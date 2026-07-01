@@ -44,7 +44,7 @@ If there is an update, the app will let you download and install it.
 
 The update manifests are platform-specific, so the macOS app reads `updates/macos/stable.json` and the Windows app reads `updates/windows/stable.json`.
 
-### Linux app (AppImage)
+### Linux app (AppImage) - Ubuntu
 
 The best-practice distribution format for Linux is the self-contained AppImage — a single executable file that bundles Python, all dependencies, and the app itself. No system-wide installation or package manager involvement required.
 
