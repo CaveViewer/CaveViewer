@@ -159,7 +159,7 @@ Releases are managed through `scripts/release.sh`, which dispatches to platform-
 
 ### Linux
 
-Linux builds must be created on a Linux host (or inside the provided Docker container — see `scripts/linux/README.md`).
+Linux builds must be created on a Linux host.
 
 ```bash
 # Build the AppImage (must run on Linux)

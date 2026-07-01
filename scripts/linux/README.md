@@ -97,7 +97,7 @@ chmod +x CaveViewer-1.2.45-x86_64.AppImage
 
 ### For CI/CD Integration
 ```bash
-# In your GitHub Actions workflow:
+# In your GitHub Actions workflow (must run on a Linux runner):
 ./scripts/linux/build_linux_app.sh
 ./scripts/linux/package.sh
 
