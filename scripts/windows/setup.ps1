@@ -276,9 +276,58 @@ function Install-Python {
     return $true
 }
 
+function Install-VcRedist {
+    <#
+        Silently installs the Microsoft Visual C++ 2015-2022 Redistributable
+        (x64) if it is not already present.
+
+        Why this is needed: some Python extension packages (including pyglm,
+        which moderngl-window depends on) ship compiled .pyd files that link
+        against vcruntime140.dll / vcruntime140_1.dll. These DLLs are part of
+        the MSVC Redistributable. Python's own installer includes them inside
+        its own directory, but some .pyd files resolve them via the system
+        PATH/SxS manifest instead -- and if the Redistributable was never
+        installed system-wide, the DLL is not found and Python throws
+        "ImportError: DLL load failed" on the very first import.
+
+        The Redistributable installer is idempotent: if a compatible version
+        is already present it exits immediately with code 0 and does nothing.
+        If it needs to install, it runs silently with no visible UI.
+
+        Non-fatal: if the download or install fails for any reason, setup
+        continues -- the packages may still work if vcruntime140.dll was
+        already present from a previous install of Python, Visual Studio,
+        or another application.
+    #>
+    $vcRedistUrl  = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    $vcRedistPath = Join-Path $env:TEMP "vc_redist_caveviewer.exe"
+
+    Write-Log "Ensuring Visual C++ Redistributable is installed..."
+
+    $downloadOk = Invoke-CaveViewerDownload -Url $vcRedistUrl -DestinationPath $vcRedistPath -TimeoutSeconds 60
+    if (-not $downloadOk) {
+        Write-Log "Note: could not download the Visual C++ Redistributable -- skipping (may already be installed)."
+        return
+    }
+
+    try {
+        $proc = Start-Process -FilePath $vcRedistPath -ArgumentList "/quiet /norestart" -Wait -PassThru
+        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 1638) {
+            # 0 = installed successfully, 1638 = a newer version is already installed
+            Write-Log "Visual C++ Redistributable is ready."
+        } else {
+            Write-Log "Note: Visual C++ Redistributable installer returned code $($proc.ExitCode) -- continuing anyway."
+        }
+    } catch {
+        Write-Log "Note: could not run the Visual C++ Redistributable installer -- continuing anyway."
+    } finally {
+        Remove-Item $vcRedistPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-Requirements {
     Write-Log "Installing required packages from requirements.txt..."
-    Write-Log "(moderngl, moderngl-window, numpy, Pillow, pygltflib -- this may take a minute.)"
+    Write-Log "(moderngl, moderngl-window, numpy, Pillow, truststore -- this may take a minute.)"
 
     if (-not (Test-Path $RequirementsFile)) {
         Write-Log "ERROR: Could not find requirements.txt at:"
@@ -421,6 +470,10 @@ $btnInstall.Add_Click({
         $btnInstall.Text = "Install"
         return
     }
+
+    # Non-fatal: ensures vcruntime140.dll is present system-wide so that
+    # Python extension packages (pyglm, moderngl, etc.) can load their DLLs.
+    Install-VcRedist
 
     $ok = Install-Requirements
     if (-not $ok) {

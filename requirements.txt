@@ -3,4 +3,5 @@ numpy==2.5.0
 Pillow==12.2.0
 moderngl-window==3.1.1
 freetype-py==2.5.1
+pyglm>=2.7.1
 truststore>=0.10.0
