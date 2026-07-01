@@ -9,6 +9,14 @@ import time
 from .base import ManualInstallResult
 from .default import DefaultSplashPlatformAdapter
 
+# Keep a strong reference to the Tk root used for the About handler so that
+# Python's cyclic GC cannot collect the root ↔ closure ↔ Tcl-interpreter
+# reference cycle after the splash screen closes.  Without this, the cycle
+# becomes unreachable from any external root and the GC frees the Tcl
+# interpreter; macOS then routes the "About" menu event through Tk's
+# NSApplicationDelegate into a freed interpreter and the app crashes.
+_about_root_ref = None
+
 
 class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def ui_font_family(self) -> str:
@@ -70,6 +78,12 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         return "command"
 
     def install_about_handler(self, root, program_name: str, version: str) -> None:
+        global _about_root_ref
+        # Hold a module-level strong reference so the Tcl interpreter backing
+        # the ::tk::mac::ShowAbout command is never freed by the GC while the
+        # app is still running (see module-level comment above).
+        _about_root_ref = root
+
         about_state = {
             "open": False,
             "last_shown": 0.0,
@@ -91,9 +105,22 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             if about_state["open"] or (now - about_state["last_shown"] < 0.75):
                 return ""
 
+            # Mark as open *before* scheduling so that a second rapid
+            # invocation (e.g. both tkAboutDialog and ::tk::mac::ShowAbout
+            # firing for the same click) is blocked by the debounce check
+            # above before _open() ever runs.
+            about_state["open"] = True
+
             def _open():
                 try:
-                    about_state["open"] = True
+                    # Re-check existence here: the root could have been
+                    # destroyed between show_about_dialog's outer check and
+                    # this after_idle callback firing.
+                    try:
+                        if not bool(root.winfo_exists()):
+                            return
+                    except Exception:
+                        return
                     about_state["last_shown"] = time.monotonic()
                     self._show_about_dialog(root, program_name, version)
                 except Exception as e:
@@ -105,6 +132,7 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             try:
                 root.after_idle(_open)
             except Exception:
+                about_state["open"] = False
                 _open()
             return ""
 
@@ -130,8 +158,7 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             "-message", f"{program_name}\nVersion {version}",
             "-detail", (
                 "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
-                "BottomLine Projects Scientific Dive Team\n"
-                "MacOS port by mr_v"
+                "BottomLine Projects Scientific Dive Team and other volunteers."
             ),
         )
 
