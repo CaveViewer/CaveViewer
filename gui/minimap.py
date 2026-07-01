@@ -4,7 +4,14 @@ gui/minimap.py
 A small top-down minimap overlay, bottom-left of the screen, showing a
 crude outline of the entire cave map's footprint (computed once from the
 chunk manifest's bounding boxes -- no extra rendering pass needed) with a
-red dot tracking the camera's current X/Z position live as you fly.
+red ARROW tracking both the camera's current X/Z position and which way
+it's currently facing, live as you fly.
+
+The arrow points along the camera's horizontal heading (yaw) only --
+not full 3D forward including pitch. This is deliberate: the minimap is
+a top-down (X/Z plane) silhouette, so projecting pitch into it too would
+mean the arrow shrinks toward a dot whenever you look straight up or down,
+which would read as broken rather than informative.
 
 Deliberately crude by design: this is a top-down (X/Z plane) silhouette of
 "where does the cave occupy space", not a literal rendered view. For a cave
@@ -19,6 +26,8 @@ independent of the main mesh rendering pipeline.
 
 from __future__ import annotations
 
+import math
+import math
 import moderngl
 import numpy as np
 
@@ -48,7 +57,8 @@ class Minimap:
     # Layout, in pixels from the bottom-left corner of the window.
     MARGIN = 18
     PANEL_SIZE = 200       # square panel, in pixels
-    DOT_RADIUS = 5
+    ARROW_LENGTH = 9       # tip-to-tail-center distance, in panel pixels
+    ARROW_HALF_WIDTH = 5   # half the width across the back of the arrowhead
     CELL_PIXEL_SIZE = 3.0  # how big each occupied chunk-cell renders as, in panel pixels
 
     def __init__(self, ctx: moderngl.Context, manifest: dict):
@@ -215,7 +225,8 @@ class Minimap:
 
     # -- rendering -----------------------------------------------------------
 
-    def render(self, window_size: tuple[int, int], camera_position: np.ndarray) -> None:
+    def render(self, window_size: tuple[int, int], camera_position: np.ndarray,
+               camera_forward: np.ndarray) -> None:
         verts = []
 
         def add_quad_px(x0, y0, x1, y1, rgba):
@@ -268,12 +279,53 @@ class Minimap:
         add_quad_px(x0, y0, x0 + border, y1, (0.56, 0.69, 0.92, 0.95))
         add_quad_px(x1 - border, y0, x1, y1, (0.56, 0.69, 0.92, 0.95))
 
-        # live position dot (bright red, drawn last so it's always on top
-        # of the footprint outline)
+        def add_triangle_px(p0, p1, p2, rgba):
+            w, h = window_size
+            for (px, py) in (p0, p1, p2):
+                nx = (px / w) * 2.0 - 1.0
+                ny = 1.0 - (py / h) * 2.0
+                verts.append((nx, ny, *rgba))
+
+        # live position + heading arrow (bright red, drawn last so it's
+        # always on top of the footprint outline). Replaced the old plain
+        # dot -- a dot showed WHERE you are but gave no sense of WHICH WAY
+        # you're facing, which matters when trying to reorient in a tight
+        # passage.
         cam_px, cam_py = self._world_to_panel_px(
             float(camera_position[0]), float(camera_position[2]), window_size
         )
-        add_circle_px(cam_px, cam_py, self.DOT_RADIUS, (0.98, 0.29, 0.29, 1.0))
+
+        # Heading-only direction: project the camera's forward vector's
+        # X/Z components. Fall back to a plain dot when looking straight
+        # up/down (no meaningful horizontal heading).
+        forward_x = float(camera_forward[0])
+        forward_z = float(camera_forward[2])
+        heading_len = math.hypot(forward_x, forward_z)
+        if heading_len < 1e-6:
+            add_circle_px(cam_px, cam_py, 5, (1.0, 0.15, 0.15, 1.0))
+        else:
+            ahead_world_x = float(camera_position[0]) + forward_x / heading_len
+            ahead_world_z = float(camera_position[2]) + forward_z / heading_len
+            ahead_px, ahead_py = self._world_to_panel_px(ahead_world_x, ahead_world_z, window_size)
+
+            dir_x, dir_y = ahead_px - cam_px, ahead_py - cam_py
+            dir_len = math.hypot(dir_x, dir_y)
+            if dir_len < 1e-6:
+                add_circle_px(cam_px, cam_py, 5, (1.0, 0.15, 0.15, 1.0))
+            else:
+                dir_x, dir_y = dir_x / dir_len, dir_y / dir_len
+                perp_x, perp_y = -dir_y, dir_x
+
+                tip = (cam_px + dir_x * self.ARROW_LENGTH,
+                       cam_py + dir_y * self.ARROW_LENGTH)
+                back_center = (cam_px - dir_x * self.ARROW_LENGTH * 0.6,
+                               cam_py - dir_y * self.ARROW_LENGTH * 0.6)
+                back_left = (back_center[0] + perp_x * self.ARROW_HALF_WIDTH,
+                             back_center[1] + perp_y * self.ARROW_HALF_WIDTH)
+                back_right = (back_center[0] - perp_x * self.ARROW_HALF_WIDTH,
+                              back_center[1] - perp_y * self.ARROW_HALF_WIDTH)
+
+                add_triangle_px(tip, back_left, back_right, (1.0, 0.15, 0.15, 1.0))
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:

@@ -197,7 +197,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         # photo texture is sampled or the surface falls back to plain lit
         # gray. See gui/render_mode_buttons.py for the four resulting
         # combined display states.
-        self.render_mode_buttons = RenderModeButtons(self.ctx, texture_enabled=True, wireframe_enabled=False)
+        self.render_mode_buttons = RenderModeButtons(self.ctx, texture_enabled=True, wireframe_enabled=False,
+                                                      smooth_shading_enabled=True)
 
         # Controls reference / loading overlay -- full-screen right now
         # while the first chunks around the spawn point stream in, and
@@ -232,6 +233,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # logic can run again later when switching to a different map via
         # the OPEN button -- see load_new_map() / _teardown_current_map().
         self._chunk_gpu_objects: dict[tuple, list] = {}
+        # Per-chunk, per-material CPU-side data for instant SHADE toggle:
+        # each entry holds (mat_name, positions, uvs, smooth_normals, flat_normals)
+        # tuples in the same order as _chunk_gpu_objects, so toggling shading
+        # can zip the two lists and rewrite each VBO in place via vbo.write().
+        self._chunk_normal_cache: dict[tuple, list] = {}
         self._has_map_loaded = False
         self._pending_import_started = False
 
@@ -340,6 +346,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # shouldn't be, given the loop above), don't carry it into the
         # next map's state
         self._chunk_gpu_objects.clear()
+        self._chunk_normal_cache.clear()
 
     def load_new_map(self, cache_dir: str, textures_dir: str, manifest: dict) -> None:
         """
@@ -530,14 +537,24 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _on_chunk_ready(self, chunk_data):
         vao_list = []
+        normal_cache_entry = []
         for mat_name, group in chunk_data.groups.items():
             n = len(group.positions)
             if n == 0:
                 continue
+
+            # group.normals is whatever the chunk cache has on disk (smooth
+            # by default). Flat normals are recomputed once from positions so
+            # both variants are locally available for an instant SHADE toggle.
+            smooth_normals = group.normals
+            flat_normals = chunker.compute_flat_normals(group.positions)
+            active_normals = (smooth_normals if self.render_mode_buttons.smooth_shading_enabled
+                               else flat_normals)
+
             interleaved = np.empty((n, 8), dtype=np.float32)
             interleaved[:, 0:3] = group.positions
             interleaved[:, 3:5] = group.uvs
-            interleaved[:, 5:8] = group.normals
+            interleaved[:, 5:8] = active_normals
 
             vbo = self.ctx.buffer(interleaved.tobytes())
             vao = self.ctx.vertex_array(
@@ -545,8 +562,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             texture = self.texture_manager.acquire(mat_name)
             vao_list.append((vao, vbo, mat_name, texture))
+            normal_cache_entry.append((mat_name, group.positions, group.uvs, smooth_normals, flat_normals))
 
         self._chunk_gpu_objects[chunk_data.cell] = vao_list
+        self._chunk_normal_cache[chunk_data.cell] = normal_cache_entry
 
     def _on_chunk_unload(self, cell):
         vao_list = self._chunk_gpu_objects.pop(cell, [])
@@ -554,6 +573,31 @@ class CaveViewerWindow(mglw.WindowConfig):
             vao.release()
             vbo.release()
             self.texture_manager.release(mat_name)
+        self._chunk_normal_cache.pop(cell, None)
+
+    def _apply_shading_toggle(self) -> None:
+        """
+        Rewrites the normal columns of every currently-loaded chunk's VBO
+        in place to match the current smooth_shading_enabled state -- no
+        chunk reload or new GPU objects needed. Both normal variants were
+        precomputed in _on_chunk_ready, so this is an instant in-place
+        update. Chunks that stream in after this point pick up the new
+        state automatically via _on_chunk_ready's active_normals selection.
+        """
+        smooth = self.render_mode_buttons.smooth_shading_enabled
+        for cell, vao_list in self._chunk_gpu_objects.items():
+            cache_entries = self._chunk_normal_cache.get(cell)
+            if not cache_entries or len(cache_entries) != len(vao_list):
+                continue
+            for (vao, vbo, mat_name, texture), (cached_mat, positions, uvs, smooth_n, flat_n) in zip(
+                    vao_list, cache_entries):
+                active_normals = smooth_n if smooth else flat_n
+                n = len(positions)
+                interleaved = np.empty((n, 8), dtype=np.float32)
+                interleaved[:, 0:3] = positions
+                interleaved[:, 3:5] = uvs
+                interleaved[:, 5:8] = active_normals
+                vbo.write(interleaved.tobytes())
 
     # -- moderngl_window hooks ------------------------------------------------
     #
@@ -790,7 +834,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.render_distance_stepper.render(self.wnd.size, render_distance_anchor_x, render_distance_anchor_y,
                                               label_above=True)
 
-        self.minimap.render(self.wnd.size, self.camera.position)
+        self.minimap.render(self.wnd.size, self.camera.position, self.camera.forward())
 
         # FPS / chunk-loading readout, positioned directly above the
         # minimap panel (a small gap between the two so they don't touch).
@@ -1421,7 +1465,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
 
             clicked_button = self.render_mode_buttons.on_mouse_press(x, y, self.wnd.size, buttons_top_y)
-            if clicked_button == "help":
+            if clicked_button == "shade":
+                self._apply_shading_toggle()
+                return
+            elif clicked_button == "help":
                 # Toggle: if the help screen is already showing (manual
                 # mode), a second click closes it; otherwise show it.
                 # Showing help intentionally overrides whatever loading
@@ -1444,9 +1491,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._handle_open_button_click()
                 return
             elif clicked_button is not None:
-                # "mesh" or "texture" -- already handled internally by
-                # render_mode_buttons.on_mouse_press (it toggled its own
-                # state before returning), nothing further needed here.
+                # "mesh" or "texture" -- already toggled internally by
+                # render_mode_buttons.on_mouse_press, nothing further needed here.
                 return
 
             # While the color picker panel is open, it behaves like a

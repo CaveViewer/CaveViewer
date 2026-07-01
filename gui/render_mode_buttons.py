@@ -80,20 +80,21 @@ class RenderModeButtons:
     MARGIN_RIGHT = 18
 
     def __init__(self, ctx: moderngl.Context,
-                 texture_enabled: bool = True, wireframe_enabled: bool = False):
+                 texture_enabled: bool = True, wireframe_enabled: bool = False,
+                 smooth_shading_enabled: bool = True):
         self.ctx = ctx
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
 
         self.texture_enabled = texture_enabled
         self.wireframe_enabled = wireframe_enabled
+        # ON = smooth (averaged) normals, OFF = flat (per-triangle)
+        # normals. Defaults to True to match core/chunker.py's "smooth"
+        # default import shading -- so a freshly imported map's button
+        # state reflects how it was actually imported.
+        self.smooth_shading_enabled = smooth_shading_enabled
 
-        # Sized generously for three buttons' worth of: background, drop
-        # shadow, top highlight strip, 4 border edges, and full text
-        # labels (the longer "TEXTURE" at up to ~7 letters * 35 filled
-        # pixels each, worst case) -- comfortably covers the redesigned
-        # visuals (shadow + highlight added beyond the original flat
-        # rectangle) without needing the auto-grow fallback on first render.
-        self._max_verts = 3000
+        # Sized generously for six buttons' worth of shapes + labels.
+        self._max_verts = 3600
         self._vbo = ctx.buffer(reserve=self._max_verts * 6 * 4)
         self._vao = ctx.vertex_array(
             self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
@@ -103,20 +104,21 @@ class RenderModeButtons:
 
     @classmethod
     def total_stack_height(cls, scale: float = 1.0) -> float:
-        """Full height of all 5 buttons + gaps between them, at a given
+        """Full height of all 6 buttons + gaps between them, at a given
         scale factor -- used by viewer_window.py to figure out how much
         vertical room this whole block needs when laying out the
         bottom-anchored right-side column."""
-        n_buttons = 5
+        n_buttons = 6
         return n_buttons * (cls.BUTTON_HEIGHT * scale) + (n_buttons - 1) * (cls.BUTTON_GAP * scale)
 
     def _button_rect_px(self, index: int, window_size: tuple[int, int], top_y: float) -> tuple[float, float, float, float]:
-        """Returns (x0, y0, x1, y1) for button `index` (0=Mesh, 1=Texture, 2=Help, 3=Color, 4=Open).
+        """Returns (x0, y0, x1, y1) for button `index`
+        (0=Mesh, 1=Texture, 2=Shade, 3=Help, 4=Color, 5=Open).
         top_y is where the FIRST button (Mesh) starts -- passed in by the
         caller, which owns the overall column layout."""
         w, h = window_size
 
-        n_buttons = 5
+        n_buttons = 6
         full_stack_height = n_buttons * self.BUTTON_HEIGHT + (n_buttons - 1) * self.BUTTON_GAP
 
         # If the full stack (starting at `top_y`) would run past the
@@ -153,14 +155,17 @@ class RenderModeButtons:
     def _texture_button_rect(self, window_size, top_y):
         return self._button_rect_px(1, window_size, top_y)
 
-    def _help_button_rect(self, window_size, top_y):
+    def _shade_button_rect(self, window_size, top_y):
         return self._button_rect_px(2, window_size, top_y)
 
-    def _color_button_rect(self, window_size, top_y):
+    def _help_button_rect(self, window_size, top_y):
         return self._button_rect_px(3, window_size, top_y)
 
-    def _open_button_rect(self, window_size, top_y):
+    def _color_button_rect(self, window_size, top_y):
         return self._button_rect_px(4, window_size, top_y)
+
+    def _open_button_rect(self, window_size, top_y):
+        return self._button_rect_px(5, window_size, top_y)
 
     @staticmethod
     def _px_to_ndc(x: float, y: float, window_size: tuple[int, int]) -> tuple[float, float]:
@@ -179,6 +184,10 @@ class RenderModeButtons:
         x0, y0, x1, y1 = self._texture_button_rect(window_size, top_y)
         return x0 <= x <= x1 and y0 <= y <= y1
 
+    def hit_test_shade(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> bool:
+        x0, y0, x1, y1 = self._shade_button_rect(window_size, top_y)
+        return x0 <= x <= x1 and y0 <= y <= y1
+
     def hit_test_help(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> bool:
         x0, y0, x1, y1 = self._help_button_rect(window_size, top_y)
         return x0 <= x <= x1 and y0 <= y <= y1
@@ -194,8 +203,8 @@ class RenderModeButtons:
     def on_mouse_press(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> str | None:
         """
         Returns a string identifying which button was clicked ("mesh",
-        "texture", "help", "color", or "open"), or None if the click
-        missed all five -- the caller (viewer_window.py) acts on the
+        "texture", "shade", "help", "color", or "open"), or None if the
+        click missed all six -- the caller (viewer_window.py) acts on the
         result, since Help/Color/Open's actual behavior depends on state
         this module doesn't have access to (see the module docstring for
         why they're intentionally stateless here). top_y is where this
@@ -208,6 +217,9 @@ class RenderModeButtons:
         if self.hit_test_texture(x, y, window_size, top_y):
             self.texture_enabled = not self.texture_enabled
             return "texture"
+        if self.hit_test_shade(x, y, window_size, top_y):
+            self.smooth_shading_enabled = not self.smooth_shading_enabled
+            return "shade"
         if self.hit_test_help(x, y, window_size, top_y):
             return "help"
         if self.hit_test_color(x, y, window_size, top_y):
@@ -314,6 +326,7 @@ class RenderModeButtons:
 
         draw_toggle_button(self._mesh_button_rect(window_size, top_y), self.wireframe_enabled, "MESH")
         draw_toggle_button(self._texture_button_rect(window_size, top_y), self.texture_enabled, "TEXTURE")
+        draw_toggle_button(self._shade_button_rect(window_size, top_y), self.smooth_shading_enabled, "SHADE")
         draw_toggle_button(self._help_button_rect(window_size, top_y), help_active, "HELP")
         draw_toggle_button(self._color_button_rect(window_size, top_y), color_active, "COLOR")
         draw_toggle_button(self._open_button_rect(window_size, top_y), False, "OPEN")

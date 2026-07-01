@@ -291,6 +291,20 @@ def _compute_flat_normals(flat_pos: np.ndarray) -> np.ndarray:
     return np.repeat(n, 3, axis=0).astype(np.float32)
 
 
+def compute_flat_normals(flat_pos: np.ndarray) -> np.ndarray:
+    """
+    Public entry point for the same per-triangle flat-normal computation
+    _write_chunk_file uses internally, exposed so gui/viewer_window.py
+    can recompute a flat-shaded normal set from an already-loaded chunk's
+    positions at runtime (for the SHADE toggle button) without needing to
+    re-import or duplicate this math. `flat_pos` must already be
+    de-indexed/flat (N*3, 3) -- i.e. exactly the shape ChunkMaterialGroup.
+    positions is in, which is what makes this safe to call directly on
+    already-streamed chunk data.
+    """
+    return _compute_flat_normals(flat_pos)
+
+
 def load_manifest(cache_dir):
     # If no cache_dir was provided (launch without a preloaded map), or the
     # manifest file is missing, return None so callers can handle "no map".
