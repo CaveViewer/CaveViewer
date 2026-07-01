@@ -344,7 +344,8 @@ function Add-PythonFirewallRule {
         is the user sees the firewall popup on first launch.
     #>
     try {
-        $pythonPath = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+        $pythonPath = if ($pythonCmd) { $pythonCmd.Source } else { $null }
         if (-not $pythonPath -or -not (Test-Path $pythonPath)) {
             Write-Log "Firewall rule skipped: python.exe path not found."
             return
