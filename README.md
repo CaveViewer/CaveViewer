@@ -94,6 +94,15 @@ git checkout "$latest"
 
 **2. Create a virtual environment and install dependencies**
 
+Install typical dependencies
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential wget libssl-dev zlib1g-dev libbz2-dev \
+  libreadline-dev libsqlite3-dev libncursesw5-dev xz-utils \
+  tk-dev libffi-dev liblzma-dev python3-tk tk-dev tcl-dev libgl1 libegl1 libglx-mesa0 
+```  
 `scripts/dev/install.sh` creates a `.venv` inside the project root, installs all packages from `requirements.txt`, and generates a `run_caveviewer.sh` launcher:
 
 ```bash
