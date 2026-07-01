@@ -20,11 +20,19 @@ Whichever format a map is in, the rest of the program (chunking, streaming, all 
 
 ## How to install and run CaveViewer
 
+## Supported platforms
+
+MacOS X - Apple Silicon
+Linux - Fedora, Ubuntu
+Windows - 10, 11
+
 ### macOS app (recommended)
 
 Download the latest DMG from https://github.com/KernalPanic/CaveViewerPlus/releases, open it, and drag CaveViewer into Applications. If this is your first time installing the app, you have to go to Settings -> Privacy & Security and then allow system to open CaveViewerPlus. These steps are necessary the app is not published through the App Store.
 
 If there is an update, the app will let you download and install it.
+
+NOTE: Intel Macs are not supported.
 
 ### Windows app (recommended)
 
@@ -44,7 +52,7 @@ If there is an update, the app will let you download and install it.
 
 The update manifests are platform-specific, so the macOS app reads `updates/macos/stable.json` and the Windows app reads `updates/windows/stable.json`.
 
-### Linux app (AppImage) - Ubuntu
+### Linux app (AppImage) - Ubuntu or Fedora
 
 The best-practice distribution format for Linux is the self-contained AppImage — a single executable file that bundles Python, all dependencies, and the app itself. No system-wide installation or package manager involvement required.
 
