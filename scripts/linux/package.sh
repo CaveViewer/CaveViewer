@@ -77,8 +77,25 @@ fi
 # echo "DEBUG: AppImage contents:"
 # ls -la "$EXTRACT_DIR/CaveViewer/" | head -20
 
-# Set up library paths
-export LD_LIBRARY_PATH="$EXTRACT_DIR/CaveViewer/lib:$EXTRACT_DIR/CaveViewer/lib64:${LD_LIBRARY_PATH:-}"
+# On RPM-based distros (Fedora, RHEL, etc.) the unversioned libGL.so / libEGL.so
+# symlinks are only available in -devel packages and are often absent at runtime.
+# Build a compat directory with unversioned symlinks pointing at the real versioned
+# libraries so that PyInstaller's ctypes hook can resolve them via LD_LIBRARY_PATH.
+GL_COMPAT_DIR="$EXTRACT_DIR/gl_compat"
+mkdir -p "$GL_COMPAT_DIR"
+for lib_base in libGL libEGL libGLU libGLES1_CM libGLESv2; do
+  unversioned="${lib_base}.so"
+  # Only create a compat symlink when the unversioned name is not already present
+  if ! ldconfig -p 2>/dev/null | grep -q "[[:space:]]${unversioned}[[:space:]]"; then
+    versioned_path=$(ldconfig -p 2>/dev/null | grep "[[:space:]]${lib_base}\.so\." | awk '{print $NF}' | sort -V | tail -1)
+    if [ -n "$versioned_path" ]; then
+      ln -sf "$versioned_path" "$GL_COMPAT_DIR/${unversioned}"
+    fi
+  fi
+done
+
+# Set up library paths (gl_compat first so the symlinks are found before system dirs)
+export LD_LIBRARY_PATH="$GL_COMPAT_DIR:$EXTRACT_DIR/CaveViewer/lib:$EXTRACT_DIR/CaveViewer/lib64:${LD_LIBRARY_PATH:-}"
 
 # Make sure we can find system tcl/tk libraries if needed
 export TCL_LIBRARY="/usr/share/tcltk/tcl8.6"
