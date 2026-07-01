@@ -1,10 +1,10 @@
 {
-  "latest_version": "1.0.4",
-  "download_url": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.4/CaveViewer-1.0.4-windows.zip",
-  "download_size_bytes": 379227,
-  "download_url_windows_zip": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.4/CaveViewer-1.0.4-windows.zip",
-  "download_size_bytes_windows_zip": 379227,
-  "release_notes": "Fix DLL load failure for pyglm on Windows by installing Visual C++ Redistributable during setup",
-  "sha256": "730e99cb73ad3fb3a169b86982d6f7015686732528a12fb4fe6be230b465c562",
-  "sha256_windows_zip": "730e99cb73ad3fb3a169b86982d6f7015686732528a12fb4fe6be230b465c562"
+  "latest_version": "1.0.2",
+  "download_url": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.2/CaveViewer-1.0.2-windows.zip",
+  "download_size_bytes": 379610,
+  "download_url_windows_zip": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.2/CaveViewer-1.0.2-windows.zip",
+  "download_size_bytes_windows_zip": 379610,
+  "release_notes": "Initial release",
+  "sha256": "88d8a05381838f8ef2ab0defe67270b72918fa45cb4f975933a05b5668544e45",
+  "sha256_windows_zip": "88d8a05381838f8ef2ab0defe67270b72918fa45cb4f975933a05b5668544e45"
 }
