@@ -287,6 +287,7 @@ def show_sample_maps_dialog(parent, install_dir):
 
 
 def _center_over_parent(window, parent, width, height):
+    import sys
     parent.update_idletasks()
     px = parent.winfo_rootx()
     py = parent.winfo_rooty()
@@ -294,6 +295,9 @@ def _center_over_parent(window, parent, width, height):
     ph = parent.winfo_height()
     x = px + (pw - width) // 2
     y = py + (ph - height) // 2
+    if sys.platform.startswith("linux"):
+        x += 30
+        y += 30
     window.geometry(f"{width}x{height}+{x}+{y}")
 
 
