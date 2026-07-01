@@ -322,6 +322,55 @@ function Install-Requirements {
     return $true
 }
 
+function Add-PythonFirewallRule {
+    <#
+        Adds a Windows Firewall outbound allow-rule for python.exe so that
+        CaveViewer can reach GitHub (update checks, sample-map catalog) the
+        very first time it runs.
+
+        Why this matters: setup runs elevated (Administrator), but the
+        Desktop shortcut launches python as a normal user.  The first time a
+        newly-installed python.exe makes an outbound TCP connection, Windows
+        Defender Firewall can show a "allow / block" popup.  If the user
+        dismisses or blocks that popup, Python is firewall-blocked for every
+        subsequent session -- the app can't check for updates or load the
+        sample-map list even though the machine is genuinely online.
+        Creating the rule here, while we're still elevated, prevents the
+        popup entirely and ensures the app works out of the box.
+
+        This step is intentionally non-fatal: if the rule can't be created
+        (e.g. a corporate Group Policy blocks New-NetFirewallRule), setup
+        still completes successfully -- the app will run, and the worst-case
+        is the user sees the firewall popup on first launch.
+    #>
+    try {
+        $pythonPath = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+        if (-not $pythonPath -or -not (Test-Path $pythonPath)) {
+            Write-Log "Firewall rule skipped: python.exe path not found."
+            return
+        }
+
+        $ruleName = "CaveViewer - Python outbound"
+
+        # Remove any stale rule from a previous install before re-adding.
+        Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+
+        New-NetFirewallRule `
+            -DisplayName $ruleName `
+            -Direction Outbound `
+            -Program $pythonPath `
+            -Action Allow `
+            -Profile Any `
+            -Enabled True | Out-Null
+
+        Write-Log "Firewall rule created -- Python can reach the internet when launched from the Desktop shortcut."
+    } catch {
+        # Non-fatal: log the reason but let setup continue.
+        Write-Log "Note: could not create firewall rule ($($_.Exception.Message))."
+        Write-Log "If CaveViewer can't reach GitHub on first launch, allow Python through Windows Firewall manually."
+    }
+}
+
 function New-DesktopShortcut {
     Write-Log "Creating a CaveViewer shortcut on your Desktop..."
 
@@ -379,6 +428,11 @@ $btnInstall.Add_Click({
         $btnInstall.Enabled = $true
         $btnInstall.Text = "Install"
         return
+    }
+
+    # Non-fatal: add a firewall rule so CaveViewer can reach GitHub on first
+    # launch without triggering a "block or allow?" popup.
+    Add-PythonFirewallRule
     }
 
     $ok = New-DesktopShortcut
