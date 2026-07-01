@@ -14,6 +14,48 @@ spec_file="$repo_root/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/linux/app"
 work_dir="$repo_root/build/pyinstaller"
 
+# python-build-standalone: Python binaries compiled against glibc 2.17 so the
+# bundled libpython3.12.so won't require GLIBC_2.38 on older distros.
+# Update these when upgrading Python: https://github.com/astral-sh/python-build-standalone/releases
+PBS_PYTHON_VERSION="3.12.10"
+PBS_TAG="20250612"
+
+# Download (or reuse cached) a portable Python binary.
+# Prints the path to the python3 executable.
+setup_portable_python() {
+  local arch
+  case "$(uname -m)" in
+    x86_64)  arch="x86_64-unknown-linux-gnu" ;;
+    aarch64) arch="aarch64-unknown-linux-gnu" ;;
+    *) echo "Error: unsupported architecture $(uname -m)"; exit 1 ;;
+  esac
+
+  local cache_dir="$repo_root/.cache/standalone-python"
+  local python_bin="$cache_dir/python/bin/python3"
+
+  if [ -x "$python_bin" ]; then
+    echo "Standalone Python already cached." >&2
+    echo "$python_bin"
+    return 0
+  fi
+
+  local tarball="cpython-${PBS_PYTHON_VERSION}+${PBS_TAG}-${arch}-install_only.tar.gz"
+  local url="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${tarball}"
+
+  echo "Downloading portable Python ${PBS_PYTHON_VERSION} (glibc 2.17 compatible)..." >&2
+  mkdir -p "$cache_dir"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --progress-bar -o "$cache_dir/$tarball" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --show-progress -O "$cache_dir/$tarball" "$url"
+  else
+    echo "Error: curl or wget is required to download standalone Python."; exit 1
+  fi
+  tar -xzf "$cache_dir/$tarball" -C "$cache_dir"
+  rm "$cache_dir/$tarball"
+  echo "$python_bin"
+}
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Error: this script must be run on Linux."
   exit 1
@@ -47,25 +89,22 @@ fi
 
 echo "✓ All build dependencies installed"
 echo ""
-# Detect Docker by checking if /build directory exists (set in Dockerfile)
-if [ -d "/build" ] && [ "$(id -u)" == "0" ]; then
-  # Running in Docker as root - use system Python
-  python_exe="python3"
-  echo "Running in Docker container - using system Python"
-else
-  # Running locally - use venv for isolation
-  if [ ! -x "$venv_dir/bin/python" ]; then
-    echo "Creating virtual environment at $venv_dir..."
-    python3 -m venv "$venv_dir"
-  fi
-  python_exe="$venv_dir/bin/python"
-  echo "Using venv: $venv_dir"
+standalone_python=$(setup_portable_python)
+echo "Using portable Python: $standalone_python"
+echo ""
+
+if [ ! -x "$venv_dir/bin/python" ]; then
+  echo "Creating virtual environment at $venv_dir..."
+  "$standalone_python" -m venv "$venv_dir"
 fi
+python_exe="$venv_dir/bin/python"
+echo "Using venv: $venv_dir"
 
 "$python_exe" -m pip install --upgrade pip setuptools
 
-# Install dependencies with --no-binary for Pillow so it compiles from source with Tkinter support
-"$python_exe" -m pip install --upgrade --no-binary :all: -r "$repo_root/requirements.txt"
+# Install dependencies: Pillow must compile from source to pick up Tkinter support.
+# All other packages use pre-built manylinux wheels (glibc 2.17 compatible).
+"$python_exe" -m pip install --upgrade --no-binary Pillow -r "$repo_root/requirements.txt"
 
 # Verify Pillow was compiled with Tkinter support
 echo "Verifying Pillow installation..."
@@ -73,7 +112,7 @@ echo "Verifying Pillow installation..."
   echo "ERROR: Pillow was not compiled with Tkinter support"
   echo "Attempting to rebuild Pillow..."
   "$python_exe" -m pip uninstall -y Pillow
-  "$python_exe" -m pip install --no-cache-dir --no-binary :all: "Pillow>=10.0.0"
+  "$python_exe" -m pip install --no-cache-dir --no-binary Pillow "Pillow>=10.0.0"
   "$python_exe" -c "from PIL import Image; import PIL._tkinter_finder; print('✓ Pillow compiled with Tkinter support')"
 }
 
