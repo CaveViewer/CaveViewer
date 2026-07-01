@@ -22,13 +22,13 @@ Whichever format a map is in, the rest of the program (chunking, streaming, all 
 
 ### macOS app (recommended)
 
-Download the latest DMG from https://github.com/innerspace-explorer/CaveViewerMac/releases, open it, and drag CaveViewer into Applications. If this is your first time installing the app, you have to go to Settings -> Privacy & Security and then allow system to open CaveViewerMac. These steps are necessary the app is not published through the App Store.
+Download the latest DMG from https://github.com/KernalPanic/CaveViewerPlus/releases, open it, and drag CaveViewer into Applications. If this is your first time installing the app, you have to go to Settings -> Privacy & Security and then allow system to open CaveViewerPlus. These steps are necessary the app is not published through the App Store.
 
 If there is an update, the app will let you download and install it.
 
 ### Windows app (recommended)
 
-Download the latest zip from https://github.com/innerspace-explorer/CaveViewerMac/releases and extract it anywhere on your machine.
+Download the latest zip from https://github.com/KernalPanic/CaveViewerPlus/releases and extract it anywhere on your machine.
 
 **First-time setup:** double-click `launch.bat` inside the extracted folder. This opens a guided setup window that will:
 
@@ -51,8 +51,8 @@ For development, clone the repository and run from the working tree. Requires Py
 **1. Clone and check out the latest stable tag**
 
 ```bash
-git clone https://github.com/innerspace-explorer/CaveViewerMac.git
-cd CaveViewerMac
+git clone https://github.com/KernalPanic/CaveViewerPlus.git
+cd CaveViewerPlus
 git fetch --tags
 latest=$(git tag -l "v*" --sort=-version:refname | head -n 1)
 git checkout "$latest"

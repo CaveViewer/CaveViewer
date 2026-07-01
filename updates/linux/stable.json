@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "latest_version": "1.0.1",
   "download_url": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-x86_64.AppImage",
   "download_size_bytes": 47890343,
@@ -7,4 +8,14 @@
   "release_notes": "Minor updates.",
   "sha256": "583e8b866b66021ed6ce22c98592e02be2283f7cd18a77f2fa5c0e4653979467",
   "sha256_linux_appimage": "583e8b866b66021ed6ce22c98592e02be2283f7cd18a77f2fa5c0e4653979467"
+=======
+  "latest_version": "1.2.46",
+  "download_url": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.2.46/CaveViewer-1.2.46-x86_64.AppImage",
+  "download_size_bytes": 47890887,
+  "download_url_linux_appimage": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.2.46/CaveViewer-1.2.46-x86_64.AppImage",
+  "download_size_bytes_linux_appimage": 47890887,
+  "release_notes": "First Linux Client.",
+  "sha256": "7e64c6825f3e706ac3c5308b65936fea137cad6fcfc44e2c7477aa7839d98f33",
+  "sha256_linux_appimage": "7e64c6825f3e706ac3c5308b65936fea137cad6fcfc44e2c7477aa7839d98f33"
+>>>>>>> 5768f52 (Changed repo targets to the correct repo.)
 }

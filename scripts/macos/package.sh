@@ -8,7 +8,7 @@ set -euo pipefail
 #
 # Example:
 #   ./scripts/macos/package.sh
-#   ./scripts/macos/package.sh "https://github.com/owner/CaveViewerMac/releases/download/v1.2.3"
+#   ./scripts/macos/package.sh "https://github.com/owner/CaveViewerPlus/releases/download/v1.2.3"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

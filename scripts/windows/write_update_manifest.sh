@@ -6,7 +6,7 @@ set -euo pipefail
 #   ./scripts/windows/write_update_manifest.sh <version> <windows_zip_url> <windows_zip_file> [release_notes]
 # Example:
 #   ./scripts/windows/write_update_manifest.sh 1.0.1 \
-#     "https://github.com/<owner>/CaveViewerMac/releases/download/v1.0.1/CaveViewer-1.0.1-windows.zip" \
+#     "https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-windows.zip" \
 #     "dist/windows/packages/CaveViewer-1.0.1-windows.zip" \
 #     "Bug fixes and performance improvements"
 

@@ -136,10 +136,10 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         )
 
     def default_update_repo(self) -> str:
-        return "innerspace-explorer/CaveViewerMac"
+        return "KernalPanic/CaveViewerPlus"
 
     def update_check_user_agent(self) -> str:
-        return "CaveViewerMac-UpdateChecker"
+        return "CaveViewerPlus-UpdateChecker"
 
     def supports_install_channel(self, channel: str) -> bool:
         return channel == "macos_app"

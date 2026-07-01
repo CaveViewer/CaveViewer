@@ -6,7 +6,7 @@ set -euo pipefail
 #   ./scripts/linux/write_update_manifest.sh <version> <appimage_url> <appimage_file> [release_notes]
 # Example:
 #   ./scripts/linux/write_update_manifest.sh 1.0.1 \
-#     "https://github.com/<owner>/CaveViewerMac/releases/download/v1.0.1/CaveViewer-1.0.1-x86_64.AppImage" \
+#     "https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-x86_64.AppImage" \
 #     "dist/linux/packages/CaveViewer-1.0.1-x86_64.AppImage" \
 #     "Bug fixes and performance improvements"
 
