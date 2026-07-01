@@ -434,7 +434,6 @@ $btnInstall.Add_Click({
     # Non-fatal: add a firewall rule so CaveViewer can reach GitHub on first
     # launch without triggering a "block or allow?" popup.
     Add-PythonFirewallRule
-    }
 
     $ok = New-DesktopShortcut
     if (-not $ok) {
