@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build a Windows-ready source bundle and metadata.
+#
+# Usage:
+#   ./scripts/windows/package.sh [base_download_url]
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
+source "$repo_root/scripts/common/version.sh"
+source "$repo_root/scripts/common/artifacts.sh"
+source "$repo_root/scripts/common/github.sh"
+
+version_file="$repo_root/caveviewer_version.py"
+packages_dir="$repo_root/dist/windows/packages"
+metadata_dir="$repo_root/dist/windows/metadata"
+app_root="$repo_root/dist/windows/app"
+base_download_url="${1:-}"
+
+if [ ! -f "$version_file" ]; then
+	echo "Error: version file not found: $version_file"
+	exit 1
+fi
+
+cv_require_cmd git
+cv_require_cmd python
+
+version="$(cv_read_app_version "$version_file")"
+app_name="$(cv_read_app_name "$version_file")"
+
+if [ -z "$version" ] || [ -z "$app_name" ]; then
+	echo "Error: could not parse APP_NAME/APP_VERSION from $version_file"
+	exit 1
+fi
+
+bundle_name="${app_name}-${version}"
+artifact_name="${bundle_name}-windows.zip"
+artifact_path="$packages_dir/$artifact_name"
+meta_name="${bundle_name}.json"
+meta_path="$metadata_dir/$meta_name"
+update_meta_name="${bundle_name}.update.json"
+update_meta_path="$metadata_dir/$update_meta_name"
+staging_root="$app_root/$bundle_name"
+release_dir="$staging_root/release"
+
+mkdir -p "$packages_dir" "$metadata_dir" "$app_root"
+rm -f "$artifact_path" "$meta_path"
+rm -f "$update_meta_path"
+rm -f "$packages_dir"/*-windows-setup.zip
+rm -rf "$staging_root"
+mkdir -p "$release_dir"
+
+python - "$repo_root" "$staging_root" <<'PY'
+import pathlib
+import shutil
+import subprocess
+import sys
+
+repo_root = pathlib.Path(sys.argv[1])
+staging_root = pathlib.Path(sys.argv[2])
+
+pathspecs = [
+		"caveviewer.py",
+		"caveviewer_version.py",
+		"requirements.txt",
+		"README.md",
+		"CaveViewer.spec",
+		"core",
+		"gui",
+		"shaders",
+		"updates",
+		"scripts/windows",
+]
+
+result = subprocess.run(
+		["git", "-C", str(repo_root), "ls-files", "-z", "--", *pathspecs],
+		check=True,
+		stdout=subprocess.PIPE,
+)
+
+files = [path for path in result.stdout.decode("utf-8").split("\0") if path]
+for relative_path in files:
+		source_path = repo_root / relative_path
+		destination_path = staging_root / relative_path
+		destination_path.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(source_path, destination_path)
+
+# Make setup scripts first-class citizens at the bundle root.
+root_launch = staging_root / "launch.bat"
+root_setup = staging_root / "setup.ps1"
+src_launch = staging_root / "scripts" / "windows" / "launch.bat"
+src_setup = staging_root / "scripts" / "windows" / "setup.ps1"
+
+if not src_launch.is_file() or not src_setup.is_file():
+	missing = []
+	if not src_launch.is_file():
+		missing.append(str(src_launch))
+	if not src_setup.is_file():
+		missing.append(str(src_setup))
+	raise RuntimeError(f"Missing required Windows setup script(s): {', '.join(missing)}")
+
+shutil.copy2(src_launch, root_launch)
+shutil.copy2(src_setup, root_setup)
+PY
+
+python - "$repo_root" "$staging_root" "$artifact_name" "$version" "$app_name" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+repo_root = pathlib.Path(sys.argv[1])
+staging_root = pathlib.Path(sys.argv[2])
+artifact_name = sys.argv[3]
+version = sys.argv[4]
+app_name = sys.argv[5]
+
+important_files = [
+	"README.md",
+	"caveviewer.py",
+	"caveviewer_version.py",
+	"requirements.txt",
+	"scripts/windows/launch.bat",
+	"scripts/windows/setup.ps1",
+	"updates/windows/stable.json",
+]
+
+sha_lines = []
+for relative_path in important_files:
+	path = repo_root / relative_path
+	if not path.is_file():
+		continue
+	hasher = hashlib.sha256()
+	with path.open("rb") as file_handle:
+		for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+			hasher.update(chunk)
+	sha_lines.append(f"{hasher.hexdigest()}  {relative_path}")
+
+(staging_root / "release" / "SHA256SUMS.txt").write_text("\n".join(sha_lines) + "\n", encoding="utf-8")
+
+release_manifest = {
+	"app_name": app_name,
+	"version": version,
+	"bundle_type": "windows_portable_source_bundle",
+	"artifact_file": artifact_name,
+	"bundle_contains": [
+		"source_files",
+		"launch.bat",
+		"setup.ps1",
+		"release/SHA256SUMS.txt",
+		"release/manifest.json",
+	],
+}
+
+(staging_root / "release" / "manifest.json").write_text(
+	json.dumps(release_manifest, indent=2, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+PY
+
+python - "$app_root" "$staging_root" "$artifact_path" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+app_root = pathlib.Path(sys.argv[1])
+staging_root = pathlib.Path(sys.argv[2])
+artifact_path = pathlib.Path(sys.argv[3])
+
+with zipfile.ZipFile(artifact_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+		for path in sorted(staging_root.rglob("*")):
+				if path.is_file():
+						archive.write(path, path.relative_to(app_root).as_posix())
+PY
+
+sha256="$(cv_sha256 "$artifact_path")"
+size_bytes="$(cv_size_bytes "$artifact_path")"
+created_at_utc="$(cv_created_at_utc)"
+download_url=""
+
+if [ -n "$base_download_url" ]; then
+	download_url="${base_download_url%/}/$artifact_name"
+fi
+
+python - "$update_meta_path" "$app_name" "$version" "$download_url" "$size_bytes" "$sha256" <<'PY'
+import json
+import pathlib
+import sys
+
+update_meta_path = pathlib.Path(sys.argv[1])
+app_name = sys.argv[2]
+version = sys.argv[3]
+download_url = sys.argv[4]
+size_bytes = int(sys.argv[5])
+sha256 = sys.argv[6]
+
+update_manifest = {
+	"app_name": app_name,
+	"latest_version": version,
+	"install_channel": "windows_app",
+	"download_url": download_url,
+	"download_url_windows_zip": download_url,
+	"download_size_bytes": size_bytes,
+	"download_size_bytes_windows_zip": size_bytes,
+	"sha256": sha256,
+	"sha256_windows_zip": sha256,
+	"release_notes": "",
+}
+
+update_meta_path.write_text(
+	json.dumps(update_manifest, indent=2, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+PY
+
+cat > "$meta_path" <<EOF
+{
+	"app_name": "$app_name",
+	"version": "$version",
+	"package_type": "windows_portable_source_bundle",
+	"artifact_file": "$artifact_name",
+	"artifact_path": "dist/windows/packages/$artifact_name",
+	"entrypoint": "launch.bat",
+	"sha256": "$sha256",
+	"size_bytes": $size_bytes,
+	"created_at_utc": "$created_at_utc",
+	"download_url": "$download_url"
+}
+EOF
+
+if [ "${KEEP_WINDOWS_APP_DIR:-0}" != "1" ]; then
+	rm -rf "$app_root"
+fi
+
+echo "Packaged Windows artifact: $artifact_path"
+echo "Metadata file: $meta_path"
+echo "Update manifest: $update_meta_path"
+echo "SHA256: $sha256"

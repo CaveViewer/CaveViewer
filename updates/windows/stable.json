@@ -1,0 +1,10 @@
+{
+  "latest_version": "1.2.45",
+  "download_url": "https://github.com/innerspace-explorer/CaveViewerMac/releases/download/v1.2.45/CaveViewer-1.2.45-windows.zip",
+  "download_size_bytes": 371904,
+  "download_url_windows_zip": "https://github.com/innerspace-explorer/CaveViewerMac/releases/download/v1.2.45/CaveViewer-1.2.45-windows.zip",
+  "download_size_bytes_windows_zip": 371904,
+  "release_notes": "Stable.",
+  "sha256": "5e1ddf06eb04820967153a6ee9298d3fe0d309a601656b134241bbf1d412e2c7",
+  "sha256_windows_zip": "5e1ddf06eb04820967153a6ee9298d3fe0d309a601656b134241bbf1d412e2c7"
+}

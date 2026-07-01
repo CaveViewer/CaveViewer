@@ -1,0 +1,320 @@
+"""
+gui/sample_maps_dialog.py
+
+The window opened by the splash screen's "Sample Maps..." button: lists
+the known sample cave scans (see gui/sample_maps.py), shows their size,
+and lets the person download (or, if already downloaded, directly open)
+whichever one they want -- a one-click way to try CaveViewer without
+having their own scan yet.
+
+Kept separate from gui/sample_maps.py (pure fetch/download/extract
+logic, no UI) the same way gui/update_flow.py is kept separate from
+gui/update_checker.py -- this module is purely the Tkinter presentation
+and the glue that drives the other one.
+"""
+
+from __future__ import annotations
+
+import os
+
+_LAST_SAMPLE_MAPS_DIR_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last_sample_maps_dir")
+
+
+def show_sample_maps_dialog(parent, install_dir):
+    """
+    Shows the sample maps list as a modal dialog over `parent` (the
+    splash screen's Tk root). Blocks until the person either picks a map
+    to open (downloading it first if needed) or closes the window.
+
+    Returns the local folder path of the map to open, or None if the
+    dialog was closed without selecting one -- the caller (the splash
+    screen) treats a non-None return exactly like a Browse-selected
+    folder, so picking a sample map and browsing to your own folder are
+    just two different ways of arriving at the same "here's a folder,
+    go load it" outcome.
+    """
+    import tkinter as tk
+    from tkinter import messagebox
+    from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
+        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_FG, _BORDER_COLOR
+    from gui.sample_maps import (
+        fetch_sample_map_catalog, is_sample_map_already_downloaded,
+        download_and_extract_sample_map, local_sample_map_path,
+    )
+
+    selected_folder = [None]
+
+    dialog = tk.Toplevel(parent)
+    dialog.title("Sample Maps")
+    dialog.configure(bg=_BG_COLOR)
+    dialog.resizable(False, False)
+    dialog.transient(parent)
+
+    window_w = 460
+    dialog.geometry(f"{window_w}x200")
+    _center_over_parent(dialog, parent, window_w, 200)
+
+    header = tk.Label(
+        dialog, text="Sample Maps", font=("Segoe UI", 14, "bold"),
+        fg=_TITLE_COLOR, bg=_BG_COLOR,
+    )
+    header.pack(pady=(18, 4))
+
+    sub = tk.Label(
+        dialog, text="No map of your own? Try one of these.",
+        font=("Segoe UI", 9), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
+    )
+    sub.pack(pady=(0, 14))
+
+    status_label = tk.Label(
+        dialog, text="Loading available maps...", font=("Segoe UI", 10),
+        fg=_SUBTITLE_COLOR, bg=_BG_COLOR,
+    )
+    status_label.pack(pady=(10, 10))
+
+    list_frame = tk.Frame(dialog, bg=_BG_COLOR)
+
+    dialog.update()
+
+    catalog, error = fetch_sample_map_catalog()
+
+    status_label.destroy()
+
+    # Only show the hard "couldn't load anything" error screen if there's
+    # truly nothing to show at all -- in every other case (including a
+    # failed network fetch), still show the list built from
+    # KNOWN_SAMPLE_MAPS, since any map already downloaded previously
+    # needs to stay openable regardless of whether THIS fetch succeeded.
+    # This is the actual fix for sample maps becoming unreachable while
+    # offline: a network failure used to unconditionally show this error
+    # screen and never even check local disk for what's already there.
+    if not catalog:
+        dialog.geometry(f"{window_w}x220")
+        tk.Label(
+            dialog, text=f"Couldn't load the sample map list:\n\n{error}",
+            font=("Segoe UI", 9), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
+            wraplength=window_w - 60, justify="center",
+        ).pack(pady=(10, 16))
+        close_btn = tk.Button(
+            dialog, text="Close", command=dialog.destroy,
+            font=("Segoe UI", 9), bg=_BG_COLOR, fg=_SUBTITLE_COLOR,
+            relief="flat", borderwidth=1, highlightbackground=_BORDER_COLOR,
+            cursor="hand2",
+        )
+        close_btn.pack(pady=(0, 14))
+        dialog.wait_window()
+        return None
+
+    # A network error alongside a non-empty catalog means: every known
+    # map is still listed (from KNOWN_SAMPLE_MAPS), but fresh
+    # download_url/size info couldn't be fetched for any of them. Maps
+    # already downloaded are completely unaffected by this (their Open
+    # button works from local disk alone) -- only maps NOT yet
+    # downloaded are actually impacted, since there's no fresh URL to
+    # download them from until the network is back. Show a small,
+    # non-blocking notice instead of refusing to show the list at all.
+    extra_height = 0
+    if error:
+        extra_height = 50
+        notice = tk.Label(
+            dialog,
+            text="Couldn't check for fresh download info -- maps you've already\n"
+                 "downloaded still work below. New downloads need the internet.",
+            font=("Segoe UI", 8), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
+            justify="center",
+        )
+        notice.pack(pady=(0, 8))
+
+    row_height = 72
+    dialog.geometry(f"{window_w}x{200 + extra_height + row_height * len(catalog)}")
+
+    list_frame.pack(fill="both", expand=True, padx=20)
+
+    def format_size(size_bytes):
+        if size_bytes is None:
+            return ""
+        mb = size_bytes / (1024 * 1024)
+        return f"{mb:.0f} MB"
+
+    # Dictionary to track progress bars and buttons for each sample
+    progress_bars = {}
+    action_buttons = {}
+    downloaded_paths = {}  # Store result_path after download
+
+    def on_pick(sample):
+        already_have = is_sample_map_already_downloaded(install_dir, sample)
+
+        if already_have:
+            selected_folder[0] = local_sample_map_path(install_dir, sample)
+            dialog.destroy()
+            return
+
+        if sample.download_url is None:
+            messagebox.showinfo(
+                "Sample Maps",
+                f"{sample.display_name} isn't available for download right now "
+                f"(its file wasn't found on the server, or the server couldn't be "
+                f"reached). Try again later, or pick a different sample map.",
+                parent=dialog,
+            )
+            return
+
+        # Ask user where to save the map
+        from tkinter import filedialog
+        last_sample_dir = _load_last_sample_maps_dir()
+        save_dir = filedialog.askdirectory(
+            title=f"Save {sample.display_name} to...",
+            initialdir=last_sample_dir or install_dir,
+            parent=dialog,
+        )
+        if not save_dir:
+            return  # User cancelled the directory selection
+
+        _save_last_sample_maps_dir(save_dir)
+
+        # Hide button and show progress bar canvas (container already packed with fixed height)
+        action_buttons[sample.display_name].pack_forget()
+        progress_bar_container, progress_bar_canvas, progress_bar = progress_bars[sample.display_name]
+        progress_bar_canvas.pack(fill="x", padx=14, pady=(6, 0))
+        # Force layout update to get accurate canvas width
+        dialog.update_idletasks()
+
+        def on_progress(downloaded, total):
+            if total > 0:
+                frac = min(1.0, downloaded / total)
+                # Get the current width of the canvas (it fills the parent)
+                canvas_width = progress_bar_canvas.winfo_width()
+                if canvas_width > 1:  # winfo_width() returns 1 before widget is displayed
+                    progress_bar_canvas.coords(progress_bar, 0, 0, int(canvas_width * frac), 4)
+                progress_bar_canvas.update()
+
+        try:
+            result_path = download_and_extract_sample_map(save_dir, sample, progress_cb=on_progress)
+        except Exception as e:
+            progress_bar_canvas.pack_forget()
+            action_buttons[sample.display_name].pack(side="right", padx=14, pady=10)
+            messagebox.showerror(
+                "Download Failed",
+                f"Couldn't download {sample.display_name}:\n\n{e}",
+                parent=dialog,
+            )
+            return
+
+        # Download succeeded - hide progress bar and show "Open Map" button
+        progress_bar_canvas.pack_forget()
+        downloaded_paths[sample.display_name] = result_path
+        
+        # Update button text to "Open Map", change command, and show it
+        action_btn = action_buttons[sample.display_name]
+        action_btn.config(
+            text="Open",
+            command=lambda sn=sample.display_name, rp=result_path: on_open_map(sn, rp)
+        )
+        action_btn.pack(side="right", padx=14, pady=10)
+
+    def on_open_map(sample_name, result_path):
+        selected_folder[0] = result_path
+        dialog.destroy()
+
+    for sample in catalog:
+        row = tk.Frame(list_frame, bg=_PANEL_COLOR)
+        row.pack(fill="x", pady=6)
+
+        # Create progress bar container with fixed height (reserves space always)
+        progress_bar_container = tk.Frame(row, bg=_PANEL_COLOR, height=16)
+        progress_bar_container.pack(fill="x", padx=0, pady=0)
+        progress_bar_container.pack_propagate(False)  # Maintain fixed height
+        
+        progress_bar_canvas = tk.Canvas(
+            progress_bar_container, height=4, bg="#1c1c24",
+            highlightthickness=0
+        )
+        # Don't pack initially - will be packed when download starts
+        progress_bar = progress_bar_canvas.create_rectangle(0, 0, 0, 4, fill=_BUTTON_BG, width=0)
+        progress_bars[sample.display_name] = (progress_bar_container, progress_bar_canvas, progress_bar)
+
+        # Content frame - contains text and button side by side
+        content_frame = tk.Frame(row, bg=_PANEL_COLOR)
+        content_frame.pack(fill="both", expand=True)
+
+        text_frame = tk.Frame(content_frame, bg=_PANEL_COLOR)
+        text_frame.pack(side="left", fill="both", expand=True, padx=(14, 8), pady=10)
+
+        tk.Label(
+            text_frame, text=sample.display_name, font=("Segoe UI", 11, "bold"),
+            fg=_SUBTITLE_COLOR, bg=_PANEL_COLOR, anchor="w",
+        ).pack(anchor="w")
+
+        already_have = is_sample_map_already_downloaded(install_dir, sample)
+        if already_have:
+            detail_text = "Downloaded"
+        elif sample.download_url is None:
+            detail_text = "Currently unavailable"
+        else:
+            detail_text = format_size(sample.size_bytes)
+
+        tk.Label(
+            text_frame, text=detail_text, font=("Segoe UI", 9),
+            fg=_INSTRUCTION_COLOR, bg=_PANEL_COLOR, anchor="w",
+        ).pack(anchor="w")
+
+        btn_text = "Open" if already_have else "Download to..."
+        btn_enabled = already_have or sample.download_url is not None
+
+        action_btn = tk.Button(
+            content_frame, text=btn_text, command=lambda s=sample: on_pick(s),
+            font=("Segoe UI", 10, "bold"),
+            bg=_BUTTON_BG if btn_enabled else _BORDER_COLOR,
+            fg=_BUTTON_FG if btn_enabled else _INSTRUCTION_COLOR,
+            activebackground=_BUTTON_BG, activeforeground=_BUTTON_FG,
+            relief="flat", borderwidth=0,
+            padx=16, pady=6,
+            state="normal" if btn_enabled else "disabled",
+            cursor="hand2" if btn_enabled else "arrow",
+        )
+        action_btn.pack(side="right", padx=14, pady=10)
+        action_buttons[sample.display_name] = action_btn
+
+    footer = tk.Label(
+        dialog, text="Close this window to go back to the main screen.",
+        font=("Segoe UI", 8), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
+    )
+    footer.pack(pady=(8, 14))
+
+    dialog.wait_window()
+
+    return selected_folder[0]
+
+
+def _center_over_parent(window, parent, width, height):
+    parent.update_idletasks()
+    px = parent.winfo_rootx()
+    py = parent.winfo_rooty()
+    pw = parent.winfo_width()
+    ph = parent.winfo_height()
+    x = px + (pw - width) // 2
+    y = py + (ph - height) // 2
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
+
+def _load_last_sample_maps_dir() -> str | None:
+    """Load the last directory where the user saved sample maps."""
+    try:
+        with open(_LAST_SAMPLE_MAPS_DIR_FILE, "r", encoding="utf-8") as f:
+            path = f.read().strip()
+        if path and os.path.isdir(path):
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def _save_last_sample_maps_dir(path: str) -> None:
+    """Save the directory where the user saved sample maps."""
+    try:
+        if not path or not os.path.isdir(path):
+            return
+        with open(_LAST_SAMPLE_MAPS_DIR_FILE, "w", encoding="utf-8") as f:
+            f.write(path)
+    except Exception:
+        pass

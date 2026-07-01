@@ -1,0 +1,267 @@
+# Platform-Specific Code Module
+
+This directory implements a **platform adapter pattern** that allows the CaveViewer application to provide platform-specific behavior across macOS, Windows, and Linux without scattering conditional logic throughout the codebase.
+
+## Directory Structure
+
+```
+platform/
+├── __init__.py              # Public API exports
+├── base.py                  # SplashPlatformAdapter protocol definition
+├── factory.py               # Platform detection and adapter instantiation
+├── macos.py                 # macOS-specific implementations
+├── windows.py               # Windows-specific implementations
+├── linux.py                 # Linux-specific implementations
+└── default.py               # Default/fallback implementations for non-macOS platforms
+```
+
+## Architecture Overview
+
+The module uses Python's **Protocol** pattern to define a contract (`SplashPlatformAdapter`) that each platform implementation must satisfy. This allows:
+
+- **No runtime conditionals**: Instead of `if sys.platform == "darwin": ...`, code calls adapter methods
+- **Easy testing**: Mock adapters can be injected for testing specific platforms
+- **Extensibility**: New platform-specific methods can be added to the protocol and implemented per-platform
+- **Maintainability**: Platform-specific logic is isolated in dedicated files
+
+## Key Components
+
+### `base.py` – Protocol Definition
+
+Defines `SplashPlatformAdapter`, a Protocol that specifies all platform-aware methods:
+
+```python
+class SplashPlatformAdapter(Protocol):
+    def bookmark_save_modifier(self) -> str:
+        """Return 'command' (macOS) or 'control' (Windows/Linux)"""
+    
+    def mouse_look_button_name(self) -> str:
+        """Return 'right' (macOS) or 'left' (Windows/Linux)"""
+    
+    # ... other methods for updates, installation, UI fonts, etc.
+```
+
+**When to modify**: Add new methods when introducing platform-specific behavior elsewhere in the codebase.
+
+### `factory.py` – Platform Detection
+
+```python
+def get_platform_adapter() -> SplashPlatformAdapter:
+    if sys.platform == "darwin":
+        return MacOSSplashPlatformAdapter()
+    if sys.platform.startswith("win"):
+        return WindowsSplashPlatformAdapter()
+    if sys.platform.startswith("linux"):
+        return LinuxSplashPlatformAdapter()
+    return DefaultSplashPlatformAdapter()
+```
+
+**How it works**:
+- Inspects `sys.platform` once at module load time
+- Returns the appropriate adapter instance
+- Falls back to `DefaultSplashPlatformAdapter` for unknown platforms
+
+**When to modify**: Only if adding support for a new platform that requires different `sys.platform` detection (rare).
+
+### `macos.py` – macOS Implementations
+
+Extends `DefaultSplashPlatformAdapter` with macOS-specific overrides:
+
+```python
+class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
+    def ui_font_family(self) -> str:
+        return "Helvetica Neue"
+    
+    def bookmark_save_modifier(self) -> str:
+        return "command"
+    
+    def mouse_look_button_name(self) -> str:
+        return "right"
+    
+    def install_channel(self) -> str:
+        return "macos_app"  # DMG distribution channel
+```
+
+### `windows.py` & `linux.py` – Platform Overrides
+
+Similarly extend `DefaultSplashPlatformAdapter` with Windows/Linux specific behavior:
+
+```python
+class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
+    def bookmark_save_modifier(self) -> str:
+        return "control"
+    
+    def mouse_look_button_name(self) -> str:
+        return "left"
+    
+    def install_channel(self) -> str:
+        return "windows_app"  # ZIP distribution channel
+```
+
+### `default.py` – Fallback Implementations
+
+Provides safe defaults for methods that should work on all platforms:
+
+```python
+class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
+    def ui_font_family(self) -> str:
+        return "Segoe UI"  # Generic, widely available
+    
+    def install_channel(self) -> str:
+        return "unsupported"  # Safe default for unknown platforms
+```
+
+## Usage Examples
+
+### In application code (e.g., `viewer_window.py`):
+
+```python
+from gui.platform.factory import get_platform_adapter
+
+adapter = get_platform_adapter()
+
+# Get platform-specific behavior
+if adapter.mouse_look_button_name() == "right":
+    # macOS: show "Right click + mouse"
+else:
+    # Windows/Linux: show "Left click + mouse"
+
+modifier = adapter.bookmark_save_modifier()  # "command" or "control"
+font = adapter.ui_font_family()  # Platform-specific UI font
+```
+
+No need for `if sys.platform == ...` checks anywhere in the main code!
+
+## How to Add Platform-Specific Functionality
+
+### Step 1: Add Method to Protocol (`base.py`)
+
+Define the method contract with documentation:
+
+```python
+def my_new_feature(self) -> str:
+    """Return platform-specific value for my_new_feature.
+    
+    macOS example: 'value_for_mac'
+    Windows/Linux example: 'value_for_others'
+    """
+    ...
+```
+
+### Step 2: Implement in All Adapter Classes
+
+Add the implementation to each platform file:
+
+**`macos.py`:**
+```python
+def my_new_feature(self) -> str:
+    return "value_for_mac"
+```
+
+**`windows.py`:**
+```python
+def my_new_feature(self) -> str:
+    return "value_for_windows"
+```
+
+**`linux.py`:**
+```python
+def my_new_feature(self) -> str:
+    return "value_for_linux"
+```
+
+**`default.py`:**
+```python
+def my_new_feature(self) -> str:
+    return "fallback_value"  # Safe default
+```
+
+### Step 3: Use in Application Code
+
+```python
+adapter = get_platform_adapter()
+my_value = adapter.my_new_feature()
+```
+
+That's it! The platform-specific behavior is now centralized and accessible from anywhere in the codebase.
+
+## Example: Keyboard Shortcuts
+
+### Problem
+macOS uses Cmd+1..9 to save bookmarks; Windows/Linux use Ctrl+1..9.
+
+### Solution
+
+1. **Added to protocol** (`base.py`):
+   ```python
+   def bookmark_save_modifier(self) -> str:
+       """Return the modifier key name ('command' or 'control')."""
+   ```
+
+2. **Implemented per-platform** (`macos.py`, `default.py`):
+   - macOS: Returns `"command"`
+   - Windows/Linux: Returns `"control"`
+
+3. **Used in UI code** (`controls_overlay.py`):
+   ```python
+   adapter = get_platform_adapter()
+   if adapter.bookmark_save_modifier() == "command":
+       rows.append(("Cmd + 1..9", "Save camera bookmark slot"))
+   else:
+       rows.append(("Ctrl + 1..9", "Save camera bookmark slot"))
+   ```
+
+## Testing Platform-Specific Code
+
+For unit testing with mocked platforms:
+
+```python
+from typing import Protocol
+
+class MockAdapter:
+    def bookmark_save_modifier(self) -> str:
+        return "command"  # Simulate macOS
+    
+    def mouse_look_button_name(self) -> str:
+        return "right"
+
+# Inject mock in tests, then verify behavior
+```
+
+## Common Patterns
+
+### UI Strings with Platform Differences
+**When**: User-facing text that varies by platform (e.g., "Cmd+1" vs "Ctrl+1")
+
+**How**:
+1. Add method to protocol that returns the variable part (e.g., `bookmark_save_modifier()`)
+2. In UI code, query adapter and build the full string dynamically
+
+### Installation & Distribution Channels
+**When**: Different distribution formats (DMG for macOS, ZIP for Windows, AppImage for Linux)
+
+**How**:
+- `install_channel()` returns the channel identifier
+- `persist_downloaded_payload()` implements platform-specific storage
+- Update system knows which channel the current build came from
+
+### UI Framework & Fonts
+**When**: Native UI elements (menus, fonts, dialogs) behave differently per-platform
+
+**How**:
+- `ui_font_family()` returns platform-appropriate font
+- `install_about_handler()` integrates with native About menu on macOS
+
+## Best Practices
+
+1. **Centralize, don't scatter**: Always use the adapter, never add platform checks directly in feature code
+2. **Default to safe**: The `DefaultSplashPlatformAdapter` should provide the most conservative, widely-compatible behavior
+3. **Document why**: When platform implementations differ, document the reason in comments
+4. **Test both paths**: Verify behavior on at least macOS and Windows/Linux if possible
+5. **Keep it simple**: Protocol methods should do one thing; don't create god-adapters with 50 unrelated methods
+
+## Related Files
+
+- **`gui/controls_overlay.py`**: Uses `bookmark_save_modifier()` and `mouse_look_button_name()` to display platform-specific controls
+- **`gui/viewer_window.py`**: Uses adapters to bind keyboard/mouse events to platform-specific modifiers
+- **`gui/splash_screen.py`**: Primary consumer of installer and update-related adapter methods

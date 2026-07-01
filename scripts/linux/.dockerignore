@@ -1,0 +1,39 @@
+# .dockerignore - exclude files from Docker build context
+
+# Version control
+.git
+.gitignore
+.github
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist
+build
+
+# Build artifacts
+.pytest_cache
+.coverage
+htmlcov
+
+# OS files
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# Large/unnecessary files
+*.dmg
+*.exe
+*.AppImage
+node_modules

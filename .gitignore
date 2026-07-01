@@ -1,0 +1,15 @@
+.venv*
+.DS_Store
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+*.swn
+*.bak
+*.tmp
+*.log
+.tmp/
+build/
+dist/*
+.Trash*
+update_log.txt

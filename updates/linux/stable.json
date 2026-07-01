@@ -1,0 +1,10 @@
+{
+  "latest_version": "1.2.46",
+  "download_url": "https://github.com/innerspace-explorer/CaveViewerMac/releases/download/v1.2.46/CaveViewer-1.2.46-x86_64.AppImage",
+  "download_size_bytes": 47890887,
+  "download_url_linux_appimage": "https://github.com/innerspace-explorer/CaveViewerMac/releases/download/v1.2.46/CaveViewer-1.2.46-x86_64.AppImage",
+  "download_size_bytes_linux_appimage": 47890887,
+  "release_notes": "First Linux Client.",
+  "sha256": "7e64c6825f3e706ac3c5308b65936fea137cad6fcfc44e2c7477aa7839d98f33",
+  "sha256_linux_appimage": "7e64c6825f3e706ac3c5308b65936fea137cad6fcfc44e2c7477aa7839d98f33"
+}

@@ -1,0 +1,10 @@
+{
+  "latest_version": "1.2.46",
+  "download_url": "https://github.com/innerspace-explorer/CaveViewerMac/releases/download/v1.2.46/CaveViewer-1.2.46.dmg",
+  "download_size_bytes": 25033562,
+  "download_url_macosx_dmg": "https://github.com/innerspace-explorer/CaveViewerMac/releases/download/v1.2.46/CaveViewer-1.2.46.dmg",
+  "download_size_bytes_macosx_dmg": 25033562,
+  "release_notes": "Bug fixes.",
+  "sha256": "066cb003e45dfe7d137fa3705d4f3ffea4eadf9f9ee7a02a5ed5b78a225fb346",
+  "sha256_macosx_dmg": "066cb003e45dfe7d137fa3705d4f3ffea4eadf9f9ee7a02a5ed5b78a225fb346"
+}
