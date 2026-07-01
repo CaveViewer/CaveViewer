@@ -44,6 +44,32 @@ If there is an update, the app will let you download and install it.
 
 The update manifests are platform-specific, so the macOS app reads `updates/macos/stable.json` and the Windows app reads `updates/windows/stable.json`.
 
+### Linux app (AppImage)
+
+The best-practice distribution format for Linux is the self-contained AppImage — a single executable file that bundles Python, all dependencies, and the app itself. No system-wide installation or package manager involvement required.
+
+**1. Download the AppImage**
+
+Download `CaveViewer-<version>-x86_64.AppImage` from https://github.com/KernalPanic/CaveViewerPlus/releases.
+
+**2. Make it executable and run**
+
+```bash
+chmod +x CaveViewer-*-x86_64.AppImage
+./CaveViewer-*-x86_64.AppImage
+```
+
+The AppImage self-extracts to a temporary directory on launch and cleans up when it exits. No installation step is needed.
+
+**System requirements:** a display server (X11 or Wayland with XWayland), OpenGL 3.3+, and the following runtime libraries which are present by default on most desktop distributions:
+
+```bash
+# Ubuntu/Debian — install if the app fails to start
+sudo apt-get install libfreetype6 libgl1-mesa-dri libxkbcommon0
+```
+
+If there is an update, the app will let you download and install it.
+
 ### From source (development)
 
 For development, clone the repository and run from the working tree. Requires Python 3.10+.
@@ -133,9 +159,17 @@ Releases are managed through `scripts/release.sh`, which dispatches to platform-
 
 ### Linux
 
+Linux builds must be created on a Linux host (or inside the provided Docker container — see `scripts/linux/README.md`).
+
 ```bash
-# Build only (no publish target yet)
+# Build the AppImage (must run on Linux)
 ./scripts/release.sh linux-package
+
+# Publish to GitHub and update the Linux update manifest
+./scripts/release.sh linux-publish <version> "Release notes"
+
+# Example
+./scripts/release.sh linux-publish 1.2.3 "Bug fixes and stability improvements"
 ```
 
 The publish scripts build the platform artifact, create or update the GitHub release tag (`v<version>`), and write the corresponding update manifest (`updates/macos/stable.json` or `updates/windows/stable.json`) so the in-app updater picks up the new version.

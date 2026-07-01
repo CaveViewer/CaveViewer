@@ -50,7 +50,16 @@ Add-Type -AssemblyName System.Drawing
 
 # -- Paths --------------------------------------------------------------------
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Split-Path -Parent $ScriptDir
+
+# When packaged in the release zip, setup.ps1 is copied to the bundle root so
+# requirements.txt is a sibling.  In the source tree it lives at
+# scripts\windows\ -- two levels below the project root.
+if (Test-Path (Join-Path $ScriptDir "requirements.txt")) {
+    $ProjectRoot = $ScriptDir
+} else {
+    $ProjectRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+}
+
 $RequirementsFile = Join-Path $ProjectRoot "requirements.txt"
 $MainScript = Join-Path $ProjectRoot "caveviewer.py"
 
