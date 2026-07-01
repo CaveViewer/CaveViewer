@@ -32,7 +32,7 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Optional
 
-from gui.update_checker import download_update
+from gui.update_checker import download_update, make_ssl_context
 
 
 # Configuration for sample maps repository.
@@ -103,7 +103,8 @@ def fetch_sample_map_catalog():
             _TAGGED_RELEASE_API_URL,
             headers={"Accept": "application/vnd.github+json", "User-Agent": "CaveViewer-SampleMaps"},
         )
-        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS,
+                                     context=make_ssl_context()) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 404:

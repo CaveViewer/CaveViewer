@@ -24,12 +24,46 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
+import sys
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
 from typing import Optional
 
 from gui.platform import get_platform_adapter
+
+
+def make_ssl_context() -> ssl.SSLContext:
+    """
+    Returns an SSL context that trusts both Python's bundled CA bundle and
+    the Windows system certificate store.
+
+    Python's default SSL context only uses its own bundled CA bundle
+    (derived from Mozilla/certifi) -- it does not consult the Windows
+    certificate store.  This causes CERTIFICATE_VERIFY_FAILED on machines
+    where antivirus software (Avast, Bitdefender, Kaspersky, Windows
+    Defender with network inspection, etc.) or a corporate proxy performs
+    SSL inspection: those tools re-sign server certificates with their own
+    root CA, which Windows trusts but Python's bundle does not.
+
+    Loading the Windows store alongside the bundled bundle fixes both cases
+    without disabling verification.  The Windows-store loading path is
+    gated on sys.platform so it has no effect on macOS or Linux.
+    """
+    ctx = ssl.create_default_context()
+    if sys.platform == "win32":
+        for store_name in ("CA", "ROOT"):
+            try:
+                for cert, enc, _trust in ssl.enum_certificates(store_name):
+                    if enc == "x509_asn":
+                        try:
+                            ctx.load_verify_locations(cadata=cert)
+                        except ssl.SSLError:
+                            pass
+            except (AttributeError, OSError):
+                pass
+    return ctx
 
 
 # Primary configuration for update checks:
@@ -140,7 +174,8 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
             _MANIFEST_URL,
             headers=headers,
         )
-        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS,
+                                     context=make_ssl_context()) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -246,7 +281,7 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
         headers={"User-Agent": _PLATFORM_ADAPTER.update_check_user_agent()},
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with urllib.request.urlopen(request, timeout=30, context=make_ssl_context()) as response:
         total = expected_size_bytes or int(response.headers.get("Content-Length", 0)) or None
         downloaded = 0
         chunk_size = 65536
