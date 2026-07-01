@@ -83,9 +83,37 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
 
     def font_candidates(self) -> list[str]:
         """Return Linux-specific font file paths in priority order."""
-        return [
+        candidates = [
+            # Debian / Ubuntu
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
             "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            # Fedora / RHEL / openSUSE
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+            "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/liberation2/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
         ]
+        # Dynamic fallback: ask fontconfig for the best available sans-serif font.
+        # This covers any distro / custom font installation automatically.
+        fc_path = self._fc_match_font()
+        if fc_path:
+            candidates.append(fc_path)
+        return candidates
+
+    def _fc_match_font(self) -> str | None:
+        """Return a font path from fontconfig, or None if unavailable."""
+        try:
+            result = subprocess.run(
+                ["fc-match", "--format=%{file}", "sans-serif:style=Regular"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            path = result.stdout.strip()
+            if path and path.lower().endswith((".ttf", ".otf", ".ttc")):
+                return path
+        except Exception:
+            pass
+        return None
