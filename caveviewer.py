@@ -33,6 +33,18 @@ __version__ = APP_VERSION
 # directory this script is launched from.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Inject the OS trust store into Python's SSL before any network calls.
+# This fixes CERTIFICATE_VERIFY_FAILED on Windows when antivirus or
+# corporate proxy software performs SSL inspection -- those tools add
+# their own root CA to the Windows certificate store, which Python's
+# bundled CA bundle does not know about.  truststore makes Python use
+# the same verification path as Windows itself (and Chrome/Edge).
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass  # non-fatal: falls back to Python's bundled CA bundle
+
 _UPDATE_STARTED_SENTINEL = "__caveviewer_update_started__"
 
 
