@@ -282,6 +282,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.manifest = manifest
 
         self.texture_manager = TextureManager(self.ctx, self.textures_dir, self.manifest["mtl_materials"])
+        self.texture_manager.validate_textures()
 
         def predecode_textures_for_chunk(chunk_data):
             # Called from a background worker thread (see StreamingWorld) --

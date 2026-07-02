@@ -272,6 +272,36 @@ class TextureManager:
                 if hasattr(tex, "release"):
                     tex.release()
 
+    def validate_textures(self) -> dict:
+        """
+        Scan all materials in material_to_file and report which texture
+        files are present on disk and which are missing. Safe to call from
+        any thread (no OpenGL calls). Intended to be called once after the
+        manager is created, before rendering starts.
+
+        Returns a dict with keys:
+            'found'   : list of (material_name, filepath) for existing files
+            'missing' : list of (material_name, filepath) for missing files
+        """
+        found = []
+        missing = []
+        for mat_name, file_or_bytes in self.material_to_file.items():
+            if file_or_bytes is None:
+                continue  # no texture assigned to this material
+            if isinstance(file_or_bytes, bytes):
+                continue  # embedded texture, no file to check
+            path = os.path.join(self.textures_dir, file_or_bytes)
+            if os.path.exists(path):
+                found.append((mat_name, path))
+            else:
+                missing.append((mat_name, path))
+                print(f"[TextureManager] VALIDATE: missing texture for "
+                      f"'{mat_name}' -> '{path}'")
+
+        print(f"[TextureManager] Validation complete: "
+              f"{len(found)} textures found, {len(missing)} missing.")
+        return {"found": found, "missing": missing}
+
     def loaded_count(self) -> int:
         return len(self._file_cache)
 
