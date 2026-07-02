@@ -50,8 +50,14 @@ void main() {
 
 
 class ImportProgressPanel:
-    BAR_WIDTH = 480
-    BAR_HEIGHT = 28
+    # Match splash-screen update and sample-download bars: thin dark track
+    # with amber fill, no border.
+    BAR_WIDTH = 300
+    BAR_HEIGHT = 4
+
+    # Colors mirror gui/splash_screen.py's update progress visuals.
+    _TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)   # #1c1c24
+    _FILL_RGBA = (0.7922, 0.6353, 0.2431, 1.00)    # #caa23e (_BUTTON_BG)
 
     def __init__(self, ctx: moderngl.Context):
         self.ctx = ctx
@@ -63,9 +69,18 @@ class ImportProgressPanel:
             self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
         )
 
+    def _format_stage_label(self, stage: str) -> str:
+        text = (stage or "").strip()
+        if not text:
+            return "Preparing data"
+        text = text.replace("_", " ").replace("-", " ")
+        text = " ".join(text.split())
+        text = text.rstrip(" .,:;!?")
+        return text[:1].upper() + text[1:]
+
     def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float,
-               title: str = "IMPORTING NEW MAP",
-               note: str = "THIS IS A ONE-TIME COST -- FUTURE OPENS OF THIS MAP WILL BE INSTANT") -> None:
+               title: str = "Preparing Map",
+               note: str = "First-time setup in progress. Next time, this map will open much faster.") -> None:
         verts = []
         w, h = window_size
 
@@ -91,47 +106,41 @@ class ImportProgressPanel:
                 glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
                 add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
 
-        add_quad_px(0, 0, w, h, (0.03, 0.05, 0.08, 0.58))
+        add_quad_px(0, 0, w, h, (0.04, 0.04, 0.05, 0.60))
 
         title_size = 3.5
         title_w = bitmap_font.text_width_px(title, title_size)
         title_y = h * 0.38
-        add_text(title, (w - title_w) / 2.0, title_y, title_size, (0.62, 0.80, 1.0, 1.0))
+        add_text(title, (w - title_w) / 2.0, title_y, title_size, (0.95, 0.85, 0.55, 1.0))
 
         name_size = 1.9
         name_text = map_name.upper()
         name_w = bitmap_font.text_width_px(name_text, name_size)
         name_y = title_y + bitmap_font.text_height_px(title_size) + 16
-        add_text(name_text, (w - name_w) / 2.0, name_y, name_size, (0.82, 0.86, 0.92, 1.0))
+        add_text(name_text, (w - name_w) / 2.0, name_y, name_size, (0.80, 0.80, 0.84, 1.0))
 
         bar_x0 = (w - self.BAR_WIDTH) / 2.0
         bar_y0 = name_y + bitmap_font.text_height_px(name_size) + 30
         bar_x1 = bar_x0 + self.BAR_WIDTH
         bar_y1 = bar_y0 + self.BAR_HEIGHT
 
-        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, (0.26, 0.30, 0.38, 0.95))
+        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._TRACK_RGBA)
         fraction_clamped = max(0.0, min(1.0, fraction))
         fill_x1 = bar_x0 + fraction_clamped * self.BAR_WIDTH
         if fill_x1 > bar_x0:
-            add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, (0.20, 0.55, 0.98, 0.95))
-        border = 2.0
-        border_color = (0.55, 0.70, 0.95, 0.96)
-        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y0 + border, border_color)
-        add_quad_px(bar_x0, bar_y1 - border, bar_x1, bar_y1, border_color)
-        add_quad_px(bar_x0, bar_y0, bar_x0 + border, bar_y1, border_color)
-        add_quad_px(bar_x1 - border, bar_y0, bar_x1, bar_y1, border_color)
+            add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, self._FILL_RGBA)
 
         stage_size = 1.75
-        stage_text = f"{stage.upper()} -- {fraction_clamped*100:.0f}%"
+        stage_text = self._format_stage_label(stage)
         stage_w = bitmap_font.text_width_px(stage_text, stage_size)
-        stage_y = bar_y1 + 14
-        add_text(stage_text, (w - stage_w) / 2.0, stage_y, stage_size, (0.84, 0.90, 0.98, 1.0))
+        stage_y = bar_y1 + 12
+        add_text(stage_text, (w - stage_w) / 2.0, stage_y, stage_size, (0.80, 0.80, 0.84, 1.0))
 
         note_size = 1.4
         note_y = stage_y + bitmap_font.text_height_px(stage_size) + 20
         if note:
             note_w = bitmap_font.text_width_px(note, note_size)
-            add_text(note, (w - note_w) / 2.0, note_y, note_size, (0.72, 0.76, 0.84, 1.0))
+            add_text(note, (w - note_w) / 2.0, note_y, note_size, (0.60, 0.60, 0.65, 1.0))
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:

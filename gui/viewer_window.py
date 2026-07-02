@@ -964,7 +964,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             _pulse = float(0.5 + 0.4 * np.sin(current_time * 2.5))
             self.import_progress_panel.render(
                 self.wnd.size, _map_name, "loading chunks", _pulse,
-                title="LOADING MAP", note="",
+                title="Preparing Map", note="",
             )
             return
 
