@@ -13,3 +13,11 @@ build/
 dist/*
 .Trash*
 update_log.txt
+# Compiled C extension (core/drawbatch.c) -- built locally, not committed
+core/drawbatch*.so
+core/drawbatch*.pyd
+*.egg-info/
+# Compiled C extension (core/drawbatch.c) -- built locally, not committed
+core/drawbatch*.so
+core/drawbatch*.pyd
+*.egg-info/
