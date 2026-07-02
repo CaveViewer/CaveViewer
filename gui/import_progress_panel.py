@@ -63,7 +63,9 @@ class ImportProgressPanel:
             self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
         )
 
-    def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float) -> None:
+    def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float,
+               title: str = "IMPORTING NEW MAP",
+               note: str = "THIS IS A ONE-TIME COST -- FUTURE OPENS OF THIS MAP WILL BE INSTANT") -> None:
         verts = []
         w, h = window_size
 
@@ -91,7 +93,6 @@ class ImportProgressPanel:
 
         add_quad_px(0, 0, w, h, (0.03, 0.05, 0.08, 0.58))
 
-        title = "IMPORTING NEW MAP"
         title_size = 3.5
         title_w = bitmap_font.text_width_px(title, title_size)
         title_y = h * 0.38
@@ -126,11 +127,11 @@ class ImportProgressPanel:
         stage_y = bar_y1 + 14
         add_text(stage_text, (w - stage_w) / 2.0, stage_y, stage_size, (0.84, 0.90, 0.98, 1.0))
 
-        note = "THIS IS A ONE-TIME COST -- FUTURE OPENS OF THIS MAP WILL BE INSTANT"
         note_size = 1.4
-        note_w = bitmap_font.text_width_px(note, note_size)
         note_y = stage_y + bitmap_font.text_height_px(stage_size) + 20
-        add_text(note, (w - note_w) / 2.0, note_y, note_size, (0.72, 0.76, 0.84, 1.0))
+        if note:
+            note_w = bitmap_font.text_width_px(note, note_size)
+            add_text(note, (w - note_w) / 2.0, note_y, note_size, (0.72, 0.76, 0.84, 1.0))
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:

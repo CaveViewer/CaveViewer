@@ -157,6 +157,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._layout_cache_result: dict | None = None
         self._is_iconified = False
         self._is_background_paused = False
+        self._closing_requested = False
         self._startup_focus_requested = False
         self._platform_adapter = get_platform_adapter()
         self._bookmarks_path: str | None = None
@@ -249,6 +250,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_aabbs: dict[tuple, tuple] = {}
         self._has_map_loaded = False
         self._pending_import_started = False
+        self._initial_chunks_loaded = False
+        self._window_resources_released = False
 
         if have_ready_cache:
             self._load_map(
@@ -337,6 +340,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.world.config.load_radius_cells = self.render_distance_stepper.value
 
         self.controls_overlay.show_fullscreen()
+        # Reset on each map load; set True when the first chunk reaches the GPU.
+        self._initial_chunks_loaded = False
 
     def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
         """Print a one-time texture summary to console on map load."""
@@ -430,6 +435,74 @@ class CaveViewerWindow(mglw.WindowConfig):
         # next map's state
         self._chunk_gpu_objects.clear()
         self._chunk_normal_cache.clear()
+        self._chunk_aabbs.clear()
+
+        if hasattr(self, "texture_manager") and self.texture_manager is not None:
+            self.texture_manager.shutdown()
+
+        self._has_map_loaded = False
+        self.world = None
+        self.camera = None
+        self.minimap = None
+        self.texture_manager = None
+
+    def _release_window_resources(self) -> None:
+        """Release non-map GPU/UI resources when closing the viewer window."""
+        if self._window_resources_released:
+            return
+        self._window_resources_released = True
+
+        self._keys_down.clear()
+        self._mouse_look_active = False
+        self._mouse_look_left_option_active = False
+        self._last_mouse_pos = None
+
+        def _release_attr(obj, attr_name: str) -> None:
+            resource = getattr(obj, attr_name, None)
+            if resource is None:
+                return
+            if hasattr(resource, "release"):
+                try:
+                    resource.release()
+                except Exception:
+                    pass
+            try:
+                setattr(obj, attr_name, None)
+            except Exception:
+                pass
+
+        components = (
+            "light_stepper",
+            "render_distance_stepper",
+            "ambient_stepper",
+            "render_mode_buttons",
+            "controls_overlay",
+            "color_picker",
+            "import_progress_panel",
+            "stats_readout",
+            "minimap",
+        )
+        for name in components:
+            obj = getattr(self, name, None)
+            if obj is None:
+                continue
+            _release_attr(obj, "_vao")
+            _release_attr(obj, "_vbo")
+            _release_attr(obj, "_logo_vbo")
+            _release_attr(obj, "program")
+            if hasattr(obj, "release"):
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+            setattr(self, name, None)
+
+        _release_attr(self, "program")
+
+        CaveViewerWindow.cave_cache_dir = None
+        CaveViewerWindow.cave_textures_dir = None
+        CaveViewerWindow.cave_manifest = None
+        CaveViewerWindow.cave_pending_import = None
 
     def load_new_map(self, cache_dir: str, textures_dir: str, manifest: dict) -> None:
         """
@@ -649,6 +722,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         self._chunk_gpu_objects[chunk_data.cell] = vao_list
         self._chunk_normal_cache[chunk_data.cell] = normal_cache_entry
+        self._initial_chunks_loaded = True
 
     def _on_chunk_unload(self, cell):
         vao_list = self._chunk_gpu_objects.pop(cell, [])
@@ -818,6 +892,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         return result
 
     def on_render(self, current_time: float, frame_time: float):
+        if self._closing_requested:
+            return
+
         if self._startup_focus_enabled:
             self._request_startup_focus_once()
 
@@ -878,6 +955,18 @@ class CaveViewerWindow(mglw.WindowConfig):
             max_per_frame=6, time_budget_ms=3.0,
         )
         streaming_ms = (time.perf_counter() - t0) * 1000.0
+
+        # Show a loading indicator while the initial chunks stream in from disk.
+        # Without this the screen is black until the first chunk arrives, which
+        # can take several seconds on slow hardware or large maps.
+        if not self._initial_chunks_loaded:
+            _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+            _pulse = float(0.5 + 0.4 * np.sin(current_time * 2.5))
+            self.import_progress_panel.render(
+                self.wnd.size, _map_name, "loading chunks", _pulse,
+                title="LOADING MAP", note="",
+            )
+            return
 
         self.ctx.clear(*self.color_picker.color)  # background ("void") color, adjustable via the COLOR button
 
@@ -1729,8 +1818,26 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_scroll_event = on_mouse_scroll_event
 
     def on_close(self):
+        if self._closing_requested:
+            return
+        self._closing_requested = True
+
+        if hasattr(self, "wnd"):
+            try:
+                self.wnd.mouse_exclusivity = False
+            except Exception:
+                pass
+
         if self._has_map_loaded:
-            self.world.shutdown()
+            self._teardown_current_map()
+        self._release_window_resources()
+
+        # Ensure the backend window loop receives an explicit close request.
+        if hasattr(self, "wnd") and hasattr(self.wnd, "close"):
+            try:
+                self.wnd.close()
+            except Exception:
+                pass
 
     close = on_close
 

@@ -368,28 +368,8 @@ def _print_viewer_controls() -> None:
     print("          Esc = quit\n")
 
 
-def main():
-    print("=" * 60)
-    print(f"  {APP_NAME} {__version__}")
-    print("=" * 60)
-
-    # Make the command-line folder argument optional and robust to an empty string.
-    folder = None
-    if len(sys.argv) > 1 and sys.argv[1].strip():
-        folder = sys.argv[1].strip()
-    else:
-        from gui.splash_screen import show_splash_screen
-        folder = show_splash_screen(program_name=APP_NAME, version=__version__)
-
-    if folder == _UPDATE_STARTED_SENTINEL:
-        print("Update is being installed; exiting the current instance.")
-        return
-
-    # If the user didn't pick a folder, exit gracefully
-    if not folder:
-        print("No folder selected. Exiting.")
-        return
-
+def _run_map_session(folder: str) -> None:
+    """Load and view one cave map. Returns when the viewer window closes."""
     folder = os.path.abspath(folder)
     print(f"\nSelected folder: {folder}")
 
@@ -462,6 +442,34 @@ def main():
             import traceback
             traceback.print_exc()
             sys.exit(1)
+
+
+def main():
+    print("=" * 60)
+    print(f"  {APP_NAME} {__version__}")
+    print("=" * 60)
+
+    # CLI argument: open that path and exit when the viewer closes.
+    if len(sys.argv) > 1 and sys.argv[1].strip():
+        _run_map_session(sys.argv[1].strip())
+        return
+
+    # GUI mode: show the splash screen, run the viewer, then show the
+    # splash screen again so the user can open another map or exit.
+    while True:
+        from gui.splash_screen import show_splash_screen
+        folder = show_splash_screen(program_name=APP_NAME, version=__version__)
+
+        if folder == _UPDATE_STARTED_SENTINEL:
+            print("Update is being installed; exiting the current instance.")
+            return
+
+        if not folder:
+            print("No folder selected. Exiting.")
+            return
+
+        _run_map_session(folder)
+        # Viewer closed -- loop back and show the splash screen again
 
 
 if __name__ == "__main__":

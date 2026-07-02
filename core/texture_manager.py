@@ -263,6 +263,11 @@ class TextureManager:
             # only release the underlying GPU texture if no other material
             # alias still points at the same file
             filename = self.material_to_file.get(material_name)
+            if not filename:
+                tex = entry.moderngl_texture
+                if hasattr(tex, "release"):
+                    tex.release()
+                return
             still_used = any(
                 self.material_to_file.get(m) == filename
                 for m in self._loaded
@@ -271,6 +276,24 @@ class TextureManager:
                 tex = self._file_cache.pop(filename)
                 if hasattr(tex, "release"):
                     tex.release()
+
+    def shutdown(self) -> None:
+        """Best-effort full cleanup for window shutdown / map teardown."""
+        # Release textures tracked by material refcounts.
+        for mat_name in list(self._loaded.keys()):
+            # Force release regardless of current count so shutdown is deterministic.
+            self._loaded[mat_name].ref_count = 1
+            self.release(mat_name)
+
+        # Release any remaining deduplicated file-cache textures.
+        for tex in list(self._file_cache.values()):
+            if hasattr(tex, "release"):
+                tex.release()
+        self._file_cache.clear()
+
+        # Drop decoded-but-not-uploaded CPU images.
+        with self._decode_cache_lock:
+            self._decode_cache.clear()
 
     def validate_textures(self) -> dict:
         """

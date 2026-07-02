@@ -157,7 +157,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             if scale < 1.0:
                 new_size = (int(logo_img.width * scale), int(logo_img.height * scale))
                 logo_img = logo_img.resize(new_size, Image.LANCZOS)
-            logo_photo = ImageTk.PhotoImage(logo_img)
+            logo_photo = ImageTk.PhotoImage(logo_img, master=root)
         except Exception as e:
             print(f"[CaveViewer] Note: could not load splash screen logo ({e}); continuing without it.")
     else:
@@ -521,6 +521,12 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
     browse_button.focus_set()
     root.deiconify()
+    root.lift()
+    root.focus_force()
+    # Briefly force topmost so the splash appears above the GLFW viewer window
+    # that just closed -- on macOS the focus doesn't transfer automatically.
+    root.attributes("-topmost", True)
+    root.after(200, lambda: root.attributes("-topmost", False))
     # Auto-check once at startup. Silent when offline or already up-to-date.
     root.after(350, lambda: _start_check_updates(user_initiated=False))
     root.bind("<Return>", lambda _event: on_browse())
@@ -528,6 +534,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     root.protocol("WM_DELETE_WINDOW", on_close)
 
     root.mainloop()
+    try:
+        root.destroy()
+    except Exception:
+        pass  # already destroyed, or a background thread beat us to it
 
     return selected_folder[0]
 
