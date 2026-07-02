@@ -177,18 +177,26 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         if extra_progress_cb:
             extra_progress_cb(stage, frac)
 
-    mesh = parse_obj(obj_path, progress_cb=progress)
+    _parse_timing: dict = {}
+    mesh = parse_obj(obj_path, progress_cb=progress, timing=_parse_timing)
     print()  # newline after the parse progress bar
 
     materials = parse_mtl(mtl_path)
 
-    cache_dir = chunker.build_cache(obj_path, mesh, materials, progress_cb=progress)
+    _chunk_timing: dict = {}
+    cache_dir = chunker.build_cache(obj_path, mesh, materials, progress_cb=progress,
+                                    timing=_chunk_timing)
     print()
 
     elapsed = time.time() - t_start
     n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
     print(f"\nImport complete in {elapsed:.1f}s -- "
           f"{len(mesh.face_pos_idx):,} triangles split into {n_chunks:,} spatial chunks.")
+    print(f"  read + partition     : {_parse_timing.get('prepass', 0):.2f}s")
+    print(f"  vertex + face parse  : {_parse_timing.get('parse_loop', 0):.2f}s")
+    print(f"  numpy prep           : {_chunk_timing.get('numpy_prep', 0):.2f}s")
+    print(f"  face grouping        : {_chunk_timing.get('face_group', 0):.2f}s")
+    print(f"  chunk file write     : {_chunk_timing.get('write', 0):.2f}s")
 
     return cache_dir
 

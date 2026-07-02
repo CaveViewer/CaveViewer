@@ -700,11 +700,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             if n == 0:
                 continue
 
-            # group.normals is whatever the chunk cache has on disk (smooth
-            # by default). Flat normals are recomputed once from positions so
-            # both variants are locally available for an instant SHADE toggle.
+            # group.normals contains smooth (OBJ vertex) normals stored in the
+            # chunk file; flat_normals are also precomputed at import time and
+            # stored alongside them (v2+ cache format) so we no longer need to
+            # recompute per-chunk on the main thread during streaming.
             smooth_normals = group.normals
-            flat_normals = chunker.compute_flat_normals(group.positions)
+            flat_normals = group.flat_normals
             active_normals = (smooth_normals if self.render_mode_buttons.smooth_shading_enabled
                                else flat_normals)
 

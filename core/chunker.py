@@ -31,6 +31,7 @@ import concurrent.futures
 import json
 import os
 import struct
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -44,7 +45,7 @@ CHUNKS_DIRNAME = "chunks"
 DEFAULT_CHUNK_SIZE = 8.0  # meters; tune based on cave passage scale
 
 _MAGIC = b"CVCH"  # CaveViewer CHunk
-_VERSION = 1
+_VERSION = 2      # v2 adds precomputed flat normals to each group
 
 
 @dataclass
@@ -60,9 +61,10 @@ class ChunkData:
 @dataclass
 class ChunkMaterialGroup:
     material_name: str
-    positions: np.ndarray   # (N, 3) float32, flat (already expanded, not indexed)
-    uvs: np.ndarray         # (N, 2) float32
-    normals: np.ndarray     # (N, 3) float32
+    positions: np.ndarray    # (N, 3) float32, flat (already expanded, not indexed)
+    uvs: np.ndarray          # (N, 2) float32
+    normals: np.ndarray      # (N, 3) float32 -- smooth (OBJ vertex normals or fallback flat)
+    flat_normals: np.ndarray # (N, 3) float32 -- face normals, always flat-shaded
 
 
 def world_to_cell(point: np.ndarray, chunk_size: float) -> tuple[int, int, int]:
@@ -71,12 +73,18 @@ def world_to_cell(point: np.ndarray, chunk_size: float) -> tuple[int, int, int]:
 
 def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
                  chunk_size: float = DEFAULT_CHUNK_SIZE,
-                 progress_cb=None) -> str:
+                 progress_cb=None,
+                 timing: dict | None = None) -> str:
     """
     Partition `mesh` into spatial chunks and write the disk cache next to
     `obj_path`. Returns the cache directory path.
 
     progress_cb(stage: str, fraction: float)
+
+    timing, if given, is populated with elapsed seconds for key sub-stages:
+      'numpy_prep'  -- centroid/sort vectorised numpy work
+      'face_group'  -- per-cell face grouping loop
+      'write'       -- parallel chunk file I/O
     """
     obj_dir = os.path.dirname(os.path.abspath(obj_path))
     cache_dir = os.path.join(obj_dir, CACHE_DIRNAME)
@@ -86,6 +94,7 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     if progress_cb:
         progress_cb("computing face centroids", 0.0)
 
+    _t_numpy = time.perf_counter()
     tri_pos = mesh.positions[mesh.face_pos_idx]   # (Nf, 3, 3)
     centroids = tri_pos.mean(axis=1)              # (Nf, 3)
     cell_coords = np.floor(centroids / chunk_size).astype(np.int64)  # (Nf, 3)
@@ -129,6 +138,9 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     if progress_cb:
         progress_cb("writing chunk files", 0.3)
 
+    if timing is not None:
+        timing["numpy_prep"] = time.perf_counter() - _t_numpy
+
     manifest_chunks = {}
     total_runs = len(run_starts)
 
@@ -154,6 +166,9 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
         mat_name = material_names[mat_id] if mat_id >= 0 else "__no_material__"
         per_cell_groups.setdefault(real_cell, []).append((mat_name, face_idx_in_order))
 
+    if timing is not None:
+        timing["face_group"] = time.perf_counter() - _t_numpy - timing.get("numpy_prep", 0)
+
     worker_count_env = os.environ.get("CAVEVIEWER_CHUNK_BUILD_WORKERS")
     if worker_count_env:
         try:
@@ -177,6 +192,7 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     cell_items = list(per_cell_groups.items())
     total_cells = len(cell_items)
     completed_cells = 0
+    _t_write = time.perf_counter()
 
     def _write_one_cell(cell_coord: tuple[int, int, int], groups: list[tuple[str, np.ndarray]]):
         cell_str = f"{cell_coord[0]}_{cell_coord[1]}_{cell_coord[2]}"
@@ -198,6 +214,9 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
 
     if progress_cb:
         progress_cb("writing manifest", 0.98)
+
+    if timing is not None:
+        timing["write"] = time.perf_counter() - _t_write
 
     manifest = {
         "version": _VERSION,
@@ -270,6 +289,9 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
             f.write(flat_pos.tobytes())
             f.write(flat_uv.tobytes())
             f.write(flat_nrm.tobytes())
+            # Precompute and store flat (face) normals so the streaming path
+            # can skip computing them on the main thread per chunk load.
+            f.write(_compute_flat_normals(flat_pos).tobytes())
 
             all_positions.append(flat_pos)
             used_materials.append(mat_name)
@@ -333,8 +355,9 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
 
     version = struct.unpack_from("<I", blob, offset)[0]
     offset += 4
-    if version != _VERSION:
-        raise ValueError(f"Unsupported chunk version {version} in {path}")
+    if version not in (1, 2):
+        raise ValueError(f"Unsupported chunk version {version} in {path} "
+                         f"(expected 1 or 2 -- delete the .caveviewer_cache folder to rebuild)")
 
     n_groups = struct.unpack_from("<I", blob, offset)[0]
     offset += 4
@@ -361,7 +384,15 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
         normals = np.frombuffer(blob, dtype=np.float32, count=nrm_count, offset=offset).reshape(n_verts, 3)
         offset += nrm_count * 4
 
-        groups[name] = ChunkMaterialGroup(name, positions, uvs, normals)
+        # v2+: flat normals are stored; v1: compute them here (one-time cost on
+        # background thread, same as before this change, until cache is rebuilt).
+        if version >= 2:
+            flat_normals = np.frombuffer(blob, dtype=np.float32, count=nrm_count, offset=offset).reshape(n_verts, 3)
+            offset += nrm_count * 4
+        else:
+            flat_normals = _compute_flat_normals(np.array(positions))
+
+        groups[name] = ChunkMaterialGroup(name, positions, uvs, normals, flat_normals)
         all_pos.append(positions)
 
     stacked = np.concatenate(all_pos, axis=0) if all_pos else np.zeros((0, 3), np.float32)
