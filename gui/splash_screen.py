@@ -534,10 +534,16 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     root.protocol("WM_DELETE_WINDOW", on_close)
 
     root.mainloop()
-    try:
-        root.destroy()
-    except Exception:
-        pass  # already destroyed, or a background thread beat us to it
+    # On macOS, keep the Tk app object alive for the process lifetime so
+    # the global app-menu About callback remains bound to a valid Tk
+    # application. Destroying it here leaves a stale About callback that
+    # can trigger "application has been destroyed" errors after returning
+    # from the OpenGL viewer window.
+    if sys.platform != "darwin":
+        try:
+            root.destroy()
+        except Exception:
+            pass  # already destroyed, or a background thread beat us to it
 
     return selected_folder[0]
 

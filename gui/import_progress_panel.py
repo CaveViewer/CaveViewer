@@ -58,6 +58,9 @@ class ImportProgressPanel:
     # Colors mirror gui/splash_screen.py's update progress visuals.
     _TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)   # #1c1c24
     _FILL_RGBA = (0.7922, 0.6353, 0.2431, 1.00)    # #caa23e (_BUTTON_BG)
+    _TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)    # #f2d98c (_TITLE_COLOR)
+    _SUBTITLE_RGBA = (0.8000, 0.8039, 0.8392, 1.0) # #cccdd6 (_SUBTITLE_COLOR)
+    _NOTE_RGBA = (0.6039, 0.6039, 0.6510, 1.0)     # #9a9aa6 (_INSTRUCTION_COLOR)
 
     def __init__(self, ctx: moderngl.Context):
         self.ctx = ctx
@@ -111,13 +114,13 @@ class ImportProgressPanel:
         title_size = 3.5
         title_w = bitmap_font.text_width_px(title, title_size)
         title_y = h * 0.38
-        add_text(title, (w - title_w) / 2.0, title_y, title_size, (0.95, 0.85, 0.55, 1.0))
+        add_text(title, (w - title_w) / 2.0, title_y, title_size, self._TITLE_RGBA)
 
         name_size = 1.9
         name_text = map_name.upper()
         name_w = bitmap_font.text_width_px(name_text, name_size)
         name_y = title_y + bitmap_font.text_height_px(title_size) + 16
-        add_text(name_text, (w - name_w) / 2.0, name_y, name_size, (0.80, 0.80, 0.84, 1.0))
+        add_text(name_text, (w - name_w) / 2.0, name_y, name_size, self._SUBTITLE_RGBA)
 
         bar_x0 = (w - self.BAR_WIDTH) / 2.0
         bar_y0 = name_y + bitmap_font.text_height_px(name_size) + 30
@@ -134,13 +137,13 @@ class ImportProgressPanel:
         stage_text = self._format_stage_label(stage)
         stage_w = bitmap_font.text_width_px(stage_text, stage_size)
         stage_y = bar_y1 + 12
-        add_text(stage_text, (w - stage_w) / 2.0, stage_y, stage_size, (0.80, 0.80, 0.84, 1.0))
+        add_text(stage_text, (w - stage_w) / 2.0, stage_y, stage_size, self._SUBTITLE_RGBA)
 
         note_size = 1.4
         note_y = stage_y + bitmap_font.text_height_px(stage_size) + 20
         if note:
             note_w = bitmap_font.text_width_px(note, note_size)
-            add_text(note, (w - note_w) / 2.0, note_y, note_size, (0.60, 0.60, 0.65, 1.0))
+            add_text(note, (w - note_w) / 2.0, note_y, note_size, self._NOTE_RGBA)
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:

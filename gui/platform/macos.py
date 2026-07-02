@@ -114,10 +114,10 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             root.eval(
                 "proc ::tk::mac::ShowAbout {} {\n"
                 "    global _cv_about_title _cv_about_msg _cv_about_detail\n"
-                "    tk_messageBox -type ok"
+                "    catch {tk_messageBox -type ok"
                 " -title $_cv_about_title"
                 " -message $_cv_about_msg"
-                " -detail $_cv_about_detail\n"
+                " -detail $_cv_about_detail} _cv_about_err\n"
                 "}\n"
                 "proc tkAboutDialog {} { ::tk::mac::ShowAbout }"
             )

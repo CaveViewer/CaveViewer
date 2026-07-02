@@ -52,7 +52,7 @@ void main() {
 }
 """
 
-# Separate shader pair for the spinning logo: unlike every other shape
+# Separate shader pair for the loading logo: unlike every other shape
 # this overlay draws (flat-colored vector triangles), the logo is a
 # textured image, so it needs UV coordinates and a texture sampler rather
 # than per-vertex color -- different enough from the vector-shape
@@ -84,6 +84,13 @@ void main() {
 
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 _LOGO_PATH = os.path.join(_ASSETS_DIR, "loading_logo.png")
+
+# Match splash_screen.py text palette exactly.
+_SPLASH_TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)       # #f2d98c
+_SPLASH_SUBTITLE_RGBA = (0.8000, 0.8039, 0.8392, 1.0)    # #cccdd6
+_SPLASH_INSTRUCTION_RGBA = (0.6039, 0.6039, 0.6510, 1.0) # #9a9aa6
+_SPLASH_PROGRESS_TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)  # #1c1c24
+_SPLASH_PROGRESS_FILL_RGBA = (0.7922, 0.6353, 0.2431, 1.0)    # #caa23e
 
 
 def _get_platform_control_rows() -> list[tuple[str, str]]:
@@ -182,11 +189,12 @@ class ControlsOverlay:
         self._manual_mode = False
         self._start_time = 0.0
         self._fade_start_time = None
+        self._progress_fraction = 0.0
         
         # Generate platform-specific control rows
         self._control_rows = _get_platform_control_rows()
 
-        # Spinning logo: loaded once here (a one-time disk read + GPU
+        # Loading logo: loaded once here (a one-time disk read + GPU
         # upload, not repeated every frame) and re-drawn each frame with
         # an updated rotation angle while this overlay is visible. A
         # missing/unreadable logo file degrades to simply not drawing the
@@ -201,7 +209,7 @@ class ControlsOverlay:
             self._logo_texture = ctx.texture(img.size, 4, tex_data)
             self._logo_texture.build_mipmaps()
         except Exception as e:
-            print(f"[ControlsOverlay] WARNING: could not load spinning logo "
+            print(f"[ControlsOverlay] WARNING: could not load loading logo "
                   f"({_LOGO_PATH}): {e}")
 
         self.logo_program = ctx.program(vertex_shader=_LOGO_VERT_SRC, fragment_shader=_LOGO_FRAG_SRC)
@@ -211,8 +219,6 @@ class ControlsOverlay:
         self._logo_vao = ctx.vertex_array(
             self.logo_program, [(self._logo_vbo, "2f 2f", "in_pos", "in_uv")]
         )
-        self._spin_start_time = time.perf_counter()
-
     # -- lifecycle ------------------------------------------------------------
 
     def show_fullscreen(self) -> None:
@@ -222,6 +228,7 @@ class ControlsOverlay:
         self._manual_mode = False
         self._start_time = time.perf_counter()
         self._fade_start_time = None
+        self._progress_fraction = 0.0
 
     def show_panel(self) -> None:
         """Call after a minimap teleport, while the new area's chunks stream in."""
@@ -230,6 +237,7 @@ class ControlsOverlay:
         self._manual_mode = False
         self._start_time = time.perf_counter()
         self._fade_start_time = None
+        self._progress_fraction = 0.0
 
     def show_help(self) -> None:
         """
@@ -301,6 +309,12 @@ class ControlsOverlay:
 
         loaded = streaming_stats.get("loaded", 0)
         pending = streaming_stats.get("pending", 0)
+        total = max(0, loaded + pending)
+        if total > 0:
+            frac = max(0.0, min(1.0, float(loaded) / float(total)))
+            # Keep progress monotonic so the bar doesn't jump backward
+            # when pending work is reprioritized across frames.
+            self._progress_fraction = max(self._progress_fraction, frac)
 
         if self._fullscreen:
             enough_loaded = loaded >= self.MIN_CHUNKS_TO_DISMISS and pending == 0
@@ -328,44 +342,15 @@ class ControlsOverlay:
         t = min(fade_elapsed / self.FADE_OUT_SECONDS, 1.0)
         return 1.0 - t
 
-    # -- spinning logo ------------------------------------------------------------
+    # -- logo -----------------------------------------------------------------
 
-    def _render_spinning_logo(self, center_x: float, center_y: float, size_px: float,
-                                window_size: tuple[int, int], alpha_mult: float) -> None:
-        """
-        Draws the logo as a textured quad continuously tumbling around a
-        VERTICAL axis through its own center -- like a coin or a playing
-        card spinning in place, rather than a flat clock-hand rotation.
-        The logo stays upright the whole time; only its apparent WIDTH
-        changes (narrowing to a thin sliver edge-on, then widening back
-        out), which is the standard, convincing way to fake a 3D spin on
-        a flat 2D image without actual 3D geometry.
-
-        Two details make this read as "3D" rather than just "squashed":
-          - Past the halfway point of each half-rotation (i.e. once we'd
-            be looking at the "back" of the card), the U texture
-            coordinates are mirrored left-right. A real object would show
-            its back face there; since this flat artwork has no separate
-            back face drawn, mirroring the same image reads as "now
-            looking at it from the other side" rather than an unnatural
-            instant flip or a frozen sliver.
-          - Brightness dips slightly as the logo narrows toward edge-on
-            (where a real spinning object would catch the least light
-            face-on and look darkest), then recovers as it widens back
-            toward the viewer -- a cheap but effective shading cue that
-            sells the 3D illusion far better than width-scaling alone.
-        """
+    def _render_logo(self, center_x: float, center_y: float, size_px: float,
+                     window_size: tuple[int, int], alpha_mult: float) -> None:
+        """Draw a static centered logo as a textured quad."""
         if self._logo_texture is None:
             return
 
         w, h = window_size
-
-        # continuous tumble, independent of frame rate -- driven by
-        # elapsed wall-clock time rather than incrementing per-frame by a
-        # fixed step, so the spin speed stays consistent regardless of
-        # how fast or slow the render loop is currently running
-        elapsed = time.perf_counter() - self._spin_start_time
-        angle = elapsed * 1.2  # radians/second; ~ one full tumble every ~5.2s
 
         # half-extents in pixels, preserving the logo's own aspect ratio
         if self._logo_aspect >= 1.0:
@@ -375,36 +360,15 @@ class ControlsOverlay:
             half_h = size_px / 2.0
             half_w = (size_px * self._logo_aspect) / 2.0
 
-        # cos(angle) is the actual "3D" part: +1 = facing the viewer head
-        # on (full width), 0 = edge-on (zero width, a vertical sliver),
-        # -1 = facing fully away (full width again, but mirrored -- the
-        # "back" of the card). Width scales by the ABSOLUTE value so it
-        # never goes negative (which would otherwise invert the quad's
-        # winding and could flicker/cull oddly); the sign is handled
-        # separately, below, purely for the texture-mirroring decision.
-        cos_a = np.cos(angle)
-        width_scale = abs(cos_a)
-        facing_away = cos_a < 0.0
-
-        scaled_half_w = half_w * width_scale
-
-        # brightness dips toward edge-on (width_scale near 0) and recovers
-        # toward face-on (width_scale near 1) -- floor it so the logo
-        # never goes fully black/invisible even at the thinnest sliver
-        brightness = 0.35 + 0.65 * width_scale
-
         local_corners = [
-            (-scaled_half_w, -half_h), (scaled_half_w, -half_h),
-            (scaled_half_w, half_h), (-scaled_half_w, half_h),
+            (-half_w, -half_h), (half_w, -half_h),
+            (half_w, half_h), (-half_w, half_h),
         ]
         # V=0 at the TOP corners and V=1 at the BOTTOM corners, matching
         # standard image coordinate convention (row 0 = top of the
         # image) -- the original mapping had this inverted, which is what
         # made the logo render upside down.
-        if facing_away:
-            uvs = [(1.0, 0.0), (0.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
-        else:
-            uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
 
         verts = []
         for (lx, ly), (u, v) in zip(local_corners, uvs):
@@ -433,7 +397,7 @@ class ControlsOverlay:
         self._logo_texture.use(location=0)
         self.logo_program["u_texture"].value = 0
         self.logo_program["u_alpha"].value = alpha_mult
-        self.logo_program["u_brightness"].value = float(brightness)
+        self.logo_program["u_brightness"].value = 1.0
 
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
@@ -506,14 +470,14 @@ class ControlsOverlay:
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
-        # Spinning logo draws as its own pass (separate shader/texture)
+        # Logo draws as its own pass (separate shader/texture)
         # on top of everything just drawn above -- logo_spec is
         # (center_x, center_y, size_px), returned by whichever layout
         # builder ran, so the logo's position adapts to fullscreen vs
         # panel layout without this method needing to know those details.
         if logo_spec is not None:
             logo_cx, logo_cy, logo_size = logo_spec
-            self._render_spinning_logo(logo_cx, logo_cy, logo_size, window_size, alpha_mult)
+            self._render_logo(logo_cx, logo_cy, logo_size, window_size, alpha_mult)
 
     # -- layout: full-screen variant --------------------------------------------
 
@@ -533,19 +497,19 @@ class ControlsOverlay:
             subtitle = "Press Help again to close this screen"
         else:
             title = "Loading cave"
-            subtitle = "While the map streams in, here are the controls"
+            subtitle = "Loading in progress. These controls will help you navigate."
 
         title_size = 4.3
         title_w = bitmap_font.text_width_px(title, title_size)
         title_x = (w - title_w) / 2.0
         title_y = h * 0.14
-        add_text(title, title_x, title_y, title_size, (0.14, 0.33, 0.63, 1.0))
+        add_text(title, title_x, title_y, title_size, _SPLASH_TITLE_RGBA)
 
         sub_size = 2.2
         sub_w = bitmap_font.text_width_px(subtitle, sub_size)
         sub_x = (w - sub_w) / 2.0
         sub_y = title_y + bitmap_font.text_height_px(title_size) + 18
-        add_text(subtitle, sub_x, sub_y, sub_size, (0.82, 0.86, 0.92, 1.0))
+        add_text(subtitle, sub_x, sub_y, sub_size, _SPLASH_SUBTITLE_RGBA)
 
         # Compute the table's real total width from actual content (same
         # approach now used for the panel variant) so the whole table can
@@ -578,6 +542,24 @@ class ControlsOverlay:
         logo_size = max(60.0, min(logo_area_height * 0.7, 180.0))
         logo_cx = w / 2.0
         logo_cy = logo_area_height / 2.0
+
+        if not self._manual_mode:
+            bar_w = 300.0
+            bar_h = 4.0
+            bar_x0 = (w - bar_w) / 2.0
+            bar_x1 = bar_x0 + bar_w
+            logo_bottom = logo_cy + logo_size / 2.0
+            preferred_y = logo_bottom + 10.0
+            max_y = title_y - bar_h - 8.0
+            bar_y0 = min(preferred_y, max_y)
+            bar_y0 = max(bar_y0, logo_bottom + 4.0)
+            bar_y1 = bar_y0 + bar_h
+
+            add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, _SPLASH_PROGRESS_TRACK_RGBA)
+            fill_x1 = bar_x0 + self._progress_fraction * bar_w
+            if fill_x1 > bar_x0:
+                add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
+
         return (logo_cx, logo_cy, logo_size)
 
     # -- layout: small panel variant (used after teleport) ----------------------
@@ -625,7 +607,7 @@ class ControlsOverlay:
 
         title_x = panel_x0 + (panel_w - title_w) / 2.0
         title_y = panel_y0 + 12
-        add_text(title, title_x, title_y, title_size, (0.14, 0.33, 0.63, 1.0))
+        add_text(title, title_x, title_y, title_size, _SPLASH_TITLE_RGBA)
 
         # label_col_width is now exactly max_label_w (plus nothing extra)
         # since the panel itself was sized to fit it precisely -- the
@@ -681,6 +663,6 @@ class ControlsOverlay:
         for label, desc in self._control_rows:
             label_w = bitmap_font.text_width_px(label, label_size)
             label_x = label_col_right_x - label_w
-            add_text(label, label_x, y, label_size, (0.62, 0.80, 1.0, 1.0))
-            add_text(desc, desc_col_x, y, desc_size, (0.86, 0.89, 0.94, 1.0))
+            add_text(label, label_x, y, label_size, _SPLASH_SUBTITLE_RGBA)
+            add_text(desc, desc_col_x, y, desc_size, _SPLASH_INSTRUCTION_RGBA)
             y += row_height
