@@ -13,3 +13,4 @@ build/
 dist/*
 .Trash*
 update_log.txt
+.cache/

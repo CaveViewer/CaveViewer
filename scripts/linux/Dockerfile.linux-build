@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+# BUILD_PLATFORM controls the target architecture (linux/arm64 or linux/amd64).
+# Passed as --build-arg BUILD_PLATFORM=... by build_linux_in_docker.sh.
+ARG BUILD_PLATFORM=linux/arm64
+FROM --platform=${BUILD_PLATFORM} ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Pre-install all build prerequisites so the build script's apt step is a no-op.
+# python3-venv: needed for the venv the build script creates.
+# sudo: build_linux_app.sh calls sudo apt-get; pre-installing everything means
+#       those calls are skipped, but sudo must exist so the script doesn't error.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    python3-venv \
+    python3-tk \
+    tk-dev \
+    tcl-dev \
+    libfreetype6-dev \
+    libjpeg-dev \
+    zlib1g-dev \
+    libpng-dev \
+    libtiff-dev \
+    libwebp-dev \
+    libopenjp2-7-dev \
+    curl \
+    sudo \
+    git
+
+# Copy the real Python 3.12 binary (not a symlink) into a portable cache
+# structure so build_linux_app.sh finds it immediately and skips its own
+# download. A real binary is required -- the venv module fails when the source
+# Python is a symlink chain on a bind-mounted filesystem.
+RUN mkdir -p /opt/portable-python/python/bin && \
+    cp "$(readlink -f $(which python3))" /opt/portable-python/python/bin/python3 && \
+    chmod +x /opt/portable-python/python/bin/python3
+
+# Entrypoint: seed the build script's portable Python cache from the image's
+# symlink on first run. On subsequent runs the cache already exists -- fast no-op.
+RUN printf '#!/usr/bin/env bash\n\
+PYTHON_CACHE=/workspace/.cache/standalone-python\n\
+CACHE_PYTHON=$PYTHON_CACHE/python/bin/python3\n\
+# Re-seed if the cached Python is missing or is the wrong architecture.\n\
+if [ ! -e "$CACHE_PYTHON" ] || ! "$CACHE_PYTHON" --version >/dev/null 2>&1; then\n\
+    echo "[Docker] Seeding portable Python cache from system Python..."\n\
+    rm -rf "$PYTHON_CACHE"\n\
+    mkdir -p "$PYTHON_CACHE/python/bin"\n\
+    cp -a /opt/portable-python/python/bin/. "$PYTHON_CACHE/python/bin/"\n\
+fi\n\
+# Remove any stale .venv left by a previous failed or wrong-arch run.\n\
+if [ -d /workspace/.venv ] && ! /workspace/.venv/bin/python3 --version >/dev/null 2>&1; then\n\
+    echo "[Docker] Removing stale .venv..."\n\
+    rm -rf /workspace/.venv\n\
+fi\n\
+exec "$@"\n' > /usr/local/bin/docker-entrypoint.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+WORKDIR /workspace

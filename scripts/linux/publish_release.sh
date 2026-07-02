@@ -69,8 +69,25 @@ if ! grep -q '^APP_VERSION = "' "$version_file"; then
   exit 1
 fi
 
-app_appimage_name="CaveViewer-${normalized_version}-x86_64.AppImage"
-app_appimage_path="$linux_packages_dir/$app_appimage_name"
+# Find all AppImages for this version regardless of architecture suffix.
+# When building both arm64 and amd64, both are uploaded to the release.
+map_appimage_paths=()
+while IFS= read -r -d '' f; do
+  map_appimage_paths+=("$f")
+done < <(find "$linux_packages_dir" -maxdepth 1 -name "CaveViewer-${normalized_version}-*.AppImage" -print0 2>/dev/null | sort -z)
+
+if [ ${#map_appimage_paths[@]} -eq 0 ]; then
+  echo "Error: no AppImage found in $linux_packages_dir for version $normalized_version"
+  exit 1
+fi
+
+# Prefer x86_64 for the update manifest (largest installed base); fall back to first found.
+manifest_appimage_path="${map_appimage_paths[0]}"
+for _p in "${map_appimage_paths[@]}"; do
+  [[ "$_p" == *x86_64* ]] && manifest_appimage_path="$_p" && break
+done
+manifest_appimage_name="$(basename "$manifest_appimage_path")"
+
 source_tarball_name="CaveViewer-${normalized_version}-source.tar.gz"
 source_dist_dir="$repo_root/dist/source"
 source_tarball_path="$source_dist_dir/$source_tarball_name"
@@ -95,8 +112,8 @@ fi
 echo "Packaging source code..."
 "$repo_root/scripts/common/package_source.sh" "$normalized_version"
 
-if [ ! -f "$app_appimage_path" ]; then
-  echo "Error: expected Linux AppImage package not found: $app_appimage_path"
+if [ ${#map_appimage_paths[@]} -eq 0 ]; then
+  echo "Error: expected Linux AppImage package not found in $linux_packages_dir"
   exit 1
 fi
 
@@ -107,24 +124,24 @@ fi
 
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   echo "Release $tag already exists; uploading/replacing assets"
-  gh release upload "$tag" "$app_appimage_path" "$source_tarball_path" --repo "$repo" --clobber
+  gh release upload "$tag" "${map_appimage_paths[@]}" "$source_tarball_path" --repo "$repo" --clobber
 else
-  echo "Creating release $tag and uploading Linux AppImage and source"
-  gh release create "$tag" "$app_appimage_path" "$source_tarball_path" --repo "$repo" --title "$release_title" --notes "$release_notes"
+  echo "Creating release $tag and uploading Linux AppImages and source"
+  gh release create "$tag" "${map_appimage_paths[@]}" "$source_tarball_path" --repo "$repo" --title "$release_title" --notes "$release_notes"
 fi
 
-appimage_asset_url="$(gh api "repos/$repo/releases/tags/$tag" --jq ".assets[] | select(.name == \"$app_appimage_name\") | .browser_download_url")"
+appimage_asset_url="$(gh api "repos/$repo/releases/tags/$tag" --jq ".assets[] | select(.name == \"$manifest_appimage_name\") | .browser_download_url")"
 
 if [ -z "$appimage_asset_url" ]; then
   echo "Error: could not resolve browser_download_url for asset $app_appimage_name on release $tag"
   exit 1
 fi
 
-echo "Linux AppImage asset URL: $appimage_asset_url"
+echo "Linux AppImage asset URL (manifest): $appimage_asset_url"
 "$script_dir/write_update_manifest.sh" \
   "$normalized_version" \
   "$appimage_asset_url" \
-  "$app_appimage_path" \
+  "$manifest_appimage_path" \
   "$release_notes"
 
 echo "Committing version bump and updated manifest..."

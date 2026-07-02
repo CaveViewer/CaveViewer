@@ -37,9 +37,11 @@ echo "Packaging CaveViewer v$APP_VERSION..."
 
 mkdir -p "$dist_packages_dir"
 
+ARCH="$(uname -m)"
+
 # Create distributable tarball with version info
-output_tarball="$dist_packages_dir/CaveViewer-${APP_VERSION}-x86_64.tar.gz"
-output_appimage="$dist_packages_dir/CaveViewer-${APP_VERSION}-x86_64.AppImage"
+output_tarball="$dist_packages_dir/CaveViewer-${APP_VERSION}-${ARCH}.tar.gz"
+output_appimage="$dist_packages_dir/CaveViewer-${APP_VERSION}-${ARCH}.AppImage"
 
 # Create tarball of the app
 cd "$dist_app_dir"
