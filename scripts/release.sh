@@ -7,6 +7,7 @@ set -euo pipefail
 #   ./scripts/release.sh <target> [args...]
 #
 # Targets:
+#   all-package         -> scripts/all_package.sh
 #   macos-package       -> scripts/macos/package.sh
 #   macos-publish       -> scripts/macos/publish_release.sh
 #   macos-dist-layout   -> scripts/macos/show_dist_layout.sh
@@ -27,6 +28,9 @@ target="$1"
 shift
 
 case "$target" in
+  all-package)
+    exec "$script_dir/all_package.sh" "$@"
+    ;;
   macos-package)
     exec "$script_dir/macos/package.sh" "$@"
     ;;
