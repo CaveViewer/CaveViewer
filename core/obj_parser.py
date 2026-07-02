@@ -237,7 +237,7 @@ def parse_mtl(mtl_path: str) -> dict[str, Material]:
                 current_name = line.split(maxsplit=1)[1].strip()
                 current_tex = None
             elif line.startswith("map_Kd "):
-                current_tex = line.split(maxsplit=1)[1].strip()
+                current_tex = line.split(maxsplit=1)[1].strip().strip('"').strip("'")
 
     if current_name is not None:
         materials[current_name] = Material(current_name, current_tex)
