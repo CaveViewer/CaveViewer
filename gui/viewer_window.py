@@ -244,6 +244,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         # tuples in the same order as _chunk_gpu_objects, so toggling shading
         # can zip the two lists and rewrite each VBO in place via vbo.write().
         self._chunk_normal_cache: dict[tuple, list] = {}
+        # Per-cell world-space AABBs for frustum culling, populated in
+        # _load_map from the manifest's pre-computed bounding boxes.
+        self._chunk_aabbs: dict[tuple, tuple] = {}
         self._has_map_loaded = False
         self._pending_import_started = False
 
@@ -308,6 +311,20 @@ class CaveViewerWindow(mglw.WindowConfig):
         # pass or GPU cost beyond this tiny 2D overlay.
         self.minimap = Minimap(self.ctx, self.manifest)
 
+        # One-time texture diagnostic: print material/texture summary to
+        # console so atlas feasibility can be judged without guessing.
+        self._print_texture_diagnostics(manifest, textures_dir)
+
+        # Build world-space AABB lookup for every cell in the manifest so
+        # the frustum culler can skip chunks outside the view each frame.
+        self._chunk_aabbs = {
+            tuple(int(v) for v in cell_str.split("_")): (
+                np.array(info["bounds_min"], dtype=np.float32),
+                np.array(info["bounds_max"], dtype=np.float32),
+            )
+            for cell_str, info in manifest["chunks"].items()
+        }
+
         # Render-distance slider's current value should drive the new
         # map's streaming config immediately, rather than resetting back
         # to the control's own default -- if someone already turned it up
@@ -319,6 +336,65 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.world.config.load_radius_cells = self.render_distance_stepper.value
 
         self.controls_overlay.show_fullscreen()
+
+    def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
+        """Print a one-time texture summary to console on map load."""
+        from PIL import Image
+        import io as _io
+
+        mats = manifest.get("mtl_materials", {})
+        print(f"[CaveViewer] Texture diagnostics: {len(mats)} materials, "
+              f"{len(manifest.get('chunks', {}))} total chunks")
+
+        # Deduplicate: multiple material names can share one file/bytes blob.
+        seen: dict[object, tuple[str, tuple[int, int]]] = {}  # key -> (first_mat, size)
+        missing = 0
+        embedded = 0
+
+        for mat_name, file_or_bytes in mats.items():
+            if file_or_bytes is None:
+                missing += 1
+                continue
+            if file_or_bytes in seen:
+                continue
+            if isinstance(file_or_bytes, bytes):
+                embedded += 1
+                try:
+                    img = Image.open(_io.BytesIO(file_or_bytes))
+                    seen[file_or_bytes] = (mat_name, img.size)
+                except Exception:
+                    seen[file_or_bytes] = (mat_name, (0, 0))
+            else:
+                import os as _os
+                path = _os.path.join(textures_dir, file_or_bytes)
+                try:
+                    with Image.open(path) as img:
+                        seen[file_or_bytes] = (mat_name, img.size)
+                except Exception:
+                    seen[file_or_bytes] = (mat_name, (0, 0))
+
+        sizes = [sz for _, sz in seen.values() if sz != (0, 0)]
+        unique_files = len(seen)
+        total_px = sum(w * h for w, h in sizes)
+        total_mb = total_px * 3 / (1024 * 1024)  # RGB uncompressed
+
+        size_counts: dict[tuple, int] = {}
+        for sz in sizes:
+            size_counts[sz] = size_counts.get(sz, 0) + 1
+
+        print(f"[CaveViewer]   Unique texture files : {unique_files}"
+              + (f" ({embedded} embedded)" if embedded else ""))
+        if missing:
+            print(f"[CaveViewer]   Materials with no texture: {missing}")
+        for sz, count in sorted(size_counts.items(), key=lambda x: -x[1]):
+            print(f"[CaveViewer]   {sz[0]}x{sz[1]} : {count} texture(s)")
+        print(f"[CaveViewer]   Uncompressed RGB total  : {total_mb:.0f} MB")
+        max_dim = max((max(w, h) for w, h in sizes), default=0)
+        # Rough atlas fit: next power-of-2 square that holds total_px
+        import math as _math
+        atlas_side = 2 ** _math.ceil(_math.log2(_math.sqrt(total_px))) if total_px > 0 else 0
+        print(f"[CaveViewer]   Estimated atlas needed  : {atlas_side}x{atlas_side} px "
+              f"({atlas_side*atlas_side*3/1024/1024:.0f} MB)")
 
     def _teardown_current_map(self) -> None:
         """
@@ -645,6 +721,45 @@ class CaveViewerWindow(mglw.WindowConfig):
     _AMBIENT_MIN = 0.04
     _AMBIENT_MAX = 0.9
 
+    @staticmethod
+    def _frustum_planes(view: np.ndarray, proj: np.ndarray) -> np.ndarray:
+        """
+        Extract the 6 view-frustum planes in world space from the row-major
+        view and projection matrices using the Gribb-Hartmann method.
+        The combined clip matrix M = proj @ view maps world-space column
+        vectors to clip space; summing/differencing rows of M gives the 6
+        plane equations. Returns a (6, 4) float64 array where each row
+        (a, b, c, d) satisfies a*x + b*y + c*z + d >= 0 for inside points.
+        """
+        vp = (proj @ view).astype(np.float64)
+        planes = np.empty((6, 4), dtype=np.float64)
+        planes[0] = vp[3] + vp[0]   # left
+        planes[1] = vp[3] - vp[0]   # right
+        planes[2] = vp[3] + vp[1]   # bottom
+        planes[3] = vp[3] - vp[1]   # top
+        planes[4] = vp[3] + vp[2]   # near
+        planes[5] = vp[3] - vp[2]   # far
+        lengths = np.linalg.norm(planes[:, :3], axis=1, keepdims=True)
+        planes /= np.maximum(lengths, 1e-9)
+        return planes
+
+    @staticmethod
+    def _aabb_inside_frustum(planes: np.ndarray,
+                              bmin: np.ndarray, bmax: np.ndarray) -> bool:
+        """
+        Positive-vertex frustum-AABB test. For each plane, pick the AABB
+        corner furthest along the plane normal (the 'positive vertex'). If
+        that corner is outside the plane, the entire AABB is outside the
+        frustum (conservative -- produces no false culls).
+        """
+        for a, b, c, d in planes:
+            px = bmax[0] if a >= 0 else bmin[0]
+            py = bmax[1] if b >= 0 else bmin[1]
+            pz = bmax[2] if c >= 0 else bmin[2]
+            if a * px + b * py + c * pz + d < 0:
+                return False
+        return True
+
     def _right_column_layout(self, window_size: tuple[int, int]) -> dict:
         """
         Returns a dict with every position the right-side column needs:
@@ -805,12 +920,23 @@ class CaveViewerWindow(mglw.WindowConfig):
         # stalls until the GPU result is ready; this is intentional for
         # diagnostic accuracy and adds negligible overhead on modern
         # drivers where the query resolves within the same frame.
+        # Frustum-cull loaded chunks against the current view before drawing.
+        # Build _visible_cells once so both solid and wireframe passes share
+        # the same culled set without repeating the test.
+        _vp_planes = self._frustum_planes(view, proj)
+        _visible_cells = []
+        for cell, vao_list in self._chunk_gpu_objects.items():
+            aabb = self._chunk_aabbs.get(cell)
+            if aabb is None or self._aabb_inside_frustum(_vp_planes, aabb[0], aabb[1]):
+                _visible_cells.append((cell, vao_list))
+        _chunks_drawn = len(_visible_cells)
+
         # u_texture always refers to sampler unit 0 -- set it once before
         # the loop rather than redundantly on every single draw call.
         self.program["u_texture"].value = 0
         with self.ctx.query(time=True) as _gpu_q:
             if show_solid_pass:
-                for cell, vao_list in self._chunk_gpu_objects.items():
+                for cell, vao_list in _visible_cells:
                     for vao, vbo, mat_name, texture in vao_list:
                         texture.use(location=0)
                         vao.render(moderngl.TRIANGLES)
@@ -832,7 +958,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 # wireframe is still fully readable, just not perfectly crisp
                 # in rare cases.
                 self.ctx.wireframe = True
-                for cell, vao_list in self._chunk_gpu_objects.items():
+                for cell, vao_list in _visible_cells:
                     for vao, vbo, mat_name, texture in vao_list:
                         vao.render(moderngl.TRIANGLES)
                 self.ctx.wireframe = False
@@ -920,8 +1046,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             print(f"[CaveViewer] FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
                   f"streaming={streaming_ms:.1f}ms mesh_draw={mesh_draw_ms:.1f}ms "
                   f"gpu_draw={self._last_gpu_draw_ms:.1f}ms "
-                  f"overlay={overlay_ms:.1f}ms | chunks loaded={stats['loaded']} "
-                  f"pending={stats['pending']}")
+                  f"overlay={overlay_ms:.1f}ms | drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
+                  f"loaded={stats['loaded']} pending={stats['pending']}")
 
         self._frame_count += 1
         now = time.time()
@@ -929,7 +1055,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             fps = self._frame_count / (now - self._last_fps_print)
             stats = self.world.stats()
             print(f"[CaveViewer] {fps:.1f} fps | chunks loaded={stats['loaded']} "
-                  f"pending={stats['pending']} | speed={self.camera.move_speed:.1f}m/s "
+                  f"pending={stats['pending']} drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
+                  f"| speed={self.camera.move_speed:.1f}m/s "
                   f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
             self._frame_count = 0
             self._last_fps_print = now
