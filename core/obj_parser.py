@@ -238,7 +238,8 @@ def parse_mtl(mtl_path: str) -> dict[str, Material]:
                 current_tex = None
             elif line.startswith("map_Kd "):
                 # Support quoted and unquoted filenames. Remove quotes only if
-                # they are the first and last characters.
+                # they are the first and last characters. This handles names
+                # that may contain spaces or other special characters.
                 path = line.split(maxsplit=1)[1].strip()
                 if len(path) > 1 and path.startswith('"') and path.endswith('"'):
                     current_tex = path[1:-1]
