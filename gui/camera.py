@@ -53,21 +53,22 @@ class FlyCamera:
 
     def right(self) -> np.ndarray:
         # Compute base right vector: forward × world_up
+        f = self.forward()  # compute once; was called twice before
         world_up = np.array([0.0, 1.0, 0.0])
-        base_right = _normalize(np.cross(self.forward(), world_up))
-        
+        base_right = _normalize(np.cross(f, world_up))
+
+        if self.roll == 0.0:
+            return base_right
+
         # Rotate around forward axis by roll angle using Rodrigues' formula
-        f = self.forward()
-        cr, sr = math.cos(self.roll), math.sin(self.roll)
-        
         # Rodrigues: v_rot = v*cos(θ) + (k × v)*sin(θ) + k*(k·v)*(1-cos(θ))
         # where k is the rotation axis (forward) and v is the vector to rotate (base_right)
+        cr, sr = math.cos(self.roll), math.sin(self.roll)
         k_cross_v = np.cross(f, base_right)
         k_dot_v = np.dot(f, base_right)
-        
-        rotated_right = (base_right * cr + 
-                        k_cross_v * sr + 
-                        f * k_dot_v * (1.0 - cr))
+        rotated_right = (base_right * cr +
+                         k_cross_v * sr +
+                         f * k_dot_v * (1.0 - cr))
         return _normalize(rotated_right)
 
     def up(self) -> np.ndarray:
@@ -114,9 +115,18 @@ class FlyCamera:
     # -- matrices ------------------------------------------------------------
 
     def view_matrix(self) -> np.ndarray:
+        # Compute f/r/u in one pass from a single forward() call.
+        # Calling self.right() and self.up() separately would invoke
+        # forward() 6 times total due to their internal call chains.
         f = self.forward()
-        r = self.right()
-        u = self.up()
+        world_up = np.array([0.0, 1.0, 0.0])
+        r = _normalize(np.cross(f, world_up))
+        if self.roll != 0.0:
+            cr, sr = math.cos(self.roll), math.sin(self.roll)
+            k_cross_v = np.cross(f, r)
+            k_dot_v = np.dot(f, r)
+            r = _normalize(r * cr + k_cross_v * sr + f * k_dot_v * (1.0 - cr))
+        u = _normalize(np.cross(r, f))
         pos = self.position
 
         # standard lookAt-style matrix construction

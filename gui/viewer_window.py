@@ -139,6 +139,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         with open(os.path.join(SHADER_DIR, "mesh.frag")) as f:
             frag_src = f.read()
         self.program = self.ctx.program(vertex_shader=vert_src, fragment_shader=frag_src)
+        # u_model is always the identity matrix -- write it once here rather than
+        # allocating and re-uploading a fresh identity matrix every frame.
+        self.program["u_model"].write(np.identity(4, dtype=np.float32).tobytes())
 
         self._keys_down = set()
         self._last_raw_modifiers = 0
@@ -148,7 +151,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._frame_count = 0
         self._last_fps_print = time.time()
         self._frame_time_history: list[float] = []
+        self._last_gpu_draw_ms = 0.0
         self._last_input_reset_log = 0.0
+        self._layout_cache_size: tuple | None = None
+        self._layout_cache_result: dict | None = None
         self._is_iconified = False
         self._is_background_paused = False
         self._startup_focus_requested = False
@@ -653,6 +659,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         Stack order, top to bottom: Brightness, Global Light, Render
         Distance, then the button block.
         """
+        if window_size == self._layout_cache_size:
+            return self._layout_cache_result
+
         w, h = window_size
 
         # label reserve: matches StepperControl.render's own
@@ -682,12 +691,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         right_x_ambient = w - 18 - self.ambient_stepper.total_width()
         right_x_render_distance = w - 18 - self.render_distance_stepper.total_width()
 
-        return {
+        result = {
             "brightness_anchor": (right_x_brightness, brightness_anchor_y),
             "ambient_anchor": (right_x_ambient, ambient_anchor_y),
             "render_distance_anchor": (right_x_render_distance, render_distance_anchor_y),
             "buttons_top_y": buttons_top_y,
         }
+        self._layout_cache_size = window_size
+        self._layout_cache_result = result
+        return result
 
     def on_render(self, current_time: float, frame_time: float):
         if self._startup_focus_enabled:
@@ -740,7 +752,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         # detects a changed load_radius_cells on its own, not just a
         # moved camera -- this assignment is what actually gives it a
         # changed value to detect).
-        self.world.config.load_radius_cells = self.render_distance_stepper.value
+        if self.world.config.load_radius_cells != self.render_distance_stepper.value:
+            self.world.config.load_radius_cells = self.render_distance_stepper.value
 
         t0 = time.perf_counter()
         self.world.update(self.camera.position.astype(np.float32))
@@ -755,12 +768,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         aspect = self.wnd.size[0] / max(self.wnd.size[1], 1)
         view = self.camera.view_matrix()
         proj = self.camera.projection_matrix(aspect)
-        model = np.identity(4, dtype=np.float32)
 
         self.program["u_view"].write(view.T.tobytes())
         self.program["u_projection"].write(proj.T.tobytes())
-        self.program["u_model"].write(model.T.tobytes())
-        self.program["u_camera_pos"].value = tuple(self.camera.position.astype(np.float32))
+        _pos = self.camera.position
+        self.program["u_camera_pos"].value = (float(_pos[0]), float(_pos[1]), float(_pos[2]))
         self.program["u_light_color"].value = (1.0, 0.95, 0.85)  # warm headlamp tone
         self.program["u_light_intensity"].value = float(self.light_stepper.value)
         # GLOBAL LIGHT stepper (0-10) maps linearly onto the shader's
@@ -784,34 +796,48 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Texture toggle, which defeats the point of turning texture off
         # in the first place when inspecting wireframe-only.
         show_solid_pass = self.render_mode_buttons.texture_enabled or not self.render_mode_buttons.wireframe_enabled
-        if show_solid_pass:
-            for cell, vao_list in self._chunk_gpu_objects.items():
-                for vao, vbo, mat_name, texture in vao_list:
-                    texture.use(location=0)
-                    self.program["u_texture"].value = 0
-                    vao.render(moderngl.TRIANGLES)
 
-        # Wireframe pass: drawn whenever Mesh is toggled on. If the solid
-        # pass also drew (texture or gray surface visible), this overlays
-        # triangulation on top of it. If the solid pass was skipped (the
-        # texture-off + wireframe-on combination above), this is the only
-        # thing that draws -- true wireframe-only.
-        if self.render_mode_buttons.wireframe_enabled:
-            # NOTE: this draws coincident wireframe lines directly on top of
-            # the solid pass's geometry, which can show minor z-fighting/
-            # flicker on some GPUs since both passes write near-identical
-            # depth values. A polygon-offset bias would clean this up, but
-            # since the bias amount needs hand-tuning against moderngl's
-            # actual ctx.polygon_offset API (left out here rather than
-            # guess at a value that could silently do nothing or look
-            # wrong), this is a known minor cosmetic rough edge -- the
-            # wireframe is still fully readable, just not perfectly crisp
-            # in rare cases.
-            self.ctx.wireframe = True
-            for cell, vao_list in self._chunk_gpu_objects.items():
-                for vao, vbo, mat_name, texture in vao_list:
-                    vao.render(moderngl.TRIANGLES)
-            self.ctx.wireframe = False
+        # GPU timer query wraps both draw passes so the elapsed value
+        # reflects actual GPU execution time -- distinct from the CPU
+        # wall-clock mesh_draw_ms below, which includes Python loop
+        # overhead and driver submission but not necessarily the GPU's
+        # own fill/shading cost. Reading .elapsed after the with-block
+        # stalls until the GPU result is ready; this is intentional for
+        # diagnostic accuracy and adds negligible overhead on modern
+        # drivers where the query resolves within the same frame.
+        # u_texture always refers to sampler unit 0 -- set it once before
+        # the loop rather than redundantly on every single draw call.
+        self.program["u_texture"].value = 0
+        with self.ctx.query(time=True) as _gpu_q:
+            if show_solid_pass:
+                for cell, vao_list in self._chunk_gpu_objects.items():
+                    for vao, vbo, mat_name, texture in vao_list:
+                        texture.use(location=0)
+                        vao.render(moderngl.TRIANGLES)
+
+            # Wireframe pass: drawn whenever Mesh is toggled on. If the solid
+            # pass also drew (texture or gray surface visible), this overlays
+            # triangulation on top of it. If the solid pass was skipped (the
+            # texture-off + wireframe-on combination above), this is the only
+            # thing that draws -- true wireframe-only.
+            if self.render_mode_buttons.wireframe_enabled:
+                # NOTE: this draws coincident wireframe lines directly on top of
+                # the solid pass's geometry, which can show minor z-fighting/
+                # flicker on some GPUs since both passes write near-identical
+                # depth values. A polygon-offset bias would clean this up, but
+                # since the bias amount needs hand-tuning against moderngl's
+                # actual ctx.polygon_offset API (left out here rather than
+                # guess at a value that could silently do nothing or look
+                # wrong), this is a known minor cosmetic rough edge -- the
+                # wireframe is still fully readable, just not perfectly crisp
+                # in rare cases.
+                self.ctx.wireframe = True
+                for cell, vao_list in self._chunk_gpu_objects.items():
+                    for vao, vbo, mat_name, texture in vao_list:
+                        vao.render(moderngl.TRIANGLES)
+                self.ctx.wireframe = False
+
+        self._last_gpu_draw_ms = _gpu_q.elapsed / 1_000_000
         mesh_draw_ms = (time.perf_counter() - t0) * 1000.0
 
         # Overlay HUD elements draw last, on top of the 3D scene, each with
@@ -893,6 +919,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             stats = self.world.stats()
             print(f"[CaveViewer] FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
                   f"streaming={streaming_ms:.1f}ms mesh_draw={mesh_draw_ms:.1f}ms "
+                  f"gpu_draw={self._last_gpu_draw_ms:.1f}ms "
                   f"overlay={overlay_ms:.1f}ms | chunks loaded={stats['loaded']} "
                   f"pending={stats['pending']}")
 
@@ -902,7 +929,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             fps = self._frame_count / (now - self._last_fps_print)
             stats = self.world.stats()
             print(f"[CaveViewer] {fps:.1f} fps | chunks loaded={stats['loaded']} "
-                  f"pending={stats['pending']} | speed={self.camera.move_speed:.1f}m/s")
+                  f"pending={stats['pending']} | speed={self.camera.move_speed:.1f}m/s "
+                  f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
             self._frame_count = 0
             self._last_fps_print = now
 

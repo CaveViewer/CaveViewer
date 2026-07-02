@@ -84,6 +84,11 @@ class Minimap:
         )
 
         self._compute_footprint(manifest)
+        # Static geometry cache: background + footprint tiles + border only
+        # need to be rebuilt when the window is resized, not every frame.
+        self._static_geom_bytes: bytes = b''
+        self._static_vert_count: int = 0
+        self._static_geom_window_size: tuple | None = None
 
     # -- footprint computation (done once, at startup) -----------------------
 
@@ -225,72 +230,65 @@ class Minimap:
 
     # -- rendering -----------------------------------------------------------
 
-    def render(self, window_size: tuple[int, int], camera_position: np.ndarray,
-               camera_forward: np.ndarray) -> None:
-        verts = []
+    def _build_static_geom(self, window_size: tuple[int, int]) -> tuple[bytes, int]:
+        """
+        Builds the background + all footprint cell squares + border as
+        pre-serialised float32 bytes and a vertex count. Called once per
+        unique window size; the result is cached in render() so this
+        loop over every occupied cell only runs on startup and on resize.
+        """
+        verts: list = []
 
-        def add_quad_px(x0, y0, x1, y1, rgba):
-            (nx0, ny0) = self._px_to_ndc(x0, y0, window_size)
-            (nx1, ny1) = self._px_to_ndc(x1, y1, window_size)
+        def add_quad(x0, y0, x1, y1, rgba):
+            nx0, ny0 = self._px_to_ndc(x0, y0, window_size)
+            nx1, ny1 = self._px_to_ndc(x1, y1, window_size)
             top, bottom = max(ny0, ny1), min(ny0, ny1)
             left, right = min(nx0, nx1), max(nx0, nx1)
-            quad = [
-                (left, bottom), (right, bottom), (right, top),
-                (left, bottom), (right, top), (left, top),
-            ]
-            for (x, y) in quad:
-                verts.append((x, y, *rgba))
-
-        def add_circle_px(cx, cy, radius, rgba, segments=12):
-            w, h = window_size
-            for i in range(segments):
-                a0 = (i / segments) * 2 * np.pi
-                a1 = ((i + 1) / segments) * 2 * np.pi
-                for (px, py) in [(cx, cy),
-                                  (cx + radius * np.cos(a0), cy + radius * np.sin(a0)),
-                                  (cx + radius * np.cos(a1), cy + radius * np.sin(a1))]:
-                    nx = (px / w) * 2.0 - 1.0
-                    ny = 1.0 - (py / h) * 2.0
-                    verts.append((nx, ny, *rgba))
+            for xy in ((left, bottom), (right, bottom), (right, top),
+                       (left, bottom), (right, top), (left, top)):
+                verts.append((*xy, *rgba))
 
         x0, y0, x1, y1 = self._panel_rect_px(window_size)
 
-        # panel background (semi-transparent dark, so it reads as a
-        # distinct HUD element over the 3D view behind it)
-        add_quad_px(x0, y0, x1, y1, (0.10, 0.12, 0.16, 0.72))
+        add_quad(x0, y0, x1, y1, (0.10, 0.12, 0.16, 0.72))
 
-        # footprint outline: one small square per occupied chunk cell,
-        # collapsed onto X/Z. Drawn in a dim cool gray so the bright red
-        # position dot stands out clearly against it.
         cell_px_size = self.CELL_PIXEL_SIZE
         for (cx, cz) in self.occupied_xz:
             world_x = (cx + 0.5) * self.chunk_size
             world_z = (cz + 0.5) * self.chunk_size
             px, py = self._world_to_panel_px(world_x, world_z, window_size)
             half = cell_px_size / 2.0
-            add_quad_px(px - half, py - half, px + half, py + half,
-                        (0.45, 0.52, 0.64, 0.85))
+            add_quad(px - half, py - half, px + half, py + half, (0.45, 0.52, 0.64, 0.85))
 
-        # thin border around the panel so its edges are crisp against the
-        # 3D scene regardless of what's behind it
         border = 2
-        add_quad_px(x0, y0, x1, y0 + border, (0.56, 0.69, 0.92, 0.95))
-        add_quad_px(x0, y1 - border, x1, y1, (0.56, 0.69, 0.92, 0.95))
-        add_quad_px(x0, y0, x0 + border, y1, (0.56, 0.69, 0.92, 0.95))
-        add_quad_px(x1 - border, y0, x1, y1, (0.56, 0.69, 0.92, 0.95))
+        add_quad(x0, y0, x1, y0 + border, (0.56, 0.69, 0.92, 0.95))
+        add_quad(x0, y1 - border, x1, y1, (0.56, 0.69, 0.92, 0.95))
+        add_quad(x0, y0, x0 + border, y1, (0.56, 0.69, 0.92, 0.95))
+        add_quad(x1 - border, y0, x1, y1, (0.56, 0.69, 0.92, 0.95))
 
-        def add_triangle_px(p0, p1, p2, rgba):
-            w, h = window_size
-            for (px, py) in (p0, p1, p2):
-                nx = (px / w) * 2.0 - 1.0
-                ny = 1.0 - (py / h) * 2.0
-                verts.append((nx, ny, *rgba))
+        return np.array(verts, dtype=np.float32).tobytes(), len(verts)
 
-        # live position + heading arrow (bright red, drawn last so it's
-        # always on top of the footprint outline). Replaced the old plain
-        # dot -- a dot showed WHERE you are but gave no sense of WHICH WAY
-        # you're facing, which matters when trying to reorient in a tight
-        # passage.
+    def render(self, window_size: tuple[int, int], camera_position: np.ndarray,
+               camera_forward: np.ndarray) -> None:
+        # Rebuild static geometry (background + footprint + border) only when
+        # window size changes; these tiles are map-independent and never move.
+        if window_size != self._static_geom_window_size:
+            self._static_geom_bytes, self._static_vert_count = self._build_static_geom(window_size)
+            self._static_geom_window_size = window_size
+
+        # Dynamic part: only the camera arrow/dot (3-36 verts) changes per frame.
+        arrow_verts: list = []
+        w, h = window_size
+
+        def add_circle_px(cx, cy, radius, rgba, segments=12):
+            for i in range(segments):
+                a0 = (i / segments) * 2 * np.pi
+                a1 = ((i + 1) / segments) * 2 * np.pi
+                for (px, py) in [(cx, cy),
+                                  (cx + radius * np.cos(a0), cy + radius * np.sin(a0)),
+                                  (cx + radius * np.cos(a1), cy + radius * np.sin(a1))]:
+                    arrow_verts.append(((px / w) * 2.0 - 1.0, 1.0 - (py / h) * 2.0, *rgba))
+
         cam_px, cam_py = self._world_to_panel_px(
             float(camera_position[0]), float(camera_position[2]), window_size
         )
@@ -315,30 +313,31 @@ class Minimap:
             else:
                 dir_x, dir_y = dir_x / dir_len, dir_y / dir_len
                 perp_x, perp_y = -dir_y, dir_x
-
                 tip = (cam_px + dir_x * self.ARROW_LENGTH,
                        cam_py + dir_y * self.ARROW_LENGTH)
                 back_center = (cam_px - dir_x * self.ARROW_LENGTH * 0.6,
                                cam_py - dir_y * self.ARROW_LENGTH * 0.6)
-                back_left = (back_center[0] + perp_x * self.ARROW_HALF_WIDTH,
-                             back_center[1] + perp_y * self.ARROW_HALF_WIDTH)
+                back_left  = (back_center[0] + perp_x * self.ARROW_HALF_WIDTH,
+                              back_center[1] + perp_y * self.ARROW_HALF_WIDTH)
                 back_right = (back_center[0] - perp_x * self.ARROW_HALF_WIDTH,
                               back_center[1] - perp_y * self.ARROW_HALF_WIDTH)
+                for (px, py) in (tip, back_left, back_right):
+                    arrow_verts.append(((px / w) * 2.0 - 1.0, 1.0 - (py / h) * 2.0,
+                                        1.0, 0.15, 0.15, 1.0))
 
-                add_triangle_px(tip, back_left, back_right, (1.0, 0.15, 0.15, 1.0))
+        arrow_bytes = np.array(arrow_verts, dtype=np.float32).tobytes() if arrow_verts else b''
+        full_bytes = self._static_geom_bytes + arrow_bytes
+        total_verts = self._static_vert_count + len(arrow_verts)
 
-        data = np.array(verts, dtype=np.float32)
-        if data.nbytes > self._max_verts * 6 * 4:
-            # safety net: grow the buffer if the map's chunk count estimate
-            # was somehow exceeded, rather than truncating the draw
+        if len(full_bytes) > self._max_verts * 6 * 4:
             self._vbo.release()
-            self._max_verts = max(self._max_verts * 2, len(verts))
+            self._max_verts = max(self._max_verts * 2, total_verts)
             self._vbo = self.ctx.buffer(reserve=self._max_verts * 6 * 4)
             self._vao = self.ctx.vertex_array(
                 self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
             )
 
-        self._vbo.write(data.tobytes())
+        self._vbo.write(full_bytes)
 
         # Face culling is meaningless for a flat 2D overlay (there's no
         # "back" of a UI element that should ever be hidden), but the main
@@ -352,7 +351,7 @@ class Minimap:
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
-        self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
+        self._vao.render(moderngl.TRIANGLES, vertices=total_verts)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
