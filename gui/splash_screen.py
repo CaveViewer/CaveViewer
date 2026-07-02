@@ -424,11 +424,13 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         threading.Thread(target=worker, daemon=True).start()
 
     def _close_and_install():
-        root.destroy()
+        root.withdraw()
+        root.quit()
 
     def _confirm_close_for_manual_update():
         selected_folder[0] = _UPDATE_STARTED_SENTINEL
-        root.destroy()
+        root.withdraw()
+        root.quit()
 
     def _defer_manual_update_close():
         _show_update_panel("Update downloaded and opened for manual installation.", show_progress=False)
@@ -464,10 +466,12 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         if folder:
             selected_folder[0] = folder
             _save_last_browse_dir(folder)
-            root.destroy()
+            root.withdraw()
+            root.quit()
 
     def on_close(_event=None):
-        root.destroy()
+        root.withdraw()
+        root.quit()
 
     browse_button = tk.Button(
         root, text="Browse...", command=on_browse,
@@ -499,7 +503,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         result = show_sample_maps_dialog(root, install_dir)
         if result:
             selected_folder[0] = result
-            root.destroy()
+            root.withdraw()
+            root.quit()
     
     example_maps_label = tk.Label(
         root,

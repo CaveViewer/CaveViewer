@@ -131,6 +131,10 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
 
             try:
                 root.after_idle(_open)
+                # flush idle callbacks immediately so the dialog fires even
+                # when the Tk mainloop is no longer running (e.g. while the
+                # OpenGL viewer window is active after the splash screen closed)
+                root.update_idletasks()
             except Exception:
                 about_state["open"] = False
                 _open()
