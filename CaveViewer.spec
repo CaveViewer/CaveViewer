@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+
+project_root = Path(__file__).resolve().parent
 
 a = Analysis(
-    ['/workspace/caveviewer.py'],
-    pathex=[],
+    [str(project_root / 'caveviewer.py')],
+    pathex=[str(project_root)],
     binaries=[],
-    datas=[('/workspace/shaders', 'shaders'), ('/workspace/gui/assets', 'gui/assets')],
+    datas=[
+        (str(project_root / 'shaders'), 'shaders'),
+        (str(project_root / 'gui' / 'assets'), 'gui/assets'),
+    ],
     hiddenimports=['PIL._tkinter_finder', 'tkinter', 'moderngl_window.context.pyglet'],
     hookspath=[],
     hooksconfig={},
