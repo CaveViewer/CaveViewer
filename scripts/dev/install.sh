@@ -28,15 +28,20 @@ fi
 
 # Create virtual environment
 venv_dir="$project_root/.venv"
-if [ ! -d "$venv_dir" ]; then
+venv_python="$venv_dir/bin/python"
+if [ ! -x "$venv_python" ] || ! "$venv_python" -c "import sys" >/dev/null 2>&1; then
+  if [ -d "$venv_dir" ]; then
+    echo "Existing virtual environment at $venv_dir is invalid; recreating it."
+    rm -rf "$venv_dir"
+  fi
   echo "Creating virtual environment at $venv_dir"
   python3 -m venv "$venv_dir"
 fi
 
 # Upgrade pip and install dependencies from provided requirements.txt
 echo "Installing Python packages from requirements.txt"
-"$venv_dir/bin/python" -m pip install --upgrade pip
-"$venv_dir/bin/python" -m pip install -r "$project_root/requirements.txt"
+"$venv_python" -m pip install --upgrade pip
+"$venv_python" -m pip install -r "$project_root/requirements.txt"
 
 # Create a small launcher that always uses this project's virtualenv.
 launcher_path="$project_root/run_caveviewer.sh"
