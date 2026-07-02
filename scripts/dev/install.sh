@@ -49,5 +49,15 @@ exec "$venv_dir/bin/python" "$project_root/caveviewer.py"
 EOF
 chmod +x "$launcher_path"
 
+# Build the C draw-loop extension (drawbatch).
+# Failure is non-fatal: the app falls back to the Python draw loop silently.
+echo "Building C draw-loop extension (core/drawbatch.c)..."
+if "$venv_dir/bin/python" core/setup_drawbatch.py build_ext --inplace \
+       --quiet 2>&1; then
+  echo "  drawbatch built successfully."
+else
+  echo "  Warning: drawbatch build failed -- Python draw-loop fallback will be used."
+fi
+
 echo "Setup complete."
 echo "Run CaveViewer with: $launcher_path"

@@ -28,6 +28,53 @@ from core import chunker
 from core.streaming_world import StreamingWorld, StreamingConfig
 from core.texture_manager import TextureManager
 from gui.camera import FlyCamera
+
+# ---------------------------------------------------------------------------
+# Optional C draw-loop extension (core/drawbatch.c)
+#
+# When built it executes the per-frame GL draw calls natively, bypassing the
+# ~2-5 µs Python interpreter cost per call.  The app works correctly without
+# it -- the pure-Python path below is the automatic fallback.
+# Build: python core/setup_drawbatch.py build_ext --inplace
+# ---------------------------------------------------------------------------
+try:
+    from core import drawbatch as _drawbatch_ext
+except ImportError:
+    _drawbatch_ext = None
+
+
+def _resolve_gl_ptr(name: str) -> int:
+    """
+    Return the address of an OpenGL function as a plain integer using
+    ctypes.  Works on macOS (OpenGL.framework), Linux (libGL), and
+    Windows (wglGetProcAddress).  Must be called after an OpenGL context
+    has been made current so that wglGetProcAddress can succeed on Windows.
+    """
+    import ctypes
+    try:
+        if sys.platform == "darwin":
+            _lib = ctypes.CDLL("/System/Library/Frameworks/OpenGL.framework/OpenGL")
+            fn = getattr(_lib, name, None)
+            return ctypes.cast(fn, ctypes.c_void_p).value if fn else 0
+        elif sys.platform.startswith("linux"):
+            import ctypes.util
+            libname = ctypes.util.find_library("GL") or "libGL.so.1"
+            _lib = ctypes.CDLL(libname)
+            fn = getattr(_lib, name, None)
+            return ctypes.cast(fn, ctypes.c_void_p).value if fn else 0
+        elif sys.platform == "win32":
+            _gl32 = ctypes.WinDLL("opengl32")
+            wgl_get = _gl32.wglGetProcAddress
+            wgl_get.restype = ctypes.c_void_p
+            wgl_get.argtypes = [ctypes.c_char_p]
+            addr = wgl_get(name.encode())
+            if addr:
+                return addr
+            fn = getattr(_gl32, name, None)
+            return ctypes.cast(fn, ctypes.c_void_p).value if fn else 0
+    except Exception:
+        pass
+    return 0
 from gui.minimap import Minimap
 from gui.render_mode_buttons import RenderModeButtons
 from gui.controls_overlay import ControlsOverlay
@@ -233,6 +280,29 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
+        # C draw-loop extension: resolve GL function pointers once and store
+        # for use in on_render().  Falls back to the Python loop silently if
+        # the extension hasn't been built yet.
+        self._drawbatch = None
+        if _drawbatch_ext is not None:
+            try:
+                bt  = _resolve_gl_ptr("glBindTexture")
+                bva = _resolve_gl_ptr("glBindVertexArray")
+                da  = _resolve_gl_ptr("glDrawArrays")
+                if bt and bva and da:
+                    _drawbatch_ext.set_gl_functions(bt, bva, da)
+                    self._drawbatch = _drawbatch_ext
+                    print("[CaveViewer] C draw-loop extension active")
+                else:
+                    print("[CaveViewer] C draw-loop extension: GL ptrs not resolved, "
+                          "using Python fallback")
+            except Exception as _exc:
+                print(f"[CaveViewer] C draw-loop extension init failed ({_exc}), "
+                      "using Python fallback")
+        else:
+            print("[CaveViewer] C draw-loop extension not built -- "
+                  "run: python core/setup_drawbatch.py build_ext --inplace")
+
         # Map-specific state (world, manifest, camera, minimap, texture
         # manager, chunk GPU objects) lives in its own method, separate
         # from the one-time-per-window setup above, so the exact same
@@ -247,6 +317,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Per-cell world-space AABBs for frustum culling, populated in
         # _load_map from the manifest's pre-computed bounding boxes.
         self._chunk_aabbs: dict[tuple, tuple] = {}
+        # Per-cell cached (tex_glo, vao_glo, nverts) tuples for the C
+        # draw-loop extension; rebuilt on each chunk load/unload.
+        self._cell_draw_cmds: dict[tuple, list] = {}
         self._has_map_loaded = False
         self._pending_import_started = False
 
@@ -429,6 +502,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # next map's state
         self._chunk_gpu_objects.clear()
         self._chunk_normal_cache.clear()
+        self._cell_draw_cmds.clear()
 
     def load_new_map(self, cache_dir: str, textures_dir: str, manifest: dict) -> None:
         """
@@ -620,6 +694,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _on_chunk_ready(self, chunk_data):
         vao_list = []
         normal_cache_entry = []
+        cell_cmds = []  # (tex_glo, vao_glo, nverts) for C draw extension
         for mat_name, group in chunk_data.groups.items():
             n = len(group.positions)
             if n == 0:
@@ -645,9 +720,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             texture = self.texture_manager.acquire(mat_name)
             vao_list.append((vao, vbo, mat_name, texture))
             normal_cache_entry.append((mat_name, group.positions, group.uvs, smooth_normals, flat_normals))
+            cell_cmds.append((texture.glo, vao.glo, n))
 
         self._chunk_gpu_objects[chunk_data.cell] = vao_list
         self._chunk_normal_cache[chunk_data.cell] = normal_cache_entry
+        self._cell_draw_cmds[chunk_data.cell] = cell_cmds
 
     def _on_chunk_unload(self, cell):
         vao_list = self._chunk_gpu_objects.pop(cell, [])
@@ -656,6 +733,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             vbo.release()
             self.texture_manager.release(mat_name)
         self._chunk_normal_cache.pop(cell, None)
+        self._cell_draw_cmds.pop(cell, None)
 
     def _apply_shading_toggle(self) -> None:
         """
@@ -934,12 +1012,27 @@ class CaveViewerWindow(mglw.WindowConfig):
         # u_texture always refers to sampler unit 0 -- set it once before
         # the loop rather than redundantly on every single draw call.
         self.program["u_texture"].value = 0
+
+        # Build a flat draw command list from the visible cells once per
+        # frame. Cached (tex_glo, vao_glo, nverts) tuples avoid per-frame
+        # attribute access on moderngl objects and are reused by both passes.
+        _draw_cmds: list = []
+        for cell, _ in _visible_cells:
+            cmds = self._cell_draw_cmds.get(cell)
+            if cmds:
+                _draw_cmds.extend(cmds)
+
         with self.ctx.query(time=True) as _gpu_q:
             if show_solid_pass:
-                for cell, vao_list in _visible_cells:
-                    for vao, vbo, mat_name, texture in vao_list:
-                        texture.use(location=0)
-                        vao.render(moderngl.TRIANGLES)
+                if self._drawbatch is not None:
+                    # C fast path: all GL calls execute in native C without
+                    # returning to the Python interpreter per call.
+                    self._drawbatch.draw_chunks(_draw_cmds)
+                else:
+                    for cell, vao_list in _visible_cells:
+                        for vao, vbo, mat_name, texture in vao_list:
+                            texture.use(location=0)
+                            vao.render(moderngl.TRIANGLES)
 
             # Wireframe pass: drawn whenever Mesh is toggled on. If the solid
             # pass also drew (texture or gray surface visible), this overlays
@@ -958,9 +1051,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                 # wireframe is still fully readable, just not perfectly crisp
                 # in rare cases.
                 self.ctx.wireframe = True
-                for cell, vao_list in _visible_cells:
-                    for vao, vbo, mat_name, texture in vao_list:
-                        vao.render(moderngl.TRIANGLES)
+                if self._drawbatch is not None:
+                    self._drawbatch.draw_chunks_wireframe(_draw_cmds)
+                else:
+                    for cell, vao_list in _visible_cells:
+                        for vao, vbo, mat_name, texture in vao_list:
+                            vao.render(moderngl.TRIANGLES)
                 self.ctx.wireframe = False
 
         self._last_gpu_draw_ms = _gpu_q.elapsed / 1_000_000
