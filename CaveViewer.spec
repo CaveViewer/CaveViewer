@@ -26,11 +26,22 @@ hiddenimports = []
 hiddenimports += collect_submodules("moderngl")
 hiddenimports += collect_submodules("moderngl_window")
 
+# Bundle the compiled C draw-loop extension if it was built before packaging.
+# The import in viewer_window.py is wrapped in try/except so PyInstaller's
+# analysis phase won't detect it automatically -- we include it explicitly
+# here. If the .so hasn't been built, binaries stays empty and the app falls
+# back to the Python draw loop without error.
+import glob as _glob
+_drawbatch_binaries = [
+    (p, "core")
+    for p in _glob.glob("core/drawbatch*.so") + _glob.glob("core/drawbatch*.pyd")
+]
+
 
 a = Analysis(
     ["caveviewer.py"],
     pathex=[],
-    binaries=[],
+    binaries=_drawbatch_binaries,
     datas=[
         ("shaders", "shaders"),
         ("gui/assets", "gui/assets"),
