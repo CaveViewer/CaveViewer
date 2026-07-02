@@ -456,7 +456,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     # -- browse button + instructions ---------------------------------------------
     def on_browse():
         dialog_kwargs = {
-            "title": "Select the folder containing your cave map (.obj, .mtl, .jpg)",
+            "title": "Select a cave map folder",
         }
         last_dir = _load_last_browse_dir()
         if last_dir:
@@ -474,7 +474,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         root.quit()
 
     browse_button = tk.Button(
-        root, text="Browse...", command=on_browse,
+        root, text="Select Map...", command=on_browse,
         font=_BUTTON_FONT,
         bg=_BUTTON_BG, fg=_BUTTON_FG,
         activebackground=_BUTTON_BG, activeforeground=_BUTTON_FG,
@@ -487,8 +487,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
     instruction_label = tk.Label(
         root,
-        text="Point this to the folder containing your map's\n"
-             ".obj+.mtl or .glb file (with textures).",
+        text="Point this to a folder with your map's .obj+.mtl or .glb file,\n"
+             "or a folder that was already imported by CaveViewer.",
         font=_BODY_FONT,
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",
