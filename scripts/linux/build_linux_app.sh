@@ -9,7 +9,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-venv_dir="$repo_root/.venv"
+# Keep Linux build dependencies isolated from the main developer venv.
+venv_dir="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux-build}"
 spec_file="$repo_root/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/linux/app"
 work_dir="$repo_root/build/pyinstaller"

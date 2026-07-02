@@ -15,6 +15,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 dockerfile="$script_dir/Dockerfile.linux-build"
+linux_build_venv="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux-build}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Error: docker is not installed or not in PATH."
@@ -44,9 +45,9 @@ for arch in "${archs[@]}"; do
     build_args=(--platform "$platform" --build-arg "BUILD_PLATFORM=$platform" -f "$dockerfile" -t "$image_name")
     if $rebuild; then
       build_args=(--no-cache "${build_args[@]}")
-      if [ -d "$repo_root/.venv" ]; then
-        echo "Removing stale .venv..."
-        rm -rf "$repo_root/.venv"
+      if [ -d "$linux_build_venv" ]; then
+        echo "Removing stale Linux build venv: $linux_build_venv"
+        rm -rf "$linux_build_venv"
       fi
     fi
     DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "$repo_root"
