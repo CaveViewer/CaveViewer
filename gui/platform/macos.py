@@ -4,17 +4,16 @@ import os
 import shutil
 import subprocess
 import tempfile
-import time
 
 from .base import ManualInstallResult
 from .default import DefaultSplashPlatformAdapter
 
 # Keep a strong reference to the Tk root used for the About handler so that
-# Python's cyclic GC cannot collect the root ↔ closure ↔ Tcl-interpreter
-# reference cycle after the splash screen closes.  Without this, the cycle
-# becomes unreachable from any external root and the GC frees the Tcl
-# interpreter; macOS then routes the "About" menu event through Tk's
-# NSApplicationDelegate into a freed interpreter and the app crashes.
+# Python's cyclic GC cannot collect it.  The root must never be destroyed
+# (splash callbacks use root.quit() instead of root.destroy()) because Tk
+# registers a permanent NSApplicationDelegate for the process lifetime --
+# macOS routes About-menu events through that delegate into this interpreter
+# for as long as the app is running.
 _about_root_ref = None
 
 
@@ -79,76 +78,51 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
 
     def install_about_handler(self, root, program_name: str, version: str) -> None:
         global _about_root_ref
-        # Hold a module-level strong reference so the Tcl interpreter backing
-        # the ::tk::mac::ShowAbout command is never freed by the GC while the
-        # app is still running (see module-level comment above).
+        # Hold a module-level strong reference so the Tcl interpreter is
+        # never freed by the GC (see module-level comment above).
         _about_root_ref = root
 
-        about_state = {
-            "open": False,
-            "last_shown": 0.0,
-        }
+        title = f"About {program_name}"
+        message = f"{program_name}\nVersion {version}"
+        detail = (
+            "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
+            "BottomLine Projects Scientific Dive Team and other volunteers."
+        )
 
-        def show_about_dialog(*_args):
-            # Tk macOS command callbacks may pass arguments depending on Tk
-            # version/menu plumbing. Also guard against late callbacks after
-            # the splash root has already been destroyed.
-            try:
-                if not bool(root.winfo_exists()):
-                    return ""
-            except Exception:
-                return ""
-
-            now = time.monotonic()
-            # Some Tk/macOS builds can trigger both callback names for one menu
-            # action; debounce to prevent duplicate dialogs.
-            if about_state["open"] or (now - about_state["last_shown"] < 0.75):
-                return ""
-
-            # Mark as open *before* scheduling so that a second rapid
-            # invocation (e.g. both tkAboutDialog and ::tk::mac::ShowAbout
-            # firing for the same click) is blocked by the debounce check
-            # above before _open() ever runs.
-            about_state["open"] = True
-
-            def _open():
-                try:
-                    # Re-check existence here: the root could have been
-                    # destroyed between show_about_dialog's outer check and
-                    # this after_idle callback firing.
-                    try:
-                        if not bool(root.winfo_exists()):
-                            return
-                    except Exception:
-                        return
-                    about_state["last_shown"] = time.monotonic()
-                    self._show_about_dialog(root, program_name, version)
-                except Exception as e:
-                    print(f"[CaveViewer] Failed to open About dialog: {e}")
-                finally:
-                    about_state["open"] = False
-                    about_state["last_shown"] = time.monotonic()
-
-            try:
-                root.after_idle(_open)
-                # flush idle callbacks immediately so the dialog fires even
-                # when the Tk mainloop is no longer running (e.g. while the
-                # OpenGL viewer window is active after the splash screen closed)
-                root.update_idletasks()
-            except Exception:
-                about_state["open"] = False
-                _open()
-            return ""
-
+        # Register the About handler as PURE TCL PROCS rather than Python
+        # callbacks.  Python callbacks registered via root.createcommand()
+        # go through _tkinter's PythonCmd() C function, which calls
+        # PyEval_RestoreThread(tcl_tstate).  tcl_tstate is a module-global
+        # in _tkinter that is only non-NULL while an _tkinter call is
+        # actively in progress (e.g. inside mainloop()).  Once the splash
+        # screen closes and the OpenGL viewer window takes over, no
+        # _tkinter call is active, so tcl_tstate is NULL -- and the next
+        # About-menu click triggers PythonCmd -> PyEval_RestoreThread(NULL)
+        # -> _Py_FatalError -> SIGABRT crash.
+        #
+        # Pure Tcl procs bypass PythonCmd entirely: Tcl executes them
+        # directly in the Tcl interpreter without touching Python's GIL
+        # machinery, so the crash cannot occur regardless of whether the
+        # Tk mainloop is running.
+        #
+        # Use root.call() to set the string variables so Python newlines
+        # are passed as Tcl objects directly (no manual Tcl escaping).
         try:
-            root.createcommand("tkAboutDialog", show_about_dialog)
-        except Exception:
-            pass
-
-        try:
-            root.createcommand("::tk::mac::ShowAbout", show_about_dialog)
-        except Exception:
-            pass
+            root.call("set", "_cv_about_title", title)
+            root.call("set", "_cv_about_msg", message)
+            root.call("set", "_cv_about_detail", detail)
+            root.eval(
+                "proc ::tk::mac::ShowAbout {} {\n"
+                "    global _cv_about_title _cv_about_msg _cv_about_detail\n"
+                "    tk_messageBox -type ok"
+                " -title $_cv_about_title"
+                " -message $_cv_about_msg"
+                " -detail $_cv_about_detail\n"
+                "}\n"
+                "proc tkAboutDialog {} { ::tk::mac::ShowAbout }"
+            )
+        except Exception as e:
+            print(f"[CaveViewer] Note: could not install About handler: {e}")
 
     def _show_about_dialog(self, parent, program_name: str, version: str) -> None:
         # Use the native tk_messageBox path directly and avoid setting an icon.
