@@ -4,7 +4,7 @@ set -euo pipefail
 # Build package artifacts for all supported platforms from one entrypoint.
 #
 # Usage:
-#   ./scripts/all_package.sh [--linux-arch=arm64|amd64|both] [--rebuild] [--skip=macos,linux,windows]
+#   ./scripts/all_package.sh --version=X.Y.Z [--linux-arch=arm64|amd64|both] [--rebuild] [--skip=macos,linux,windows]
 #
 # Notes:
 # - linux arch defaults to "both".
@@ -16,6 +16,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 source "$script_dir/common/version.sh"
 source "$script_dir/common/artifacts.sh"
 
+version_file="$repo_root/caveviewer_version.py"
+release_version=""
 linux_arch="both"
 rebuild=false
 skip_macos=false
@@ -25,26 +27,42 @@ skip_windows=false
 print_help() {
   cat <<'EOF'
 Usage:
-  ./scripts/all_package.sh [options]
+  ./scripts/all_package.sh --version=X.Y.Z [options]
 
 Options:
-  --linux-arch=arm64|amd64|both   Linux build architecture(s). Default: both
-  --rebuild                        Force Docker Linux image rebuild
-  --skip=macos,linux,windows       Comma-separated targets to skip
-  -h, --help                       Show this help
+  --version=X.Y.Z                   Required. Set APP_VERSION before packaging (accepts optional leading v)
+  --linux-arch=arm64|amd64|both    Linux build architecture(s). Default: both
+  --rebuild                         Force Docker Linux image rebuild
+  --skip=macos,linux,windows        Comma-separated targets to skip
+  -h, --help                        Show this help
 EOF
 }
 
-for arg in "$@"; do
-  case "$arg" in
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version=*)
+      release_version="${1#--version=}"
+      shift
+      ;;
+    --version)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --version requires a value"
+        exit 1
+      fi
+      release_version="$1"
+      shift
+      ;;
     --linux-arch=*)
-      linux_arch="${arg#--linux-arch=}"
+      linux_arch="${1#--linux-arch=}"
+      shift
       ;;
     --rebuild)
       rebuild=true
+      shift
       ;;
     --skip=*)
-      skip_list="${arg#--skip=}"
+      skip_list="${1#--skip=}"
       IFS=',' read -r -a items <<<"$skip_list"
       for item in "${items[@]}"; do
         case "${item// /}" in
@@ -58,18 +76,25 @@ for arg in "$@"; do
             ;;
         esac
       done
+      shift
       ;;
     -h|--help)
       print_help
       exit 0
       ;;
     *)
-      echo "Error: unknown option '$arg'"
+      echo "Error: unknown option '$1'"
       print_help
       exit 1
       ;;
   esac
 done
+
+if [ -z "$release_version" ]; then
+  echo "Error: --version is required"
+  print_help
+  exit 1
+fi
 
 case "$linux_arch" in
   arm64|amd64|both) ;;
@@ -78,6 +103,25 @@ case "$linux_arch" in
     exit 1
     ;;
 esac
+
+normalized_version="${release_version#v}"
+if [ -z "$normalized_version" ]; then
+  echo "Error: --version cannot be empty"
+  exit 1
+fi
+
+current_version="$(cv_read_app_version "$version_file")"
+if [ -z "$current_version" ]; then
+  echo "Error: could not read APP_VERSION from $version_file"
+  exit 1
+fi
+
+if [ "$current_version" != "$normalized_version" ]; then
+  cv_set_app_version "$version_file" "$normalized_version"
+  echo "Set APP_VERSION: $current_version -> $normalized_version"
+else
+  echo "APP_VERSION already at $normalized_version"
+fi
 
 host_os="$(uname -s)"
 
@@ -154,7 +198,6 @@ else
   echo "[windows] Skipped by option."
 fi
 
-version_file="$repo_root/caveviewer_version.py"
 version="$(cv_read_app_version "$version_file")"
 
 echo ""

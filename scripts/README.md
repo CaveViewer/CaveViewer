@@ -15,7 +15,7 @@ Use the dispatcher script:
 Target:
 
 ```bash
-./scripts/release.sh all-package [options]
+./scripts/release.sh all-package --version=X.Y.Z [options]
 ```
 
 This runs a host-aware packaging flow using existing platform scripts.
@@ -32,6 +32,7 @@ Default behavior:
   - Skip macOS package with a message
 
 Options:
+- --version=X.Y.Z (required; accepts optional leading v; sets APP_VERSION before packaging)
 - --linux-arch=arm64|amd64|both (default: both)
 - --rebuild
 - --skip=macos,linux,windows
@@ -40,7 +41,7 @@ Options:
 Examples:
 
 ```bash
-./scripts/release.sh all-package
+./scripts/release.sh all-package --version=1.2.45
 ./scripts/release.sh all-package --linux-arch=both
 ./scripts/release.sh all-package --rebuild
 ./scripts/release.sh all-package --skip=windows
