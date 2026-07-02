@@ -185,6 +185,15 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     cache_dir = chunker.build_cache(obj_path, mesh, materials, progress_cb=progress)
     print()
 
+    import shutil
+    _src_tex_dir = os.path.dirname(os.path.abspath(obj_path))
+    for _mat in materials.values():
+        if _mat.diffuse_texture:
+            _src = os.path.join(_src_tex_dir, _mat.diffuse_texture)
+            _dst = os.path.join(cache_dir, _mat.diffuse_texture)
+            if os.path.exists(_src) and not os.path.exists(_dst):
+                shutil.copy2(_src, _dst)
+
     elapsed = time.time() - t_start
     n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
     print(f"\nImport complete in {elapsed:.1f}s -- "
@@ -279,6 +288,14 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     cache_dir = chunker.build_cache(source_path, mesh, materials, progress_cb=progress)
     print()
 
+    import shutil
+    for _mat in materials.values():
+        if _mat.diffuse_texture:
+            _src = os.path.join(textures_dir, _mat.diffuse_texture)
+            _dst = os.path.join(cache_dir, _mat.diffuse_texture)
+            if os.path.exists(_src) and not os.path.exists(_dst):
+                shutil.copy2(_src, _dst)
+
     elapsed = time.time() - t_start
     n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
     print(f"\nImport complete in {elapsed:.1f}s -- "
@@ -336,6 +353,21 @@ def pick_folder_dialog() -> str | None:
     return folder or None
 
 
+def _print_viewer_controls() -> None:
+    print("\nLaunching viewer...")
+    print("Controls: WASD = move, Space/Ctrl = up/down, hold Right-Mouse + move = look,")
+    print("          Shift = speed boost, Scroll = adjust fly speed,")
+    print("          Left-click +/- (bottom-right corner) = adjust headlamp brightness,")
+    print("          Left-click +/- (bottom-right corner, below brightness) = adjust global ambient light,")
+    print("          Left-click the minimap (bottom-left) = jump to that spot,")
+    print("          Left-click +/- (bottom-right corner, below brightness) = adjust render distance,")
+    print("          Left-click Mesh/Texture buttons (bottom-right corner) = toggle wireframe/texture,")
+    print("          Left-click the Help button (bottom-right corner) = show/hide the controls list,")
+    print("          Left-click the Color button (bottom-right corner) = open/close the background color picker,")
+    print("          Left-click the Open button (bottom-right corner) = switch to a different map,")
+    print("          Esc = quit\n")
+
+
 def main():
     print("=" * 60)
     print(f"  {APP_NAME} {__version__}")
@@ -364,6 +396,28 @@ def main():
     try:
         model_descriptor = find_model_file(folder)
     except FileNotFoundError as e:
+        from core import chunker as _ck
+        # Case 1: folder contains a .caveviewer_cache/ subfolder (standard layout)
+        _prebuilt_cache = os.path.join(folder, _ck.CACHE_DIRNAME)
+        _textures_dir = folder
+        # Case 2: folder itself is the cache directory (e.g. renamed or moved)
+        if not os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
+            if os.path.exists(os.path.join(folder, _ck.MANIFEST_NAME)):
+                _prebuilt_cache = folder
+                _textures_dir = folder
+        if os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
+            print("\nPre-compiled map detected -- launching viewer directly.")
+            print("(Delete the .caveviewer_cache folder to force a rebuild.)")
+            _print_viewer_controls()
+            from gui.viewer_window import run_viewer
+            try:
+                run_viewer(_prebuilt_cache, textures_dir=_textures_dir)
+            except Exception as launch_err:
+                print(f"\nError starting viewer: {launch_err}", file=sys.stderr)
+                import traceback
+                traceback.print_exc()
+                sys.exit(1)
+            return
         print(f"\nError: {e}")
         sys.exit(1)
 
@@ -373,18 +427,7 @@ def main():
     if fmt == "obj":
         print(f"Found materials: {os.path.basename(model_descriptor['mtl_path'])}")
 
-    print("\nLaunching viewer...")
-    print("Controls: WASD = move, Space/Ctrl = up/down, hold Right-Mouse + move = look,")
-    print("          Shift = speed boost, Scroll = adjust fly speed,")
-    print("          Left-click +/- (bottom-right corner) = adjust headlamp brightness,")
-    print("          Left-click +/- (bottom-right corner, below brightness) = adjust global ambient light,")
-    print("          Left-click the minimap (bottom-left) = jump to that spot,")
-    print("          Left-click +/- (bottom-right corner, below brightness) = adjust render distance,")
-    print("          Left-click Mesh/Texture buttons (bottom-right corner) = toggle wireframe/texture,")
-    print("          Left-click the Help button (bottom-right corner) = show/hide the controls list,")
-    print("          Left-click the Color button (bottom-right corner) = open/close the background color picker,")
-    print("          Left-click the Open button (bottom-right corner) = switch to a different map,")
-    print("          Esc = quit\n")
+    _print_viewer_controls()
 
     from core import chunker
 
