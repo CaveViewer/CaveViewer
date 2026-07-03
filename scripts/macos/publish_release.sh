@@ -6,13 +6,40 @@ set -euo pipefail
 # updater flow.
 #
 # Usage:
-#   ./scripts/macos/publish_release.sh <version> [release_notes]
+#   ./scripts/macos/publish_release.sh [--skip-build] <version> [release_notes]
 #
 # Example:
 #   ./scripts/macos/publish_release.sh 1.0.2 "Bug fixes and stability improvements"
 #
+skip_build=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --skip-build)
+      skip_build=true
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--skip-build] <version> [release_notes]"
+      echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
 if [ "$#" -gt 0 ] && [ "$1" = "-h" -o "$1" = "--help" ]; then
-  echo "Usage: $0 <version> [release_notes]"
+  echo "Usage: $0 [--skip-build] <version> [release_notes]"
   echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
   exit 0
 fi
@@ -83,8 +110,12 @@ else
   echo "APP_VERSION already at $normalized_version"
 fi
 
-"$script_dir/build_macos_app.sh"
-"$script_dir/package_macos_dmg.sh" "https://github.com/$repo/releases/download/$tag"
+if $skip_build; then
+  echo "Skipping build/package step (--skip-build)."
+else
+  "$script_dir/build_macos_app.sh"
+  "$script_dir/package_macos_dmg.sh" "https://github.com/$repo/releases/download/$tag"
+fi
 
 if [ ! -f "$app_dmg_path" ]; then
   echo "Error: expected macOS DMG package not found: $app_dmg_path"

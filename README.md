@@ -103,7 +103,7 @@ sudo apt install -y \
   libreadline-dev libsqlite3-dev libncursesw5-dev xz-utils \
   tk-dev libffi-dev liblzma-dev python3-tk tk-dev tcl-dev libgl1 libegl1 libglx-mesa0 
 ```  
-`scripts/dev/install.sh` creates a `.venv` inside the project root, installs all packages from `requirements.txt`, and generates a `run_caveviewer.sh` launcher:
+`scripts/dev/install.sh` creates a `.venv-dev` inside the project root (or uses `CAVEVIEWER_DEV_VENV` if set), installs all packages from `requirements.txt`, and generates a `run_caveviewer.sh` launcher:
 
 ```bash
 ./scripts/dev/install.sh

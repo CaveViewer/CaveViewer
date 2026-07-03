@@ -6,7 +6,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-venv_dir="$repo_root/.venv"
+venv_dir="${CAVEVIEWER_MACOS_BUILD_VENV:-$repo_root/.venv-macos-build}"
 spec_file="$repo_root/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/macos/app"
 work_dir="$repo_root/build/pyinstaller"
@@ -25,10 +25,18 @@ if [ ! -f "$spec_file" ]; then
   exit 1
 fi
 
-if [ ! -x "$venv_dir/bin/python" ]; then
-  echo "Error: virtual environment not found at $venv_dir"
-  echo "Run ./scripts/dev/install.sh first (or create .venv manually), then re-run this script."
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Error: python3 not found. Install Python 3.10+ and re-run."
   exit 1
+fi
+
+if [ ! -x "$venv_dir/bin/python" ] || ! "$venv_dir/bin/python" -c "import sys" >/dev/null 2>&1; then
+  if [ -d "$venv_dir" ]; then
+    echo "Existing macOS build virtual environment at $venv_dir is invalid; recreating it."
+    rm -rf "$venv_dir"
+  fi
+  echo "Creating macOS build virtual environment at $venv_dir"
+  python3 -m venv "$venv_dir"
 fi
 
 if [ ! -f "$logo_png" ]; then

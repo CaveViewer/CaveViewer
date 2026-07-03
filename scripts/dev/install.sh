@@ -26,9 +26,20 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-# Create virtual environment
-venv_dir="$project_root/.venv"
+# Create development virtual environment
+legacy_venv_dir="$project_root/.venv"
+venv_dir="${CAVEVIEWER_DEV_VENV:-$project_root/.venv-dev}"
 venv_python="$venv_dir/bin/python"
+
+if [ "$venv_dir" = "$project_root/.venv-dev" ] \
+  && [ ! -e "$venv_dir" ] \
+  && [ -d "$legacy_venv_dir" ] \
+  && [ -x "$legacy_venv_dir/bin/python" ] \
+  && "$legacy_venv_dir/bin/python" -c "import sys" >/dev/null 2>&1; then
+  echo "Migrating existing development virtual environment: $legacy_venv_dir -> $venv_dir"
+  mv "$legacy_venv_dir" "$venv_dir"
+fi
+
 if [ ! -x "$venv_python" ] || ! "$venv_python" -c "import sys" >/dev/null 2>&1; then
   if [ -d "$venv_dir" ]; then
     echo "Existing virtual environment at $venv_dir is invalid; recreating it."
@@ -38,6 +49,8 @@ if [ ! -x "$venv_python" ] || ! "$venv_python" -c "import sys" >/dev/null 2>&1; 
   python3 -m venv "$venv_dir"
 fi
 
+echo "Using development virtual environment: $venv_dir"
+
 # Upgrade pip and install dependencies from provided requirements.txt
 echo "Installing Python packages from requirements.txt"
 "$venv_python" -m pip install --upgrade pip
@@ -46,11 +59,20 @@ echo "Installing Python packages from requirements.txt"
 # Create a small launcher that always uses this project's virtualenv.
 launcher_path="$project_root/run_caveviewer.sh"
 echo "Creating launcher script: $launcher_path"
-cat > "$launcher_path" <<EOF
+cat > "$launcher_path" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$project_root"
-exec "$venv_dir/bin/python" "$project_root/caveviewer.py"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+venv_dir="${CAVEVIEWER_DEV_VENV:-$repo_root/.venv-dev}"
+
+if [ ! -x "$venv_dir/bin/python" ]; then
+  echo "Error: python not found at $venv_dir/bin/python"
+  echo "Run ./scripts/dev/install.sh to set up dependencies."
+  exit 1
+fi
+
+cd "$repo_root"
+exec "$venv_dir/bin/python" "$repo_root/caveviewer.py"
 EOF
 chmod +x "$launcher_path"
 

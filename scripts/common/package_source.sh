@@ -61,7 +61,7 @@ for item in \
         --exclude='.DS_Store' \
         --exclude='.caveviewer_cache' \
         --exclude='venv' \
-        --exclude='.venv' \
+        --exclude='.venv*' \
         --exclude='*.egg-info' \
         --exclude='.env' \
         "$item/" "$source_dir/$item/"

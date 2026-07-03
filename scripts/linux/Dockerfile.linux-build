@@ -50,10 +50,16 @@ if [ ! -e "$CACHE_PYTHON" ] || ! "$CACHE_PYTHON" --version >/dev/null 2>&1; then
     mkdir -p "$PYTHON_CACHE/python/bin"\n\
     cp -a /opt/portable-python/python/bin/. "$PYTHON_CACHE/python/bin/"\n\
 fi\n\
-# Remove any stale .venv left by a previous failed or wrong-arch run.\n\
-if [ -d /workspace/.venv ] && ! /workspace/.venv/bin/python3 --version >/dev/null 2>&1; then\n\
-    echo "[Docker] Removing stale .venv..."\n\
-    rm -rf /workspace/.venv\n\
+# Remove a stale Linux build venv from failed/wrong-arch runs.\n\
+LINUX_VENV=${CAVEVIEWER_LINUX_BUILD_VENV:-/workspace/.venv-linux-build}\n\
+if [ "$LINUX_VENV" = "/workspace/.venv" ]; then\n\
+    echo "[Docker] Skipping cleanup for /workspace/.venv"\n\
+elif [ -d "$LINUX_VENV" ] && [ ! -x "$LINUX_VENV/bin/python3" ]; then\n\
+    echo "[Docker] Removing stale Linux build venv at $LINUX_VENV..."\n\
+    rm -rf "$LINUX_VENV"\n\
+elif [ -d "$LINUX_VENV" ] && ! "$LINUX_VENV/bin/python3" --version >/dev/null 2>&1; then\n\
+    echo "[Docker] Removing stale Linux build venv at $LINUX_VENV..."\n\
+    rm -rf "$LINUX_VENV"\n\
 fi\n\
 exec "$@"\n' > /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-entrypoint.sh

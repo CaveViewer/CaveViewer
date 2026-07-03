@@ -1,9 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import os
 
 
-project_root = Path(__file__).resolve().parent
+project_root = Path(globals().get('SPECPATH', os.getcwd())).resolve()
 
 a = Analysis(
     [str(project_root / 'caveviewer.py')],
@@ -48,4 +49,17 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='CaveViewer',
+)
+
+bundle_kwargs = {
+    'name': 'CaveViewer.app',
+    'bundle_identifier': None,
+}
+app_icon = os.environ.get('CAVEVIEWER_APP_ICON', '').strip()
+if app_icon:
+    bundle_kwargs['icon'] = app_icon
+
+app = BUNDLE(
+    coll,
+    **bundle_kwargs,
 )

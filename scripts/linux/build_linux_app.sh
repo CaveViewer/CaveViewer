@@ -9,8 +9,17 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+linux_arch_tag=""
+case "$(uname -m)" in
+  x86_64) linux_arch_tag="amd64" ;;
+  aarch64|arm64) linux_arch_tag="arm64" ;;
+esac
+linux_venv_default="$repo_root/.venv-linux-build"
+if [ -n "$linux_arch_tag" ]; then
+  linux_venv_default="$repo_root/.venv-linux-build-$linux_arch_tag"
+fi
 # Keep Linux build dependencies isolated from the main developer venv.
-venv_dir="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux-build}"
+venv_dir="${CAVEVIEWER_LINUX_BUILD_VENV:-$linux_venv_default}"
 spec_file="$repo_root/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/linux/app"
 work_dir="$repo_root/build/pyinstaller"
@@ -128,6 +137,7 @@ CAVEVIEWER_APP_ICON="" \
 "$python_exe" -m PyInstaller --clean --noconfirm \
   --distpath "$dist_app_dir" \
   --workpath "$work_dir" \
+  --specpath "$work_dir" \
   --onedir \
   --name CaveViewer \
   --hidden-import=PIL._tkinter_finder \

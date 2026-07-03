@@ -6,13 +6,40 @@ set -euo pipefail
 # updater flow.
 #
 # Usage:
-#   ./scripts/linux/publish_release.sh <version> [release_notes]
+#   ./scripts/linux/publish_release.sh [--skip-build] <version> [release_notes]
 #
 # Example:
 #   ./scripts/linux/publish_release.sh 1.0.2 "Bug fixes and stability improvements"
 #
+skip_build=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --skip-build)
+      skip_build=true
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--skip-build] <version> [release_notes]"
+      echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
 if [ "$#" -gt 0 ] && [ "$1" = "-h" -o "$1" = "--help" ]; then
-  echo "Usage: $0 <version> [release_notes]"
+  echo "Usage: $0 [--skip-build] <version> [release_notes]"
   echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
   exit 0
 fi
@@ -36,6 +63,13 @@ source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/github.sh"
 version_file="$repo_root/caveviewer_version.py"
 linux_packages_dir="$repo_root/dist/linux/packages"
+
+collect_linux_artifacts() {
+  map_appimage_paths=()
+  while IFS= read -r -d '' f; do
+    map_appimage_paths+=("$f")
+  done < <(find "$linux_packages_dir" -maxdepth 1 -name "CaveViewer-${normalized_version}-*.AppImage" -print0 2>/dev/null | sort -z)
+}
 
 cv_require_cmd gh
 cv_require_cmd git
@@ -69,25 +103,6 @@ if ! grep -q '^APP_VERSION = "' "$version_file"; then
   exit 1
 fi
 
-# Find all AppImages for this version regardless of architecture suffix.
-# When building both arm64 and amd64, both are uploaded to the release.
-map_appimage_paths=()
-while IFS= read -r -d '' f; do
-  map_appimage_paths+=("$f")
-done < <(find "$linux_packages_dir" -maxdepth 1 -name "CaveViewer-${normalized_version}-*.AppImage" -print0 2>/dev/null | sort -z)
-
-if [ ${#map_appimage_paths[@]} -eq 0 ]; then
-  echo "Error: no AppImage found in $linux_packages_dir for version $normalized_version"
-  exit 1
-fi
-
-# Prefer x86_64 for the update manifest (largest installed base); fall back to first found.
-manifest_appimage_path="${map_appimage_paths[0]}"
-for _p in "${map_appimage_paths[@]}"; do
-  [[ "$_p" == *x86_64* ]] && manifest_appimage_path="$_p" && break
-done
-manifest_appimage_name="$(basename "$manifest_appimage_path")"
-
 source_tarball_name="CaveViewer-${normalized_version}-source.tar.gz"
 source_dist_dir="$repo_root/dist/source"
 source_tarball_path="$source_dist_dir/$source_tarball_name"
@@ -100,22 +115,37 @@ else
   echo "APP_VERSION already at $normalized_version"
 fi
 
-# Build only on Linux. On macOS, assume Docker build was already done
-if [[ "$OSTYPE" != "darwin"* ]]; then
-  "$script_dir/build_linux_app.sh"
-  "$script_dir/package.sh"
+if $skip_build; then
+  echo "Skipping build/package step (--skip-build)."
 else
-  echo "[skip] Build on macOS (use: ./scripts/linux/build_linux_in_docker.sh)"
+  # Build only on Linux. On macOS, assume Docker build was already done.
+  if [[ "$OSTYPE" != "darwin"* ]]; then
+    "$script_dir/build_linux_app.sh"
+    "$script_dir/package.sh"
+  else
+    echo "[skip] Build on macOS (use: ./scripts/linux/build_linux_in_docker.sh)"
+  fi
 fi
 
 # Package source code
 echo "Packaging source code..."
 "$repo_root/scripts/common/package_source.sh" "$normalized_version"
 
+# Find all AppImages for this version regardless of architecture suffix.
+# When building both arm64 and amd64, both are uploaded to the release.
+collect_linux_artifacts
+
 if [ ${#map_appimage_paths[@]} -eq 0 ]; then
-  echo "Error: expected Linux AppImage package not found in $linux_packages_dir"
+  echo "Error: no AppImage found in $linux_packages_dir for version $normalized_version"
   exit 1
 fi
+
+# Prefer x86_64 for the update manifest (largest installed base); fall back to first found.
+manifest_appimage_path="${map_appimage_paths[0]}"
+for _p in "${map_appimage_paths[@]}"; do
+  [[ "$_p" == *x86_64* ]] && manifest_appimage_path="$_p" && break
+done
+manifest_appimage_name="$(basename "$manifest_appimage_path")"
 
 if [ ! -f "$source_tarball_path" ]; then
   echo "Error: expected source tarball not found: $source_tarball_path"

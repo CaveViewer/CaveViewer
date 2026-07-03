@@ -48,7 +48,10 @@ Creates a self-contained Python environment with all dependencies:
 **Output:** `dist/linux/app/CaveViewer/` - a complete self-contained application directory
 
 **What it does:**
-- Creates/uses `.venv` Python virtual environment
+- Creates/uses an architecture-specific Python virtual environment by default:
+    - `.venv-linux-build-arm64` on arm64
+    - `.venv-linux-build-amd64` on amd64
+- You can override with `CAVEVIEWER_LINUX_BUILD_VENV=/path/to/venv`
 - Installs all dependencies from `requirements.txt`
 - Runs PyInstaller to bundle Python + all packages + assets
 - Uses `--onedir` mode (easier for AppImage integration)
@@ -164,8 +167,8 @@ QT_QPA_PLATFORM_PLUGIN_PATH="" ./CaveViewer-1.2.45-x86_64.AppImage
 ### Manual Build Steps (debugging)
 ```bash
 # 1. Create venv
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv-linux-build-amd64
+source .venv-linux-build-amd64/bin/activate
 
 # 2. Install deps
 pip install -r requirements.txt
