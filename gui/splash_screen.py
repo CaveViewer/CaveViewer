@@ -107,6 +107,8 @@ _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
 _CTA_HINT_FONT = (_UI_FONT_FAMILY, 10)
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
+_SPLASH_WINDOW_HEIGHT = 600 if sys.platform == "darwin" else 628
+_SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 30
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
     "BottomLine Projects Scientific Dive Team and other volunteers.\n")
@@ -133,7 +135,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
     _PLATFORM_ADAPTER.install_about_handler(root, program_name, version)
 
-    window_w, window_h = 500, 600
+    window_w, window_h = 500, _SPLASH_WINDOW_HEIGHT
 
     # Center the window on screen rather than letting the OS place it
     # arbitrarily -- a first-launch splash screen appearing somewhere
@@ -549,7 +551,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     for widget in (sample_maps_cta, cta_row, cta_link_label, cta_hint_label):
         _bind_sample_maps_click(widget)
 
-    sample_maps_cta.pack(pady=(20, 16))
+    sample_maps_cta.pack(pady=(20, _SPLASH_CTA_BOTTOM_PAD))
 
     # -- footer note ----------------------------------------------------------------
 
