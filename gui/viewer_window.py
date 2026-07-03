@@ -263,6 +263,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
+        self._chunk_prep_progress = 0.0
+        self._chunk_prep_complete_until = None
+        self._chunk_prep_completion_armed = False
         self._window_resources_released = False
 
         if have_ready_cache:
@@ -354,6 +357,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.controls_overlay.show_fullscreen()
         # Reset on each map load; set True when the first chunk reaches the GPU.
         self._initial_chunks_loaded = False
+        self._chunk_prep_progress = 0.0
+        self._chunk_prep_complete_until = None
+        self._chunk_prep_completion_armed = False
+        self.import_progress_panel.reset_progress()
 
     def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
         """Print a one-time texture summary to console on map load."""
@@ -856,6 +863,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     # out texture detail into flat white.
     _AMBIENT_MIN = 0.04
     _AMBIENT_MAX = 0.9
+    _CHUNK_PREP_MAX_FRACTION = 0.97
+    _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.35
 
     @staticmethod
     def _frustum_planes(view: np.ndarray, proj: np.ndarray) -> np.ndarray:
@@ -1021,17 +1030,42 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         streaming_ms = (time.perf_counter() - t0) * 1000.0
 
+        # As soon as prep crosses the readiness threshold, hold a brief
+        # fully-complete frame so the progress bar doesn't disappear abruptly.
+        if self._initial_chunks_loaded and not self._chunk_prep_completion_armed:
+            self._chunk_prep_completion_armed = True
+            self._chunk_prep_complete_until = (
+                time.perf_counter() + self._CHUNK_PREP_COMPLETE_HOLD_SECONDS
+            )
+
         # Show a loading indicator while the initial chunks stream in from disk.
         # Without this the screen is black until the first chunk arrives, which
         # can take several seconds on slow hardware or large maps.
+        now = time.perf_counter()
         if not self._initial_chunks_loaded:
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
-            _pulse = float(0.5 + 0.4 * np.sin(current_time * 2.5))
+            stats = self.world.stats()
+            loaded = max(0, int(stats.get("loaded", 0)))
+            pending = max(0, int(stats.get("pending", 0)))
+            total = loaded + pending
+            raw_fraction = (loaded / total) if total > 0 else 0.0
+            target = min(self._CHUNK_PREP_MAX_FRACTION, raw_fraction * self._CHUNK_PREP_MAX_FRACTION)
+            self._chunk_prep_progress = max(self._chunk_prep_progress, target)
             self.import_progress_panel.render(
-                self.wnd.size, _map_name, "loading chunks", _pulse,
+                self.wnd.size, _map_name, "loading chunks", self._chunk_prep_progress,
                 title="Preparing Map", note="",
             )
             return
+
+        if self._chunk_prep_complete_until is not None and now < self._chunk_prep_complete_until:
+            _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+            self.import_progress_panel.render(
+                self.wnd.size, _map_name, "loading chunks", 1.0,
+                title="Preparing Map", note="",
+            )
+            return
+
+        self._chunk_prep_complete_until = None
 
         self.ctx.clear(*self.color_picker.color)  # background ("void") color, adjustable via the COLOR button
 

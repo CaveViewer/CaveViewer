@@ -72,6 +72,14 @@ class ImportProgressPanel:
             self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
         )
 
+        self._display_fraction = 0.0
+        self._progress_token = None
+
+    def reset_progress(self) -> None:
+        """Reset monotonic progress state between distinct loading runs."""
+        self._display_fraction = 0.0
+        self._progress_token = None
+
     def _format_stage_label(self, stage: str) -> str:
         text = (stage or "").strip()
         if not text:
@@ -129,7 +137,18 @@ class ImportProgressPanel:
 
         add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._TRACK_RGBA)
         fraction_clamped = max(0.0, min(1.0, fraction))
-        fill_x1 = bar_x0 + fraction_clamped * self.BAR_WIDTH
+        token = (map_name, title)
+        if self._progress_token != token:
+            self.reset_progress()
+            self._progress_token = token
+
+        # If this panel is reused for the same token right after a full
+        # run (e.g. opening the same map again), allow a fresh start.
+        if fraction_clamped <= 0.05 and self._display_fraction >= 0.95:
+            self._display_fraction = 0.0
+
+        self._display_fraction = max(self._display_fraction, fraction_clamped)
+        fill_x1 = bar_x0 + self._display_fraction * self.BAR_WIDTH
         if fill_x1 > bar_x0:
             add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, self._FILL_RGBA)
 
