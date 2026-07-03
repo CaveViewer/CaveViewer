@@ -35,13 +35,25 @@
     this is expected and necessary).
 #>
 
+param(
+    [int]$IoWorkers = 0
+)
+
+if ($IoWorkers -lt 0) {
+    $IoWorkers = 0
+}
+
 # -- Self-elevate if not already running as Administrator -------------------
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if (-not $isAdmin) {
     $scriptPath = $MyInvocation.MyCommand.Path
-    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" -Verb RunAs
+    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+    if ($IoWorkers -gt 0) {
+        $argList += " -IoWorkers $IoWorkers"
+    }
+    Start-Process powershell.exe -ArgumentList $argList -Verb RunAs
     exit
 }
 
@@ -433,8 +445,18 @@ function New-DesktopShortcut {
 
         $wshShell = New-Object -ComObject WScript.Shell
         $shortcut = $wshShell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = $pythonPath
-        $shortcut.Arguments = "`"$MainScript`""
+
+        if ($IoWorkers -gt 0) {
+            # Launch through cmd.exe so the shortcut can set this runtime-only
+            # environment variable without modifying system/user env settings.
+            $shortcut.TargetPath = $env:ComSpec
+            $shortcut.Arguments = "/C `"set CAVEVIEWER_IO_WORKERS=$IoWorkers && `"$pythonPath`" `"$MainScript`"`""
+            Write-Log "Shortcut configured with CAVEVIEWER_IO_WORKERS=$IoWorkers."
+        } else {
+            $shortcut.TargetPath = $pythonPath
+            $shortcut.Arguments = "`"$MainScript`""
+        }
+
         $shortcut.WorkingDirectory = $ProjectRoot
         $shortcut.Description = "Launch CaveViewer"
 
@@ -550,7 +572,12 @@ function Show-InstallCompleteDialog {
     $btnLaunch.Add_Click({
         try {
             $pythonPath = (Get-Command python).Source
-            Start-Process -FilePath $pythonPath -ArgumentList "`"$MainScript`"" -WorkingDirectory $ProjectRoot
+            if ($IoWorkers -gt 0) {
+                $launchArgs = "/C `"set CAVEVIEWER_IO_WORKERS=$IoWorkers && `"$pythonPath`" `"$MainScript`"`""
+                Start-Process -FilePath $env:ComSpec -ArgumentList $launchArgs -WorkingDirectory $ProjectRoot
+            } else {
+                Start-Process -FilePath $pythonPath -ArgumentList "`"$MainScript`"" -WorkingDirectory $ProjectRoot
+            }
         } catch {
             Write-Log "WARNING: Could not launch CaveViewer automatically: $($_.Exception.Message)"
             Write-Log "You can still double-click the CaveViewer icon on your Desktop."
@@ -577,6 +604,9 @@ function Show-InstallCompleteDialog {
 }
 
 Write-Log "Welcome to CaveViewer Setup."
+if ($IoWorkers -gt 0) {
+    Write-Log "Runtime worker override enabled: CAVEVIEWER_IO_WORKERS=$IoWorkers"
+}
 Write-Log "Click Install to set up Python, the required libraries, and a Desktop shortcut."
 
 [void]$form.ShowDialog()

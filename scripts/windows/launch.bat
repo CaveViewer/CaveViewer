@@ -15,4 +15,12 @@ REM -ExecutionPolicy Bypass applies ONLY to this one launch, not to your
 REM whole system's PowerShell settings -- it does not change any permanent
 REM Windows security setting.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
+REM Optional runtime tuning for CaveViewer's chunk streaming workers.
+REM Leave empty to use the app default auto-detected worker count.
+REM Example: set "CAVEVIEWER_IO_WORKERS=4"
+set "CAVEVIEWER_IO_WORKERS="
+
+set "IO_WORKERS_ARG="
+if not "%CAVEVIEWER_IO_WORKERS%"=="" set "IO_WORKERS_ARG=-IoWorkers %CAVEVIEWER_IO_WORKERS%"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %IO_WORKERS_ARG%
