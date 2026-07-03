@@ -142,7 +142,8 @@ class RenderModeButtons:
             "tools_buttons_top_y": tools_buttons_top_y,
         }
 
-    def _button_rect_px(self, index: int, window_size: tuple[int, int], top_y: float) -> tuple[float, float, float, float]:
+    def _button_rect_px(self, index: int, window_size: tuple[int, int], top_y: float,
+                        right_inset: float | None = None) -> tuple[float, float, float, float]:
         """Returns (x0, y0, x1, y1) for button `index`
         (0=Mesh, 1=Texture, 2=Shade, 3=Open, 4=Help, 5=Color).
         top_y is where the FIRST button (Mesh) starts -- passed in by the
@@ -152,7 +153,10 @@ class RenderModeButtons:
         button_h = layout["button_h"]
         button_gap = layout["button_gap"]
 
-        x1 = w - self.MARGIN_RIGHT
+        if right_inset is None:
+            right_inset = self.MARGIN_RIGHT
+
+        x1 = w - right_inset
         x0 = x1 - self.BUTTON_WIDTH
         if index <= 2:
             group_top = layout["view_buttons_top_y"]
@@ -165,23 +169,23 @@ class RenderModeButtons:
         y1 = y0 + button_h
         return x0, y0, x1, y1
 
-    def _mesh_button_rect(self, window_size, top_y):
-        return self._button_rect_px(0, window_size, top_y)
+    def _mesh_button_rect(self, window_size, top_y, right_inset: float | None = None):
+        return self._button_rect_px(0, window_size, top_y, right_inset)
 
-    def _texture_button_rect(self, window_size, top_y):
-        return self._button_rect_px(1, window_size, top_y)
+    def _texture_button_rect(self, window_size, top_y, right_inset: float | None = None):
+        return self._button_rect_px(1, window_size, top_y, right_inset)
 
-    def _shade_button_rect(self, window_size, top_y):
-        return self._button_rect_px(2, window_size, top_y)
+    def _shade_button_rect(self, window_size, top_y, right_inset: float | None = None):
+        return self._button_rect_px(2, window_size, top_y, right_inset)
 
-    def _help_button_rect(self, window_size, top_y):
-        return self._button_rect_px(4, window_size, top_y)
+    def _help_button_rect(self, window_size, top_y, right_inset: float | None = None):
+        return self._button_rect_px(4, window_size, top_y, right_inset)
 
-    def _color_button_rect(self, window_size, top_y):
-        return self._button_rect_px(5, window_size, top_y)
+    def _color_button_rect(self, window_size, top_y, right_inset: float | None = None):
+        return self._button_rect_px(5, window_size, top_y, right_inset)
 
-    def _open_button_rect(self, window_size, top_y):
-        return self._button_rect_px(3, window_size, top_y)
+    def _open_button_rect(self, window_size, top_y, right_inset: float | None = None):
+        return self._button_rect_px(3, window_size, top_y, right_inset)
 
     @staticmethod
     def _px_to_ndc(x: float, y: float, window_size: tuple[int, int]) -> tuple[float, float]:
@@ -192,31 +196,38 @@ class RenderModeButtons:
 
     # -- interaction ------------------------------------------------------------
 
-    def hit_test_mesh(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> bool:
-        x0, y0, x1, y1 = self._mesh_button_rect(window_size, top_y)
+    def hit_test_mesh(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
+                      right_inset: float | None = None) -> bool:
+        x0, y0, x1, y1 = self._mesh_button_rect(window_size, top_y, right_inset)
         return x0 <= x <= x1 and y0 <= y <= y1
 
-    def hit_test_texture(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> bool:
-        x0, y0, x1, y1 = self._texture_button_rect(window_size, top_y)
+    def hit_test_texture(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
+                         right_inset: float | None = None) -> bool:
+        x0, y0, x1, y1 = self._texture_button_rect(window_size, top_y, right_inset)
         return x0 <= x <= x1 and y0 <= y <= y1
 
-    def hit_test_shade(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> bool:
-        x0, y0, x1, y1 = self._shade_button_rect(window_size, top_y)
+    def hit_test_shade(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
+                       right_inset: float | None = None) -> bool:
+        x0, y0, x1, y1 = self._shade_button_rect(window_size, top_y, right_inset)
         return x0 <= x <= x1 and y0 <= y <= y1
 
-    def hit_test_help(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> bool:
-        x0, y0, x1, y1 = self._help_button_rect(window_size, top_y)
+    def hit_test_help(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
+                      right_inset: float | None = None) -> bool:
+        x0, y0, x1, y1 = self._help_button_rect(window_size, top_y, right_inset)
         return x0 <= x <= x1 and y0 <= y <= y1
 
-    def hit_test_color(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> bool:
-        x0, y0, x1, y1 = self._color_button_rect(window_size, top_y)
+    def hit_test_color(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
+                       right_inset: float | None = None) -> bool:
+        x0, y0, x1, y1 = self._color_button_rect(window_size, top_y, right_inset)
         return x0 <= x <= x1 and y0 <= y <= y1
 
-    def hit_test_open(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> bool:
-        x0, y0, x1, y1 = self._open_button_rect(window_size, top_y)
+    def hit_test_open(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
+                      right_inset: float | None = None) -> bool:
+        x0, y0, x1, y1 = self._open_button_rect(window_size, top_y, right_inset)
         return x0 <= x <= x1 and y0 <= y <= y1
 
-    def on_mouse_press(self, x: float, y: float, window_size: tuple[int, int], top_y: float) -> str | None:
+    def on_mouse_press(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
+                       right_inset: float | None = None) -> str | None:
         """
         Returns a string identifying which button was clicked ("mesh",
         "texture", "shade", "help", "color", or "open"), or None if the
@@ -227,27 +238,27 @@ class RenderModeButtons:
         button block starts -- see total_stack_height()'s docstring for
         why the caller, not this class, owns that position.
         """
-        if self.hit_test_mesh(x, y, window_size, top_y):
+        if self.hit_test_mesh(x, y, window_size, top_y, right_inset):
             self.wireframe_enabled = not self.wireframe_enabled
             return "mesh"
-        if self.hit_test_texture(x, y, window_size, top_y):
+        if self.hit_test_texture(x, y, window_size, top_y, right_inset):
             self.texture_enabled = not self.texture_enabled
             return "texture"
-        if self.hit_test_shade(x, y, window_size, top_y):
+        if self.hit_test_shade(x, y, window_size, top_y, right_inset):
             self.smooth_shading_enabled = not self.smooth_shading_enabled
             return "shade"
-        if self.hit_test_help(x, y, window_size, top_y):
+        if self.hit_test_help(x, y, window_size, top_y, right_inset):
             return "help"
-        if self.hit_test_color(x, y, window_size, top_y):
+        if self.hit_test_color(x, y, window_size, top_y, right_inset):
             return "color"
-        if self.hit_test_open(x, y, window_size, top_y):
+        if self.hit_test_open(x, y, window_size, top_y, right_inset):
             return "open"
         return None
 
     # -- rendering --------------------------------------------------------------
 
     def render(self, window_size: tuple[int, int], top_y: float, help_active: bool = False,
-               color_active: bool = False) -> None:
+               color_active: bool = False, right_inset: float | None = None) -> None:
         verts = []
 
         def add_quad_px(x0, y0, x1, y1, rgba):
@@ -340,16 +351,14 @@ class RenderModeButtons:
                 glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
                 add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
 
-        layout = self._group_layout(window_size, top_y)
-
-        mesh_rect = self._mesh_button_rect(window_size, top_y)
+        mesh_rect = self._mesh_button_rect(window_size, top_y, right_inset)
 
         draw_toggle_button(mesh_rect, self.wireframe_enabled, "MESH")
-        draw_toggle_button(self._texture_button_rect(window_size, top_y), self.texture_enabled, "TEXTURE")
-        draw_toggle_button(self._shade_button_rect(window_size, top_y), self.smooth_shading_enabled, "SHADE")
-        draw_toggle_button(self._open_button_rect(window_size, top_y), False, "OPEN")
-        draw_toggle_button(self._help_button_rect(window_size, top_y), help_active, "HELP")
-        draw_toggle_button(self._color_button_rect(window_size, top_y), color_active, "COLOR")
+        draw_toggle_button(self._texture_button_rect(window_size, top_y, right_inset), self.texture_enabled, "TEXTURE")
+        draw_toggle_button(self._shade_button_rect(window_size, top_y, right_inset), self.smooth_shading_enabled, "SHADE")
+        draw_toggle_button(self._open_button_rect(window_size, top_y, right_inset), False, "OPEN")
+        draw_toggle_button(self._help_button_rect(window_size, top_y, right_inset), help_active, "HELP")
+        draw_toggle_button(self._color_button_rect(window_size, top_y, right_inset), color_active, "COLOR")
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:

@@ -65,6 +65,27 @@ def _resource_base_dir() -> str:
 SHADER_DIR = os.path.join(_resource_base_dir(), "shaders")
 
 
+_UI_PANEL_VERT_SRC = """
+#version 330
+in vec2 in_pos;
+in vec4 in_color;
+out vec4 v_color;
+void main() {
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+    v_color = in_color;
+}
+"""
+
+_UI_PANEL_FRAG_SRC = """
+#version 330
+in vec4 v_color;
+out vec4 f_color;
+void main() {
+    f_color = v_color;
+}
+"""
+
+
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = f"{APP_NAME} {APP_VERSION}"
@@ -105,6 +126,20 @@ class CaveViewerWindow(mglw.WindowConfig):
     # Hold the completed import bar briefly so the transition into the
     # loaded map view feels intentional instead of abrupt.
     IMPORT_COMPLETE_PAUSE_SECONDS = 1.0
+
+    # Shared backplate behind the always-visible right-side HUD controls.
+    # This keeps section labels readable over bright cave surfaces without
+    # adding a separate background to every individual widget.
+    RIGHT_COLUMN_PANEL_SIDE_PAD = 14
+    RIGHT_COLUMN_PANEL_TOP_PAD = 12
+    RIGHT_COLUMN_PANEL_BOTTOM_PAD = 14
+    RIGHT_COLUMN_PANEL_RIGHT_MARGIN = 20
+    RIGHT_COLUMN_PANEL_BOTTOM_MARGIN = 20
+    RIGHT_COLUMN_PANEL_LABEL_GAP = 10
+    RIGHT_COLUMN_PANEL_LABEL_SIZE = 1.7
+    RIGHT_COLUMN_PANEL_FILL_RGBA = (0.09, 0.12, 0.16, 0.84)
+    RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
+    RIGHT_COLUMN_PANEL_BORDER_PX = 1.5
 
     # Startup focus forcing can make bundled macOS app windows appear in a
     # corner first and then jump as the window manager re-places them.
@@ -149,6 +184,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         # u_model is always the identity matrix -- write it once here rather than
         # allocating and re-uploading a fresh identity matrix every frame.
         self.program["u_model"].write(np.identity(4, dtype=np.float32).tobytes())
+
+        self._hud_panel_program = self.ctx.program(
+            vertex_shader=_UI_PANEL_VERT_SRC,
+            fragment_shader=_UI_PANEL_FRAG_SRC,
+        )
+        self._hud_panel_vbo = self.ctx.buffer(reserve=64 * 6 * 4)
+        self._hud_panel_vao = self.ctx.vertex_array(
+            self._hud_panel_program,
+            [(self._hud_panel_vbo, "2f 4f", "in_pos", "in_color")],
+        )
 
         self._keys_down = set()
         self._last_raw_modifiers = 0
@@ -517,6 +562,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             setattr(self, name, None)
 
         _release_attr(self, "program")
+        _release_attr(self, "_hud_panel_vao")
+        _release_attr(self, "_hud_panel_vbo")
+        _release_attr(self, "_hud_panel_program")
 
         CaveViewerWindow.cave_cache_dir = None
         CaveViewerWindow.cave_textures_dir = None
@@ -932,10 +980,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         label_reserve = bitmap_font.text_height_px(1.5) + 8
 
         button_block_height = RenderModeButtons.total_stack_height()
+        content_right_inset = self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN + self.RIGHT_COLUMN_PANEL_SIDE_PAD
+        content_bottom_inset = self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN + self.RIGHT_COLUMN_PANEL_BOTTOM_PAD
 
         # Build the stack from the BOTTOM up: button block's bottom sits
         # RIGHT_COLUMN_BOTTOM_MARGIN above the window's bottom edge.
-        buttons_bottom_y = h - self.RIGHT_COLUMN_BOTTOM_MARGIN
+        buttons_bottom_y = h - content_bottom_inset
         buttons_top_y = buttons_bottom_y - button_block_height
 
         render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_BUTTON_GROUP_GAP
@@ -947,19 +997,105 @@ class CaveViewerWindow(mglw.WindowConfig):
         brightness_bottom_y = ambient_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP
         brightness_anchor_y = brightness_bottom_y - self.light_stepper.total_height()
 
-        right_x_brightness = w - 18 - self.light_stepper.total_width()
-        right_x_ambient = w - 18 - self.ambient_stepper.total_width()
-        right_x_render_distance = w - 18 - self.render_distance_stepper.total_width()
+        right_x_brightness = w - content_right_inset - self.light_stepper.total_width()
+        right_x_ambient = w - content_right_inset - self.ambient_stepper.total_width()
+        right_x_render_distance = w - content_right_inset - self.render_distance_stepper.total_width()
 
         result = {
             "brightness_anchor": (right_x_brightness, brightness_anchor_y),
             "ambient_anchor": (right_x_ambient, ambient_anchor_y),
             "render_distance_anchor": (right_x_render_distance, render_distance_anchor_y),
             "buttons_top_y": buttons_top_y,
+            "content_right_inset": content_right_inset,
+            "content_bottom_inset": content_bottom_inset,
         }
         self._layout_cache_size = window_size
         self._layout_cache_result = result
         return result
+
+    def _right_column_panel_rect(self, window_size: tuple[int, int], column: dict | None = None) -> tuple[float, float, float, float]:
+        """Bounds for the shared backplate behind the right-side HUD column."""
+        if column is None:
+            column = self._right_column_layout(window_size)
+
+        w, h = window_size
+        label_height = bitmap_font.text_height_px(self.RIGHT_COLUMN_PANEL_LABEL_SIZE)
+        buttons_top_y = column["buttons_top_y"]
+
+        brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
+        ambient_anchor_x, ambient_anchor_y = column["ambient_anchor"]
+        render_distance_anchor_x, render_distance_anchor_y = column["render_distance_anchor"]
+
+        stepper_lefts = [brightness_anchor_x, ambient_anchor_x, render_distance_anchor_x]
+        stepper_rights = [
+            brightness_anchor_x + self.light_stepper.total_width(),
+            ambient_anchor_x + self.ambient_stepper.total_width(),
+            render_distance_anchor_x + self.render_distance_stepper.total_width(),
+        ]
+        label_tops = [
+            brightness_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
+            ambient_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
+            render_distance_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
+        ]
+
+        button_x0, _button_y0, button_x1, _button_y1 = self.render_mode_buttons._button_rect_px(
+            0, window_size, buttons_top_y, column["content_right_inset"]
+        )
+        _last_x0, _last_y0, _last_x1, button_bottom_y = self.render_mode_buttons._button_rect_px(
+            5, window_size, buttons_top_y, column["content_right_inset"]
+        )
+
+        x0 = min(min(stepper_lefts), button_x0) - self.RIGHT_COLUMN_PANEL_SIDE_PAD
+        x1 = w - self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN
+        y0 = min(label_tops) - self.RIGHT_COLUMN_PANEL_TOP_PAD
+        y1 = h - self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN
+        return (x0, y0, x1, y1)
+
+    def _render_right_column_panel(self, window_size: tuple[int, int], column: dict | None = None) -> None:
+        """Draw a shared translucent panel behind the right-side HUD controls."""
+        if column is None:
+            column = self._right_column_layout(window_size)
+
+        x0, y0, x1, y1 = self._right_column_panel_rect(window_size, column)
+        w, h = window_size
+        verts = []
+
+        def px_to_ndc(x: float, y: float) -> tuple[float, float]:
+            nx = (x / w) * 2.0 - 1.0
+            ny = 1.0 - (y / h) * 2.0
+            return nx, ny
+
+        def add_quad_px(qx0: float, qy0: float, qx1: float, qy1: float, rgba: tuple[float, float, float, float]) -> None:
+            nx0, ny0 = px_to_ndc(qx0, qy0)
+            nx1, ny1 = px_to_ndc(qx1, qy1)
+            top, bottom = max(ny0, ny1), min(ny0, ny1)
+            left, right = min(nx0, nx1), max(nx0, nx1)
+            quad = [
+                (left, bottom), (right, bottom), (right, top),
+                (left, bottom), (right, top), (left, top),
+            ]
+            for vx, vy in quad:
+                verts.append((vx, vy, *rgba))
+
+        add_quad_px(x0, y0, x1, y1, self.RIGHT_COLUMN_PANEL_FILL_RGBA)
+
+        border = self.RIGHT_COLUMN_PANEL_BORDER_PX
+        border_color = self.RIGHT_COLUMN_PANEL_BORDER_RGBA
+        add_quad_px(x0, y0, x1, y0 + border, border_color)
+        add_quad_px(x0, y1 - border, x1, y1, border_color)
+        add_quad_px(x0, y0, x0 + border, y1, border_color)
+        add_quad_px(x1 - border, y0, x1, y1, border_color)
+
+        data = np.array(verts, dtype=np.float32)
+        self._hud_panel_vbo.write(data.tobytes())
+
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._hud_panel_vao.render(moderngl.TRIANGLES, vertices=len(verts))
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
 
     def on_render(self, current_time: float, frame_time: float):
         if self._closing_requested:
@@ -1170,6 +1306,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         render_distance_anchor_x, render_distance_anchor_y = column["render_distance_anchor"]
         buttons_top_y = column["buttons_top_y"]
 
+        self._render_right_column_panel(self.wnd.size, column)
         self.light_stepper.render(self.wnd.size, brightness_anchor_x, brightness_anchor_y, label_above=True)
         self.ambient_stepper.render(self.wnd.size, ambient_anchor_x, ambient_anchor_y, label_above=True)
         self.render_distance_stepper.render(self.wnd.size, render_distance_anchor_x, render_distance_anchor_y,
@@ -1199,8 +1336,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
         self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
-                                          help_active=self.controls_overlay.is_manual_mode,
-                                          color_active=self.color_picker.is_active)
+                          help_active=self.controls_overlay.is_manual_mode,
+                          color_active=self.color_picker.is_active,
+                          right_inset=column["content_right_inset"])
 
         # Color picker panel draws on top of the regular HUD elements (it
         # dims the 3D view behind it, same visual language as the Help
@@ -1816,16 +1954,18 @@ class CaveViewerWindow(mglw.WindowConfig):
 
             if buttons_locked_for_loading:
                 if (
-                    self.render_mode_buttons.hit_test_mesh(x, y, self.wnd.size, buttons_top_y)
-                    or self.render_mode_buttons.hit_test_texture(x, y, self.wnd.size, buttons_top_y)
-                    or self.render_mode_buttons.hit_test_shade(x, y, self.wnd.size, buttons_top_y)
-                    or self.render_mode_buttons.hit_test_help(x, y, self.wnd.size, buttons_top_y)
-                    or self.render_mode_buttons.hit_test_color(x, y, self.wnd.size, buttons_top_y)
-                    or self.render_mode_buttons.hit_test_open(x, y, self.wnd.size, buttons_top_y)
+                    self.render_mode_buttons.hit_test_mesh(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
+                    or self.render_mode_buttons.hit_test_texture(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
+                    or self.render_mode_buttons.hit_test_shade(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
+                    or self.render_mode_buttons.hit_test_help(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
+                    or self.render_mode_buttons.hit_test_color(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
+                    or self.render_mode_buttons.hit_test_open(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
                 ):
                     return
 
-            clicked_button = self.render_mode_buttons.on_mouse_press(x, y, self.wnd.size, buttons_top_y)
+            clicked_button = self.render_mode_buttons.on_mouse_press(
+                x, y, self.wnd.size, buttons_top_y, column["content_right_inset"]
+            )
             if clicked_button == "shade":
                 self._apply_shading_toggle()
                 return
