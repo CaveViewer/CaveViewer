@@ -48,6 +48,26 @@ except Exception:
 _UPDATE_STARTED_SENTINEL = "__caveviewer_update_started__"
 
 
+def _print_user_env_overrides() -> None:
+    """
+    Print currently-set CaveViewer environment overrides so startup logs
+    always show which runtime knobs are active for this process.
+    """
+    active = {
+        key: value
+        for key, value in os.environ.items()
+        if key.startswith("CAVEVIEWER_") and str(value).strip() != ""
+    }
+
+    if not active:
+        print("Active environment overrides: none")
+        return
+
+    print("Active environment overrides:")
+    for key in sorted(active):
+        print(f"  {key}={active[key]}")
+
+
 def find_input_files(folder: str) -> tuple[str, str]:
     """Locate the .obj and its .mtl inside `folder`. Returns (obj_path, mtl_path).
     Raises a clear error if the folder doesn't contain what we expect, since
@@ -490,6 +510,7 @@ def main():
     print("=" * 60)
     print(f"  {APP_NAME} {__version__}")
     print("=" * 60)
+    _print_user_env_overrides()
 
     # CLI argument: open that path and exit when the viewer closes.
     if len(sys.argv) > 1 and sys.argv[1].strip():
