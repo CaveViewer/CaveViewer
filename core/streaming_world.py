@@ -75,6 +75,9 @@ def _parse_memory_target_fraction(raw_value: str | None) -> float:
 
     Accepts either fraction (0.10) or percent-style (10, 25, 40).
     Returns a conservative default when unset/invalid.
+
+    This value is interpreted as a share of TOTAL physical RAM
+    (best-effort detected), not currently free RAM.
     """
     conservative_default = 0.12
     if raw_value is None:
@@ -230,7 +233,13 @@ class StreamingWorld:
         return max(int(median_size * overhead_multiplier), 512 * 1024)
 
     def _configure_chunk_budget_from_memory_target(self) -> None:
-        """Derive max_loaded_chunks from memory target and estimated chunk footprint."""
+        """Derive max_loaded_chunks from memory target and estimated chunk footprint.
+
+        Important: this is a policy cap for chunk residency, not a strict
+        memory reservation. Actual process memory can differ due to Python
+        object overhead, decode/transient buffers, textures, driver usage,
+        and whatever else is running on the machine.
+        """
         if self._estimated_chunk_ram_bytes <= 0:
             return
 

@@ -246,6 +246,9 @@ You can configure CaveViewer behavior through environment variables without edit
   Conservative default: `12%` of detected physical RAM.
   Accepts either fraction (`0.12`) or percent-style (`12`, `25`).
   This is not an absolute GB value.
+  Uses total physical RAM as a reference (not currently free RAM), and
+  acts as a residency policy target rather than an OS-level reservation.
+  Other running applications can still reduce effectively available memory.
 
 - `CAVEVIEWER_IO_WORKERS`
   Runtime chunk-load worker thread count.
