@@ -623,7 +623,29 @@ class CaveViewerWindow(mglw.WindowConfig):
         try:
             model_descriptor = find_model_file(folder)
         except FileNotFoundError as e:
-            _LOG.warning(f"Could not open this folder: {e}")
+            # Match caveviewer.py's startup behavior: allow selecting a
+            # folder that already contains a built .caveviewer_cache,
+            # or selecting the cache directory itself directly.
+            prebuilt_cache = os.path.join(folder, chunker_module.CACHE_DIRNAME)
+            textures_dir = folder
+            if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
+                if os.path.exists(os.path.join(folder, chunker_module.MANIFEST_NAME)):
+                    prebuilt_cache = folder
+                    textures_dir = folder
+            if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
+                _LOG.warning(f"Could not open this folder: {e}")
+                return
+
+            try:
+                new_manifest = chunker_module.load_manifest(prebuilt_cache)
+            except Exception as manifest_err:
+                _LOG.error(f"Failed to load the selected prebuilt map: {manifest_err}")
+                return
+
+            map_name = os.path.basename(new_manifest.get("source_obj") or folder)
+            _LOG.info(f"Switching to prebuilt map: {map_name}")
+            self.load_new_map(prebuilt_cache, textures_dir, new_manifest)
+            _LOG.info(f"Now viewing: {map_name}")
             return
 
         source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
