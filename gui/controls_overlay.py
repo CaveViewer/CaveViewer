@@ -30,6 +30,10 @@ from PIL import Image
 
 from gui import bitmap_font
 from gui.platform.factory import get_platform_adapter
+from core.logging_utils import get_logger
+
+
+_LOG = get_logger("ControlsOverlay")
 
 
 _VERT_SRC = """
@@ -209,8 +213,7 @@ class ControlsOverlay:
             self._logo_texture = ctx.texture(img.size, 4, tex_data)
             self._logo_texture.build_mipmaps()
         except Exception as e:
-            print(f"[ControlsOverlay] WARNING: could not load loading logo "
-                  f"({_LOGO_PATH}): {e}")
+            _LOG.warning(f"could not load loading logo ({_LOGO_PATH}): {e}")
 
         self.logo_program = ctx.program(vertex_shader=_LOGO_VERT_SRC, fragment_shader=_LOGO_FRAG_SRC)
         # 4 verts (2f pos + 2f uv) per quad, drawn as a triangle strip --

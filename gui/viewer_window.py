@@ -25,6 +25,7 @@ import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
 from core import chunker
+from core.logging_utils import get_logger
 from core.streaming_world import StreamingWorld, StreamingConfig
 from core.texture_manager import TextureManager
 from gui.camera import FlyCamera
@@ -38,6 +39,8 @@ from gui.stats_readout import StatsReadout
 from gui import bitmap_font
 from gui.platform.factory import get_platform_adapter
 from caveviewer_version import APP_NAME, APP_VERSION
+
+_LOG = get_logger("CaveViewer")
 
 def _resource_base_dir() -> str:
     """
@@ -353,7 +356,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         import io as _io
 
         mats = manifest.get("mtl_materials", {})
-        print(f"[CaveViewer] Texture diagnostics: {len(mats)} materials, "
+        _LOG.info(f"Texture diagnostics: {len(mats)} materials, "
               f"{len(manifest.get('chunks', {}))} total chunks")
 
         # Deduplicate: multiple material names can share one file/bytes blob.
@@ -392,18 +395,18 @@ class CaveViewerWindow(mglw.WindowConfig):
         for sz in sizes:
             size_counts[sz] = size_counts.get(sz, 0) + 1
 
-        print(f"[CaveViewer]   Unique texture files : {unique_files}"
-              + (f" ({embedded} embedded)" if embedded else ""))
+        _LOG.info(f"  Unique texture files : {unique_files}"
+                  + (f" ({embedded} embedded)" if embedded else ""))
         if missing:
-            print(f"[CaveViewer]   Materials with no texture: {missing}")
+            _LOG.info(f"  Materials with no texture: {missing}")
         for sz, count in sorted(size_counts.items(), key=lambda x: -x[1]):
-            print(f"[CaveViewer]   {sz[0]}x{sz[1]} : {count} texture(s)")
-        print(f"[CaveViewer]   Uncompressed RGB total  : {total_mb:.0f} MB")
+            _LOG.info(f"  {sz[0]}x{sz[1]} : {count} texture(s)")
+        _LOG.info(f"  Uncompressed RGB total  : {total_mb:.0f} MB")
         max_dim = max((max(w, h) for w, h in sizes), default=0)
         # Rough atlas fit: next power-of-2 square that holds total_px
         import math as _math
         atlas_side = 2 ** _math.ceil(_math.log2(_math.sqrt(total_px))) if total_px > 0 else 0
-        print(f"[CaveViewer]   Estimated atlas needed  : {atlas_side}x{atlas_side} px "
+        _LOG.info(f"  Estimated atlas needed  : {atlas_side}x{atlas_side} px "
               f"({atlas_side*atlas_side*3/1024/1024:.0f} MB)")
 
     def _teardown_current_map(self) -> None:
@@ -551,16 +554,16 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         folder = pick_folder_dialog()
         if not folder:
-            print("[CaveViewer] Open cancelled -- no folder selected.")
+            _LOG.info("Open cancelled -- no folder selected.")
             return
 
         folder = os.path.abspath(folder)
-        print(f"[CaveViewer] Opening new map from: {folder}")
+        _LOG.info(f"Opening new map from: {folder}")
 
         try:
             model_descriptor = find_model_file(folder)
         except FileNotFoundError as e:
-            print(f"[CaveViewer] Could not open this folder: {e}")
+            _LOG.warning(f"Could not open this folder: {e}")
             return
 
         source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
@@ -610,18 +613,18 @@ class CaveViewerWindow(mglw.WindowConfig):
                 on_progress("loading cached map", 1.0)
                 cache_dir = chunker_module.get_cache_dir(source_path)
         except Exception as e:
-            print(f"[CaveViewer] Failed to import this map: {e}")
+            _LOG.error(f"Failed to import this map: {e}")
             return
 
         try:
             new_manifest = chunker_module.load_manifest(cache_dir)
         except Exception as e:
-            print(f"[CaveViewer] Failed to load the new map's manifest after import: {e}")
+            _LOG.error(f"Failed to load the new map's manifest after import: {e}")
             return
 
-        print(f"[CaveViewer] Switching to: {map_name}")
+        _LOG.info(f"Switching to: {map_name}")
         self.load_new_map(cache_dir, folder, new_manifest)
-        print(f"[CaveViewer] Now viewing: {map_name}")
+        _LOG.info(f"Now viewing: {map_name}")
 
     def _run_pending_import(self) -> None:
         """
@@ -689,8 +692,8 @@ class CaveViewerWindow(mglw.WindowConfig):
 
             new_manifest = chunker_module.load_manifest(cache_dir)
         except Exception as e:
-            print(f"[CaveViewer] Failed to import this map: {e}")
-            print("[CaveViewer] Closing -- there's no map to show without a successful import.")
+            _LOG.error(f"Failed to import this map: {e}")
+            _LOG.error("Closing -- there's no map to show without a successful import.")
             # wnd.close() is moderngl-window's standard way to request a
             # clean shutdown, but -- same reasoning as the swap_buffers
             # defensive check above -- this project has hit real cross-
@@ -704,7 +707,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.wnd.close()
             return
 
-        print(f"[CaveViewer] Now viewing: {map_name}")
+        _LOG.info(f"Now viewing: {map_name}")
         self.load_new_map(cache_dir, textures_dir, new_manifest)
 
     # -- chunk GPU lifecycle ------------------------------------------------
@@ -1151,21 +1154,21 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         if len(self._frame_time_history) >= 10 and total_ms > max(rolling_avg * 3, 25.0):
             stats = self.world.stats()
-            print(f"[CaveViewer] FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
-                  f"streaming={streaming_ms:.1f}ms mesh_draw={mesh_draw_ms:.1f}ms "
-                  f"gpu_draw={self._last_gpu_draw_ms:.1f}ms "
-                  f"overlay={overlay_ms:.1f}ms | drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
-                  f"loaded={stats['loaded']} pending={stats['pending']}")
+            _LOG.warning(f"FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
+                         f"streaming={streaming_ms:.1f}ms mesh_draw={mesh_draw_ms:.1f}ms "
+                         f"gpu_draw={self._last_gpu_draw_ms:.1f}ms "
+                         f"overlay={overlay_ms:.1f}ms | drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
+                         f"loaded={stats['loaded']} pending={stats['pending']}")
 
         self._frame_count += 1
         now = time.time()
         if now - self._last_fps_print > 2.0:
             fps = self._frame_count / (now - self._last_fps_print)
             stats = self.world.stats()
-            print(f"[CaveViewer] {fps:.1f} fps | chunks loaded={stats['loaded']} "
-                  f"pending={stats['pending']} drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
-                  f"| speed={self.camera.move_speed:.1f}m/s "
-                  f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
+            _LOG.info(f"{fps:.1f} fps | chunks loaded={stats['loaded']} "
+                      f"pending={stats['pending']} drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
+                      f"| speed={self.camera.move_speed:.1f}m/s "
+                      f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
             self._frame_count = 0
             self._last_fps_print = now
 
@@ -1376,7 +1379,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                         "pitch": float(pitch),
                     }
         except Exception as e:
-            print(f"[CaveViewer] Failed to load bookmarks: {e}")
+            _LOG.warning(f"Failed to load bookmarks: {e}")
 
     def _save_bookmarks(self) -> None:
         if not self._bookmarks_path:
@@ -1389,7 +1392,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             with open(self._bookmarks_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
         except Exception as e:
-            print(f"[CaveViewer] Failed to save bookmarks: {e}")
+            _LOG.warning(f"Failed to save bookmarks: {e}")
 
     def _save_bookmark_slot(self, slot: int) -> None:
         if not self._has_map_loaded:
@@ -1404,14 +1407,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             "pitch": float(self.camera.pitch),
         }
         self._save_bookmarks()
-        print(f"[CaveViewer] Saved camera bookmark {slot}.")
+        _LOG.info(f"Saved camera bookmark {slot}.")
 
     def _recall_bookmark_slot(self, slot: int) -> bool:
         if not self._has_map_loaded:
             return False
         data = self._bookmarks.get(slot)
         if not data:
-            print(f"[CaveViewer] Bookmark {slot} is empty.")
+            _LOG.info(f"Bookmark {slot} is empty.")
             return False
 
         pos = data["position"]
@@ -1424,7 +1427,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.camera.pitch = pitch
         self.camera.roll = 0.0  # Reset roll when loading a bookmark
 
-        print(f"[CaveViewer] Recalled camera bookmark {slot}.")
+        _LOG.info(f"Recalled camera bookmark {slot}.")
         return True
 
     def _handle_bookmark_hotkey(self, key, modifiers: KeyModifiers) -> bool:
@@ -1608,7 +1611,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         now = time.time()
         if now - self._last_input_reset_log > 3.0:
-            print(f"[CaveViewer] Input state reset ({reason}).")
+            _LOG.info(f"Input state reset ({reason}).")
             self._last_input_reset_log = now
 
     def _query_runtime_iconified_state(self) -> bool:
@@ -1913,6 +1916,6 @@ def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
         msg = str(e)
         if "Neither CaveViewerWindow.cave_cache_dir" in msg and "must be set" in msg:
             # Clean exit without a traceback
-            print("Viewer exited without a preloaded map.")
+            _LOG.info("Viewer exited without a preloaded map.")
             return
         raise

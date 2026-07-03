@@ -26,6 +26,7 @@ import sys
 import glob
 import time
 from caveviewer_version import APP_NAME, APP_VERSION
+from core.logging_utils import configure_logging, get_logger
 
 __version__ = APP_VERSION
 
@@ -46,6 +47,7 @@ except Exception:
     pass  # non-fatal: falls back to Python's bundled CA bundle
 
 _UPDATE_STARTED_SENTINEL = "__caveviewer_update_started__"
+_LOG = get_logger("CaveViewer")
 
 
 def _print_user_env_overrides() -> None:
@@ -60,12 +62,12 @@ def _print_user_env_overrides() -> None:
     }
 
     if not active:
-        print("Active environment overrides: none")
+        _LOG.info("Active environment overrides: none")
         return
 
-    print("Active environment overrides:")
+    _LOG.info("Active environment overrides:")
     for key in sorted(active):
-        print(f"  {key}={active[key]}")
+        _LOG.info(f"  {key}={active[key]}")
 
 
 def find_input_files(folder: str) -> tuple[str, str]:
@@ -80,7 +82,7 @@ def find_input_files(folder: str) -> tuple[str, str]:
             f".obj, .mtl, and .jpg texture tiles from Agisoft."
         )
     if len(obj_candidates) > 1:
-        print(f"Note: multiple .obj files found, using the first one: {obj_candidates[0]}")
+        _LOG.info(f"Note: multiple .obj files found, using the first one: {obj_candidates[0]}")
     obj_path = obj_candidates[0]
 
     from core.obj_parser import parse_obj  # local import; heavy-ish module
@@ -147,7 +149,7 @@ def find_model_file(folder: str) -> dict:
         if not candidates:
             continue
         if len(candidates) > 1:
-            print(f"Note: multiple {ext} files found, using the first one: {candidates[0]}")
+            _LOG.info(f"Note: multiple {ext} files found, using the first one: {candidates[0]}")
         model_path = candidates[0]
 
         if ext == ".obj":
@@ -179,22 +181,22 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     from core.obj_parser import parse_obj, parse_mtl
 
     if not force_rebuild and chunker.cache_is_valid(obj_path):
-        print(f"Using existing chunk cache (delete the .caveviewer_cache "
-              f"folder next to your .obj if you want to force a rebuild).")
+        _LOG.info(f"Using existing chunk cache (delete the .caveviewer_cache "
+                  f"folder next to your .obj if you want to force a rebuild).")
         return chunker.get_cache_dir(obj_path)
 
-    print(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
-    print(f"This is a one-time cost; subsequent opens of this map will be instant.\n")
+    _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
+    _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
     active_chunk_size = chunker.configured_chunk_size()
-    print(f"Using chunk size: {active_chunk_size:.1f}m "
-          f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
+    _LOG.info(f"Using chunk size: {active_chunk_size:.1f}m "
+              f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
     try:
         source_size_gb = os.path.getsize(obj_path) / (1024 ** 3)
         if source_size_gb >= 10.0:
-            print("Large-map tip: for very large sources, try "
-                  f"{chunker.CHUNK_SIZE_ENV_VAR}=16 or 24 to reduce "
-                  "chunk-file count and improve streaming performance.")
+            _LOG.info("Large-map tip: for very large sources, try "
+                    f"{chunker.CHUNK_SIZE_ENV_VAR}=16 or 24 to reduce "
+                    "chunk-file count and improve streaming performance.")
     except OSError:
         pass
 
@@ -237,8 +239,8 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
 
     elapsed = time.time() - t_start
     n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
-    print(f"\nImport complete in {elapsed:.1f}s -- "
-          f"{len(mesh.face_pos_idx):,} triangles split into {n_chunks:,} spatial chunks.")
+    _LOG.info(f"Import complete in {elapsed:.1f}s -- "
+              f"{len(mesh.face_pos_idx):,} triangles split into {n_chunks:,} spatial chunks.")
 
     return cache_dir
 
@@ -278,22 +280,22 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     source_path = model_descriptor["glb_path"]
 
     if not force_rebuild and chunker.cache_is_valid(source_path):
-        print(f"Using existing chunk cache (delete the .caveviewer_cache "
-              f"folder next to your {os.path.basename(source_path)} if you want to force a rebuild).")
+        _LOG.info(f"Using existing chunk cache (delete the .caveviewer_cache "
+                  f"folder next to your {os.path.basename(source_path)} if you want to force a rebuild).")
         return chunker.get_cache_dir(source_path)
 
-    print(f"No valid cache found -- importing {os.path.basename(source_path)}.")
-    print(f"This is a one-time cost; subsequent opens of this map will be instant.\n")
+    _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
+    _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
     active_chunk_size = chunker.configured_chunk_size()
-    print(f"Using chunk size: {active_chunk_size:.1f}m "
-          f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
+    _LOG.info(f"Using chunk size: {active_chunk_size:.1f}m "
+              f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
     try:
         source_size_gb = os.path.getsize(source_path) / (1024 ** 3)
         if source_size_gb >= 10.0:
-            print("Large-map tip: for very large sources, try "
-                  f"{chunker.CHUNK_SIZE_ENV_VAR}=16 or 24 to reduce "
-                  "chunk-file count and improve streaming performance.")
+            _LOG.info("Large-map tip: for very large sources, try "
+                    f"{chunker.CHUNK_SIZE_ENV_VAR}=16 or 24 to reduce "
+                    "chunk-file count and improve streaming performance.")
     except OSError:
         pass
 
@@ -360,8 +362,8 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
 
     elapsed = time.time() - t_start
     n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
-    print(f"\nImport complete in {elapsed:.1f}s -- "
-          f"{len(mesh.face_pos_idx):,} triangles split into {n_chunks:,} spatial chunks.")
+    _LOG.info(f"Import complete in {elapsed:.1f}s -- "
+              f"{len(mesh.face_pos_idx):,} triangles split into {n_chunks:,} spatial chunks.")
 
     return cache_dir
 
@@ -416,24 +418,14 @@ def pick_folder_dialog() -> str | None:
 
 
 def _print_viewer_controls() -> None:
-    print("\nLaunching viewer...")
-    print("Controls: WASD = move, Space/Ctrl = up/down, hold Right-Mouse + move = look,")
-    print("          Shift = speed boost, Scroll = adjust fly speed,")
-    print("          Left-click +/- (bottom-right corner) = adjust headlamp brightness,")
-    print("          Left-click +/- (bottom-right corner, below brightness) = adjust global ambient light,")
-    print("          Left-click the minimap (bottom-left) = jump to that spot,")
-    print("          Left-click +/- (bottom-right corner, below brightness) = adjust render distance,")
-    print("          Left-click Mesh/Texture buttons (bottom-right corner) = toggle wireframe/texture,")
-    print("          Left-click the Help button (bottom-right corner) = show/hide the controls list,")
-    print("          Left-click the Color button (bottom-right corner) = open/close the background color picker,")
-    print("          Left-click the Open button (bottom-right corner) = switch to a different map,")
-    print("          Esc = quit\n")
+    _LOG.info("Launching viewer...")
+    _LOG.info("Controls help is available in-app via the Help button.")
 
 
 def _run_map_session(folder: str) -> None:
     """Load and view one cave map. Returns when the viewer window closes."""
     folder = os.path.abspath(folder)
-    print(f"\nSelected folder: {folder}")
+    _LOG.info(f"Selected folder: {folder}")
 
     try:
         model_descriptor = find_model_file(folder)
@@ -448,26 +440,26 @@ def _run_map_session(folder: str) -> None:
                 _prebuilt_cache = folder
                 _textures_dir = folder
         if os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
-            print("\nPre-compiled map detected -- launching viewer directly.")
-            print("(Delete the .caveviewer_cache folder to force a rebuild.)")
+            _LOG.info("Pre-compiled map detected -- launching viewer directly.")
+            _LOG.info("(Delete the .caveviewer_cache folder to force a rebuild.)")
             _print_viewer_controls()
             from gui.viewer_window import run_viewer
             try:
                 run_viewer(_prebuilt_cache, textures_dir=_textures_dir)
             except Exception as launch_err:
-                print(f"\nError starting viewer: {launch_err}", file=sys.stderr)
+                _LOG.error(f"Error starting viewer: {launch_err}")
                 import traceback
                 traceback.print_exc()
                 sys.exit(1)
             return
-        print(f"\nError: {e}")
+        _LOG.error(f"Error: {e}")
         sys.exit(1)
 
     fmt = model_descriptor["format"]
     source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
-    print(f"Found {fmt.upper()} mesh: {os.path.basename(source_path)}")
+    _LOG.info(f"Found {fmt.upper()} mesh: {os.path.basename(source_path)}")
     if fmt == "obj":
-        print(f"Found materials: {os.path.basename(model_descriptor['mtl_path'])}")
+        _LOG.info(f"Found materials: {os.path.basename(model_descriptor['mtl_path'])}")
 
     _print_viewer_controls()
 
@@ -477,14 +469,14 @@ def _run_map_session(folder: str) -> None:
         # Fast path, unchanged: a cache already exists, so there's no
         # import to show progress for -- launch straight in, same as
         # this has always worked.
-        print("Using existing chunk cache (delete the .caveviewer_cache "
-              "folder next to your model file if you want to force a rebuild).")
+        _LOG.info("Using existing chunk cache (delete the .caveviewer_cache "
+                  "folder next to your model file if you want to force a rebuild).")
         cache_dir = chunker.get_cache_dir(source_path)
         from gui.viewer_window import run_viewer
         try:
             run_viewer(cache_dir, textures_dir=folder)
         except Exception as e:
-            print(f"\nError starting viewer: {e}", file=sys.stderr)
+            _LOG.error(f"Error starting viewer: {e}")
             import traceback
             traceback.print_exc()
             sys.exit(1)
@@ -500,16 +492,17 @@ def _run_map_session(folder: str) -> None:
         try:
             run_viewer_with_pending_import(model_descriptor, textures_dir=folder)
         except Exception as e:
-            print(f"\nError starting viewer: {e}", file=sys.stderr)
+            _LOG.error(f"Error starting viewer: {e}")
             import traceback
             traceback.print_exc()
             sys.exit(1)
 
 
 def main():
-    print("=" * 60)
-    print(f"  {APP_NAME} {__version__}")
-    print("=" * 60)
+    configure_logging()
+    _LOG.info("=" * 60)
+    _LOG.info(f"  {APP_NAME} {__version__}")
+    _LOG.info("=" * 60)
     _print_user_env_overrides()
 
     # CLI argument: open that path and exit when the viewer closes.
@@ -524,11 +517,11 @@ def main():
         folder = show_splash_screen(program_name=APP_NAME, version=__version__)
 
         if folder == _UPDATE_STARTED_SENTINEL:
-            print("Update is being installed; exiting the current instance.")
+            _LOG.info("Update is being installed; exiting the current instance.")
             return
 
         if not folder:
-            print("No folder selected. Exiting.")
+            _LOG.info("No folder selected. Exiting.")
             return
 
         _run_map_session(folder)
@@ -541,7 +534,8 @@ if __name__ == "__main__":
     except Exception as e:
         import traceback
         error_msg = f"Fatal error in CaveViewer: {e}\n\nTraceback:\n{traceback.format_exc()}"
-        print(error_msg, file=sys.stderr)
+        configure_logging()
+        _LOG.error(error_msg)
         
         # Try to show error dialog if GUI is available
         try:

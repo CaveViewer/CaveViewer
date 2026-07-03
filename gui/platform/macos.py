@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 
+from core.logging_utils import get_logger
 from .base import ManualInstallResult
 from .default import DefaultSplashPlatformAdapter
 
@@ -15,6 +16,7 @@ from .default import DefaultSplashPlatformAdapter
 # macOS routes About-menu events through that delegate into this interpreter
 # for as long as the app is running.
 _about_root_ref = None
+_LOG = get_logger("CaveViewer")
 
 
 class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
@@ -122,7 +124,7 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
                 "proc tkAboutDialog {} { ::tk::mac::ShowAbout }"
             )
         except Exception as e:
-            print(f"[CaveViewer] Note: could not install About handler: {e}")
+            _LOG.warning(f"could not install About handler: {e}")
 
     def _show_about_dialog(self, parent, program_name: str, version: str) -> None:
         # Use the native tk_messageBox path directly and avoid setting an icon.

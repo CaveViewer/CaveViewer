@@ -35,6 +35,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from core.logging_utils import get_logger
 from core.obj_parser import RawMesh, MaterialRange
 
 CACHE_DIRNAME = ".caveviewer_cache"
@@ -43,6 +44,7 @@ CHUNKS_DIRNAME = "chunks"
 
 CHUNK_SIZE_ENV_VAR = "CAVEVIEWER_CHUNK_SIZE_METERS"
 _DEFAULT_CHUNK_SIZE_FALLBACK = 8.0  # meters; preserve existing default behavior
+_LOG = get_logger("chunker")
 
 
 def _resolve_default_chunk_size() -> float:
@@ -55,8 +57,8 @@ def _resolve_default_chunk_size() -> float:
             raise ValueError("must be > 0")
         return value
     except Exception:
-        print(
-            f"[chunker] WARNING: ignoring invalid {CHUNK_SIZE_ENV_VAR}={raw!r}; "
+        _LOG.warning(
+            f"ignoring invalid {CHUNK_SIZE_ENV_VAR}={raw!r}; "
             f"using default {_DEFAULT_CHUNK_SIZE_FALLBACK:.1f}m"
         )
         return _DEFAULT_CHUNK_SIZE_FALLBACK

@@ -15,15 +15,18 @@ import tempfile
 import time
 
 try:
+    from core.logging_utils import configure_logging, get_logger
     from gui.platform import get_platform_adapter
 except ModuleNotFoundError:
     # Supports running as a plain script via `python gui/updater.py`.
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
+    from core.logging_utils import configure_logging, get_logger
     from gui.platform import get_platform_adapter
 
 _PLATFORM_ADAPTER = get_platform_adapter()
+_LOG = get_logger("Updater")
 _TEMP_CLEANUP_PREFIXES = (
     "caveviewer_update_mount_",
     "caveviewer_update_stage_",
@@ -44,7 +47,7 @@ def _truncate_log(log_path):
 def log(log_path, message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{timestamp}] {message}"
-    print(line)
+    _LOG.info(message)
     try:
         with open(log_path, "a") as f:
             f.write(line + "\n")
@@ -110,8 +113,9 @@ def _verify_payload_sha256(payload_path, expected_sha256, log_path):
     log(log_path, "Payload SHA-256 verification passed.")
 
 def main():
+    configure_logging()
     if len(sys.argv) < 4:
-        print("Usage: python updater.py <mode> <payload_path> <expected_sha256>")
+        _LOG.error("Usage: python updater.py <mode> <payload_path> <expected_sha256>")
         sys.exit(1)
 
     mode = (sys.argv[1] or _PLATFORM_ADAPTER.install_channel()).strip().lower()

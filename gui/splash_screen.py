@@ -36,6 +36,7 @@ import sys
 import tempfile
 import threading
 from caveviewer_version import APP_NAME, APP_VERSION
+from core.logging_utils import get_logger
 from gui.platform import get_splash_platform_adapter
 
 
@@ -87,6 +88,7 @@ _LAST_BROWSE_PATH_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last
 
 # URL for example maps link -- empty/None means link is disabled
 _EXAMPLE_MAPS_URL = None
+_LOG = get_logger("CaveViewer")
 
 _BG_COLOR = "#0a0a0d"           # near-black, matches the in-app overlay backgrounds
 _PANEL_COLOR = "#12121a"        # slightly lighter panel background
@@ -163,9 +165,9 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 logo_img = logo_img.resize(new_size, Image.LANCZOS)
             logo_photo = ImageTk.PhotoImage(logo_img, master=root)
         except Exception as e:
-            print(f"[CaveViewer] Note: could not load splash screen logo ({e}); continuing without it.")
+            _LOG.warning(f"could not load splash screen logo ({e}); continuing without it.")
     else:
-        print("[CaveViewer] Note: splash screen logo asset not found; continuing without it.")
+        _LOG.warning("splash screen logo asset not found; continuing without it.")
 
     if logo_photo is not None:
         logo_label = tk.Label(root, image=logo_photo, bg=_BG_COLOR, borderwidth=0)

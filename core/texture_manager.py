@@ -40,6 +40,7 @@ from typing import Optional
 
 from PIL import Image
 import numpy as np
+from core.logging_utils import get_logger
 
 # Pillow's default decompression-bomb guard rejects images above ~179
 # million pixels, as a safety measure against maliciously crafted image
@@ -54,6 +55,8 @@ import numpy as np
 # call in a try/except (see _decode_from_disk below) as a second layer
 # of protection regardless of where the threshold ends up sitting.
 Image.MAX_IMAGE_PIXELS = 1_000_000_000
+
+_LOG = get_logger("TextureManager")
 
 
 @dataclass
@@ -171,13 +174,13 @@ class TextureManager:
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             return DecodedImage(size=img.size, components=3, data=img.tobytes())
         except Exception as e:
-            print(f"[TextureManager] WARNING: failed to decode an embedded texture: {e}")
+            _LOG.warning(f"failed to decode an embedded texture: {e}")
             return None
 
     def _decode_from_disk(self, filename: str) -> Optional[DecodedImage]:
         path = os.path.join(self.textures_dir, filename)
         if not os.path.exists(path):
-            print(f"[TextureManager] WARNING: texture file missing: {path}")
+            _LOG.warning(f"texture file missing: {path}")
             return None
 
         try:
@@ -196,8 +199,7 @@ class TextureManager:
             # missing-texture placeholder instead of taking down the
             # whole viewer. A wrong-looking (magenta) texture on one
             # chunk is recoverable; a crashed app mid-flythrough is not.
-            print(f"[TextureManager] WARNING: failed to decode texture "
-                  f"'{filename}': {e}")
+            _LOG.warning(f"failed to decode texture '{filename}': {e}")
             return None
 
     # -- main-thread-only GPU upload step ------------------------------------
@@ -318,11 +320,9 @@ class TextureManager:
                 found.append((mat_name, path))
             else:
                 missing.append((mat_name, path))
-                print(f"[TextureManager] VALIDATE: missing texture for "
-                      f"'{mat_name}' -> '{path}'")
+                _LOG.warning(f"VALIDATE: missing texture for '{mat_name}' -> '{path}'")
 
-        print(f"[TextureManager] Validation complete: "
-              f"{len(found)} textures found, {len(missing)} missing.")
+        _LOG.info(f"Validation complete: {len(found)} textures found, {len(missing)} missing.")
         return {"found": found, "missing": missing}
 
     def loaded_count(self) -> int:

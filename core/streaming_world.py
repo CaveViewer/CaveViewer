@@ -28,6 +28,10 @@ import numpy as np
 
 from core import chunker
 from core.chunker import ChunkData
+from core.logging_utils import get_logger
+
+
+_LOG = get_logger("StreamingWorld")
 
 
 @dataclass
@@ -174,7 +178,7 @@ class StreamingWorld:
                         # a failure here should not block the chunk from
                         # becoming ready -- worst case, acquire() falls back
                         # to a synchronous decode on the main thread later.
-                        print(f"[StreamingWorld] texture pre-decode failed for {cell}: {e}")
+                        _LOG.warning(f"texture pre-decode failed for {cell}: {e}")
                 self._ready_queue.put(data)
             except FileNotFoundError:
                 # cell vanished from manifest expectations; ignore safely
@@ -182,7 +186,7 @@ class StreamingWorld:
             except Exception as e:
                 # don't crash the worker thread on a single bad chunk file;
                 # surface via print so it's visible without killing render
-                print(f"[StreamingWorld] failed to load chunk {cell}: {e}")
+                _LOG.warning(f"failed to load chunk {cell}: {e}")
 
     def cell_for_position(self, position: np.ndarray) -> tuple[int, int, int]:
         return chunker.world_to_cell(position, self.config.chunk_size)
