@@ -179,7 +179,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # not), so this sidesteps the whole class of problem by using
         # discrete +/-1 clicks instead of continuous drag-tracking.
         # Range/default unchanged from the old slider (0-10, default 3).
-        self.light_stepper = StepperControl(self.ctx, "BRIGHTNESS", initial_value=3, min_value=0, max_value=10)
+        self.light_stepper = StepperControl(self.ctx, "BRIGHTNESS", initial_value=5, min_value=0, max_value=10)
 
         # Render distance control: a -/value/+ stepper, left side of the
         # screen, mirroring the brightness control's placement logic but
@@ -190,7 +190,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # (see core/streaming_world.py) still applies underneath this as
         # a hard backstop regardless of what this is set to.
         self.render_distance_stepper = StepperControl(
-            self.ctx, "VIEW DIST", initial_value=4, min_value=1, max_value=10
+            self.ctx, "DISTANCE", initial_value=5, min_value=1, max_value=10
         )
 
         # "Global illumination" control: not actual simulated light
@@ -204,7 +204,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # original fixed ambient value this app always used (0.04, a
         # tiny fill so unlit areas aren't pure black), so leaving this at
         # its default changes nothing from before this feature existed.
-        self.ambient_stepper = StepperControl(self.ctx, "GLOBAL LIGHT", initial_value=0, min_value=0, max_value=10)
+        self.ambient_stepper = StepperControl(self.ctx, "GLOBAL LIGHT", initial_value=5, min_value=0, max_value=10)
 
         # Mesh/Texture toggle buttons, stacked just below the brightness
         # slider. Mesh = wireframe overlay on/off; Texture = whether the
@@ -213,6 +213,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # combined display states.
         self.render_mode_buttons = RenderModeButtons(self.ctx, texture_enabled=True, wireframe_enabled=False,
                                                       smooth_shading_enabled=True)
+        # Loading-policy lock for right-side button effects. While a map
+        # is loading, all render-mode toggles are forced off; once
+        # loading completes, defaults become Texture ON, Mesh OFF,
+        # Shade OFF until explicitly enabled by the user.
+        self._render_mode_load_lock_active = False
 
         # Controls reference / loading overlay -- full-screen right now
         # while the first chunks around the spawn point stream in, and
@@ -777,6 +782,40 @@ class CaveViewerWindow(mglw.WindowConfig):
                 interleaved[:, 5:8] = active_normals
                 vbo.write(interleaved.tobytes())
 
+    def _buttons_locked_for_loading(self) -> bool:
+        """True while map loading should disable the right-side button block."""
+        if not self._has_map_loaded:
+            return True
+        if not self._initial_chunks_loaded:
+            return True
+        return self.controls_overlay.is_active and not self.controls_overlay.is_manual_mode
+
+    def _sync_render_mode_loading_policy(self) -> None:
+        """Apply loading-time button policy and post-load defaults exactly on transitions."""
+        locked = self._buttons_locked_for_loading()
+
+        if locked:
+            if self._render_mode_load_lock_active:
+                return
+            self.render_mode_buttons.texture_enabled = False
+            self.render_mode_buttons.wireframe_enabled = False
+            if self.render_mode_buttons.smooth_shading_enabled:
+                self.render_mode_buttons.smooth_shading_enabled = False
+                if self._has_map_loaded:
+                    self._apply_shading_toggle()
+            self._render_mode_load_lock_active = True
+            return
+
+        # Just unlocked after loading: enable only Texture.
+        if self._render_mode_load_lock_active:
+            self.render_mode_buttons.texture_enabled = True
+            self.render_mode_buttons.wireframe_enabled = False
+            if self.render_mode_buttons.smooth_shading_enabled:
+                self.render_mode_buttons.smooth_shading_enabled = False
+                if self._has_map_loaded:
+                    self._apply_shading_toggle()
+            self._render_mode_load_lock_active = False
+
     # -- moderngl_window hooks ------------------------------------------------
     #
     # moderngl-window renamed its per-frame/event hooks across major versions
@@ -799,6 +838,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     # own height.
     RIGHT_COLUMN_BOTTOM_MARGIN = 18
     RIGHT_COLUMN_GAP = 14  # vertical gap between each of the 4 blocks (brightness, render distance, global light, buttons)
+    RIGHT_COLUMN_BUTTON_GROUP_GAP = 30  # extra gap between View dist and Mesh/Texture/Shade group
 
     # Keyboard look fallback (especially useful on macOS hardware where
     # right-button drag can be awkward/unavailable). Interpreted as
@@ -889,7 +929,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         buttons_bottom_y = h - self.RIGHT_COLUMN_BOTTOM_MARGIN
         buttons_top_y = buttons_bottom_y - button_block_height
 
-        render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_GAP
+        render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_BUTTON_GROUP_GAP
         render_distance_anchor_y = render_distance_bottom_y - self.render_distance_stepper.total_height()
 
         ambient_bottom_y = render_distance_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP
@@ -915,6 +955,10 @@ class CaveViewerWindow(mglw.WindowConfig):
     def on_render(self, current_time: float, frame_time: float):
         if self._closing_requested:
             return
+
+        # Keep render-mode button effects synced to loading state even
+        # on frames that early-return before normal HUD interaction.
+        self._sync_render_mode_loading_policy()
 
         if self._startup_focus_enabled:
             self._request_startup_focus_once()
@@ -1721,6 +1765,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             render_distance_anchor_x, render_distance_anchor_y = column["render_distance_anchor"]
             buttons_top_y = column["buttons_top_y"]
 
+            # While map-loading overlays are active (startup fullscreen or
+            # teleport panel), keep the right-side button block inert.
+            # Manual HELP mode is intentionally excluded so the same
+            # buttons remain usable when the user explicitly opens help.
+            buttons_locked_for_loading = self._buttons_locked_for_loading()
+
             if self.light_stepper.on_mouse_press(x, y, brightness_anchor_x, brightness_anchor_y):
                 return
 
@@ -1729,6 +1779,17 @@ class CaveViewerWindow(mglw.WindowConfig):
 
             if self.render_distance_stepper.on_mouse_press(x, y, render_distance_anchor_x, render_distance_anchor_y):
                 return
+
+            if buttons_locked_for_loading:
+                if (
+                    self.render_mode_buttons.hit_test_mesh(x, y, self.wnd.size, buttons_top_y)
+                    or self.render_mode_buttons.hit_test_texture(x, y, self.wnd.size, buttons_top_y)
+                    or self.render_mode_buttons.hit_test_shade(x, y, self.wnd.size, buttons_top_y)
+                    or self.render_mode_buttons.hit_test_help(x, y, self.wnd.size, buttons_top_y)
+                    or self.render_mode_buttons.hit_test_color(x, y, self.wnd.size, buttons_top_y)
+                    or self.render_mode_buttons.hit_test_open(x, y, self.wnd.size, buttons_top_y)
+                ):
+                    return
 
             clicked_button = self.render_mode_buttons.on_mouse_press(x, y, self.wnd.size, buttons_top_y)
             if clicked_button == "shade":
@@ -1762,15 +1823,15 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
 
             # While the color picker panel is open, it behaves like a
-            # modal -- ANY left-click is consumed by it (a slider drag,
-            # or simply a click that misses every slider), rather than
-            # falling through to the minimap/3D view underneath. Without
-            # this, clicking just outside a slider while picking a color
-            # could accidentally teleport you via the minimap at the
-            # same time, which would be a confusing side effect of what
-            # was meant to be a color adjustment.
+            # modal -- clicks inside the panel interact with its sliders.
+            # A click outside closes the picker and is consumed so that
+            # dismissing it cannot also trigger unrelated world/UI actions
+            # underneath on the same click.
             if self.color_picker.is_active:
-                self.color_picker.on_mouse_press(x, y, self.wnd.size)
+                if self.color_picker.hit_test_panel(x, y, self.wnd.size):
+                    self.color_picker.on_mouse_press(x, y, self.wnd.size)
+                else:
+                    self.color_picker.hide()
                 return
 
             minimap_target = self.minimap.world_xz_for_click(x, y, self.wnd.size)

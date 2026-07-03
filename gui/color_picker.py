@@ -49,13 +49,18 @@ void main() {
 
 class ColorPicker:
     PANEL_WIDTH = 380
-    PANEL_HEIGHT = 300
+    PANEL_HEIGHT = 292
     TRACK_HEIGHT = 10
     TRACK_MARGIN_SIDE = 48
     HANDLE_WIDTH = 16
     HANDLE_HEIGHT = 24
-    ROW_GAP = 56
+    ROW_GAP = 50
     SWATCH_SIZE = 48
+
+    TITLE_TOP = 16
+    ROW_TOP_OFFSET = 74
+    SWATCH_BOTTOM_MARGIN = 36
+    FOOTER_HINT_TOP_PAD = 10
 
     _CHANNEL_NAMES = ["R", "G", "B"]
     _CHANNEL_COLORS = [
@@ -120,10 +125,18 @@ class ColorPicker:
         px0, py0, px1, py1 = self._panel_rect_px(window_size)
         track_x0 = px0 + self.TRACK_MARGIN_SIDE
         track_x1 = px1 - self.TRACK_MARGIN_SIDE
-        row_top = py0 + 60 + channel * self.ROW_GAP
+        row_top = py0 + self.ROW_TOP_OFFSET + channel * self.ROW_GAP
         track_y0 = row_top
         track_y1 = row_top + self.TRACK_HEIGHT
         return track_x0, track_y0, track_x1, track_y1
+
+    def _swatch_rect_px(self, window_size: tuple[int, int]) -> tuple[float, float, float, float]:
+        px0, py0, px1, py1 = self._panel_rect_px(window_size)
+        swatch_x0 = px0 + (self.PANEL_WIDTH - self.SWATCH_SIZE) / 2.0
+        swatch_y1 = py1 - self.SWATCH_BOTTOM_MARGIN
+        swatch_x1 = swatch_x0 + self.SWATCH_SIZE
+        swatch_y0 = swatch_y1 - self.SWATCH_SIZE
+        return swatch_x0, swatch_y0, swatch_x1, swatch_y1
 
     def _handle_rect_px(self, channel: int, window_size: tuple[int, int]) -> tuple[float, float, float, float]:
         tx0, ty0, tx1, ty1 = self._track_rect_px(channel, window_size)
@@ -245,7 +258,7 @@ class ColorPicker:
         title = "Background Color"
         title_size = 2.2
         title_w = bitmap_font.text_width_px(title, title_size)
-        add_text(title, px0 + (self.PANEL_WIDTH - title_w) / 2.0, py0 + 16, title_size,
+        add_text(title, px0 + (self.PANEL_WIDTH - title_w) / 2.0, py0 + self.TITLE_TOP, title_size,
                   (0.62, 0.80, 1.0, 1.0))
 
         for channel in range(3):
@@ -272,10 +285,7 @@ class ColorPicker:
             add_text(value_text, tx1 + 12, (ty0 + ty1) / 2.0 - bitmap_font.text_height_px(label_size) / 2.0,
                       label_size, (0.88, 0.91, 0.97, 1.0))
 
-        swatch_x0 = px0 + (self.PANEL_WIDTH - self.SWATCH_SIZE) / 2.0
-        swatch_y0 = py1 - self.SWATCH_SIZE - 16
-        swatch_x1 = swatch_x0 + self.SWATCH_SIZE
-        swatch_y1 = swatch_y0 + self.SWATCH_SIZE
+        swatch_x0, swatch_y0, swatch_x1, swatch_y1 = self._swatch_rect_px(window_size)
         r, g, b = self.color
         add_quad_px(swatch_x0, swatch_y0, swatch_x1, swatch_y1, (r, g, b, 1.0))
         swatch_border = 1.5
@@ -283,6 +293,13 @@ class ColorPicker:
         add_quad_px(swatch_x0, swatch_y1 - swatch_border, swatch_x1, swatch_y1, (0.55, 0.70, 0.95, 1.0))
         add_quad_px(swatch_x0, swatch_y0, swatch_x0 + swatch_border, swatch_y1, (0.55, 0.70, 0.95, 1.0))
         add_quad_px(swatch_x1 - swatch_border, swatch_y0, swatch_x1, swatch_y1, (0.55, 0.70, 0.95, 1.0))
+
+        hint = "Click outside to close"
+        hint_size = 1.2
+        hint_w = bitmap_font.text_width_px(hint, hint_size)
+        hint_y = swatch_y1 + self.FOOTER_HINT_TOP_PAD
+        add_text(hint, px0 + (self.PANEL_WIDTH - hint_w) / 2.0, hint_y, hint_size,
+              (0.72, 0.79, 0.90, 0.95))
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:

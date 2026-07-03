@@ -74,10 +74,13 @@ class RenderModeButtons:
     # column (controls + buttons together) from a single position,
     # currently the bottom-right corner -- see
     # CaveViewerWindow._right_column_layout().
-    BUTTON_WIDTH = 110
+    # Match StepperControl.total_width() so the button stack visually
+    # aligns with the brightness/ambient/view-distance controls above.
+    BUTTON_WIDTH = 120
     BUTTON_HEIGHT = 34
     BUTTON_GAP = 10
     MARGIN_RIGHT = 18
+    GROUP_GAP = 34
 
     def __init__(self, ctx: moderngl.Context,
                  texture_enabled: bool = True, wireframe_enabled: bool = False,
@@ -93,8 +96,8 @@ class RenderModeButtons:
         # state reflects how it was actually imported.
         self.smooth_shading_enabled = smooth_shading_enabled
 
-        # Sized generously for six buttons' worth of shapes + labels.
-        self._max_verts = 3600
+        # Sized generously for six buttons, two section headers, and separator.
+        self._max_verts = 5000
         self._vbo = ctx.buffer(reserve=self._max_verts * 6 * 4)
         self._vao = ctx.vertex_array(
             self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
@@ -104,37 +107,19 @@ class RenderModeButtons:
 
     @classmethod
     def total_stack_height(cls, scale: float = 1.0) -> float:
-        """Full height of all 6 buttons + gaps between them, at a given
+        """Full height of the grouped 6-button stack, at a given
         scale factor -- used by viewer_window.py to figure out how much
         vertical room this whole block needs when laying out the
         bottom-anchored right-side column."""
-        n_buttons = 6
-        return n_buttons * (cls.BUTTON_HEIGHT * scale) + (n_buttons - 1) * (cls.BUTTON_GAP * scale)
+        view_group_h = 3 * (cls.BUTTON_HEIGHT * scale) + 2 * (cls.BUTTON_GAP * scale)
+        utility_group_h = 3 * (cls.BUTTON_HEIGHT * scale) + 2 * (cls.BUTTON_GAP * scale)
+        return view_group_h + (cls.GROUP_GAP * scale) + utility_group_h
 
-    def _button_rect_px(self, index: int, window_size: tuple[int, int], top_y: float) -> tuple[float, float, float, float]:
-        """Returns (x0, y0, x1, y1) for button `index`
-        (0=Mesh, 1=Texture, 2=Shade, 3=Help, 4=Color, 5=Open).
-        top_y is where the FIRST button (Mesh) starts -- passed in by the
-        caller, which owns the overall column layout."""
-        w, h = window_size
+    def _group_layout(self, window_size: tuple[int, int], top_y: float) -> dict:
+        """Compute grouped button/header geometry and a shared scale."""
+        _w, h = window_size
 
-        n_buttons = 6
-        full_stack_height = n_buttons * self.BUTTON_HEIGHT + (n_buttons - 1) * self.BUTTON_GAP
-
-        # If the full stack (starting at `top_y`) would run past the
-        # bottom of the window, shrink the per-button height and gap
-        # proportionally so all five buttons stay visible and clickable,
-        # rather than letting later buttons (Color, Open) run off-screen
-        # on a short window. The floor here is deliberately low (0.35,
-        # not the 0.5 used when there were fewer buttons) -- a HIGHER
-        # floor than what's actually needed to fit defeats the entire
-        # point of this calculation: at 640x480 with 5 buttons, the floor
-        # was clamping the scale UP to a value that still overflowed the
-        # window, which was a real, reproducible bug caught by testing
-        # this exact window size after adding the 5th button. The floor
-        # only matters at truly extreme window sizes (smaller than any
-        # realistic usage) where some shrinkage is an acceptable
-        # tradeoff against buttons being literally unreachable.
+        full_stack_height = self.total_stack_height(scale=1.0)
         available_height = h - top_y - 10  # 10px bottom breathing room
         scale = 1.0
         if full_stack_height > available_height and available_height > 0:
@@ -142,10 +127,41 @@ class RenderModeButtons:
 
         button_h = self.BUTTON_HEIGHT * scale
         button_gap = self.BUTTON_GAP * scale
+        group_gap = self.GROUP_GAP * scale
+
+        view_buttons_top_y = top_y
+        view_group_h = 3 * button_h + 2 * button_gap
+
+        tools_buttons_top_y = view_buttons_top_y + view_group_h + group_gap
+
+        return {
+            "scale": scale,
+            "button_h": button_h,
+            "button_gap": button_gap,
+            "view_buttons_top_y": view_buttons_top_y,
+            "tools_buttons_top_y": tools_buttons_top_y,
+        }
+
+    def _button_rect_px(self, index: int, window_size: tuple[int, int], top_y: float) -> tuple[float, float, float, float]:
+        """Returns (x0, y0, x1, y1) for button `index`
+        (0=Mesh, 1=Texture, 2=Shade, 3=Open, 4=Help, 5=Color).
+        top_y is where the FIRST button (Mesh) starts -- passed in by the
+        caller, which owns the overall column layout."""
+        w, _h = window_size
+        layout = self._group_layout(window_size, top_y)
+        button_h = layout["button_h"]
+        button_gap = layout["button_gap"]
 
         x1 = w - self.MARGIN_RIGHT
         x0 = x1 - self.BUTTON_WIDTH
-        y0 = top_y + index * (button_h + button_gap)
+        if index <= 2:
+            group_top = layout["view_buttons_top_y"]
+            index_in_group = index
+        else:
+            group_top = layout["tools_buttons_top_y"]
+            index_in_group = index - 3
+
+        y0 = group_top + index_in_group * (button_h + button_gap)
         y1 = y0 + button_h
         return x0, y0, x1, y1
 
@@ -159,13 +175,13 @@ class RenderModeButtons:
         return self._button_rect_px(2, window_size, top_y)
 
     def _help_button_rect(self, window_size, top_y):
-        return self._button_rect_px(3, window_size, top_y)
-
-    def _color_button_rect(self, window_size, top_y):
         return self._button_rect_px(4, window_size, top_y)
 
-    def _open_button_rect(self, window_size, top_y):
+    def _color_button_rect(self, window_size, top_y):
         return self._button_rect_px(5, window_size, top_y)
+
+    def _open_button_rect(self, window_size, top_y):
+        return self._button_rect_px(3, window_size, top_y)
 
     @staticmethod
     def _px_to_ndc(x: float, y: float, window_size: tuple[int, int]) -> tuple[float, float]:
@@ -324,12 +340,16 @@ class RenderModeButtons:
                 glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
                 add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
 
-        draw_toggle_button(self._mesh_button_rect(window_size, top_y), self.wireframe_enabled, "MESH")
+        layout = self._group_layout(window_size, top_y)
+
+        mesh_rect = self._mesh_button_rect(window_size, top_y)
+
+        draw_toggle_button(mesh_rect, self.wireframe_enabled, "MESH")
         draw_toggle_button(self._texture_button_rect(window_size, top_y), self.texture_enabled, "TEXTURE")
         draw_toggle_button(self._shade_button_rect(window_size, top_y), self.smooth_shading_enabled, "SHADE")
+        draw_toggle_button(self._open_button_rect(window_size, top_y), False, "OPEN")
         draw_toggle_button(self._help_button_rect(window_size, top_y), help_active, "HELP")
         draw_toggle_button(self._color_button_rect(window_size, top_y), color_active, "COLOR")
-        draw_toggle_button(self._open_button_rect(window_size, top_y), False, "OPEN")
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:
