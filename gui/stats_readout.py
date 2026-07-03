@@ -68,28 +68,25 @@ class StatsReadout:
         self._render_cache_verts: int = 0
 
     def total_height(self) -> float:
-        """Total vertical space this readout occupies (two lines of text
-        + the gap between them) -- used by the caller to know how much
+        """Total vertical space this readout occupies (one line of text)
+        -- used by the caller to know how much
         room to reserve above the minimap panel."""
         line_h = bitmap_font.text_height_px(self.TEXT_SIZE)
-        return line_h * 2 + self.LINE_GAP
+        return line_h
 
     def render(self, window_size: tuple[int, int], bottom_left_x: float, bottom_y: float,
                fps: float, chunks_loaded: int, chunks_pending: int) -> None:
         """
-        Draws two lines of text -- "FPS xx.x" and "CHUNKS n (m pending)"
-        -- with their BOTTOM-left corner at (bottom_left_x, bottom_y), so
+        Draws one line of text -- "FPS xx.x" -- with its BOTTOM-left
+        corner at (bottom_left_x, bottom_y), so
         the caller can position this readout's bottom edge flush against
         the top of the minimap panel without needing to know this
         class's exact text-height internals first.
         """
         fps_text = f"FPS {fps:.0f}"
-        chunks_text = f"CHUNKS {chunks_loaded}"
-        if chunks_pending > 0:
-            chunks_text += f" ({chunks_pending} PENDING)"
         fps_color = (0.18, 0.66, 0.36, 1.0) if fps >= 15.0 else (0.98, 0.58, 0.18, 1.0)
 
-        cache_key = (fps_text, chunks_text, fps_color, window_size, bottom_left_x, bottom_y)
+        cache_key = (fps_text, fps_color, window_size, bottom_left_x, bottom_y)
         if cache_key != self._render_cache_key:
             verts = []
 
@@ -114,12 +111,8 @@ class StatsReadout:
                     add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
 
             line_h = bitmap_font.text_height_px(self.TEXT_SIZE)
-            chunks_line_y = bottom_y - line_h
-            fps_line_y = chunks_line_y - self.LINE_GAP - line_h
-            chunks_color = (0.33, 0.52, 0.82, 1.0)
-
+            fps_line_y = bottom_y - line_h
             add_text(fps_text, bottom_left_x, fps_line_y, self.TEXT_SIZE, fps_color)
-            add_text(chunks_text, bottom_left_x, chunks_line_y, self.TEXT_SIZE, chunks_color)
 
             if not verts:
                 return
