@@ -435,7 +435,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.world.config.load_radius_cells = self.render_distance_stepper.value
 
         self.controls_overlay.show_fullscreen()
-        # Reset on each map load; set True when the first chunk reaches the GPU.
+        # Reset on each map load; set True when the initial view has enough
+        # uploaded chunks to be usable, not merely when the first chunk arrives.
         self._initial_chunks_loaded = False
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
@@ -856,7 +857,6 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         self._chunk_gpu_objects[chunk_data.cell] = vao_list
         self._chunk_normal_cache[chunk_data.cell] = normal_cache_entry
-        self._initial_chunks_loaded = True
 
     def _on_chunk_unload(self, cell):
         vao_list = self._chunk_gpu_objects.pop(cell, [])
@@ -958,8 +958,17 @@ class CaveViewerWindow(mglw.WindowConfig):
     # out texture detail into flat white.
     _AMBIENT_MIN = 0.04
     _AMBIENT_MAX = 0.9
+    _INITIAL_LOAD_MIN_CHUNKS = 6
     _CHUNK_PREP_MAX_FRACTION = 0.97
     _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.35
+
+    def _initial_chunk_load_is_ready(self, stats: dict) -> bool:
+        loaded = max(0, int(stats.get("loaded", 0)))
+        pending = max(0, int(stats.get("pending", 0)))
+        total_available = max(1, int(stats.get("total_available", 1)))
+        max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
+        needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded)
+        return loaded >= needed and pending == 0
 
     @staticmethod
     def _frustum_planes(view: np.ndarray, proj: np.ndarray) -> np.ndarray:
@@ -1213,6 +1222,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             time_budget_ms=self._upload_time_budget_ms,
         )
         streaming_ms = (time.perf_counter() - t0) * 1000.0
+        stats = self.world.stats()
+        if not self._initial_chunks_loaded and self._initial_chunk_load_is_ready(stats):
+            self._initial_chunks_loaded = True
 
         # As soon as prep crosses the readiness threshold, hold a brief
         # fully-complete frame so the progress bar doesn't disappear abruptly.
@@ -1228,7 +1240,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         now = time.perf_counter()
         if not self._initial_chunks_loaded:
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
-            stats = self.world.stats()
             loaded = max(0, int(stats.get("loaded", 0)))
             pending = max(0, int(stats.get("pending", 0)))
             total = loaded + pending

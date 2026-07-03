@@ -48,10 +48,12 @@ void main() {
 
 
 class ColorPicker:
-    PANEL_WIDTH = 380
+    PANEL_WIDTH = 400
     PANEL_HEIGHT = 292
     TRACK_HEIGHT = 10
-    TRACK_MARGIN_SIDE = 48
+    TRACK_MARGIN_SIDE = 56
+    VALUE_COLUMN_WIDTH = 28
+    VALUE_GAP = 14
     HANDLE_WIDTH = 16
     HANDLE_HEIGHT = 24
     ROW_GAP = 50
@@ -124,7 +126,7 @@ class ColorPicker:
     def _track_rect_px(self, channel: int, window_size: tuple[int, int]) -> tuple[float, float, float, float]:
         px0, py0, px1, py1 = self._panel_rect_px(window_size)
         track_x0 = px0 + self.TRACK_MARGIN_SIDE
-        track_x1 = px1 - self.TRACK_MARGIN_SIDE
+        track_x1 = px1 - self.TRACK_MARGIN_SIDE - self.VALUE_COLUMN_WIDTH
         row_top = py0 + self.ROW_TOP_OFFSET + channel * self.ROW_GAP
         track_y0 = row_top
         track_y1 = row_top + self.TRACK_HEIGHT
@@ -282,7 +284,7 @@ class ColorPicker:
                       label_size, accent)
 
             value_text = str(self.values[channel])
-            add_text(value_text, tx1 + 12, (ty0 + ty1) / 2.0 - bitmap_font.text_height_px(label_size) / 2.0,
+            add_text(value_text, tx1 + self.VALUE_GAP, (ty0 + ty1) / 2.0 - bitmap_font.text_height_px(label_size) / 2.0,
                       label_size, (0.88, 0.91, 0.97, 1.0))
 
         swatch_x0, swatch_y0, swatch_x1, swatch_y1 = self._swatch_rect_px(window_size)

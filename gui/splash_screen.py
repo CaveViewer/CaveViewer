@@ -204,24 +204,44 @@ def _default_advanced_settings() -> dict[str, str]:
     return {field["key"]: "" for field in _ADVANCED_SETTING_FIELDS}
 
 
-def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
-    normalized = _normalize_advanced_settings(values)
+def _env_setting_or_default(env_var: str, default: str) -> str:
+    value = os.getenv(env_var, "").strip()
+    return value if value else default
+
+
+def _advanced_setting_defaults() -> dict[str, str]:
     logical_cpus = max(1, os.cpu_count() or 1)
-    defaults = {
-        "memory_target_percent": "12",
-        "gpu_memory_target_percent": "70",
-        "gpu_memory_gb": os.getenv("CAVEVIEWER_GPU_MEMORY_GB", ""),
-        "io_reserved_cpus": "3",
-        "io_workers": str(max(1, logical_cpus - 3)),
-        "upload_chunks_per_frame": "1",
-        "upload_time_budget_ms": "3.0",
-        "chunk_size_meters": os.getenv("CAVEVIEWER_CHUNK_SIZE_METERS", "8"),
-        "chunk_build_reserved_cpus": os.getenv("CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS", "2"),
-        "chunk_build_workers": os.getenv(
-            "CAVEVIEWER_CHUNK_BUILD_WORKERS",
-            str(max(1, logical_cpus - 2)),
+    return {
+        "memory_target_percent": _env_setting_or_default(
+            "CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "12"
+        ),
+        "gpu_memory_target_percent": _env_setting_or_default(
+            "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET", "70"
+        ),
+        "gpu_memory_gb": os.getenv("CAVEVIEWER_GPU_MEMORY_GB", "").strip(),
+        "io_reserved_cpus": _env_setting_or_default("CAVEVIEWER_IO_RESERVED_CPUS", "3"),
+        "io_workers": _env_setting_or_default(
+            "CAVEVIEWER_IO_WORKERS", str(max(1, logical_cpus - 3))
+        ),
+        "upload_chunks_per_frame": _env_setting_or_default(
+            "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "1"
+        ),
+        "upload_time_budget_ms": _env_setting_or_default(
+            "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", "3.0"
+        ),
+        "chunk_size_meters": _env_setting_or_default("CAVEVIEWER_CHUNK_SIZE_METERS", "8"),
+        "chunk_build_reserved_cpus": _env_setting_or_default(
+            "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS", "2"
+        ),
+        "chunk_build_workers": _env_setting_or_default(
+            "CAVEVIEWER_CHUNK_BUILD_WORKERS", str(max(1, logical_cpus - 2))
         ),
     }
+
+
+def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
+    normalized = _normalize_advanced_settings(values)
+    defaults = _advanced_setting_defaults()
     return {
         key: (normalized.get(key, "") or defaults[key])
         for key in defaults
@@ -728,6 +748,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     instruction_label.pack(pady=(0, 0))
 
     def _show_advanced_settings_dialog() -> None:
+        nonlocal advanced_settings
+        advanced_settings = _effective_advanced_settings(_load_advanced_settings())
+        _apply_advanced_settings_to_env(advanced_settings)
+
         dialog = tk.Toplevel(root)
         dialog.title("Advanced Settings")
         dialog.configure(bg=_BG_COLOR)
@@ -780,7 +804,11 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     anchor="w",
                 ).pack(anchor="w")
 
-                var = tk.StringVar(value=effective_settings[field["key"]])
+                # macOS keeps prior splash Tk roots alive for the app-menu About
+                # handler, so implicit StringVars can attach to an old hidden
+                # root after returning from the viewer. Bind each variable to
+                # this dialog's root so entry defaults render reliably.
+                var = tk.StringVar(master=dialog, value=effective_settings[field["key"]])
                 field_vars[field["key"]] = var
                 entry = tk.Entry(
                     row,
@@ -832,7 +860,6 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             dialog.destroy()
 
         def on_apply():
-            nonlocal advanced_settings
             proposed = {key: var.get() for key, var in field_vars.items()}
             ok, message, normalized = _validate_advanced_settings(proposed)
             if not ok:
