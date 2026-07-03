@@ -253,12 +253,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         # screen, mirroring the brightness control's placement logic but
         # on the opposite side. Directly drives
         # self.world.config.load_radius_cells live, same as the slider it
-        # replaced. Range/default unchanged (1-10 chunk-radius units,
-        # default 4). StreamingWorld's max_loaded_chunks safety valve
+        # replaced. Range is 1-10 chunk-radius units. Default to 1 so cached
+        # maps become visible quickly on storage-sensitive Windows systems;
+        # users can raise it once the initial area is visible. StreamingWorld's max_loaded_chunks safety valve
         # (see core/streaming_world.py) still applies underneath this as
         # a hard backstop regardless of what this is set to.
         self.render_distance_stepper = StepperControl(
-            self.ctx, "DISTANCE", initial_value=5, min_value=1, max_value=10
+            self.ctx, "DISTANCE", initial_value=1, min_value=1, max_value=10
         )
 
         # "Global illumination" control: not actual simulated light
@@ -964,11 +965,19 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _initial_chunk_load_is_ready(self, stats: dict) -> bool:
         loaded = max(0, int(stats.get("loaded", 0)))
-        pending = max(0, int(stats.get("pending", 0)))
         total_available = max(1, int(stats.get("total_available", 1)))
         max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
         needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded)
-        return loaded >= needed and pending == 0
+        return loaded >= needed
+
+    def _initial_chunk_load_progress(self, stats: dict) -> float:
+        loaded = max(0, int(stats.get("loaded", 0)))
+        ready = max(0, int(stats.get("ready", 0)))
+        total_available = max(1, int(stats.get("total_available", 1)))
+        max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
+        wanted = max(1, int(stats.get("wanted", self._INITIAL_LOAD_MIN_CHUNKS)))
+        needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded, wanted)
+        return max(0.0, min(1.0, float(loaded + ready) / float(needed)))
 
     @staticmethod
     def _frustum_planes(view: np.ndarray, proj: np.ndarray) -> np.ndarray:
@@ -1240,10 +1249,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         now = time.perf_counter()
         if not self._initial_chunks_loaded:
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
-            loaded = max(0, int(stats.get("loaded", 0)))
-            pending = max(0, int(stats.get("pending", 0)))
-            total = loaded + pending
-            raw_fraction = (loaded / total) if total > 0 else 0.0
+            raw_fraction = self._initial_chunk_load_progress(stats)
             target = min(self._CHUNK_PREP_MAX_FRACTION, raw_fraction * self._CHUNK_PREP_MAX_FRACTION)
             self._chunk_prep_progress = max(self._chunk_prep_progress, target)
             self.import_progress_panel.render(

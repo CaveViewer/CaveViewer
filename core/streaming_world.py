@@ -605,5 +605,7 @@ class StreamingWorld:
         return {
             "loaded": len(self.loaded_cells),
             "pending": len(self._pending),
+            "ready": self._ready_queue.qsize(),
+            "wanted": len(self._last_wanted_cells),
             "total_available": len(self.available_cells),
         }
