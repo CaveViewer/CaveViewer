@@ -166,6 +166,18 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     print(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
     print(f"This is a one-time cost; subsequent opens of this map will be instant.\n")
 
+    active_chunk_size = chunker.configured_chunk_size()
+    print(f"Using chunk size: {active_chunk_size:.1f}m "
+          f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
+    try:
+        source_size_gb = os.path.getsize(obj_path) / (1024 ** 3)
+        if source_size_gb >= 10.0:
+            print("Large-map tip: for very large sources, try "
+                  f"{chunker.CHUNK_SIZE_ENV_VAR}=16 or 24 to reduce "
+                  "chunk-file count and improve streaming performance.")
+    except OSError:
+        pass
+
     t_start = time.time()
 
     parse_weight = 0.5
@@ -252,6 +264,18 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
 
     print(f"No valid cache found -- importing {os.path.basename(source_path)}.")
     print(f"This is a one-time cost; subsequent opens of this map will be instant.\n")
+
+    active_chunk_size = chunker.configured_chunk_size()
+    print(f"Using chunk size: {active_chunk_size:.1f}m "
+          f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
+    try:
+        source_size_gb = os.path.getsize(source_path) / (1024 ** 3)
+        if source_size_gb >= 10.0:
+            print("Large-map tip: for very large sources, try "
+                  f"{chunker.CHUNK_SIZE_ENV_VAR}=16 or 24 to reduce "
+                  "chunk-file count and improve streaming performance.")
+    except OSError:
+        pass
 
     t_start = time.time()
 

@@ -195,6 +195,30 @@ The publish scripts build the platform artifact, create or update the GitHub rel
 
 A small panel in the bottom-left corner shows a top-down outline of the entire cave system's footprint, with a red dot marking your current position.
 
+## Large-map tuning
+
+For very large source maps (for example `.obj` files around 10-20GB+), you can increase cache chunk size to reduce the number of chunk files and improve streaming performance on some systems (especially Windows random-I/O workloads).
+
+- Environment variable: `CAVEVIEWER_CHUNK_SIZE_METERS`
+- Default: `8.0` (current behavior)
+- Recommended starting values for very large maps: `16` or `24`
+
+Examples:
+
+```bash
+# macOS / Linux
+export CAVEVIEWER_CHUNK_SIZE_METERS=16
+./run_caveviewer.sh
+```
+
+```powershell
+# Windows PowerShell
+$env:CAVEVIEWER_CHUNK_SIZE_METERS = "16"
+python caveviewer.py
+```
+
+Use larger chunk sizes only when needed: very large values can increase per-chunk draw cost, while smaller values increase chunk-file count.
+
 ## Troubleshooting
 
 If you encounter issues, check the console output for error messages and ensure all required files are present in the selected folder.

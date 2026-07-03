@@ -41,10 +41,36 @@ CACHE_DIRNAME = ".caveviewer_cache"
 MANIFEST_NAME = "manifest.json"
 CHUNKS_DIRNAME = "chunks"
 
-DEFAULT_CHUNK_SIZE = 8.0  # meters; tune based on cave passage scale
+CHUNK_SIZE_ENV_VAR = "CAVEVIEWER_CHUNK_SIZE_METERS"
+_DEFAULT_CHUNK_SIZE_FALLBACK = 8.0  # meters; preserve existing default behavior
+
+
+def _resolve_default_chunk_size() -> float:
+    raw = os.environ.get(CHUNK_SIZE_ENV_VAR, "").strip()
+    if not raw:
+        return _DEFAULT_CHUNK_SIZE_FALLBACK
+    try:
+        value = float(raw)
+        if value <= 0.0:
+            raise ValueError("must be > 0")
+        return value
+    except Exception:
+        print(
+            f"[chunker] WARNING: ignoring invalid {CHUNK_SIZE_ENV_VAR}={raw!r}; "
+            f"using default {_DEFAULT_CHUNK_SIZE_FALLBACK:.1f}m"
+        )
+        return _DEFAULT_CHUNK_SIZE_FALLBACK
+
+
+DEFAULT_CHUNK_SIZE = _resolve_default_chunk_size()
 
 _MAGIC = b"CVCH"  # CaveViewer CHunk
 _VERSION = 1
+
+
+def configured_chunk_size() -> float:
+    """Return the chunk size currently used by default for cache builds."""
+    return DEFAULT_CHUNK_SIZE
 
 
 @dataclass
