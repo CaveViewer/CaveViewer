@@ -379,7 +379,19 @@ class CaveViewerWindow(mglw.WindowConfig):
             for mat_name in chunk_data.groups.keys():
                 self.texture_manager.decode_for_material(mat_name)
 
-        chunk_size = self.manifest["chunk_size"]
+        chunk_size = chunker.manifest_chunk_size(self.manifest)
+        if chunk_size is None:
+            raise ValueError(
+                "Map cache manifest is missing a valid chunk_size. "
+                "Rebuild the .caveviewer_cache folder with this version of CaveViewer."
+            )
+        configured_chunk_size = chunker.configured_chunk_size()
+        _LOG.info(f"Opening map cache with manifest chunk size: {chunk_size:g}m.")
+        if abs(chunk_size - configured_chunk_size) > 1e-6:
+            _LOG.info(
+                f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}m, "
+                "but existing/prebuilt caches stream using the chunk size recorded in manifest.json."
+            )
         config = StreamingConfig(chunk_size=chunk_size, load_radius_cells=4, unload_radius_margin=1)
         self.world = StreamingWorld(self.cache_dir, config, on_decode_textures=predecode_textures_for_chunk)
 

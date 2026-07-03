@@ -266,6 +266,7 @@ You can configure CaveViewer behavior through environment variables without edit
 - `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS`
   Soft per-frame time budget for uploading ready chunks. Default: `3.0`.
   A single large chunk can still exceed this because upload work cannot be interrupted mid-chunk.
+  This setting controls runtime streaming/upload pacing only; it does not affect initial cache import.
 
 - `CAVEVIEWER_CHUNK_BUILD_WORKERS`
   Worker thread count for writing chunk files during cache build/import.
@@ -281,6 +282,7 @@ export CAVEVIEWER_CHUNK_SIZE_METERS=16
 export CAVEVIEWER_MEMORY_UTILIZATION_TARGET=20
 export CAVEVIEWER_IO_WORKERS=4
 export CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1
+export CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=3.0
 ./run_caveviewer.sh
 ```
 
@@ -290,8 +292,41 @@ $env:CAVEVIEWER_CHUNK_SIZE_METERS = "16"
 $env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "20"
 $env:CAVEVIEWER_IO_WORKERS = "4"
 $env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
+$env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "3.0"
 python caveviewer.py
 ```
+
+Powerful workstation starting point (Windows 11, high-core-count CPU, 128GB RAM, NVIDIA GPU with 24GB VRAM):
+
+```powershell
+$env:CAVEVIEWER_CHUNK_SIZE_METERS = "32"
+$env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "25"
+$env:CAVEVIEWER_IO_WORKERS = "4"
+$env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
+$env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "3.0"
+python caveviewer.py
+```
+
+In the viewer, start with **DISTANCE** set to `1` or `2`. If the map is already cached, only the runtime settings (`MEMORY_UTILIZATION_TARGET`, `IO_WORKERS`, and upload pacing) take effect immediately. Changing `CAVEVIEWER_CHUNK_SIZE_METERS` requires deleting/rebuilding the map's `.caveviewer_cache`, because chunk size is baked into the cache.
+
+To check the chunk size of a precomputed map, open its `.caveviewer_cache/manifest.json` and look for:
+
+```json
+"chunk_size": 32.0
+```
+
+When opening an existing or precomputed cache, CaveViewer always uses the `chunk_size` recorded in `manifest.json`, even if `CAVEVIEWER_CHUNK_SIZE_METERS` is currently set to a different value. The environment variable only controls new cache imports or rebuilt caches.
+
+If Windows streaming appears I/O-bound on very large maps, test these combinations in order:
+
+1. `32m` chunks, **DISTANCE** `1`, `IO_WORKERS=4`
+2. `32m` chunks, **DISTANCE** `2`, `IO_WORKERS=4`
+3. `48m` chunks, **DISTANCE** `1`, `IO_WORKERS=2`
+4. `48m` chunks, **DISTANCE** `1`, `IO_WORKERS=4`
+
+Larger chunks reduce the number of chunk files and random file opens, which can help Windows storage paths. The tradeoff is that each ready chunk is heavier to upload and draw, so keep `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1` when testing `32m` or `48m` chunks.
+
+The splash screen's **Advanced Settings** dialog is split into **Streaming Performance** and **Map Parsing** sections. Streaming settings affect runtime loading and GPU upload pacing. Map Parsing settings affect new imports or rebuilt caches; they do not reinterpret an existing `.caveviewer_cache`.
 
 Cache-build tuning examples (import/chunk generation phase):
 

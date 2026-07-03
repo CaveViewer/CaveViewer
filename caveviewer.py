@@ -422,6 +422,28 @@ def _print_viewer_controls() -> None:
     _LOG.info("Controls help is available in-app via the Help button.")
 
 
+def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> None:
+    """Log the chunk size recorded in an existing cache manifest."""
+    from core import chunker
+
+    cache_chunk_size = chunker.cache_chunk_size(cache_dir)
+    configured_chunk_size = chunker.configured_chunk_size()
+    if cache_chunk_size is None:
+        _LOG.warning(
+            f"{context} does not report a valid chunk size in manifest.json; "
+            "opening may fail if the cache is incomplete or from an unsupported version."
+        )
+        return
+
+    _LOG.info(f"{context} chunk size: {cache_chunk_size:g}m.")
+    if abs(cache_chunk_size - configured_chunk_size) > 1e-6:
+        _LOG.info(
+            f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}m, "
+            "but existing/prebuilt caches always open with their manifest chunk size. "
+            "Delete or rebuild .caveviewer_cache to apply a different import chunk size."
+        )
+
+
 def _run_map_session(folder: str) -> None:
     """Load and view one cave map. Returns when the viewer window closes."""
     folder = os.path.abspath(folder)
@@ -442,6 +464,7 @@ def _run_map_session(folder: str) -> None:
         if os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
             _LOG.info("Pre-compiled map detected -- launching viewer directly.")
             _LOG.info("(Delete the .caveviewer_cache folder to force a rebuild.)")
+            _log_cache_chunk_size(_prebuilt_cache, context="Pre-compiled map cache")
             _print_viewer_controls()
             from gui.viewer_window import run_viewer
             try:
@@ -472,6 +495,7 @@ def _run_map_session(folder: str) -> None:
         _LOG.info("Using existing chunk cache (delete the .caveviewer_cache "
                   "folder next to your model file if you want to force a rebuild).")
         cache_dir = chunker.get_cache_dir(source_path)
+        _log_cache_chunk_size(cache_dir, context="Existing chunk cache")
         from gui.viewer_window import run_viewer
         try:
             run_viewer(cache_dir, textures_dir=folder)
@@ -548,4 +572,3 @@ if __name__ == "__main__":
             pass
         
         sys.exit(1)
-

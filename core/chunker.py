@@ -398,6 +398,27 @@ def load_manifest(cache_dir):
         return json.load(f)
 
 
+def manifest_chunk_size(manifest: dict | None) -> float | None:
+    """Return the chunk size recorded in a cache manifest, if valid."""
+    if not isinstance(manifest, dict):
+        return None
+    try:
+        chunk_size = float(manifest.get("chunk_size"))
+    except (TypeError, ValueError):
+        return None
+    if chunk_size <= 0.0:
+        return None
+    return chunk_size
+
+
+def cache_chunk_size(cache_dir: str) -> float | None:
+    """Read the chunk size from an existing cache's manifest."""
+    try:
+        return manifest_chunk_size(load_manifest(cache_dir))
+    except Exception:
+        return None
+
+
 def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
     cell_str = f"{cell[0]}_{cell[1]}_{cell[2]}"
     path = os.path.join(cache_dir, CHUNKS_DIRNAME, f"{cell_str}.bin")

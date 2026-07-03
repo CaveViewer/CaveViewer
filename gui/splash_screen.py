@@ -112,44 +112,77 @@ _CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
 _SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
-_ADVANCED_DIALOG_WRAP = 420 if sys.platform == "darwin" else 560
-_ADVANCED_DIALOG_ENTRY_WIDTH = 18 if sys.platform == "darwin" else 24
+_ADVANCED_DIALOG_TWO_COLUMN = True
+_ADVANCED_DIALOG_WRAP = 340
+_ADVANCED_DIALOG_ENTRY_WIDTH = 22
 _ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else 24
+_ADVANCED_DIALOG_SECTION_GAP = 18
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
     "BottomLine Projects Scientific Dive Team and other volunteers.\n")
 
 _ADVANCED_SETTING_FIELDS = (
     {
+        "section": "streaming",
         "key": "memory_target_percent",
         "env_var": "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
         "label": "Memory target (%)",
         "hint": "Percent of total RAM CaveViewer may use for loaded chunks.",
     },
     {
+        "section": "streaming",
         "key": "io_workers",
         "env_var": "CAVEVIEWER_IO_WORKERS",
         "label": "Worker count",
         "hint": "Background chunk-loading worker threads.",
     },
     {
+        "section": "streaming",
         "key": "io_reserved_cpus",
         "env_var": "CAVEVIEWER_IO_RESERVED_CPUS",
         "label": "CPU cores to keep free",
         "hint": "How many CPU cores CaveViewer should avoid using for streaming workers.",
     },
     {
+        "section": "streaming",
         "key": "upload_chunks_per_frame",
         "env_var": "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
         "label": "Chunk uploads per frame",
         "hint": "Ready chunks to upload to the GPU each frame. Use 1 for smoother streaming.",
     },
     {
+        "section": "streaming",
         "key": "upload_time_budget_ms",
         "env_var": "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
         "label": "Upload budget (ms)",
         "hint": "Soft per-frame budget for chunk uploads. A single large chunk can exceed it.",
     },
+    {
+        "section": "parsing",
+        "key": "chunk_size_meters",
+        "env_var": "CAVEVIEWER_CHUNK_SIZE_METERS",
+        "label": "Import chunk size (m)",
+        "hint": "Chunk size for new/rebuilt caches. Existing caches use their manifest chunk size.",
+    },
+    {
+        "section": "parsing",
+        "key": "chunk_build_workers",
+        "env_var": "CAVEVIEWER_CHUNK_BUILD_WORKERS",
+        "label": "Import worker count",
+        "hint": "Worker threads used while writing chunk files during initial map import.",
+    },
+    {
+        "section": "parsing",
+        "key": "chunk_build_reserved_cpus",
+        "env_var": "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
+        "label": "Import CPUs to keep free",
+        "hint": "CPU cores to reserve when import worker count is not explicitly set.",
+    },
+)
+
+_ADVANCED_SETTING_SECTIONS = (
+    ("streaming", "Streaming Performance"),
+    ("parsing", "Map Parsing"),
 )
 
 
@@ -166,6 +199,12 @@ def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
         "io_workers": str(max(1, logical_cpus - 3)),
         "upload_chunks_per_frame": "1",
         "upload_time_budget_ms": "3.0",
+        "chunk_size_meters": os.getenv("CAVEVIEWER_CHUNK_SIZE_METERS", "8"),
+        "chunk_build_reserved_cpus": os.getenv("CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS", "2"),
+        "chunk_build_workers": os.getenv(
+            "CAVEVIEWER_CHUNK_BUILD_WORKERS",
+            str(max(1, logical_cpus - 2)),
+        ),
     }
     return {
         key: (normalized.get(key, "") or defaults[key])
@@ -216,6 +255,8 @@ def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | Non
         ("io_workers", "Worker count", 1, None),
         ("io_reserved_cpus", "CPUs to leave free", 0, None),
         ("upload_chunks_per_frame", "Chunk uploads per frame", 1, 16),
+        ("chunk_build_workers", "Import worker count", 1, None),
+        ("chunk_build_reserved_cpus", "Import CPUs to keep free", 0, None),
     )
     for key, label, minimum, maximum in integer_fields:
         text = normalized[key]
@@ -240,6 +281,18 @@ def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | Non
         if upload_budget_value < 0.5 or upload_budget_value > 50.0:
             return False, "Upload budget must be between 0.5 and 50 ms.", normalized
         normalized["upload_time_budget_ms"] = f"{upload_budget_value:g}"
+
+    chunk_size_text = normalized["chunk_size_meters"]
+    if chunk_size_text:
+        try:
+            chunk_size_value = float(chunk_size_text)
+        except ValueError:
+            return False, "Import chunk size must be a positive number.", normalized
+        if chunk_size_value <= 0.0:
+            return False, "Import chunk size must be greater than 0.", normalized
+        if chunk_size_value > 512.0:
+            return False, "Import chunk size must be 512m or smaller.", normalized
+        normalized["chunk_size_meters"] = f"{chunk_size_value:g}"
 
     return True, None, normalized
 
@@ -648,51 +701,82 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         body = tk.Frame(dialog, bg=_BG_COLOR, padx=_ADVANCED_DIALOG_BODY_PAD_X, pady=18)
         body.pack(fill="both", expand=True)
 
-        tk.Label(
-            body,
-            text="Streaming Performance",
-            font=_VERSION_FONT,
-            fg=_TITLE_COLOR,
-            bg=_BG_COLOR,
-        ).pack(anchor="w", pady=(0, 8))
-
         field_vars: dict[str, tk.StringVar] = {}
-        for field in _ADVANCED_SETTING_FIELDS:
-            row = tk.Frame(body, bg=_BG_COLOR)
-            row.pack(fill="x", pady=(0, 10))
+        effective_settings = _effective_advanced_settings(advanced_settings)
 
-            tk.Label(
-                row,
-                text=field["label"],
-                font=_BODY_FONT,
-                fg=_SUBTITLE_COLOR,
+        section_row = tk.Frame(body, bg=_BG_COLOR)
+        section_row.pack(fill="both", expand=True, pady=(0, 10))
+
+        def render_section(parent, title: str, section_key: str) -> None:
+            section = tk.Frame(
+                parent,
                 bg=_BG_COLOR,
-                anchor="w",
-            ).pack(anchor="w")
-
-            var = tk.StringVar(value=_effective_advanced_settings(advanced_settings)[field["key"]])
-            field_vars[field["key"]] = var
-            entry = tk.Entry(
-                row,
-                textvariable=var,
-                font=_BODY_FONT,
-                bg="#1c1c24",
-                fg=_SUBTITLE_COLOR,
-                insertbackground=_SUBTITLE_COLOR,
-                relief="flat",
-                width=_ADVANCED_DIALOG_ENTRY_WIDTH,
+                padx=14,
+                pady=12,
+                highlightthickness=1,
+                highlightbackground=_BORDER_COLOR,
+                highlightcolor=_BORDER_COLOR,
             )
-            entry.pack(anchor="w", pady=(4, 4))
+            if _ADVANCED_DIALOG_TWO_COLUMN:
+                section.pack(side="left", fill="both", expand=True, padx=(0, _ADVANCED_DIALOG_SECTION_GAP))
+            else:
+                section.pack(fill="x", pady=(0, 12))
 
             tk.Label(
-                row,
-                text=field["hint"],
-                font=_SMALL_FONT,
-                fg=_INSTRUCTION_COLOR,
+                section,
+                text=title,
+                font=_VERSION_FONT,
+                fg=_TITLE_COLOR,
                 bg=_BG_COLOR,
-                justify="left",
-                wraplength=_ADVANCED_DIALOG_WRAP,
-            ).pack(anchor="w")
+            ).pack(anchor="w", pady=(0, 10))
+
+            fields = [field for field in _ADVANCED_SETTING_FIELDS if field.get("section") == section_key]
+            for field in fields:
+                row = tk.Frame(section, bg=_BG_COLOR)
+                row.pack(fill="x", pady=(0, 9))
+
+                tk.Label(
+                    row,
+                    text=field["label"],
+                    font=_BODY_FONT,
+                    fg=_SUBTITLE_COLOR,
+                    bg=_BG_COLOR,
+                    anchor="w",
+                ).pack(anchor="w")
+
+                var = tk.StringVar(value=effective_settings[field["key"]])
+                field_vars[field["key"]] = var
+                entry = tk.Entry(
+                    row,
+                    textvariable=var,
+                    font=_BODY_FONT,
+                    bg="#1c1c24",
+                    fg=_SUBTITLE_COLOR,
+                    insertbackground=_SUBTITLE_COLOR,
+                    relief="flat",
+                    width=_ADVANCED_DIALOG_ENTRY_WIDTH,
+                )
+                entry.pack(anchor="w", pady=(4, 4))
+
+                tk.Label(
+                    row,
+                    text=field["hint"],
+                    font=_SMALL_FONT,
+                    fg=_INSTRUCTION_COLOR,
+                    bg=_BG_COLOR,
+                    justify="left",
+                    wraplength=_ADVANCED_DIALOG_WRAP,
+                ).pack(anchor="w")
+
+        for section_key, section_title in _ADVANCED_SETTING_SECTIONS:
+            render_section(section_row, section_title, section_key)
+
+        if _ADVANCED_DIALOG_TWO_COLUMN:
+            section_children = section_row.winfo_children()
+            for child in section_children[:-1]:
+                child.pack_configure(padx=(0, _ADVANCED_DIALOG_SECTION_GAP))
+            if section_children:
+                section_children[-1].pack_configure(padx=(0, 0))
 
         error_label = tk.Label(
             body,
