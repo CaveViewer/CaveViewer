@@ -24,11 +24,26 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
 _FACE_VERT_RE = re.compile(r"(-?\d+)(?:/(-?\d*)(?:/(-?\d*))?)?")
+OBJ_SCAN_THROTTLE_ENV_VAR = "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS"
+_SCAN_PROGRESS_MIN_INTERVAL_SECONDS = 0.20
+_SCAN_THROTTLE_INTERVAL_BYTES = 8 * 1024 * 1024
+_SCAN_PROGRESS_WEIGHT = 0.20
+
+
+def _obj_scan_throttle_seconds() -> float:
+    raw = os.getenv(OBJ_SCAN_THROTTLE_ENV_VAR, "").strip()
+    if raw:
+        try:
+            return max(0.0, min(50.0, float(raw))) / 1000.0
+        except ValueError:
+            pass
+    return 0.001 if os.name == "nt" else 0.0
 
 
 @dataclass
@@ -59,7 +74,7 @@ class RawMesh:
     mtl_file: str | None = None
 
 
-def _count_prepass(obj_path: str) -> tuple[int, int, int, int]:
+def _count_prepass(obj_path: str, progress_cb=None) -> tuple[int, int, int, int]:
     """
     Fast first pass: count vertices/uvs/normals/faces (post-triangulation
     estimate) so we can pre-allocate numpy arrays of the right size instead
@@ -68,8 +83,33 @@ def _count_prepass(obj_path: str) -> tuple[int, int, int, int]:
     as 2 triangles.
     """
     n_v = n_vt = n_vn = n_f = 0
+    file_size = os.path.getsize(obj_path)
+    bytes_read = 0
+    last_reported_fraction = -1.0
+    last_report_time = 0.0
+    next_throttle_at = _SCAN_THROTTLE_INTERVAL_BYTES
+    throttle_seconds = _obj_scan_throttle_seconds()
+
     with open(obj_path, "r", buffering=1024 * 1024, errors="replace") as fh:
         for line in fh:
+            bytes_read += len(line)
+            if progress_cb and file_size:
+                now = time.perf_counter()
+                fraction = max(0.0, min(1.0, bytes_read / file_size))
+                if (
+                    fraction >= 1.0
+                    or fraction - last_reported_fraction >= 0.01
+                    or now - last_report_time >= _SCAN_PROGRESS_MIN_INTERVAL_SECONDS
+                ):
+                    progress_cb("scanning file", fraction)
+                    last_reported_fraction = fraction
+                    last_report_time = now
+
+            if throttle_seconds > 0.0 and bytes_read >= next_throttle_at:
+                time.sleep(throttle_seconds)
+                while next_throttle_at <= bytes_read:
+                    next_throttle_at += _SCAN_THROTTLE_INTERVAL_BYTES
+
             if not line:
                 continue
             prefix = line[:2]
@@ -83,6 +123,8 @@ def _count_prepass(obj_path: str) -> tuple[int, int, int, int]:
                 n_tokens = len(line.split()) - 1
                 if n_tokens >= 3:
                     n_f += n_tokens - 2
+    if progress_cb:
+        progress_cb("scanning file", 1.0)
     return n_v, n_vt, n_vn, n_f
 
 
@@ -106,7 +148,12 @@ def parse_obj(obj_path: str, progress_cb=None) -> RawMesh:
     """
     if progress_cb:
         progress_cb("scanning file", 0.0)
-    n_v, n_vt, n_vn, n_f_est = _count_prepass(obj_path)
+
+    def scan_progress(stage: str, frac: float) -> None:
+        if progress_cb:
+            progress_cb(stage, _SCAN_PROGRESS_WEIGHT * max(0.0, min(1.0, frac)))
+
+    n_v, n_vt, n_vn, n_f_est = _count_prepass(obj_path, progress_cb=scan_progress)
 
     positions = np.empty((n_v, 3), dtype=np.float32)
     uvs = np.empty((n_vt, 2), dtype=np.float32)
@@ -133,7 +180,10 @@ def parse_obj(obj_path: str, progress_cb=None) -> RawMesh:
             if progress_cb and file_size:
                 frac = bytes_read / file_size
                 if frac - last_reported > 0.01:
-                    progress_cb("parsing geometry", frac)
+                    progress_cb(
+                        "parsing geometry",
+                        _SCAN_PROGRESS_WEIGHT + (1.0 - _SCAN_PROGRESS_WEIGHT) * frac,
+                    )
                     last_reported = frac
 
             if not line or line[0] == "#":

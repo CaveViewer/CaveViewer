@@ -180,6 +180,13 @@ _ADVANCED_SETTING_FIELDS = (
     },
     {
         "section": "parsing",
+        "key": "obj_scan_throttle_ms",
+        "env_var": "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
+        "label": "OBJ scan throttle (ms)",
+        "hint": "Small yield during OBJ scanning. Use 1-5ms on Windows if imports make the app unresponsive.",
+    },
+    {
+        "section": "parsing",
         "key": "chunk_build_workers",
         "env_var": "CAVEVIEWER_CHUNK_BUILD_WORKERS",
         "label": "Import worker count",
@@ -230,6 +237,9 @@ def _advanced_setting_defaults() -> dict[str, str]:
             "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", "3.0"
         ),
         "chunk_size_meters": _env_setting_or_default("CAVEVIEWER_CHUNK_SIZE_METERS", "8"),
+        "obj_scan_throttle_ms": _env_setting_or_default(
+            "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS", "1" if sys.platform.startswith("win") else "0"
+        ),
         "chunk_build_reserved_cpus": _env_setting_or_default(
             "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS", "2"
         ),
@@ -349,6 +359,16 @@ def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | Non
         if chunk_size_value > 512.0:
             return False, "Import chunk size must be 512m or smaller.", normalized
         normalized["chunk_size_meters"] = f"{chunk_size_value:g}"
+
+    obj_scan_throttle_text = normalized["obj_scan_throttle_ms"]
+    if obj_scan_throttle_text:
+        try:
+            obj_scan_throttle_value = float(obj_scan_throttle_text)
+        except ValueError:
+            return False, "OBJ scan throttle must be a number between 0 and 50.", normalized
+        if obj_scan_throttle_value < 0.0 or obj_scan_throttle_value > 50.0:
+            return False, "OBJ scan throttle must be between 0 and 50 ms.", normalized
+        normalized["obj_scan_throttle_ms"] = f"{obj_scan_throttle_value:g}"
 
     return True, None, normalized
 

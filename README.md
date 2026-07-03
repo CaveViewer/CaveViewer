@@ -243,6 +243,12 @@ You can configure CaveViewer behavior through environment variables without edit
   Chunk size used when building a new cache. Default: `8.0`.
   For very large maps, try `16` or `24`.
 
+- `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS`
+  Small yield inserted during the initial OBJ scan/prepass.
+  Default: `1` ms on Windows, `0` ms on macOS/Linux.
+  If Windows marks the app unresponsive or the machine feels pegged during `scanning file`, try `2` to `5`.
+  Higher values improve responsiveness but slow initial cache import.
+
 - `CAVEVIEWER_MEMORY_UTILIZATION_TARGET`
   Target system RAM share used to derive runtime chunk residency (`max_loaded_chunks`).
   Conservative default: `12%` of detected physical RAM.
