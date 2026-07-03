@@ -732,6 +732,19 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         dialog.bind("<Escape>", lambda _event: on_cancel())
         dialog.bind("<Return>", lambda _event: on_apply())
         dialog.update_idletasks()
+        try:
+            root.update_idletasks()
+            dialog_w = dialog.winfo_reqwidth()
+            dialog_h = dialog.winfo_reqheight()
+            screen_w = dialog.winfo_screenwidth()
+            screen_h = dialog.winfo_screenheight()
+            offset_x = root.winfo_rootx() + 36
+            offset_y = root.winfo_rooty() + 48
+            clamped_x = max(8, min(offset_x, screen_w - dialog_w - 8))
+            clamped_y = max(8, min(offset_y, screen_h - dialog_h - 8))
+            dialog.geometry(f"+{clamped_x}+{clamped_y}")
+        except Exception:
+            pass
         dialog.wait_visibility()
         dialog.grab_set()
         apply_button.focus_set()
