@@ -126,8 +126,22 @@ _ADVANCED_SETTING_FIELDS = (
         "section": "streaming",
         "key": "memory_target_percent",
         "env_var": "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
-        "label": "Memory target (%)",
-        "hint": "Percent of total RAM CaveViewer may use for loaded chunks.",
+        "label": "System RAM target (%)",
+        "hint": "Percent of total system RAM CaveViewer may use for loaded chunks.",
+    },
+    {
+        "section": "streaming",
+        "key": "gpu_memory_target_percent",
+        "env_var": "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
+        "label": "GPU memory target (%)",
+        "hint": "Percent of detected or configured GPU memory to use for loaded chunks.",
+    },
+    {
+        "section": "streaming",
+        "key": "gpu_memory_gb",
+        "env_var": "CAVEVIEWER_GPU_MEMORY_GB",
+        "label": "GPU memory override (GB)",
+        "hint": "Optional. Set this if GPU memory cannot be detected automatically.",
     },
     {
         "section": "streaming",
@@ -195,6 +209,8 @@ def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
     logical_cpus = max(1, os.cpu_count() or 1)
     defaults = {
         "memory_target_percent": "12",
+        "gpu_memory_target_percent": "70",
+        "gpu_memory_gb": os.getenv("CAVEVIEWER_GPU_MEMORY_GB", ""),
         "io_reserved_cpus": "3",
         "io_workers": str(max(1, logical_cpus - 3)),
         "upload_chunks_per_frame": "1",
@@ -250,6 +266,26 @@ def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | Non
         if memory_value < 1.0 or memory_value > 80.0:
             return False, "Streaming memory target must be between 1 and 80 percent.", normalized
         normalized["memory_target_percent"] = f"{memory_value:g}"
+
+    gpu_memory_text = normalized["gpu_memory_target_percent"]
+    if gpu_memory_text:
+        try:
+            gpu_memory_value = float(gpu_memory_text)
+        except ValueError:
+            return False, "GPU memory target must be a number between 1 and 80.", normalized
+        if gpu_memory_value < 1.0 or gpu_memory_value > 80.0:
+            return False, "GPU memory target must be between 1 and 80 percent.", normalized
+        normalized["gpu_memory_target_percent"] = f"{gpu_memory_value:g}"
+
+    gpu_memory_gb_text = normalized["gpu_memory_gb"]
+    if gpu_memory_gb_text:
+        try:
+            gpu_memory_gb = float(gpu_memory_gb_text)
+        except ValueError:
+            return False, "GPU memory override must be a positive number of GB.", normalized
+        if gpu_memory_gb <= 0.0 or gpu_memory_gb > 1024.0:
+            return False, "GPU memory override must be between 0 and 1024 GB.", normalized
+        normalized["gpu_memory_gb"] = f"{gpu_memory_gb:g}"
 
     integer_fields = (
         ("io_workers", "Worker count", 1, None),

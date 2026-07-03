@@ -244,13 +244,24 @@ You can configure CaveViewer behavior through environment variables without edit
   For very large maps, try `16` or `24`.
 
 - `CAVEVIEWER_MEMORY_UTILIZATION_TARGET`
-  Target RAM share used to derive runtime chunk residency (`max_loaded_chunks`).
+  Target system RAM share used to derive runtime chunk residency (`max_loaded_chunks`).
   Conservative default: `12%` of detected physical RAM.
   Accepts either fraction (`0.12`) or percent-style (`12`, `25`).
   This is not an absolute GB value.
   Uses total physical RAM as a reference (not currently free RAM), and
   acts as a residency policy target rather than an OS-level reservation.
   Other running applications can still reduce effectively available memory.
+
+- `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET`
+  Target GPU memory share used to derive runtime chunk residency when GPU memory can be detected.
+  Default: `70%`.
+  Accepts either fraction (`0.70`) or percent-style (`70`).
+  CaveViewer uses the stricter of the system-RAM and GPU-memory chunk limits.
+
+- `CAVEVIEWER_GPU_MEMORY_GB`
+  Optional explicit GPU memory size in GB.
+  Use this when automatic GPU memory detection is unavailable or incorrect.
+  On NVIDIA systems, CaveViewer also attempts to detect dedicated GPU memory through `nvidia-smi`.
 
 - `CAVEVIEWER_IO_WORKERS`
   Runtime chunk-load worker thread count.
@@ -280,6 +291,7 @@ Runtime tuning examples:
 # macOS / Linux: large-map runtime tuning
 export CAVEVIEWER_CHUNK_SIZE_METERS=16
 export CAVEVIEWER_MEMORY_UTILIZATION_TARGET=20
+export CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET=70
 export CAVEVIEWER_IO_WORKERS=4
 export CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1
 export CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=3.0
@@ -290,6 +302,7 @@ export CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=3.0
 # Windows PowerShell: large-map runtime tuning
 $env:CAVEVIEWER_CHUNK_SIZE_METERS = "16"
 $env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "20"
+$env:CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET = "70"
 $env:CAVEVIEWER_IO_WORKERS = "4"
 $env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
 $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "3.0"
@@ -301,13 +314,15 @@ Powerful workstation starting point (Windows 11, high-core-count CPU, 128GB RAM,
 ```powershell
 $env:CAVEVIEWER_CHUNK_SIZE_METERS = "32"
 $env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "25"
+$env:CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET = "65"
+$env:CAVEVIEWER_GPU_MEMORY_GB = "24"
 $env:CAVEVIEWER_IO_WORKERS = "4"
 $env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
 $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "3.0"
 python caveviewer.py
 ```
 
-In the viewer, start with **DISTANCE** set to `1` or `2`. If the map is already cached, only the runtime settings (`MEMORY_UTILIZATION_TARGET`, `IO_WORKERS`, and upload pacing) take effect immediately. Changing `CAVEVIEWER_CHUNK_SIZE_METERS` requires deleting/rebuilding the map's `.caveviewer_cache`, because chunk size is baked into the cache.
+In the viewer, start with **DISTANCE** set to `1` or `2`. If the map is already cached, only the runtime settings (`MEMORY_UTILIZATION_TARGET`, `GPU_MEMORY_UTILIZATION_TARGET`, `GPU_MEMORY_GB`, `IO_WORKERS`, and upload pacing) take effect immediately. Changing `CAVEVIEWER_CHUNK_SIZE_METERS` requires deleting/rebuilding the map's `.caveviewer_cache`, because chunk size is baked into the cache.
 
 To check the chunk size of a precomputed map, open its `.caveviewer_cache/manifest.json` and look for:
 

@@ -49,25 +49,92 @@ except Exception:
 _UPDATE_STARTED_SENTINEL = "__caveviewer_update_started__"
 _LOG = get_logger("CaveViewer")
 
+_KNOWN_CAVEVIEWER_ENV_VARS = (
+    "CAVEVIEWER_APP_ICON",
+    "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
+    "CAVEVIEWER_CHUNK_BUILD_WORKERS",
+    "CAVEVIEWER_CHUNK_SIZE_METERS",
+    "CAVEVIEWER_DEV_VENV",
+    "CAVEVIEWER_FORCE_STARTUP_FOCUS",
+    "CAVEVIEWER_GITHUB_REPO",
+    "CAVEVIEWER_GPU_MEMORY_GB",
+    "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
+    "CAVEVIEWER_HOME",
+    "CAVEVIEWER_IO_RESERVED_CPUS",
+    "CAVEVIEWER_IO_WORKERS",
+    "CAVEVIEWER_LINUX_BUILD_VENV",
+    "CAVEVIEWER_LOG_LEVEL",
+    "CAVEVIEWER_MACOS_BUILD_VENV",
+    "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
+    "CAVEVIEWER_TEXT_AA_MODE",
+    "CAVEVIEWER_UI_FONT",
+    "CAVEVIEWER_UI_TEXT_SCALE",
+    "CAVEVIEWER_UPDATE_MANIFEST_URL",
+    "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
+    "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
+    "CAVEVIEWER_WINDOWS_GITHUB_REPO",
+    "CAVEVIEWER_WINDOWS_UPDATE_MANIFEST_URL",
+)
 
-def _print_user_env_overrides() -> None:
+
+def _default_io_workers() -> str:
+    return str(max(1, (os.cpu_count() or 1) - 3))
+
+
+def _default_chunk_build_workers() -> str:
+    return str(max(1, (os.cpu_count() or 1) - 2))
+
+
+_CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
+    "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS": "2",
+    "CAVEVIEWER_CHUNK_BUILD_WORKERS": _default_chunk_build_workers,
+    "CAVEVIEWER_CHUNK_SIZE_METERS": "8",
+    "CAVEVIEWER_GPU_MEMORY_GB": "auto-detect",
+    "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET": "70",
+    "CAVEVIEWER_IO_RESERVED_CPUS": "3",
+    "CAVEVIEWER_IO_WORKERS": _default_io_workers,
+    "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "12",
+    "CAVEVIEWER_TEXT_AA_MODE": "normal",
+    "CAVEVIEWER_UI_TEXT_SCALE": "1.18",
+    "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME": "1",
+    "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS": "3.0",
+}
+
+
+def _effective_env_default(key: str) -> str | None:
+    default = _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS.get(key)
+    if default is None:
+        return None
+    if callable(default):
+        try:
+            return str(default())
+        except Exception:
+            return None
+    return str(default)
+
+
+def _print_caveviewer_environment_settings() -> None:
     """
-    Print currently-set CaveViewer environment overrides so startup logs
-    always show which runtime knobs are active for this process.
+    Print known CaveViewer environment settings without dumping unrelated
+    OS/user variables that may contain secrets.
     """
-    active = {
-        key: value
+    known = set(_KNOWN_CAVEVIEWER_ENV_VARS)
+    discovered = {
+        key
         for key, value in os.environ.items()
-        if key.startswith("CAVEVIEWER_") and str(value).strip() != ""
+        if key.startswith("CAVEVIEWER_") and key not in known and str(value).strip() != ""
     }
 
-    if not active:
-        _LOG.info("Active environment overrides: none")
-        return
-
-    _LOG.info("Active environment overrides:")
-    for key in sorted(active):
-        _LOG.info(f"  {key}={active[key]}")
+    _LOG.info("CaveViewer environment settings at startup:")
+    for key in sorted(known | discovered):
+        value = os.environ.get(key)
+        is_set = value is not None and str(value).strip() != ""
+        display_value = value if is_set else "<unset>"
+        if not is_set:
+            effective_default = _effective_env_default(key)
+            if effective_default is not None:
+                display_value = f"{display_value} (effective: {effective_default})"
+        _LOG.info(f"  {key}={display_value}")
 
 
 def find_input_files(folder: str) -> tuple[str, str]:
@@ -527,7 +594,7 @@ def main():
     _LOG.info("=" * 60)
     _LOG.info(f"  {APP_NAME} {__version__}")
     _LOG.info("=" * 60)
-    _print_user_env_overrides()
+    _print_caveviewer_environment_settings()
 
     # CLI argument: open that path and exit when the viewer closes.
     if len(sys.argv) > 1 and sys.argv[1].strip():

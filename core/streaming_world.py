@@ -18,6 +18,7 @@ This keeps the streaming *logic* unit-testable without an OpenGL context
 from __future__ import annotations
 
 import os
+import subprocess
 import threading
 import queue
 import time
@@ -69,7 +70,7 @@ def _detect_total_ram_bytes() -> int:
     return 8 * 1024 * 1024 * 1024
 
 
-def _parse_memory_target_fraction(raw_value: str | None) -> float:
+def _parse_target_fraction(raw_value: str | None, conservative_default: float) -> float:
     """
     Parse memory target from env.
 
@@ -79,7 +80,6 @@ def _parse_memory_target_fraction(raw_value: str | None) -> float:
     This value is interpreted as a share of TOTAL physical RAM
     (best-effort detected), not currently free RAM.
     """
-    conservative_default = 0.12
     if raw_value is None:
         return conservative_default
 
@@ -97,6 +97,64 @@ def _parse_memory_target_fraction(raw_value: str | None) -> float:
 
     # Guardrails: allow explicit tuning but keep pathological values out.
     return max(0.01, min(0.80, value))
+
+
+def _parse_memory_target_fraction(raw_value: str | None) -> float:
+    """
+    Parse system-RAM residency target from env.
+
+    Accepts either fraction (0.10) or percent-style (10, 25, 40).
+    Returns a conservative default when unset/invalid.
+    """
+    return _parse_target_fraction(raw_value, conservative_default=0.12)
+
+
+def _parse_gpu_target_fraction(raw_value: str | None) -> float:
+    """
+    Parse GPU-memory residency target from env.
+
+    Defaults higher than the RAM target because this only applies when a
+    dedicated GPU memory size can be detected or explicitly configured.
+    """
+    return _parse_target_fraction(raw_value, conservative_default=0.70)
+
+
+def _detect_total_gpu_memory_bytes() -> int | None:
+    """Best-effort dedicated GPU memory detection.
+
+    CAVEVIEWER_GPU_MEMORY_GB is an explicit override for systems where
+    automatic detection is unavailable. On NVIDIA systems, nvidia-smi is
+    used when present.
+    """
+    override_gb = os.environ.get("CAVEVIEWER_GPU_MEMORY_GB", "").strip()
+    if override_gb:
+        try:
+            value = float(override_gb)
+            if value > 0.0:
+                return int(value * (1024 ** 3))
+        except ValueError:
+            pass
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        first_line = result.stdout.strip().splitlines()[0].strip()
+        total_mb = int(first_line.split()[0])
+        if total_mb > 0:
+            return total_mb * 1024 * 1024
+    except Exception:
+        pass
+
+    return None
 
 
 @dataclass
@@ -166,7 +224,11 @@ class StreamingWorld:
         self._memory_target_fraction = _parse_memory_target_fraction(target_env)
         self._total_ram_bytes = _detect_total_ram_bytes()
         self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes()
-        self._configure_chunk_budget_from_memory_target()
+        gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
+        self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
+        self._total_gpu_memory_bytes = _detect_total_gpu_memory_bytes()
+        self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes()
+        self._configure_chunk_budget_from_memory_targets()
 
         self.loaded_cells: set[tuple[int, int, int]] = set()
         self._pending: set[tuple[int, int, int]] = set()
@@ -232,19 +294,56 @@ class StreamingWorld:
         overhead_multiplier = 6.0
         return max(int(median_size * overhead_multiplier), 512 * 1024)
 
-    def _configure_chunk_budget_from_memory_target(self) -> None:
-        """Derive max_loaded_chunks from memory target and estimated chunk footprint.
+    def _estimate_chunk_gpu_bytes(self) -> int:
+        """Estimate GPU-resident cost per loaded chunk from cache chunk sizes."""
+        chunks_dir = os.path.join(self.cache_dir, chunker.CHUNKS_DIRNAME)
+        chunk_keys = list(self.manifest.get("chunks", {}).keys())
+        if not chunk_keys:
+            return 2 * 1024 * 1024
+
+        sample_limit = min(128, len(chunk_keys))
+        sampled_sizes: list[int] = []
+        for cell_str in chunk_keys[:sample_limit]:
+            path = os.path.join(chunks_dir, f"{cell_str}.bin")
+            try:
+                size = os.path.getsize(path)
+                if size > 0:
+                    sampled_sizes.append(size)
+            except OSError:
+                continue
+
+        if not sampled_sizes:
+            return 2 * 1024 * 1024
+
+        sampled_sizes.sort()
+        median_size = sampled_sizes[len(sampled_sizes) // 2]
+        # A chunk's VBO is roughly the position/uv/normal payload size.
+        # Use headroom for driver allocation overhead and texture residency
+        # shared across loaded chunks.
+        overhead_multiplier = 2.5
+        return max(int(median_size * overhead_multiplier), 512 * 1024)
+
+    def _configure_chunk_budget_from_memory_targets(self) -> None:
+        """Derive max_loaded_chunks from system RAM and GPU memory targets.
 
         Important: this is a policy cap for chunk residency, not a strict
         memory reservation. Actual process memory can differ due to Python
-        object overhead, decode/transient buffers, textures, driver usage,
-        and whatever else is running on the machine.
+        object overhead, decode/transient buffers, GPU buffers/textures,
+        driver usage, and whatever else is running on the machine.
         """
         if self._estimated_chunk_ram_bytes <= 0:
             return
 
-        budget_bytes = int(self._total_ram_bytes * self._memory_target_fraction)
-        budget_chunks = max(1, budget_bytes // self._estimated_chunk_ram_bytes)
+        ram_budget_bytes = int(self._total_ram_bytes * self._memory_target_fraction)
+        ram_budget_chunks = max(1, ram_budget_bytes // self._estimated_chunk_ram_bytes)
+        budget_chunks = ram_budget_chunks
+
+        gpu_budget_chunks = None
+        if self._total_gpu_memory_bytes is not None and self._estimated_chunk_gpu_bytes > 0:
+            gpu_budget_bytes = int(self._total_gpu_memory_bytes * self._gpu_target_fraction)
+            gpu_budget_chunks = max(1, gpu_budget_bytes // self._estimated_chunk_gpu_bytes)
+            budget_chunks = min(budget_chunks, gpu_budget_chunks)
+
         budget_chunks = min(budget_chunks, len(self.available_cells))
 
         # Apply the memory-derived budget directly so env tuning can both
@@ -254,9 +353,22 @@ class StreamingWorld:
             "Memory target %.0f%% of %.1f GB => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
             self._memory_target_fraction * 100.0,
             self._total_ram_bytes / (1024 ** 3),
-            self.config.max_loaded_chunks,
+            ram_budget_chunks,
             self._estimated_chunk_ram_bytes / (1024 ** 2),
         )
+        if gpu_budget_chunks is not None:
+            _LOG.info(
+                "GPU memory target %.0f%% of %.1f GB => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
+                self._gpu_target_fraction * 100.0,
+                self._total_gpu_memory_bytes / (1024 ** 3),
+                gpu_budget_chunks,
+                self._estimated_chunk_gpu_bytes / (1024 ** 2),
+            )
+            _LOG.info("Effective max_loaded_chunks=%d after RAM/GPU limits.", self.config.max_loaded_chunks)
+        else:
+            _LOG.info(
+                "GPU memory limit not applied; set CAVEVIEWER_GPU_MEMORY_GB or install nvidia-smi for detection."
+            )
 
     def shutdown(self):
         self._stop_event.set()
@@ -341,6 +453,12 @@ class StreamingWorld:
 
         load_r = self.config.load_radius_cells
         wanted = self._cells_in_radius(cam_cell, load_r) & self.available_cells
+        if len(wanted) > self.config.max_loaded_chunks:
+            ordered_wanted = sorted(
+                wanted,
+                key=lambda cell: self._cell_distance_sq(cell, cam_cell),
+            )
+            wanted = set(ordered_wanted[:max(1, self.config.max_loaded_chunks)])
         self._last_wanted_cells = wanted
 
         with self._lock:
