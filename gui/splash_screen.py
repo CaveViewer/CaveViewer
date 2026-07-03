@@ -104,6 +104,8 @@ _VERSION_FONT = (_UI_FONT_FAMILY, 12)
 _BODY_FONT = (_UI_FONT_FAMILY, 12)
 _SMALL_FONT = (_UI_FONT_FAMILY, 10)
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
+_CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
+_CTA_HINT_FONT = (_UI_FONT_FAMILY, 10)
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
@@ -506,16 +508,48 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             root.withdraw()
             root.quit()
     
-    example_maps_label = tk.Label(
+    sample_maps_cta = tk.Frame(
         root,
-        text="Download Sample Maps",
-        font=_LINK_FONT,
+        bg=_PANEL_COLOR,
+        highlightthickness=1,
+        highlightbackground="#3b3320",
+        highlightcolor="#3b3320",
+        cursor="hand2",
+        padx=14,
+        pady=9,
+    )
+
+    cta_row = tk.Frame(sample_maps_cta, bg=_PANEL_COLOR, cursor="hand2")
+    cta_row.pack()
+
+    cta_link_label = tk.Label(
+        cta_row,
+        text="New here? Download Sample Maps",
+        font=_CTA_LINK_FONT,
         fg=_BUTTON_BG,
-        bg=_BG_COLOR,
+        bg=_PANEL_COLOR,
         cursor="hand2",
     )
-    example_maps_label.bind("<Button-1>", lambda _: _on_example_maps_click())
-    example_maps_label.pack(pady=(8, 16))
+    cta_link_label.pack(side="left")
+
+    cta_hint_label = tk.Label(
+        sample_maps_cta,
+        text="Includes ready-to-open demo caves",
+        font=_CTA_HINT_FONT,
+        fg=_SUBTITLE_COLOR,
+        bg=_PANEL_COLOR,
+        cursor="hand2",
+        justify="center",
+    )
+    cta_hint_label.pack(pady=(5, 0))
+
+    def _bind_sample_maps_click(widget):
+        widget.bind("<Button-1>", lambda _: _on_example_maps_click())
+
+    for widget in (sample_maps_cta, cta_row, cta_link_label, cta_hint_label):
+        _bind_sample_maps_click(widget)
+
+    sample_maps_cta.pack(pady=(20, 16))
 
     # -- footer note ----------------------------------------------------------------
 

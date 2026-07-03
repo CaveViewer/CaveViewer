@@ -125,10 +125,60 @@ def show_sample_maps_dialog(parent, install_dir):
         )
         notice.pack(pady=(0, 8))
 
-    row_height = 72
-    dialog.geometry(f"{window_w}x{200 + extra_height + row_height * len(catalog)}")
+    row_height = 88
+    base_height = 176
+    desired_height = base_height + extra_height + row_height * len(catalog)
+    max_height = max(260, dialog.winfo_screenheight() - 120)
+    final_height = min(desired_height, max_height)
+    dialog.geometry(f"{window_w}x{final_height}")
+    _center_over_parent(dialog, parent, window_w, final_height)
 
     list_frame.pack(fill="both", expand=True, padx=20)
+
+    list_view_height = max(96, final_height - (base_height + extra_height))
+    list_viewport = tk.Frame(list_frame, bg=_BG_COLOR, height=list_view_height)
+    list_viewport.pack(fill="x")
+    list_viewport.pack_propagate(False)
+
+    list_canvas = tk.Canvas(
+        list_viewport,
+        bg=_BG_COLOR,
+        highlightthickness=0,
+        borderwidth=0,
+    )
+    list_scrollbar = tk.Scrollbar(list_viewport, orient="vertical", command=list_canvas.yview)
+    list_canvas.configure(yscrollcommand=list_scrollbar.set)
+
+    rows_frame = tk.Frame(list_canvas, bg=_BG_COLOR)
+    rows_window = list_canvas.create_window((0, 0), window=rows_frame, anchor="nw")
+
+    def _sync_rows_width(event=None):
+        list_canvas.itemconfigure(rows_window, width=list_canvas.winfo_width())
+
+    def _sync_scrollregion(event=None):
+        list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+
+    rows_frame.bind("<Configure>", _sync_scrollregion)
+    list_canvas.bind("<Configure>", _sync_rows_width)
+
+    def _on_mousewheel(event):
+        if event.delta:
+            list_canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def _on_linux_scroll_up(_event):
+        list_canvas.yview_scroll(-1, "units")
+
+    def _on_linux_scroll_down(_event):
+        list_canvas.yview_scroll(1, "units")
+
+    list_canvas.bind("<MouseWheel>", _on_mousewheel)
+    rows_frame.bind("<MouseWheel>", _on_mousewheel)
+    list_canvas.bind("<Button-4>", _on_linux_scroll_up)
+    list_canvas.bind("<Button-5>", _on_linux_scroll_down)
+    rows_frame.bind("<Button-4>", _on_linux_scroll_up)
+    rows_frame.bind("<Button-5>", _on_linux_scroll_down)
+
+    list_canvas.pack(side="left", fill="both", expand=True)
 
     def format_size(size_bytes):
         if size_bytes is None:
@@ -217,7 +267,7 @@ def show_sample_maps_dialog(parent, install_dir):
         dialog.destroy()
 
     for sample in catalog:
-        row = tk.Frame(list_frame, bg=_PANEL_COLOR)
+        row = tk.Frame(rows_frame, bg=_PANEL_COLOR)
         row.pack(fill="x", pady=6)
 
         # Create progress bar container with fixed height (reserves space always)
@@ -258,7 +308,7 @@ def show_sample_maps_dialog(parent, install_dir):
             fg=_INSTRUCTION_COLOR, bg=_PANEL_COLOR, anchor="w",
         ).pack(anchor="w")
 
-        btn_text = "Open" if already_have else "Download to..."
+        btn_text = "Open" if already_have else "Save to..."
         btn_enabled = already_have or sample.download_url is not None
 
         action_btn = tk.Button(
@@ -275,11 +325,15 @@ def show_sample_maps_dialog(parent, install_dir):
         action_btn.pack(side="right", padx=14, pady=10)
         action_buttons[sample.display_name] = action_btn
 
-    footer = tk.Label(
-        dialog, text="Close this window to go back to the main screen.",
-        font=("Segoe UI", 8), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
-    )
-    footer.pack(pady=(8, 14))
+    # Decide scrollbar visibility using measured content height so rows are
+    # never clipped even if theme/font metrics differ across platforms.
+    dialog.update_idletasks()
+    content_height = rows_frame.winfo_reqheight()
+    viewport_height = list_viewport.winfo_height()
+    if content_height > viewport_height:
+        list_scrollbar.pack(side="right", fill="y")
+    else:
+        list_scrollbar.pack_forget()
 
     dialog.wait_window()
 
