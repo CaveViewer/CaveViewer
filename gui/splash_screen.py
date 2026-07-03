@@ -31,6 +31,7 @@ without extra modal pop-ups.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -85,6 +86,7 @@ def _resolve_asset_path(filename: str) -> str | None:
 # second copy of the same image.
 _LOGO_PATH = _resolve_asset_path("loading_logo.png")
 _LAST_BROWSE_PATH_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last_browse_path")
+_ADVANCED_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_advanced_settings.json")
 
 # URL for example maps link -- empty/None means link is disabled
 _EXAMPLE_MAPS_URL = None
@@ -115,6 +117,108 @@ _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
     "BottomLine Projects Scientific Dive Team and other volunteers.\n")
 
+_ADVANCED_SETTING_FIELDS = (
+    {
+        "key": "memory_target_percent",
+        "env_var": "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
+        "label": "Memory target (%)",
+        "hint": "Percent of total RAM CaveViewer may use for loaded chunks.",
+    },
+    {
+        "key": "io_workers",
+        "env_var": "CAVEVIEWER_IO_WORKERS",
+        "label": "Worker count",
+        "hint": "Background chunk-loading worker threads.",
+    },
+    {
+        "key": "io_reserved_cpus",
+        "env_var": "CAVEVIEWER_IO_RESERVED_CPUS",
+            "label": "CPU cores to keep free",
+        "hint": "How many CPU cores CaveViewer should avoid using for streaming workers.",
+    },
+)
+
+
+def _default_advanced_settings() -> dict[str, str]:
+    return {field["key"]: "" for field in _ADVANCED_SETTING_FIELDS}
+
+
+def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
+    normalized = _normalize_advanced_settings(values)
+    logical_cpus = max(1, os.cpu_count() or 1)
+    defaults = {
+        "memory_target_percent": "12",
+        "io_reserved_cpus": "3",
+        "io_workers": str(max(1, logical_cpus - 3)),
+    }
+    return {
+        key: (normalized.get(key, "") or defaults[key])
+        for key in defaults
+    }
+
+
+def _normalize_advanced_settings(values: dict | None) -> dict[str, str]:
+    normalized = _default_advanced_settings()
+    if not isinstance(values, dict):
+        return normalized
+    for field in _ADVANCED_SETTING_FIELDS:
+        raw = values.get(field["key"], "")
+        normalized[field["key"]] = str(raw).strip() if raw is not None else ""
+    return normalized
+
+
+def _load_advanced_settings() -> dict[str, str]:
+    try:
+        with open(_ADVANCED_SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return _normalize_advanced_settings(json.load(f))
+    except Exception:
+        return _default_advanced_settings()
+
+
+def _save_advanced_settings(values: dict[str, str]) -> None:
+    try:
+        with open(_ADVANCED_SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(_normalize_advanced_settings(values), f, indent=2)
+    except Exception as e:
+        _LOG.warning(f"could not save advanced settings ({e})")
+
+
+def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | None, dict[str, str]]:
+    normalized = _normalize_advanced_settings(values)
+
+    memory_text = normalized["memory_target_percent"]
+    if memory_text:
+        try:
+            memory_value = float(memory_text)
+        except ValueError:
+            return False, "Streaming memory target must be a number between 1 and 80.", normalized
+        if memory_value < 1.0 or memory_value > 80.0:
+            return False, "Streaming memory target must be between 1 and 80 percent.", normalized
+        normalized["memory_target_percent"] = f"{memory_value:g}"
+
+    for key, label in (("io_workers", "Worker count"), ("io_reserved_cpus", "CPUs to leave free")):
+        text = normalized[key]
+        if not text:
+            continue
+        try:
+            int_value = int(text)
+        except ValueError:
+            return False, f"{label} must be a whole number.", normalized
+        if key == "io_workers" and int_value < 1:
+            return False, "Streaming worker count must be at least 1.", normalized
+        if key == "io_reserved_cpus" and int_value < 0:
+                return False, "CPU cores to keep free cannot be negative.", normalized
+        normalized[key] = str(int_value)
+
+    return True, None, normalized
+
+
+def _apply_advanced_settings_to_env(values: dict[str, str]) -> None:
+    normalized = _effective_advanced_settings(values)
+    for field in _ADVANCED_SETTING_FIELDS:
+        value = normalized[field["key"]]
+        os.environ[field["env_var"]] = value
+
 
 def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION) -> str | None:
     """
@@ -127,6 +231,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     from tkinter import filedialog
 
     selected_folder: list[str | None] = [None]
+    advanced_settings = _effective_advanced_settings(_load_advanced_settings())
+    _apply_advanced_settings_to_env(advanced_settings)
 
     root = tk.Tk()
     # Keep hidden until final geometry is set to avoid a visible corner->center jump.
@@ -500,6 +606,146 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         justify="center",
     )
     instruction_label.pack(pady=(0, 0))
+
+    def _show_advanced_settings_dialog() -> None:
+        dialog = tk.Toplevel(root)
+        dialog.title("Advanced Settings")
+        dialog.configure(bg=_BG_COLOR)
+        dialog.resizable(False, False)
+        dialog.transient(root)
+        dialog.grab_set()
+
+        body = tk.Frame(dialog, bg=_BG_COLOR, padx=18, pady=18)
+        body.pack(fill="both", expand=True)
+
+        tk.Label(
+            body,
+            text="Streaming Performance",
+            font=_VERSION_FONT,
+            fg=_TITLE_COLOR,
+            bg=_BG_COLOR,
+        ).pack(anchor="w", pady=(0, 8))
+
+        field_vars: dict[str, tk.StringVar] = {}
+        for field in _ADVANCED_SETTING_FIELDS:
+            row = tk.Frame(body, bg=_BG_COLOR)
+            row.pack(fill="x", pady=(0, 10))
+
+            tk.Label(
+                row,
+                text=field["label"],
+                font=_BODY_FONT,
+                fg=_SUBTITLE_COLOR,
+                bg=_BG_COLOR,
+                anchor="w",
+            ).pack(anchor="w")
+
+            var = tk.StringVar(value=_effective_advanced_settings(advanced_settings)[field["key"]])
+            field_vars[field["key"]] = var
+            entry = tk.Entry(
+                row,
+                textvariable=var,
+                font=_BODY_FONT,
+                bg="#1c1c24",
+                fg=_SUBTITLE_COLOR,
+                insertbackground=_SUBTITLE_COLOR,
+                relief="flat",
+                width=18,
+            )
+            entry.pack(anchor="w", pady=(4, 4))
+
+            tk.Label(
+                row,
+                text=field["hint"],
+                font=_SMALL_FONT,
+                fg=_INSTRUCTION_COLOR,
+                bg=_BG_COLOR,
+                justify="left",
+                wraplength=420,
+            ).pack(anchor="w")
+
+        error_label = tk.Label(
+            body,
+            text="",
+            font=_SMALL_FONT,
+            fg="#ff9b90",
+            bg=_BG_COLOR,
+            justify="left",
+            wraplength=420,
+        )
+        error_label.pack(anchor="w", pady=(4, 10))
+
+        button_row = tk.Frame(body, bg=_BG_COLOR)
+        button_row.pack(fill="x")
+
+        def on_cancel():
+            dialog.destroy()
+
+        def on_apply():
+            nonlocal advanced_settings
+            proposed = {key: var.get() for key, var in field_vars.items()}
+            ok, message, normalized = _validate_advanced_settings(proposed)
+            if not ok:
+                error_label.config(text=message or "Invalid advanced settings.")
+                return
+
+            advanced_settings = _effective_advanced_settings(normalized)
+            _apply_advanced_settings_to_env(advanced_settings)
+            _save_advanced_settings(advanced_settings)
+            dialog.destroy()
+
+        cancel_button = tk.Button(
+            button_row,
+            text="Cancel",
+            command=on_cancel,
+            font=_SMALL_FONT,
+            bg="#2a2a33",
+            fg=_SUBTITLE_COLOR,
+            activebackground="#33333f",
+            activeforeground=_SUBTITLE_COLOR,
+            relief="flat",
+            borderwidth=0,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        )
+
+        apply_button = tk.Button(
+            button_row,
+            text="Apply",
+            command=on_apply,
+            font=_SMALL_FONT,
+            bg=_BUTTON_BG,
+            fg=_BUTTON_FG,
+            activebackground=_BUTTON_BG,
+            activeforeground=_BUTTON_FG,
+            relief="flat",
+            borderwidth=0,
+            padx=16,
+            pady=6,
+            cursor="hand2",
+            default="active",
+        )
+
+        apply_button.pack(side="right")
+        cancel_button.pack(side="right", padx=(0, 8))
+
+        dialog.bind("<Escape>", lambda _event: on_cancel())
+        dialog.bind("<Return>", lambda _event: on_apply())
+        dialog.update_idletasks()
+        apply_button.focus_set()
+        dialog.focus_force()
+
+    advanced_link = tk.Label(
+        root,
+        text="Advanced Settings...",
+        font=_SMALL_FONT,
+        fg="#5d6f8a",
+        bg=_BG_COLOR,
+        cursor="hand2",
+    )
+    advanced_link.bind("<Button-1>", lambda _event: _show_advanced_settings_dialog())
+    advanced_link.pack(pady=(12, 4))
 
     # Example maps link - opens the sample maps dialog
     def _on_example_maps_click():
