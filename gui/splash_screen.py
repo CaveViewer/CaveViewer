@@ -107,8 +107,8 @@ _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
 _CTA_HINT_FONT = (_UI_FONT_FAMILY, 10)
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-_SPLASH_WINDOW_HEIGHT = 600 if sys.platform == "darwin" else 628
-_SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 30
+_SPLASH_WINDOW_HEIGHT = 600 if sys.platform == "darwin" else 644
+_SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
     "BottomLine Projects Scientific Dive Team and other volunteers.\n")
@@ -540,6 +540,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         font=_CTA_HINT_FONT,
         fg=_SUBTITLE_COLOR,
         bg=_PANEL_COLOR,
+        pady=1,
         cursor="hand2",
         justify="center",
     )
