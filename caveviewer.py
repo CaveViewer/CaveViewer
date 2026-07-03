@@ -168,7 +168,10 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
 
     t_start = time.time()
 
-    def progress(stage: str, frac: float):
+    parse_weight = 0.5
+
+    def _emit_progress(stage: str, frac: float):
+        frac = max(0.0, min(1.0, frac))
         bar_width = 40
         filled = int(bar_width * frac)
         bar = "#" * filled + "-" * (bar_width - filled)
@@ -177,12 +180,18 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         if extra_progress_cb:
             extra_progress_cb(stage, frac)
 
-    mesh = parse_obj(obj_path, progress_cb=progress)
+    def parse_progress(stage: str, frac: float):
+        _emit_progress(stage, parse_weight * frac)
+
+    def cache_progress(stage: str, frac: float):
+        _emit_progress(stage, parse_weight + (1.0 - parse_weight) * frac)
+
+    mesh = parse_obj(obj_path, progress_cb=parse_progress)
     print()  # newline after the parse progress bar
 
     materials = parse_mtl(mtl_path)
 
-    cache_dir = chunker.build_cache(obj_path, mesh, materials, progress_cb=progress)
+    cache_dir = chunker.build_cache(obj_path, mesh, materials, progress_cb=cache_progress)
     print()
 
     import shutil
@@ -246,7 +255,10 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
 
     t_start = time.time()
 
-    def progress(stage: str, frac: float):
+    parse_weight = 0.5
+
+    def _emit_progress(stage: str, frac: float):
+        frac = max(0.0, min(1.0, frac))
         bar_width = 40
         filled = int(bar_width * frac)
         bar = "#" * filled + "-" * (bar_width - filled)
@@ -255,9 +267,15 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
         if extra_progress_cb:
             extra_progress_cb(stage, frac)
 
+    def parse_progress(stage: str, frac: float):
+        _emit_progress(stage, parse_weight * frac)
+
+    def cache_progress(stage: str, frac: float):
+        _emit_progress(stage, parse_weight + (1.0 - parse_weight) * frac)
+
     if fmt == "glb":
         from core.glb_parser import parse_glb
-        mesh, embedded_textures = parse_glb(source_path, progress_cb=progress)
+        mesh, embedded_textures = parse_glb(source_path, progress_cb=parse_progress)
 
         # Write each embedded texture out to a real file in textures_dir,
         # once, so every downstream consumer (chunker.py's manifest,
@@ -285,7 +303,7 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
 
     print()  # newline after the parse progress bar
 
-    cache_dir = chunker.build_cache(source_path, mesh, materials, progress_cb=progress)
+    cache_dir = chunker.build_cache(source_path, mesh, materials, progress_cb=cache_progress)
     print()
 
     import shutil

@@ -99,6 +99,10 @@ class CaveViewerWindow(mglw.WindowConfig):
     # one place instead of tuning every overlay module individually.
     UI_TEXT_SCALE = 1.18
 
+    # Hold the completed import bar briefly so the transition into the
+    # loaded map view feels intentional instead of abrupt.
+    IMPORT_COMPLETE_PAUSE_SECONDS = 1.0
+
     # Startup focus forcing can make bundled macOS app windows appear in a
     # corner first and then jump as the window manager re-places them.
     # Default to disabled for frozen macOS builds; allow override.
@@ -567,8 +571,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # the progress panel so it's visible what's happening rather than
         # the window appearing to freeze with no explanation.
         already_cached = chunker_module.cache_is_valid(source_path)
+        did_pause_on_complete = False
 
         def on_progress(stage: str, fraction: float):
+            nonlocal did_pause_on_complete
             self.import_progress_panel.render(self.wnd.size, map_name, stage, fraction)
             # Explicitly push this frame to the screen -- the normal
             # render loop is paused while import_and_cache_any() runs
@@ -591,12 +597,17 @@ class CaveViewerWindow(mglw.WindowConfig):
             else:
                 self.ctx.finish()
 
+            if fraction >= 1.0 and not did_pause_on_complete:
+                did_pause_on_complete = True
+                time.sleep(self.IMPORT_COMPLETE_PAUSE_SECONDS)
+
         try:
             if not already_cached:
                 on_progress("starting import", 0.0)
                 cache_dir = import_and_cache_any(model_descriptor, folder, force_rebuild=False,
                                                    extra_progress_cb=on_progress)
             else:
+                on_progress("loading cached map", 1.0)
                 cache_dir = chunker_module.get_cache_dir(source_path)
         except Exception as e:
             print(f"[CaveViewer] Failed to import this map: {e}")
@@ -653,13 +664,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         from core import chunker as chunker_module
 
         already_cached = chunker_module.cache_is_valid(source_path)
+        did_pause_on_complete = False
 
         def on_progress(stage: str, fraction: float):
+            nonlocal did_pause_on_complete
             self.import_progress_panel.render(self.wnd.size, map_name, stage, fraction)
             if hasattr(self.wnd, "swap_buffers"):
                 self.wnd.swap_buffers()
             else:
                 self.ctx.finish()
+
+            if fraction >= 1.0 and not did_pause_on_complete:
+                did_pause_on_complete = True
+                time.sleep(self.IMPORT_COMPLETE_PAUSE_SECONDS)
 
         try:
             if not already_cached:
@@ -667,6 +684,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 cache_dir = import_and_cache_any(model_descriptor, textures_dir, force_rebuild=False,
                                                    extra_progress_cb=on_progress)
             else:
+                on_progress("loading cached map", 1.0)
                 cache_dir = chunker_module.get_cache_dir(source_path)
 
             new_manifest = chunker_module.load_manifest(cache_dir)
