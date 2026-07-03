@@ -112,6 +112,9 @@ _CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
 _SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
+_ADVANCED_DIALOG_WRAP = 420 if sys.platform == "darwin" else 560
+_ADVANCED_DIALOG_ENTRY_WIDTH = 18 if sys.platform == "darwin" else 24
+_ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else 24
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
     "BottomLine Projects Scientific Dive Team and other volunteers.\n")
@@ -642,7 +645,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         dialog.resizable(False, False)
         dialog.transient(root)
 
-        body = tk.Frame(dialog, bg=_BG_COLOR, padx=18, pady=18)
+        body = tk.Frame(dialog, bg=_BG_COLOR, padx=_ADVANCED_DIALOG_BODY_PAD_X, pady=18)
         body.pack(fill="both", expand=True)
 
         tk.Label(
@@ -677,7 +680,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 fg=_SUBTITLE_COLOR,
                 insertbackground=_SUBTITLE_COLOR,
                 relief="flat",
-                width=18,
+                width=_ADVANCED_DIALOG_ENTRY_WIDTH,
             )
             entry.pack(anchor="w", pady=(4, 4))
 
@@ -688,7 +691,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 fg=_INSTRUCTION_COLOR,
                 bg=_BG_COLOR,
                 justify="left",
-                wraplength=420,
+                wraplength=_ADVANCED_DIALOG_WRAP,
             ).pack(anchor="w")
 
         error_label = tk.Label(
@@ -698,7 +701,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             fg="#ff9b90",
             bg=_BG_COLOR,
             justify="left",
-            wraplength=420,
+            wraplength=_ADVANCED_DIALOG_WRAP,
         )
         error_label.pack(anchor="w", pady=(4, 10))
 
