@@ -109,9 +109,8 @@ _BODY_FONT = (_UI_FONT_FAMILY, 12)
 _SMALL_FONT = (_UI_FONT_FAMILY, 10)
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
-_CTA_HINT_FONT = (_UI_FONT_FAMILY, 10)
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-_SPLASH_WINDOW_HEIGHT = 600 if sys.platform == "darwin" else 644
+_SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
 _SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
@@ -243,7 +242,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
     _PLATFORM_ADAPTER.install_about_handler(root, program_name, version)
 
-    window_w, window_h = 500, _SPLASH_WINDOW_HEIGHT
+    window_w, window_h = 500, _SPLASH_WINDOW_MIN_HEIGHT
 
     # Center the window on screen rather than letting the OS place it
     # arbitrarily -- a first-launch splash screen appearing somewhere
@@ -791,35 +790,21 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         pady=9,
     )
 
-    cta_row = tk.Frame(sample_maps_cta, bg=_PANEL_COLOR, cursor="hand2")
-    cta_row.pack()
-
     cta_link_label = tk.Label(
-        cta_row,
-        text="New here? Download Sample Maps",
-        font=_CTA_LINK_FONT,
+        sample_maps_cta,
+        text="New here? Download ready-to-open sample maps",
+        font=_LINK_FONT,
         fg=_BUTTON_BG,
         bg=_PANEL_COLOR,
         cursor="hand2",
-    )
-    cta_link_label.pack(side="left")
-
-    cta_hint_label = tk.Label(
-        sample_maps_cta,
-        text="Includes ready-to-open demo caves",
-        font=_CTA_HINT_FONT,
-        fg=_SUBTITLE_COLOR,
-        bg=_PANEL_COLOR,
-        pady=1,
-        cursor="hand2",
         justify="center",
     )
-    cta_hint_label.pack(pady=(5, 0))
+    cta_link_label.pack()
 
     def _bind_sample_maps_click(widget):
         widget.bind("<Button-1>", lambda _: _on_example_maps_click())
 
-    for widget in (sample_maps_cta, cta_row, cta_link_label, cta_hint_label):
+    for widget in (sample_maps_cta, cta_link_label):
         _bind_sample_maps_click(widget)
 
     sample_maps_cta.pack(pady=(20, _SPLASH_CTA_BOTTOM_PAD))
@@ -827,6 +812,13 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     # -- footer note ----------------------------------------------------------------
 
     browse_button.focus_set()
+    root.update_idletasks()
+    final_height = max(_SPLASH_WINDOW_MIN_HEIGHT, root.winfo_reqheight())
+    max_height = max(360, root.winfo_screenheight() - 80)
+    final_height = min(final_height, max_height)
+    pos_y = (screen_h - final_height) // 3
+    root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
+
     root.deiconify()
     root.lift()
     root.focus_force()

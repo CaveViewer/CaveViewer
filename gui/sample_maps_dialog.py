@@ -341,18 +341,23 @@ def show_sample_maps_dialog(parent, install_dir):
 
 
 def _center_over_parent(window, parent, width, height):
-    import sys
     parent.update_idletasks()
     px = parent.winfo_rootx()
     py = parent.winfo_rooty()
     pw = parent.winfo_width()
-    ph = parent.winfo_height()
-    x = px + (pw - width) // 2
-    y = py + (ph - height) // 2
-    if sys.platform.startswith("linux"):
-        x += 30
-        y += 30
-    window.geometry(f"{width}x{height}+{x}+{y}")
+    screen_w = parent.winfo_screenwidth()
+    screen_h = parent.winfo_screenheight()
+
+    # Match the advanced settings dialog behavior: keep the child near
+    # the parent's upper-right corner, but let it protrude past the
+    # parent's right edge so the overlap is visually obvious.
+    protrusion_x = 72
+    inset_y = 40
+    desired_x = px + pw - width + protrusion_x
+    desired_y = py + inset_y
+    clamped_x = max(8, min(desired_x, screen_w - width - 8))
+    clamped_y = max(8, min(desired_y, screen_h - height - 8))
+    window.geometry(f"{width}x{height}+{clamped_x}+{clamped_y}")
 
 
 def _load_last_sample_maps_dir() -> str | None:
