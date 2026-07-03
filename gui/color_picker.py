@@ -48,14 +48,14 @@ void main() {
 
 
 class ColorPicker:
-    PANEL_WIDTH = 360
-    PANEL_HEIGHT = 230
+    PANEL_WIDTH = 380
+    PANEL_HEIGHT = 300
     TRACK_HEIGHT = 10
-    TRACK_MARGIN_SIDE = 30
+    TRACK_MARGIN_SIDE = 48
     HANDLE_WIDTH = 16
     HANDLE_HEIGHT = 24
     ROW_GAP = 56
-    SWATCH_SIZE = 50
+    SWATCH_SIZE = 48
 
     _CHANNEL_NAMES = ["R", "G", "B"]
     _CHANNEL_COLORS = [
@@ -242,7 +242,7 @@ class ColorPicker:
         add_quad_px(px0, py0, px0 + border, py1, border_color)
         add_quad_px(px1 - border, py0, px1, py1, border_color)
 
-        title = "BACKGROUND COLOR"
+        title = "Background Color"
         title_size = 2.2
         title_w = bitmap_font.text_width_px(title, title_size)
         add_text(title, px0 + (self.PANEL_WIDTH - title_w) / 2.0, py0 + 16, title_size,
