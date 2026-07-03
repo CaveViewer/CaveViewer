@@ -76,13 +76,16 @@ def configured_chunk_size() -> float:
 
 
 @dataclass
-class ChunkData:
-    """In-memory representation of one spatial cell's geometry, grouped by
-    material so the renderer can do one draw call per texture per chunk."""
-    cell: tuple[int, int, int]
-    groups: dict[str, "ChunkMaterialGroup"]
-    bounds_min: np.ndarray  # (3,) float32
-    bounds_max: np.ndarray  # (3,) float32
+class ChunkUploadGroup:
+    """CPU-prepared vertex payload for one material group in a chunk.
+
+    OpenGL object creation still has to happen on the render thread, but
+    normal generation, interleaving, and bytes conversion can happen in a
+    streaming worker before the chunk reaches the renderer.
+    """
+    material_name: str
+    smooth_vertex_bytes: bytes
+    flat_vertex_bytes: bytes
 
 
 @dataclass
@@ -91,6 +94,17 @@ class ChunkMaterialGroup:
     positions: np.ndarray   # (N, 3) float32, flat (already expanded, not indexed)
     uvs: np.ndarray         # (N, 2) float32
     normals: np.ndarray     # (N, 3) float32
+
+
+@dataclass
+class ChunkData:
+    """In-memory representation of one spatial cell's geometry, grouped by
+    material so the renderer can do one draw call per texture per chunk."""
+    cell: tuple[int, int, int]
+    groups: dict[str, ChunkMaterialGroup]
+    bounds_min: np.ndarray  # (3,) float32
+    bounds_max: np.ndarray  # (3,) float32
+    upload_groups: list[ChunkUploadGroup] | None = None
 
 
 def world_to_cell(point: np.ndarray, chunk_size: float) -> tuple[int, int, int]:
@@ -331,6 +345,43 @@ def compute_flat_normals(flat_pos: np.ndarray) -> np.ndarray:
     already-streamed chunk data.
     """
     return _compute_flat_normals(flat_pos)
+
+
+def _interleaved_vertex_bytes(positions: np.ndarray, uvs: np.ndarray,
+                              normals: np.ndarray) -> bytes:
+    """Pack position/uv/normal columns into the renderer's VBO layout."""
+    n = len(positions)
+    interleaved = np.empty((n, 8), dtype=np.float32)
+    interleaved[:, 0:3] = positions
+    interleaved[:, 3:5] = uvs
+    interleaved[:, 5:8] = normals
+    return interleaved.tobytes()
+
+
+def prepare_chunk_upload_groups(chunk_data: ChunkData) -> ChunkData:
+    """
+    Precompute CPU-side renderer payloads for a loaded chunk.
+
+    This deliberately does no OpenGL work. It is safe to call from a
+    background streaming worker and leaves the render thread with only
+    context-bound buffer/VAO/texture operations.
+    """
+    upload_groups: list[ChunkUploadGroup] = []
+    for mat_name, group in chunk_data.groups.items():
+        n = len(group.positions)
+        if n == 0:
+            continue
+
+        smooth_normals = group.normals
+        flat_normals = compute_flat_normals(group.positions)
+        upload_groups.append(ChunkUploadGroup(
+            material_name=mat_name,
+            smooth_vertex_bytes=_interleaved_vertex_bytes(group.positions, group.uvs, smooth_normals),
+            flat_vertex_bytes=_interleaved_vertex_bytes(group.positions, group.uvs, flat_normals),
+        ))
+
+    chunk_data.upload_groups = upload_groups
+    return chunk_data
 
 
 def load_manifest(cache_dir):

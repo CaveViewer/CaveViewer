@@ -42,6 +42,27 @@ from caveviewer_version import APP_NAME, APP_VERSION
 
 _LOG = get_logger("CaveViewer")
 
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, min(maximum, int(raw)))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, min(maximum, float(raw)))
+    except ValueError:
+        return default
+
+
 def _resource_base_dir() -> str:
     """
     Returns the correct base directory to resolve bundled resources (like
@@ -211,6 +232,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._is_background_paused = False
         self._closing_requested = False
         self._startup_focus_requested = False
+        self._upload_chunks_per_frame = _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
+        self._upload_time_budget_ms = _env_float("CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", 3.0, 0.5, 50.0)
         self._platform_adapter = get_platform_adapter()
         self._bookmarks_path: str | None = None
         self._bookmarks: dict[int, dict] = {}
@@ -350,9 +373,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         def predecode_textures_for_chunk(chunk_data):
             # Called from a background worker thread (see StreamingWorld) --
             # decodes JPEGs for every material this chunk uses, ahead of
-            # time, so the eventual main-thread GPU upload in
-            # _on_chunk_ready is just a fast texture() call on already-
-            # decoded pixels rather than a slow decode-and-upload combined.
+            # time, so the eventual main-thread GPU upload can use
+            # already-decoded pixels rather than doing a slow
+            # decode-and-upload combination.
             for mat_name in chunk_data.groups.keys():
                 self.texture_manager.decode_for_material(mat_name)
 
@@ -797,31 +820,27 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _on_chunk_ready(self, chunk_data):
         vao_list = []
         normal_cache_entry = []
-        for mat_name, group in chunk_data.groups.items():
-            n = len(group.positions)
-            if n == 0:
-                continue
+        upload_groups = chunk_data.upload_groups
+        if upload_groups is None:
+            chunker.prepare_chunk_upload_groups(chunk_data)
+            upload_groups = chunk_data.upload_groups or []
 
-            # group.normals is whatever the chunk cache has on disk (smooth
-            # by default). Flat normals are recomputed once from positions so
-            # both variants are locally available for an instant SHADE toggle.
-            smooth_normals = group.normals
-            flat_normals = chunker.compute_flat_normals(group.positions)
-            active_normals = (smooth_normals if self.render_mode_buttons.smooth_shading_enabled
-                               else flat_normals)
+        for group in upload_groups:
+            active_bytes = (group.smooth_vertex_bytes
+                            if self.render_mode_buttons.smooth_shading_enabled
+                            else group.flat_vertex_bytes)
 
-            interleaved = np.empty((n, 8), dtype=np.float32)
-            interleaved[:, 0:3] = group.positions
-            interleaved[:, 3:5] = group.uvs
-            interleaved[:, 5:8] = active_normals
-
-            vbo = self.ctx.buffer(interleaved.tobytes())
+            vbo = self.ctx.buffer(active_bytes)
             vao = self.ctx.vertex_array(
                 self.program, [(vbo, "3f 2f 3f", "in_position", "in_uv", "in_normal")]
             )
-            texture = self.texture_manager.acquire(mat_name)
-            vao_list.append((vao, vbo, mat_name, texture))
-            normal_cache_entry.append((mat_name, group.positions, group.uvs, smooth_normals, flat_normals))
+            texture = self.texture_manager.acquire(group.material_name)
+            vao_list.append((vao, vbo, group.material_name, texture))
+            normal_cache_entry.append((
+                group.material_name,
+                group.smooth_vertex_bytes,
+                group.flat_vertex_bytes,
+            ))
 
         self._chunk_gpu_objects[chunk_data.cell] = vao_list
         self._chunk_normal_cache[chunk_data.cell] = normal_cache_entry
@@ -840,7 +859,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         Rewrites the normal columns of every currently-loaded chunk's VBO
         in place to match the current smooth_shading_enabled state -- no
         chunk reload or new GPU objects needed. Both normal variants were
-        precomputed in _on_chunk_ready, so this is an instant in-place
+        precomputed by the streaming worker, so this is an instant in-place
         update. Chunks that stream in after this point pick up the new
         state automatically via _on_chunk_ready's active_normals selection.
         """
@@ -849,15 +868,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             cache_entries = self._chunk_normal_cache.get(cell)
             if not cache_entries or len(cache_entries) != len(vao_list):
                 continue
-            for (vao, vbo, mat_name, texture), (cached_mat, positions, uvs, smooth_n, flat_n) in zip(
+            for (vao, vbo, mat_name, texture), (cached_mat, smooth_bytes, flat_bytes) in zip(
                     vao_list, cache_entries):
-                active_normals = smooth_n if smooth else flat_n
-                n = len(positions)
-                interleaved = np.empty((n, 8), dtype=np.float32)
-                interleaved[:, 0:3] = positions
-                interleaved[:, 3:5] = uvs
-                interleaved[:, 5:8] = active_normals
-                vbo.write(interleaved.tobytes())
+                vbo.write(smooth_bytes if smooth else flat_bytes)
 
     def _buttons_locked_for_loading(self) -> bool:
         """True while map loading should disable the right-side button block."""
@@ -1184,7 +1197,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.world.update(self.camera.position.astype(np.float32))
         self.world.drain_ready_chunks(
             self._on_chunk_ready, self._on_chunk_unload,
-            max_per_frame=6, time_budget_ms=3.0,
+            max_per_frame=self._upload_chunks_per_frame,
+            time_budget_ms=self._upload_time_budget_ms,
         )
         streaming_ms = (time.perf_counter() - t0) * 1000.0
 

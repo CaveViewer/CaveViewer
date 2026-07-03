@@ -132,8 +132,20 @@ _ADVANCED_SETTING_FIELDS = (
     {
         "key": "io_reserved_cpus",
         "env_var": "CAVEVIEWER_IO_RESERVED_CPUS",
-            "label": "CPU cores to keep free",
+        "label": "CPU cores to keep free",
         "hint": "How many CPU cores CaveViewer should avoid using for streaming workers.",
+    },
+    {
+        "key": "upload_chunks_per_frame",
+        "env_var": "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
+        "label": "Chunk uploads per frame",
+        "hint": "Ready chunks to upload to the GPU each frame. Use 1 for smoother streaming.",
+    },
+    {
+        "key": "upload_time_budget_ms",
+        "env_var": "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
+        "label": "Upload budget (ms)",
+        "hint": "Soft per-frame budget for chunk uploads. A single large chunk can exceed it.",
     },
 )
 
@@ -149,6 +161,8 @@ def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
         "memory_target_percent": "12",
         "io_reserved_cpus": "3",
         "io_workers": str(max(1, logical_cpus - 3)),
+        "upload_chunks_per_frame": "1",
+        "upload_time_budget_ms": "3.0",
     }
     return {
         key: (normalized.get(key, "") or defaults[key])
@@ -195,7 +209,12 @@ def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | Non
             return False, "Streaming memory target must be between 1 and 80 percent.", normalized
         normalized["memory_target_percent"] = f"{memory_value:g}"
 
-    for key, label in (("io_workers", "Worker count"), ("io_reserved_cpus", "CPUs to leave free")):
+    integer_fields = (
+        ("io_workers", "Worker count", 1, None),
+        ("io_reserved_cpus", "CPUs to leave free", 0, None),
+        ("upload_chunks_per_frame", "Chunk uploads per frame", 1, 16),
+    )
+    for key, label, minimum, maximum in integer_fields:
         text = normalized[key]
         if not text:
             continue
@@ -203,11 +222,21 @@ def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | Non
             int_value = int(text)
         except ValueError:
             return False, f"{label} must be a whole number.", normalized
-        if key == "io_workers" and int_value < 1:
-            return False, "Streaming worker count must be at least 1.", normalized
-        if key == "io_reserved_cpus" and int_value < 0:
-                return False, "CPU cores to keep free cannot be negative.", normalized
+        if int_value < minimum:
+            return False, f"{label} must be at least {minimum}.", normalized
+        if maximum is not None and int_value > maximum:
+            return False, f"{label} must be no more than {maximum}.", normalized
         normalized[key] = str(int_value)
+
+    upload_budget_text = normalized["upload_time_budget_ms"]
+    if upload_budget_text:
+        try:
+            upload_budget_value = float(upload_budget_text)
+        except ValueError:
+            return False, "Upload budget must be a number between 0.5 and 50.", normalized
+        if upload_budget_value < 0.5 or upload_budget_value > 50.0:
+            return False, "Upload budget must be between 0.5 and 50 ms.", normalized
+        normalized["upload_time_budget_ms"] = f"{upload_budget_value:g}"
 
     return True, None, normalized
 

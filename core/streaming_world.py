@@ -296,6 +296,7 @@ class StreamingWorld:
 
             try:
                 data = chunker.load_chunk_file(self.cache_dir, cell)
+                chunker.prepare_chunk_upload_groups(data)
                 if self.on_decode_textures is not None:
                     try:
                         self.on_decode_textures(data)

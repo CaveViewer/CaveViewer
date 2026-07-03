@@ -259,6 +259,14 @@ You can configure CaveViewer behavior through environment variables without edit
 - `CAVEVIEWER_IO_RESERVED_CPUS`
   CPU cores to reserve when `CAVEVIEWER_IO_WORKERS` is not explicitly set.
 
+- `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME`
+  Maximum number of ready chunks to upload to the GPU per frame. Default: `1`.
+  Lower values favor smooth frame pacing; higher values can catch up faster after large teleports.
+
+- `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS`
+  Soft per-frame time budget for uploading ready chunks. Default: `3.0`.
+  A single large chunk can still exceed this because upload work cannot be interrupted mid-chunk.
+
 - `CAVEVIEWER_CHUNK_BUILD_WORKERS`
   Worker thread count for writing chunk files during cache build/import.
 
@@ -272,6 +280,7 @@ Runtime tuning examples:
 export CAVEVIEWER_CHUNK_SIZE_METERS=16
 export CAVEVIEWER_MEMORY_UTILIZATION_TARGET=20
 export CAVEVIEWER_IO_WORKERS=4
+export CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1
 ./run_caveviewer.sh
 ```
 
@@ -280,6 +289,7 @@ export CAVEVIEWER_IO_WORKERS=4
 $env:CAVEVIEWER_CHUNK_SIZE_METERS = "16"
 $env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "20"
 $env:CAVEVIEWER_IO_WORKERS = "4"
+$env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
 python caveviewer.py
 ```
 
