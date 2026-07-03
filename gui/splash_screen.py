@@ -738,10 +738,18 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             dialog_h = dialog.winfo_reqheight()
             screen_w = dialog.winfo_screenwidth()
             screen_h = dialog.winfo_screenheight()
-            offset_x = root.winfo_rootx() + 96
-            offset_y = root.winfo_rooty() + 72
-            clamped_x = max(8, min(offset_x, screen_w - dialog_w - 8))
-            clamped_y = max(8, min(offset_y, screen_h - dialog_h - 8))
+            parent_x = root.winfo_rootx()
+            parent_y = root.winfo_rooty()
+            parent_w = root.winfo_width()
+            # Keep the dialog near the splash window's upper-right corner,
+            # but let it protrude past the right edge by a fixed amount so
+            # the overlap reads clearly on every platform.
+            protrusion_x = 72
+            inset_y = 40
+            desired_x = parent_x + parent_w - dialog_w + protrusion_x
+            desired_y = parent_y + inset_y
+            clamped_x = max(8, min(desired_x, screen_w - dialog_w - 8))
+            clamped_y = max(8, min(desired_y, screen_h - dialog_h - 8))
             dialog.geometry(f"+{clamped_x}+{clamped_y}")
         except Exception:
             pass
