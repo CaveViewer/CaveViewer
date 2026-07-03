@@ -250,7 +250,7 @@ class Minimap:
 
         x0, y0, x1, y1 = self._panel_rect_px(window_size)
 
-        add_quad(x0, y0, x1, y1, (0.10, 0.12, 0.16, 0.72))
+        add_quad(x0, y0, x1, y1, (0.06, 0.07, 0.10, 0.88))
 
         cell_px_size = self.CELL_PIXEL_SIZE
         for (cx, cz) in self.occupied_xz:
@@ -260,11 +260,12 @@ class Minimap:
             half = cell_px_size / 2.0
             add_quad(px - half, py - half, px + half, py + half, (0.45, 0.52, 0.64, 0.85))
 
-        border = 2
-        add_quad(x0, y0, x1, y0 + border, (0.56, 0.69, 0.92, 0.95))
-        add_quad(x0, y1 - border, x1, y1, (0.56, 0.69, 0.92, 0.95))
-        add_quad(x0, y0, x0 + border, y1, (0.56, 0.69, 0.92, 0.95))
-        add_quad(x1 - border, y0, x1, y1, (0.56, 0.69, 0.92, 0.95))
+        border = 1.5
+        border_color = (0.42, 0.54, 0.72, 0.70)
+        add_quad(x0, y0, x1, y0 + border, border_color)
+        add_quad(x0, y1 - border, x1, y1, border_color)
+        add_quad(x0, y0, x0 + border, y1, border_color)
+        add_quad(x1 - border, y0, x1, y1, border_color)
 
         return np.array(verts, dtype=np.float32).tobytes(), len(verts)
 

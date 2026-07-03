@@ -1392,6 +1392,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.stats_readout.render(
             self.wnd.size, minimap_x0, readout_bottom_y,
             fps=instantaneous_fps, chunks_loaded=world_stats["loaded"], chunks_pending=world_stats["pending"],
+            panel_width=minimap_x1 - minimap_x0,
         )
 
         self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
