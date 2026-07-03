@@ -21,6 +21,7 @@ import os
 import threading
 import queue
 import time
+import ctypes
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -32,6 +33,67 @@ from core.logging_utils import get_logger
 
 
 _LOG = get_logger("StreamingWorld")
+
+
+def _detect_total_ram_bytes() -> int:
+    """Best-effort total physical RAM detection without extra dependencies."""
+    try:
+        if os.name == "nt":
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return int(stat.ullTotalPhys)
+            return 8 * 1024 * 1024 * 1024
+
+        if hasattr(os, "sysconf"):
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            pages = os.sysconf("SC_PHYS_PAGES")
+            if isinstance(page_size, int) and isinstance(pages, int) and page_size > 0 and pages > 0:
+                return int(page_size * pages)
+    except Exception:
+        return 8 * 1024 * 1024 * 1024
+
+    return 8 * 1024 * 1024 * 1024
+
+
+def _parse_memory_target_fraction(raw_value: str | None) -> float:
+    """
+    Parse memory target from env.
+
+    Accepts either fraction (0.10) or percent-style (10, 25, 40).
+    Returns a conservative default when unset/invalid.
+    """
+    conservative_default = 0.12
+    if raw_value is None:
+        return conservative_default
+
+    text = raw_value.strip()
+    if not text:
+        return conservative_default
+
+    try:
+        value = float(text)
+    except ValueError:
+        return conservative_default
+
+    if value > 1.0:
+        value = value / 100.0
+
+    # Guardrails: allow explicit tuning but keep pathological values out.
+    return max(0.01, min(0.80, value))
 
 
 @dataclass
@@ -95,6 +157,13 @@ class StreamingWorld:
             tuple(int(x) for x in cell_str.split("_"))
             for cell_str in self.manifest["chunks"]
         }
+        self._last_wanted_cells: set[tuple[int, int, int]] = set()
+
+        target_env = os.environ.get("CAVEVIEWER_MEMORY_UTILIZATION_TARGET")
+        self._memory_target_fraction = _parse_memory_target_fraction(target_env)
+        self._total_ram_bytes = _detect_total_ram_bytes()
+        self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes()
+        self._configure_chunk_budget_from_memory_target()
 
         self.loaded_cells: set[tuple[int, int, int]] = set()
         self._pending: set[tuple[int, int, int]] = set()
@@ -131,6 +200,54 @@ class StreamingWorld:
 
         self._last_camera_cell: Optional[tuple[int, int, int]] = None
         self._last_load_radius: Optional[int] = None
+
+    def _estimate_chunk_ram_bytes(self) -> int:
+        """Estimate in-RAM cost per loaded chunk from cache chunk file sizes."""
+        chunks_dir = os.path.join(self.cache_dir, chunker.CHUNKS_DIRNAME)
+        chunk_keys = list(self.manifest.get("chunks", {}).keys())
+        if not chunk_keys:
+            return 2 * 1024 * 1024
+
+        sample_limit = min(128, len(chunk_keys))
+        sampled_sizes: list[int] = []
+        for cell_str in chunk_keys[:sample_limit]:
+            path = os.path.join(chunks_dir, f"{cell_str}.bin")
+            try:
+                size = os.path.getsize(path)
+                if size > 0:
+                    sampled_sizes.append(size)
+            except OSError:
+                continue
+
+        if not sampled_sizes:
+            return 2 * 1024 * 1024
+
+        sampled_sizes.sort()
+        median_size = sampled_sizes[len(sampled_sizes) // 2]
+        # Keep conservative headroom for numpy arrays, Python object overhead,
+        # and GPU-side residency associated with a loaded chunk.
+        overhead_multiplier = 6.0
+        return max(int(median_size * overhead_multiplier), 512 * 1024)
+
+    def _configure_chunk_budget_from_memory_target(self) -> None:
+        """Derive max_loaded_chunks from memory target and estimated chunk footprint."""
+        if self._estimated_chunk_ram_bytes <= 0:
+            return
+
+        budget_bytes = int(self._total_ram_bytes * self._memory_target_fraction)
+        budget_chunks = max(1, budget_bytes // self._estimated_chunk_ram_bytes)
+        budget_chunks = min(budget_chunks, len(self.available_cells))
+
+        # Apply the memory-derived budget directly so env tuning can both
+        # raise and lower residency as intended.
+        self.config.max_loaded_chunks = int(budget_chunks)
+        _LOG.info(
+            "Memory target %.0f%% of %.1f GB => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
+            self._memory_target_fraction * 100.0,
+            self._total_ram_bytes / (1024 ** 3),
+            self.config.max_loaded_chunks,
+            self._estimated_chunk_ram_bytes / (1024 ** 2),
+        )
 
     def shutdown(self):
         self._stop_event.set()
@@ -214,6 +331,7 @@ class StreamingWorld:
 
         load_r = self.config.load_radius_cells
         wanted = self._cells_in_radius(cam_cell, load_r) & self.available_cells
+        self._last_wanted_cells = wanted
 
         with self._lock:
             to_request = wanted - self.loaded_cells - self._pending
@@ -323,6 +441,37 @@ class StreamingWorld:
                     self.loaded_cells.discard(cell)
                 on_chunk_unload(cell)
             self._cells_to_unload_next_drain = set()
+
+        # Hard memory residency cap: if loaded chunk count exceeds budget,
+        # evict farthest chunks first (prefer those outside the immediate
+        # wanted set) until within max_loaded_chunks.
+        with self._lock:
+            loaded_count = len(self.loaded_cells)
+            # Never evict below the current wanted set; that causes chunk
+            # thrash and repeated reloading while the camera is stationary.
+            effective_cap = max(self.config.max_loaded_chunks, len(self._last_wanted_cells))
+            over_budget = loaded_count - effective_cap
+            if over_budget > 0:
+                cam_cell = getattr(self, "_last_cam_cell_for_priority", None)
+                if cam_cell is not None:
+                    preferred = [c for c in self.loaded_cells if c not in self._last_wanted_cells]
+                    fallback = [c for c in self.loaded_cells if c in self._last_wanted_cells]
+                    preferred.sort(key=lambda c: self._cell_distance_sq(c, cam_cell), reverse=True)
+                    fallback.sort(key=lambda c: self._cell_distance_sq(c, cam_cell), reverse=True)
+                    eviction_order = preferred + fallback
+                else:
+                    eviction_order = list(self.loaded_cells)
+
+                to_evict = eviction_order[:over_budget]
+                for cell in to_evict:
+                    self.loaded_cells.discard(cell)
+
+                evicted_cells = to_evict
+            else:
+                evicted_cells = []
+
+        for cell in evicted_cells:
+            on_chunk_unload(cell)
 
     def stats(self) -> dict:
         return {

@@ -241,6 +241,12 @@ You can configure CaveViewer behavior through environment variables without edit
   Chunk size used when building a new cache. Default: `8.0`.
   For very large maps, try `16` or `24`.
 
+- `CAVEVIEWER_MEMORY_UTILIZATION_TARGET`
+  Target RAM share used to derive runtime chunk residency (`max_loaded_chunks`).
+  Conservative default: `12%` of detected physical RAM.
+  Accepts either fraction (`0.12`) or percent-style (`12`, `25`).
+  This is not an absolute GB value.
+
 - `CAVEVIEWER_IO_WORKERS`
   Runtime chunk-load worker thread count.
   Recommended starting range for very large maps on Windows: `2` to `6` (try `4` first).
@@ -259,6 +265,7 @@ Runtime tuning examples:
 ```bash
 # macOS / Linux: large-map runtime tuning
 export CAVEVIEWER_CHUNK_SIZE_METERS=16
+export CAVEVIEWER_MEMORY_UTILIZATION_TARGET=20
 export CAVEVIEWER_IO_WORKERS=4
 ./run_caveviewer.sh
 ```
@@ -266,6 +273,7 @@ export CAVEVIEWER_IO_WORKERS=4
 ```powershell
 # Windows PowerShell: large-map runtime tuning
 $env:CAVEVIEWER_CHUNK_SIZE_METERS = "16"
+$env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "20"
 $env:CAVEVIEWER_IO_WORKERS = "4"
 python caveviewer.py
 ```
