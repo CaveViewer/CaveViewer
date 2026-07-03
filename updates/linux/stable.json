@@ -1,10 +1,10 @@
 {
-  "latest_version": "1.0.24",
-  "download_url": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.24/CaveViewer-1.0.24-x86_64.AppImage",
-  "download_size_bytes": 48345681,
-  "download_url_linux_appimage": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.24/CaveViewer-1.0.24-x86_64.AppImage",
-  "download_size_bytes_linux_appimage": 48345681,
-  "release_notes": "Release 1.0.24",
-  "sha256": "3db5eb3a7bb832347c0bed5981680b5003c3ee5360f34a2bef0d16f3efb50a61",
-  "sha256_linux_appimage": "3db5eb3a7bb832347c0bed5981680b5003c3ee5360f34a2bef0d16f3efb50a61"
+  "latest_version": "1.0.25",
+  "download_url": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.25/CaveViewer-1.0.25-x86_64.AppImage",
+  "download_size_bytes": 48350725,
+  "download_url_linux_appimage": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.25/CaveViewer-1.0.25-x86_64.AppImage",
+  "download_size_bytes_linux_appimage": 48350725,
+  "release_notes": "Release 1.0.25",
+  "sha256": "1495fe9a1cd4a77ca45dc088d5af4b5224c684fac6ac487f83fc1365758d293e",
+  "sha256_linux_appimage": "1495fe9a1cd4a77ca45dc088d5af4b5224c684fac6ac487f83fc1365758d293e"
 }
