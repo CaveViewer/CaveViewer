@@ -738,8 +738,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             dialog_h = dialog.winfo_reqheight()
             screen_w = dialog.winfo_screenwidth()
             screen_h = dialog.winfo_screenheight()
-            offset_x = root.winfo_rootx() + 36
-            offset_y = root.winfo_rooty() + 48
+            offset_x = root.winfo_rootx() + 96
+            offset_y = root.winfo_rooty() + 72
             clamped_x = max(8, min(offset_x, screen_w - dialog_w - 8))
             clamped_y = max(8, min(offset_y, screen_h - dialog_h - 8))
             dialog.geometry(f"+{clamped_x}+{clamped_y}")
