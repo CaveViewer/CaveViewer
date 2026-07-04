@@ -146,7 +146,16 @@ mkdir -p \
 cp -a "$app_dir/." "$appdir/usr/lib/caveviewer/"
 icon_hicolor_dir="$appdir/usr/share/icons/hicolor"
 icon_root="$appdir/caveviewer.png"
-icon_python="${CAVEVIEWER_LINUX_BUILD_VENV:-}/bin/python"
+linux_arch_tag=""
+case "$(uname -m)" in
+  x86_64) linux_arch_tag="amd64" ;;
+  aarch64|arm64) linux_arch_tag="arm64" ;;
+esac
+linux_venv_default="$repo_root/.venv-linux-build"
+if [ -n "$linux_arch_tag" ]; then
+  linux_venv_default="$repo_root/.venv-linux-build-$linux_arch_tag"
+fi
+icon_python="${CAVEVIEWER_LINUX_BUILD_VENV:-$linux_venv_default}/bin/python"
 if [ -x "$icon_python" ]; then
   "$icon_python" -c '
 import pathlib
