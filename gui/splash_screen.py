@@ -956,6 +956,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         _apply_advanced_settings_to_env(advanced_settings)
 
         dialog = tk.Toplevel(root)
+        dialog.withdraw()
         dialog.title("Advanced Settings")
         dialog.configure(bg=_BG_COLOR)
         dialog.resizable(False, False)
@@ -1198,6 +1199,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         dialog.bind("<Escape>", lambda _event: on_cancel())
         dialog.bind("<Return>", lambda _event: on_apply())
         dialog.update_idletasks()
+        geometry_applied = False
         try:
             root.update_idletasks()
             dialog_w = max(dialog.winfo_reqwidth(), _ADVANCED_DIALOG_MIN_WIDTH)
@@ -1220,8 +1222,13 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             clamped_y = max(8, min(desired_y, screen_h - 328))
             dialog_h = min(dialog_h, max(320, screen_h - clamped_y - 8))
             dialog.geometry(f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}")
+            geometry_applied = True
         except Exception:
             pass
+        if not geometry_applied:
+            dialog.geometry("+%d+%d" % (root.winfo_rootx() + 24, root.winfo_rooty() + 24))
+        dialog.deiconify()
+        dialog.lift(root)
         dialog.wait_visibility()
         dialog.grab_set()
         apply_button.focus_set()
