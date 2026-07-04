@@ -26,9 +26,64 @@ work_dir="$repo_root/build/pyinstaller"
 
 # python-build-standalone: Python binaries compiled against glibc 2.17 so the
 # bundled libpython3.12.so won't require GLIBC_2.38 on older distros.
-# Update these when upgrading Python: https://github.com/astral-sh/python-build-standalone/releases
-PBS_PYTHON_VERSION="3.12.10"
-PBS_TAG="20250612"
+# Keep this on the Python series we support, but discover the exact patch
+# release from GitHub so a stale filename does not break CI release builds.
+# Override for reproducible/debug builds with:
+#   CAVEVIEWER_STANDALONE_PYTHON_SERIES=3.12
+#   CAVEVIEWER_STANDALONE_PYTHON_TAG=20260623
+PBS_PYTHON_SERIES="${CAVEVIEWER_STANDALONE_PYTHON_SERIES:-3.12}"
+PBS_TAG="${CAVEVIEWER_STANDALONE_PYTHON_TAG:-latest}"
+
+resolve_portable_python_asset() {
+  local arch="$1"
+
+  python3 - "$arch" "$PBS_PYTHON_SERIES" "$PBS_TAG" <<'PY'
+import json
+import re
+import sys
+import urllib.error
+import urllib.request
+
+arch, python_series, tag = sys.argv[1:4]
+base_url = "https://api.github.com/repos/astral-sh/python-build-standalone/releases"
+api_url = f"{base_url}/latest" if tag == "latest" else f"{base_url}/tags/{tag}"
+
+try:
+    with urllib.request.urlopen(api_url, timeout=30) as response:
+        release = json.load(response)
+except urllib.error.HTTPError as exc:
+    print(f"Error: python-build-standalone release lookup failed: HTTP {exc.code} {api_url}", file=sys.stderr)
+    sys.exit(1)
+except Exception as exc:
+    print(f"Error: python-build-standalone release lookup failed: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+pattern = re.compile(
+    rf"^cpython-{re.escape(python_series)}\.\d+\+\d+-"
+    rf"{re.escape(arch)}-install_only\.tar\.gz$"
+)
+
+matches = []
+for asset in release.get("assets", []):
+    name = asset.get("name", "")
+    url = asset.get("browser_download_url", "")
+    if pattern.match(name) and url:
+        matches.append((name, url))
+
+if not matches:
+    release_name = release.get("tag_name") or tag
+    print(
+        "Error: no python-build-standalone asset matched "
+        f"Python {python_series}, arch {arch}, release {release_name}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+matches.sort()
+print(matches[-1][0])
+print(matches[-1][1])
+PY
+}
 
 # Download (or reuse cached) a portable Python binary.
 # Prints the path to the python3 executable.
@@ -49,10 +104,12 @@ setup_portable_python() {
     return 0
   fi
 
-  local tarball="cpython-${PBS_PYTHON_VERSION}+${PBS_TAG}-${arch}-install_only.tar.gz"
-  local url="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${tarball}"
+  local asset_info tarball url
+  asset_info="$(resolve_portable_python_asset "$arch")"
+  tarball="$(printf '%s\n' "$asset_info" | sed -n '1p')"
+  url="$(printf '%s\n' "$asset_info" | sed -n '2p')"
 
-  echo "Downloading portable Python ${PBS_PYTHON_VERSION} (glibc 2.17 compatible)..." >&2
+  echo "Downloading portable Python ${tarball} (glibc 2.17 compatible)..." >&2
   mkdir -p "$cache_dir"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL --progress-bar -o "$cache_dir/$tarball" "$url"
@@ -61,8 +118,16 @@ setup_portable_python() {
   else
     echo "Error: curl or wget is required to download standalone Python."; exit 1
   fi
+  if [ ! -s "$cache_dir/$tarball" ]; then
+    echo "Error: downloaded standalone Python tarball is missing or empty: $cache_dir/$tarball"
+    exit 1
+  fi
   tar -xzf "$cache_dir/$tarball" -C "$cache_dir"
   rm "$cache_dir/$tarball"
+  if [ ! -x "$python_bin" ]; then
+    echo "Error: standalone Python extraction did not produce: $python_bin"
+    exit 1
+  fi
   echo "$python_bin"
 }
 
