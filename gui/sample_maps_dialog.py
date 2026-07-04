@@ -16,6 +16,9 @@ and the glue that drives the other one.
 from __future__ import annotations
 
 import os
+import sys
+import threading
+import time
 
 _LAST_SAMPLE_MAPS_DIR_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last_sample_maps_dir")
 
@@ -36,7 +39,7 @@ def show_sample_maps_dialog(parent, install_dir):
     import tkinter as tk
     from tkinter import messagebox, filedialog
     from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
-        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_FG, _BORDER_COLOR
+        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_FG, _BORDER_COLOR, _validate_selected_map_folder
     from gui.sample_maps import (
         fetch_sample_map_catalog, is_sample_map_already_downloaded,
         download_and_extract_sample_map, local_sample_map_path,
@@ -74,9 +77,36 @@ def show_sample_maps_dialog(parent, install_dir):
 
     list_frame = tk.Frame(dialog, bg=_BG_COLOR)
 
-    dialog.update()
+    # Fetch the catalog on a background thread so the loading indicator can
+    # actually animate. fetch_sample_map_catalog() makes a network request
+    # that can take several seconds; running it inline would freeze the UI
+    # and leave the "Loading..." text static with no sign of progress.
+    fetch_holder = {}
 
-    catalog, error = fetch_sample_map_catalog()
+    def _fetch_worker():
+        fetch_holder["result"] = fetch_sample_map_catalog()
+
+    threading.Thread(target=_fetch_worker, daemon=True).start()
+
+    _spinner_frames = "|/-\\"
+    _spinner_i = 0
+    # Keep the indicator up for a short minimum so a fast (cached) fetch does
+    # not flash the loading screen for a fraction of a second before the list
+    # appears -- a brief, steady spinner reads better than a flicker.
+    _min_spinner_seconds = 0.6
+    _spinner_start = time.perf_counter()
+    while ("result" not in fetch_holder
+           or (time.perf_counter() - _spinner_start) < _min_spinner_seconds):
+        if not dialog.winfo_exists():
+            return selected_folder[0]
+        status_label.config(
+            text=f"Loading available maps  {_spinner_frames[_spinner_i % len(_spinner_frames)]}"
+        )
+        _spinner_i += 1
+        dialog.update()
+        time.sleep(0.12)
+
+    catalog, error = fetch_holder["result"]
 
     status_label.destroy()
 
@@ -133,7 +163,7 @@ def show_sample_maps_dialog(parent, install_dir):
     dialog.geometry(f"{window_w}x{final_height}")
     _center_over_parent(dialog, parent, window_w, final_height)
 
-    list_frame.pack(fill="both", expand=True, padx=20)
+    list_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
     # Only a small, fixed set of sample maps is offered, so the list is
     # rendered directly with no scrolling. Rows are packed straight into
@@ -150,6 +180,7 @@ def show_sample_maps_dialog(parent, install_dir):
     # Dictionary to track progress bars and buttons for each sample
     progress_bars = {}
     action_buttons = {}
+    detail_labels = {}
     downloaded_paths = {}  # Store result_path after download
 
     # Resolve the last-used save directory once, up front. Doing this here
@@ -159,14 +190,7 @@ def show_sample_maps_dialog(parent, install_dir):
     # chooser from appearing after the button is pressed.
     initial_save_dir = [_load_last_sample_maps_dir() or install_dir]
 
-    def on_pick(sample):
-        already_have = is_sample_map_already_downloaded(install_dir, sample)
-
-        if already_have:
-            selected_folder[0] = local_sample_map_path(install_dir, sample)
-            dialog.destroy()
-            return
-
+    def _download_flow(sample):
         if sample.download_url is None:
             messagebox.showinfo(
                 "Sample Maps",
@@ -211,7 +235,7 @@ def show_sample_maps_dialog(parent, install_dir):
             result_path = download_and_extract_sample_map(save_dir, sample, progress_cb=on_progress)
         except Exception as e:
             progress_bar_canvas.pack_forget()
-            action_buttons[sample.display_name].pack(side="right", padx=14, pady=10)
+            action_buttons[sample.display_name].pack(side="right", padx=(8, 16), pady=12)
             messagebox.showerror(
                 "Download Failed",
                 f"Couldn't download {sample.display_name}:\n\n{e}",
@@ -225,23 +249,109 @@ def show_sample_maps_dialog(parent, install_dir):
         
         # Update button text to "Open Map", change command, and show it
         action_btn = action_buttons[sample.display_name]
-        action_btn.config(
-            text="Open",
-            command=lambda sn=sample.display_name, rp=result_path: on_open_map(sn, rp)
+        _set_action_button(
+            action_btn, "Open",
+            lambda sn=sample.display_name, rp=result_path: on_open_map(sn, rp),
         )
-        action_btn.pack(side="right", padx=14, pady=10)
+        action_btn.pack(side="right", padx=(8, 16), pady=12)
 
     def on_open_map(sample_name, result_path):
         selected_folder[0] = result_path
         dialog.destroy()
 
+    def _make_action_button(parent, text, command, enabled=True):
+        # On macOS native tk.Button ignores bg/fg and renders as a gray
+        # Aqua button, so use a Label styled to match the amber Tk buttons
+        # used elsewhere. Other platforms honor tk.Button colors fine.
+        if sys.platform == "darwin":
+            btn = tk.Label(
+                parent, text=text, font=("Segoe UI", 10, "bold"),
+                bg=_BUTTON_BG if enabled else _BORDER_COLOR,
+                fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
+                width=10, anchor="center",
+                padx=8, pady=6,
+                cursor="hand2" if enabled else "arrow",
+                takefocus=enabled,
+            )
+            btn._cv_command = command
+            btn._cv_enabled = enabled
+
+            def _invoke(_event=None, _b=btn):
+                if getattr(_b, "_cv_enabled", False) and _b._cv_command:
+                    _b._cv_command()
+                return "break"
+
+            if enabled:
+                btn.bind("<Button-1>", _invoke)
+                btn.bind("<Return>", _invoke)
+                btn.bind("<space>", _invoke)
+                btn.bind("<Enter>", lambda _event, _b=btn: _b.config(bg="#d8b34d"))
+                btn.bind("<Leave>", lambda _event, _b=btn: _b.config(bg=_BUTTON_BG))
+            return btn
+
+        return tk.Button(
+            parent, text=text, command=command if enabled else None,
+            font=("Segoe UI", 10, "bold"),
+            bg=_BUTTON_BG if enabled else _BORDER_COLOR,
+            fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
+            activebackground=_BUTTON_BG, activeforeground=_BUTTON_FG,
+            relief="flat", borderwidth=0,
+            width=10,
+            padx=8, pady=6,
+            state="normal" if enabled else "disabled",
+            cursor="hand2" if enabled else "arrow",
+        )
+
+    def _set_action_button(btn, text, command):
+        if sys.platform == "darwin":
+            btn._cv_command = command
+            btn._cv_enabled = True
+            btn.config(text=text)
+        else:
+            btn.config(text=text, command=command)
+
+    def on_pick(sample):
+        sample_path = local_sample_map_path(install_dir, sample)
+
+        # Only treat the map as openable if its folder still contains a usable
+        # map. The folder can go stale between opening this dialog and clicking
+        # (moved or partially deleted), and is_sample_map_already_downloaded()
+        # only checks that the folder is non-empty -- not that it holds a real
+        # .glb / .obj+.mtl / cache. Validate the same way the splash screen's
+        # Open flow does so a broken folder shows a friendly message instead of
+        # crashing the viewer with "No supported model file found".
+        if is_sample_map_already_downloaded(install_dir, sample):
+            is_valid, error_message = _validate_selected_map_folder(sample_path)
+            if is_valid:
+                selected_folder[0] = sample_path
+                dialog.destroy()
+                return
+
+            messagebox.showwarning(
+                "Sample Maps",
+                f"{sample.display_name} can't be opened:\n\n{error_message}\n\n"
+                "Its files may have been moved or deleted. Download it again.",
+                parent=dialog,
+            )
+            detail_label = detail_labels.get(sample.display_name)
+            if detail_label is not None:
+                detail_label.config(text="Not downloaded")
+            action_btn = action_buttons.get(sample.display_name)
+            if action_btn is not None:
+                _set_action_button(action_btn, "Save to...", lambda s=sample: _download_flow(s))
+            return
+
+        _download_flow(sample)
+
     for sample in catalog:
         row = tk.Frame(rows_frame, bg=_PANEL_COLOR)
         row.pack(fill="x", pady=6)
 
-        # Create progress bar container with fixed height (reserves space always)
-        progress_bar_container = tk.Frame(row, bg=_PANEL_COLOR, height=16)
-        progress_bar_container.pack(fill="x", padx=0, pady=0)
+        # Thin progress strip reserved at the BOTTOM of the card so it never
+        # leaves an empty band above the map name; it only fills in during an
+        # active download.
+        progress_bar_container = tk.Frame(row, bg=_PANEL_COLOR, height=10)
+        progress_bar_container.pack(side="bottom", fill="x", padx=0, pady=0)
         progress_bar_container.pack_propagate(False)  # Maintain fixed height
         
         progress_bar_canvas = tk.Canvas(
@@ -257,10 +367,15 @@ def show_sample_maps_dialog(parent, install_dir):
         content_frame.pack(fill="both", expand=True)
 
         text_frame = tk.Frame(content_frame, bg=_PANEL_COLOR)
-        text_frame.pack(side="left", fill="both", expand=True, padx=(14, 8), pady=10)
+        text_frame.pack(side="left", fill="both", expand=True, padx=(16, 8), pady=12)
+
+        # Inner block packed with expand keeps the name + size vertically
+        # centered within the card rather than pinned to the top.
+        text_inner = tk.Frame(text_frame, bg=_PANEL_COLOR)
+        text_inner.pack(expand=True, anchor="w")
 
         tk.Label(
-            text_frame, text=sample.display_name, font=("Segoe UI", 11, "bold"),
+            text_inner, text=sample.display_name, font=("Segoe UI", 11, "bold"),
             fg=_SUBTITLE_COLOR, bg=_PANEL_COLOR, anchor="w",
         ).pack(anchor="w")
 
@@ -272,27 +387,32 @@ def show_sample_maps_dialog(parent, install_dir):
         else:
             detail_text = format_size(sample.size_bytes)
 
-        tk.Label(
-            text_frame, text=detail_text, font=("Segoe UI", 9),
+        detail_label = tk.Label(
+            text_inner, text=detail_text, font=("Segoe UI", 9),
             fg=_INSTRUCTION_COLOR, bg=_PANEL_COLOR, anchor="w",
-        ).pack(anchor="w")
+        )
+        detail_label.pack(anchor="w", pady=(2, 0))
+        detail_labels[sample.display_name] = detail_label
 
         btn_text = "Open" if already_have else "Save to..."
         btn_enabled = already_have or sample.download_url is not None
 
-        action_btn = tk.Button(
-            content_frame, text=btn_text, command=lambda s=sample: on_pick(s),
-            font=("Segoe UI", 10, "bold"),
-            bg=_BUTTON_BG if btn_enabled else _BORDER_COLOR,
-            fg=_BUTTON_FG if btn_enabled else _INSTRUCTION_COLOR,
-            activebackground=_BUTTON_BG, activeforeground=_BUTTON_FG,
-            relief="flat", borderwidth=0,
-            padx=16, pady=6,
-            state="normal" if btn_enabled else "disabled",
-            cursor="hand2" if btn_enabled else "arrow",
+        action_btn = _make_action_button(
+            content_frame, btn_text,
+            lambda s=sample: on_pick(s), enabled=btn_enabled,
         )
-        action_btn.pack(side="right", padx=14, pady=10)
+        action_btn.pack(side="right", padx=(8, 16), pady=12)
         action_buttons[sample.display_name] = action_btn
+
+    # Re-fit the window to the actual rendered content so there is no dead
+    # space below the cards, and nothing is clipped. Clearing the explicit
+    # geometry first forces winfo_reqheight() to report the true required
+    # height of the content rather than echoing the earlier fixed size.
+    dialog.geometry("")
+    dialog.update_idletasks()
+    fitted_height = min(dialog.winfo_reqheight(), max_height)
+    dialog.geometry(f"{window_w}x{fitted_height}")
+    _center_over_parent(dialog, parent, window_w, fitted_height)
 
     dialog.wait_window()
 
