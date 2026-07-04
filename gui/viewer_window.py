@@ -320,6 +320,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         # from the one-time-per-window setup above, so the exact same
         # logic can run again later when switching to a different map via
         # the OPEN button -- see load_new_map() / _teardown_current_map().
+        self.cache_dir = None
+        self.textures_dir = None
+        self.manifest = None
+        self.world = None
+        self.camera = None
+        self.minimap = None
+        self.texture_manager = None
         self._chunk_gpu_objects: dict[tuple, list] = {}
         # Per-chunk, per-material CPU-side data for instant SHADE toggle:
         # each entry holds (mat_name, positions, uvs, smooth_normals, flat_normals)
@@ -2074,7 +2081,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                     self.color_picker.hide()
                 return
 
-            minimap_target = self.minimap.world_xz_for_click(x, y, self.wnd.size)
+            minimap_target = None
+            if self._has_map_loaded and self.minimap is not None:
+                minimap_target = self.minimap.world_xz_for_click(x, y, self.wnd.size)
             if minimap_target is not None:
                 target_x, target_z = minimap_target
                 # Land at an actual occupied height near that X/Z, rather
