@@ -28,6 +28,7 @@ at the camera's center of attention for long.
 from __future__ import annotations
 
 import concurrent.futures
+import gc
 import json
 import os
 import struct
@@ -128,14 +129,29 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     if progress_cb:
         progress_cb("computing face centroids", 0.0)
 
-    tri_pos = mesh.positions[mesh.face_pos_idx]   # (Nf, 3, 3)
-    centroids = tri_pos.mean(axis=1)              # (Nf, 3)
-    cell_coords = np.floor(centroids / chunk_size).astype(np.int64)  # (Nf, 3)
+    n_faces = len(mesh.face_pos_idx)
+
+    # Avoid materializing tri_pos (Nf, 3, 3) and centroids (Nf, 3) for
+    # very large maps. For 100M+ faces those temporaries can cost many
+    # gigabytes. Compute each centroid axis directly from the three vertex
+    # index columns and store only the final chunk cell coordinate.
+    cell_coords = np.empty((n_faces, 3), dtype=np.int32)
+    face_pos_idx = mesh.face_pos_idx
+    inv_scaled_triangle = 1.0 / (3.0 * chunk_size)
+    for axis in range(3):
+        vertex_axis = mesh.positions[:, axis]
+        centroid_axis = (
+            vertex_axis[face_pos_idx[:, 0]]
+            + vertex_axis[face_pos_idx[:, 1]]
+            + vertex_axis[face_pos_idx[:, 2]]
+        ) * inv_scaled_triangle
+        cell_coords[:, axis] = np.floor(centroid_axis).astype(np.int32, copy=False)
+        if progress_cb:
+            progress_cb("computing face centroids", 0.03 * (axis + 1))
+    del face_pos_idx
 
     if progress_cb:
         progress_cb("grouping faces by cell", 0.1)
-
-    n_faces = len(mesh.face_pos_idx)
 
     # IMPORTANT: key by *unique material name*, not by MaterialRange index.
     # A single material (e.g. "tile_A") can appear in multiple separate
@@ -153,16 +169,28 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     for mr in mesh.material_ranges:
         face_material_id[mr.start_face:mr.end_face] = material_name_to_id[mr.material_name]
 
-    cell_min = cell_coords.min(axis=0)
-    shifted = cell_coords - cell_min
+    cell_min = cell_coords.min(axis=0).astype(np.int64)
     AXIS_BITS = 100_000
-    cell_key = (shifted[:, 0].astype(np.int64) * AXIS_BITS * AXIS_BITS
-                + shifted[:, 1].astype(np.int64) * AXIS_BITS
-                + shifted[:, 2].astype(np.int64))
-    combined_key = cell_key * (len(material_names) + 1) + (face_material_id.astype(np.int64) + 1)
+    shifted_axis = cell_coords[:, 0].astype(np.int64, copy=False) - cell_min[0]
+    cell_key = shifted_axis * (AXIS_BITS * AXIS_BITS)
+    shifted_axis = cell_coords[:, 1].astype(np.int64, copy=False) - cell_min[1]
+    shifted_axis *= AXIS_BITS
+    cell_key += shifted_axis
+    shifted_axis = cell_coords[:, 2].astype(np.int64, copy=False) - cell_min[2]
+    cell_key += shifted_axis
+    del cell_coords, shifted_axis
+    combined_key = cell_key
+    combined_key *= len(material_names) + 1
+    material_key = face_material_id.astype(np.int64, copy=False)
+    material_key += 1
+    combined_key += material_key
+    del cell_key, face_material_id, material_key
+    gc.collect()
 
     order = np.argsort(combined_key, kind="stable")
     sorted_keys = combined_key[order]
+    del combined_key
+    gc.collect()
 
     boundaries = np.nonzero(np.diff(sorted_keys))[0] + 1
     run_starts = np.concatenate(([0], boundaries))

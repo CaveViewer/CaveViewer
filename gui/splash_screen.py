@@ -114,11 +114,11 @@ _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
 _SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
 _ADVANCED_DIALOG_TWO_COLUMN = True
-_ADVANCED_DIALOG_WRAP = 440 if sys.platform == "win32" else 340
-_ADVANCED_DIALOG_ENTRY_WIDTH = 30 if sys.platform == "win32" else 22
+_ADVANCED_DIALOG_WRAP = 540 if sys.platform == "win32" else 340
+_ADVANCED_DIALOG_ENTRY_WIDTH = 36 if sys.platform == "win32" else 22
 _ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
-_ADVANCED_DIALOG_SECTION_GAP = 28 if sys.platform == "win32" else 18
-_ADVANCED_DIALOG_MIN_WIDTH = 940 if sys.platform == "win32" else 0
+_ADVANCED_DIALOG_SECTION_GAP = 36 if sys.platform == "win32" else 18
+_ADVANCED_DIALOG_MIN_WIDTH = 1160 if sys.platform == "win32" else 0
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
     "BottomLine Projects Scientific Dive Team and other volunteers.\n")
