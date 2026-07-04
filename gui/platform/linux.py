@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 
 from .base import ManualInstallResult
@@ -68,18 +69,26 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def updater_supported_modes(self) -> set[str]:
         return {"linux_app"}
 
+    def persist_downloaded_payload(self, temp_payload_path: str, download_url: str | None) -> str:
+        final_path = super().persist_downloaded_payload(temp_payload_path, download_url)
+        if final_path.lower().endswith(".appimage"):
+            current_mode = os.stat(final_path).st_mode
+            os.chmod(final_path, current_mode | 0o111)
+        return final_path
+
     def prepare_manual_install(self, payload_path: str) -> ManualInstallResult:
-        self._open_payload(payload_path)
+        self._open_payload_location(payload_path)
         return ManualInstallResult(mounted_payload_path=None, mounted_app_path=None)
 
     def launch_payload_for_mode(self, mode: str, payload_path: str, log_func) -> None:
         if mode != "linux_app":
             return super().launch_payload_for_mode(mode, payload_path, log_func)
-        self._open_payload(payload_path)
-        log_func(f"Opened payload for manual install: {payload_path}")
+        self._open_payload_location(payload_path)
+        log_func(f"Opened payload location for manual install: {payload_path}")
 
-    def _open_payload(self, payload_path: str) -> None:
-        subprocess.Popen(["xdg-open", payload_path])
+    def _open_payload_location(self, payload_path: str) -> None:
+        containing_dir = os.path.dirname(os.path.abspath(payload_path)) or os.path.expanduser("~")
+        subprocess.Popen(["xdg-open", containing_dir])
 
     def font_candidates(self) -> list[str]:
         """Return Linux-specific font file paths in priority order."""

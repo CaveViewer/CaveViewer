@@ -678,6 +678,18 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         update_state["busy"] = bool(is_busy)
         _set_link_enabled(not is_busy)
 
+    def _manual_install_success_message(payload_path: str) -> str:
+        if sys.platform.startswith("linux"):
+            return (
+                "Update downloaded to:\n"
+                f"{payload_path}\n"
+                "The containing folder was opened for manual installation."
+            )
+        return (
+            "Update downloaded and opened for manual installation:\n"
+            f"{payload_path}"
+        )
+
     def _on_download_complete(payload_path: str):
         update_state["downloaded_payload"] = payload_path
         _set_busy(False)
@@ -685,9 +697,14 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             manual_install = _PLATFORM_ADAPTER.prepare_manual_install(payload_path)
             update_state["mounted_payload"] = manual_install.mounted_payload_path
             update_state["mounted_app"] = manual_install.mounted_app_path
-            _show_update_panel("Update downloaded and opened for manual installation.", show_progress=False)
+            _show_update_panel(_manual_install_success_message(payload_path), show_progress=False)
         except Exception as e:
-            _show_update_panel(f"Update downloaded, but install could not start: {e}", show_progress=False)
+            _show_update_panel(
+                "Update downloaded to:\n"
+                f"{payload_path}\n"
+                f"Install could not start: {e}",
+                show_progress=False,
+            )
             update_action_row.pack(pady=(0, 2))
             close_install_button.config(text="Close app to install manually")
             close_install_button.pack(side="left", padx=(0, 8))
