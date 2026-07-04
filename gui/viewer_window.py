@@ -108,7 +108,7 @@ void main() {
 
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
-    title = f"{APP_NAME} {APP_VERSION}"
+    title = APP_NAME
     # Start larger on desktop platforms so the HELP overlay and right-side
     # controls have comfortable vertical room on first launch.
     # Use a 16:10 baseline (more vertical space than 16:9) while keeping
