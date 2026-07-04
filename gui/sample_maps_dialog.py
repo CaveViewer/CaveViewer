@@ -406,13 +406,18 @@ def show_sample_maps_dialog(parent, install_dir):
 
     # Re-fit the window to the actual rendered content so there is no dead
     # space below the cards, and nothing is clipped. Clearing the explicit
-    # geometry first forces winfo_reqheight() to report the true required
-    # height of the content rather than echoing the earlier fixed size.
+    # geometry first forces the winfo_req* calls to report the true required
+    # size of the content rather than echoing the earlier fixed size. Fitting
+    # the WIDTH (not just the height) matters on Windows, where larger font
+    # metrics make a long map name consume the row and push its button off
+    # the right edge at the hardcoded 460px width.
     dialog.geometry("")
     dialog.update_idletasks()
+    max_width = min(dialog.winfo_screenwidth() - 80, 760)
+    fitted_width = max(window_w, min(dialog.winfo_reqwidth(), max_width))
     fitted_height = min(dialog.winfo_reqheight(), max_height)
-    dialog.geometry(f"{window_w}x{fitted_height}")
-    _center_over_parent(dialog, parent, window_w, fitted_height)
+    dialog.geometry(f"{fitted_width}x{fitted_height}")
+    _center_over_parent(dialog, parent, fitted_width, fitted_height)
 
     dialog.wait_window()
 
