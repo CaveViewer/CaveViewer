@@ -1,10 +1,10 @@
 {
-  "latest_version": "1.0.33",
-  "download_url": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.33/CaveViewer-1.0.33.dmg",
-  "download_size_bytes": 27259319,
-  "download_url_macosx_dmg": "https://github.com/KernalPanic/CaveViewerPlus/releases/download/v1.0.33/CaveViewer-1.0.33.dmg",
-  "download_size_bytes_macosx_dmg": 27259319,
-  "release_notes": "Release 1.0.33",
-  "sha256": "1c49b9052aa8019fe6ef9f9c85c45147cc011ded263c65b48d6275e863fd2812",
-  "sha256_macosx_dmg": "1c49b9052aa8019fe6ef9f9c85c45147cc011ded263c65b48d6275e863fd2812"
+  "latest_version": "1.0.34",
+  "download_url": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.34/CaveViewer-1.0.34.dmg",
+  "download_size_bytes": 27826126,
+  "download_url_macosx_dmg": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.34/CaveViewer-1.0.34.dmg",
+  "download_size_bytes_macosx_dmg": 27826126,
+  "release_notes": "Release 1.0.34",
+  "sha256": "2f98cfd0819e64234eadbda2e414625c75bedea860d25892dd261122504bdd0e",
+  "sha256_macosx_dmg": "2f98cfd0819e64234eadbda2e414625c75bedea860d25892dd261122504bdd0e"
 }
