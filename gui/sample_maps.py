@@ -32,18 +32,33 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Optional
 
+from core.logging_utils import get_logger
 from gui.update_checker import download_update, make_ssl_context
 
 
-# Configuration for sample maps repository.
-# Sample maps are hosted at: https://github.com/KernalPanic/CaveViewer/releases/tag/sample-data
-_SAMPLE_MAPS_REPO = "KernalPanic/CaveViewer"
+_LOG = get_logger("SampleMaps")
 
-_SAMPLE_DATA_TAG = "sample-data"
-_TAGGED_RELEASE_API_URL = f"https://api.github.com/repos/{_SAMPLE_MAPS_REPO}/releases/tags/{_SAMPLE_DATA_TAG}"
+
+# Configuration for sample maps repository.
+# Sample maps are hosted by default at:
+# https://github.com/KernalPanic/CaveViewer/releases/tag/sample-data
+_DEFAULT_SAMPLE_MAPS_REPO = "KernalPanic/CaveViewer"
+_DEFAULT_SAMPLE_DATA_TAG = "sample-data"
+
+def _env_or_default(name: str, default: str) -> str:
+    value = os.environ.get(name, "").strip()
+    return value or default
+
+_SAMPLE_MAPS_REPO = _env_or_default("CAVEVIEWER_SAMPLE_MAPS_REPO", _DEFAULT_SAMPLE_MAPS_REPO)
+_SAMPLE_DATA_TAG = _env_or_default("CAVEVIEWER_SAMPLE_DATA_TAG", _DEFAULT_SAMPLE_DATA_TAG)
+_TAGGED_RELEASE_API_URL = _env_or_default(
+    "CAVEVIEWER_SAMPLE_MAPS_API_URL",
+    f"https://api.github.com/repos/{_SAMPLE_MAPS_REPO}/releases/tags/{_SAMPLE_DATA_TAG}",
+)
 _REQUEST_TIMEOUT_SECONDS = 8
 
 SAMPLE_MAPS_DIRNAME = "sample_maps"
+_SAMPLE_MAPS_CONFIG_LOGGED = False
 
 
 @dataclass
@@ -98,6 +113,8 @@ def fetch_sample_map_catalog():
     genuinely unusable, and even then they're shown (as "unavailable"),
     never silently dropped.
     """
+    _log_sample_maps_config_once()
+
     try:
         request = urllib.request.Request(
             _TAGGED_RELEASE_API_URL,
@@ -108,7 +125,7 @@ def fetch_sample_map_catalog():
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            error_msg = "No sample-data release found on the repository."
+            error_msg = f"No sample map release found for tag {_SAMPLE_DATA_TAG!r}."
         else:
             error_msg = f"GitHub returned an error (HTTP {e.code})."
         return _known_maps_with_no_download_info(), error_msg
@@ -149,6 +166,27 @@ def fetch_sample_map_catalog():
             results.append(SampleMapInfo(display_name=known.display_name, asset_name=known.asset_name))
 
     return results, None
+
+
+def _log_sample_maps_config_once() -> None:
+    global _SAMPLE_MAPS_CONFIG_LOGGED
+    if _SAMPLE_MAPS_CONFIG_LOGGED:
+        return
+
+    _SAMPLE_MAPS_CONFIG_LOGGED = True
+    _LOG.info(
+        "Sample map source env: CAVEVIEWER_SAMPLE_MAPS_API_URL=%r, "
+        "CAVEVIEWER_SAMPLE_MAPS_REPO=%r, CAVEVIEWER_SAMPLE_DATA_TAG=%r",
+        os.environ.get("CAVEVIEWER_SAMPLE_MAPS_API_URL"),
+        os.environ.get("CAVEVIEWER_SAMPLE_MAPS_REPO"),
+        os.environ.get("CAVEVIEWER_SAMPLE_DATA_TAG"),
+    )
+    _LOG.info(
+        "Sample map source resolved: api_url=%r, repo=%r, tag=%r",
+        _TAGGED_RELEASE_API_URL,
+        _SAMPLE_MAPS_REPO,
+        _SAMPLE_DATA_TAG,
+    )
 
 
 def local_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:

@@ -104,6 +104,46 @@ Notes:
 - `scripts/windows/setup.ps1` is designed to install prerequisites and set up a runnable local source environment.
 - `scripts/windows/launch.bat` is a launcher for the setup script.
 
+## Sample Map Source Overrides
+
+By default, the built-in sample maps dialog reads release assets from:
+
+- Repository: `KernalPanic/CaveViewer`
+- Release tag: `sample-data`
+
+For local development, you can point the sample maps dialog at a different source before launching the program. These settings are environment variables only; they are not exposed in the app UI.
+
+Precedence:
+
+1. `CAVEVIEWER_SAMPLE_MAPS_API_URL` uses a full release API URL directly.
+2. Otherwise, CaveViewer builds the GitHub release API URL from `CAVEVIEWER_SAMPLE_MAPS_REPO` and `CAVEVIEWER_SAMPLE_DATA_TAG`.
+3. If none are set, the defaults above are used.
+
+macOS/Linux example:
+
+```bash
+CAVEVIEWER_SAMPLE_MAPS_REPO="MyOrg/MyMaps" \
+CAVEVIEWER_SAMPLE_DATA_TAG="public-samples" \
+./run_caveviewer.sh
+```
+
+Windows PowerShell example:
+
+```powershell
+$env:CAVEVIEWER_SAMPLE_MAPS_REPO = "MyOrg/MyMaps"
+$env:CAVEVIEWER_SAMPLE_DATA_TAG = "public-samples"
+.\.venv-dev\Scripts\python caveviewer.py
+```
+
+Advanced direct API override:
+
+```bash
+CAVEVIEWER_SAMPLE_MAPS_API_URL="https://api.github.com/repos/MyOrg/MyMaps/releases/tags/public-samples" \
+./run_caveviewer.sh
+```
+
+The API response must be compatible with GitHub's release API shape, including an `assets` list with asset `name`, `browser_download_url`, and `size` fields.
+
 ## Updating Your Local Source Environment
 
 When the repository changes:

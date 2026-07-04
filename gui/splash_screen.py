@@ -133,7 +133,7 @@ _ADVANCED_DIALOG_SECTION_GAP = 44 if sys.platform == "win32" else 18
 _ADVANCED_DIALOG_MIN_WIDTH = 1320 if sys.platform == "win32" else 0
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
-    "BottomLine Projects Scientific Dive Team and other volunteers.\n")
+    "BottomLine Projects Scientific Dive Team and mr_v.\n")
 
 _ADVANCED_SETTING_FIELDS = (
     {

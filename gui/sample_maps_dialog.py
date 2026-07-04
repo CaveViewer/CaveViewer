@@ -23,6 +23,10 @@ import time
 _LAST_SAMPLE_MAPS_DIR_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last_sample_maps_dir")
 
 
+class _SampleMapDownloadCancelled(Exception):
+    pass
+
+
 def show_sample_maps_dialog(parent, install_dir):
     """
     Shows the sample maps list as a modal dialog over `parent` (the
@@ -46,12 +50,22 @@ def show_sample_maps_dialog(parent, install_dir):
     )
 
     selected_folder = [None]
+    dialog_closed = [False]
 
     dialog = tk.Toplevel(parent)
     dialog.title("Sample Maps")
     dialog.configure(bg=_BG_COLOR)
     dialog.resizable(False, False)
     dialog.transient(parent)
+
+    def _close_dialog():
+        dialog_closed[0] = True
+        try:
+            dialog.destroy()
+        except tk.TclError:
+            pass
+
+    dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
 
     # Size everything in scaled pixels so the dialog is physically comparable
     # to the DPI-scaled splash window rather than looking small on high-DPI
@@ -205,11 +219,27 @@ def show_sample_maps_dialog(parent, install_dir):
         mb = size_bytes / (1024 * 1024)
         return f"{mb:.0f} MB"
 
+    def _not_downloaded_detail_text(sample):
+        if sample.download_url is None:
+            return "Currently unavailable"
+        return format_size(sample.size_bytes)
+
     # Dictionary to track progress bars and buttons for each sample
     progress_bars = {}
     action_buttons = {}
     detail_labels = {}
     downloaded_paths = {}  # Store result_path after download
+
+    def _widget_exists(widget) -> bool:
+        if widget is None:
+            return False
+        try:
+            return bool(widget.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _dialog_exists() -> bool:
+        return not dialog_closed[0] and _widget_exists(dialog)
 
     # Resolve the last-used save directory once, up front. Doing this here
     # (rather than inside the "Save to..." click handler) keeps the click
@@ -242,28 +272,55 @@ def show_sample_maps_dialog(parent, install_dir):
 
         _save_last_sample_maps_dir(save_dir)
         initial_save_dir[0] = save_dir
+        if not _dialog_exists():
+            return
 
         # Hide button and show progress bar canvas (container already packed with fixed height)
-        action_buttons[sample.display_name].pack_forget()
+        action_btn = action_buttons[sample.display_name]
+        if not _widget_exists(action_btn):
+            return
         progress_bar_container, progress_bar_canvas, progress_bar = progress_bars[sample.display_name]
-        progress_bar_canvas.pack(fill="x", padx=14, pady=(6, 0))
-        # Force layout update to get accurate canvas width
-        dialog.update_idletasks()
+        if not _widget_exists(progress_bar_canvas):
+            return
+        try:
+            action_btn.pack_forget()
+            progress_bar_canvas.pack(fill="x", padx=14, pady=(6, 0))
+            # Force layout update to get accurate canvas width
+            dialog.update_idletasks()
+        except tk.TclError:
+            return
 
         def on_progress(downloaded, total):
+            if not _dialog_exists() or not _widget_exists(progress_bar_canvas):
+                raise _SampleMapDownloadCancelled()
             if total > 0:
-                frac = min(1.0, downloaded / total)
-                # Get the current width of the canvas (it fills the parent)
-                canvas_width = progress_bar_canvas.winfo_width()
-                if canvas_width > 1:  # winfo_width() returns 1 before widget is displayed
-                    progress_bar_canvas.coords(progress_bar, 0, 0, int(canvas_width * frac), 4)
-                progress_bar_canvas.update()
+                try:
+                    frac = min(1.0, downloaded / total)
+                    # Get the current width of the canvas (it fills the parent)
+                    canvas_width = progress_bar_canvas.winfo_width()
+                    if canvas_width > 1:  # winfo_width() returns 1 before widget is displayed
+                        progress_bar_canvas.coords(progress_bar, 0, 0, int(canvas_width * frac), 4)
+                    progress_bar_canvas.update()
+                    if not _dialog_exists():
+                        raise _SampleMapDownloadCancelled()
+                except tk.TclError:
+                    raise _SampleMapDownloadCancelled()
 
         try:
             result_path = download_and_extract_sample_map(save_dir, sample, progress_cb=on_progress)
         except Exception as e:
-            progress_bar_canvas.pack_forget()
-            action_buttons[sample.display_name].pack(side="right", padx=(8, 16), pady=12)
+            if isinstance(e, _SampleMapDownloadCancelled):
+                return
+            if not _dialog_exists():
+                return
+            try:
+                if _widget_exists(progress_bar_canvas):
+                    progress_bar_canvas.pack_forget()
+                action_btn = action_buttons.get(sample.display_name)
+                if _widget_exists(action_btn):
+                    action_btn.pack(side="right", padx=(8, 16), pady=12)
+            except tk.TclError:
+                return
             messagebox.showerror(
                 "Download Failed",
                 f"Couldn't download {sample.display_name}:\n\n{e}",
@@ -271,21 +328,54 @@ def show_sample_maps_dialog(parent, install_dir):
             )
             return
 
+        if not _dialog_exists():
+            return
+
         # Download succeeded - hide progress bar and show "Open Map" button
-        progress_bar_canvas.pack_forget()
+        try:
+            if _widget_exists(progress_bar_canvas):
+                progress_bar_canvas.pack_forget()
+        except tk.TclError:
+            return
         downloaded_paths[sample.display_name] = result_path
         
         # Update button text to "Open Map", change command, and show it
         action_btn = action_buttons[sample.display_name]
+        if not _widget_exists(action_btn):
+            return
         _set_action_button(
             action_btn, "Open",
-            lambda sn=sample.display_name, rp=result_path: on_open_map(sn, rp),
+            lambda s=sample, rp=result_path: on_open_map(s, rp),
         )
-        action_btn.pack(side="right", padx=(8, 16), pady=12)
+        try:
+            action_btn.pack(side="right", padx=(8, 16), pady=12)
+        except tk.TclError:
+            return
 
-    def on_open_map(sample_name, result_path):
+    def on_open_map(sample, result_path):
+        is_valid, error_message = _validate_selected_map_folder(result_path)
+        if is_valid:
+            selected_folder[0] = result_path
+            _close_dialog()
+            return
+
+        messagebox.showwarning(
+            "Sample Maps",
+            f"{sample.display_name} can't be opened:\n\n{error_message}\n\n"
+            "Its files may have been moved or deleted. Download it again.",
+            parent=dialog,
+        )
+        downloaded_paths.pop(sample.display_name, None)
+        detail_label = detail_labels.get(sample.display_name)
+        if detail_label is not None:
+            detail_label.config(text=_not_downloaded_detail_text(sample))
+        action_btn = action_buttons.get(sample.display_name)
+        if action_btn is not None:
+            _set_action_button(action_btn, "Save to...", lambda s=sample: _download_flow(s))
+
+    def _open_installed_sample(result_path):
         selected_folder[0] = result_path
-        dialog.destroy()
+        _close_dialog()
 
     def _make_action_button(parent, text, command, enabled=True):
         # On macOS native tk.Button ignores bg/fg and renders as a gray
@@ -351,8 +441,7 @@ def show_sample_maps_dialog(parent, install_dir):
         if is_sample_map_already_downloaded(install_dir, sample):
             is_valid, error_message = _validate_selected_map_folder(sample_path)
             if is_valid:
-                selected_folder[0] = sample_path
-                dialog.destroy()
+                _open_installed_sample(sample_path)
                 return
 
             messagebox.showwarning(
@@ -363,7 +452,7 @@ def show_sample_maps_dialog(parent, install_dir):
             )
             detail_label = detail_labels.get(sample.display_name)
             if detail_label is not None:
-                detail_label.config(text="Not downloaded")
+                detail_label.config(text=_not_downloaded_detail_text(sample))
             action_btn = action_buttons.get(sample.display_name)
             if action_btn is not None:
                 _set_action_button(action_btn, "Save to...", lambda s=sample: _download_flow(s))
@@ -410,10 +499,8 @@ def show_sample_maps_dialog(parent, install_dir):
         already_have = is_sample_map_already_downloaded(install_dir, sample)
         if already_have:
             detail_text = "Downloaded"
-        elif sample.download_url is None:
-            detail_text = "Currently unavailable"
         else:
-            detail_text = format_size(sample.size_bytes)
+            detail_text = _not_downloaded_detail_text(sample)
 
         detail_label = tk.Label(
             text_inner, text=detail_text, font=("Segoe UI", 9),
