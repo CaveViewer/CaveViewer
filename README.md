@@ -71,7 +71,7 @@ The Advanced Settings panel in the startup window acts as the advanced installer
 
 These values are validated in the UI, applied to environment variables for the current launch, and saved to a local settings file so they are reused next time.
 
-- Saved settings file: ~/.caveviewer_advanced_settings.json
+- Saved settings file: ~/.caveviewer/advanced_settings.json
 - Streaming section controls runtime chunk loading and upload behavior.
 - Map Parsing section controls cache-build/import behavior.
 

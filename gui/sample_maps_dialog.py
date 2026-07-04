@@ -20,7 +20,13 @@ import sys
 import threading
 import time
 
-_LAST_SAMPLE_MAPS_DIR_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last_sample_maps_dir")
+from gui.preferences import migrate_preference_file
+
+
+_LAST_SAMPLE_MAPS_DIR_FILE = migrate_preference_file(
+    "last_sample_maps_dir",
+    ".caveviewer_last_sample_maps_dir",
+)
 
 
 class _SampleMapDownloadCancelled(Exception):

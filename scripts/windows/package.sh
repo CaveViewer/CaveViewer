@@ -95,16 +95,18 @@ for relative_path in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
 				destination_path.parent.mkdir(parents=True, exist_ok=True)
 				shutil.copy2(source_path, destination_path)
 
-# Generated/updated branding assets may be present in a release workspace before
-# they have been committed. Copy the required runtime assets explicitly so the
-# Windows source bundle does not silently fall back to older tracked artwork.
-required_asset_paths = [
+# Generated/updated runtime files may be present in a release workspace before
+# they have been committed. Copy required files explicitly so the Windows
+# source bundle does not silently omit a helper module or fall back to older
+# tracked artwork.
+required_runtime_paths = [
+		"gui/preferences.py",
 		"gui/assets/app_icon_logo.png",
 		"gui/assets/app_mark_transparent.png",
 		"gui/assets/loading_logo.png",
 		"scripts/windows/icon/caveviewer.ico",
 ]
-for relative_path in required_asset_paths:
+for relative_path in required_runtime_paths:
 		source_path = repo_root / relative_path
 		if source_path.is_file():
 				destination_path = staging_root / relative_path

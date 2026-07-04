@@ -42,6 +42,7 @@ from caveviewer_version import APP_NAME, APP_VERSION
 from core.logging_utils import get_logger
 from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness, tk_display_scale
 from gui.platform import get_splash_platform_adapter
+from gui.preferences import migrate_preference_file
 
 
 # Resolve asset paths for both dev and PyInstaller bundle environments
@@ -89,8 +90,8 @@ def _resolve_asset_path(filename: str) -> str | None:
 # second copy of the same image.
 _LOGO_PATH = _resolve_asset_path("app_mark_transparent.png") or _resolve_asset_path("loading_logo.png")
 _APP_ICON_PATH = _resolve_asset_path("app_icon_logo.png")
-_LAST_BROWSE_PATH_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last_browse_path")
-_ADVANCED_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_advanced_settings.json")
+_LAST_BROWSE_PATH_FILE = migrate_preference_file("last_browse_path", ".caveviewer_last_browse_path")
+_ADVANCED_SETTINGS_FILE = migrate_preference_file("advanced_settings.json", ".caveviewer_advanced_settings.json")
 
 # URL for example maps link -- empty/None means link is disabled
 _EXAMPLE_MAPS_URL = None
