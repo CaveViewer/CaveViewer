@@ -103,22 +103,25 @@ _BUTTON_FG = "#1a1408"          # dark text on the amber button, matches in-app 
 _BORDER_COLOR = "#5c5c6e"
 _UPDATE_STARTED_SENTINEL = "__caveviewer_update_started__"
 _PLATFORM_ADAPTER = get_splash_platform_adapter()
+_WINDOWS_SPLASH_LAYOUT = sys.platform == "win32"
+_LINUX_SPLASH_LAYOUT = sys.platform.startswith("linux")
+_ROOMY_SPLASH_LAYOUT = _WINDOWS_SPLASH_LAYOUT or _LINUX_SPLASH_LAYOUT
 _UI_FONT_FAMILY = _PLATFORM_ADAPTER.ui_font_family()
 _TITLE_FONT = (_UI_FONT_FAMILY, 24, "bold")
 _VERSION_FONT = (_UI_FONT_FAMILY, 12)
 _BODY_FONT = (_UI_FONT_FAMILY, 12)
 _SMALL_FONT = (_UI_FONT_FAMILY, 10)
-_INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if sys.platform == "win32" else _BODY_FONT
-_FOOTER_FONT = (_UI_FONT_FAMILY, 9) if sys.platform == "win32" else _SMALL_FONT
+_INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
+_FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-_SPLASH_WINDOW_MIN_HEIGHT = 540 if sys.platform == "darwin" else (560 if sys.platform == "win32" else 620)
+_SPLASH_WINDOW_MIN_HEIGHT = 540 if sys.platform == "darwin" else 560
 _SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 36
 _FOOTER_CREDITS_BOTTOM_PAD = 18 if sys.platform == "darwin" else 36
-_TITLE_TO_ACTION_GAP = 58 if sys.platform == "win32" else 28
-_BROWSE_BUTTON_BOTTOM_GAP = 32 if sys.platform == "win32" else 16
-_INSTRUCTION_BOTTOM_GAP = 20 if sys.platform == "win32" else 0
-_SECONDARY_LINK_ROW_TOP_GAP = 30 if sys.platform == "win32" else 16
+_TITLE_TO_ACTION_GAP = 72 if _LINUX_SPLASH_LAYOUT else (58 if _WINDOWS_SPLASH_LAYOUT else 28)
+_BROWSE_BUTTON_BOTTOM_GAP = 42 if _LINUX_SPLASH_LAYOUT else (32 if _WINDOWS_SPLASH_LAYOUT else 16)
+_INSTRUCTION_BOTTOM_GAP = 30 if _LINUX_SPLASH_LAYOUT else (20 if _WINDOWS_SPLASH_LAYOUT else 0)
+_SECONDARY_LINK_ROW_TOP_GAP = 40 if _LINUX_SPLASH_LAYOUT else (30 if _WINDOWS_SPLASH_LAYOUT else 16)
 _ADVANCED_DIALOG_TWO_COLUMN = True
 _ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
 _ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
