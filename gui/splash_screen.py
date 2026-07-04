@@ -113,6 +113,11 @@ _CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
 _SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
+_BROWSE_BUTTON_BOTTOM_GAP = 24 if sys.platform == "win32" else 16
+_INSTRUCTION_BOTTOM_GAP = 8 if sys.platform == "win32" else 0
+_ADVANCED_LINK_TOP_GAP = 20 if sys.platform == "win32" else 12
+_ADVANCED_LINK_BOTTOM_GAP = 10 if sys.platform == "win32" else 4
+_SAMPLE_MAPS_TOP_GAP = 28 if sys.platform == "win32" else 20
 _ADVANCED_DIALOG_TWO_COLUMN = True
 _ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
 _ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
@@ -764,7 +769,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         padx=30, pady=9,
         cursor="hand2",
     )
-    browse_button.pack(pady=(0, 16))
+    browse_button.pack(pady=(0, _BROWSE_BUTTON_BOTTOM_GAP))
 
     instruction_label = tk.Label(
         root,
@@ -774,7 +779,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",
     )
-    instruction_label.pack(pady=(0, 0))
+    instruction_label.pack(pady=(0, _INSTRUCTION_BOTTOM_GAP))
 
     def _show_advanced_settings_dialog() -> None:
         nonlocal advanced_settings
@@ -977,7 +982,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         cursor="hand2",
     )
     advanced_link.bind("<Button-1>", lambda _event: _show_advanced_settings_dialog())
-    advanced_link.pack(pady=(12, 4))
+    advanced_link.pack(pady=(_ADVANCED_LINK_TOP_GAP, _ADVANCED_LINK_BOTTOM_GAP))
 
     # Example maps link - opens the sample maps dialog
     def _on_example_maps_click():
@@ -1018,7 +1023,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     for widget in (sample_maps_cta, cta_link_label):
         _bind_sample_maps_click(widget)
 
-    sample_maps_cta.pack(pady=(20, _SPLASH_CTA_BOTTOM_PAD))
+    sample_maps_cta.pack(pady=(_SAMPLE_MAPS_TOP_GAP, _SPLASH_CTA_BOTTOM_PAD))
 
     # -- footer note ----------------------------------------------------------------
 
