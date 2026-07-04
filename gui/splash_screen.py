@@ -115,7 +115,8 @@ _INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FON
 _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-_SPLASH_WINDOW_MIN_HEIGHT = 540 if sys.platform == "darwin" else 560
+_SPLASH_WINDOW_MIN_HEIGHT = 480 if sys.platform == "darwin" else 560
+_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = 24 if sys.platform == "darwin" else 0
 _SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 36
 _FOOTER_CREDITS_BOTTOM_PAD = 18 if sys.platform == "darwin" else 36
 _TITLE_TO_ACTION_GAP = 72 if _LINUX_SPLASH_LAYOUT else (58 if _WINDOWS_SPLASH_LAYOUT else 28)
@@ -1128,7 +1129,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
     browse_button.focus_set()
     root.update_idletasks()
-    final_height = max(px(_SPLASH_WINDOW_MIN_HEIGHT), root.winfo_reqheight())
+    final_height = max(
+        px(_SPLASH_WINDOW_MIN_HEIGHT),
+        root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK),
+    )
     max_height = max(px(360), root.winfo_screenheight() - px(80))
     final_height = min(final_height, max_height)
     pos_y = (screen_h - final_height) // 3
