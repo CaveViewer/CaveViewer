@@ -53,17 +53,35 @@ def show_sample_maps_dialog(parent, install_dir):
     dialog.resizable(False, False)
     dialog.transient(parent)
 
+    # Size everything in scaled pixels so the dialog is physically comparable
+    # to the DPI-scaled splash window rather than looking small on high-DPI
+    # displays.
+    from gui.dpi_utils import tk_display_scale
+    scale = tk_display_scale(parent)
+
+    def _px(value):
+        return int(round(value * scale))
+
     # Card metrics, defined up front so the window can open at its full,
-    # comfortable size BEFORE the loading spinner shows. Keeping the loading
-    # state and the populated list at the same size means the dialog never
-    # visibly grows -- it reads as one window with a loading phase rather
-    # than a small loader that pops into a bigger list.
-    row_height = 88
-    base_height = 96
-    window_w = 500
+    # comfortable size BEFORE the loading spinner shows.
+    row_height = _px(84)
+    base_height = _px(150)
+    window_w = _px(500)
     preload_h = base_height + row_height * max(1, len(KNOWN_SAMPLE_MAPS))
-    dialog.geometry(f"{window_w}x{preload_h}")
-    _center_over_parent(dialog, parent, window_w, preload_h)
+
+    # Compute the on-screen position ONCE and reuse it for every later resize.
+    # Re-centering on each resize is what made the window visibly jump between
+    # the loading state and the populated list; anchoring the top-left corner
+    # lets the window grow in place instead of leaping to a new location.
+    parent.update_idletasks()
+    _screen_w = parent.winfo_screenwidth()
+    _screen_h = parent.winfo_screenheight()
+    _p_x = parent.winfo_rootx()
+    _p_y = parent.winfo_rooty()
+    _p_w = parent.winfo_width()
+    anchor_x = max(8, min(_p_x + _p_w - window_w + _px(72), _screen_w - window_w - 8))
+    anchor_y = max(8, min(_p_y + _px(40), _screen_h - preload_h - 8))
+    dialog.geometry(f"{window_w}x{preload_h}+{anchor_x}+{anchor_y}")
 
     header = tk.Label(
         dialog, text="Sample Maps", font=("Segoe UI", 14, "bold"),
@@ -129,7 +147,7 @@ def show_sample_maps_dialog(parent, install_dir):
     # offline: a network failure used to unconditionally show this error
     # screen and never even check local disk for what's already there.
     if not catalog:
-        dialog.geometry(f"{window_w}x220")
+        dialog.geometry(f"{window_w}x{_px(220)}+{anchor_x}+{anchor_y}")
         tk.Label(
             dialog, text=f"Couldn't load the sample map list:\n\n{error}",
             font=("Segoe UI", 9), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
@@ -164,12 +182,6 @@ def show_sample_maps_dialog(parent, install_dir):
             justify="center",
         )
         notice.pack(pady=(0, 8))
-
-    desired_height = base_height + extra_height + row_height * len(catalog)
-    max_height = max(260, dialog.winfo_screenheight() - 120)
-    final_height = min(desired_height, max_height)
-    dialog.geometry(f"{window_w}x{final_height}")
-    _center_over_parent(dialog, parent, window_w, final_height)
 
     list_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
@@ -412,20 +424,18 @@ def show_sample_maps_dialog(parent, install_dir):
         action_btn.pack(side="right", padx=(8, 16), pady=12)
         action_buttons[sample.display_name] = action_btn
 
-    # Re-fit the window to the actual rendered content so there is no dead
-    # space below the cards, and nothing is clipped. Clearing the explicit
-    # geometry first forces the winfo_req* calls to report the true required
-    # size of the content rather than echoing the earlier fixed size. Fitting
-    # the WIDTH (not just the height) matters on Windows, where larger font
-    # metrics make a long map name consume the row and push its button off
-    # the right edge at the hardcoded 460px width.
-    dialog.geometry("")
+    # Re-fit the window to the actual rendered content, but keep the SAME
+    # anchor position computed up front so it never repositions (no jump).
+    # The size only grows to fit content -- floored at the preload size so it
+    # never shrinks either -- and is clamped to stay on screen from the
+    # anchor. Fitting the width matters on Windows, where larger font metrics
+    # make a long map name push its button off the right edge.
     dialog.update_idletasks()
-    max_width = min(dialog.winfo_screenwidth() - 80, 760)
+    max_width = min(_screen_w - anchor_x - 8, _px(760))
+    max_height = min(_screen_h - anchor_y - 8, _px(760))
     fitted_width = max(window_w, min(dialog.winfo_reqwidth(), max_width))
-    fitted_height = min(dialog.winfo_reqheight(), max_height)
-    dialog.geometry(f"{fitted_width}x{fitted_height}")
-    _center_over_parent(dialog, parent, fitted_width, fitted_height)
+    fitted_height = max(preload_h, min(dialog.winfo_reqheight(), max_height))
+    dialog.geometry(f"{fitted_width}x{fitted_height}+{anchor_x}+{anchor_y}")
 
     dialog.wait_window()
 
