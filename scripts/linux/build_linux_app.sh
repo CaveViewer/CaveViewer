@@ -175,6 +175,14 @@ fi
 python_exe="$venv_dir/bin/python"
 echo "Using venv: $venv_dir"
 
+# python-build-standalone can carry sysconfig paths from its build host
+# (for example /tools/llvm/bin/llvm-ar). Those paths do not exist on GitHub
+# Actions or ordinary distro build hosts, and Pillow's source build respects
+# them unless we point distutils/setuptools back at the local binutils.
+export AR="${AR:-ar}"
+export RANLIB="${RANLIB:-ranlib}"
+export NM="${NM:-nm}"
+
 "$python_exe" -m pip install --upgrade pip setuptools
 
 # Install dependencies: Pillow must compile from source to pick up Tkinter support.
