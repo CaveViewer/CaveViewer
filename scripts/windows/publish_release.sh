@@ -73,13 +73,10 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
-repo="${CAVEVIEWER_WINDOWS_GITHUB_REPO:-}"
-if [ -z "$repo" ]; then
-  repo="$(cv_infer_repo "$repo_root" || true)"
-fi
+repo="$(cv_infer_repo "$repo_root" || true)"
 
 if [ -z "$repo" ]; then
-  echo "Error: could not determine repository. Set CAVEVIEWER_WINDOWS_GITHUB_REPO=owner/repo"
+  echo "Error: could not determine repository from the local git remote."
   exit 1
 fi
 

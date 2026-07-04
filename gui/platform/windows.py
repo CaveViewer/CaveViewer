@@ -11,12 +11,9 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     """Windows platform adapter for update metadata and manual installer handoff."""
 
     def default_update_repo(self) -> str:
-        return os.getenv("CAVEVIEWER_WINDOWS_GITHUB_REPO", super().default_update_repo())
+        return super().default_update_repo()
 
     def default_update_manifest_url(self, repo: str) -> str:
-        override_url = os.getenv("CAVEVIEWER_WINDOWS_UPDATE_MANIFEST_URL", "").strip()
-        if override_url:
-            return override_url
         return f"https://raw.githubusercontent.com/{repo}/main/updates/windows/stable.json"
 
     def install_channel(self) -> str:
