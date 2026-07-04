@@ -32,6 +32,7 @@ without extra modal pop-ups.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -135,6 +136,10 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
         "label": "System RAM target (%)",
         "hint": "System RAM limit for loaded chunks.",
+        "value_type": "float",
+        "min": 1.0,
+        "max": 80.0,
+        "units": "percent",
     },
     {
         "section": "streaming",
@@ -142,6 +147,10 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
         "label": "GPU memory target (%)",
         "hint": "GPU memory limit for loaded chunks.",
+        "value_type": "float",
+        "min": 1.0,
+        "max": 80.0,
+        "units": "percent",
     },
     {
         "section": "streaming",
@@ -149,6 +158,11 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_GPU_MEMORY_GB",
         "label": "GPU memory override (GB)",
         "hint": "Optional GPU memory override.",
+        "value_type": "float",
+        "min": 0.0,
+        "min_exclusive": True,
+        "max": 1024.0,
+        "units": "GB",
     },
     {
         "section": "streaming",
@@ -156,6 +170,8 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_IO_WORKERS",
         "label": "Worker count",
         "hint": "Background chunk-loading threads.",
+        "value_type": "int",
+        "min": 1,
     },
     {
         "section": "streaming",
@@ -163,6 +179,8 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_IO_RESERVED_CPUS",
         "label": "CPU cores to keep free",
         "hint": "CPU cores reserved from streaming.",
+        "value_type": "int",
+        "min": 0,
     },
     {
         "section": "streaming",
@@ -170,6 +188,9 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
         "label": "Chunk uploads per frame",
         "hint": "Ready chunks uploaded per frame.",
+        "value_type": "int",
+        "min": 1,
+        "max": 16,
     },
     {
         "section": "streaming",
@@ -177,6 +198,10 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
         "label": "Upload budget (ms)",
         "hint": "Soft per-frame upload budget.",
+        "value_type": "float",
+        "min": 0.5,
+        "max": 50.0,
+        "units": "ms",
     },
     {
         "section": "parsing",
@@ -184,6 +209,11 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_CHUNK_SIZE_METERS",
         "label": "Import chunk size (m)",
         "hint": "Chunk size for new caches.",
+        "value_type": "float",
+        "min": 0.0,
+        "min_exclusive": True,
+        "max": 512.0,
+        "units": "m",
     },
     {
         "section": "parsing",
@@ -191,6 +221,10 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
         "label": "OBJ scan throttle (ms)",
         "hint": "Yield during OBJ scanning.",
+        "value_type": "float",
+        "min": 0.0,
+        "max": 50.0,
+        "units": "ms",
     },
     {
         "section": "parsing",
@@ -198,6 +232,8 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_CHUNK_BUILD_WORKERS",
         "label": "Import worker count",
         "hint": "Threads used while writing chunks.",
+        "value_type": "int",
+        "min": 1,
     },
     {
         "section": "parsing",
@@ -205,6 +241,8 @@ _ADVANCED_SETTING_FIELDS = (
         "env_var": "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
         "label": "Import CPUs to keep free",
         "hint": "CPU cores reserved from import.",
+        "value_type": "int",
+        "min": 0,
     },
 )
 
@@ -291,93 +329,67 @@ def _save_advanced_settings(values: dict[str, str]) -> None:
         _LOG.warning(f"could not save advanced settings ({e})")
 
 
-def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | None, dict[str, str]]:
+def _format_advanced_range(field: dict) -> str:
+    minimum = field.get("min")
+    maximum = field.get("max")
+    units = field.get("units", "")
+    suffix = f" {units}" if units else ""
+    if minimum is not None and maximum is not None:
+        lower = f"greater than {minimum:g}" if field.get("min_exclusive") else f"at least {minimum:g}"
+        return f"{lower} and no more than {maximum:g}{suffix}"
+    if minimum is not None:
+        return f"greater than {minimum:g}{suffix}" if field.get("min_exclusive") else f"at least {minimum:g}{suffix}"
+    if maximum is not None:
+        return f"no more than {maximum:g}{suffix}"
+    return "valid"
+
+
+def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | None, dict[str, str], str | None]:
     normalized = _normalize_advanced_settings(values)
 
-    memory_text = normalized["memory_target_percent"]
-    if memory_text:
-        try:
-            memory_value = float(memory_text)
-        except ValueError:
-            return False, "Streaming memory target must be a number between 1 and 80.", normalized
-        if memory_value < 1.0 or memory_value > 80.0:
-            return False, "Streaming memory target must be between 1 and 80 percent.", normalized
-        normalized["memory_target_percent"] = f"{memory_value:g}"
-
-    gpu_memory_text = normalized["gpu_memory_target_percent"]
-    if gpu_memory_text:
-        try:
-            gpu_memory_value = float(gpu_memory_text)
-        except ValueError:
-            return False, "GPU memory target must be a number between 1 and 80.", normalized
-        if gpu_memory_value < 1.0 or gpu_memory_value > 80.0:
-            return False, "GPU memory target must be between 1 and 80 percent.", normalized
-        normalized["gpu_memory_target_percent"] = f"{gpu_memory_value:g}"
-
-    gpu_memory_gb_text = normalized["gpu_memory_gb"]
-    if gpu_memory_gb_text:
-        try:
-            gpu_memory_gb = float(gpu_memory_gb_text)
-        except ValueError:
-            return False, "GPU memory override must be a positive number of GB.", normalized
-        if gpu_memory_gb <= 0.0 or gpu_memory_gb > 1024.0:
-            return False, "GPU memory override must be between 0 and 1024 GB.", normalized
-        normalized["gpu_memory_gb"] = f"{gpu_memory_gb:g}"
-
-    integer_fields = (
-        ("io_workers", "Worker count", 1, None),
-        ("io_reserved_cpus", "CPUs to leave free", 0, None),
-        ("upload_chunks_per_frame", "Chunk uploads per frame", 1, 16),
-        ("chunk_build_workers", "Import worker count", 1, None),
-        ("chunk_build_reserved_cpus", "Import CPUs to keep free", 0, None),
-    )
-    for key, label, minimum, maximum in integer_fields:
+    for field in _ADVANCED_SETTING_FIELDS:
+        key = field["key"]
         text = normalized[key]
         if not text:
             continue
-        try:
-            int_value = int(text)
-        except ValueError:
-            return False, f"{label} must be a whole number.", normalized
-        if int_value < minimum:
-            return False, f"{label} must be at least {minimum}.", normalized
-        if maximum is not None and int_value > maximum:
-            return False, f"{label} must be no more than {maximum}.", normalized
-        normalized[key] = str(int_value)
 
-    upload_budget_text = normalized["upload_time_budget_ms"]
-    if upload_budget_text:
-        try:
-            upload_budget_value = float(upload_budget_text)
-        except ValueError:
-            return False, "Upload budget must be a number between 0.5 and 50.", normalized
-        if upload_budget_value < 0.5 or upload_budget_value > 50.0:
-            return False, "Upload budget must be between 0.5 and 50 ms.", normalized
-        normalized["upload_time_budget_ms"] = f"{upload_budget_value:g}"
+        label = field["label"]
+        value_type = field.get("value_type")
+        minimum = field.get("min")
+        maximum = field.get("max")
+        min_exclusive = bool(field.get("min_exclusive"))
 
-    chunk_size_text = normalized["chunk_size_meters"]
-    if chunk_size_text:
-        try:
-            chunk_size_value = float(chunk_size_text)
-        except ValueError:
-            return False, "Import chunk size must be a positive number.", normalized
-        if chunk_size_value <= 0.0:
-            return False, "Import chunk size must be greater than 0.", normalized
-        if chunk_size_value > 512.0:
-            return False, "Import chunk size must be 512m or smaller.", normalized
-        normalized["chunk_size_meters"] = f"{chunk_size_value:g}"
+        if minimum is not None and minimum >= 0 and text.startswith("-"):
+            return False, f"{label} cannot be negative.", normalized, key
 
-    obj_scan_throttle_text = normalized["obj_scan_throttle_ms"]
-    if obj_scan_throttle_text:
-        try:
-            obj_scan_throttle_value = float(obj_scan_throttle_text)
-        except ValueError:
-            return False, "OBJ scan throttle must be a number between 0 and 50.", normalized
-        if obj_scan_throttle_value < 0.0 or obj_scan_throttle_value > 50.0:
-            return False, "OBJ scan throttle must be between 0 and 50 ms.", normalized
-        normalized["obj_scan_throttle_ms"] = f"{obj_scan_throttle_value:g}"
+        if value_type == "int":
+            try:
+                value = int(text)
+            except ValueError:
+                return False, f"{label} must be a whole number.", normalized, key
+            if minimum is not None and value < minimum:
+                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
+            if maximum is not None and value > maximum:
+                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
+            normalized[key] = str(value)
+            continue
 
-    return True, None, normalized
+        if value_type == "float":
+            try:
+                value = float(text)
+            except ValueError:
+                return False, f"{label} must be a number.", normalized, key
+            if not math.isfinite(value):
+                return False, f"{label} must be a finite number.", normalized, key
+            if minimum is not None:
+                below_minimum = value <= minimum if min_exclusive else value < minimum
+                if below_minimum:
+                    return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
+            if maximum is not None and value > maximum:
+                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
+            normalized[key] = f"{value:g}"
+
+    return True, None, normalized, None
 
 
 def _apply_advanced_settings_to_env(values: dict[str, str]) -> None:
@@ -792,7 +804,30 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         body.pack(fill="both", expand=True)
 
         field_vars: dict[str, tk.StringVar] = {}
+        field_entries: dict[str, tk.Entry] = {}
         effective_settings = _effective_advanced_settings(advanced_settings)
+
+        def _is_numeric_entry_candidate(value_type: str, candidate: str) -> bool:
+            if candidate == "":
+                return True
+            if value_type == "int":
+                return candidate.isdigit()
+            if value_type == "float":
+                if candidate == ".":
+                    return True
+                if candidate.count(".") > 1:
+                    return False
+                return all(ch.isdigit() or ch == "." for ch in candidate)
+            return True
+
+        numeric_entry_validator = dialog.register(_is_numeric_entry_candidate)
+
+        def _clear_field_error(key: str) -> None:
+            entry = field_entries.get(key)
+            if entry is not None:
+                entry.config(highlightbackground="#30303a", highlightcolor="#5d6f8a")
+            if error_label.winfo_exists():
+                error_label.config(text="")
 
         section_row = tk.Frame(body, bg=_BG_COLOR)
         section_row.pack(fill="both", expand=True, pady=(0, 10))
@@ -840,6 +875,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 # this dialog's root so entry defaults render reliably.
                 var = tk.StringVar(master=dialog, value=effective_settings[field["key"]])
                 field_vars[field["key"]] = var
+                value_type = field.get("value_type", "")
                 entry = tk.Entry(
                     row,
                     textvariable=var,
@@ -848,8 +884,15 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     fg=_SUBTITLE_COLOR,
                     insertbackground=_SUBTITLE_COLOR,
                     relief="flat",
+                    highlightthickness=1,
+                    highlightbackground="#30303a",
+                    highlightcolor="#5d6f8a",
                     width=_ADVANCED_DIALOG_ENTRY_WIDTH,
+                    validate="key",
+                    validatecommand=(numeric_entry_validator, value_type, "%P"),
                 )
+                field_entries[field["key"]] = entry
+                var.trace_add("write", lambda *_args, key=field["key"]: _clear_field_error(key))
                 entry.pack(anchor="w", pady=(4, 4))
 
                 tk.Label(
@@ -890,10 +933,17 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             dialog.destroy()
 
         def on_apply():
+            for entry in field_entries.values():
+                entry.config(highlightbackground="#30303a", highlightcolor="#5d6f8a")
             proposed = {key: var.get() for key, var in field_vars.items()}
-            ok, message, normalized = _validate_advanced_settings(proposed)
+            ok, message, normalized, error_key = _validate_advanced_settings(proposed)
             if not ok:
                 error_label.config(text=message or "Invalid advanced settings.")
+                if error_key and error_key in field_entries:
+                    bad_entry = field_entries[error_key]
+                    bad_entry.config(highlightbackground="#ff6b6b", highlightcolor="#ff6b6b")
+                    bad_entry.focus_set()
+                    bad_entry.selection_range(0, "end")
                 return
 
             advanced_settings = _effective_advanced_settings(normalized)
