@@ -115,7 +115,7 @@ _SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
 _SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
 _CREDITS_TO_DIVIDER_GAP = 22 if sys.platform == "win32" else 16
 _DIVIDER_TO_BROWSE_GAP = 22 if sys.platform == "win32" else 24
-_BROWSE_BUTTON_BOTTOM_GAP = 26 if sys.platform == "win32" else 16
+_BROWSE_BUTTON_BOTTOM_GAP = 22 if sys.platform == "win32" else 16
 _INSTRUCTION_BOTTOM_GAP = 14 if sys.platform == "win32" else 0
 _ADVANCED_LINK_TOP_GAP = 18 if sys.platform == "win32" else 12
 _ADVANCED_LINK_BOTTOM_GAP = 14 if sys.platform == "win32" else 4
