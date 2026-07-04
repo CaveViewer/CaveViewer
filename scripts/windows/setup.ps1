@@ -59,6 +59,8 @@ if (-not $isAdmin) {
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+[System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
 # -- Paths --------------------------------------------------------------------
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -80,45 +82,173 @@ $PythonInstallerPath = Join-Path $env:TEMP "python-installer-caveviewer.exe"
 
 # -- Form setup -----------------------------------------------------------------
 
+$ColorWindow = [System.Drawing.Color]::FromArgb(248, 249, 252)
+$ColorHeader = [System.Drawing.Color]::FromArgb(17, 24, 39)
+$ColorAccent = [System.Drawing.Color]::FromArgb(202, 162, 62)
+$ColorText = [System.Drawing.Color]::FromArgb(31, 41, 55)
+$ColorMuted = [System.Drawing.Color]::FromArgb(107, 114, 128)
+$ColorPanel = [System.Drawing.Color]::White
+$ColorLogBack = [System.Drawing.Color]::FromArgb(245, 247, 250)
+$ColorLogText = [System.Drawing.Color]::FromArgb(45, 55, 72)
+$FontBody = New-Object System.Drawing.Font("Segoe UI", 10)
+$FontSmall = New-Object System.Drawing.Font("Segoe UI", 9)
+$FontTitle = New-Object System.Drawing.Font("Segoe UI", 20, [System.Drawing.FontStyle]::Bold)
+$FontSection = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$FontButton = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$FontLog = New-Object System.Drawing.Font("Consolas", 9)
+
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "CaveViewer Setup"
-$form.Size = New-Object System.Drawing.Size(560, 420)
+$form.ClientSize = New-Object System.Drawing.Size(720, 540)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
+$form.BackColor = $ColorWindow
+$form.Font = $FontBody
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+
+$headerPanel = New-Object System.Windows.Forms.Panel
+$headerPanel.BackColor = $ColorHeader
+$headerPanel.Location = New-Object System.Drawing.Point(0, 0)
+$headerPanel.Size = New-Object System.Drawing.Size(720, 108)
+$form.Controls.Add($headerPanel)
 
 $titleLabel = New-Object System.Windows.Forms.Label
 $titleLabel.Text = "CaveViewer Setup"
-$titleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
-$titleLabel.Location = New-Object System.Drawing.Point(20, 15)
-$titleLabel.Size = New-Object System.Drawing.Size(500, 30)
-$form.Controls.Add($titleLabel)
+$titleLabel.Font = $FontTitle
+$titleLabel.ForeColor = [System.Drawing.Color]::White
+$titleLabel.BackColor = $ColorHeader
+$titleLabel.Location = New-Object System.Drawing.Point(28, 20)
+$titleLabel.Size = New-Object System.Drawing.Size(660, 38)
+$headerPanel.Controls.Add($titleLabel)
 
 $subLabel = New-Object System.Windows.Forms.Label
-$subLabel.Text = "Click Install. This window will tell you what's happening at every step."
-$subLabel.Location = New-Object System.Drawing.Point(20, 48)
-$subLabel.Size = New-Object System.Drawing.Size(500, 20)
-$form.Controls.Add($subLabel)
+$subLabel.Text = "Installs Python if needed, prepares CaveViewer's libraries, and creates a Desktop shortcut."
+$subLabel.Font = $FontBody
+$subLabel.ForeColor = [System.Drawing.Color]::FromArgb(221, 226, 235)
+$subLabel.BackColor = $ColorHeader
+$subLabel.Location = New-Object System.Drawing.Point(30, 62)
+$subLabel.Size = New-Object System.Drawing.Size(660, 24)
+$headerPanel.Controls.Add($subLabel)
+
+$statusLabel = New-Object System.Windows.Forms.Label
+$statusLabel.Text = "Ready to install"
+$statusLabel.Font = $FontSection
+$statusLabel.ForeColor = $ColorText
+$statusLabel.Location = New-Object System.Drawing.Point(28, 126)
+$statusLabel.Size = New-Object System.Drawing.Size(460, 26)
+$form.Controls.Add($statusLabel)
+
+$progressBar = New-Object System.Windows.Forms.ProgressBar
+$progressBar.Location = New-Object System.Drawing.Point(28, 158)
+$progressBar.Size = New-Object System.Drawing.Size(488, 14)
+$progressBar.Minimum = 0
+$progressBar.Maximum = 100
+$progressBar.Value = 0
+$progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+$form.Controls.Add($progressBar)
 
 # Single Install button -- runs all three steps in sequence.
 $btnInstall = New-Object System.Windows.Forms.Button
-$btnInstall.Text = "Install"
-$btnInstall.Location = New-Object System.Drawing.Point(20, 80)
-$btnInstall.Size = New-Object System.Drawing.Size(500, 44)
-$btnInstall.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+$btnInstall.Text = "Install CaveViewer"
+$btnInstall.Location = New-Object System.Drawing.Point(540, 126)
+$btnInstall.Size = New-Object System.Drawing.Size(150, 46)
+$btnInstall.Font = $FontButton
+$btnInstall.BackColor = $ColorAccent
+$btnInstall.ForeColor = [System.Drawing.Color]::FromArgb(24, 19, 8)
+$btnInstall.FlatStyle = "Flat"
+$btnInstall.FlatAppearance.BorderSize = 0
 $form.Controls.Add($btnInstall)
+
+$stepsPanel = New-Object System.Windows.Forms.Panel
+$stepsPanel.BackColor = $ColorPanel
+$stepsPanel.Location = New-Object System.Drawing.Point(28, 194)
+$stepsPanel.Size = New-Object System.Drawing.Size(214, 286)
+$stepsPanel.BorderStyle = "FixedSingle"
+$form.Controls.Add($stepsPanel)
+
+$stepsHeader = New-Object System.Windows.Forms.Label
+$stepsHeader.Text = "Setup steps"
+$stepsHeader.Font = $FontSection
+$stepsHeader.ForeColor = $ColorText
+$stepsHeader.Location = New-Object System.Drawing.Point(16, 14)
+$stepsHeader.Size = New-Object System.Drawing.Size(180, 24)
+$stepsPanel.Controls.Add($stepsHeader)
+
+$stepLabels = @{}
+$stepNames = @("Python", "Visual C++ runtime", "Python libraries", "Firewall access", "Desktop shortcut")
+for ($i = 0; $i -lt $stepNames.Count; $i++) {
+    $stepLabel = New-Object System.Windows.Forms.Label
+    $stepLabel.Text = "[ ] $($stepNames[$i])"
+    $stepLabel.Font = $FontBody
+    $stepLabel.ForeColor = $ColorMuted
+    $stepLabel.Location = New-Object System.Drawing.Point(18, (52 + ($i * 38)))
+    $stepLabel.Size = New-Object System.Drawing.Size(176, 26)
+    $stepsPanel.Controls.Add($stepLabel)
+    $stepLabels[$stepNames[$i]] = $stepLabel
+}
 
 # Log box
 $logBox = New-Object System.Windows.Forms.TextBox
 $logBox.Multiline = $true
 $logBox.ScrollBars = "Vertical"
 $logBox.ReadOnly = $true
-$logBox.Font = New-Object System.Drawing.Font("Consolas", 9)
-$logBox.Location = New-Object System.Drawing.Point(20, 135)
-$logBox.Size = New-Object System.Drawing.Size(500, 245)
-$logBox.BackColor = [System.Drawing.Color]::Black
-$logBox.ForeColor = [System.Drawing.Color]::LightGreen
+$logBox.Font = $FontLog
+$logBox.Location = New-Object System.Drawing.Point(262, 194)
+$logBox.Size = New-Object System.Drawing.Size(428, 286)
+$logBox.BackColor = $ColorLogBack
+$logBox.ForeColor = $ColorLogText
+$logBox.BorderStyle = "FixedSingle"
 $form.Controls.Add($logBox)
+
+$footerLabel = New-Object System.Windows.Forms.Label
+$footerLabel.Text = "You can leave this window open while setup runs. The log is here if something needs troubleshooting."
+$footerLabel.Font = $FontSmall
+$footerLabel.ForeColor = $ColorMuted
+$footerLabel.Location = New-Object System.Drawing.Point(28, 500)
+$footerLabel.Size = New-Object System.Drawing.Size(662, 22)
+$form.Controls.Add($footerLabel)
+
+function Set-SetupStatus {
+    param(
+        [string]$Message,
+        [int]$Percent
+    )
+    $statusLabel.Text = $Message
+    $progressBar.Value = [Math]::Max($progressBar.Minimum, [Math]::Min($progressBar.Maximum, $Percent))
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Set-StepState {
+    param(
+        [string]$Name,
+        [ValidateSet("pending", "running", "done", "failed")]
+        [string]$State
+    )
+    if (-not $stepLabels.ContainsKey($Name)) {
+        return
+    }
+    $label = $stepLabels[$Name]
+    switch ($State) {
+        "pending" {
+            $label.Text = "[ ] $Name"
+            $label.ForeColor = $ColorMuted
+        }
+        "running" {
+            $label.Text = "[>] $Name"
+            $label.ForeColor = $ColorAccent
+        }
+        "done" {
+            $label.Text = "[x] $Name"
+            $label.ForeColor = [System.Drawing.Color]::FromArgb(22, 126, 76)
+        }
+        "failed" {
+            $label.Text = "[!] $Name"
+            $label.ForeColor = [System.Drawing.Color]::FromArgb(185, 28, 28)
+        }
+    }
+    [System.Windows.Forms.Application]::DoEvents()
+}
 
 function Write-Log {
     param([string]$Message)
@@ -483,44 +613,69 @@ function New-DesktopShortcut {
 $btnInstall.Add_Click({
     $btnInstall.Enabled = $false
     $btnInstall.Text = "Installing..."
+    foreach ($stepName in $stepNames) {
+        Set-StepState $stepName "pending"
+    }
+    Set-SetupStatus "Checking Python..." 5
+    Set-StepState "Python" "running"
 
     $ok = Install-Python
     if (-not $ok) {
+        Set-StepState "Python" "failed"
+        Set-SetupStatus "Python installation failed" 5
         Write-Log ""
         Write-Log "Setup stopped -- Python installation failed. Click Install to try again."
         $btnInstall.Enabled = $true
-        $btnInstall.Text = "Install"
+        $btnInstall.Text = "Install CaveViewer"
         return
     }
+    Set-StepState "Python" "done"
 
     # Non-fatal: ensures vcruntime140.dll is present system-wide so that
     # Python extension packages (pyglm, moderngl, etc.) can load their DLLs.
+    Set-SetupStatus "Preparing Visual C++ runtime..." 25
+    Set-StepState "Visual C++ runtime" "running"
     Install-VcRedist
+    Set-StepState "Visual C++ runtime" "done"
 
+    Set-SetupStatus "Installing Python libraries..." 45
+    Set-StepState "Python libraries" "running"
     $ok = Install-Requirements
     if (-not $ok) {
+        Set-StepState "Python libraries" "failed"
+        Set-SetupStatus "Library installation failed" 45
         Write-Log ""
         Write-Log "Setup stopped -- installing requirements failed. Click Install to try again."
         $btnInstall.Enabled = $true
-        $btnInstall.Text = "Install"
+        $btnInstall.Text = "Install CaveViewer"
         return
     }
+    Set-StepState "Python libraries" "done"
 
     # Non-fatal: add a firewall rule so CaveViewer can reach GitHub on first
     # launch without triggering a "block or allow?" popup.
+    Set-SetupStatus "Configuring firewall access..." 75
+    Set-StepState "Firewall access" "running"
     Add-PythonFirewallRule
+    Set-StepState "Firewall access" "done"
 
+    Set-SetupStatus "Creating Desktop shortcut..." 88
+    Set-StepState "Desktop shortcut" "running"
     $ok = New-DesktopShortcut
     if (-not $ok) {
+        Set-StepState "Desktop shortcut" "failed"
+        Set-SetupStatus "Shortcut creation failed" 88
         Write-Log ""
         Write-Log "Setup stopped -- could not create the desktop shortcut. Click Install to try again."
         $btnInstall.Enabled = $true
-        $btnInstall.Text = "Install"
+        $btnInstall.Text = "Install CaveViewer"
         return
     }
+    Set-StepState "Desktop shortcut" "done"
 
     Write-Log ""
     Write-Log "All done!"
+    Set-SetupStatus "CaveViewer is ready" 100
     $btnInstall.Text = "Done"
     $btnInstall.Enabled = $false
 
@@ -537,36 +692,46 @@ function Show-InstallCompleteDialog {
     #>
     $dialog = New-Object System.Windows.Forms.Form
     $dialog.Text = "CaveViewer Setup"
-    $dialog.Size = New-Object System.Drawing.Size(420, 200)
+    $dialog.ClientSize = New-Object System.Drawing.Size(460, 220)
     $dialog.StartPosition = "CenterParent"
     $dialog.FormBorderStyle = "FixedDialog"
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
+    $dialog.BackColor = $ColorWindow
+    $dialog.Font = $FontBody
+    $dialog.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 
     $msgLabel = New-Object System.Windows.Forms.Label
-    $msgLabel.Text = "Installation was successful!"
-    $msgLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
-    $msgLabel.Location = New-Object System.Drawing.Point(20, 20)
-    $msgLabel.Size = New-Object System.Drawing.Size(380, 30)
+    $msgLabel.Text = "CaveViewer is ready"
+    $msgLabel.Font = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+    $msgLabel.ForeColor = $ColorText
+    $msgLabel.Location = New-Object System.Drawing.Point(28, 24)
+    $msgLabel.Size = New-Object System.Drawing.Size(404, 38)
     $dialog.Controls.Add($msgLabel)
 
     $subLabel = New-Object System.Windows.Forms.Label
-    $subLabel.Text = "Would you like to launch CaveViewer now?"
-    $subLabel.Location = New-Object System.Drawing.Point(20, 55)
-    $subLabel.Size = New-Object System.Drawing.Size(380, 24)
+    $subLabel.Text = "Setup finished successfully. You can launch CaveViewer now or use the Desktop shortcut later."
+    $subLabel.ForeColor = $ColorMuted
+    $subLabel.Location = New-Object System.Drawing.Point(30, 70)
+    $subLabel.Size = New-Object System.Drawing.Size(400, 48)
     $dialog.Controls.Add($subLabel)
 
     $btnLaunch = New-Object System.Windows.Forms.Button
     $btnLaunch.Text = "Launch CaveViewer"
-    $btnLaunch.Location = New-Object System.Drawing.Point(50, 110)
-    $btnLaunch.Size = New-Object System.Drawing.Size(150, 36)
-    $btnLaunch.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $btnLaunch.Location = New-Object System.Drawing.Point(112, 146)
+    $btnLaunch.Size = New-Object System.Drawing.Size(160, 40)
+    $btnLaunch.Font = $FontButton
+    $btnLaunch.BackColor = $ColorAccent
+    $btnLaunch.ForeColor = [System.Drawing.Color]::FromArgb(24, 19, 8)
+    $btnLaunch.FlatStyle = "Flat"
+    $btnLaunch.FlatAppearance.BorderSize = 0
     $dialog.Controls.Add($btnLaunch)
 
     $btnClose = New-Object System.Windows.Forms.Button
     $btnClose.Text = "Close"
-    $btnClose.Location = New-Object System.Drawing.Point(220, 110)
-    $btnClose.Size = New-Object System.Drawing.Size(150, 36)
+    $btnClose.Location = New-Object System.Drawing.Point(288, 146)
+    $btnClose.Size = New-Object System.Drawing.Size(88, 40)
+    $btnClose.Font = $FontBody
     $dialog.Controls.Add($btnClose)
 
     $btnLaunch.Add_Click({
