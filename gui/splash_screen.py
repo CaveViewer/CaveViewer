@@ -114,7 +114,7 @@ _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_MIN_HEIGHT = 540 if sys.platform == "darwin" else (560 if sys.platform == "win32" else 620)
 _SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 36
 _FOOTER_CREDITS_BOTTOM_PAD = 18 if sys.platform == "darwin" else 36
-_TITLE_TO_ACTION_GAP = 48 if sys.platform == "win32" else 28
+_TITLE_TO_ACTION_GAP = 58 if sys.platform == "win32" else 28
 _BROWSE_BUTTON_BOTTOM_GAP = 32 if sys.platform == "win32" else 16
 _INSTRUCTION_BOTTOM_GAP = 20 if sys.platform == "win32" else 0
 _SECONDARY_LINK_ROW_TOP_GAP = 30 if sys.platform == "win32" else 16
