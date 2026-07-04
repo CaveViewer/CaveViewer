@@ -68,7 +68,7 @@ def show_sample_maps_dialog(parent, install_dir):
     # keeping the loading state and the list the SAME size (no shrink/grow
     # that would read as two separate windows).
     row_height = _px(90)
-    base_height = _px(96)
+    base_height = _px(64 if sys.platform == "win32" else 96)
     window_w = _px(500)
     preload_h = base_height + row_height * max(1, len(KNOWN_SAMPLE_MAPS))
 
@@ -429,17 +429,15 @@ def show_sample_maps_dialog(parent, install_dir):
 
     # Re-fit the window to the actual rendered content, keeping the SAME
     # anchor position computed up front so it never repositions (no jump).
-    # Most platforms keep height floored at the preload size so the populated
-    # list is never shorter than the loading state -- that shrink is what read
-    # as "two windows." On Windows, though, native Tk metrics make the preload
-    # size noticeably taller than the actual two-row list, leaving a big blank
-    # footer. Let Windows shrink to the measured content height after loading.
+    # Height is floored at the preload size so the populated list is never
+    # shorter than the loading state -- that shrink is what read as "two
+    # windows." The Windows preload base above is tighter than other
+    # platforms so this still avoids the oversized blank footer there.
     dialog.update_idletasks()
     max_width = min(_screen_w - anchor_x - 8, _px(760))
     max_height = min(_screen_h - anchor_y - 8, _px(760))
     fitted_width = max(window_w, min(dialog.winfo_reqwidth(), max_width))
-    min_final_height = _px(220) if sys.platform == "win32" else preload_h
-    fitted_height = max(min_final_height, min(dialog.winfo_reqheight(), max_height))
+    fitted_height = max(preload_h, min(dialog.winfo_reqheight(), max_height))
     dialog.geometry(f"{fitted_width}x{fitted_height}+{anchor_x}+{anchor_y}")
 
     dialog.wait_window()
