@@ -89,8 +89,10 @@ for relative_path in files:
 # Make setup scripts first-class citizens at the bundle root.
 root_launch = staging_root / "launch.bat"
 root_setup = staging_root / "setup.ps1"
+root_icon = staging_root / "icon" / "caveviewer.ico"
 src_launch = staging_root / "scripts" / "windows" / "launch.bat"
 src_setup = staging_root / "scripts" / "windows" / "setup.ps1"
+src_icon = staging_root / "scripts" / "windows" / "icon" / "caveviewer.ico"
 
 if not src_launch.is_file() or not src_setup.is_file():
 	missing = []
@@ -102,6 +104,9 @@ if not src_launch.is_file() or not src_setup.is_file():
 
 shutil.copy2(src_launch, root_launch)
 shutil.copy2(src_setup, root_setup)
+if src_icon.is_file():
+	root_icon.parent.mkdir(parents=True, exist_ok=True)
+	shutil.copy2(src_icon, root_icon)
 PY
 
 python - "$repo_root" "$staging_root" "$artifact_name" "$version" "$app_name" <<'PY'
@@ -123,6 +128,7 @@ important_files = [
 	"requirements.txt",
 	"scripts/windows/launch.bat",
 	"scripts/windows/setup.ps1",
+	"scripts/windows/icon/caveviewer.ico",
 	"updates/windows/stable.json",
 ]
 

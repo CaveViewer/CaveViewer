@@ -23,4 +23,4 @@ set "CAVEVIEWER_IO_WORKERS="
 set "IO_WORKERS_ARG="
 if not "%CAVEVIEWER_IO_WORKERS%"=="" set "IO_WORKERS_ARG=-IoWorkers %CAVEVIEWER_IO_WORKERS%"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %IO_WORKERS_ARG%
+start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %IO_WORKERS_ARG%
