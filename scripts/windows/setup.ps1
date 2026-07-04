@@ -256,7 +256,7 @@ $logBox.BorderStyle = "FixedSingle"
 $form.Controls.Add($logBox)
 
 $footerLabel = New-Object System.Windows.Forms.Label
-$footerLabel.Text = "You can leave this window open while setup runs. The log is here if something needs troubleshooting."
+$footerLabel.Text = "Licensed under GNU GPLv3. See LICENSE and THIRD_PARTY_NOTICES.md included with this setup folder."
 $footerLabel.Font = $FontSmall
 $footerLabel.ForeColor = $ColorMuted
 $footerLabel.Location = Point-S 28 500
@@ -856,6 +856,8 @@ Write-Log "Welcome to CaveViewer Setup."
 if ($IoWorkers -gt 0) {
     Write-Log "Runtime worker override enabled: CAVEVIEWER_IO_WORKERS=$IoWorkers"
 }
+Write-Log "CaveViewer is licensed under the GNU General Public License v3.0."
+Write-Log "License files are included with this setup folder: LICENSE and THIRD_PARTY_NOTICES.md."
 Write-Log "Click Install to set up Python, the required libraries, and a Desktop shortcut."
 
 [void]$form.ShowDialog()

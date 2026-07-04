@@ -88,7 +88,7 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         message = f"{program_name}\nVersion {version}"
         detail = (
             "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
-            "BottomLine Projects Scientific Dive Team and other volunteers.\n"
+            "BottomLine Projects Scientific Dive Team and other volunteers.\n\n"
             "Licensed under the GNU General Public License v3.0."
         )
 
@@ -139,7 +139,7 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             "-message", f"{program_name}\nVersion {version}",
             "-detail", (
                 "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
-                "BottomLine Projects Scientific Dive Team and other volunteers.\n"
+                "BottomLine Projects Scientific Dive Team and other volunteers.\n\n"
                 "Licensed under the GNU General Public License v3.0."
             ),
         )
