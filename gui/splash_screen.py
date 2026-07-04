@@ -88,6 +88,7 @@ def _resolve_asset_path(filename: str) -> str | None:
 # in-program loading-screen logo, reused here rather than shipping a
 # second copy of the same image.
 _LOGO_PATH = _resolve_asset_path("loading_logo.png")
+_APP_ICON_PATH = _resolve_asset_path("app_icon_logo.png")
 _LAST_BROWSE_PATH_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last_browse_path")
 _ADVANCED_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_advanced_settings.json")
 
@@ -135,6 +136,19 @@ _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
     "BottomLine Projects Scientific Dive Team and mr_v.\n\n"
     "Licensed under the GNU General Public License v3.0.\n")
+
+
+def _set_tk_window_icon(window) -> None:
+    if not _APP_ICON_PATH:
+        return
+    try:
+        from PIL import Image, ImageTk
+        icon_img = Image.open(_APP_ICON_PATH)
+        icon_photo = ImageTk.PhotoImage(icon_img, master=window)
+        window.iconphoto(True, icon_photo)
+        window._cv_app_icon_photo = icon_photo
+    except Exception as e:
+        _LOG.warning(f"could not set application window icon ({e}); continuing without it.")
 
 _ADVANCED_SETTING_FIELDS = (
     {
@@ -489,7 +503,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     _apply_advanced_settings_to_env(advanced_settings)
 
     configure_process_dpi_awareness()
-    root = tk.Tk()
+    root = tk.Tk(className=APP_NAME)
     apply_tk_scaling(root)
     splash_scale = tk_display_scale(root)
 
@@ -501,6 +515,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     root.title(program_name)
     root.configure(bg=_BG_COLOR)
     root.resizable(False, False)
+    _set_tk_window_icon(root)
 
     _PLATFORM_ADAPTER.install_about_handler(root, program_name, version)
 

@@ -485,7 +485,7 @@ def pick_folder_dialog() -> str | None:
     from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
 
     configure_process_dpi_awareness()
-    root = tk.Tk()
+    root = tk.Tk(className=APP_NAME)
     apply_tk_scaling(root)
     root.withdraw()
     folder = filedialog.askdirectory(
@@ -656,7 +656,7 @@ if __name__ == "__main__":
         try:
             import tkinter as tk
             from tkinter import messagebox
-            root = tk.Tk()
+            root = tk.Tk(className=APP_NAME)
             root.withdraw()
             messagebox.showerror("CaveViewer Error", error_msg)
         except Exception:

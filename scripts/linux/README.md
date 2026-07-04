@@ -13,13 +13,13 @@ This guide explains how to build a self-contained AppImage for CaveViewer on Lin
 
 ```bash
 # Download the latest appimagetool
-wget https://github.com/AppImage/AppImageKit/releases/download/13/appimaketool-x86_64.AppImage
+wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
 
 # Make it executable
 chmod +x appimagetool-x86_64.AppImage
 
 # Install to system PATH
-sudo mv appimagetool-x86_64.AppImage /usr/local/bin/appimaketool
+sudo mv appimagetool-x86_64.AppImage /usr/local/bin/appimagetool
 ```
 
 ### System Libraries
@@ -27,13 +27,13 @@ The build will automatically bundle most libraries, but ensure you have developm
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install libfreetype6-dev libgl1-mesa-dev
+sudo apt-get install file libfreetype6-dev libgl1-mesa-dev
 
 # Fedora/RHEL
-sudo dnf install freetype-devel mesa-libGL-devel
+sudo dnf install file freetype-devel mesa-libGL-devel
 
 # Arch
-sudo pacman -S freetype mesa
+sudo pacman -S file freetype mesa
 ```
 
 ## Build Steps
@@ -70,7 +70,7 @@ Wraps the PyInstaller output into a distributable AppImage:
 - Adds `.desktop` file for app menu integration
 - Includes app icon
 - Creates `AppRun` wrapper script
-- Runs `appimaketool` to create final `.AppImage` executable
+- Runs `appimagetool` to create final `.AppImage` executable
 
 ### Step 3: Full Release Workflow
 One-command build + package + manifest generation:
@@ -128,7 +128,10 @@ dist/linux/
 │   │   └── ...
 │   └── CaveViewer.AppDir/        # AppImage staging directory
 │       ├── AppRun                # Entry point script
-│       ├── CaveViewer            # Symlink to main executable
+│       ├── CaveViewer            # Symlink to bundled executable
+│       ├── caveviewer.desktop
+│       ├── caveviewer.png
+│       ├── usr/lib/caveviewer/   # Copied PyInstaller bundle
 │       ├── usr/share/
 │       │   ├── applications/
 │       │   │   └── caveviewer.desktop
@@ -141,7 +144,7 @@ dist/linux/
 
 ## Troubleshooting
 
-### "appimaketool not found"
+### "appimagetool not found"
 Install it as described in Prerequisites section above.
 
 ### Build fails on dependency
@@ -191,7 +194,7 @@ If you need finer control, you can use `linuxdeploy` for better library bundling
 wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
 chmod +x linuxdeploy-x86_64.AppImage
 
-# Use in package.sh instead of direct appimaketool
+# Use in package.sh instead of direct appimagetool
 ./linuxdeploy-x86_64.AppImage --appdir=$appdir --deploy-deps-only --output=appimage
 ```
 

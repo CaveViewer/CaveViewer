@@ -145,6 +145,8 @@ CAVEVIEWER_APP_ICON="" \
   --hidden-import=moderngl_window.context.pyglet \
   --add-data "$repo_root/shaders:shaders" \
   --add-data "$repo_root/gui/assets:gui/assets" \
+  --add-data "$repo_root/LICENSE:." \
+  --add-data "$repo_root/THIRD_PARTY_NOTICES.md:." \
   "$repo_root/caveviewer.py"
 
 app_dir="$dist_app_dir/CaveViewer"

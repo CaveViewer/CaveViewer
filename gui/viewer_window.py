@@ -83,6 +83,7 @@ def _resource_base_dir() -> str:
 
 
 SHADER_DIR = os.path.join(_resource_base_dir(), "shaders")
+APP_ICON_PATH = os.path.join(_resource_base_dir(), "gui", "assets", "app_icon_logo.png")
 
 
 _UI_PANEL_VERT_SRC = """
@@ -171,6 +172,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._set_runtime_window_icon()
 
         force_focus_env = os.getenv(self.FORCE_STARTUP_FOCUS_ENV, "").strip().lower()
         force_focus = force_focus_env in {"1", "true", "yes", "on"}
@@ -358,6 +360,33 @@ class CaveViewerWindow(mglw.WindowConfig):
         # has truly finished and the window is on screen, would risk the
         # exact same "nothing to draw into yet" problem this feature
         # exists to avoid.
+
+    def _set_runtime_window_icon(self) -> None:
+        """Set the native viewer-window icon when the backend exposes one."""
+        if not os.path.exists(APP_ICON_PATH):
+            _LOG.warning(f"viewer window icon asset not found: {APP_ICON_PATH}")
+            return
+
+        targets = []
+        for target in (getattr(self, "wnd", None), getattr(getattr(self, "wnd", None), "_window", None)):
+            if target is not None and target not in targets:
+                targets.append(target)
+
+        for target in targets:
+            set_icon = getattr(target, "set_icon", None)
+            if not callable(set_icon):
+                continue
+            try:
+                import pyglet
+                icon = pyglet.image.load(APP_ICON_PATH)
+                set_icon(icon)
+                _LOG.info("Set viewer window icon.")
+                return
+            except Exception as e:
+                _LOG.warning(f"could not set viewer window icon ({e}); continuing without it.")
+                return
+
+        _LOG.debug("viewer backend does not expose a set_icon() hook.")
 
     def _load_map(self, cache_dir: str, textures_dir: str, manifest: dict) -> None:
         """

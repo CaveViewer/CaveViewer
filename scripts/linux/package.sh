@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Package a standalone Linux app bundle as a distributable tarball.
-# Supports extraction and direct execution.
+# Package a standalone Linux app bundle as a standard AppDir/AppImage.
 #
 # Usage:
 #   ./scripts/linux/package.sh
@@ -11,9 +10,11 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 dist_app_dir="$repo_root/dist/linux/app"
 app_dir="$dist_app_dir/CaveViewer"
+appdir="$dist_app_dir/CaveViewer.AppDir"
 dist_packages_dir="$repo_root/dist/linux/packages"
+icon_src="$repo_root/gui/assets/app_icon_logo.png"
 
-# Extract version info from Python file
+# Extract version info from Python file.
 APP_NAME=$(grep "^APP_NAME = " "$repo_root/caveviewer_version.py" | grep -oP '"\K[^"]+')
 APP_VERSION=$(grep "^APP_VERSION = " "$repo_root/caveviewer_version.py" | grep -oP '"\K[^"]+')
 
@@ -33,110 +34,279 @@ if [ ! -d "$app_dir" ]; then
   exit 1
 fi
 
+if [ ! -f "$icon_src" ]; then
+  echo "Error: app icon not found at $icon_src"
+  exit 1
+fi
+
+find_appimagetool() {
+  if command -v appimagetool >/dev/null 2>&1; then
+    command -v appimagetool
+    return 0
+  fi
+  if command -v appimagetool-x86_64.AppImage >/dev/null 2>&1; then
+    command -v appimagetool-x86_64.AppImage
+    return 0
+  fi
+  if command -v appimagetool-aarch64.AppImage >/dev/null 2>&1; then
+    command -v appimagetool-aarch64.AppImage
+    return 0
+  fi
+  return 1
+}
+
+appimagetool_path="$(find_appimagetool || true)"
+if [ -z "$appimagetool_path" ]; then
+  echo "Error: appimagetool not found."
+  echo "Install appimagetool or build with scripts/linux/build_linux_in_docker.sh."
+  exit 1
+fi
+echo "Using appimagetool: $appimagetool_path"
+
 echo "Packaging CaveViewer v$APP_VERSION..."
 
 mkdir -p "$dist_packages_dir"
+rm -rf "$appdir"
 
 ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) appimage_arch="x86_64" ;;
+  aarch64|arm64) appimage_arch="aarch64" ;;
+  *) appimage_arch="$ARCH" ;;
+esac
 
-# Create distributable tarball with version info
-output_tarball="$dist_packages_dir/CaveViewer-${APP_VERSION}-${ARCH}.tar.gz"
 output_appimage="$dist_packages_dir/CaveViewer-${APP_VERSION}-${ARCH}.AppImage"
+rm -f "$output_appimage"
 
-# Create tarball of the app
-cd "$dist_app_dir"
-tar -czf "$output_tarball" CaveViewer/
+mkdir -p \
+  "$appdir/usr/lib/caveviewer" \
+  "$appdir/usr/share/applications" \
+  "$appdir/usr/share/icons/hicolor/256x256/apps"
 
-if [ ! -f "$output_tarball" ]; then
-  echo "Error: tarball creation failed"
-  exit 1
+cp -a "$app_dir/." "$appdir/usr/lib/caveviewer/"
+icon_dest="$appdir/usr/share/icons/hicolor/256x256/apps/caveviewer.png"
+icon_root="$appdir/caveviewer.png"
+icon_python="${CAVEVIEWER_LINUX_BUILD_VENV:-}/bin/python"
+if [ -x "$icon_python" ]; then
+  "$icon_python" -c '
+import pathlib
+import sys
+from PIL import Image
+
+src = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
+root_dest = pathlib.Path(sys.argv[3])
+
+img = Image.open(src).convert("RGBA")
+img.thumbnail((256, 256), Image.LANCZOS)
+canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+canvas.alpha_composite(img, ((256 - img.width) // 2, (256 - img.height) // 2))
+dest.parent.mkdir(parents=True, exist_ok=True)
+canvas.save(dest)
+canvas.save(root_dest)
+' "$icon_src" "$icon_dest" "$icon_root"
+else
+  cp "$icon_src" "$icon_dest"
+  cp "$icon_src" "$icon_root"
 fi
 
-# Create a simple self-extracting AppImage-like wrapper using tar
-# This creates a shell script that extracts and runs the app
-cat > "$output_appimage" << 'APPIMAGE_WRAPPER_EOF'
-#!/bin/bash
-# CaveViewer AppImage-like wrapper script
-# Extracts and runs the bundled application
+cat > "$appdir/caveviewer.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=CaveViewer
+Comment=Explore large 3-D cave maps
+Exec=AppRun
+Icon=caveviewer
+Terminal=false
+Categories=Graphics;Science;Viewer;
+StartupWMClass=CaveViewer
+EOF
+cp "$appdir/caveviewer.desktop" "$appdir/usr/share/applications/caveviewer.desktop"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMP_DIR="${TEMP_DIR:-/tmp}"
-EXTRACT_DIR="$TEMP_DIR/CaveViewer-runtime-$$"
+cat > "$appdir/AppRun" <<'APP_RUN_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Extract the bundled app
-mkdir -p "$EXTRACT_DIR"
+debug="${CAVEVIEWER_LAUNCH_DEBUG:-0}"
+launcher_version="2026-07-04-debug-stream-v2"
+log_file="${CAVEVIEWER_LAUNCH_LOG:-${TMPDIR:-/tmp}/caveviewer-launch.log}"
 
-# Extract everything after the __ARCHIVE_BELOW__ marker
-sed -n '/^__ARCHIVE_BELOW__$/,$p' "$0" | tail -n +2 | tar -xzf - -C "$EXTRACT_DIR"
-
-if [ ! -d "$EXTRACT_DIR/CaveViewer" ]; then
-  echo "Error: failed to extract AppImage"
-  rm -rf "$EXTRACT_DIR"
-  exit 1
+if [ -n "${APPDIR:-}" ]; then
+  appdir="$APPDIR"
+elif command -v readlink >/dev/null 2>&1; then
+  appdir="$(dirname "$(readlink -f "$0")")"
+else
+  appdir="$(cd "$(dirname "$0")" && pwd)"
 fi
 
-# Debug: show what was extracted
-# echo "DEBUG: AppImage contents:"
-# ls -la "$EXTRACT_DIR/CaveViewer/" | head -20
+runtime_root="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+if [ ! -d "$runtime_root" ] || [ ! -w "$runtime_root" ]; then
+  runtime_root="/tmp"
+fi
+gl_compat_dir="$(mktemp -d "$runtime_root/caveviewer-gl-compat.XXXXXX")"
+cleanup() {
+  rm -rf "$gl_compat_dir"
+}
+trap cleanup EXIT
 
-# On RPM-based distros (Fedora, RHEL, etc.) the unversioned libGL.so / libEGL.so
-# symlinks are only available in -devel packages and are often absent at runtime.
-# Build a compat directory with unversioned symlinks pointing at the real versioned
-# libraries so that PyInstaller's ctypes hook can resolve them via LD_LIBRARY_PATH.
-GL_COMPAT_DIR="$EXTRACT_DIR/gl_compat"
-mkdir -p "$GL_COMPAT_DIR"
-for lib_base in libGL libEGL libGLU libGLES1_CM libGLESv2; do
-  unversioned="${lib_base}.so"
-  # Only create a compat symlink when the unversioned name is not already present
-  if ! ldconfig -p 2>/dev/null | grep -q "[[:space:]]${unversioned}[[:space:]]"; then
-    versioned_path=$(ldconfig -p 2>/dev/null | grep "[[:space:]]${lib_base}\.so\." | awk '{print $NF}' | sort -V | tail -1)
-    if [ -n "$versioned_path" ]; then
-      ln -sf "$versioned_path" "$GL_COMPAT_DIR/${unversioned}"
-    fi
+if [ "$debug" = "1" ]; then
+  echo "[CaveViewer AppRun] launcher_version=$launcher_version"
+  echo "[CaveViewer AppRun] launch_log=$log_file"
+  echo "[CaveViewer AppRun] APPDIR=$appdir"
+  echo "[CaveViewer AppRun] runtime_root=$runtime_root"
+  echo "[CaveViewer AppRun] gl_compat_dir=$gl_compat_dir"
+  echo "[CaveViewer AppRun] uname=$(uname -a)"
+fi
+
+install_desktop_integration() {
+  if [ "${CAVEVIEWER_NO_DESKTOP_INTEGRATION:-0}" = "1" ]; then
+    return
   fi
-done
+  if [ -z "${APPIMAGE:-}" ] || [ -z "${HOME:-}" ]; then
+    return
+  fi
 
-# Set up library paths (gl_compat first so the symlinks are found before system dirs)
-export LD_LIBRARY_PATH="$GL_COMPAT_DIR:$EXTRACT_DIR/CaveViewer/lib:$EXTRACT_DIR/CaveViewer/lib64:${LD_LIBRARY_PATH:-}"
+  data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+  applications_dir="$data_home/applications"
+  icons_dir="$data_home/icons/hicolor/256x256/apps"
+  desktop_path="$applications_dir/caveviewer.desktop"
+  icon_path="$icons_dir/caveviewer.png"
 
-# Make sure we can find system tcl/tk libraries if needed
-export TCL_LIBRARY="/usr/share/tcltk/tcl8.6"
-export TK_LIBRARY="/usr/share/tcltk/tk8.6"
+  mkdir -p "$applications_dir" "$icons_dir"
+  if [ -f "$appdir/caveviewer.png" ]; then
+    cp "$appdir/caveviewer.png" "$icon_path"
+  fi
 
-# Let PyInstaller's bundled Python handle its own module paths
-# (do not override PYTHONPATH - it interferes with PyInstaller's _internal discovery)
+  cat > "$desktop_path" <<DESKTOP_EOF
+[Desktop Entry]
+Type=Application
+Name=CaveViewer
+Comment=Explore large 3-D cave maps
+Exec="$APPIMAGE"
+Icon=caveviewer
+Terminal=false
+Categories=Graphics;Science;Viewer;
+StartupWMClass=CaveViewer
+DESKTOP_EOF
+  chmod 0644 "$desktop_path" "$icon_path" 2>/dev/null || true
 
-"$EXTRACT_DIR/CaveViewer/CaveViewer" "$@"
-exit_code=$?
+  if [ "$debug" = "1" ]; then
+    echo "[CaveViewer AppRun] Desktop file: $desktop_path"
+    echo "[CaveViewer AppRun] Desktop icon: $icon_path"
+  fi
+}
 
-# Cleanup
-rm -rf "$EXTRACT_DIR"
-exit $exit_code
-APPIMAGE_WRAPPER_EOF
+install_desktop_integration
 
-# Add archive marker before the tarball
-echo "__ARCHIVE_BELOW__" >> "$output_appimage"
+# On RPM-based distros (Fedora, RHEL, etc.) the unversioned libGL.so /
+# libEGL.so symlinks are often only available in -devel packages. Create
+# temporary compat symlinks so PyInstaller's ctypes hook can resolve them.
+if [ "$debug" = "1" ]; then
+  echo "[CaveViewer AppRun] Checking OpenGL compatibility libraries..."
+fi
+if command -v ldconfig >/dev/null 2>&1; then
+  for lib_base in libGL libEGL libGLU libGLES1_CM libGLESv2; do
+    unversioned="${lib_base}.so"
+    if ! ldconfig -p 2>/dev/null | grep -q "[[:space:]]${unversioned}[[:space:]]"; then
+      versioned_path=$(ldconfig -p 2>/dev/null | grep "[[:space:]]${lib_base}\.so\." | awk '{print $NF}' | sort -V | tail -1 || true)
+      if [ -n "$versioned_path" ]; then
+        ln -sf "$versioned_path" "$gl_compat_dir/${unversioned}"
+        if [ "$debug" = "1" ]; then
+          echo "[CaveViewer AppRun] Linked $unversioned -> $versioned_path"
+        fi
+      elif [ "$debug" = "1" ]; then
+        echo "[CaveViewer AppRun] No versioned candidate found for $unversioned"
+      fi
+    fi
+  done
+fi
+if [ "$debug" = "1" ]; then
+  echo "[CaveViewer AppRun] OpenGL compatibility check complete."
+fi
 
-# Append the tarball to the wrapper script
-cat "$output_tarball" >> "$output_appimage"
+export LD_LIBRARY_PATH="$gl_compat_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
+export TCL_LIBRARY="${TCL_LIBRARY:-/usr/share/tcltk/tcl8.6}"
+export TK_LIBRARY="${TK_LIBRARY:-/usr/share/tcltk/tk8.6}"
 
+executable="$appdir/usr/lib/caveviewer/CaveViewer"
+if [ ! -x "$executable" ]; then
+  echo "Error: CaveViewer executable not found or not executable:"
+  echo "  $executable"
+  exit 1
+fi
+
+{
+  echo "[CaveViewer AppRun] $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "[CaveViewer AppRun] launcher_version=$launcher_version"
+  echo "[CaveViewer AppRun] APPDIR=$appdir"
+  echo "[CaveViewer AppRun] executable=$executable"
+  echo "[CaveViewer AppRun] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
+  echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
+  echo "[CaveViewer AppRun] args=$*"
+} > "$log_file" 2>&1
+
+if [ "$debug" = "1" ]; then
+  echo "[CaveViewer AppRun] executable=$executable"
+  echo "[CaveViewer AppRun] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
+  echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
+  echo "[CaveViewer AppRun] Starting CaveViewer..."
+fi
+
+set +e
+if [ "$debug" = "1" ]; then
+  "$executable" "$@" 2>&1 | tee -a "$log_file"
+  exit_code=${PIPESTATUS[0]}
+else
+  "$executable" "$@" >> "$log_file" 2>&1
+  exit_code=$?
+fi
+set -e
+
+if [ "$debug" = "1" ]; then
+  echo "[CaveViewer AppRun] CaveViewer exited with code $exit_code"
+  echo "[CaveViewer AppRun] Launch log: $log_file"
+fi
+if [ "$exit_code" -ne 0 ]; then
+  echo "CaveViewer exited with code $exit_code."
+  echo "Launch log: $log_file"
+  echo ""
+  tail -n 80 "$log_file" || true
+fi
+exit "$exit_code"
+APP_RUN_EOF
+chmod +x "$appdir/AppRun"
+echo "AppRun launcher marker:"
+grep "launcher_version=" "$appdir/AppRun"
+
+# AppImageKit expects these at the AppDir root.
+ln -sfn "usr/lib/caveviewer/CaveViewer" "$appdir/CaveViewer"
+
+echo "Creating AppImage..."
+if ! ARCH="$appimage_arch" APPIMAGE_EXTRACT_AND_RUN=1 "$appimagetool_path" "$appdir" "$output_appimage"; then
+  echo ""
+  echo "Error: appimagetool failed before creating the AppImage."
+  echo "AppDir was left in place for inspection: $appdir"
+  echo "Expected output was: $output_appimage"
+  exit 1
+fi
+if [ ! -f "$output_appimage" ]; then
+  echo ""
+  echo "Error: appimagetool completed but did not create the expected AppImage:"
+  echo "  $output_appimage"
+  echo "AppDir was left in place for inspection: $appdir"
+  exit 1
+fi
 chmod +x "$output_appimage"
-
-# Clean up tarball (it's now embedded in the AppImage)
-rm -f "$output_tarball"
 
 echo ""
 echo "====================================================="
 echo "Package created successfully!"
 echo "====================================================="
+echo "AppDir: $appdir"
 echo "Output: $output_appimage"
 echo "Size: $(du -h "$output_appimage" | cut -f1)"
 echo ""
 echo "To run:"
 echo "  $output_appimage"
-echo ""
-echo "To extract:"
-echo "  mkdir -p extract_dir"
-echo "  cd extract_dir"
-echo "  tail -n +9 $output_appimage | tar xzf -"
-echo "  ./CaveViewer/CaveViewer"

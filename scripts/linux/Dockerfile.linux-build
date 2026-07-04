@@ -27,8 +27,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libwebp-dev \
     libopenjp2-7-dev \
     curl \
+    ca-certificates \
+    file \
     sudo \
     git
+
+# AppImageKit is used by scripts/linux/package.sh to create the final
+# launcher-integrated AppImage from the staged AppDir.
+RUN arch="$(uname -m)" && \
+    case "$arch" in \
+      x86_64) appimage_arch="x86_64" ;; \
+      aarch64|arm64) appimage_arch="aarch64" ;; \
+      *) echo "Unsupported appimagetool architecture: $arch"; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /usr/local/bin/appimagetool \
+      "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${appimage_arch}.AppImage" && \
+    chmod +x /usr/local/bin/appimagetool
 
 # Copy the real Python 3.12 binary (not a symlink) into a portable cache
 # structure so build_linux_app.sh finds it immediately and skips its own
