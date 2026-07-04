@@ -252,13 +252,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         # screen, mirroring the brightness control's placement logic but
         # on the opposite side. Directly drives
         # self.world.config.load_radius_cells live, same as the slider it
-        # replaced. Range is 1-10 chunk-radius units. Default to 1 so cached
-        # maps become visible quickly on storage-sensitive Windows systems;
-        # users can raise it once the initial area is visible. StreamingWorld's max_loaded_chunks safety valve
+        # replaced. Range is 1-10 chunk-radius units. Default is 3 for a
+        # balanced initial view radius without being overly aggressive on
+        # memory usage. StreamingWorld's max_loaded_chunks safety valve
         # (see core/streaming_world.py) still applies underneath this as
         # a hard backstop regardless of what this is set to.
         self.render_distance_stepper = StepperControl(
-            self.ctx, "DISTANCE", initial_value=1, min_value=1, max_value=10
+            self.ctx, "DISTANCE", initial_value=3, min_value=1, max_value=10
         )
 
         # "Global illumination" control: not actual simulated light
@@ -394,7 +394,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                 f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}m, "
                 "but existing/prebuilt caches stream using the chunk size recorded in manifest.json."
             )
-        config = StreamingConfig(chunk_size=chunk_size, load_radius_cells=4, unload_radius_margin=1)
+        config = StreamingConfig(
+            chunk_size=chunk_size,
+            load_radius_cells=self.render_distance_stepper.value,
+            unload_radius_margin=1,
+        )
         self.world = StreamingWorld(self.cache_dir, config, on_decode_textures=predecode_textures_for_chunk)
 
         # pick a sane starting position: center of the first available chunk,

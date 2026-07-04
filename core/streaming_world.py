@@ -17,6 +17,7 @@ This keeps the streaming *logic* unit-testable without an OpenGL context
 
 from __future__ import annotations
 
+import heapq
 import os
 import subprocess
 import threading
@@ -213,26 +214,33 @@ class StreamingWorld:
         self.cache_dir = cache_dir
         self.config = config
         self.on_decode_textures = on_decode_textures
-        self.manifest = chunker.load_manifest(cache_dir)
-        self.available_cells: set[tuple[int, int, int]] = {
-            tuple(int(x) for x in cell_str.split("_"))
-            for cell_str in self.manifest["chunks"]
-        }
+        manifest = chunker.load_manifest(cache_dir) or {"chunks": {}}
+        chunks = manifest.get("chunks", {})
+        sampled_chunk_keys: list[str] = []
+        self.available_cells: set[tuple[int, int, int]] = set()
+        for i, cell_str in enumerate(chunks.keys()):
+            self.available_cells.add(tuple(int(x) for x in cell_str.split("_")))
+            if i < 128:
+                sampled_chunk_keys.append(cell_str)
         self._last_wanted_cells: set[tuple[int, int, int]] = set()
 
         target_env = os.environ.get("CAVEVIEWER_MEMORY_UTILIZATION_TARGET")
         self._memory_target_fraction = _parse_memory_target_fraction(target_env)
         self._total_ram_bytes = _detect_total_ram_bytes()
-        self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes()
+        self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes(sampled_chunk_keys)
         gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
         self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
         self._total_gpu_memory_bytes = _detect_total_gpu_memory_bytes()
-        self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes()
+        self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes(sampled_chunk_keys)
         self._configure_chunk_budget_from_memory_targets()
 
         self.loaded_cells: set[tuple[int, int, int]] = set()
         self._pending: set[tuple[int, int, int]] = set()
-        self._ready_queue: "queue.Queue[ChunkData]" = queue.Queue()
+        # Cap how many fully-decoded chunk payloads can wait in RAM.
+        # This bounds worst-case worker-ahead memory spikes when the
+        # render thread is temporarily slower than background decoding.
+        ready_queue_capacity = max(16, min(256, self.config.max_loaded_chunks))
+        self._ready_queue: "queue.Queue[ChunkData]" = queue.Queue(maxsize=ready_queue_capacity)
         self._lock = threading.Lock()
         worker_env = os.environ.get("CAVEVIEWER_IO_WORKERS")
         if worker_env:
@@ -266,16 +274,14 @@ class StreamingWorld:
         self._last_camera_cell: Optional[tuple[int, int, int]] = None
         self._last_load_radius: Optional[int] = None
 
-    def _estimate_chunk_ram_bytes(self) -> int:
+    def _estimate_chunk_ram_bytes(self, chunk_keys: list[str]) -> int:
         """Estimate in-RAM cost per loaded chunk from cache chunk file sizes."""
         chunks_dir = os.path.join(self.cache_dir, chunker.CHUNKS_DIRNAME)
-        chunk_keys = list(self.manifest.get("chunks", {}).keys())
         if not chunk_keys:
             return 2 * 1024 * 1024
 
-        sample_limit = min(128, len(chunk_keys))
         sampled_sizes: list[int] = []
-        for cell_str in chunk_keys[:sample_limit]:
+        for cell_str in chunk_keys:
             path = os.path.join(chunks_dir, f"{cell_str}.bin")
             try:
                 size = os.path.getsize(path)
@@ -294,16 +300,14 @@ class StreamingWorld:
         overhead_multiplier = 6.0
         return max(int(median_size * overhead_multiplier), 512 * 1024)
 
-    def _estimate_chunk_gpu_bytes(self) -> int:
+    def _estimate_chunk_gpu_bytes(self, chunk_keys: list[str]) -> int:
         """Estimate GPU-resident cost per loaded chunk from cache chunk sizes."""
         chunks_dir = os.path.join(self.cache_dir, chunker.CHUNKS_DIRNAME)
-        chunk_keys = list(self.manifest.get("chunks", {}).keys())
         if not chunk_keys:
             return 2 * 1024 * 1024
 
-        sample_limit = min(128, len(chunk_keys))
         sampled_sizes: list[int] = []
-        for cell_str in chunk_keys[:sample_limit]:
+        for cell_str in chunk_keys:
             path = os.path.join(chunks_dir, f"{cell_str}.bin")
             try:
                 size = os.path.getsize(path)
@@ -418,7 +422,12 @@ class StreamingWorld:
                         # becoming ready -- worst case, acquire() falls back
                         # to a synchronous decode on the main thread later.
                         _LOG.warning(f"texture pre-decode failed for {cell}: {e}")
-                self._ready_queue.put(data)
+                while not self._stop_event.is_set():
+                    try:
+                        self._ready_queue.put(data, timeout=0.2)
+                        break
+                    except queue.Full:
+                        continue
             except FileNotFoundError:
                 # cell vanished from manifest expectations; ignore safely
                 pass
@@ -452,7 +461,7 @@ class StreamingWorld:
         self._last_load_radius = current_radius
 
         load_r = self.config.load_radius_cells
-        wanted = self._cells_in_radius(cam_cell, load_r) & self.available_cells
+        wanted = self._available_cells_in_radius(cam_cell, load_r)
         if len(wanted) > self.config.max_loaded_chunks:
             ordered_wanted = sorted(
                 wanted,
@@ -482,21 +491,35 @@ class StreamingWorld:
         # the instant it's outside the tight load ring -- avoids reload
         # thrashing if the camera oscillates near a boundary.
         unload_r = self.config.unload_radius_cells
-        keep = self._cells_in_radius(cam_cell, unload_r)
-        self._cells_to_unload_next_drain = self.loaded_cells - keep
+        self._cells_to_unload_next_drain = {
+            cell
+            for cell in self.loaded_cells
+            if not self._cell_in_cube_radius(cell, cam_cell, unload_r)
+        }
         self._last_cam_cell_for_priority = cam_cell
 
     def _cell_distance_sq(self, cell: tuple[int, int, int], center: tuple[int, int, int]) -> int:
         return (cell[0] - center[0]) ** 2 + (cell[1] - center[1]) ** 2 + (cell[2] - center[2]) ** 2
 
-    def _cells_in_radius(self, center: tuple[int, int, int], radius: int) -> set[tuple[int, int, int]]:
+    def _available_cells_in_radius(self, center: tuple[int, int, int], radius: int) -> set[tuple[int, int, int]]:
         cx, cy, cz = center
-        return {
-            (cx + dx, cy + dy, cz + dz)
-            for dx in range(-radius, radius + 1)
-            for dy in range(-radius, radius + 1)
-            for dz in range(-radius, radius + 1)
-        }
+        available = self.available_cells
+        wanted: set[tuple[int, int, int]] = set()
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                for dz in range(-radius, radius + 1):
+                    cell = (cx + dx, cy + dy, cz + dz)
+                    if cell in available:
+                        wanted.add(cell)
+        return wanted
+
+    @staticmethod
+    def _cell_in_cube_radius(cell: tuple[int, int, int], center: tuple[int, int, int], radius: int) -> bool:
+        return (
+            abs(cell[0] - center[0]) <= radius
+            and abs(cell[1] - center[1]) <= radius
+            and abs(cell[2] - center[2]) <= radius
+        )
 
     def drain_ready_chunks(self, on_chunk_ready: Callable[[ChunkData], None],
                              on_chunk_unload: Callable[[tuple], None],
@@ -582,15 +605,23 @@ class StreamingWorld:
             if over_budget > 0:
                 cam_cell = getattr(self, "_last_cam_cell_for_priority", None)
                 if cam_cell is not None:
-                    preferred = [c for c in self.loaded_cells if c not in self._last_wanted_cells]
-                    fallback = [c for c in self.loaded_cells if c in self._last_wanted_cells]
-                    preferred.sort(key=lambda c: self._cell_distance_sq(c, cam_cell), reverse=True)
-                    fallback.sort(key=lambda c: self._cell_distance_sq(c, cam_cell), reverse=True)
-                    eviction_order = preferred + fallback
+                    preferred = heapq.nlargest(
+                        over_budget,
+                        (c for c in self.loaded_cells if c not in self._last_wanted_cells),
+                        key=lambda c: self._cell_distance_sq(c, cam_cell),
+                    )
+                    remaining = over_budget - len(preferred)
+                    if remaining > 0:
+                        fallback = heapq.nlargest(
+                            remaining,
+                            (c for c in self.loaded_cells if c in self._last_wanted_cells),
+                            key=lambda c: self._cell_distance_sq(c, cam_cell),
+                        )
+                        to_evict = preferred + fallback
+                    else:
+                        to_evict = preferred
                 else:
-                    eviction_order = list(self.loaded_cells)
-
-                to_evict = eviction_order[:over_budget]
+                    to_evict = list(self.loaded_cells)[:over_budget]
                 for cell in to_evict:
                     self.loaded_cells.discard(cell)
 

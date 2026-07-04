@@ -308,7 +308,8 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
     has_normals = mesh.normals.shape[0] > 0
     has_uvs = mesh.uvs.shape[0] > 0
 
-    all_positions = []
+    bounds_min = None
+    bounds_max = None
     used_materials = []
 
     with open(path, "wb") as f:
@@ -321,17 +322,30 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
             uv_idx = mesh.face_uv_idx[face_idx].reshape(-1)
             nrm_idx = mesh.face_nrm_idx[face_idx].reshape(-1)
 
-            flat_pos = mesh.positions[pos_idx].astype(np.float32)
+            # RawMesh arrays are already float32; copy=False avoids an
+            # unnecessary second conversion copy while still enforcing dtype
+            # if a non-standard mesh source ever slips through.
+            flat_pos = mesh.positions[pos_idx].astype(np.float32, copy=False)
 
             if has_uvs and (uv_idx >= 0).all():
-                flat_uv = mesh.uvs[uv_idx].astype(np.float32)
+                flat_uv = mesh.uvs[uv_idx].astype(np.float32, copy=False)
             else:
                 flat_uv = np.zeros((len(pos_idx), 2), dtype=np.float32)
 
             if has_normals and (nrm_idx >= 0).all():
-                flat_nrm = mesh.normals[nrm_idx].astype(np.float32)
+                flat_nrm = mesh.normals[nrm_idx].astype(np.float32, copy=False)
             else:
                 flat_nrm = _compute_flat_normals(flat_pos)
+
+            if len(flat_pos):
+                group_min = flat_pos.min(axis=0)
+                group_max = flat_pos.max(axis=0)
+                if bounds_min is None:
+                    bounds_min = group_min.copy()
+                    bounds_max = group_max.copy()
+                else:
+                    np.minimum(bounds_min, group_min, out=bounds_min)
+                    np.maximum(bounds_max, group_max, out=bounds_max)
 
             name_bytes = mat_name.encode("utf-8")
             f.write(struct.pack("<I", len(name_bytes)))
@@ -341,11 +355,12 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
             f.write(flat_uv.tobytes())
             f.write(flat_nrm.tobytes())
 
-            all_positions.append(flat_pos)
             used_materials.append(mat_name)
 
-    stacked = np.concatenate(all_positions, axis=0)
-    return stacked.min(axis=0), stacked.max(axis=0), used_materials
+    if bounds_min is None:
+        bounds_min = np.zeros(3, dtype=np.float32)
+        bounds_max = np.zeros(3, dtype=np.float32)
+    return bounds_min, bounds_max, used_materials
 
 
 def _compute_flat_normals(flat_pos: np.ndarray) -> np.ndarray:
@@ -468,7 +483,8 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
     offset += 4
 
     groups = {}
-    all_pos = []
+    bmin = None
+    bmax = None
     for _ in range(n_groups):
         name_len = struct.unpack_from("<I", blob, offset)[0]
         offset += 4
@@ -490,11 +506,19 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
         offset += nrm_count * 4
 
         groups[name] = ChunkMaterialGroup(name, positions, uvs, normals)
-        all_pos.append(positions)
+        if len(positions):
+            group_min = positions.min(axis=0)
+            group_max = positions.max(axis=0)
+            if bmin is None:
+                bmin = group_min.copy()
+                bmax = group_max.copy()
+            else:
+                np.minimum(bmin, group_min, out=bmin)
+                np.maximum(bmax, group_max, out=bmax)
 
-    stacked = np.concatenate(all_pos, axis=0) if all_pos else np.zeros((0, 3), np.float32)
-    bmin = stacked.min(axis=0) if len(stacked) else np.zeros(3, np.float32)
-    bmax = stacked.max(axis=0) if len(stacked) else np.zeros(3, np.float32)
+    if bmin is None:
+        bmin = np.zeros(3, dtype=np.float32)
+        bmax = np.zeros(3, dtype=np.float32)
 
     return ChunkData(cell=cell, groups=groups, bounds_min=bmin, bounds_max=bmax)
 

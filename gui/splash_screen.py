@@ -954,38 +954,85 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             _save_advanced_settings(advanced_settings)
             dialog.destroy()
 
-        cancel_button = tk.Button(
-            button_row,
-            text="Cancel",
-            command=on_cancel,
-            font=_SMALL_FONT,
-            bg="#2a2a33",
-            fg=_SUBTITLE_COLOR,
-            activebackground="#33333f",
-            activeforeground=_SUBTITLE_COLOR,
-            relief="flat",
-            borderwidth=0,
-            padx=12,
-            pady=6,
-            cursor="hand2",
-        )
+        if sys.platform == "darwin":
+            def _make_action_label(parent, text, command, bg, fg, hover_bg, padx):
+                label = tk.Label(
+                    parent,
+                    text=text,
+                    font=_SMALL_FONT,
+                    bg=bg,
+                    fg=fg,
+                    padx=padx,
+                    pady=6,
+                    cursor="hand2",
+                    takefocus=True,
+                    highlightthickness=1,
+                    highlightbackground="#3a4454",
+                    highlightcolor="#7e96b8",
+                )
 
-        apply_button = tk.Button(
-            button_row,
-            text="Apply",
-            command=on_apply,
-            font=_SMALL_FONT,
-            bg=_BUTTON_BG,
-            fg=_BUTTON_FG,
-            activebackground=_BUTTON_BG,
-            activeforeground=_BUTTON_FG,
-            relief="flat",
-            borderwidth=0,
-            padx=16,
-            pady=6,
-            cursor="hand2",
-            default="active",
-        )
+                def _invoke(_event=None):
+                    command()
+                    return "break"
+
+                label.bind("<Button-1>", _invoke)
+                label.bind("<Return>", _invoke)
+                label.bind("<space>", _invoke)
+                label.bind("<Enter>", lambda _event: label.config(bg=hover_bg))
+                label.bind("<Leave>", lambda _event: label.config(bg=bg))
+                return label
+
+            cancel_button = _make_action_label(
+                button_row,
+                text="Cancel",
+                command=on_cancel,
+                bg="#2a2a33",
+                fg=_SUBTITLE_COLOR,
+                hover_bg="#33333f",
+                padx=12,
+            )
+            apply_button = _make_action_label(
+                button_row,
+                text="Apply",
+                command=on_apply,
+                bg=_BUTTON_BG,
+                fg=_BUTTON_FG,
+                hover_bg="#d8b34d",
+                padx=16,
+            )
+        else:
+            cancel_button = tk.Button(
+                button_row,
+                text="Cancel",
+                command=on_cancel,
+                font=_SMALL_FONT,
+                bg="#2a2a33",
+                fg=_SUBTITLE_COLOR,
+                activebackground="#33333f",
+                activeforeground=_SUBTITLE_COLOR,
+                relief="flat",
+                borderwidth=0,
+                padx=12,
+                pady=6,
+                cursor="hand2",
+            )
+
+            apply_button = tk.Button(
+                button_row,
+                text="Apply",
+                command=on_apply,
+                font=_SMALL_FONT,
+                bg=_BUTTON_BG,
+                fg=_BUTTON_FG,
+                activebackground=_BUTTON_BG,
+                activeforeground=_BUTTON_FG,
+                relief="flat",
+                borderwidth=0,
+                padx=16,
+                pady=6,
+                cursor="hand2",
+                default="active",
+            )
 
         apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
