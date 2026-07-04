@@ -12,9 +12,9 @@ No matter which format you open, the experience is the same. CaveViewer automati
 
 CaveViewer is currently available for the following platforms:
 
-macOS (Apple Silicon)
-Linux (Fedora and Ubuntu)
-Windows (10 and 11)
+- macOS (Apple Silicon)
+- Linux (Fedora and Ubuntu)
+- Windows (10 and 11)
 
 Support for additional operating systems and distributions may be added in the future based on community interest and user demand. If your preferred platform is not currently supported, we'd love to hear from you.
 
