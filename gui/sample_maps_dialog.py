@@ -252,9 +252,12 @@ def show_sample_maps_dialog(parent, install_dir):
     # path free of any filesystem stat -- a stale saved path on a slow or
     # disconnected volume could otherwise block and delay the folder
     # chooser from appearing after the button is pressed.
-    initial_save_dir = [_load_last_sample_maps_dir() or install_dir]
+    remembered_save_dir = _load_last_sample_maps_dir()
+    sample_maps_root_dir = remembered_save_dir or install_dir
+    initial_save_dir = [sample_maps_root_dir]
 
     def _download_flow(sample):
+        nonlocal sample_maps_root_dir
         if sample.download_url is None:
             messagebox.showinfo(
                 "Sample Maps",
@@ -277,6 +280,7 @@ def show_sample_maps_dialog(parent, install_dir):
             return  # User cancelled the directory selection
 
         _save_last_sample_maps_dir(save_dir)
+        sample_maps_root_dir = save_dir
         initial_save_dir[0] = save_dir
         if not _dialog_exists():
             return
@@ -435,7 +439,7 @@ def show_sample_maps_dialog(parent, install_dir):
             btn.config(text=text, command=command)
 
     def on_pick(sample):
-        sample_path = local_sample_map_path(install_dir, sample)
+        sample_path = local_sample_map_path(sample_maps_root_dir, sample)
 
         # Only treat the map as openable if its folder still contains a usable
         # map. The folder can go stale between opening this dialog and clicking
@@ -444,7 +448,7 @@ def show_sample_maps_dialog(parent, install_dir):
         # .glb / .obj+.mtl / cache. Validate the same way the splash screen's
         # Open flow does so a broken folder shows a friendly message instead of
         # crashing the viewer with "No supported model file found".
-        if is_sample_map_already_downloaded(install_dir, sample):
+        if is_sample_map_already_downloaded(sample_maps_root_dir, sample):
             is_valid, error_message = _validate_selected_map_folder(sample_path)
             if is_valid:
                 _open_installed_sample(sample_path)
@@ -502,7 +506,7 @@ def show_sample_maps_dialog(parent, install_dir):
             fg=_SUBTITLE_COLOR, bg=_PANEL_COLOR, anchor="w",
         ).pack(anchor="w")
 
-        already_have = is_sample_map_already_downloaded(install_dir, sample)
+        already_have = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
         if already_have:
             detail_text = "Downloaded"
         else:

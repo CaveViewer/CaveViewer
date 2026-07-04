@@ -49,7 +49,7 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
         )
 
     def default_update_repo(self) -> str:
-        return "KernalPanic/CaveViewerPlus"
+        return "KernalPanic/CaveViewer"
 
     def default_update_manifest_url(self, repo: str) -> str:
         return f"https://raw.githubusercontent.com/{repo}/main/updates/macos/stable.json"

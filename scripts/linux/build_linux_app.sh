@@ -85,6 +85,42 @@ print(matches[-1][1])
 PY
 }
 
+ensure_standalone_python_toolchain_shims() {
+  local shim_dir="/tools/llvm/bin"
+  local created_with_sudo=false
+
+  if [ -x "$shim_dir/llvm-ar" ]; then
+    return 0
+  fi
+
+  for tool in ar ranlib nm; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      echo "Error: required build tool not found: $tool"
+      exit 1
+    fi
+  done
+
+  if mkdir -p "$shim_dir" 2>/dev/null; then
+    :
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo mkdir -p "$shim_dir"
+    created_with_sudo=true
+  else
+    echo "Warning: could not create $shim_dir; Pillow may fail if standalone Python references LLVM tools there."
+    return 0
+  fi
+
+  if $created_with_sudo; then
+    sudo ln -sf "$(command -v ar)" "$shim_dir/llvm-ar"
+    sudo ln -sf "$(command -v ranlib)" "$shim_dir/llvm-ranlib"
+    sudo ln -sf "$(command -v nm)" "$shim_dir/llvm-nm"
+  else
+    ln -sf "$(command -v ar)" "$shim_dir/llvm-ar"
+    ln -sf "$(command -v ranlib)" "$shim_dir/llvm-ranlib"
+    ln -sf "$(command -v nm)" "$shim_dir/llvm-nm"
+  fi
+}
+
 # Download (or reuse cached) a portable Python binary.
 # Prints the path to the python3 executable.
 setup_portable_python() {
@@ -167,6 +203,7 @@ echo ""
 standalone_python=$(setup_portable_python)
 echo "Using portable Python: $standalone_python"
 echo ""
+ensure_standalone_python_toolchain_shims
 
 if [ ! -x "$venv_dir/bin/python" ]; then
   echo "Creating virtual environment at $venv_dir..."
