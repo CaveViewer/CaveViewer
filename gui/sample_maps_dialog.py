@@ -434,7 +434,7 @@ def show_sample_maps_dialog(parent, install_dir):
     max_width = min(_screen_w - anchor_x - 8, _px(760))
     max_height = min(_screen_h - anchor_y - 8, _px(760))
     fitted_width = max(window_w, min(dialog.winfo_reqwidth(), max_width))
-    fitted_height = max(preload_h, min(dialog.winfo_reqheight(), max_height))
+    fitted_height = min(dialog.winfo_reqheight(), max_height)
     dialog.geometry(f"{fitted_width}x{fitted_height}+{anchor_x}+{anchor_y}")
 
     dialog.wait_window()
