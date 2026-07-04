@@ -33,7 +33,12 @@ jobs:
       - name: Install system build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y file fuse libfuse2
+          sudo apt-get install -y build-essential binutils file fuse libfuse2
+          sudo mkdir -p /tools/llvm/bin
+          sudo ln -sf "$(command -v ar)" /tools/llvm/bin/llvm-ar
+          sudo ln -sf "$(command -v ranlib)" /tools/llvm/bin/llvm-ranlib
+          sudo ln -sf "$(command -v nm)" /tools/llvm/bin/llvm-nm
+          ls -l /tools/llvm/bin/llvm-ar /tools/llvm/bin/llvm-ranlib /tools/llvm/bin/llvm-nm
 
       - name: Build and publish Linux x86_64 AppImage
         env:

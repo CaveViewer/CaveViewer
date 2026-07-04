@@ -89,7 +89,7 @@ ensure_standalone_python_toolchain_shims() {
   local shim_dir="/tools/llvm/bin"
   local created_with_sudo=false
 
-  if [ -x "$shim_dir/llvm-ar" ]; then
+  if [ -x "$shim_dir/llvm-ar" ] && [ -x "$shim_dir/llvm-ranlib" ] && [ -x "$shim_dir/llvm-nm" ]; then
     return 0
   fi
 
@@ -119,6 +119,16 @@ ensure_standalone_python_toolchain_shims() {
     ln -sf "$(command -v ranlib)" "$shim_dir/llvm-ranlib"
     ln -sf "$(command -v nm)" "$shim_dir/llvm-nm"
   fi
+
+  for llvm_tool in llvm-ar llvm-ranlib llvm-nm; do
+    if [ ! -x "$shim_dir/$llvm_tool" ]; then
+      echo "Error: failed to create standalone Python toolchain shim: $shim_dir/$llvm_tool"
+      exit 1
+    fi
+  done
+
+  echo "Standalone Python toolchain shims:"
+  ls -l "$shim_dir/llvm-ar" "$shim_dir/llvm-ranlib" "$shim_dir/llvm-nm"
 }
 
 # Download (or reuse cached) a portable Python binary.
