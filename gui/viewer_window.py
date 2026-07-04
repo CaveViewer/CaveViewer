@@ -109,8 +109,11 @@ void main() {
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = f"{APP_NAME} {APP_VERSION}"
-    # Use taller window on Linux (more vertical space for UI)
-    window_size = (1280, 1050) if sys.platform.startswith("linux") else (1280, 800)
+    # Start larger on desktop platforms so the HELP overlay and right-side
+    # controls have comfortable vertical room on first launch.
+    # Use a 16:10 baseline (more vertical space than 16:9) while keeping
+    # aspect_ratio unlocked so manual resizing remains fully flexible.
+    window_size = (1600, 1000) if sys.platform.startswith("linux") else (1440, 900)
     resizable = True
     vsync = True
     aspect_ratio = None  # don't letterbox; we recompute from actual window size
