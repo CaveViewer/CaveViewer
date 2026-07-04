@@ -50,6 +50,19 @@ chmod +x CaveViewer-*.AppImage
 ./CaveViewer-*-aarch64.AppImage  # arm64
 ```
 
+## Getting Started with Sample Maps
+
+If you want to try CaveViewer without your own scan, use the built-in sample maps.
+
+1. Start CaveViewer and open the splash screen.
+2. Click `Download sample maps` below the main map-open button.
+3. Pick one of the sample maps in the dialog.
+4. If it is not already downloaded, choose a folder to save it and wait for the download to finish.
+5. When the button changes to `Open`, click it to load the sample map.
+
+Sample maps are a good way to confirm that CaveViewer is working before you import your own data. You can also reopen them later from the same sample maps dialog.
+
+
 ## Importing and Streaming Preferences
 
 The Advanced Settings panel in the startup window acts as the advanced installer/preferences surface for import and streaming behavior. Open it from the splash screen with Advanced Settings....
