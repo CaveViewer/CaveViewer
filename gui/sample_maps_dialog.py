@@ -68,7 +68,12 @@ def show_sample_maps_dialog(parent, install_dir):
     # keeping the loading state and the list the SAME size (no shrink/grow
     # that would read as two separate windows).
     row_height = _px(90)
-    base_height = _px(64 if sys.platform == "win32" else 96)
+    if sys.platform == "win32":
+        base_height = _px(64)
+    elif sys.platform.startswith("linux"):
+        base_height = _px(112)
+    else:
+        base_height = _px(96)
     window_w = _px(500)
     preload_h = base_height + row_height * max(1, len(KNOWN_SAMPLE_MAPS))
 
