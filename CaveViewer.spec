@@ -5,6 +5,10 @@ import os
 
 
 project_root = Path(globals().get('SPECPATH', os.getcwd())).resolve()
+version_ns = {}
+exec((project_root / 'caveviewer_version.py').read_text(encoding='utf-8'), version_ns)
+app_name = version_ns.get('APP_NAME', 'CaveViewer')
+app_version = version_ns.get('APP_VERSION', '0.0.0')
 
 a = Analysis(
     [str(project_root / 'caveviewer.py')],
@@ -55,7 +59,13 @@ coll = COLLECT(
 
 bundle_kwargs = {
     'name': 'CaveViewer.app',
-    'bundle_identifier': None,
+    'bundle_identifier': 'com.caveviewer.CaveViewer',
+    'info_plist': {
+        'CFBundleName': app_name,
+        'CFBundleDisplayName': app_name,
+        'CFBundleShortVersionString': app_version,
+        'CFBundleVersion': app_version,
+    },
 }
 app_icon = os.environ.get('CAVEVIEWER_APP_ICON', '').strip()
 if app_icon:
