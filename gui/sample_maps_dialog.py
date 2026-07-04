@@ -41,7 +41,7 @@ def show_sample_maps_dialog(parent, install_dir):
     from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
         _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_FG, _BORDER_COLOR, _validate_selected_map_folder
     from gui.sample_maps import (
-        fetch_sample_map_catalog, is_sample_map_already_downloaded,
+        KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog, is_sample_map_already_downloaded,
         download_and_extract_sample_map, local_sample_map_path,
     )
 
@@ -53,9 +53,17 @@ def show_sample_maps_dialog(parent, install_dir):
     dialog.resizable(False, False)
     dialog.transient(parent)
 
-    window_w = 460
-    dialog.geometry(f"{window_w}x200")
-    _center_over_parent(dialog, parent, window_w, 200)
+    # Card metrics, defined up front so the window can open at its full,
+    # comfortable size BEFORE the loading spinner shows. Keeping the loading
+    # state and the populated list at the same size means the dialog never
+    # visibly grows -- it reads as one window with a loading phase rather
+    # than a small loader that pops into a bigger list.
+    row_height = 88
+    base_height = 96
+    window_w = 500
+    preload_h = base_height + row_height * max(1, len(KNOWN_SAMPLE_MAPS))
+    dialog.geometry(f"{window_w}x{preload_h}")
+    _center_over_parent(dialog, parent, window_w, preload_h)
 
     header = tk.Label(
         dialog, text="Sample Maps", font=("Segoe UI", 14, "bold"),
@@ -69,11 +77,13 @@ def show_sample_maps_dialog(parent, install_dir):
     )
     sub.pack(pady=(0, 14))
 
+    # Pack the loading indicator with expand so it sits centered in the
+    # already full-size window instead of clinging to the top.
     status_label = tk.Label(
         dialog, text="Loading available maps...", font=("Segoe UI", 10),
         fg=_SUBTITLE_COLOR, bg=_BG_COLOR,
     )
-    status_label.pack(pady=(10, 10))
+    status_label.pack(expand=True)
 
     list_frame = tk.Frame(dialog, bg=_BG_COLOR)
 
@@ -155,8 +165,6 @@ def show_sample_maps_dialog(parent, install_dir):
         )
         notice.pack(pady=(0, 8))
 
-    row_height = 88
-    base_height = 176
     desired_height = base_height + extra_height + row_height * len(catalog)
     max_height = max(260, dialog.winfo_screenheight() - 120)
     final_height = min(desired_height, max_height)
