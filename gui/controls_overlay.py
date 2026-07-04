@@ -521,6 +521,27 @@ class ControlsOverlay:
         label_size = 2.6
         desc_size = 2.6
         gap = 26
+        row_height = 34
+
+        # Help mode can be invoked on smaller Linux/Windows windows where
+        # the full-size table overflows vertically. Keep macOS unchanged
+        # and shrink text/row spacing only when needed to fit.
+        if self._manual_mode and sys.platform != "darwin":
+            label_size = 2.3
+            desc_size = 2.3
+            row_height = 29
+
+        table_top_y = sub_y + bitmap_font.text_height_px(sub_size) + 36
+        available_table_height = h - table_top_y - 20
+        table_height = len(self._control_rows) * row_height
+        if available_table_height > 0 and table_height > available_table_height:
+            fit_ratio = available_table_height / table_height
+            # Keep sizes readable while ensuring the list fits in shorter windows.
+            label_size = max(1.8, label_size * fit_ratio)
+            desc_size = max(1.8, desc_size * fit_ratio)
+            row_height = max(21, int(row_height * fit_ratio))
+            gap = max(18, int(gap * fit_ratio))
+
         max_label_w = max(bitmap_font.text_width_px(label, label_size) for label, _ in self._control_rows)
         max_desc_w = max(bitmap_font.text_width_px(desc, desc_size) for _, desc in self._control_rows)
         table_w = max_label_w + gap + max_desc_w
@@ -530,10 +551,10 @@ class ControlsOverlay:
         self._draw_control_table(
             add_quad_px, add_text,
             label_col_right_x=label_col_right_x,
-            top_y=sub_y + bitmap_font.text_height_px(sub_size) + 36,
+            top_y=table_top_y,
             label_size=label_size,
             desc_size=desc_size,
-            row_height=34,
+            row_height=row_height,
             gap=gap,
         )
 
