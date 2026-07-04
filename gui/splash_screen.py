@@ -114,10 +114,11 @@ _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
 _SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
 _ADVANCED_DIALOG_TWO_COLUMN = True
-_ADVANCED_DIALOG_WRAP = 340
-_ADVANCED_DIALOG_ENTRY_WIDTH = 22
-_ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else 24
-_ADVANCED_DIALOG_SECTION_GAP = 18
+_ADVANCED_DIALOG_WRAP = 440 if sys.platform == "win32" else 340
+_ADVANCED_DIALOG_ENTRY_WIDTH = 30 if sys.platform == "win32" else 22
+_ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
+_ADVANCED_DIALOG_SECTION_GAP = 28 if sys.platform == "win32" else 18
+_ADVANCED_DIALOG_MIN_WIDTH = 940 if sys.platform == "win32" else 0
 _CREDITS_TEXT = (
     "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
     "BottomLine Projects Scientific Dive Team and other volunteers.\n")
@@ -940,10 +941,12 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         dialog.update_idletasks()
         try:
             root.update_idletasks()
-            dialog_w = dialog.winfo_reqwidth()
+            dialog_w = max(dialog.winfo_reqwidth(), _ADVANCED_DIALOG_MIN_WIDTH)
             dialog_h = dialog.winfo_reqheight()
             screen_w = dialog.winfo_screenwidth()
             screen_h = dialog.winfo_screenheight()
+            dialog_w = min(dialog_w, max(320, screen_w - 16))
+            dialog_h = min(dialog_h, max(320, screen_h - 16))
             parent_x = root.winfo_rootx()
             parent_y = root.winfo_rooty()
             parent_w = root.winfo_width()
@@ -956,7 +959,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             desired_y = parent_y + inset_y
             clamped_x = max(8, min(desired_x, screen_w - dialog_w - 8))
             clamped_y = max(8, min(desired_y, screen_h - dialog_h - 8))
-            dialog.geometry(f"+{clamped_x}+{clamped_y}")
+            dialog.geometry(f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}")
         except Exception:
             pass
         dialog.wait_visibility()
