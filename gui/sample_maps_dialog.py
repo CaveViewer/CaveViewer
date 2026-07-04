@@ -34,7 +34,7 @@ def show_sample_maps_dialog(parent, install_dir):
     go load it" outcome.
     """
     import tkinter as tk
-    from tkinter import messagebox
+    from tkinter import messagebox, filedialog
     from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
         _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_FG, _BORDER_COLOR
     from gui.sample_maps import (
@@ -191,6 +191,13 @@ def show_sample_maps_dialog(parent, install_dir):
     action_buttons = {}
     downloaded_paths = {}  # Store result_path after download
 
+    # Resolve the last-used save directory once, up front. Doing this here
+    # (rather than inside the "Save to..." click handler) keeps the click
+    # path free of any filesystem stat -- a stale saved path on a slow or
+    # disconnected volume could otherwise block and delay the folder
+    # chooser from appearing after the button is pressed.
+    initial_save_dir = [_load_last_sample_maps_dir() or install_dir]
+
     def on_pick(sample):
         already_have = is_sample_map_already_downloaded(install_dir, sample)
 
@@ -209,18 +216,19 @@ def show_sample_maps_dialog(parent, install_dir):
             )
             return
 
-        # Ask user where to save the map
-        from tkinter import filedialog
-        last_sample_dir = _load_last_sample_maps_dir()
+        # Ask user where to save the map. Intentionally no parent= here: on
+        # macOS passing a parent makes Tk present this as a document-modal
+        # sheet attached to the window, which animates in and can feel slow;
+        # a standalone app-modal panel appears more immediately.
         save_dir = filedialog.askdirectory(
             title=f"Save {sample.display_name} to...",
-            initialdir=last_sample_dir or install_dir,
-            parent=dialog,
+            initialdir=initial_save_dir[0],
         )
         if not save_dir:
             return  # User cancelled the directory selection
 
         _save_last_sample_maps_dir(save_dir)
+        initial_save_dir[0] = save_dir
 
         # Hide button and show progress bar canvas (container already packed with fixed height)
         action_buttons[sample.display_name].pack_forget()

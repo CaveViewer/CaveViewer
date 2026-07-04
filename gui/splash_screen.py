@@ -96,6 +96,7 @@ _EXAMPLE_MAPS_URL = None
 _LOG = get_logger("CaveViewer")
 
 _BG_COLOR = "#0a0a0d"           # near-black, matches the in-app overlay backgrounds
+_PANEL_COLOR = "#12121a"        # slightly lighter panel background
 _TITLE_COLOR = "#f2d98c"        # amber/gold, matches the in-app title text color
 _SUBTITLE_COLOR = "#cccdd6"     # light gray, matches in-app subtitle/body text
 _INSTRUCTION_COLOR = "#9a9aa6"  # dimmer gray, matches in-app secondary/note text
