@@ -194,6 +194,11 @@ required_packages=(
   "tk-dev"
   "tcl-dev"
   "libfreetype6-dev"
+  "libjpeg-dev"
+  "zlib1g-dev"
+  "libtiff-dev"
+  "libwebp-dev"
+  "libopenjp2-7-dev"
 )
 
 for pkg in "${required_packages[@]}"; do
