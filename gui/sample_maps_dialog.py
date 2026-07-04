@@ -135,50 +135,11 @@ def show_sample_maps_dialog(parent, install_dir):
 
     list_frame.pack(fill="both", expand=True, padx=20)
 
-    list_view_height = max(96, final_height - (base_height + extra_height))
-    list_viewport = tk.Frame(list_frame, bg=_BG_COLOR, height=list_view_height)
-    list_viewport.pack(fill="x")
-    list_viewport.pack_propagate(False)
-
-    list_canvas = tk.Canvas(
-        list_viewport,
-        bg=_BG_COLOR,
-        highlightthickness=0,
-        borderwidth=0,
-    )
-    list_scrollbar = tk.Scrollbar(list_viewport, orient="vertical", command=list_canvas.yview)
-    list_canvas.configure(yscrollcommand=list_scrollbar.set)
-
-    rows_frame = tk.Frame(list_canvas, bg=_BG_COLOR)
-    rows_window = list_canvas.create_window((0, 0), window=rows_frame, anchor="nw")
-
-    def _sync_rows_width(event=None):
-        list_canvas.itemconfigure(rows_window, width=list_canvas.winfo_width())
-
-    def _sync_scrollregion(event=None):
-        list_canvas.configure(scrollregion=list_canvas.bbox("all"))
-
-    rows_frame.bind("<Configure>", _sync_scrollregion)
-    list_canvas.bind("<Configure>", _sync_rows_width)
-
-    def _on_mousewheel(event):
-        if event.delta:
-            list_canvas.yview_scroll(int(-event.delta / 120), "units")
-
-    def _on_linux_scroll_up(_event):
-        list_canvas.yview_scroll(-1, "units")
-
-    def _on_linux_scroll_down(_event):
-        list_canvas.yview_scroll(1, "units")
-
-    list_canvas.bind("<MouseWheel>", _on_mousewheel)
-    rows_frame.bind("<MouseWheel>", _on_mousewheel)
-    list_canvas.bind("<Button-4>", _on_linux_scroll_up)
-    list_canvas.bind("<Button-5>", _on_linux_scroll_down)
-    rows_frame.bind("<Button-4>", _on_linux_scroll_up)
-    rows_frame.bind("<Button-5>", _on_linux_scroll_down)
-
-    list_canvas.pack(side="left", fill="both", expand=True)
+    # Only a small, fixed set of sample maps is offered, so the list is
+    # rendered directly with no scrolling. Rows are packed straight into
+    # this frame.
+    rows_frame = tk.Frame(list_frame, bg=_BG_COLOR)
+    rows_frame.pack(fill="both", expand=True)
 
     def format_size(size_bytes):
         if size_bytes is None:
@@ -332,16 +293,6 @@ def show_sample_maps_dialog(parent, install_dir):
         )
         action_btn.pack(side="right", padx=14, pady=10)
         action_buttons[sample.display_name] = action_btn
-
-    # Decide scrollbar visibility using measured content height so rows are
-    # never clipped even if theme/font metrics differ across platforms.
-    dialog.update_idletasks()
-    content_height = rows_frame.winfo_reqheight()
-    viewport_height = list_viewport.winfo_height()
-    if content_height > viewport_height:
-        list_scrollbar.pack(side="right", fill="y")
-    else:
-        list_scrollbar.pack_forget()
 
     dialog.wait_window()
 
