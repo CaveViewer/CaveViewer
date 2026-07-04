@@ -110,12 +110,12 @@ _SMALL_FONT = (_UI_FONT_FAMILY, 10)
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_MIN_HEIGHT = 540 if sys.platform == "darwin" else 620
-_SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 24
+_SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 32
 _FOOTER_CREDITS_BOTTOM_PAD = 18 if sys.platform == "darwin" else 36
-_TITLE_TO_ACTION_GAP = 34 if sys.platform == "win32" else 28
-_BROWSE_BUTTON_BOTTOM_GAP = 22 if sys.platform == "win32" else 16
-_INSTRUCTION_BOTTOM_GAP = 14 if sys.platform == "win32" else 0
-_SECONDARY_LINK_ROW_TOP_GAP = 20 if sys.platform == "win32" else 16
+_TITLE_TO_ACTION_GAP = 44 if sys.platform == "win32" else 28
+_BROWSE_BUTTON_BOTTOM_GAP = 30 if sys.platform == "win32" else 16
+_INSTRUCTION_BOTTOM_GAP = 20 if sys.platform == "win32" else 0
+_SECONDARY_LINK_ROW_TOP_GAP = 28 if sys.platform == "win32" else 16
 _ADVANCED_DIALOG_TWO_COLUMN = True
 _ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
 _ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
