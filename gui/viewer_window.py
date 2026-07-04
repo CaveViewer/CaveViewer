@@ -225,6 +225,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._last_mouse_pos = None
         self._frame_count = 0
         self._last_fps_print = time.time()
+        self._frame_active_time_s = 0.0
         self._frame_time_history: list[float] = []
         self._last_gpu_draw_ms = 0.0
         self._last_input_reset_log = 0.0
@@ -1427,17 +1428,23 @@ class CaveViewerWindow(mglw.WindowConfig):
                          f"overlay={overlay_ms:.1f}ms | drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
                          f"loaded={stats['loaded']} pending={stats['pending']}")
 
+        self._frame_active_time_s += (total_ms / 1000.0)
         self._frame_count += 1
         now = time.time()
         if now - self._last_fps_print > 2.0:
-            displayed_fps = self._frame_count / (now - self._last_fps_print)
+            wall_interval_s = max(now - self._last_fps_print, 1e-6)
+            active_interval_s = max(self._frame_active_time_s, 1e-6)
+            rendered_fps = self._frame_count / active_interval_s
+            wall_fps = self._frame_count / wall_interval_s
             stats = self.world.stats()
-            _LOG.info(f"displayed_fps={displayed_fps:.1f} frame_cost={rolling_avg:.1f}ms "
+            _LOG.info(f"rendered_fps={rendered_fps:.1f} wall_fps={wall_fps:.1f} "
+                      f"frame_cost={rolling_avg:.1f}ms "
                       f"| chunks loaded={stats['loaded']} "
                       f"pending={stats['pending']} drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
                       f"| speed={self.camera.move_speed:.1f}m/s "
                       f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
             self._frame_count = 0
+            self._frame_active_time_s = 0.0
             self._last_fps_print = now
 
     render = on_render  # back-compat alias for older moderngl-window releases
