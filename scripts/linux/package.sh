@@ -81,10 +81,10 @@ rm -f "$output_appimage"
 mkdir -p \
   "$appdir/usr/lib/caveviewer" \
   "$appdir/usr/share/applications" \
-  "$appdir/usr/share/icons/hicolor/256x256/apps"
+  "$appdir/usr/share/icons/hicolor"
 
 cp -a "$app_dir/." "$appdir/usr/lib/caveviewer/"
-icon_dest="$appdir/usr/share/icons/hicolor/256x256/apps/caveviewer.png"
+icon_hicolor_dir="$appdir/usr/share/icons/hicolor"
 icon_root="$appdir/caveviewer.png"
 icon_python="${CAVEVIEWER_LINUX_BUILD_VENV:-}/bin/python"
 if [ -x "$icon_python" ]; then
@@ -94,19 +94,26 @@ import sys
 from PIL import Image
 
 src = pathlib.Path(sys.argv[1])
-dest = pathlib.Path(sys.argv[2])
+icon_dir = pathlib.Path(sys.argv[2])
 root_dest = pathlib.Path(sys.argv[3])
+sizes = (48, 64, 128, 256, 512)
 
 img = Image.open(src).convert("RGBA")
-img.thumbnail((256, 256), Image.LANCZOS)
-canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-canvas.alpha_composite(img, ((256 - img.width) // 2, (256 - img.height) // 2))
-dest.parent.mkdir(parents=True, exist_ok=True)
-canvas.save(dest)
-canvas.save(root_dest)
-' "$icon_src" "$icon_dest" "$icon_root"
+for size in sizes:
+    resized = img.copy()
+    resized.thumbnail((size, size), Image.LANCZOS)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(resized, ((size - resized.width) // 2, (size - resized.height) // 2))
+    dest = icon_dir / f"{size}x{size}" / "apps" / "caveviewer.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dest)
+
+root_256 = icon_dir / "256x256" / "apps" / "caveviewer.png"
+root_dest.write_bytes(root_256.read_bytes())
+' "$icon_src" "$icon_hicolor_dir" "$icon_root"
 else
-  cp "$icon_src" "$icon_dest"
+  mkdir -p "$icon_hicolor_dir/256x256/apps"
+  cp "$icon_src" "$icon_hicolor_dir/256x256/apps/caveviewer.png"
   cp "$icon_src" "$icon_root"
 fi
 
@@ -168,13 +175,13 @@ install_desktop_integration() {
 
   data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
   applications_dir="$data_home/applications"
-  icons_dir="$data_home/icons/hicolor/256x256/apps"
+  icons_hicolor_dir="$data_home/icons/hicolor"
   desktop_path="$applications_dir/caveviewer.desktop"
-  icon_path="$icons_dir/caveviewer.png"
 
-  mkdir -p "$applications_dir" "$icons_dir"
-  if [ -f "$appdir/caveviewer.png" ]; then
-    cp "$appdir/caveviewer.png" "$icon_path"
+  mkdir -p "$applications_dir"
+  if [ -d "$appdir/usr/share/icons/hicolor" ]; then
+    mkdir -p "$icons_hicolor_dir"
+    cp -R "$appdir/usr/share/icons/hicolor/." "$icons_hicolor_dir/"
   fi
 
   cat > "$desktop_path" <<DESKTOP_EOF
@@ -188,11 +195,18 @@ Terminal=false
 Categories=Graphics;Science;Viewer;
 StartupWMClass=CaveViewer
 DESKTOP_EOF
-  chmod 0644 "$desktop_path" "$icon_path" 2>/dev/null || true
+  chmod 0644 "$desktop_path" 2>/dev/null || true
+  find "$icons_hicolor_dir" -path "*/apps/caveviewer.png" -exec chmod 0644 {} \; 2>/dev/null || true
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t "$icons_hicolor_dir" >/dev/null 2>&1 || true
+  fi
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q "$applications_dir" >/dev/null 2>&1 || true
+  fi
 
   if [ "$debug" = "1" ]; then
     echo "[CaveViewer AppRun] Desktop file: $desktop_path"
-    echo "[CaveViewer AppRun] Desktop icon: $icon_path"
+    echo "[CaveViewer AppRun] Desktop icons: $icons_hicolor_dir/*/apps/caveviewer.png"
   fi
 }
 

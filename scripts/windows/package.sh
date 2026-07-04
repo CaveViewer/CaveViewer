@@ -95,6 +95,22 @@ for relative_path in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
 				destination_path.parent.mkdir(parents=True, exist_ok=True)
 				shutil.copy2(source_path, destination_path)
 
+# Generated/updated branding assets may be present in a release workspace before
+# they have been committed. Copy the required runtime assets explicitly so the
+# Windows source bundle does not silently fall back to older tracked artwork.
+required_asset_paths = [
+		"gui/assets/app_icon_logo.png",
+		"gui/assets/app_mark_transparent.png",
+		"gui/assets/loading_logo.png",
+		"scripts/windows/icon/caveviewer.ico",
+]
+for relative_path in required_asset_paths:
+		source_path = repo_root / relative_path
+		if source_path.is_file():
+				destination_path = staging_root / relative_path
+				destination_path.parent.mkdir(parents=True, exist_ok=True)
+				shutil.copy2(source_path, destination_path)
+
 # Make setup scripts first-class citizens at the bundle root.
 root_launch = staging_root / "launch.bat"
 root_setup = staging_root / "setup.ps1"
@@ -140,6 +156,8 @@ important_files = [
 	"scripts/windows/launch.bat",
 	"scripts/windows/setup.ps1",
 	"scripts/windows/icon/caveviewer.ico",
+	"gui/assets/app_icon_logo.png",
+	"gui/assets/app_mark_transparent.png",
 	"updates/windows/stable.json",
 ]
 

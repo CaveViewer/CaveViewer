@@ -68,7 +68,7 @@ Wraps the PyInstaller output into a distributable AppImage:
 **What it does:**
 - Creates AppDir structure (standard AppImage format)
 - Adds `.desktop` file for app menu integration
-- Includes app icon
+- Includes app icons in standard hicolor sizes for GNOME/Fedora/Ubuntu lookup
 - Creates `AppRun` wrapper script
 - Runs `appimagetool` to create final `.AppImage` executable
 
@@ -136,7 +136,12 @@ dist/linux/
 │       │   ├── applications/
 │       │   │   └── caveviewer.desktop
 │       │   └── icons/
-│       │       └── hicolor/256x256/apps/caveviewer.png
+│       │       └── hicolor/
+│       │           ├── 48x48/apps/caveviewer.png
+│       │           ├── 64x64/apps/caveviewer.png
+│       │           ├── 128x128/apps/caveviewer.png
+│       │           ├── 256x256/apps/caveviewer.png
+│       │           └── 512x512/apps/caveviewer.png
 │       └── lib/                  # Libraries (copied from bundle)
 └── packages/
     └── CaveViewer-1.2.45-x86_64.AppImage  # Final distributable

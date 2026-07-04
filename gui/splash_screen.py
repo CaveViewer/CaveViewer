@@ -87,7 +87,7 @@ def _resolve_asset_path(filename: str) -> str | None:
 # Resolve this once at import time -- same asset already used for the
 # in-program loading-screen logo, reused here rather than shipping a
 # second copy of the same image.
-_LOGO_PATH = _resolve_asset_path("loading_logo.png")
+_LOGO_PATH = _resolve_asset_path("app_mark_transparent.png") or _resolve_asset_path("loading_logo.png")
 _APP_ICON_PATH = _resolve_asset_path("app_icon_logo.png")
 _LAST_BROWSE_PATH_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_last_browse_path")
 _ADVANCED_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".caveviewer_advanced_settings.json")

@@ -53,7 +53,7 @@ if (-not $isAdmin) {
     if ($IoWorkers -gt 0) {
         $argList += " -IoWorkers $IoWorkers"
     }
-    Start-Process powershell.exe -ArgumentList $argList -Verb RunAs
+    Start-Process powershell.exe -ArgumentList $argList -Verb RunAs -WindowStyle Minimized
     exit
 }
 
@@ -78,8 +78,28 @@ public static class CaveViewerDpi {
         }
     }
 }
+
+public static class CaveViewerConsole {
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    private const int SW_MINIMIZE = 6;
+
+    public static void Minimize() {
+        try {
+            IntPtr handle = GetConsoleWindow();
+            if (handle != IntPtr.Zero) {
+                ShowWindow(handle, SW_MINIMIZE);
+            }
+        } catch {}
+    }
+}
 "@
 [CaveViewerDpi]::Enable()
+[CaveViewerConsole]::Minimize()
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
@@ -97,6 +117,19 @@ if (Test-Path (Join-Path $ScriptDir "requirements.txt")) {
 
 $RequirementsFile = Join-Path $ProjectRoot "requirements.txt"
 $MainScript = Join-Path $ProjectRoot "caveviewer.py"
+$VersionFile = Join-Path $ProjectRoot "caveviewer_version.py"
+$AppVersion = "dev"
+if (Test-Path $VersionFile) {
+    try {
+        $versionMatch = Select-String -Path $VersionFile -Pattern 'APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($versionMatch -and $versionMatch.Matches.Count -gt 0) {
+            $AppVersion = $versionMatch.Matches[0].Groups[1].Value
+        }
+    } catch {
+        $AppVersion = "dev"
+    }
+}
+$SafeAppVersion = ($AppVersion -replace '[^A-Za-z0-9_.-]', '_')
 
 $PythonInstallerUrl = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe"
 $PythonInstallerPath = Join-Path $env:TEMP "python-installer-caveviewer.exe"
@@ -160,6 +193,12 @@ $form.MaximizeBox = $false
 $form.BackColor = $ColorWindow
 $form.Font = $FontBody
 $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
+$form.Add_Shown({
+    $form.TopMost = $true
+    $form.Activate()
+    $form.BringToFront()
+    $form.TopMost = $false
+})
 
 $headerPanel = New-Object System.Windows.Forms.Panel
 $headerPanel.BackColor = $ColorHeader
@@ -652,7 +691,7 @@ function New-DesktopShortcut {
         $pythonGuiPath = Resolve-PythonGuiPath
         $iconPath = Join-Path $ScriptDir "icon\caveviewer.ico"
         $stableIconDir = Join-Path $env:ProgramData "CaveViewer"
-        $stableIconPath = Join-Path $stableIconDir "caveviewer.ico"
+        $stableIconPath = Join-Path $stableIconDir "caveviewer-$SafeAppVersion.ico"
 
         $wshShell = New-Object -ComObject WScript.Shell
         $shortcut = $wshShell.CreateShortcut($shortcutPath)
@@ -676,7 +715,7 @@ function New-DesktopShortcut {
             New-Item -ItemType Directory -Path $stableIconDir -Force | Out-Null
             Copy-Item $iconPath $stableIconPath -Force
             $shortcut.IconLocation = "$stableIconPath,0"
-            Write-Log "Using custom CaveViewer icon."
+            Write-Log "Using custom CaveViewer icon: $stableIconPath"
         } else {
             $shortcut.IconLocation = "$pythonGuiPath,0"
             Write-Log "Custom icon not found at $iconPath -- using default icon instead."
