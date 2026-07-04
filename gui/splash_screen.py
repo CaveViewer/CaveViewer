@@ -38,7 +38,7 @@ import tempfile
 import threading
 from caveviewer_version import APP_NAME, APP_VERSION
 from core.logging_utils import get_logger
-from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
+from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness, tk_display_scale
 from gui.platform import get_splash_platform_adapter
 
 
@@ -398,6 +398,11 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     configure_process_dpi_awareness()
     root = tk.Tk()
     apply_tk_scaling(root)
+    splash_scale = tk_display_scale(root)
+
+    def px(value: float) -> int:
+        return int(round(value * splash_scale))
+
     # Keep hidden until final geometry is set to avoid a visible corner->center jump.
     root.withdraw()
     root.title(f"{program_name} {version}")
@@ -406,7 +411,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
     _PLATFORM_ADAPTER.install_about_handler(root, program_name, version)
 
-    window_w, window_h = 500, _SPLASH_WINDOW_MIN_HEIGHT
+    window_w, window_h = px(500), px(_SPLASH_WINDOW_MIN_HEIGHT)
 
     # Center the window on screen rather than letting the OS place it
     # arbitrarily -- a first-launch splash screen appearing somewhere
@@ -427,7 +432,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             # scale down to a sensible splash-screen size if the source is
             # larger than needed, preserving aspect ratio -- keeps this
             # robust to the source asset's exact dimensions changing later
-            max_logo_dim = 140
+            max_logo_dim = px(140)
             scale = min(max_logo_dim / logo_img.width, max_logo_dim / logo_img.height, 1.0)
             if scale < 1.0:
                 new_size = (int(logo_img.width * scale), int(logo_img.height * scale))
@@ -1015,8 +1020,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
     browse_button.focus_set()
     root.update_idletasks()
-    final_height = max(_SPLASH_WINDOW_MIN_HEIGHT, root.winfo_reqheight())
-    max_height = max(360, root.winfo_screenheight() - 80)
+    final_height = max(px(_SPLASH_WINDOW_MIN_HEIGHT), root.winfo_reqheight())
+    max_height = max(px(360), root.winfo_screenheight() - px(80))
     final_height = min(final_height, max_height)
     pos_y = (screen_h - final_height) // 3
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")

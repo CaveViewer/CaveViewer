@@ -59,3 +59,16 @@ def apply_tk_scaling(root) -> None:
             root.tk.call("tk", "scaling", pixels_per_inch / 72.0)
     except Exception:
         pass
+
+
+def tk_display_scale(root) -> float:
+    """Return display scale relative to 96 DPI for pixel-sized Tk layout values."""
+    if os.name != "nt":
+        return 1.0
+    try:
+        pixels_per_inch = float(root.winfo_fpixels("1i"))
+        if pixels_per_inch > 0:
+            return max(1.0, min(3.0, pixels_per_inch / 96.0))
+    except Exception:
+        pass
+    return 1.0
