@@ -105,7 +105,6 @@ _INSTRUCTION_COLOR = "#9a9aa6"  # dimmer gray, matches in-app secondary/note tex
 _BUTTON_BG = "#caa23e"          # amber button, matches the in-app active-button color
 _BUTTON_FG = "#1a1408"          # dark text on the amber button, matches in-app active-button text
 _BORDER_COLOR = "#5c5c6e"
-_UPDATE_STARTED_SENTINEL = "__caveviewer_update_started__"
 _PLATFORM_ADAPTER = get_splash_platform_adapter()
 _WINDOWS_SPLASH_LAYOUT = sys.platform == "win32"
 _LINUX_SPLASH_LAYOUT = sys.platform.startswith("linux")
@@ -627,37 +626,6 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         cursor="hand2",
     )
 
-    prompt_yes_button = tk.Button(
-        update_action_row,
-        text="Yes",
-        font=_SMALL_FONT,
-        bg=_BUTTON_BG,
-        fg=_BUTTON_FG,
-        activebackground=_BUTTON_BG,
-        activeforeground=_BUTTON_FG,
-        relief="flat",
-        borderwidth=0,
-        padx=12,
-        pady=5,
-        cursor="hand2",
-        default="active",
-    )
-
-    prompt_no_button = tk.Button(
-        update_action_row,
-        text="No",
-        font=_SMALL_FONT,
-        bg="#2a2a33",
-        fg=_SUBTITLE_COLOR,
-        activebackground="#33333f",
-        activeforeground=_SUBTITLE_COLOR,
-        relief="flat",
-        borderwidth=0,
-        padx=12,
-        pady=5,
-        cursor="hand2",
-    )
-
     dismiss_update_button = tk.Button(
         update_action_row,
         text="Later",
@@ -674,7 +642,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     )
 
     def _hide_update_actions():
-        for w in (download_link, close_install_button, dismiss_update_button, prompt_yes_button, prompt_no_button):
+        for w in (download_link, close_install_button, dismiss_update_button):
             w.pack_forget()
 
     def _set_link_enabled(is_enabled: bool):
@@ -717,12 +685,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             manual_install = _PLATFORM_ADAPTER.prepare_manual_install(payload_path)
             update_state["mounted_payload"] = manual_install.mounted_payload_path
             update_state["mounted_app"] = manual_install.mounted_app_path
-            _show_update_panel("Close the app and apply the update manually?", show_progress=False)
-            update_action_row.pack(pady=(0, 2))
-            # macOS standard button order: negative on left, default affirmative on right.
-            prompt_yes_button.pack(side="right")
-            prompt_no_button.pack(side="right", padx=(0, 8))
-            prompt_yes_button.focus_set()
+            _show_update_panel("Update downloaded and opened for manual installation.", show_progress=False)
         except Exception as e:
             _show_update_panel(f"Update downloaded, but install could not start: {e}", show_progress=False)
             update_action_row.pack(pady=(0, 2))
@@ -819,18 +782,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         root.withdraw()
         root.quit()
 
-    def _confirm_close_for_manual_update():
-        selected_folder[0] = _UPDATE_STARTED_SENTINEL
-        root.withdraw()
-        root.quit()
-
-    def _defer_manual_update_close():
-        _show_update_panel("Update downloaded and opened for manual installation.", show_progress=False)
-
     download_link.bind("<Button-1>", lambda _event: _start_download())
     close_install_button.config(command=_close_and_install)
-    prompt_yes_button.config(command=_confirm_close_for_manual_update)
-    prompt_no_button.config(command=_defer_manual_update_close)
 
     # -- browse button + instructions ---------------------------------------------
     def _show_invalid_map_dialog(message: str) -> None:
