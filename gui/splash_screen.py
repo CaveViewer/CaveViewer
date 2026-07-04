@@ -107,15 +107,17 @@ _TITLE_FONT = (_UI_FONT_FAMILY, 24, "bold")
 _VERSION_FONT = (_UI_FONT_FAMILY, 12)
 _BODY_FONT = (_UI_FONT_FAMILY, 12)
 _SMALL_FONT = (_UI_FONT_FAMILY, 10)
+_INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if sys.platform == "win32" else _BODY_FONT
+_FOOTER_FONT = (_UI_FONT_FAMILY, 9) if sys.platform == "win32" else _SMALL_FONT
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-_SPLASH_WINDOW_MIN_HEIGHT = 540 if sys.platform == "darwin" else 620
-_SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 32
+_SPLASH_WINDOW_MIN_HEIGHT = 540 if sys.platform == "darwin" else (560 if sys.platform == "win32" else 620)
+_SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 36
 _FOOTER_CREDITS_BOTTOM_PAD = 18 if sys.platform == "darwin" else 36
-_TITLE_TO_ACTION_GAP = 44 if sys.platform == "win32" else 28
-_BROWSE_BUTTON_BOTTOM_GAP = 30 if sys.platform == "win32" else 16
+_TITLE_TO_ACTION_GAP = 48 if sys.platform == "win32" else 28
+_BROWSE_BUTTON_BOTTOM_GAP = 32 if sys.platform == "win32" else 16
 _INSTRUCTION_BOTTOM_GAP = 20 if sys.platform == "win32" else 0
-_SECONDARY_LINK_ROW_TOP_GAP = 28 if sys.platform == "win32" else 16
+_SECONDARY_LINK_ROW_TOP_GAP = 30 if sys.platform == "win32" else 16
 _ADVANCED_DIALOG_TWO_COLUMN = True
 _ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
 _ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
@@ -769,7 +771,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         root,
         text="Point this to a folder with your map's .obj+.mtl or .glb file,\n"
              "or a folder that was already imported by CaveViewer.",
-        font=_BODY_FONT,
+        font=_INSTRUCTION_FONT,
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",
     )
@@ -1015,7 +1017,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     credit_label = tk.Label(
         root,
         text=_CREDITS_TEXT,
-        font=_SMALL_FONT,
+        font=_FOOTER_FONT,
         fg="#5f606b",
         bg=_BG_COLOR,
         justify="center",
