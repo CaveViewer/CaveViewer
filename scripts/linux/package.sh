@@ -55,18 +55,56 @@ find_appimagetool() {
   return 1
 }
 
-appimagetool_path="$(find_appimagetool || true)"
-if [ -z "$appimagetool_path" ]; then
-  echo "Error: appimagetool not found."
-  echo "Install appimagetool or build with scripts/linux/build_linux_in_docker.sh."
-  exit 1
-fi
-echo "Using appimagetool: $appimagetool_path"
+appimagetool_matches_arch() {
+  local path="$1"
+  local expected_arch="$2"
+  local file_info
+  file_info="$(file "$path" 2>/dev/null || true)"
+  case "$expected_arch" in
+    x86_64)
+      [[ "$file_info" == *"x86-64"* || "$file_info" == *"x86_64"* ]]
+      ;;
+    aarch64)
+      [[ "$file_info" == *"aarch64"* || "$file_info" == *"ARM aarch64"* ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
-echo "Packaging CaveViewer v$APP_VERSION..."
+ensure_appimagetool() {
+  local expected_arch="$1"
+  local candidate
+  candidate="$(find_appimagetool || true)"
+  if [ -n "$candidate" ] && appimagetool_matches_arch "$candidate" "$expected_arch"; then
+    echo "$candidate"
+    return 0
+  fi
 
-mkdir -p "$dist_packages_dir"
-rm -rf "$appdir"
+  if [ -n "$candidate" ]; then
+    echo "Ignoring appimagetool with wrong architecture: $candidate" >&2
+    file "$candidate" >&2 || true
+  fi
+
+  local tools_dir="$repo_root/dist/linux/tools"
+  local downloaded="$tools_dir/appimagetool-${expected_arch}.AppImage"
+  mkdir -p "$tools_dir"
+  if [ ! -x "$downloaded" ] || ! appimagetool_matches_arch "$downloaded" "$expected_arch"; then
+    echo "Downloading appimagetool for $expected_arch..." >&2
+    curl -fsSL -o "$downloaded" \
+      "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${expected_arch}.AppImage"
+    chmod +x "$downloaded"
+  fi
+
+  if ! appimagetool_matches_arch "$downloaded" "$expected_arch"; then
+    echo "Error: downloaded appimagetool has the wrong architecture:" >&2
+    file "$downloaded" >&2 || true
+    return 1
+  fi
+
+  echo "$downloaded"
+}
 
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -74,6 +112,14 @@ case "$ARCH" in
   aarch64|arm64) appimage_arch="aarch64" ;;
   *) appimage_arch="$ARCH" ;;
 esac
+
+appimagetool_path="$(ensure_appimagetool "$appimage_arch")"
+echo "Using appimagetool: $appimagetool_path"
+
+echo "Packaging CaveViewer v$APP_VERSION..."
+
+mkdir -p "$dist_packages_dir"
+rm -rf "$appdir"
 
 output_appimage="$dist_packages_dir/CaveViewer-${APP_VERSION}-${ARCH}.AppImage"
 rm -f "$output_appimage"
