@@ -389,7 +389,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if chunk_size is None:
             raise ValueError(
                 "Map cache manifest is missing a valid chunk_size. "
-                "Rebuild the .caveviewer_cache folder with this version of CaveViewer."
+                "Rebuild the _cache folder with this version of CaveViewer."
             )
         configured_chunk_size = chunker.configured_chunk_size()
         _LOG.info(f"Opening map cache with manifest chunk size: {chunk_size:g}m.")
@@ -669,12 +669,17 @@ class CaveViewerWindow(mglw.WindowConfig):
             model_descriptor = find_model_file(folder)
         except FileNotFoundError as e:
             # Match caveviewer.py's startup behavior: allow selecting a
-            # folder that already contains a built .caveviewer_cache,
+            # folder that already contains a built _cache,
             # or selecting the cache directory itself directly.
             prebuilt_cache = os.path.join(folder, chunker_module.CACHE_DIRNAME)
+            legacy_prebuilt_cache = os.path.join(folder, chunker_module.LEGACY_CACHE_DIRNAME)
             textures_dir = folder
             if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
-                if os.path.exists(os.path.join(folder, chunker_module.MANIFEST_NAME)):
+                if os.path.exists(os.path.join(legacy_prebuilt_cache, chunker_module.MANIFEST_NAME)):
+                    _LOG.info(f"Found legacy cache in: {legacy_prebuilt_cache}")
+                    prebuilt_cache = legacy_prebuilt_cache
+                elif os.path.exists(os.path.join(folder, chunker_module.MANIFEST_NAME)):
+                    _LOG.info(f"Found cache manifest in selected directory: {folder}")
                     prebuilt_cache = folder
                     textures_dir = folder
             if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
@@ -689,6 +694,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
             map_name = os.path.basename(new_manifest.get("source_obj") or folder)
             _LOG.info(f"Switching to prebuilt map: {map_name}")
+            _LOG.info(f"Using cache directory: {prebuilt_cache}")
             self.load_new_map(prebuilt_cache, textures_dir, new_manifest)
             _LOG.info(f"Now viewing: {map_name}")
             return
@@ -2177,7 +2183,7 @@ def run_viewer(cache_dir: str, textures_dir: str):
 def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     """
     Launches the viewer window for a map that needs FIRST-TIME import
-    (no .caveviewer_cache yet) -- used by caveviewer.py's main() instead
+    (no _cache yet) -- used by caveviewer.py's main() instead
     of run_viewer() specifically so the import can run AFTER the window
     is open, showing real progress in the same in-window panel the OPEN
     button already uses, rather than the old behavior of running the

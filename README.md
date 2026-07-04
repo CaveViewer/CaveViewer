@@ -1,73 +1,45 @@
 # CaveViewer
 
-A standalone viewer for large cave-survey 3D mesh maps, built for maps too big to comfortably load all at once. Instead of loading the whole mesh into memory/VRAM, CaveViewer splits it into a 3D grid of spatial chunks and only keeps the chunks near your current position loaded -- so frame rate stays smooth no matter how big the full cave system is.
+CaveViewer makes exploring massive 3-D maps accessible to everyone. Designed for cave divers, explorers, cartographers, and 3-D mapping enthusiasts, it uses an innovative rendering technique to display extremely large maps on anything from lightweight laptops to high-end workstations. Released as open-source software under the GNU GPL v3 license, CaveViewer is completely free—no advertisements, no subscriptions, no online accounts, and no hidden costs.
 
-Supports three map input types:
+CaveViewer supports several common 3-D map formats, including OBJ models exported from Agisoft Metashape, GLB files, and previously optimized CaveViewer cache files.
 
-- **OBJ** (+ matching `.mtl` + tiled `.jpg` textures) -- the original format this was built for, exported from Agisoft Metashape.
+No matter which format you open, the experience is the same. CaveViewer automatically prepares the map for viewing, allowing you to explore even extremely large 3-D maps with the same navigation, rendering, and tools regardless of the original file format.
 
-- **GLB** (binary glTF) -- including maps whose textures are embedded directly inside the file rather than as separate images.
+## How to Install and Run CaveViewer
 
-- **Pre-compiled map cache** (`.caveviewer_cache` with `manifest.json`) -- launch directly from an already chunked map without re-importing OBJ/GLB.
+## Supported Platforms
 
-Whichever format a map is in, the rest of the program (chunking, streaming, all the on-screen controls) behaves identically -- format only matters at the moment a map is first opened.
+CaveViewer is currently available for the following platforms:
 
-## How it works
+macOS (Apple Silicon)
+Linux (Fedora and Ubuntu)
+Windows (10 and 11)
 
-1. **First time opening a map:** CaveViewer parses your `.obj` (streaming, so it doesn't choke on multi-GB files) and splits it into a grid of spatial chunks (default 8m cubes), writing a cache folder `.caveviewer_cache` next to your `.obj` file. This is a one-time cost -- for a 10-20 million triangle map, expect roughly 30-90 seconds depending on your CPU and disk speed.
+Support for additional operating systems and distributions may be added in the future based on community interest and user demand. If your preferred platform is not currently supported, we'd love to hear from you.
 
-2. **Every time after:** CaveViewer detects the existing cache and skips straight to launching the viewer -- near-instant.
-
-3. **While flying around:** only the chunks within a few grid cells of your camera are loaded into GPU memory. As you fly deeper into the cave, far chunks behind you are unloaded and new chunks ahead of you stream in, automatically, in a background thread so it doesn't stall your frame rate.
-
-## How to install and run CaveViewer
-
-## Supported platforms
-
-MacOS X - Apple Silicon
-Linux - Fedora, Ubuntu
-Windows - 10, 11
-
-### macOS app (recommended)
+### macOS
 
 Download the latest DMG from https://github.com/KernalPanic/CaveViewerPlus/releases, open it, and drag CaveViewer into Applications. If this is your first time installing the app, you have to go to Settings -> Privacy & Security and then allow the system to open CaveViewer. These steps are necessary because the app is not published through the App Store.
 
 If there is an update, the app will let you download and install it.
 
-NOTE: Intel Macs are not supported.
+NOTE: Intel Macs are not supported yet.
 
-### Windows app (recommended)
+### Windows
 
-Download the latest zip from https://github.com/KernalPanic/CaveViewerPlus/releases and extract it anywhere on your machine.
+Download the latest zip from https://github.com/KernalPanic/CaveViewerPlus/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install. 
 
-**First-time setup:** double-click `launch.bat` inside the extracted folder. This opens a guided setup window that will:
-
-1. Install Python 3.12 if it is not already present (downloads from python.org and registers it on your PATH automatically — a UAC prompt will appear, which is expected).
-2. Install/check the Visual C++ Redistributable needed by Python extension packages.
-3. Install the required Python packages from `requirements.txt`.
-4. Add a Windows Firewall outbound rule for Python so update checks and sample-map downloads can reach GitHub.
-5. Create a Desktop shortcut so you can launch CaveViewer with a double-click going forward.
-
-> **Note:** `launch.bat` exists because Windows blocks `.ps1` files from running when double-clicked. The bat file launches the bundled `setup.ps1` with the correct flags — it does not change any permanent PowerShell execution-policy setting.
-
-After setup completes the window closes automatically. Use the Desktop shortcut (or re-run `launch.bat`) to start CaveViewer.
-
-If there is an update, the app will let you download and install it.
-
-The update manifests are platform-specific, so the macOS app reads `updates/macos/stable.json`, the Windows app reads `updates/windows/stable.json`, and the Linux app reads `updates/linux/stable.json`.
-
-### Linux app (AppImage) - Ubuntu or Fedora
+### Linux
 
 The best-practice distribution format for Linux is the self-contained AppImage — a single executable file that bundles Python, all dependencies, and the app itself. No system-wide installation or package manager involvement required.
-
-**1. Download the AppImage**
 
 Download the AppImage matching your CPU from https://github.com/KernalPanic/CaveViewerPlus/releases:
 
 - `CaveViewer-<version>-x86_64.AppImage` (amd64 / x86_64)
 - `CaveViewer-<version>-aarch64.AppImage` (arm64)
 
-**2. Make it executable and run**
+The change the permissions to make the file executable and run.
 
 ```bash
 chmod +x CaveViewer-*.AppImage
@@ -78,354 +50,79 @@ chmod +x CaveViewer-*.AppImage
 ./CaveViewer-*-aarch64.AppImage  # arm64
 ```
 
-The AppImage self-extracts to a temporary directory on launch and cleans up when it exits. No installation step is needed.
+## Importing and Streaming Preferences
 
-**System requirements:** a display server (X11 or Wayland with XWayland), OpenGL 3.3+, and the following runtime libraries which are present by default on most desktop distributions:
+The Advanced Settings panel in the startup window acts as the advanced installer/preferences surface for import and streaming behavior. Open it from the splash screen with Advanced Settings....
 
-```bash
-# Ubuntu/Debian — install if the app fails to start
-sudo apt-get install libfreetype6 libgl1-mesa-dri libxkbcommon0
-```
+These values are validated in the UI, applied to environment variables for the current launch, and saved to a local settings file so they are reused next time.
 
-If there is an update, the app will let you download and install it.
+- Saved settings file: ~/.caveviewer_advanced_settings.json
+- Streaming section controls runtime chunk loading and upload behavior.
+- Map Parsing section controls cache-build/import behavior.
 
-### From source (development)
+### Map Chunking
 
-For development, clone the repository and run from the working tree. Requires Python 3.10+.
+When you import a map, CaveViewer does not keep it as one giant object. It splits the map into many smaller 3D chunks and saves them in a cache. During viewing, CaveViewer loads only the chunks near you and unloads chunks farther away.
 
-**1. Clone and check out the latest stable tag**
+Why this matters: chunk size is one of the most important map settings because it strongly affects smoothness, pop-in, memory usage, and how far ahead the map can appear to load cleanly while you move.
 
-```bash
-git clone https://github.com/KernalPanic/CaveViewerPlus.git
-cd CaveViewerPlus
-git fetch --tags
-latest=$(git tag -l "v*" --sort=-version:refname | head -n 1)
-git checkout "$latest"
-```
+- Larger chunks: fewer load/unload events, often smoother in long/open passages, but can increase per-chunk cost.
+- Smaller chunks: finer-grained loading and culling, often useful in tight/twisty areas, but can increase chunk churn.
 
-**2. Create a development virtual environment and install dependencies**
 
-Install typical dependencies
+### Streaming Performance
 
-```bash
-sudo apt update
-sudo apt install -y \
-  build-essential wget libssl-dev zlib1g-dev libbz2-dev \
-  libreadline-dev libsqlite3-dev libncursesw5-dev xz-utils \
-  tk-dev libffi-dev liblzma-dev python3-tk tk-dev tcl-dev libgl1 libegl1 libglx-mesa0 
-```  
-`scripts/dev/install.sh` creates a dedicated development virtual environment at `.venv-dev` (or uses `CAVEVIEWER_DEV_VENV` if set), installs all packages from `requirements.txt`, and generates a `run_caveviewer.sh` launcher.
+| Preference | Environment variable | Default | Valid range | What it changes |
+|---|---|---:|---|---|
+| System RAM target (%) | — | 12 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
+| GPU memory target (%) | — | 70 | 1 to 80 | Target share of detected GPU memory used for loaded chunks. |
+| GPU memory override (GB) | — | empty | greater than 0 and up to 1024 | Manual GPU memory size when auto-detection is unavailable or inaccurate. |
+| Worker count | — | logical CPUs minus 3 (minimum 1) | integer, at least 1 | Number of background chunk-loading worker threads. |
+| CPU cores to keep free | — | 3 | integer, at least 0 | Reserve CPU cores instead of using them for streaming workers. |
+| Chunk uploads per frame | — | 1 | integer, 1 to 16 | Hard cap for how many ready chunks are uploaded each frame on the render thread. |
+| Upload budget (ms) | — | 3.0 | 0.5 to 50.0 ms | Soft time budget per frame for chunk uploads. |
 
-Linux packaging/build scripts use a separate dedicated virtual environment (`.venv-linux-build-<arch>` by default, or `CAVEVIEWER_LINUX_BUILD_VENV` when set) so build dependencies stay isolated from your development environment:
+### Map Parsing
 
-```bash
-./scripts/dev/install.sh
-```
+| Preference | Environment variable | Default | Valid range | What it changes |
+|---|---|---:|---|---|
+| Import chunk size (m) | — | 8 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
+| OBJ scan throttle (ms) | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Yield/throttle behavior during OBJ scanning. |
+| Import worker count | — | logical CPUs minus 2 (minimum 1) | integer, at least 1 | Number of worker threads used while writing chunk cache files. |
+| Import CPUs to keep free | — | 2 | integer, at least 0 | CPU cores reserved during cache build/import. |
 
-**3. (Optional) Configure environment variables**
+### Streaming vs Chunking: What Changes Now vs Later
 
-`scripts/dev/env_setup.sh` sets `PYTHONPATH`, `CAVEVIEWER_HOME`, and `CAVEVIEWER_GITHUB_REPO` for the current shell session. Source it (don't execute it) so the variables are exported to your shell:
+Use this rule of thumb:
 
-```bash
-source ./scripts/dev/env_setup.sh
-```
+- Chunking settings affect how cache chunks are built during import and apply only to new imports (or a rebuilt cache).
+- Streaming settings affect runtime behavior and can be changed for any map at any time.
 
-You can also override the update manifest URL by uncommenting and setting `CAVEVIEWER_UPDATE_MANIFEST_URL` inside that file.
+In practice:
 
-For the complete list of supported environment variables (runtime, update, and build/packaging), see the Environment Variables section below.
+- Adjust Chunk uploads per frame, Upload budget (ms), and memory targets to tune smoothness without re-importing.
+- Adjust Import chunk size (m) when you want a different chunk layout, then rebuild/import the map to test it.
 
-**4. Run**
+### Recommended Map Parsing Approach
 
-```bash
-./run_caveviewer.sh
-```
+Each imported map writes its chunk cache to an `_cache` folder inside that map directory. To try different import strategies for the same map (for example, different chunk sizes), you can either remove `_cache` and re-import, or rename it first (for example `_cache_32m`, `_cache_64m`) to preserve earlier results.
 
-## Controls
+1. Understand your map first.
+Decide how far ahead you need to see while moving. Long, open passages often benefit from larger chunk sizes. Maps with many twists and short sightlines may not need very large chunks, especially on strong hardware.
 
-| Input              | Action                          |
-|---------------------|----------------------------------|
-| `W` / `S`           | Fly forward / backward          |
-| `A` / `D`           | Strafe left / right             |
-| `E` / `Q`           | Move up / down                  |
-| Right-click + mouse (macOS) / Left-click + mouse (Windows/Linux) | Look around (yaw/pitch) |
-| `Option` + left-click + mouse (macOS) | Look around (yaw/pitch) |
-| `← ↑ ↓ →`           | Look around (yaw/pitch)     |
-| `I` / `J` / `K` / `L`   | Look around (yaw/pitch)     |
-| `Z` / `X`           | Barrel roll (counterclockwise / clockwise) |
-| `Cmd` + `0` (macOS) / `Ctrl` + `0` (Windows/Linux) | Reset view (level horizon) |
-| `Cmd` + `1`..`9` (macOS) / `Ctrl` + `1`..`9` (Windows/Linux) | Save camera bookmark to slot 1..9 |
-| `1`..`9` | Recall camera bookmark from slot 1..9 |
-| `Esc`               | Quit                            |
-| `Shift` (held)      | 3x speed boost                  |
+2. Understand your hardware limits.
+Check what you have available: GPU memory, CPU cores, and system RAM. More hardware headroom usually allows higher upload budgets and more aggressive streaming.
 
+3. Start with stable streaming settings.
+Begin with Chunk uploads per frame = 1 and Upload budget = 2 to 4 ms. This usually gives smoother frame pacing while you evaluate map behavior.
 
-## Creating a Release
+4. Test chunking approaches for that specific map.
+Try a few Import chunk size values (for example 16, 32, 64, then 100 m for very large/open maps). Rebuild/import each time so the new chunk layout is actually used. If you want to compare multiple versions side by side over time, rename `_cache` between imports to keep each result.
 
-Releases are managed through `scripts/release.sh`, which dispatches to platform-specific scripts.
+5. Tune streaming after choosing a chunk size.
+If pop-in is too visible, raise Chunk uploads per frame gradually (1, then 2, then 3) and increase Upload budget carefully (for example from 3 to 5 ms).
 
-### Recommended: unified all-platform flow
+6. Balance quality and stability.
+If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Import worker count or reduce Import CPUs to keep free.
 
-```bash
-# Build packages for supported platforms from one command
-./scripts/release.sh all-package --version=1.2.3
-
-# Build and publish in one command (reuses existing artifacts when present)
-./scripts/release.sh all-package --version=1.2.3 --publish --release-notes="Bug fixes and stability improvements"
-```
-
-Notes:
-
-- `--version` is required for `all-package`.
-- Linux architecture defaults to `both` (`amd64` + `arm64`), override with `--linux-arch=amd64|arm64|both`.
-- Use `--rebuild` to force fresh artifacts before publish.
-- Use `--skip=macos,linux,windows` to skip targets.
-
-### macOS
-
-```bash
-# Build the DMG
-./scripts/release.sh macos-package
-
-# Publish to GitHub and update the macOS update manifest
-./scripts/release.sh macos-publish <version> "Release notes"
-
-# Publish already-built artifacts without rebuilding
-./scripts/release.sh macos-publish --skip-build <version> "Release notes"
-
-# Example
-./scripts/release.sh macos-publish 1.2.3 "Bug fixes and stability improvements"
-```
-
-### Windows
-
-```bash
-# Build the zip
-./scripts/release.sh windows-package
-
-# Publish to GitHub and update the Windows update manifest
-./scripts/release.sh windows-publish <version> "Release notes"
-
-# Publish already-built artifacts without rebuilding
-./scripts/release.sh windows-publish --skip-build <version> "Release notes"
-
-# Example
-./scripts/release.sh windows-publish 1.2.3 "Bug fixes and stability improvements"
-```
-
-### Linux
-
-Direct Linux builds must be created on a Linux host. The unified `all-package` flow can also build Linux artifacts from macOS when Docker is available.
-
-```bash
-# Build the AppImage (must run on Linux)
-./scripts/release.sh linux-package
-
-# Publish to GitHub and update the Linux update manifest
-./scripts/release.sh linux-publish <version> "Release notes"
-
-# Publish already-built artifacts without rebuilding
-./scripts/release.sh linux-publish --skip-build <version> "Release notes"
-
-# Example
-./scripts/release.sh linux-publish 1.2.3 "Bug fixes and stability improvements"
-```
-
-Publish scripts create or update the GitHub release tag (`v<version>`), upload assets, and write the corresponding update manifest (`updates/macos/stable.json`, `updates/windows/stable.json`, or `updates/linux/stable.json`) so the in-app updater picks up the new version.
-
-
-## Environment Variables
-
-You can configure CaveViewer behavior through environment variables without editing code.
-
-### Runtime performance and UI
-
-- `CAVEVIEWER_CHUNK_SIZE_METERS`
-  Chunk size used when building a new cache. Default: `8.0`.
-  For very large maps, try `16` or `24`.
-
-- `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS`
-  Small yield inserted during the initial OBJ scan/prepass.
-  Default: `1` ms on Windows, `0` ms on macOS/Linux.
-  If Windows marks the app unresponsive or the machine feels pegged during `scanning file`, try `2` to `5`.
-  Higher values improve responsiveness but slow initial cache import.
-
-- `CAVEVIEWER_MEMORY_UTILIZATION_TARGET`
-  Target system RAM share used to derive runtime chunk residency (`max_loaded_chunks`).
-  Conservative default: `12%` of detected physical RAM.
-  Accepts either fraction (`0.12`) or percent-style (`12`, `25`).
-  This is not an absolute GB value.
-  Uses total physical RAM as a reference (not currently free RAM), and
-  acts as a residency policy target rather than an OS-level reservation.
-  Other running applications can still reduce effectively available memory.
-
-- `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET`
-  Target GPU memory share used to derive runtime chunk residency when GPU memory can be detected.
-  Default: `70%`.
-  Accepts either fraction (`0.70`) or percent-style (`70`).
-  CaveViewer uses the stricter of the system-RAM and GPU-memory chunk limits.
-
-- `CAVEVIEWER_GPU_MEMORY_GB`
-  Optional explicit GPU memory size in GB.
-  Use this when automatic GPU memory detection is unavailable or incorrect.
-  On NVIDIA systems, CaveViewer also attempts to detect dedicated GPU memory through `nvidia-smi`.
-
-- `CAVEVIEWER_IO_WORKERS`
-  Runtime chunk-load worker thread count.
-  Recommended starting range for very large maps on Windows: `2` to `6` (try `4` first).
-
-- `CAVEVIEWER_IO_RESERVED_CPUS`
-  CPU cores to reserve when `CAVEVIEWER_IO_WORKERS` is not explicitly set.
-
-- `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME`
-  Maximum number of ready chunks to upload to the GPU per frame. Default: `1`.
-  Lower values favor smooth frame pacing; higher values can catch up faster after large teleports.
-
-- `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS`
-  Soft per-frame time budget for uploading ready chunks. Default: `3.0`.
-  A single large chunk can still exceed this because upload work cannot be interrupted mid-chunk.
-  This setting controls runtime streaming/upload pacing only; it does not affect initial cache import.
-
-- `CAVEVIEWER_CHUNK_BUILD_WORKERS`
-  Worker thread count for writing chunk files during cache build/import.
-
-- `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`
-  CPU cores to reserve for cache build worker auto-sizing.
-
-Runtime tuning examples:
-
-```bash
-# macOS / Linux: large-map runtime tuning
-export CAVEVIEWER_CHUNK_SIZE_METERS=16
-export CAVEVIEWER_MEMORY_UTILIZATION_TARGET=20
-export CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET=70
-export CAVEVIEWER_IO_WORKERS=4
-export CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1
-export CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=3.0
-./run_caveviewer.sh
-```
-
-```powershell
-# Windows PowerShell: large-map runtime tuning
-$env:CAVEVIEWER_CHUNK_SIZE_METERS = "16"
-$env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "20"
-$env:CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET = "70"
-$env:CAVEVIEWER_IO_WORKERS = "4"
-$env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
-$env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "3.0"
-python caveviewer.py
-```
-
-Powerful workstation starting point (Windows 11, high-core-count CPU, 128GB RAM, NVIDIA GPU with 24GB VRAM):
-
-```powershell
-$env:CAVEVIEWER_CHUNK_SIZE_METERS = "32"
-$env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "25"
-$env:CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET = "65"
-$env:CAVEVIEWER_GPU_MEMORY_GB = "24"
-$env:CAVEVIEWER_IO_WORKERS = "4"
-$env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
-$env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "3.0"
-python caveviewer.py
-```
-
-In the viewer, start with **DISTANCE** set to `1` or `2`. If the map is already cached, only the runtime settings (`MEMORY_UTILIZATION_TARGET`, `GPU_MEMORY_UTILIZATION_TARGET`, `GPU_MEMORY_GB`, `IO_WORKERS`, and upload pacing) take effect immediately. Changing `CAVEVIEWER_CHUNK_SIZE_METERS` requires deleting/rebuilding the map's `.caveviewer_cache`, because chunk size is baked into the cache.
-
-To check the chunk size of a precomputed map, open its `.caveviewer_cache/manifest.json` and look for:
-
-```json
-"chunk_size": 32.0
-```
-
-When opening an existing or precomputed cache, CaveViewer always uses the `chunk_size` recorded in `manifest.json`, even if `CAVEVIEWER_CHUNK_SIZE_METERS` is currently set to a different value. The environment variable only controls new cache imports or rebuilt caches.
-
-If Windows streaming appears I/O-bound on very large maps, test these combinations in order:
-
-1. `32m` chunks, **DISTANCE** `1`, `IO_WORKERS=4`
-2. `32m` chunks, **DISTANCE** `2`, `IO_WORKERS=4`
-3. `48m` chunks, **DISTANCE** `1`, `IO_WORKERS=2`
-4. `48m` chunks, **DISTANCE** `1`, `IO_WORKERS=4`
-
-Larger chunks reduce the number of chunk files and random file opens, which can help Windows storage paths. The tradeoff is that each ready chunk is heavier to upload and draw, so keep `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1` when testing `32m` or `48m` chunks.
-
-The splash screen's **Advanced Settings** dialog is split into **Streaming Performance** and **Map Parsing** sections. Streaming settings affect runtime loading and GPU upload pacing. Map Parsing settings affect new imports or rebuilt caches; they do not reinterpret an existing `.caveviewer_cache`.
-
-Cache-build tuning examples (import/chunk generation phase):
-
-```bash
-# macOS / Linux: constrain cache-build worker count
-export CAVEVIEWER_CHUNK_BUILD_WORKERS=4
-./run_caveviewer.sh
-```
-
-```powershell
-# Windows PowerShell: constrain cache-build worker count
-$env:CAVEVIEWER_CHUNK_BUILD_WORKERS = "4"
-python caveviewer.py
-```
-
-- `CAVEVIEWER_UI_TEXT_SCALE`
-  Global UI text scale override (float).
-
-- `CAVEVIEWER_UI_FONT`
-  Absolute path to a `.ttf/.otf/.ttc` font file for UI text rendering.
-
-- `CAVEVIEWER_TEXT_AA_MODE`
-  UI text anti-aliasing mode: `normal`, `light`, or `lcd`.
-
-- `CAVEVIEWER_FORCE_STARTUP_FOCUS`
-  Startup focus override for frozen macOS builds (`1/true/yes/on` to enable).
-
-### Update configuration
-
-- `CAVEVIEWER_UPDATE_MANIFEST_URL`
-  Explicit update manifest URL (highest priority).
-
-- `CAVEVIEWER_GITHUB_REPO`
-  GitHub repo used to derive default update manifest URLs when explicit URL is not set.
-
-### Windows-specific update overrides
-
-- `CAVEVIEWER_WINDOWS_GITHUB_REPO`
-  Windows adapter repo override for update metadata.
-
-- `CAVEVIEWER_WINDOWS_UPDATE_MANIFEST_URL`
-  Windows-specific update manifest URL override.
-
-### Development and packaging
-
-- `CAVEVIEWER_DEV_VENV`
-  Development virtual environment path used by `scripts/dev/install.sh` and `run_caveviewer.sh`.
-
-- `CAVEVIEWER_LINUX_BUILD_VENV`
-  Linux packaging virtual environment path.
-
-- `CAVEVIEWER_MACOS_BUILD_VENV`
-  macOS packaging virtual environment path.
-
-### Large-map tuning
-
-For very large source maps (for example `.obj` files around 10-20GB+), you can increase cache chunk size to reduce the number of chunk files and improve streaming performance on some systems (especially Windows random-I/O workloads).
-
-- Environment variable: `CAVEVIEWER_CHUNK_SIZE_METERS`
-- Default: `8.0` (current behavior)
-- Recommended starting values for very large maps: `16` or `24`
-
-Examples:
-
-```bash
-# macOS / Linux
-export CAVEVIEWER_CHUNK_SIZE_METERS=16
-./run_caveviewer.sh
-```
-
-```powershell
-# Windows PowerShell
-$env:CAVEVIEWER_CHUNK_SIZE_METERS = "16"
-python caveviewer.py
-```
-
-Use larger chunk sizes only when needed: very large values can increase per-chunk draw cost, while smaller values increase chunk-file count.
-
-## Troubleshooting
-
-If you encounter issues, check the console output for error messages and ensure all required files are present in the selected folder.
+Important: there is no single best value for all maps. The best result comes from trying several import strategies and streaming settings for your map and your hardware.

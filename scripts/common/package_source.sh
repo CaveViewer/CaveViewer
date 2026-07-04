@@ -59,6 +59,7 @@ for item in \
         --exclude='__pycache__' \
         --exclude='*.pyc' \
         --exclude='.DS_Store' \
+        --exclude='_cache' \
         --exclude='.caveviewer_cache' \
         --exclude='venv' \
         --exclude='.venv*' \

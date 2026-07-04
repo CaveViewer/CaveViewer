@@ -31,6 +31,7 @@ without extra modal pop-ups.
 
 from __future__ import annotations
 
+import glob
 import json
 import math
 import os
@@ -403,6 +404,74 @@ def _apply_advanced_settings_to_env(values: dict[str, str]) -> None:
         os.environ[field["env_var"]] = value
 
 
+def _has_precompiled_cache(folder: str) -> bool:
+    try:
+        from core import chunker as _ck
+    except Exception:
+        return False
+
+    # Support both layouts used by caveviewer.py:
+    # 1) <map folder>/_cache/manifest.json
+    # 2) <map folder>/.caveviewer_cache/manifest.json (legacy)
+    # 3) <selected folder>/manifest.json (folder is cache root)
+    candidates = [
+        os.path.join(folder, _ck.CACHE_DIRNAME),
+        os.path.join(folder, _ck.LEGACY_CACHE_DIRNAME),
+        folder,
+    ]
+    for candidate in candidates:
+        if os.path.exists(os.path.join(candidate, _ck.MANIFEST_NAME)):
+            return True
+    return False
+
+
+def _validate_selected_map_folder(folder: str) -> tuple[bool, str]:
+    if not folder or not os.path.isdir(folder):
+        return False, "The selected path is not a valid folder."
+
+    glb_candidates = glob.glob(os.path.join(folder, "*.glb"))
+    if glb_candidates:
+        return True, ""
+
+    obj_candidates = glob.glob(os.path.join(folder, "*.obj"))
+    if obj_candidates:
+        obj_path = obj_candidates[0]
+        mtl_name = None
+        try:
+            with open(obj_path, "r", errors="replace") as f:
+                for line in f:
+                    if line.startswith("mtllib "):
+                        mtl_name = line.split(maxsplit=1)[1].strip()
+                        break
+        except Exception:
+            # If the OBJ can't be inspected, continue with fallback checks.
+            pass
+
+        if mtl_name and os.path.exists(os.path.join(folder, mtl_name)):
+            return True, ""
+
+        if glob.glob(os.path.join(folder, "*.mtl")):
+            return True, ""
+
+        if _has_precompiled_cache(folder):
+            return True, ""
+
+        return False, (
+            "Found an .obj file, but no matching .mtl file in that folder.\n\n"
+            "Select a folder with a .glb file, or with both .obj and .mtl files, "
+            "or a folder that already contains a CaveViewer pre-compiled cache."
+        )
+
+    if _has_precompiled_cache(folder):
+        return True, ""
+
+    return False, (
+        "No supported map files were found in that folder.\n\n"
+        "Select a folder with a .glb file, or with both .obj and .mtl files, "
+        "or a folder that already contains a CaveViewer pre-compiled cache."
+    )
+
+
 def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION) -> str | None:
     """
     Shows the launch splash screen and blocks until the person either
@@ -746,6 +815,101 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     prompt_no_button.config(command=_defer_manual_update_close)
 
     # -- browse button + instructions ---------------------------------------------
+    def _show_invalid_map_dialog(message: str) -> None:
+        dialog = tk.Toplevel(root)
+        dialog.title("Map Not Found")
+        dialog.configure(bg=_BG_COLOR)
+        dialog.resizable(False, False)
+        dialog.transient(root)
+
+        body = tk.Frame(dialog, bg=_BG_COLOR, padx=18, pady=16)
+        body.pack(fill="both", expand=True)
+
+        tk.Label(
+            body,
+            text="Unable to Open This Folder",
+            font=_VERSION_FONT,
+            fg=_TITLE_COLOR,
+            bg=_BG_COLOR,
+        ).pack(anchor="w", pady=(0, 8))
+
+        tk.Label(
+            body,
+            text=message,
+            font=_BODY_FONT,
+            fg=_SUBTITLE_COLOR,
+            bg=_BG_COLOR,
+            justify="left",
+            wraplength=420,
+        ).pack(anchor="w")
+
+        button_row = tk.Frame(body, bg=_BG_COLOR)
+        button_row.pack(fill="x", pady=(14, 0))
+
+        def _dismiss(_event=None):
+            dialog.destroy()
+            return "break"
+
+        if sys.platform == "darwin":
+            ok_button = tk.Label(
+                button_row,
+                text="OK",
+                font=_SMALL_FONT,
+                bg=_BUTTON_BG,
+                fg=_BUTTON_FG,
+                padx=16,
+                pady=6,
+                cursor="hand2",
+                takefocus=True,
+                highlightthickness=1,
+                highlightbackground="#3a4454",
+                highlightcolor="#7e96b8",
+            )
+            ok_button.bind("<Button-1>", _dismiss)
+            ok_button.bind("<Return>", _dismiss)
+            ok_button.bind("<space>", _dismiss)
+            ok_button.bind("<Enter>", lambda _event: ok_button.config(bg="#d8b34d"))
+            ok_button.bind("<Leave>", lambda _event: ok_button.config(bg=_BUTTON_BG))
+        else:
+            ok_button = tk.Button(
+                button_row,
+                text="OK",
+                command=lambda: _dismiss(),
+                font=_SMALL_FONT,
+                bg=_BUTTON_BG,
+                fg=_BUTTON_FG,
+                activebackground="#d8b34d",
+                activeforeground=_BUTTON_FG,
+                relief="flat",
+                borderwidth=0,
+                padx=16,
+                pady=6,
+                cursor="hand2",
+                default="active",
+            )
+
+        ok_button.pack(side="right")
+
+        dialog.bind("<Escape>", _dismiss)
+        dialog.bind("<Return>", _dismiss)
+
+        dialog.update_idletasks()
+        try:
+            root.update_idletasks()
+            dialog_w = dialog.winfo_reqwidth()
+            dialog_h = dialog.winfo_reqheight()
+            x = root.winfo_rootx() + max(0, (root.winfo_width() - dialog_w) // 2)
+            y = root.winfo_rooty() + max(0, (root.winfo_height() - dialog_h) // 2)
+            dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
+        except Exception:
+            pass
+
+        dialog.wait_visibility()
+        dialog.grab_set()
+        ok_button.focus_set()
+        dialog.focus_force()
+        dialog.wait_window()
+
     def on_browse():
         dialog_kwargs = {
             "title": "Select a cave map folder",
@@ -756,6 +920,11 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
         folder = filedialog.askdirectory(**dialog_kwargs)
         if folder:
+            is_valid, error_message = _validate_selected_map_folder(folder)
+            if not is_valid:
+                _show_invalid_map_dialog(error_message)
+                return
+
             selected_folder[0] = folder
             _save_last_browse_dir(folder)
             root.withdraw()

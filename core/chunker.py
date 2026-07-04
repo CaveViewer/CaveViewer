@@ -8,7 +8,7 @@ whole cave, we split the mesh into cells (default 8m cubes -- tune via
 CHUNK_SIZE for your cave's scale) and load only the cells near the camera
 at runtime (see core/streaming_world.py).
 
-Cache layout on disk, under <obj_folder>/.caveviewer_cache/:
+Cache layout on disk, under <obj_folder>/_cache/:
     manifest.json          - chunk grid metadata, bounds, cell size,
                               chunk_id -> required texture list, etc.
     chunks/<cx>_<cy>_<cz>.bin
@@ -39,7 +39,8 @@ import numpy as np
 from core.logging_utils import get_logger
 from core.obj_parser import RawMesh, MaterialRange
 
-CACHE_DIRNAME = ".caveviewer_cache"
+CACHE_DIRNAME = "_cache"
+LEGACY_CACHE_DIRNAME = ".caveviewer_cache"
 MANIFEST_NAME = "manifest.json"
 CHUNKS_DIRNAME = "chunks"
 
@@ -527,16 +528,32 @@ def cache_is_valid(obj_path: str) -> bool:
     """Cache is valid if it exists and is newer than the source OBJ (cheap
     staleness check so re-running on the same map doesn't reparse 2GB)."""
     obj_dir = os.path.dirname(os.path.abspath(obj_path))
-    cache_dir = os.path.join(obj_dir, CACHE_DIRNAME)
-    manifest_path = os.path.join(cache_dir, MANIFEST_NAME)
-    if not os.path.exists(manifest_path):
-        return False
-    return os.path.getmtime(manifest_path) >= os.path.getmtime(obj_path)
+    candidates = [
+        os.path.join(obj_dir, CACHE_DIRNAME),
+        os.path.join(obj_dir, LEGACY_CACHE_DIRNAME),
+    ]
+    for cache_dir in candidates:
+        manifest_path = os.path.join(cache_dir, MANIFEST_NAME)
+        if not os.path.exists(manifest_path):
+            continue
+        if os.path.getmtime(manifest_path) >= os.path.getmtime(obj_path):
+            return True
+    return False
 
 
 def get_cache_dir(obj_path: str) -> str:
     obj_dir = os.path.dirname(os.path.abspath(obj_path))
-    return os.path.join(obj_dir, CACHE_DIRNAME)
+    preferred = os.path.join(obj_dir, CACHE_DIRNAME)
+    preferred_manifest = os.path.join(preferred, MANIFEST_NAME)
+    if os.path.exists(preferred_manifest):
+        return preferred
+
+    legacy = os.path.join(obj_dir, LEGACY_CACHE_DIRNAME)
+    legacy_manifest = os.path.join(legacy, MANIFEST_NAME)
+    if os.path.exists(legacy_manifest):
+        return legacy
+
+    return preferred
 
 
 def find_landing_position(manifest: dict, target_x: float, target_z: float,

@@ -250,9 +250,11 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     from core.obj_parser import parse_obj, parse_mtl
 
     if not force_rebuild and chunker.cache_is_valid(obj_path):
-        _LOG.info(f"Using existing chunk cache (delete the .caveviewer_cache "
+        cache_dir = chunker.get_cache_dir(obj_path)
+        _LOG.info(f"Using existing chunk cache (delete the _cache "
                   f"folder next to your .obj if you want to force a rebuild).")
-        return chunker.get_cache_dir(obj_path)
+        _LOG.info(f"Found cache in: {cache_dir}")
+        return cache_dir
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
@@ -294,6 +296,8 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
 
     materials = parse_mtl(mtl_path)
 
+    target_cache_dir = os.path.join(os.path.dirname(os.path.abspath(obj_path)), chunker.CACHE_DIRNAME)
+    _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
     cache_dir = chunker.build_cache(obj_path, mesh, materials, progress_cb=cache_progress)
     print()
 
@@ -349,9 +353,11 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     source_path = model_descriptor["glb_path"]
 
     if not force_rebuild and chunker.cache_is_valid(source_path):
-        _LOG.info(f"Using existing chunk cache (delete the .caveviewer_cache "
+        cache_dir = chunker.get_cache_dir(source_path)
+        _LOG.info(f"Using existing chunk cache (delete the _cache "
                   f"folder next to your {os.path.basename(source_path)} if you want to force a rebuild).")
-        return chunker.get_cache_dir(source_path)
+        _LOG.info(f"Found cache in: {cache_dir}")
+        return cache_dir
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
@@ -418,6 +424,8 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
 
     print()  # newline after the parse progress bar
 
+    target_cache_dir = os.path.join(os.path.dirname(os.path.abspath(source_path)), chunker.CACHE_DIRNAME)
+    _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
     cache_dir = chunker.build_cache(source_path, mesh, materials, progress_cb=cache_progress)
     print()
 
@@ -512,7 +520,7 @@ def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> No
         _LOG.info(
             f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}m, "
             "but existing/prebuilt caches always open with their manifest chunk size. "
-            "Delete or rebuild .caveviewer_cache to apply a different import chunk size."
+            "Delete or rebuild _cache to apply a different import chunk size."
         )
 
 
@@ -525,17 +533,23 @@ def _run_map_session(folder: str) -> None:
         model_descriptor = find_model_file(folder)
     except FileNotFoundError as e:
         from core import chunker as _ck
-        # Case 1: folder contains a .caveviewer_cache/ subfolder (standard layout)
+        # Case 1: folder contains a _cache/ subfolder (standard layout)
         _prebuilt_cache = os.path.join(folder, _ck.CACHE_DIRNAME)
+        _legacy_prebuilt_cache = os.path.join(folder, _ck.LEGACY_CACHE_DIRNAME)
         _textures_dir = folder
         # Case 2: folder itself is the cache directory (e.g. renamed or moved)
         if not os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
-            if os.path.exists(os.path.join(folder, _ck.MANIFEST_NAME)):
+            if os.path.exists(os.path.join(_legacy_prebuilt_cache, _ck.MANIFEST_NAME)):
+                _LOG.info(f"Found legacy cache in: {_legacy_prebuilt_cache}")
+                _prebuilt_cache = _legacy_prebuilt_cache
+            elif os.path.exists(os.path.join(folder, _ck.MANIFEST_NAME)):
+                _LOG.info(f"Found cache manifest in selected directory: {folder}")
                 _prebuilt_cache = folder
                 _textures_dir = folder
         if os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
             _LOG.info("Pre-compiled map detected -- launching viewer directly.")
-            _LOG.info("(Delete the .caveviewer_cache folder to force a rebuild.)")
+            _LOG.info("(Delete the _cache folder to force a rebuild.)")
+            _LOG.info(f"Using cache directory: {_prebuilt_cache}")
             _log_cache_chunk_size(_prebuilt_cache, context="Pre-compiled map cache")
             _print_viewer_controls()
             from gui.viewer_window import run_viewer
@@ -564,9 +578,10 @@ def _run_map_session(folder: str) -> None:
         # Fast path, unchanged: a cache already exists, so there's no
         # import to show progress for -- launch straight in, same as
         # this has always worked.
-        _LOG.info("Using existing chunk cache (delete the .caveviewer_cache "
+        _LOG.info("Using existing chunk cache (delete the _cache "
                   "folder next to your model file if you want to force a rebuild).")
         cache_dir = chunker.get_cache_dir(source_path)
+        _LOG.info(f"Using cache directory: {cache_dir}")
         _log_cache_chunk_size(cache_dir, context="Existing chunk cache")
         from gui.viewer_window import run_viewer
         try:
