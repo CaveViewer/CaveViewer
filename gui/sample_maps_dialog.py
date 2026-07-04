@@ -63,9 +63,12 @@ def show_sample_maps_dialog(parent, install_dir):
         return int(round(value * scale))
 
     # Card metrics, defined up front so the window can open at its full,
-    # comfortable size BEFORE the loading spinner shows.
-    row_height = _px(84)
-    base_height = _px(150)
+    # comfortable size BEFORE the loading spinner shows. base_height is tuned
+    # so the preload height closely matches the real populated-list height,
+    # keeping the loading state and the list the SAME size (no shrink/grow
+    # that would read as two separate windows).
+    row_height = _px(90)
+    base_height = _px(96)
     window_w = _px(500)
     preload_h = base_height + row_height * max(1, len(KNOWN_SAMPLE_MAPS))
 
@@ -424,17 +427,17 @@ def show_sample_maps_dialog(parent, install_dir):
         action_btn.pack(side="right", padx=(8, 16), pady=12)
         action_buttons[sample.display_name] = action_btn
 
-    # Re-fit the window to the actual rendered content, but keep the SAME
+    # Re-fit the window to the actual rendered content, keeping the SAME
     # anchor position computed up front so it never repositions (no jump).
-    # The size only grows to fit content -- floored at the preload size so it
-    # never shrinks either -- and is clamped to stay on screen from the
-    # anchor. Fitting the width matters on Windows, where larger font metrics
-    # make a long map name push its button off the right edge.
+    # Height is floored at the preload size so the populated list is never
+    # shorter than the loading state -- that shrink is what read as "two
+    # windows." Width still grows to fit long map names (important on
+    # Windows) and everything is clamped to stay on screen from the anchor.
     dialog.update_idletasks()
     max_width = min(_screen_w - anchor_x - 8, _px(760))
     max_height = min(_screen_h - anchor_y - 8, _px(760))
     fitted_width = max(window_w, min(dialog.winfo_reqwidth(), max_width))
-    fitted_height = min(dialog.winfo_reqheight(), max_height)
+    fitted_height = max(preload_h, min(dialog.winfo_reqheight(), max_height))
     dialog.geometry(f"{fitted_width}x{fitted_height}+{anchor_x}+{anchor_y}")
 
     dialog.wait_window()
