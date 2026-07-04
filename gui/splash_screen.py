@@ -946,19 +946,20 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             screen_w = dialog.winfo_screenwidth()
             screen_h = dialog.winfo_screenheight()
             dialog_w = min(dialog_w, max(320, screen_w - 16))
-            dialog_h = min(dialog_h, max(320, screen_h - 16))
             parent_x = root.winfo_rootx()
             parent_y = root.winfo_rooty()
             parent_w = root.winfo_width()
-            # Keep the dialog near the splash window's upper-right corner,
-            # but let it protrude past the right edge by a fixed amount so
-            # the overlap reads clearly on every platform.
+            # Keep the dialog anchored near the splash window's top-right
+            # corner. This matters more now that the Windows dialog is wider:
+            # if the window manager places it low, the action buttons can
+            # end up off-screen on shorter displays.
             protrusion_x = 72
-            inset_y = 40
+            inset_y = 8
             desired_x = parent_x + parent_w - dialog_w + protrusion_x
             desired_y = parent_y + inset_y
             clamped_x = max(8, min(desired_x, screen_w - dialog_w - 8))
-            clamped_y = max(8, min(desired_y, screen_h - dialog_h - 8))
+            clamped_y = max(8, min(desired_y, screen_h - 328))
+            dialog_h = min(dialog_h, max(320, screen_h - clamped_y - 8))
             dialog.geometry(f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}")
         except Exception:
             pass
