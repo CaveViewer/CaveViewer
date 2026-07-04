@@ -476,8 +476,11 @@ def pick_folder_dialog() -> str | None:
     Windows/Mac, so this needs no extra install for the bare-bones UI."""
     import tkinter as tk
     from tkinter import filedialog
+    from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
 
+    configure_process_dpi_awareness()
     root = tk.Tk()
+    apply_tk_scaling(root)
     root.withdraw()
     folder = filedialog.askdirectory(
         title="Select folder containing your cave map (.obj, .mtl, .jpg)"
@@ -593,6 +596,12 @@ def _run_map_session(folder: str) -> None:
 
 def main():
     configure_logging()
+    if os.name == "nt":
+        try:
+            from gui.dpi_utils import configure_process_dpi_awareness
+            configure_process_dpi_awareness()
+        except Exception:
+            pass
     _LOG.info("=" * 60)
     _LOG.info(f"  {APP_NAME} {__version__}")
     _LOG.info("=" * 60)

@@ -38,6 +38,7 @@ import tempfile
 import threading
 from caveviewer_version import APP_NAME, APP_VERSION
 from core.logging_utils import get_logger
+from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
 from gui.platform import get_splash_platform_adapter
 
 
@@ -394,7 +395,9 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     advanced_settings = _effective_advanced_settings(_load_advanced_settings())
     _apply_advanced_settings_to_env(advanced_settings)
 
+    configure_process_dpi_awareness()
     root = tk.Tk()
+    apply_tk_scaling(root)
     # Keep hidden until final geometry is set to avoid a visible corner->center jump.
     root.withdraw()
     root.title(f"{program_name} {version}")
