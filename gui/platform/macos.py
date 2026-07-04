@@ -88,7 +88,8 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         message = f"{program_name}\nVersion {version}"
         detail = (
             "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
-            "BottomLine Projects Scientific Dive Team and other volunteers."
+            "BottomLine Projects Scientific Dive Team and other volunteers.\n"
+            "Licensed under the GNU General Public License v3.0."
         )
 
         # Register the About handler as PURE TCL PROCS rather than Python
@@ -138,7 +139,8 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             "-message", f"{program_name}\nVersion {version}",
             "-detail", (
                 "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
-                "BottomLine Projects Scientific Dive Team and other volunteers."
+                "BottomLine Projects Scientific Dive Team and other volunteers.\n"
+                "Licensed under the GNU General Public License v3.0."
             ),
         )
 

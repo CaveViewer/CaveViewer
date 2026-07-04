@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Packages dist/macos/app/CaveViewer.app into a versioned DMG and includes
-# README.md inside the DMG for end-user instructions.
+# README.md and license notices inside the DMG for end-user instructions.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
@@ -11,6 +11,8 @@ source "$repo_root/scripts/common/artifacts.sh"
 version_file="$repo_root/caveviewer_version.py"
 app_bundle="$repo_root/dist/macos/app/CaveViewer.app"
 readme_path="$repo_root/README.md"
+license_path="$repo_root/LICENSE"
+third_party_notices_path="$repo_root/THIRD_PARTY_NOTICES.md"
 packages_dir="$repo_root/dist/macos/packages"
 metadata_dir="$repo_root/dist/macos/metadata"
 
@@ -32,6 +34,16 @@ fi
 
 if [ ! -f "$readme_path" ]; then
   echo "Error: README not found at $readme_path"
+  exit 1
+fi
+
+if [ ! -f "$license_path" ]; then
+  echo "Error: LICENSE not found at $license_path"
+  exit 1
+fi
+
+if [ ! -f "$third_party_notices_path" ]; then
+  echo "Error: third-party notices not found at $third_party_notices_path"
   exit 1
 fi
 
@@ -59,6 +71,8 @@ trap cleanup EXIT
 
 cp -R "$app_bundle" "$staging_dir/"
 cp "$readme_path" "$staging_dir/README.md"
+cp "$license_path" "$staging_dir/LICENSE"
+cp "$third_party_notices_path" "$staging_dir/THIRD_PARTY_NOTICES.md"
 ln -s /Applications "$staging_dir/Applications"
 
 hdiutil create \

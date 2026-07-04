@@ -65,6 +65,8 @@ pathspecs = [
 		"caveviewer_version.py",
 		"requirements.txt",
 		"README.md",
+		"LICENSE",
+		"THIRD_PARTY_NOTICES.md",
 		"CaveViewer.spec",
 		"core",
 		"gui",
@@ -85,6 +87,13 @@ for relative_path in files:
 		destination_path = staging_root / relative_path
 		destination_path.parent.mkdir(parents=True, exist_ok=True)
 		shutil.copy2(source_path, destination_path)
+
+for relative_path in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+		source_path = repo_root / relative_path
+		if source_path.is_file():
+				destination_path = staging_root / relative_path
+				destination_path.parent.mkdir(parents=True, exist_ok=True)
+				shutil.copy2(source_path, destination_path)
 
 # Make setup scripts first-class citizens at the bundle root.
 root_launch = staging_root / "launch.bat"
@@ -123,6 +132,8 @@ app_name = sys.argv[5]
 
 important_files = [
 	"README.md",
+	"LICENSE",
+	"THIRD_PARTY_NOTICES.md",
 	"caveviewer.py",
 	"caveviewer_version.py",
 	"requirements.txt",
@@ -152,6 +163,8 @@ release_manifest = {
 	"artifact_file": artifact_name,
 	"bundle_contains": [
 		"source_files",
+		"LICENSE",
+		"THIRD_PARTY_NOTICES.md",
 		"launch.bat",
 		"setup.ps1",
 		"release/SHA256SUMS.txt",

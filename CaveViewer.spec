@@ -13,6 +13,8 @@ a = Analysis(
     datas=[
         (str(project_root / 'shaders'), 'shaders'),
         (str(project_root / 'gui' / 'assets'), 'gui/assets'),
+        (str(project_root / 'LICENSE'), '.'),
+        (str(project_root / 'THIRD_PARTY_NOTICES.md'), '.'),
     ],
     hiddenimports=['PIL._tkinter_finder', 'tkinter', 'moderngl_window.context.pyglet'],
     hookspath=[],

@@ -141,3 +141,9 @@ If pop-in is too visible, raise Chunk uploads per frame gradually (1, then 2, th
 If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Import worker count or reduce Import CPUs to keep free.
 
 Important: there is no single best value for all maps. The best result comes from trying several import strategies and streaming settings for your map and your hardware.
+
+## License
+
+CaveViewer is free software licensed under the GNU General Public License version 3.0. See `LICENSE` for the full license text.
+
+Third-party dependency notices are listed in `THIRD_PARTY_NOTICES.md`.

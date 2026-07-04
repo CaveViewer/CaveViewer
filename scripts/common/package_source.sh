@@ -40,6 +40,8 @@ for item in \
   caveviewer_version.py \
   requirements.txt \
   README.md \
+  LICENSE \
+  THIRD_PARTY_NOTICES.md \
   CHANGELOG.md \
   core \
   gui \

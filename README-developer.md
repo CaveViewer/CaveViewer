@@ -19,6 +19,13 @@ The repository's source archive format is:
 
 This format is produced by the existing source packaging flow in `scripts/common/package_source.sh`.
 
+Release packages should include:
+
+- `LICENSE`
+- `THIRD_PARTY_NOTICES.md`
+
+The application About text should identify CaveViewer as licensed under the GNU General Public License version 3.0.
+
 ## Requirements
 
 - Git
