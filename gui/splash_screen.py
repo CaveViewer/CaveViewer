@@ -113,6 +113,8 @@ _CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
 _SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
+_CREDITS_TO_DIVIDER_GAP = 22 if sys.platform == "win32" else 16
+_DIVIDER_TO_BROWSE_GAP = 22 if sys.platform == "win32" else 24
 _BROWSE_BUTTON_BOTTOM_GAP = 26 if sys.platform == "win32" else 16
 _INSTRUCTION_BOTTOM_GAP = 14 if sys.platform == "win32" else 0
 _ADVANCED_LINK_TOP_GAP = 18 if sys.platform == "win32" else 12
@@ -733,11 +735,11 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",
     )
-    credit_label.pack(pady=(0, 16))
+    credit_label.pack(pady=(0, _CREDITS_TO_DIVIDER_GAP))
 
     # -- separator line, subtle ---------------------------------------------------
     separator = tk.Frame(root, bg=_BORDER_COLOR, height=1)
-    separator.pack(fill="x", padx=44, pady=(0, 24))
+    separator.pack(fill="x", padx=44, pady=(0, _DIVIDER_TO_BROWSE_GAP))
 
     # -- browse button + instructions ---------------------------------------------
     def on_browse():
