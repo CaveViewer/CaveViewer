@@ -94,7 +94,6 @@ _EXAMPLE_MAPS_URL = None
 _LOG = get_logger("CaveViewer")
 
 _BG_COLOR = "#0a0a0d"           # near-black, matches the in-app overlay backgrounds
-_PANEL_COLOR = "#12121a"        # slightly lighter panel background
 _TITLE_COLOR = "#f2d98c"        # amber/gold, matches the in-app title text color
 _SUBTITLE_COLOR = "#cccdd6"     # light gray, matches in-app subtitle/body text
 _INSTRUCTION_COLOR = "#9a9aa6"  # dimmer gray, matches in-app secondary/note text
@@ -109,17 +108,14 @@ _VERSION_FONT = (_UI_FONT_FAMILY, 12)
 _BODY_FONT = (_UI_FONT_FAMILY, 12)
 _SMALL_FONT = (_UI_FONT_FAMILY, 10)
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
-_CTA_LINK_FONT = (_UI_FONT_FAMILY, 12, "bold", "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-_SPLASH_WINDOW_MIN_HEIGHT = 600 if sys.platform == "darwin" else 620
-_SPLASH_CTA_BOTTOM_PAD = 16 if sys.platform == "darwin" else 44
-_CREDITS_TO_DIVIDER_GAP = 22 if sys.platform == "win32" else 16
-_DIVIDER_TO_BROWSE_GAP = 22 if sys.platform == "win32" else 24
+_SPLASH_WINDOW_MIN_HEIGHT = 540 if sys.platform == "darwin" else 620
+_SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 24
+_FOOTER_CREDITS_BOTTOM_PAD = 18 if sys.platform == "darwin" else 36
+_TITLE_TO_ACTION_GAP = 34 if sys.platform == "win32" else 28
 _BROWSE_BUTTON_BOTTOM_GAP = 22 if sys.platform == "win32" else 16
 _INSTRUCTION_BOTTOM_GAP = 14 if sys.platform == "win32" else 0
-_ADVANCED_LINK_TOP_GAP = 18 if sys.platform == "win32" else 12
-_ADVANCED_LINK_BOTTOM_GAP = 14 if sys.platform == "win32" else 4
-_SAMPLE_MAPS_TOP_GAP = 22 if sys.platform == "win32" else 20
+_SECONDARY_LINK_ROW_TOP_GAP = 20 if sys.platform == "win32" else 16
 _ADVANCED_DIALOG_TWO_COLUMN = True
 _ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
 _ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
@@ -413,7 +409,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
     # Keep hidden until final geometry is set to avoid a visible corner->center jump.
     root.withdraw()
-    root.title(f"{program_name} {version}")
+    root.title(program_name)
     root.configure(bg=_BG_COLOR)
     root.resizable(False, False)
 
@@ -476,13 +472,14 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         "mounted_app": None,
         "busy": False,
         "link_enabled": True,
+        "check_user_initiated": False,
     }
 
     update_panel = tk.Frame(root, bg=_BG_COLOR)
 
     update_status_label = tk.Label(
         update_panel,
-        text="Your app is up to date.",
+        text="",
         font=_SMALL_FONT,
         fg=_INSTRUCTION_COLOR,
         bg=_BG_COLOR,
@@ -602,8 +599,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         _hide_update_actions()
         update_action_row.pack_forget()
 
-    update_panel.pack(pady=(0, 10))
-    update_status_label.pack(pady=(0, 8))
+    update_panel.pack(pady=(0, 0))
 
     def _set_busy(is_busy: bool):
         update_state["busy"] = bool(is_busy)
@@ -679,11 +675,13 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     def _on_check_result(result):
         _set_busy(False)
         if result.error:
-            _show_update_panel("Your app is up to date.", show_progress=False)
+            message = "Your app is up to date." if update_state.get("check_user_initiated") else ""
+            _show_update_panel(message, show_progress=False)
             return
 
         if not result.update_available:
-            _show_update_panel("Your app is up to date.", show_progress=False)
+            message = "Your app is up to date." if update_state.get("check_user_initiated") else ""
+            _show_update_panel(message, show_progress=False)
             return
 
         update_state["result"] = result
@@ -695,10 +693,11 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         if update_state["busy"]:
             return
         _set_busy(True)
+        update_state["check_user_initiated"] = bool(user_initiated)
         if user_initiated:
             _show_update_panel("Checking for updates...", show_progress=False)
         else:
-            _show_update_panel("Your app is up to date.", show_progress=False)
+            _show_update_panel("", show_progress=False)
 
         def worker():
             from gui.update_checker import check_for_update
@@ -728,19 +727,6 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     prompt_yes_button.config(command=_confirm_close_for_manual_update)
     prompt_no_button.config(command=_defer_manual_update_close)
 
-    credit_label = tk.Label(
-        root,
-        text=_CREDITS_TEXT,
-        font=_SMALL_FONT,
-        fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
-        justify="center",
-    )
-    credit_label.pack(pady=(0, _CREDITS_TO_DIVIDER_GAP))
-
-    # -- separator line, subtle ---------------------------------------------------
-    separator = tk.Frame(root, bg=_BORDER_COLOR, height=1)
-    separator.pack(fill="x", padx=44, pady=(0, _DIVIDER_TO_BROWSE_GAP))
-
     # -- browse button + instructions ---------------------------------------------
     def on_browse():
         dialog_kwargs = {
@@ -761,17 +747,23 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         root.withdraw()
         root.quit()
 
-    browse_button = tk.Button(
-        root, text="Select Map...", command=on_browse,
+    browse_button = tk.Label(
+        root,
+        text="Select Map...",
         font=_BUTTON_FONT,
-        bg=_BUTTON_BG, fg=_BUTTON_FG,
-        activebackground=_BUTTON_BG, activeforeground=_BUTTON_FG,
-        relief="flat", borderwidth=0,
-        default="active",
-        padx=30, pady=9,
+        bg=_BUTTON_BG,
+        fg=_BUTTON_FG,
+        padx=34,
+        pady=11,
         cursor="hand2",
+        takefocus=True,
     )
-    browse_button.pack(pady=(0, _BROWSE_BUTTON_BOTTOM_GAP))
+    browse_button.bind("<Button-1>", lambda _event: on_browse())
+    browse_button.bind("<Return>", lambda _event: on_browse())
+    browse_button.bind("<space>", lambda _event: on_browse())
+    browse_button.bind("<Enter>", lambda _event: browse_button.config(bg="#d8b34d"))
+    browse_button.bind("<Leave>", lambda _event: browse_button.config(bg=_BUTTON_BG))
+    browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
 
     instruction_label = tk.Label(
         root,
@@ -975,17 +967,6 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         apply_button.focus_set()
         dialog.focus_force()
 
-    advanced_link = tk.Label(
-        root,
-        text="Advanced Settings...",
-        font=_SMALL_FONT,
-        fg="#5d6f8a",
-        bg=_BG_COLOR,
-        cursor="hand2",
-    )
-    advanced_link.bind("<Button-1>", lambda _event: _show_advanced_settings_dialog())
-    advanced_link.pack(pady=(_ADVANCED_LINK_TOP_GAP, _ADVANCED_LINK_BOTTOM_GAP))
-
     # Example maps link - opens the sample maps dialog
     def _on_example_maps_click():
         from gui.sample_maps_dialog import show_sample_maps_dialog
@@ -996,36 +977,50 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             selected_folder[0] = result
             root.withdraw()
             root.quit()
-    
-    sample_maps_cta = tk.Frame(
-        root,
-        bg=_PANEL_COLOR,
-        highlightthickness=1,
-        highlightbackground="#3b3320",
-        highlightcolor="#3b3320",
-        cursor="hand2",
-        padx=14,
-        pady=9,
-    )
 
-    cta_link_label = tk.Label(
-        sample_maps_cta,
-        text="New here? Download ready-to-open sample maps",
-        font=_LINK_FONT,
-        fg=_BUTTON_BG,
-        bg=_PANEL_COLOR,
+    secondary_link_row = tk.Frame(root, bg=_BG_COLOR)
+    secondary_link_row.pack(pady=(_SECONDARY_LINK_ROW_TOP_GAP, _SECONDARY_LINK_ROW_BOTTOM_GAP))
+
+    advanced_link = tk.Label(
+        secondary_link_row,
+        text="Advanced Settings...",
+        font=_SMALL_FONT,
+        fg="#5d6f8a",
+        bg=_BG_COLOR,
         cursor="hand2",
+    )
+    advanced_link.bind("<Button-1>", lambda _event: _show_advanced_settings_dialog())
+    advanced_link.pack(side="left")
+
+    secondary_separator = tk.Label(
+        secondary_link_row,
+        text="   |   ",
+        font=_SMALL_FONT,
+        fg="#3f4a5c",
+        bg=_BG_COLOR,
+    )
+    secondary_separator.pack(side="left")
+
+    sample_maps_link = tk.Label(
+        secondary_link_row,
+        text="Download sample maps",
+        font=_SMALL_FONT,
+        fg=_BUTTON_BG,
+        bg=_BG_COLOR,
+        cursor="hand2",
+    )
+    sample_maps_link.bind("<Button-1>", lambda _event: _on_example_maps_click())
+    sample_maps_link.pack(side="left")
+
+    credit_label = tk.Label(
+        root,
+        text=_CREDITS_TEXT,
+        font=_SMALL_FONT,
+        fg="#5f606b",
+        bg=_BG_COLOR,
         justify="center",
     )
-    cta_link_label.pack()
-
-    def _bind_sample_maps_click(widget):
-        widget.bind("<Button-1>", lambda _: _on_example_maps_click())
-
-    for widget in (sample_maps_cta, cta_link_label):
-        _bind_sample_maps_click(widget)
-
-    sample_maps_cta.pack(pady=(_SAMPLE_MAPS_TOP_GAP, _SPLASH_CTA_BOTTOM_PAD))
+    credit_label.pack(pady=(0, _FOOTER_CREDITS_BOTTOM_PAD))
 
     # -- footer note ----------------------------------------------------------------
 
