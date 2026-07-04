@@ -73,33 +73,47 @@ appimagetool_matches_arch() {
   esac
 }
 
+appimagetool_can_execute() {
+  local path="$1"
+  APPIMAGE_EXTRACT_AND_RUN=1 "$path" --appimage-version >/dev/null 2>&1 ||
+    APPIMAGE_EXTRACT_AND_RUN=1 "$path" --version >/dev/null 2>&1 ||
+    APPIMAGE_EXTRACT_AND_RUN=1 "$path" --help >/dev/null 2>&1
+}
+
+appimagetool_is_usable() {
+  local path="$1"
+  local expected_arch="$2"
+  appimagetool_matches_arch "$path" "$expected_arch" && appimagetool_can_execute "$path"
+}
+
 ensure_appimagetool() {
   local expected_arch="$1"
   local candidate
   candidate="$(find_appimagetool || true)"
-  if [ -n "$candidate" ] && appimagetool_matches_arch "$candidate" "$expected_arch"; then
+  if [ -n "$candidate" ] && appimagetool_is_usable "$candidate" "$expected_arch"; then
     echo "$candidate"
     return 0
   fi
 
   if [ -n "$candidate" ]; then
-    echo "Ignoring appimagetool with wrong architecture: $candidate" >&2
+    echo "Ignoring unusable appimagetool: $candidate" >&2
     file "$candidate" >&2 || true
   fi
 
   local tools_dir="$repo_root/dist/linux/tools"
   local downloaded="$tools_dir/appimagetool-${expected_arch}.AppImage"
   mkdir -p "$tools_dir"
-  if [ ! -x "$downloaded" ] || ! appimagetool_matches_arch "$downloaded" "$expected_arch"; then
+  if [ ! -x "$downloaded" ] || ! appimagetool_is_usable "$downloaded" "$expected_arch"; then
     echo "Downloading appimagetool for $expected_arch..." >&2
     curl -fsSL -o "$downloaded" \
       "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${expected_arch}.AppImage"
     chmod +x "$downloaded"
   fi
 
-  if ! appimagetool_matches_arch "$downloaded" "$expected_arch"; then
-    echo "Error: downloaded appimagetool has the wrong architecture:" >&2
+  if ! appimagetool_is_usable "$downloaded" "$expected_arch"; then
+    echo "Error: downloaded appimagetool cannot run in this build environment:" >&2
     file "$downloaded" >&2 || true
+    echo "This usually means Docker/QEMU cannot execute $expected_arch AppImages on this host." >&2
     return 1
   fi
 

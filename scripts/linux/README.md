@@ -71,9 +71,10 @@ Wraps the PyInstaller output into a distributable AppImage:
 - Includes app icons in standard hicolor sizes for GNOME/Fedora/Ubuntu lookup
 - Creates `AppRun` wrapper script
 - Runs `appimagetool` to create final `.AppImage` executable
-- Validates the `appimagetool` CPU architecture and downloads the matching
-  `x86_64` or `aarch64` tool into `dist/linux/tools/` if the cached/system tool
-  is missing or wrong for the current build container
+- Validates that `appimagetool` both matches the CPU architecture and can
+  execute in the current build container. If the cached/system tool is missing,
+  wrong, or unusable, the script downloads the matching `x86_64` or `aarch64`
+  tool into `dist/linux/tools/`.
 
 ### Step 3: Full Release Workflow
 One-command build + package + manifest generation:
