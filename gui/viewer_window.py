@@ -35,7 +35,6 @@ from gui.controls_overlay import ControlsOverlay
 from gui.stepper_control import StepperControl
 from gui.color_picker import ColorPicker
 from gui.import_progress_panel import ImportProgressPanel
-from gui.stats_readout import StatsReadout
 from gui import bitmap_font
 from gui.platform.factory import get_platform_adapter
 from caveviewer_version import APP_NAME, APP_VERSION
@@ -306,11 +305,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         # active during normal viewing, so it has no on/off state of its
         # own the way the other overlays do.
         self.import_progress_panel = ImportProgressPanel(self.ctx)
-
-        # Live FPS / chunk-loading readout, positioned above the minimap.
-        # Map-independent (no per-map state), so it's set up once here
-        # rather than rebuilt every time _load_map() runs for a new map.
-        self.stats_readout = StatsReadout(self.ctx)
 
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
@@ -587,7 +581,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             "controls_overlay",
             "color_picker",
             "import_progress_panel",
-            "stats_readout",
             "minimap",
         )
         for name in components:
@@ -1386,28 +1379,6 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         self.minimap.render(self.wnd.size, self.camera.position, self.camera.forward())
 
-        # FPS / chunk-loading readout, positioned directly above the
-        # minimap panel (a small gap between the two so they don't touch).
-        # FPS is smoothed over the same rolling frame-time window the
-        # spike-detector below already maintains, rather than the
-        # coarser ~2-second console-print interval -- a readout that
-        # only updates every 2 seconds would feel sluggish and
-        # disconnected from whatever you just changed (e.g. clicking the
-        # render-distance stepper).
-        minimap_x0, minimap_y0, minimap_x1, minimap_y1 = self.minimap._panel_rect_px(self.wnd.size)
-        if self._frame_time_history:
-            avg_frame_ms = sum(self._frame_time_history) / len(self._frame_time_history)
-            instantaneous_fps = 1000.0 / max(avg_frame_ms, 0.1)
-        else:
-            instantaneous_fps = 0.0
-        world_stats = self.world.stats()
-        readout_bottom_y = minimap_y0 - 8  # 8px gap above the minimap's top edge
-        self.stats_readout.render(
-            self.wnd.size, minimap_x0, readout_bottom_y,
-            fps=instantaneous_fps, chunks_loaded=world_stats["loaded"], chunks_pending=world_stats["pending"],
-            panel_width=minimap_x1 - minimap_x0,
-        )
-
         self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
                           help_active=self.controls_overlay.is_manual_mode,
                           color_active=self.color_picker.is_active,
@@ -1452,9 +1423,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._frame_count += 1
         now = time.time()
         if now - self._last_fps_print > 2.0:
-            fps = self._frame_count / (now - self._last_fps_print)
+            displayed_fps = self._frame_count / (now - self._last_fps_print)
             stats = self.world.stats()
-            _LOG.info(f"{fps:.1f} fps | chunks loaded={stats['loaded']} "
+            _LOG.info(f"displayed_fps={displayed_fps:.1f} frame_cost={rolling_avg:.1f}ms "
+                      f"| chunks loaded={stats['loaded']} "
                       f"pending={stats['pending']} drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
                       f"| speed={self.camera.move_speed:.1f}m/s "
                       f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
