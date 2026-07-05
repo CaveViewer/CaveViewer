@@ -1294,18 +1294,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             target = min(self._CHUNK_PREP_MAX_FRACTION, raw_fraction * self._CHUNK_PREP_MAX_FRACTION)
             self._chunk_prep_progress = max(self._chunk_prep_progress, target)
             self.import_progress_panel.render(
-                self.wnd.size, _map_name, "loading chunks", self._chunk_prep_progress,
+                self.wnd.size, _map_name, "opening cave", self._chunk_prep_progress,
                 title="Preparing Map", note="",
             )
             return
 
         if self._chunk_prep_complete_until is not None and now < self._chunk_prep_complete_until:
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
-            remaining = self._chunk_prep_complete_until - now
-            completion_t = 1.0 - max(0.0, remaining / self._CHUNK_PREP_COMPLETE_HOLD_SECONDS)
             self.import_progress_panel.render(
-                self.wnd.size, _map_name, "loading chunks", 1.0,
-                title="Preparing Map", note="", completion_t=completion_t,
+                self.wnd.size, _map_name, "opening cave", 1.0,
+                title="Preparing Map", note="",
             )
             return
 

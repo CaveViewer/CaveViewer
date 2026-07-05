@@ -105,20 +105,10 @@ def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
         ("Esc", "Quit"),
     ])
 
-    display = [
-        ("Brightness +/-", "Adjust headlamp brightness"),
-        ("Global light +/-", "Adjust ambient fill light"),
-        ("View dist +/-", "Adjust render distance"),
-        ("Mesh button", "Toggle wireframe"),
-        ("Texture button", "Toggle photo texture"),
-        ("Color button", "Change background color"),
-    ]
-
     return [
         ("Move", movement),
         ("Look", look),
         ("Navigate", navigation),
-        ("Display", display),
     ]
 
 
@@ -399,7 +389,7 @@ class ControlsOverlay:
         w, h = window_size
 
         # Dim the 3D view heavily while the controls reference is shown.
-        add_quad_px(0, 0, w, h, (0.002, 0.004, 0.008, 0.91))
+        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, 0.96))
 
         # Manual help has a title; startup help is intentionally lighter:
         # the map is already visually loading, so the only text needed
@@ -440,9 +430,9 @@ class ControlsOverlay:
             fill_x1 = bar_x0 + self._progress_fraction * bar_w
             if fill_x1 > bar_x0:
                 add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
-            table_start_offset = 54.0
+            table_start_offset = 84.0
         else:
-            table_start_offset = 36.0
+            table_start_offset = 58.0
 
         table_top_y = bar_bottom_y + table_start_offset
         self._draw_grouped_controls(
@@ -458,29 +448,29 @@ class ControlsOverlay:
     def _draw_grouped_controls(self, add_quad_px, add_text, window_size, top_y, available_height):
         w, h = window_size
 
-        heading_size = 1.65
-        key_size = 1.78
-        desc_size = 1.78
-        row_height = 30.0
-        section_gap = 18.0
-        key_pad_x = 10.0
-        key_pad_y = 5.0
+        heading_size = 1.68
+        key_size = 1.76
+        desc_size = 1.80
+        row_height = 31.0
+        heading_gap = 13.0
+        section_gap = 38.0
+        key_pad_x = 8.0
+        key_pad_y = 4.0
         key_desc_gap = 18.0
-        column_gap = 58.0
 
         if self._manual_mode and sys.platform != "darwin":
             heading_size = 1.55
             key_size = 1.62
-            desc_size = 1.62
-            row_height = 27.0
-            section_gap = 15.0
+            desc_size = 1.66
+            row_height = 28.0
+            heading_gap = 11.0
+            section_gap = 32.0
 
-        two_columns = w >= 900 and h >= 620
-        columns = self._split_control_sections(two_columns)
+        columns = [self._control_sections]
         metrics = [
             self._measure_control_column(
                 sections, heading_size, key_size, desc_size, row_height,
-                section_gap, key_pad_x, key_desc_gap
+                heading_gap, section_gap, key_pad_x, key_desc_gap
             )
             for sections in columns
         ]
@@ -492,21 +482,20 @@ class ControlsOverlay:
             key_size = max(1.24, key_size * fit_ratio)
             desc_size = max(1.24, desc_size * fit_ratio)
             row_height = max(21.0, row_height * fit_ratio)
-            section_gap = max(10.0, section_gap * fit_ratio)
+            heading_gap = max(8.0, heading_gap * fit_ratio)
+            section_gap = max(18.0, section_gap * fit_ratio)
             key_pad_x = max(7.0, key_pad_x * fit_ratio)
             key_pad_y = max(3.0, key_pad_y * fit_ratio)
             key_desc_gap = max(12.0, key_desc_gap * fit_ratio)
             metrics = [
                 self._measure_control_column(
                     sections, heading_size, key_size, desc_size, row_height,
-                    section_gap, key_pad_x, key_desc_gap
+                    heading_gap, section_gap, key_pad_x, key_desc_gap
                 )
                 for sections in columns
             ]
 
         total_width = sum(metric["width"] for metric in metrics)
-        if len(columns) > 1:
-            total_width += column_gap * (len(columns) - 1)
 
         x = max(28.0, (w - total_width) / 2.0)
         for sections, metric in zip(columns, metrics):
@@ -519,24 +508,17 @@ class ControlsOverlay:
                 key_size=key_size,
                 desc_size=desc_size,
                 row_height=row_height,
+                heading_gap=heading_gap,
                 section_gap=section_gap,
                 key_pad_x=key_pad_x,
                 key_pad_y=key_pad_y,
                 key_desc_gap=key_desc_gap,
             )
-            x += metric["width"] + column_gap
-
-    def _split_control_sections(self, two_columns: bool):
-        if not two_columns:
-            return [self._control_sections]
-        return [
-            self._control_sections[:2],
-            self._control_sections[2:],
-        ]
+            x += metric["width"]
 
     def _measure_control_column(
         self, sections, heading_size, key_size, desc_size, row_height,
-        section_gap, key_pad_x, key_desc_gap
+        heading_gap, section_gap, key_pad_x, key_desc_gap
     ):
         key_col_width = 0.0
         desc_col_width = 0.0
@@ -546,11 +528,11 @@ class ControlsOverlay:
 
         for heading, rows in sections:
             heading_width = max(heading_width, bitmap_font.text_width_px(heading.upper(), heading_size))
-            height += heading_height + 10.0
+            height += heading_height + heading_gap
             for key, desc in rows:
                 key_col_width = max(
                     key_col_width,
-                    bitmap_font.text_width_px(key, key_size) + key_pad_x * 2.0,
+                    self._measure_keycap_sequence(key, key_size, key_pad_x),
                 )
                 desc_col_width = max(desc_col_width, bitmap_font.text_width_px(desc, desc_size))
                 height += row_height
@@ -568,7 +550,7 @@ class ControlsOverlay:
 
     def _draw_control_column(
         self, add_quad_px, add_text, sections, x, top_y, key_col_width,
-        heading_size, key_size, desc_size, row_height, section_gap,
+        heading_size, key_size, desc_size, row_height, heading_gap, section_gap,
         key_pad_x, key_pad_y, key_desc_gap
     ):
         y = top_y
@@ -578,15 +560,16 @@ class ControlsOverlay:
 
         for heading, rows in sections:
             add_text(heading.upper(), x, y, heading_size, _SPLASH_TITLE_RGBA)
-            y += heading_height + 10.0
+            y += heading_height + heading_gap
 
             for key, desc in rows:
-                key_w = bitmap_font.text_width_px(key, key_size) + key_pad_x * 2.0
                 key_h = key_text_height + key_pad_y * 2.0
                 key_x = x
                 key_y = y + (row_height - key_h) / 2.0
-                self._draw_keycap(add_quad_px, key_x, key_y, key_x + key_w, key_y + key_h)
-                add_text(key, key_x + key_pad_x, key_y + key_pad_y, key_size, _SPLASH_TITLE_RGBA)
+                self._draw_keycap_sequence(
+                    add_quad_px, add_text, key, key_x, key_y,
+                    key_size, key_pad_x, key_pad_y,
+                )
 
                 desc_x = x + key_col_width + key_desc_gap
                 desc_y = y + (row_height - desc_text_height) / 2.0
@@ -594,6 +577,50 @@ class ControlsOverlay:
                 y += row_height
 
             y += section_gap
+
+    def _keycap_parts(self, label: str) -> list[str]:
+        if " + " in label:
+            parts = []
+            tokens = label.split(" + ")
+            for i, token in enumerate(tokens):
+                if i:
+                    parts.append("+")
+                parts.append(token)
+            return parts
+        if label in {"W A S D", "J L I K", "Z X"}:
+            return label.split()
+        return [label]
+
+    def _measure_keycap_sequence(self, label, key_size, key_pad_x):
+        total_w = 0.0
+        gap = 5.0
+        plus_gap = 4.0
+        for part in self._keycap_parts(label):
+            if part == "+":
+                total_w += bitmap_font.text_width_px(part, key_size) + plus_gap * 2.0
+            else:
+                total_w += bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
+            total_w += gap
+        return max(0.0, total_w - gap)
+
+    def _draw_keycap_sequence(
+        self, add_quad_px, add_text, label, x, y, key_size, key_pad_x, key_pad_y
+    ):
+        cursor_x = x
+        gap = 5.0
+        plus_gap = 4.0
+        key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
+        for part in self._keycap_parts(label):
+            part_w = bitmap_font.text_width_px(part, key_size)
+            if part == "+":
+                add_text(part, cursor_x + plus_gap, y + key_pad_y, key_size, _SPLASH_INSTRUCTION_RGBA)
+                cursor_x += part_w + plus_gap * 2.0 + gap
+                continue
+
+            key_w = part_w + key_pad_x * 2.0
+            self._draw_keycap(add_quad_px, cursor_x, y, cursor_x + key_w, y + key_h)
+            add_text(part, cursor_x + key_pad_x, y + key_pad_y, key_size, _SPLASH_TITLE_RGBA)
+            cursor_x += key_w + gap
 
     def _draw_keycap(self, add_quad_px, x0, y0, x1, y1):
         fill = (0.020, 0.030, 0.045, 0.78)

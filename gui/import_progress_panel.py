@@ -22,13 +22,14 @@ the much larger work of moving the parser to a background thread.
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 
 import moderngl
 import numpy as np
 from PIL import Image
+
+from gui import bitmap_font
 
 
 _VERT_SRC = """
@@ -69,6 +70,7 @@ uniform float u_alpha;
 uniform float u_progress;
 in vec2 v_uv;
 out vec4 f_color;
+
 bool is_amber(vec4 color) {
     return (
         color.a > 0.05 &&
@@ -79,41 +81,42 @@ bool is_amber(vec4 color) {
         color.g > color.b * 1.6
     );
 }
-void use_nearby_amber(vec2 offset, inout vec4 tex_color, inout bool amber_pixel) {
-    vec4 sample_color = texture(u_texture, v_uv + offset);
-    if (is_amber(sample_color) && sample_color.a > tex_color.a) {
-        tex_color = sample_color;
-        tex_color.a *= 0.88;
-        amber_pixel = true;
-    }
-}
+
 void main() {
     vec4 tex_color = texture(u_texture, v_uv);
-    bool amber_pixel = is_amber(tex_color);
-    if (!amber_pixel) {
-        vec2 ring_expand = vec2(0.010, 0.010);
-        use_nearby_amber(vec2( ring_expand.x, 0.0), tex_color, amber_pixel);
-        use_nearby_amber(vec2(-ring_expand.x, 0.0), tex_color, amber_pixel);
-        use_nearby_amber(vec2(0.0,  ring_expand.y), tex_color, amber_pixel);
-        use_nearby_amber(vec2(0.0, -ring_expand.y), tex_color, amber_pixel);
-        use_nearby_amber(vec2( ring_expand.x,  ring_expand.y), tex_color, amber_pixel);
-        use_nearby_amber(vec2(-ring_expand.x,  ring_expand.y), tex_color, amber_pixel);
-        use_nearby_amber(vec2( ring_expand.x, -ring_expand.y), tex_color, amber_pixel);
-        use_nearby_amber(vec2(-ring_expand.x, -ring_expand.y), tex_color, amber_pixel);
+    if (is_amber(tex_color)) {
+        tex_color.a = 0.0;
     }
-    if (amber_pixel) {
-        vec2 centered = v_uv - vec2(0.5, 0.5);
-        float angle = atan(centered.x, centered.y);
-        if (angle < 0.0) {
-            angle += 6.28318530718;
-        }
-        float pixel_progress = angle / 6.28318530718;
-        if (pixel_progress > clamp(u_progress, 0.0, 1.0)) {
-            float lum = dot(tex_color.rgb, vec3(0.299, 0.587, 0.114));
-            tex_color.rgb = mix(vec3(lum), vec3(0.39, 0.40, 0.44), 0.72);
-        }
+
+    vec2 centered = v_uv - vec2(0.5, 0.5);
+    float dist = length(centered);
+    float ring_inner = 0.398;
+    float ring_outer = 0.442;
+    float edge = 0.005;
+    float outer_mask = 1.0 - smoothstep(ring_outer - edge, ring_outer + edge, dist);
+    float inner_mask = smoothstep(ring_inner - edge, ring_inner + edge, dist);
+    float ring_alpha = outer_mask * inner_mask;
+
+    float angle = atan(centered.x, centered.y);
+    if (angle < 0.0) {
+        angle += 6.28318530718;
     }
-    f_color = vec4(tex_color.rgb, tex_color.a * u_alpha);
+    float pixel_progress = angle / 6.28318530718;
+    float fill_active = step(pixel_progress, clamp(u_progress, 0.0, 1.0));
+
+    vec3 track_rgb = vec3(0.315, 0.325, 0.360);
+    vec3 fill_rgb = vec3(0.7922, 0.6353, 0.2431);
+    vec4 ring_color = vec4(mix(track_rgb, fill_rgb, fill_active), ring_alpha * mix(0.58, 1.0, fill_active));
+
+    float out_alpha = tex_color.a + ring_color.a * (1.0 - tex_color.a);
+    vec3 out_rgb = vec3(0.0);
+    if (out_alpha > 0.0) {
+        out_rgb = (
+            tex_color.rgb * tex_color.a +
+            ring_color.rgb * ring_color.a * (1.0 - tex_color.a)
+        ) / out_alpha;
+    }
+    f_color = vec4(out_rgb, out_alpha * u_alpha);
 }
 """
 
@@ -128,10 +131,10 @@ _LOGO_PATH = os.path.join(_ASSETS_DIR, "app_mark_transparent.png")
 
 
 class ImportProgressPanel:
-    LOGO_SIZE = 132.0
-    _BURST_PARTICLE_COUNT = 170
+    LOGO_SIZE = 172.0
 
     _BACKDROP_RGBA = (0.0039, 0.0078, 0.0118, 0.88)  # near-black blue
+    _STAGE_TEXT_RGBA = (0.8000, 0.8039, 0.8392, 1.0)
 
     def __init__(self, ctx: moderngl.Context):
         self.ctx = ctx
@@ -154,25 +157,6 @@ class ImportProgressPanel:
 
         self._display_fraction = 0.0
         self._progress_token = None
-        self._burst_particles = self._make_burst_particles()
-
-    def _make_burst_particles(self) -> list[tuple[float, float, float, float, float, tuple[float, float, float]]]:
-        particles = []
-        golden_angle = math.pi * (3.0 - math.sqrt(5.0))
-        for i in range(self._BURST_PARTICLE_COUNT):
-            angle = i * golden_angle
-            speed = 150.0 + ((i * 47) % 290)
-            start_radius = 39.0 + ((i * 19) % 22)
-            size = 0.35 + ((i * 13) % 18) / 32.0
-            delay = ((i * 29) % 100) / 520.0
-            if i % 5 == 0:
-                color = (0.7922, 0.6353, 0.2431)
-            elif i % 3 == 0:
-                color = (0.4745, 0.8078, 0.9255)
-            else:
-                color = (0.3451, 0.3882, 0.4235)
-            particles.append((angle, speed, start_radius, size, delay, color))
-        return particles
 
     def _load_logo_texture(self) -> None:
         try:
@@ -201,8 +185,7 @@ class ImportProgressPanel:
 
     def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float,
                title: str = "Preparing Map",
-               note: str = "First-time setup in progress. Next time, this map will open much faster.",
-               completion_t: float | None = None) -> None:
+               note: str = "First-time setup in progress. Next time, this map will open much faster.") -> None:
         verts = []
         w, h = window_size
 
@@ -221,26 +204,12 @@ class ImportProgressPanel:
             for (x, y) in quad:
                 verts.append((x, y, *rgba))
 
-        def add_dust_particles(cx, cy, t):
-            if t <= 0.0:
-                return
-            for angle, speed, start_radius, size, delay, color in self._burst_particles:
-                local_t = max(0.0, min(1.0, (t - delay) / max(1.0 - delay, 0.001)))
-                if local_t <= 0.0:
-                    continue
-                ease = 1.0 - (1.0 - local_t) ** 3
-                drift = start_radius + speed * ease
-                swirl = math.sin(local_t * math.tau + angle * 0.37) * 18.0 * (1.0 - local_t)
-                x = cx + math.cos(angle) * drift - math.sin(angle) * swirl
-                y = cy + math.sin(angle) * drift + math.cos(angle) * swirl
-                particle_size = size * (1.0 + local_t * 0.55)
-                alpha = 0.62 * max(0.0, (1.0 - local_t) ** 1.55)
-                r, g, b = color
-                add_quad_px(
-                    x - particle_size, y - particle_size,
-                    x + particle_size, y + particle_size,
-                    (r, g, b, alpha),
-                )
+        def add_text(text, x, y, pixel_size, rgba):
+            r, g, b, a = rgba
+            for glyph in bitmap_font.iter_text_pixels(text, x, y, pixel_size):
+                px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
+                glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
+                add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
 
         add_quad_px(0, 0, w, h, self._BACKDROP_RGBA)
 
@@ -262,9 +231,12 @@ class ImportProgressPanel:
 
         logo_cx = w / 2.0
         logo_cy = panel_y0 + panel_h * 0.50
-        burst_t = None if completion_t is None else max(0.0, min(1.0, completion_t))
-        if burst_t is not None:
-            add_dust_particles(logo_cx, logo_cy, burst_t)
+        stage_label = self._stage_label(stage)
+        stage_size = 2.15
+        stage_w = bitmap_font.text_width_px(stage_label, stage_size)
+        stage_x = (w - stage_w) / 2.0
+        stage_y = logo_cy + (self.LOGO_SIZE / 2.0) + 30.0
+        add_text(stage_label, stage_x, stage_y, stage_size, self._STAGE_TEXT_RGBA)
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:
@@ -282,7 +254,7 @@ class ImportProgressPanel:
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self._render_logo(logo_cx, logo_cy, window_size, self._display_fraction, burst_t)
+        self._render_logo(logo_cx, logo_cy, window_size, self._display_fraction)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
@@ -293,15 +265,12 @@ class ImportProgressPanel:
         center_y: float,
         window_size: tuple[int, int],
         progress: float,
-        completion_t: float | None = None,
     ) -> None:
         if self._logo_texture is None:
             return
 
-        burst_t = 0.0 if completion_t is None else max(0.0, min(1.0, completion_t))
-        burst_ease = 1.0 - (1.0 - burst_t) ** 3
-        size_px = self.LOGO_SIZE * (1.0 + burst_ease * 1.35)
-        alpha = 1.0 if completion_t is None else max(0.0, 1.0 - burst_t * 1.2)
+        size_px = self.LOGO_SIZE
+        alpha = 1.0
         if self._logo_aspect >= 1.0:
             half_w = size_px / 2.0
             half_h = (size_px / self._logo_aspect) / 2.0
@@ -332,3 +301,24 @@ class ImportProgressPanel:
         self.logo_program["u_alpha"].value = alpha
         self.logo_program["u_progress"].value = max(0.0, min(1.0, progress))
         self._logo_vao.render(moderngl.TRIANGLES, vertices=6)
+
+    def _stage_label(self, stage: str) -> str:
+        normalized = " ".join((stage or "").strip().lower().split())
+        labels = {
+            "starting import": "Starting import...",
+            "scanning file": "Scanning map...",
+            "computing face centroids": "Analyzing geometry...",
+            "grouping faces by cell": "Building spatial index...",
+            "grouping chunk faces": "Building map chunks...",
+            "writing chunk files": "Writing map cache...",
+            "writing manifest": "Finalizing map cache...",
+            "loading cached map": "Loading cached map...",
+            "loading chunks": "Opening cave...",
+            "opening cave": "Opening cave...",
+            "done": "Finishing...",
+        }
+        if normalized in labels:
+            return labels[normalized]
+        if normalized:
+            return normalized[:1].upper() + normalized[1:] + "..."
+        return "Working..."
