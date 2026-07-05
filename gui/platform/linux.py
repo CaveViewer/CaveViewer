@@ -10,6 +10,9 @@ from .default import DefaultSplashPlatformAdapter
 class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     """Linux platform adapter for update metadata and manual installer handoff."""
 
+    def ui_font_family(self) -> str:
+        return "Noto Sans"
+
     def default_update_manifest_url(self, repo: str) -> str:
         return f"https://raw.githubusercontent.com/{repo}/main/updates/linux/stable.json"
 
@@ -93,6 +96,10 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def font_candidates(self) -> list[str]:
         """Return Linux-specific font file paths in priority order."""
         candidates = [
+            # Bundled AppImage font and common Noto package locations.
+            "/usr/share/caveviewer/fonts/CaveViewerUI-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
             # Debian / Ubuntu
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -102,7 +109,6 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
             "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
             "/usr/share/fonts/liberation2/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
         ]
         # Dynamic fallback: ask fontconfig for the best available sans-serif font.
         # This covers any distro / custom font installation automatically.

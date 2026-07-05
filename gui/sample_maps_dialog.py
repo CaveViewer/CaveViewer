@@ -49,7 +49,8 @@ def show_sample_maps_dialog(parent, install_dir):
     import tkinter as tk
     from tkinter import messagebox, filedialog
     from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
-        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_FG, _BORDER_COLOR, _validate_selected_map_folder
+        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_FG, _BORDER_COLOR, _UI_FONT_FAMILY, \
+        _validate_selected_map_folder
     from gui.sample_maps import (
         KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog, is_sample_map_already_downloaded,
         download_and_extract_sample_map, local_sample_map_path,
@@ -112,21 +113,21 @@ def show_sample_maps_dialog(parent, install_dir):
     dialog.geometry(f"{window_w}x{preload_h}+{anchor_x}+{anchor_y}")
 
     header = tk.Label(
-        dialog, text="Sample Maps", font=("Segoe UI", 14, "bold"),
+        dialog, text="Sample Maps", font=(_UI_FONT_FAMILY, 14, "bold"),
         fg=_TITLE_COLOR, bg=_BG_COLOR,
     )
     header.pack(pady=(18, 4))
 
     sub = tk.Label(
         dialog, text="No map of your own? Try one of these.",
-        font=("Segoe UI", 9), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
+        font=(_UI_FONT_FAMILY, 9), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
     )
     sub.pack(pady=(0, 14))
 
     # Pack the loading indicator with expand so it sits centered in the
     # already full-size window instead of clinging to the top.
     status_label = tk.Label(
-        dialog, text="Loading available maps...", font=("Segoe UI", 10),
+        dialog, text="Loading available maps...", font=(_UI_FONT_FAMILY, 10),
         fg=_SUBTITLE_COLOR, bg=_BG_COLOR,
     )
     status_label.pack(expand=True)
@@ -178,12 +179,12 @@ def show_sample_maps_dialog(parent, install_dir):
         dialog.geometry(f"{window_w}x{_px(220)}+{anchor_x}+{anchor_y}")
         tk.Label(
             dialog, text=f"Couldn't load the sample map list:\n\n{error}",
-            font=("Segoe UI", 9), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
+            font=(_UI_FONT_FAMILY, 9), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
             wraplength=window_w - 60, justify="center",
         ).pack(pady=(10, 16))
         close_btn = tk.Button(
             dialog, text="Close", command=dialog.destroy,
-            font=("Segoe UI", 9), bg=_BG_COLOR, fg=_SUBTITLE_COLOR,
+            font=(_UI_FONT_FAMILY, 9), bg=_BG_COLOR, fg=_SUBTITLE_COLOR,
             relief="flat", borderwidth=1, highlightbackground=_BORDER_COLOR,
             cursor="hand2",
         )
@@ -206,7 +207,7 @@ def show_sample_maps_dialog(parent, install_dir):
             dialog,
             text="Couldn't check for fresh download info -- maps you've already\n"
                  "downloaded still work below. New downloads need the internet.",
-            font=("Segoe UI", 8), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
+            font=(_UI_FONT_FAMILY, 8), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
             justify="center",
         )
         notice.pack(pady=(0, 8))
@@ -393,7 +394,7 @@ def show_sample_maps_dialog(parent, install_dir):
         # used elsewhere. Other platforms honor tk.Button colors fine.
         if sys.platform == "darwin":
             btn = tk.Label(
-                parent, text=text, font=("Segoe UI", 10, "bold"),
+                parent, text=text, font=(_UI_FONT_FAMILY, 10, "bold"),
                 bg=_BUTTON_BG if enabled else _BORDER_COLOR,
                 fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
                 width=10, anchor="center",
@@ -419,7 +420,7 @@ def show_sample_maps_dialog(parent, install_dir):
 
         return tk.Button(
             parent, text=text, command=command if enabled else None,
-            font=("Segoe UI", 10, "bold"),
+            font=(_UI_FONT_FAMILY, 10, "bold"),
             bg=_BUTTON_BG if enabled else _BORDER_COLOR,
             fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
             activebackground=_BUTTON_BG, activeforeground=_BUTTON_FG,
@@ -502,7 +503,7 @@ def show_sample_maps_dialog(parent, install_dir):
         text_inner.pack(expand=True, anchor="w")
 
         tk.Label(
-            text_inner, text=sample.display_name, font=("Segoe UI", 11, "bold"),
+            text_inner, text=sample.display_name, font=(_UI_FONT_FAMILY, 11, "bold"),
             fg=_SUBTITLE_COLOR, bg=_PANEL_COLOR, anchor="w",
         ).pack(anchor="w")
 
@@ -513,7 +514,7 @@ def show_sample_maps_dialog(parent, install_dir):
             detail_text = _not_downloaded_detail_text(sample)
 
         detail_label = tk.Label(
-            text_inner, text=detail_text, font=("Segoe UI", 9),
+            text_inner, text=detail_text, font=(_UI_FONT_FAMILY, 9),
             fg=_INSTRUCTION_COLOR, bg=_PANEL_COLOR, anchor="w",
         )
         detail_label.pack(anchor="w", pady=(2, 0))

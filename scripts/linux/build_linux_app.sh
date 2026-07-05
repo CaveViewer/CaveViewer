@@ -189,6 +189,8 @@ missing_packages=()
 # Check for required packages
 required_packages=(
   "build-essential"
+  "fontconfig"
+  "fonts-noto-core"
   "python3-dev"
   "python3-tk"
   "tk-dev"

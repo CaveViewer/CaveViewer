@@ -27,13 +27,13 @@ The build will automatically bundle most libraries, but ensure you have developm
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install file libfreetype6-dev libgl1-mesa-dev
+sudo apt-get install file fontconfig fonts-noto-core libfreetype6-dev libgl1-mesa-dev
 
 # Fedora/RHEL
-sudo dnf install file freetype-devel mesa-libGL-devel
+sudo dnf install file fontconfig google-noto-sans-fonts freetype-devel mesa-libGL-devel
 
 # Arch
-sudo pacman -S file freetype mesa
+sudo pacman -S file fontconfig noto-fonts freetype mesa
 ```
 
 ## Build Steps

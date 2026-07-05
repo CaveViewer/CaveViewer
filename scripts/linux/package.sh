@@ -144,6 +144,28 @@ mkdir -p \
   "$appdir/usr/share/icons/hicolor"
 
 cp -a "$app_dir/." "$appdir/usr/lib/caveviewer/"
+bundled_font_dir="$appdir/usr/share/caveviewer/fonts"
+bundled_ui_font="$bundled_font_dir/CaveViewerUI-Regular.ttf"
+mkdir -p "$bundled_font_dir"
+ui_font_candidates=(
+  "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+  "/usr/share/fonts/google-noto/NotoSans-Regular.ttf"
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+  "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"
+  "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
+  "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+)
+for ui_font_candidate in "${ui_font_candidates[@]}"; do
+  if [ -f "$ui_font_candidate" ]; then
+    cp "$ui_font_candidate" "$bundled_ui_font"
+    echo "Bundled UI font: $ui_font_candidate"
+    break
+  fi
+done
+if [ ! -f "$bundled_ui_font" ]; then
+  echo "Warning: no preferred UI font was found to bundle; runtime font fallback will be used."
+fi
+
 icon_hicolor_dir="$appdir/usr/share/icons/hicolor"
 icon_root="$appdir/caveviewer.png"
 linux_arch_tag=""
@@ -310,8 +332,25 @@ fi
 bundled_internal_dir="$appdir/usr/lib/caveviewer/_internal"
 bundled_tcl_dir="$bundled_internal_dir/_tcl_data"
 bundled_tk_dir="$bundled_internal_dir/_tk_data"
+bundled_ui_font="$appdir/usr/share/caveviewer/fonts/CaveViewerUI-Regular.ttf"
+bundled_font_dir="$appdir/usr/share/caveviewer/fonts"
 
 export LD_LIBRARY_PATH="$gl_compat_dir:$bundled_internal_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
+if [ -f "$bundled_ui_font" ]; then
+  export CAVEVIEWER_UI_FONT="${CAVEVIEWER_UI_FONT:-$bundled_ui_font}"
+fi
+if [ -d "$bundled_font_dir" ]; then
+  fontconfig_file="$gl_compat_dir/fonts.conf"
+  cat > "$fontconfig_file" <<FONTCONFIG_EOF
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <dir>$bundled_font_dir</dir>
+</fontconfig>
+FONTCONFIG_EOF
+  export FONTCONFIG_FILE="${FONTCONFIG_FILE:-$fontconfig_file}"
+fi
 if [ -d "$bundled_tcl_dir" ]; then
   export TCL_LIBRARY="${TCL_LIBRARY:-$bundled_tcl_dir}"
 else
@@ -336,6 +375,8 @@ fi
   echo "[CaveViewer AppRun] APPDIR=$appdir"
   echo "[CaveViewer AppRun] executable=$executable"
   echo "[CaveViewer AppRun] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
+  echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
   echo "[CaveViewer AppRun] args=$*"
@@ -344,6 +385,8 @@ fi
 if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] executable=$executable"
   echo "[CaveViewer AppRun] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
+  echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
   echo "[CaveViewer AppRun] Starting CaveViewer..."

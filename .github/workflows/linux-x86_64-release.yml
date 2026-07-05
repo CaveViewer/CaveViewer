@@ -37,6 +37,8 @@ jobs:
             build-essential \
             binutils \
             file \
+            fontconfig \
+            fonts-noto-core \
             fuse \
             libfuse2 \
             libfreetype6-dev \
