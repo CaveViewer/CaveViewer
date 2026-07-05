@@ -493,13 +493,25 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         # Build world-space AABB lookup for every cell in the manifest so
         # the frustum culler can skip chunks outside the view each frame.
+        # Build with a single bulk numpy pass: creating 34 000+ individual
+        # np.array() calls in a dict comprehension causes severe GC
+        # pressure on memory-limited machines (observed 30 s+ freeze on
+        # Parallels with a 17 000-chunk map at 72 % RAM).
+        _chunks = manifest["chunks"]
+        _LOG.info(f"Building chunk AABB table for {len(_chunks)} chunks …")
+        _cells = list(_chunks.keys())
+        _mins_raw = [_chunks[c]["bounds_min"] for c in _cells]
+        _maxs_raw = [_chunks[c]["bounds_max"] for c in _cells]
+        _mins_arr = np.array(_mins_raw, dtype=np.float32)   # (N, 3)
+        _maxs_arr = np.array(_maxs_raw, dtype=np.float32)   # (N, 3)
         self._chunk_aabbs = {
             tuple(int(v) for v in cell_str.split("_")): (
-                np.array(info["bounds_min"], dtype=np.float32),
-                np.array(info["bounds_max"], dtype=np.float32),
+                _mins_arr[i], _maxs_arr[i]
             )
-            for cell_str, info in manifest["chunks"].items()
+            for i, cell_str in enumerate(_cells)
         }
+        del _cells, _mins_raw, _maxs_raw, _mins_arr, _maxs_arr, _chunks
+        _LOG.info("Chunk AABB table ready.")
 
         # Render-distance slider's current value should drive the new
         # map's streaming config immediately, rather than resetting back
