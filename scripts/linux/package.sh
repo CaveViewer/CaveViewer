@@ -12,7 +12,7 @@ dist_app_dir="$repo_root/dist/linux/app"
 app_dir="$dist_app_dir/CaveViewer"
 appdir="$dist_app_dir/CaveViewer.AppDir"
 dist_packages_dir="$repo_root/dist/linux/packages"
-icon_src="$repo_root/gui/assets/app_icon_logo.png"
+icon_src="$repo_root/gui/assets/app_icon_macos.png"
 
 # Extract version info from Python file.
 APP_NAME=$(grep "^APP_NAME = " "$repo_root/caveviewer_version.py" | grep -oP '"\K[^"]+')

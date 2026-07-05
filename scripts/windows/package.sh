@@ -84,6 +84,8 @@ result = subprocess.run(
 files = [path for path in result.stdout.decode("utf-8").split("\0") if path]
 for relative_path in files:
 		source_path = repo_root / relative_path
+		if not source_path.exists():
+				continue
 		destination_path = staging_root / relative_path
 		destination_path.parent.mkdir(parents=True, exist_ok=True)
 		shutil.copy2(source_path, destination_path)
@@ -101,10 +103,9 @@ for relative_path in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
 # tracked artwork.
 required_runtime_paths = [
 		"gui/preferences.py",
-		"gui/assets/app_icon_logo.png",
+		"gui/assets/app_icon_macos.png",
 		"gui/assets/app_icon_windows.png",
 		"gui/assets/app_mark_transparent.png",
-		"gui/assets/loading_logo.png",
 		"scripts/windows/icon/caveviewer.ico",
 ]
 for relative_path in required_runtime_paths:
@@ -159,7 +160,7 @@ important_files = [
 	"scripts/windows/launch.bat",
 	"scripts/windows/setup.ps1",
 	"scripts/windows/icon/caveviewer.ico",
-	"gui/assets/app_icon_logo.png",
+	"gui/assets/app_icon_macos.png",
 	"gui/assets/app_icon_windows.png",
 	"gui/assets/app_mark_transparent.png",
 	"updates/windows/stable.json",

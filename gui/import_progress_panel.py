@@ -55,7 +55,9 @@ class ImportProgressPanel:
     BAR_WIDTH = 300
     BAR_HEIGHT = 4
 
-    # Colors mirror gui/splash_screen.py's update progress visuals.
+    _BACKDROP_RGBA = (0.0039, 0.0078, 0.0118, 0.88)  # near-black blue
+    _PANEL_RGBA = (0.0157, 0.0275, 0.0392, 0.56)
+    _GLOW_RGBA = (0.0784, 0.2706, 0.3569, 0.10)
     _TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)   # #1c1c24
     _FILL_RGBA = (0.7922, 0.6353, 0.2431, 1.00)    # #caa23e (_BUTTON_BG)
     _TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)    # #f2d98c (_TITLE_COLOR)
@@ -117,11 +119,31 @@ class ImportProgressPanel:
                 glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
                 add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
 
-        add_quad_px(0, 0, w, h, (0.04, 0.04, 0.05, 0.60))
+        add_quad_px(0, 0, w, h, self._BACKDROP_RGBA)
+
+        panel_w = min(620.0, w * 0.78)
+        panel_h = 230.0
+        panel_x0 = (w - panel_w) / 2.0
+        panel_y0 = h * 0.33
+        panel_x1 = panel_x0 + panel_w
+        panel_y1 = panel_y0 + panel_h
+
+        # Layered translucent rectangles approximate a soft glow without
+        # introducing image assets or backend-specific window transparency.
+        glow_pad = 110.0
+        for i, alpha_scale in enumerate((0.24, 0.16, 0.10, 0.06)):
+            pad = glow_pad - i * 24.0
+            r, g, b, a = self._GLOW_RGBA
+            add_quad_px(
+                panel_x0 - pad, panel_y0 - pad * 0.45,
+                panel_x1 + pad, panel_y1 + pad * 0.45,
+                (r, g, b, a * alpha_scale),
+            )
+        add_quad_px(panel_x0, panel_y0, panel_x1, panel_y1, self._PANEL_RGBA)
 
         title_size = 3.5
         title_w = bitmap_font.text_width_px(title, title_size)
-        title_y = h * 0.38
+        title_y = panel_y0 + 34.0
         add_text(title, (w - title_w) / 2.0, title_y, title_size, self._TITLE_RGBA)
 
         name_size = 1.9

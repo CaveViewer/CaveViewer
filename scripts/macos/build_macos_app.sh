@@ -11,9 +11,6 @@ spec_file="$repo_root/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/macos/app"
 work_dir="$repo_root/build/pyinstaller"
 logo_png="$repo_root/gui/assets/app_icon_macos.png"
-if [ ! -f "$logo_png" ]; then
-  logo_png="$repo_root/gui/assets/app_icon_logo.png"
-fi
 icon_work_dir="$work_dir/iconset"
 iconset_dir="$icon_work_dir/CaveViewer.iconset"
 icon_icns="$icon_work_dir/CaveViewer.icns"

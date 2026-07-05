@@ -25,12 +25,12 @@ echo "=== Checking for gui/assets ==="
 ls -la CaveViewer/gui/assets/ || echo "ERROR: gui/assets not found!"
 
 echo ""
-echo "=== Checking for gui/assets/loading_logo.png ==="
-if [ -f "CaveViewer/gui/assets/loading_logo.png" ]; then
-  echo "✓ loading_logo.png found"
-  file CaveViewer/gui/assets/loading_logo.png
+echo "=== Checking for gui/assets/app_mark_transparent.png ==="
+if [ -f "CaveViewer/gui/assets/app_mark_transparent.png" ]; then
+  echo "✓ app_mark_transparent.png found"
+  file CaveViewer/gui/assets/app_mark_transparent.png
 else
-  echo "✗ loading_logo.png NOT found"
+  echo "✗ app_mark_transparent.png NOT found"
 fi
 
 echo ""

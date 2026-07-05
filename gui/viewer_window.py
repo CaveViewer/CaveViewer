@@ -87,16 +87,15 @@ SHADER_DIR = os.path.join(_resource_base_dir(), "shaders")
 
 def _runtime_app_icon_path() -> str:
     assets_dir = os.path.join(_resource_base_dir(), "gui", "assets")
-    filenames = (
-        ("app_icon_macos.png", "app_icon_logo.png")
-        if sys.platform == "darwin"
-        else ("app_icon_logo.png",)
-    )
+    if sys.platform == "win32":
+        filenames = ("app_icon_windows.png",)
+    else:
+        filenames = ("app_icon_macos.png",)
     for filename in filenames:
         path = os.path.join(assets_dir, filename)
         if os.path.exists(path):
             return path
-    return os.path.join(assets_dir, filenames[-1])
+    return os.path.join(assets_dir, filenames[0])
 
 
 APP_ICON_PATH = _runtime_app_icon_path()
@@ -642,7 +641,6 @@ class CaveViewerWindow(mglw.WindowConfig):
                 continue
             _release_attr(obj, "_vao")
             _release_attr(obj, "_vbo")
-            _release_attr(obj, "_logo_vbo")
             _release_attr(obj, "program")
             if hasattr(obj, "release"):
                 try:

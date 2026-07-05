@@ -20,13 +20,11 @@ main mesh rendering pipeline.
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 
 import moderngl
 import numpy as np
-from PIL import Image
 
 from gui import bitmap_font
 from gui.platform.factory import get_platform_adapter
@@ -55,39 +53,6 @@ void main() {
     f_color = v_color;
 }
 """
-
-# Separate shader pair for the loading logo: unlike every other shape
-# this overlay draws (flat-colored vector triangles), the logo is a
-# textured image, so it needs UV coordinates and a texture sampler rather
-# than per-vertex color -- different enough from the vector-shape
-# pipeline above that it gets its own tiny program rather than trying to
-# force one shader to do both jobs.
-_LOGO_VERT_SRC = """
-#version 330
-in vec2 in_pos;
-in vec2 in_uv;
-out vec2 v_uv;
-void main() {
-    gl_Position = vec4(in_pos, 0.0, 1.0);
-    v_uv = in_uv;
-}
-"""
-
-_LOGO_FRAG_SRC = """
-#version 330
-uniform sampler2D u_texture;
-uniform float u_alpha;
-uniform float u_brightness;
-in vec2 v_uv;
-out vec4 f_color;
-void main() {
-    vec4 tex_color = texture(u_texture, v_uv);
-    f_color = vec4(tex_color.rgb * u_brightness, tex_color.a * u_alpha);
-}
-"""
-
-_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-_LOGO_PATH = os.path.join(_ASSETS_DIR, "loading_logo.png")
 
 # Match splash_screen.py text palette exactly.
 _SPLASH_TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)       # #f2d98c
@@ -198,30 +163,6 @@ class ControlsOverlay:
         # Generate platform-specific control rows
         self._control_rows = _get_platform_control_rows()
 
-        # Loading logo: loaded once here (a one-time disk read + GPU
-        # upload, not repeated every frame) and re-drawn each frame with
-        # an updated rotation angle while this overlay is visible. A
-        # missing/unreadable logo file degrades to simply not drawing the
-        # logo (self._logo_texture stays None) rather than crashing the
-        # whole loading screen over a missing image asset.
-        self._logo_texture = None
-        self._logo_aspect = 1.0
-        try:
-            img = Image.open(_LOGO_PATH).convert("RGBA")
-            self._logo_aspect = img.size[0] / img.size[1]
-            tex_data = img.tobytes()
-            self._logo_texture = ctx.texture(img.size, 4, tex_data)
-            self._logo_texture.build_mipmaps()
-        except Exception as e:
-            _LOG.warning(f"could not load loading logo ({_LOGO_PATH}): {e}")
-
-        self.logo_program = ctx.program(vertex_shader=_LOGO_VERT_SRC, fragment_shader=_LOGO_FRAG_SRC)
-        # 4 verts (2f pos + 2f uv) per quad, drawn as a triangle strip --
-        # rewritten every frame since the rotation angle changes constantly.
-        self._logo_vbo = ctx.buffer(reserve=4 * 4 * 4)
-        self._logo_vao = ctx.vertex_array(
-            self.logo_program, [(self._logo_vbo, "2f 2f", "in_pos", "in_uv")]
-        )
     # -- lifecycle ------------------------------------------------------------
 
     def show_fullscreen(self) -> None:
@@ -345,71 +286,6 @@ class ControlsOverlay:
         t = min(fade_elapsed / self.FADE_OUT_SECONDS, 1.0)
         return 1.0 - t
 
-    # -- logo -----------------------------------------------------------------
-
-    def _render_logo(self, center_x: float, center_y: float, size_px: float,
-                     window_size: tuple[int, int], alpha_mult: float) -> None:
-        """Draw a static centered logo as a textured quad."""
-        if self._logo_texture is None:
-            return
-
-        w, h = window_size
-
-        # half-extents in pixels, preserving the logo's own aspect ratio
-        if self._logo_aspect >= 1.0:
-            half_w = size_px / 2.0
-            half_h = (size_px / self._logo_aspect) / 2.0
-        else:
-            half_h = size_px / 2.0
-            half_w = (size_px * self._logo_aspect) / 2.0
-
-        local_corners = [
-            (-half_w, -half_h), (half_w, -half_h),
-            (half_w, half_h), (-half_w, half_h),
-        ]
-        # V=0 at the TOP corners and V=1 at the BOTTOM corners, matching
-        # standard image coordinate convention (row 0 = top of the
-        # image) -- the original mapping had this inverted, which is what
-        # made the logo render upside down.
-        uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-
-        verts = []
-        for (lx, ly), (u, v) in zip(local_corners, uvs):
-            px = center_x + lx
-            py = center_y + ly
-            nx = (px / w) * 2.0 - 1.0
-            ny = 1.0 - (py / h) * 2.0
-            verts.append((nx, ny, u, v))
-
-        # two triangles from the 4 corners (0,1,2) and (0,2,3) -- a quad
-        # drawn as 6 vertices rather than a triangle strip/fan, simplest
-        # to get right and consistent with how every other shape in this
-        # overlay system is built
-        tri_order = [0, 1, 2, 0, 2, 3]
-        data = np.array([verts[i] for i in tri_order], dtype=np.float32)
-
-        if data.nbytes > self._logo_vbo.size:
-            self._logo_vbo.release()
-            self._logo_vbo = self.ctx.buffer(reserve=data.nbytes)
-            self._logo_vao = self.ctx.vertex_array(
-                self.logo_program, [(self._logo_vbo, "2f 2f", "in_pos", "in_uv")]
-            )
-
-        self._logo_vbo.write(data.tobytes())
-
-        self._logo_texture.use(location=0)
-        self.logo_program["u_texture"].value = 0
-        self.logo_program["u_alpha"].value = alpha_mult
-        self.logo_program["u_brightness"].value = 1.0
-
-        self.ctx.disable(moderngl.CULL_FACE)
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self._logo_vao.render(moderngl.TRIANGLES, vertices=6)
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.CULL_FACE)
-
     # -- rendering --------------------------------------------------------------
 
     def render(self, window_size: tuple[int, int]) -> None:
@@ -450,9 +326,9 @@ class ControlsOverlay:
                 add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
 
         if self._fullscreen:
-            logo_spec = self._build_fullscreen(add_quad_px, add_text, window_size)
+            self._build_fullscreen(add_quad_px, add_text, window_size)
         else:
-            logo_spec = self._build_panel(add_quad_px, add_text, window_size)
+            self._build_panel(add_quad_px, add_text, window_size)
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:
@@ -473,23 +349,27 @@ class ControlsOverlay:
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
-        # Logo draws as its own pass (separate shader/texture)
-        # on top of everything just drawn above -- logo_spec is
-        # (center_x, center_y, size_px), returned by whichever layout
-        # builder ran, so the logo's position adapts to fullscreen vs
-        # panel layout without this method needing to know those details.
-        if logo_spec is not None:
-            logo_cx, logo_cy, logo_size = logo_spec
-            self._render_logo(logo_cx, logo_cy, logo_size, window_size, alpha_mult)
-
     # -- layout: full-screen variant --------------------------------------------
 
     def _build_fullscreen(self, add_quad_px, add_text, window_size):
         w, h = window_size
 
-        # dim the whole 3D view behind the overlay so the text reads
-        # clearly regardless of what's loaded/visible underneath
-        add_quad_px(0, 0, w, h, (0.03, 0.05, 0.08, 0.66))
+        # Dim the 3D view with a very dark, slightly blue transparent layer.
+        add_quad_px(0, 0, w, h, (0.004, 0.008, 0.014, 0.78))
+
+        glow_w = min(760.0, w * 0.82)
+        glow_h = min(520.0, h * 0.70)
+        glow_x0 = (w - glow_w) / 2.0
+        glow_y0 = h * 0.09
+        glow_x1 = glow_x0 + glow_w
+        glow_y1 = glow_y0 + glow_h
+        for i, alpha in enumerate((0.045, 0.032, 0.022)):
+            pad = 70.0 + i * 46.0
+            add_quad_px(
+                glow_x0 - pad, glow_y0 - pad * 0.45,
+                glow_x1 + pad, glow_y1 + pad * 0.45,
+                (0.08, 0.28, 0.36, alpha),
+            )
 
         # Title/subtitle differ depending on why this screen is showing:
         # the original "loading" wording makes sense at startup, but
@@ -505,7 +385,7 @@ class ControlsOverlay:
         title_size = 4.3
         title_w = bitmap_font.text_width_px(title, title_size)
         title_x = (w - title_w) / 2.0
-        title_y = h * 0.14
+        title_y = h * 0.12
         add_text(title, title_x, title_y, title_size, _SPLASH_TITLE_RGBA)
 
         sub_size = 2.2
@@ -513,6 +393,23 @@ class ControlsOverlay:
         sub_x = (w - sub_w) / 2.0
         sub_y = title_y + bitmap_font.text_height_px(title_size) + 18
         add_text(subtitle, sub_x, sub_y, sub_size, _SPLASH_SUBTITLE_RGBA)
+
+        bar_bottom_y = sub_y + bitmap_font.text_height_px(sub_size)
+        if not self._manual_mode:
+            bar_w = 300.0
+            bar_h = 4.0
+            bar_x0 = (w - bar_w) / 2.0
+            bar_x1 = bar_x0 + bar_w
+            bar_y0 = bar_bottom_y + 22.0
+            bar_y1 = bar_y0 + bar_h
+
+            add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, _SPLASH_PROGRESS_TRACK_RGBA)
+            fill_x1 = bar_x0 + self._progress_fraction * bar_w
+            if fill_x1 > bar_x0:
+                add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
+            table_start_offset = 54.0
+        else:
+            table_start_offset = 36.0
 
         # Compute the table's real total width from actual content (same
         # approach now used for the panel variant) so the whole table can
@@ -531,7 +428,7 @@ class ControlsOverlay:
             desc_size = 2.3
             row_height = 29
 
-        table_top_y = sub_y + bitmap_font.text_height_px(sub_size) + 36
+        table_top_y = bar_bottom_y + table_start_offset
         available_table_height = h - table_top_y - 20
         table_height = len(self._control_rows) * row_height
         if available_table_height > 0 and table_height > available_table_height:
@@ -558,33 +455,7 @@ class ControlsOverlay:
             gap=gap,
         )
 
-        # Logo sits centered in the space above the title -- sized to fit
-        # comfortably within that space (capped at a reasonable max so it
-        # doesn't dominate the screen on a very tall window), and never
-        # smaller than a sensible minimum on a very short window either.
-        logo_area_height = title_y
-        logo_size = max(60.0, min(logo_area_height * 0.7, 180.0))
-        logo_cx = w / 2.0
-        logo_cy = logo_area_height / 2.0
-
-        if not self._manual_mode:
-            bar_w = 300.0
-            bar_h = 4.0
-            bar_x0 = (w - bar_w) / 2.0
-            bar_x1 = bar_x0 + bar_w
-            logo_bottom = logo_cy + logo_size / 2.0
-            preferred_y = logo_bottom + 10.0
-            max_y = title_y - bar_h - 8.0
-            bar_y0 = min(preferred_y, max_y)
-            bar_y0 = max(bar_y0, logo_bottom + 4.0)
-            bar_y1 = bar_y0 + bar_h
-
-            add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, _SPLASH_PROGRESS_TRACK_RGBA)
-            fill_x1 = bar_x0 + self._progress_fraction * bar_w
-            if fill_x1 > bar_x0:
-                add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
-
-        return (logo_cx, logo_cy, logo_size)
+        return None
 
     # -- layout: small panel variant (used after teleport) ----------------------
 
@@ -620,10 +491,10 @@ class ControlsOverlay:
         panel_x1 = panel_x0 + panel_w
         panel_y1 = panel_y0 + panel_h
 
-        add_quad_px(panel_x0, panel_y0, panel_x1, panel_y1, (0.20, 0.23, 0.28, 0.92))
+        add_quad_px(panel_x0, panel_y0, panel_x1, panel_y1, (0.015, 0.026, 0.040, 0.88))
 
         border = 2.0
-        border_color = (0.55, 0.70, 0.95, 0.95)
+        border_color = (0.23, 0.38, 0.48, 0.75)
         add_quad_px(panel_x0, panel_y0, panel_x1, panel_y0 + border, border_color)
         add_quad_px(panel_x0, panel_y1 - border, panel_x1, panel_y1, border_color)
         add_quad_px(panel_x0, panel_y0, panel_x0 + border, panel_y1, border_color)
@@ -649,15 +520,7 @@ class ControlsOverlay:
             gap=gap,
         )
 
-        # Small logo to the left of the title, inside the existing panel
-        # bounds -- this keeps the panel's overall size and position
-        # unchanged from before this feature existed (placing it above
-        # the panel would risk running off the top of the screen on a
-        # short window, since the panel already starts close to y=0).
-        logo_size = min(28.0, title_y + bitmap_font.text_height_px(title_size) - panel_y0 + 4)
-        logo_cx = panel_x0 + 22
-        logo_cy = title_y + bitmap_font.text_height_px(title_size) / 2.0
-        return (logo_cx, logo_cy, logo_size)
+        return None
 
     # -- shared control-table drawing --------------------------------------------
 

@@ -89,12 +89,13 @@ def _resolve_asset_path(filename: str) -> str | None:
 # Resolve this once at import time -- same asset already used for the
 # in-program loading-screen logo, reused here rather than shipping a
 # second copy of the same image.
-_LOGO_PATH = _resolve_asset_path("app_mark_transparent.png") or _resolve_asset_path("loading_logo.png")
-_APP_ICON_PATH = (
-    _resolve_asset_path("app_icon_macos.png")
-    if sys.platform == "darwin"
-    else None
-) or _resolve_asset_path("app_icon_logo.png")
+_LOGO_PATH = _resolve_asset_path("app_mark_transparent.png")
+if sys.platform == "darwin":
+    _APP_ICON_PATH = _resolve_asset_path("app_icon_macos.png")
+elif sys.platform == "win32":
+    _APP_ICON_PATH = _resolve_asset_path("app_icon_windows.png")
+else:
+    _APP_ICON_PATH = _resolve_asset_path("app_icon_macos.png")
 _LAST_BROWSE_PATH_FILE = migrate_preference_file("last_browse_path", ".caveviewer_last_browse_path")
 _ADVANCED_SETTINGS_FILE = migrate_preference_file("advanced_settings.json", ".caveviewer_advanced_settings.json")
 
