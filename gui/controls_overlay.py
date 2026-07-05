@@ -129,7 +129,9 @@ class ControlsOverlay:
     # Separate (higher) threshold for the compact teleport panel: we want
     # enough geometry in the frustum that revealing the view looks populated,
     # not a sparse scattering of tiles around an otherwise black screen.
-    MIN_CHUNKS_TO_DISMISS_PANEL = 20
+    # Kept at 12 rather than 20 so slower machines can reach it within the
+    # extended timeout below without the safety ceiling firing first.
+    MIN_CHUNKS_TO_DISMISS_PANEL = 12
 
     # How long to hold the overlay up at minimum, even if chunks finish
     # loading instantly (e.g. a very fast machine or a small nearby area
@@ -148,12 +150,10 @@ class ControlsOverlay:
     FADE_OUT_SECONDS = 0.5
 
     # Hard ceiling on how long the panel variant can stay up regardless of
-    # load progress -- a safety net so an unusually slow machine (or a
-    # teleport into an area needing far more chunks than MIN_CHUNKS_TO_DISMISS
-    # to feel "settled") doesn't leave the panel lingering indefinitely.
-    # The fullscreen variant has no such ceiling since it's meant to stay
-    # up until the initial spawn area is properly ready.
-    MAX_DISPLAY_SECONDS_PANEL = 4.0
+    # load progress.  Raised to 20 s so slower machines have time to decode
+    # and upload MIN_CHUNKS_TO_DISMISS_PANEL chunks before the safety net
+    # fires and reveals a sparsely populated cave.
+    MAX_DISPLAY_SECONDS_PANEL = 20.0
 
     def __init__(self, ctx: moderngl.Context):
         self.ctx = ctx
