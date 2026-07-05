@@ -265,12 +265,12 @@ class ImportProgressPanel:
         center_y: float,
         window_size: tuple[int, int],
         progress: float,
+        alpha: float = 1.0,
     ) -> None:
         if self._logo_texture is None:
             return
 
         size_px = self.LOGO_SIZE
-        alpha = 1.0
         if self._logo_aspect >= 1.0:
             half_w = size_px / 2.0
             half_h = (size_px / self._logo_aspect) / 2.0
@@ -301,6 +301,26 @@ class ImportProgressPanel:
         self.logo_program["u_alpha"].value = alpha
         self.logo_program["u_progress"].value = max(0.0, min(1.0, progress))
         self._logo_vao.render(moderngl.TRIANGLES, vertices=6)
+
+    def draw_logo(
+        self,
+        center_x: float,
+        center_y: float,
+        window_size: tuple[int, int],
+        progress: float,
+        alpha: float = 1.0,
+    ) -> None:
+        """Public entry point: render just the logo+ring with its own GL state.
+        Safe to call from other overlay modules (e.g. ControlsOverlay)."""
+        if self._logo_texture is None:
+            return
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._render_logo(center_x, center_y, window_size, progress, alpha)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
 
     def _stage_label(self, stage: str) -> str:
         normalized = " ".join((stage or "").strip().lower().split())

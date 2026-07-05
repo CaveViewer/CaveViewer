@@ -121,12 +121,14 @@ def _get_platform_control_rows() -> list[tuple[str, str]]:
 
 
 class ControlsOverlay:
-    # Minimum number of loaded chunks (and zero pending) before the
-    # overlay is considered satisfied and starts dismissing -- chosen as
-    # "enough to actually see something", not "every chunk in the load
-    # radius", since waiting for a perfectly full radius on a slow machine
-    # could leave the overlay up far longer than necessary.
+    # Minimum loaded chunks before the fullscreen startup overlay starts
+    # dismissing.  Shared by the awaiting-begin path.
     MIN_CHUNKS_TO_DISMISS = 6
+
+    # Separate (higher) threshold for the compact teleport panel: we want
+    # enough geometry in the frustum that revealing the view looks populated,
+    # not a sparse scattering of tiles around an otherwise black screen.
+    MIN_CHUNKS_TO_DISMISS_PANEL = 20
 
     # How long to hold the overlay up at minimum, even if chunks finish
     # loading instantly (e.g. a very fast machine or a small nearby area
@@ -135,6 +137,11 @@ class ControlsOverlay:
     # reading time while the compact teleport panel stays brief.
     MIN_DISPLAY_SECONDS_FULLSCREEN = 6.0
     MIN_DISPLAY_SECONDS_PANEL = 0.8
+
+    # How long to keep the teleport panel visible after streaming completes
+    # (pending == 0 and enough chunks loaded) so the screen doesn't flicker
+    # as the panel vanishes the instant new geometry pops in.
+    PANEL_LINGER_AFTER_LOAD = 0.6
 
     # How long the fade-out transition takes once dismiss conditions are met.
     FADE_OUT_SECONDS = 0.5
@@ -165,6 +172,8 @@ class ControlsOverlay:
         self._start_time = 0.0
         self._fade_start_time = None
         self._progress_fraction = 0.0
+        self._panel_loaded_time: float | None = None
+        self._logo_renderer = None  # set via set_logo_renderer() after construction
         
         # Generate platform-specific control rows.
         self._control_sections = _get_platform_control_sections()
@@ -185,6 +194,11 @@ class ControlsOverlay:
         self._fade_start_time = None
         self._progress_fraction = 0.0
 
+    def set_logo_renderer(self, renderer) -> None:
+        """Wire in an ImportProgressPanel so the teleport panel uses its
+        logo+ring progress indicator instead of a plain bar."""
+        self._logo_renderer = renderer
+
     def show_panel(self) -> None:
         """Call after a minimap teleport, while the new area's chunks stream in."""
         self._active = True
@@ -194,6 +208,7 @@ class ControlsOverlay:
         self._ready_to_begin = False
         self._start_time = time.perf_counter()
         self._fade_start_time = None
+        self._panel_loaded_time = None
         self._progress_fraction = 0.0
 
     def show_help(self) -> None:
@@ -277,6 +292,7 @@ class ControlsOverlay:
             return
         loaded = streaming_stats.get("loaded", 0)
         pending = streaming_stats.get("pending", 0)
+        ready  = streaming_stats.get("ready",   0)
         total = max(0, loaded + pending)
         if total > 0:
             frac = max(0.0, min(1.0, float(loaded) / float(total)))
@@ -297,7 +313,23 @@ class ControlsOverlay:
         if self._fullscreen:
             enough_loaded = loaded >= self.MIN_CHUNKS_TO_DISMISS and pending == 0
         else:
-            enough_loaded = loaded >= self.MIN_CHUNKS_TO_DISMISS or elapsed >= self.MAX_DISPLAY_SECONDS_PANEL
+            # For the teleport panel, also wait for the GPU upload queue to
+            # drain (ready == 0) before starting the linger countdown.
+            # pending == 0 alone only means background decode is done; with
+            # UPLOAD_CHUNKS_PER_FRAME = 1, a non-empty ready queue means chunks
+            # are still uploading frame-by-frame and textures aren't on the GPU
+            # yet -- starting the fade while that queue has items produces a
+            # brief "untextured geometry" flash as the overlay reveals the view.
+            if (self._panel_loaded_time is None
+                    and loaded >= self.MIN_CHUNKS_TO_DISMISS_PANEL
+                    and pending == 0
+                    and ready == 0):
+                self._panel_loaded_time = now
+            enough_loaded = (
+                (self._panel_loaded_time is not None
+                 and (now - self._panel_loaded_time) >= self.PANEL_LINGER_AFTER_LOAD)
+                or elapsed >= self.MAX_DISPLAY_SECONDS_PANEL
+            )
 
         if self._fade_start_time is None:
             if enough_loaded and elapsed >= min_display:
@@ -311,6 +343,14 @@ class ControlsOverlay:
     @property
     def is_active(self) -> bool:
         return self._active
+
+    @property
+    def is_fading(self) -> bool:
+        """True while the fade-out animation is running (overlay still active
+        but dismiss has been triggered).  Used by viewer_window to re-enable
+        texture rendering before the dim overlay fully reveals the cave,
+        so the cave is already textured when it becomes visible."""
+        return self._active and self._fade_start_time is not None
 
     def _current_alpha_multiplier(self) -> float:
         """1.0 = fully opaque, fading down to 0.0 during the dismiss fade."""
@@ -373,12 +413,23 @@ class ControlsOverlay:
                 self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
             )
 
-        self._vbo.write(data.tobytes())
+        if verts:
+            self._vbo.write(data.tobytes())
 
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
-        self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
+        if verts:
+            self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
+        # For the compact teleport panel, draw the logo+ring centred on screen.
+        if not self._fullscreen and self._logo_renderer is not None:
+            self._logo_renderer.draw_logo(
+                center_x=w / 2.0,
+                center_y=h / 2.0,
+                window_size=window_size,
+                progress=self._progress_fraction,
+                alpha=alpha_mult,
+            )
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
@@ -636,66 +687,10 @@ class ControlsOverlay:
 
     def _build_panel(self, add_quad_px, add_text, window_size):
         w, h = window_size
-
-        title = "Loading new area"
-        title_size = 2.3
-        label_size = 1.6
-        desc_size = 1.6
-        gap = 16
-        side_margin = 24
-
-        # Panel width is DERIVED from the actual content that has to fit
-        # inside it, rather than a fixed guessed constant -- this is the
-        # actual fix for the reported bug: the previous fixed panel_w=340
-        # was sized independently of the real label/description text
-        # widths, so the description column (positioned using the same
-        # center-relative formula the unbounded fullscreen layout uses)
-        # could extend past the panel's right edge. Measuring the real
-        # content first and sizing the box to it guarantees this can't
-        # happen regardless of what the control list's text says.
-        max_label_w = max(bitmap_font.text_width_px(label, label_size) for label, _ in self._control_rows)
-        max_desc_w = max(bitmap_font.text_width_px(desc, desc_size) for _, desc in self._control_rows)
-        title_w = bitmap_font.text_width_px(title, title_size)
-
-        table_w = max_label_w + gap + max_desc_w
-        panel_w = max(table_w, title_w) + 2 * side_margin
-
-        panel_h = 36 + len(self._control_rows) * 25 + 26
-        panel_x0 = (w - panel_w) / 2.0
-        panel_y0 = 40.0
-        panel_x1 = panel_x0 + panel_w
-        panel_y1 = panel_y0 + panel_h
-
-        add_quad_px(panel_x0, panel_y0, panel_x1, panel_y1, (0.015, 0.026, 0.040, 0.88))
-
-        border = 2.0
-        border_color = (0.23, 0.38, 0.48, 0.75)
-        add_quad_px(panel_x0, panel_y0, panel_x1, panel_y0 + border, border_color)
-        add_quad_px(panel_x0, panel_y1 - border, panel_x1, panel_y1, border_color)
-        add_quad_px(panel_x0, panel_y0, panel_x0 + border, panel_y1, border_color)
-        add_quad_px(panel_x1 - border, panel_y0, panel_x1, panel_y1, border_color)
-
-        title_x = panel_x0 + (panel_w - title_w) / 2.0
-        title_y = panel_y0 + 12
-        add_text(title, title_x, title_y, title_size, _SPLASH_TITLE_RGBA)
-
-        # label_col_width is now exactly max_label_w (plus nothing extra)
-        # since the panel itself was sized to fit it precisely -- the
-        # table starts right at the panel's left content edge rather than
-        # being centered via the center_x-relative formula, which is what
-        # let the description column drift past the panel's actual right
-        # edge before.
-        self._draw_control_table(
-            add_quad_px, add_text,
-            label_col_right_x=panel_x0 + side_margin + max_label_w,
-            top_y=title_y + bitmap_font.text_height_px(title_size) + 16,
-            label_size=label_size,
-            desc_size=desc_size,
-            row_height=22,
-            gap=gap,
-        )
-
-        return None
+        # Dim the 3D view so that unloaded geometry (black void) is never
+        # directly visible while streaming catches up after a teleport.
+        # The dim and the logo progress ring fade out together via alpha_mult.
+        add_quad_px(0, 0, w, h, (0.003, 0.005, 0.008, 0.90))
 
     # -- shared control-table drawing --------------------------------------------
 

@@ -322,6 +322,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # active during normal viewing, so it has no on/off state of its
         # own the way the other overlays do.
         self.import_progress_panel = ImportProgressPanel(self.ctx)
+        self.controls_overlay.set_logo_renderer(self.import_progress_panel)
 
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
@@ -932,7 +933,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             return True
         if not self._initial_chunks_loaded:
             return True
-        return self.controls_overlay.is_active and not self.controls_overlay.is_manual_mode
+        # Don't lock during the fade-out: textures must be re-enabled before
+        # the dim overlay reveals the cave, otherwise the user sees gray
+        # (untextured) geometry through the fading dim for the full 0.5 s fade.
+        return (self.controls_overlay.is_active
+                and not self.controls_overlay.is_manual_mode
+                and not self.controls_overlay.is_fading)
 
     def _sync_render_mode_loading_policy(self) -> None:
         """Apply loading-time button policy and post-load defaults exactly on transitions."""
