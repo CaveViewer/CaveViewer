@@ -1743,6 +1743,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.camera.pitch = pitch
         self.camera.roll = 0.0  # Reset roll when loading a bookmark
 
+        self.controls_overlay.show_panel()
         _LOG.info(f"Recalled camera bookmark {slot}.")
         return True
 
