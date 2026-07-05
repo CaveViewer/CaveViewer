@@ -138,6 +138,53 @@ _CREDITS_TEXT = (
     "Licensed under the GNU General Public License v3.0.\n")
 
 
+def _configure_runtime_tk_fonts(root) -> None:
+    """Resolve the UI font against fonts Tk can actually render."""
+    global _UI_FONT_FAMILY, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
+    global _SMALL_FONT, _INSTRUCTION_FONT, _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT
+
+    try:
+        import tkinter.font as tkfont
+
+        available = {family.lower(): family for family in tkfont.families(root)}
+        preferred = [_PLATFORM_ADAPTER.ui_font_family()]
+        if _LINUX_SPLASH_LAYOUT:
+            preferred.extend([
+                "Ubuntu Sans",
+                "Ubuntu",
+                "Noto Sans",
+                "DejaVu Sans",
+                "Liberation Sans",
+            ])
+
+        resolved_family = None
+        for family in preferred:
+            if not family:
+                continue
+            resolved_family = available.get(family.lower())
+            if resolved_family:
+                break
+
+        if not resolved_family:
+            resolved_family = tkfont.nametofont("TkDefaultFont").actual("family")
+
+        if resolved_family:
+            _UI_FONT_FAMILY = resolved_family
+            if _LINUX_SPLASH_LAYOUT:
+                _LOG.info(f"Using Tk UI font family: {_UI_FONT_FAMILY}")
+    except Exception as exc:
+        _LOG.warning(f"could not resolve Tk UI font family ({exc}); using {_UI_FONT_FAMILY}.")
+
+    _TITLE_FONT = (_UI_FONT_FAMILY, 24, "bold")
+    _VERSION_FONT = (_UI_FONT_FAMILY, 12)
+    _BODY_FONT = (_UI_FONT_FAMILY, 12)
+    _SMALL_FONT = (_UI_FONT_FAMILY, 10)
+    _INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
+    _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
+    _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
+    _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
+
+
 def _set_tk_window_icon(window) -> None:
     if not _APP_ICON_PATH:
         return
@@ -505,6 +552,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     configure_process_dpi_awareness()
     root = tk.Tk(className=APP_NAME)
     apply_tk_scaling(root)
+    _configure_runtime_tk_fonts(root)
     splash_scale = tk_display_scale(root)
 
     def px(value: float) -> int:
