@@ -853,12 +853,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         _show_update_panel("", show_progress=False)
         update_action_row.pack(pady=(0, 2))
         download_link.pack()
-        # Lock the panel height now that it's at its tallest state (action row
-        # visible).  Without this, replacing the action row (~22 px) with the
-        # 4 px progress bar causes the rest of the window to jump upward.
-        root.update_idletasks()
-        update_panel.config(height=update_panel.winfo_reqheight())
-        update_panel.pack_propagate(False)
+        # Panel height was already reserved at startup; no resize needed here.
 
     def _start_check_updates(*, user_initiated: bool = False):
         if update_state["busy"]:
@@ -1378,6 +1373,23 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     # -- footer note ----------------------------------------------------------------
 
     browse_button.focus_set()
+
+    # Reserve space for the update panel before the window is measured and
+    # frozen.  Without this the panel has zero height at sizing time, the
+    # window is too short, and the download link appears below the visible
+    # area when the background update check returns 350 ms later.
+    # Strategy: temporarily pack the tallest update-panel state (action row
+    # + link), measure it, lock the panel at that height with
+    # pack_propagate(False), then immediately hide the children so the
+    # panel appears empty at startup.
+    update_action_row.pack(pady=(0, 2))
+    download_link.pack()
+    root.update_idletasks()
+    update_panel.config(height=update_panel.winfo_reqheight())
+    update_panel.pack_propagate(False)
+    update_action_row.pack_forget()
+    _hide_update_actions()
+
     root.update_idletasks()
     final_height = max(
         px(_SPLASH_WINDOW_MIN_HEIGHT),
