@@ -76,6 +76,22 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
 )
 
 
+def _console_write(text: str) -> None:
+    """Best-effort console output for terminal runs; GUI launches may not have stdout."""
+    stream = getattr(sys, "stdout", None)
+    if stream is None:
+        return
+    try:
+        stream.write(text)
+        stream.flush()
+    except Exception:
+        pass
+
+
+def _console_newline() -> None:
+    _console_write("\n")
+
+
 def _default_io_workers() -> str:
     return str(max(1, (os.cpu_count() or 1) - 3))
 
@@ -278,8 +294,7 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         bar_width = 40
         filled = int(bar_width * frac)
         bar = "#" * filled + "-" * (bar_width - filled)
-        sys.stdout.write(f"\r  [{bar}] {frac*100:5.1f}%  {stage:<28}")
-        sys.stdout.flush()
+        _console_write(f"\r  [{bar}] {frac*100:5.1f}%  {stage:<28}")
         if extra_progress_cb:
             extra_progress_cb(stage, frac)
 
@@ -290,14 +305,14 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         _emit_progress(stage, parse_weight + (1.0 - parse_weight) * frac)
 
     mesh = parse_obj(obj_path, progress_cb=parse_progress)
-    print()  # newline after the parse progress bar
+    _console_newline()  # newline after the parse progress bar
 
     materials = parse_mtl(mtl_path)
 
     target_cache_dir = os.path.join(os.path.dirname(os.path.abspath(obj_path)), chunker.CACHE_DIRNAME)
     _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
     cache_dir = chunker.build_cache(obj_path, mesh, materials, progress_cb=cache_progress)
-    print()
+    _console_newline()
 
     import shutil
     _src_tex_dir = os.path.dirname(os.path.abspath(obj_path))
@@ -381,8 +396,7 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
         bar_width = 40
         filled = int(bar_width * frac)
         bar = "#" * filled + "-" * (bar_width - filled)
-        sys.stdout.write(f"\r  [{bar}] {frac*100:5.1f}%  {stage:<28}")
-        sys.stdout.flush()
+        _console_write(f"\r  [{bar}] {frac*100:5.1f}%  {stage:<28}")
         if extra_progress_cb:
             extra_progress_cb(stage, frac)
 
@@ -420,12 +434,12 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     else:
         raise ValueError(f"Unknown model format: {fmt!r}")
 
-    print()  # newline after the parse progress bar
+    _console_newline()  # newline after the parse progress bar
 
     target_cache_dir = os.path.join(os.path.dirname(os.path.abspath(source_path)), chunker.CACHE_DIRNAME)
     _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
     cache_dir = chunker.build_cache(source_path, mesh, materials, progress_cb=cache_progress)
-    print()
+    _console_newline()
 
     import shutil
     for _mat in materials.values():

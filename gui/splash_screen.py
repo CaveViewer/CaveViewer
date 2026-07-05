@@ -762,16 +762,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         _set_link_enabled(not is_busy)
 
     def _manual_install_success_message(payload_path: str) -> str:
-        if sys.platform.startswith("linux"):
-            return (
-                "Update downloaded to:\n"
-                f"{payload_path}\n"
-                "The containing folder was opened for manual installation."
-            )
-        return (
-            "Update downloaded and opened for manual installation:\n"
-            f"{payload_path}"
-        )
+        return "Update downloaded"
 
     def _on_download_complete(payload_path: str):
         update_state["downloaded_payload"] = payload_path
