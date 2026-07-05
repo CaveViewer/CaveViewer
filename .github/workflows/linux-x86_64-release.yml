@@ -11,6 +11,11 @@ on:
         description: "Release notes"
         required: false
         default: "Linux x86_64 release"
+      publish:
+        description: "Publish the AppImage to the GitHub release"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -21,7 +26,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -30,39 +35,35 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Install system build tools
+      - name: Verify Docker build environment
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            binutils \
-            file \
-            fontconfig \
-            fonts-noto-core \
-            fuse \
-            libfuse2 \
-            libfreetype6-dev \
-            libjpeg-dev \
-            libopenjp2-7-dev \
-            libtiff-dev \
-            libwebp-dev \
-            python3-tk \
-            tcl-dev \
-            tk-dev \
-            zlib1g-dev
-          sudo mkdir -p /tools/llvm/bin
-          sudo ln -sf "$(command -v ar)" /tools/llvm/bin/llvm-ar
-          sudo ln -sf "$(command -v ranlib)" /tools/llvm/bin/llvm-ranlib
-          sudo ln -sf "$(command -v nm)" /tools/llvm/bin/llvm-nm
-          ls -l /tools/llvm/bin/llvm-ar /tools/llvm/bin/llvm-ranlib /tools/llvm/bin/llvm-nm
+          docker version
+          docker buildx version
 
-      - name: Build and publish Linux x86_64 AppImage
+      - name: Build Linux x86_64 AppImage via Docker
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ./scripts/release.sh all-package \
-            --version="${{ inputs.version }}" \
-            --linux-arch=amd64 \
-            --skip=macos,windows \
-            --publish \
-            --release-notes="${{ inputs.release_notes }}"
+          if [ "${{ inputs.publish }}" = "true" ]; then
+            ./scripts/release.sh all-package \
+              --version="${{ inputs.version }}" \
+              --linux-arch=amd64 \
+              --linux-build=docker \
+              --skip=macos,windows \
+              --publish \
+              --release-notes="${{ inputs.release_notes }}"
+          else
+            ./scripts/release.sh all-package \
+              --version="${{ inputs.version }}" \
+              --linux-arch=amd64 \
+              --linux-build=docker \
+              --skip=macos,windows \
+              --release-notes="${{ inputs.release_notes }}"
+          fi
+
+      - name: Upload Linux x86_64 AppImage for testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: CaveViewer-${{ inputs.version }}-linux-x86_64
+          path: dist/linux/packages/CaveViewer-${{ inputs.version }}-x86_64.AppImage
+          if-no-files-found: error

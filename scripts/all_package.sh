@@ -4,7 +4,7 @@ set -euo pipefail
 # Build package artifacts for all supported platforms from one entrypoint.
 #
 # Usage:
-#   ./scripts/all_package.sh --version=X.Y.Z [--linux-arch=arm64|amd64|both] [--rebuild] [--skip=macos,linux,windows] [--publish] [--release-notes="..."]
+#   ./scripts/all_package.sh --version=X.Y.Z [--linux-arch=arm64|amd64|both] [--linux-build=auto|native|docker] [--rebuild] [--skip=macos,linux,windows] [--publish] [--release-notes="..."]
 #
 # Notes:
 # - linux arch defaults to "both".
@@ -19,6 +19,7 @@ source "$script_dir/common/artifacts.sh"
 version_file="$repo_root/caveviewer_version.py"
 release_version=""
 linux_arch="both"
+linux_build="auto"
 rebuild=false
 publish=false
 release_notes=""
@@ -73,6 +74,7 @@ Usage:
 Options:
   --version=X.Y.Z                   Required. Set APP_VERSION before packaging (accepts optional leading v)
   --linux-arch=arm64|amd64|both    Linux build architecture(s). Default: both
+  --linux-build=auto|native|docker  Linux build mode. Default: auto
   --rebuild                         Force Docker Linux image rebuild
   --publish                         After build succeeds, publish artifacts to GitHub via platform publish scripts
   --release-notes="text"            Release notes used when --publish is set (default: "Release X.Y.Z")
@@ -100,6 +102,10 @@ while [ "$#" -gt 0 ]; do
       linux_arch="${1#--linux-arch=}"
       shift
       ;;
+    --linux-build=*)
+      linux_build="${1#--linux-build=}"
+      shift
+      ;;
     --rebuild)
       rebuild=true
       shift
@@ -123,8 +129,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip=*)
       skip_list="${1#--skip=}"
-      IFS=',' read -r -a items <<<"$skip_list"
-      for item in "${items[@]}"; do
+      old_ifs="$IFS"
+      IFS=','
+      for item in $skip_list; do
+        IFS="$old_ifs"
         case "${item// /}" in
           macos) skip_macos=true ;;
           linux) skip_linux=true ;;
@@ -135,7 +143,9 @@ while [ "$#" -gt 0 ]; do
             exit 1
             ;;
         esac
+        IFS=','
       done
+      IFS="$old_ifs"
       shift
       ;;
     -h|--help)
@@ -160,6 +170,13 @@ case "$linux_arch" in
   arm64|amd64|both) ;;
   *)
     echo "Error: invalid --linux-arch '$linux_arch' (expected arm64|amd64|both)"
+    exit 1
+    ;;
+esac
+case "$linux_build" in
+  auto|native|docker) ;;
+  *)
+    echo "Error: invalid --linux-build '$linux_build' (expected auto|native|docker)"
     exit 1
     ;;
 esac
@@ -193,6 +210,7 @@ echo "====================================================="
 echo "CaveViewer unified packaging"
 echo "Host OS: $host_os"
 echo "Linux arch: $linux_arch"
+echo "Linux build mode: $linux_build"
 echo "Publish mode: $publish"
 echo "====================================================="
 
@@ -200,6 +218,10 @@ run_linux_native=false
 run_linux_docker=false
 native_arch=""
 if [ "$host_os" = "Darwin" ]; then
+  if [ "$linux_build" = "native" ]; then
+    echo "Error: --linux-build=native is not supported on macOS."
+    exit 1
+  fi
   run_linux_docker=true
 elif [ "$host_os" = "Linux" ]; then
   case "$(uname -m)" in
@@ -207,7 +229,20 @@ elif [ "$host_os" = "Linux" ]; then
     aarch64) native_arch="arm64" ;;
   esac
 
-  if [ "$linux_arch" = "both" ] || [ "$linux_arch" != "$native_arch" ]; then
+  if [ "$linux_build" = "docker" ]; then
+    if command -v docker >/dev/null 2>&1; then
+      run_linux_docker=true
+    else
+      echo "Error: --linux-build=docker requested, but Docker is not installed or not in PATH."
+      exit 1
+    fi
+  elif [ "$linux_build" = "native" ]; then
+    if [ "$linux_arch" = "both" ] || [ "$linux_arch" != "$native_arch" ]; then
+      echo "Error: --linux-build=native cannot build linux arch '$linux_arch' on native '$native_arch' host."
+      exit 1
+    fi
+    run_linux_native=true
+  elif [ "$linux_arch" = "both" ] || [ "$linux_arch" != "$native_arch" ]; then
     if command -v docker >/dev/null 2>&1; then
       run_linux_docker=true
     else
@@ -248,11 +283,11 @@ if ! $skip_linux; then
   else
     if $run_linux_docker; then
       echo "[linux] Building package(s) via Docker..."
-      docker_args=("--arch=$linux_arch")
       if $rebuild; then
-        docker_args+=("--rebuild")
+        "$script_dir/linux/build_linux_in_docker.sh" "--arch=$linux_arch" --rebuild
+      else
+        "$script_dir/linux/build_linux_in_docker.sh" "--arch=$linux_arch"
       fi
-      "$script_dir/linux/build_linux_in_docker.sh" "${docker_args[@]}"
     elif $run_linux_native; then
       echo "[linux] Building package natively..."
       "$script_dir/linux/build_linux_app.sh"
@@ -307,10 +342,17 @@ fi
 
 if ! $skip_linux; then
   linux_found=false
-  while IFS= read -r -d '' appimage; do
-    linux_found=true
-    print_artifact "Linux AppImage" "$appimage"
-  done < <(find "$repo_root/dist/linux/packages" -maxdepth 1 -name "CaveViewer-${version}-*.AppImage" -print0 2>/dev/null | sort -z)
+  if [ -d "$repo_root/dist/linux/packages" ]; then
+    linux_artifact_list="$(mktemp)"
+    find "$repo_root/dist/linux/packages" -maxdepth 1 -name "CaveViewer-${version}-*.AppImage" -print 2>/dev/null | sort > "$linux_artifact_list"
+    if [ -s "$linux_artifact_list" ]; then
+      linux_found=true
+      while IFS= read -r appimage; do
+        print_artifact "Linux AppImage" "$appimage"
+      done < "$linux_artifact_list"
+    fi
+    rm -f "$linux_artifact_list"
+  fi
   if ! $linux_found; then
     echo "Linux AppImage"
     echo "  missing"
