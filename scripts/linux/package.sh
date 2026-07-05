@@ -423,6 +423,7 @@ else
 fi
 
 if [ "$exit_code" -ne 0 ] && [ "${CAVEVIEWER_USE_BUNDLED_TK:-0}" != "1" ] &&
+   { [ -d "$bundled_tcl_dir" ] || [ -d "$bundled_tk_dir" ]; } &&
    grep -Eq "lib(tcl|tk)[0-9.]*\.so.*cannot open shared object file" "$log_file"; then
   echo "[CaveViewer AppRun] System Tcl/Tk library missing; retrying with bundled Tcl/Tk." | tee -a "$log_file"
   export CAVEVIEWER_USE_BUNDLED_TK=1

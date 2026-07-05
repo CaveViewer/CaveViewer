@@ -258,63 +258,6 @@ echo "Verifying Pillow installation..."
 cd "$repo_root"
 mkdir -p "$dist_app_dir" "$work_dir"
 
-tk_runtime_args=()
-while IFS= read -r tk_runtime_lib; do
-  if [ -n "$tk_runtime_lib" ] && [ -f "$tk_runtime_lib" ]; then
-    tk_runtime_args+=(--add-binary "$tk_runtime_lib:.")
-  fi
-done < <("$python_exe" - <<'PY'
-from __future__ import annotations
-
-import pathlib
-import re
-import subprocess
-import sys
-import sysconfig
-
-paths: set[str] = set()
-
-try:
-    import _tkinter  # type: ignore
-    tkinter_path = getattr(_tkinter, "__file__", "")
-    if tkinter_path:
-        try:
-            output = subprocess.check_output(["ldd", tkinter_path], text=True, stderr=subprocess.DEVNULL)
-        except Exception:
-            output = ""
-        for line in output.splitlines():
-            if "libtcl" not in line and "libtk" not in line:
-                continue
-            match = re.search(r"=>\s+(\S+)", line)
-            if match:
-                paths.add(match.group(1))
-except Exception:
-    pass
-
-roots = {
-    pathlib.Path(sys.prefix),
-    pathlib.Path(sys.base_prefix),
-    pathlib.Path(sysconfig.get_config_var("prefix") or sys.prefix),
-    pathlib.Path(sysconfig.get_config_var("exec_prefix") or sys.base_prefix),
-}
-for root in roots:
-    for lib_dir_name in ("lib", "lib64"):
-        lib_dir = root / lib_dir_name
-        for pattern in ("libtcl*.so*", "libtk*.so*"):
-            for candidate in lib_dir.glob(pattern):
-                if candidate.is_file():
-                    paths.add(str(candidate))
-
-for path in sorted(paths):
-    print(path)
-PY
-)
-
-if [ "${#tk_runtime_args[@]}" -gt 0 ]; then
-  echo "Bundling Tcl/Tk runtime libraries:"
-  printf '  %s\n' "${tk_runtime_args[@]}"
-fi
-
 # Run PyInstaller with --onedir for AppImage bundling
 # Don't use the macOS spec file; generate a Linux-specific onedir build
 CAVEVIEWER_APP_ICON="" \
@@ -327,7 +270,6 @@ CAVEVIEWER_APP_ICON="" \
   --hidden-import=PIL._tkinter_finder \
   --hidden-import=tkinter \
   --hidden-import=moderngl_window.context.pyglet \
-  "${tk_runtime_args[@]}" \
   --add-data "$repo_root/shaders:shaders" \
   --add-data "$repo_root/gui/assets:gui/assets" \
   --add-data "$repo_root/LICENSE:." \
