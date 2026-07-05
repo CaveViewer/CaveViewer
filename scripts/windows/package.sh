@@ -102,6 +102,7 @@ for relative_path in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
 required_runtime_paths = [
 		"gui/preferences.py",
 		"gui/assets/app_icon_logo.png",
+		"gui/assets/app_icon_windows.png",
 		"gui/assets/app_mark_transparent.png",
 		"gui/assets/loading_logo.png",
 		"scripts/windows/icon/caveviewer.ico",
@@ -159,6 +160,7 @@ important_files = [
 	"scripts/windows/setup.ps1",
 	"scripts/windows/icon/caveviewer.ico",
 	"gui/assets/app_icon_logo.png",
+	"gui/assets/app_icon_windows.png",
 	"gui/assets/app_mark_transparent.png",
 	"updates/windows/stable.json",
 ]
