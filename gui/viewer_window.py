@@ -402,6 +402,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             if not callable(set_icon):
                 continue
             try:
+                # Try passing the path directly first — some pyglet versions
+                # (and some backends) expect a filename/Path rather than a
+                # pre-loaded ImageData object and will call .is_absolute() on
+                # the argument, which fails on ImageData.
+                set_icon(APP_ICON_PATH)
+                _LOG.info("Set viewer window icon.")
+                return
+            except Exception:
+                pass
+            try:
                 import pyglet
                 icon = pyglet.image.load(APP_ICON_PATH)
                 set_icon(icon)
