@@ -278,7 +278,8 @@ class Minimap:
         return np.array(verts, dtype=np.float32).tobytes(), len(verts)
 
     def render(self, window_size: tuple[int, int], camera_position: np.ndarray,
-               camera_forward: np.ndarray) -> None:
+               camera_forward: np.ndarray,
+               bookmarks: dict | None = None) -> None:
         # Rebuild static geometry (background + footprint + border) only when
         # window size changes; these tiles are map-independent and never move.
         if window_size != self._static_geom_window_size:
@@ -289,6 +290,15 @@ class Minimap:
         arrow_verts: list = []
         w, h = window_size
 
+        def add_quad_px(x0, y0, x1, y1, rgba):
+            nx0 = (x0 / w) * 2.0 - 1.0;  ny0 = 1.0 - (y0 / h) * 2.0
+            nx1 = (x1 / w) * 2.0 - 1.0;  ny1 = 1.0 - (y1 / h) * 2.0
+            top, bottom = max(ny0, ny1), min(ny0, ny1)
+            left, right  = min(nx0, nx1), max(nx0, nx1)
+            for xy in ((left, bottom), (right, bottom), (right, top),
+                       (left, bottom), (right, top),  (left, top)):
+                arrow_verts.append((*xy, *rgba))
+
         def add_circle_px(cx, cy, radius, rgba, segments=12):
             for i in range(segments):
                 a0 = (i / segments) * 2 * np.pi
@@ -297,6 +307,24 @@ class Minimap:
                                   (cx + radius * np.cos(a0), cy + radius * np.sin(a0)),
                                   (cx + radius * np.cos(a1), cy + radius * np.sin(a1))]:
                     arrow_verts.append(((px / w) * 2.0 - 1.0, 1.0 - (py / h) * 2.0, *rgba))
+
+        # Bookmark markers: small cross (+) in muted amber, drawn before the
+        # camera arrow so the arrow always reads on top of any overlap.
+        if bookmarks:
+            _BM_COLOR = (0.88, 0.72, 0.28, 0.90)
+            arm = 6.5   # half-length of each cross arm in pixels
+            thick = 2.0  # half-thickness of each arm
+            x0_panel, y0_panel, x1_panel, y1_panel = self._panel_rect_px(window_size)
+            for slot_data in bookmarks.values():
+                pos = slot_data.get("position")
+                if pos is None or len(pos) < 3:
+                    continue
+                bx, by = self._world_to_panel_px(float(pos[0]), float(pos[2]), window_size)
+                # clip to panel interior so markers don't bleed outside the border
+                if not (x0_panel < bx < x1_panel and y0_panel < by < y1_panel):
+                    continue
+                add_quad_px(bx - arm, by - thick, bx + arm, by + thick, _BM_COLOR)  # horizontal
+                add_quad_px(bx - thick, by - arm, bx + thick, by + arm, _BM_COLOR)  # vertical
 
         cam_px, cam_py = self._world_to_panel_px(
             float(camera_position[0]), float(camera_position[2]), window_size

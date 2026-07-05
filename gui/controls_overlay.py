@@ -100,6 +100,7 @@ def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
 
     navigation.extend([
         ("1..9", "Recall camera bookmark slot"),
+        ("Del + 1..9", "Delete bookmark slot"),
         ("Minimap click", "Jump to that spot"),
         ("Open button", "Switch to a different map"),
         ("Esc", "Quit"),

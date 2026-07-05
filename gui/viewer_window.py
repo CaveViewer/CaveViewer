@@ -15,6 +15,7 @@ simple lookup-and-release.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -1424,7 +1425,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.render_distance_stepper.render(self.wnd.size, render_distance_anchor_x, render_distance_anchor_y,
                                               label_above=True)
 
-        self.minimap.render(self.wnd.size, self.camera.position, self.camera.forward())
+        self.minimap.render(self.wnd.size, self.camera.position, self.camera.forward(),
+                             self._bookmarks)
 
         self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
                           help_active=self.controls_overlay.is_manual_mode,
@@ -1744,6 +1746,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         _LOG.info(f"Recalled camera bookmark {slot}.")
         return True
 
+    def _delete_bookmark_slot(self, slot: int) -> None:
+        if not self._has_map_loaded:
+            return
+        if slot not in self._bookmarks:
+            _LOG.info(f"Bookmark {slot} does not exist; nothing to delete.")
+            return
+        del self._bookmarks[slot]
+        self._save_bookmarks()
+        _LOG.info(f"Deleted camera bookmark {slot}.")
+
     def _handle_bookmark_hotkey(self, key, modifiers: KeyModifiers) -> bool:
         if not self._has_map_loaded:
             return False
@@ -1756,7 +1768,26 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Shift+digit is accepted as a fallback on macOS for backends that don't report Command.
         save_modifier_down = self._bookmark_save_modifier_is_down(modifiers)
         shift_down = self._key_is_down(keys, "LEFT_SHIFT", "RIGHT_SHIFT", "LSHIFT", "RSHIFT")
+        ctrl_down = self._control_is_down(modifiers)
+        backspace_down = self._key_is_down(
+            keys,
+            "DELETE", "DEL",
+            "FORWARD_DELETE", "FWDDELETE",
+        )
 
+        # Delete: Backspace held + digit (all platforms, checked first).
+        if backspace_down:
+            self._delete_bookmark_slot(slot)
+            return True
+
+        # Delete: Ctrl + Shift + digit (all platforms, checked first so the
+        # macOS Shift-only save fallback doesn't interfere).
+        if ctrl_down and shift_down:
+            self._delete_bookmark_slot(slot)
+            return True
+
+        # Save: platform modifier + digit (Cmd on macOS, Ctrl on Win/Linux).
+        # Shift+digit is a macOS-only fallback for backends that don't report Cmd.
         if save_modifier_down or (sys.platform == "darwin" and shift_down):
             self._save_bookmark_slot(slot)
             return True
@@ -1837,6 +1868,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.camera.barrel_roll(roll_dir * roll_speed * dt)
 
     def on_key_event(self, key, action, modifiers: KeyModifiers):
+        if self.controls_overlay is None:
+            return
         keys = self.wnd.keys
         if action == keys.ACTION_PRESS:
             if self.controls_overlay.is_waiting_for_begin:
@@ -2146,6 +2179,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 # closest to the camera's current height (see
                 # find_landing_position in core/chunker.py). This is what
                 # prevents landing above or below the actual passage.
+                old_x = float(self.camera.position[0])
+                old_z = float(self.camera.position[2])
                 landing_x, landing_y, landing_z = chunker.find_landing_position(
                     self.manifest, target_x, target_z,
                     preferred_y=float(self.camera.position[1]),
@@ -2153,6 +2188,18 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.camera.position[0] = landing_x
                 self.camera.position[1] = landing_y
                 self.camera.position[2] = landing_z
+
+                # Reorient toward the teleport direction so the camera looks
+                # into the new area rather than potentially facing blank space.
+                # Only rotate when the click is far enough away to give a
+                # meaningful direction (>0.5 m threshold avoids jitter for
+                # near-by clicks that don't imply a clear travel direction).
+                dx = landing_x - old_x
+                dz = landing_z - old_z
+                if math.hypot(dx, dz) > 0.5:
+                    self.camera.yaw   = math.atan2(dz, dx)
+                    self.camera.pitch = 0.0
+                    self.camera.roll  = 0.0
 
                 # Show the controls panel briefly while the newly-teleported
                 # area's chunks stream in around the camera -- same content
