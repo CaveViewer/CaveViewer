@@ -160,7 +160,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     # Global UI text scale for all bitmap_font-rendered labels. This is
     # intentionally configured here so font sizing can be adjusted from
     # one place instead of tuning every overlay module individually.
-    UI_TEXT_SCALE = 1.18
+    UI_TEXT_SCALE = 1.28
 
     # Shared backplate behind the always-visible right-side HUD controls.
     # This keeps section labels readable over bright cave surfaces without

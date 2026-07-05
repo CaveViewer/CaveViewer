@@ -83,13 +83,23 @@ def _resolve_font_path() -> str:
 
 def _get_aa_target() -> int:
     """Get FreeType anti-aliasing target mode from environment or default.
-    
+
     CAVEVIEWER_TEXT_AA_MODE can be:
     - 'lcd': LCD sub-pixel rendering (sharper on Retina/high-DPI, uses more memory)
-    - 'light': Light auto-hinting (balanced quality/sharpness)
-    - 'normal': Standard anti-aliasing (default)
+    - 'light': Light auto-hinting (smooth curves, matches macOS CoreText style)
+    - 'normal': Standard grid-fitted anti-aliasing
+
+    macOS defaults to 'light' because Apple's CoreText uses smooth light
+    anti-aliasing with no pixel-level grid-fitting; FreeType's light mode
+    with force_autohint matches that approach and looks noticeably sharper
+    on Retina displays than the hinting-heavy normal mode.
     """
-    mode = os.getenv("CAVEVIEWER_TEXT_AA_MODE", "normal").lower()
+    import sys
+    env = os.getenv("CAVEVIEWER_TEXT_AA_MODE", "").lower()
+    if not env:
+        mode = "light" if sys.platform == "darwin" else "normal"
+    else:
+        mode = env
     if mode == "lcd":
         return freetype.FT_LOAD_TARGET_LCD
     elif mode == "light":

@@ -197,12 +197,19 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         return "right"
 
     def font_candidates(self) -> list[str]:
-        """Return macOS-specific font file paths in priority order."""
+        """Return macOS-specific font file paths in priority order.
+
+        SFNS.ttf (San Francisco) is the primary macOS UI font and renders
+        well in FreeType's light mode (the macOS default set in bitmap_font).
+        HelveticaNeue.ttc is a robust fallback -- it carries proper TrueType
+        hinting and renders cleanly across all sizes even in normal mode.
+        """
         return [
             "/System/Library/Fonts/SFNS.ttf",
             "/System/Library/Fonts/SFNSDisplay.ttf",
+            "/System/Library/Fonts/HelveticaNeue.ttc",
+            "/System/Library/Fonts/Helvetica.ttc",
             "/System/Library/Fonts/Supplemental/Helvetica.ttc",
             "/System/Library/Fonts/Supplemental/Arial.ttf",
             "/Library/Fonts/Arial.ttf",
-            "/Library/Fonts/Helvetica.ttc",
         ]
