@@ -621,6 +621,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._mouse_look_left_option_active = False
         self._last_mouse_pos = None
 
+        # Drop any in-flight import state so the worker thread's queue
+        # and manifest don't stay referenced after the window closes.
+        # The worker thread is daemon=True so it is killed on process exit;
+        # dropping these refs ensures they are GC'd promptly.
+        self._import_active = False
+        self._import_queue = None
+        self._import_thread = None
+
         def _release_attr(obj, attr_name: str) -> None:
             resource = getattr(obj, attr_name, None)
             if resource is None:
@@ -773,6 +781,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         on_render() drains the queue every frame and handles each message
         on the main thread where OpenGL calls are legal.
         """
+        if self._import_active:
+            _LOG.warning("Import already in progress; ignoring duplicate start request.")
+            return
         self._import_active = True
         self._import_is_startup = is_startup
         self._import_map_name = map_name
