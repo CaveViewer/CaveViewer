@@ -35,6 +35,7 @@ import glob
 import json
 import math
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -149,7 +150,12 @@ def _configure_runtime_tk_fonts(root) -> None:
         available = {family.lower(): family for family in tkfont.families(root)}
         preferred = [_PLATFORM_ADAPTER.ui_font_family()]
         if _LINUX_SPLASH_LAYOUT:
+            fc_family = _fontconfig_sans_family()
+            if fc_family:
+                preferred.insert(0, fc_family)
             preferred.extend([
+                "Adwaita Sans",
+                "Cantarell",
                 "Ubuntu Sans",
                 "Ubuntu",
                 "Noto Sans",
@@ -189,6 +195,21 @@ def _configure_runtime_tk_fonts(root) -> None:
     _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
     _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
     _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
+
+
+def _fontconfig_sans_family() -> str | None:
+    """Return fontconfig's preferred Linux sans-serif family."""
+    try:
+        result = subprocess.run(
+            ["fc-match", "--format=%{family[0]}", "sans-serif:style=Regular"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        family = result.stdout.strip()
+        return family or None
+    except Exception:
+        return None
 
 
 def _set_tk_window_icon(window) -> None:

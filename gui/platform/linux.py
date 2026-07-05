@@ -11,7 +11,7 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     """Linux platform adapter for update metadata and manual installer handoff."""
 
     def ui_font_family(self) -> str:
-        return "Ubuntu Sans"
+        return "sans-serif"
 
     def default_update_manifest_url(self, repo: str) -> str:
         return f"https://raw.githubusercontent.com/{repo}/main/updates/linux/stable.json"
