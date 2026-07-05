@@ -270,6 +270,27 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     if progress_cb:
         progress_cb("writing manifest", 0.98)
 
+    # Fine-grained 2D occupancy footprint for the minimap.  This is computed
+    # from raw vertex positions (not face centroids), at a resolution chosen
+    # to give ~200 cells along the longest world axis -- fine enough for the
+    # minimap panel regardless of the 3D chunk_size.  Stored as a flat list
+    # [cx0, cz0, cx1, cz1, ...] of int32 pairs so the minimap can render a
+    # detailed outline even when 3D chunks are very large (e.g. 100 m).
+    _FOOTPRINT_TARGET_CELLS = 200
+    pos_x = mesh.positions[:, 0]
+    pos_z = mesh.positions[:, 2]
+    extent_max = max(
+        float(pos_x.max() - pos_x.min()),
+        float(pos_z.max() - pos_z.min()),
+        1.0,
+    )
+    footprint_cell_size = max(2.0, extent_max / _FOOTPRINT_TARGET_CELLS)
+    fine_cx = np.floor(pos_x / footprint_cell_size).astype(np.int32)
+    fine_cz = np.floor(pos_z / footprint_cell_size).astype(np.int32)
+    footprint_pairs = np.unique(np.column_stack([fine_cx, fine_cz]), axis=0)
+    footprint_flat = footprint_pairs.flatten().tolist()
+    del fine_cx, fine_cz, footprint_pairs
+
     manifest = {
         "version": _VERSION,
         "chunk_size": chunk_size,
@@ -278,6 +299,8 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
             name: mat.diffuse_texture for name, mat in materials.items()
         },
         "chunks": manifest_chunks,
+        "footprint_cell_size": footprint_cell_size,
+        "footprint_cells": footprint_flat,
     }
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)

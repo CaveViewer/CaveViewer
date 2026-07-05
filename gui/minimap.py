@@ -94,26 +94,36 @@ class Minimap:
 
     def _compute_footprint(self, manifest: dict) -> None:
         """
-        Collapses every chunk's 3D bounding box onto the X/Z plane (top-
-        down) to get a set of occupied (x, z) cell coordinates, then finds
-        the overall min/max extent for scaling into the panel later. This
-        is the "crude top-down outline" -- a footprint silhouette, not a
-        rendered view, which is the right level of detail for a cave with
-        real vertical complexity (multiple levels would just overlap and
-        confuse a literal top-down render).
+        Builds the set of occupied (cx, cz) cells used by the minimap.
+
+        Prefers the fine-grained "footprint_cells" field written by
+        build_cache() (chunker.py) since v1.0.49+: a fixed-resolution
+        occupancy grid independent of the 3D chunk_size, so the minimap
+        looks detailed even when chunks are large (e.g. 100 m).  Falls
+        back to collapsing the 3D chunk cell list for older caches.
         """
-        chunk_size = manifest["chunk_size"]
-        occupied_xz = set()
+        if "footprint_cells" in manifest and "footprint_cell_size" in manifest:
+            # Fine-grained path: flat [cx0,cz0, cx1,cz1, ...] int list.
+            chunk_size = float(manifest["footprint_cell_size"])
+            flat = manifest["footprint_cells"]
+            occupied_xz = set()
+            for i in range(0, len(flat) - 1, 2):
+                occupied_xz.add((int(flat[i]), int(flat[i + 1])))
+        else:
+            # Legacy path: derive footprint from 3D chunk cells.
+            chunk_size = manifest["chunk_size"]
+            occupied_xz = set()
+            for cell_str in manifest["chunks"]:
+                cx, cy, cz = (int(v) for v in cell_str.split("_"))
+                occupied_xz.add((cx, cz))
+
         min_x = min_z = float("inf")
         max_x = max_z = float("-inf")
-
-        for cell_str in manifest["chunks"]:
-            cx, cy, cz = (int(v) for v in cell_str.split("_"))
-            occupied_xz.add((cx, cz))  # collapse Y (vertical) -- top-down footprint
-            min_x = min(min_x, cx)
-            max_x = max(max_x, cx)
-            min_z = min(min_z, cz)
-            max_z = max(max_z, cz)
+        for cx, cz in occupied_xz:
+            if cx < min_x: min_x = cx
+            if cx > max_x: max_x = cx
+            if cz < min_z: min_z = cz
+            if cz > max_z: max_z = cz
 
         self.chunk_size = chunk_size
         self.occupied_xz = occupied_xz
@@ -121,8 +131,6 @@ class Minimap:
         self.max_cell_x = max_x
         self.min_cell_z = min_z
         self.max_cell_z = max_z
-
-        # avoid division by zero for a degenerate single-chunk map
         self._span_x = max(max_x - min_x, 1)
         self._span_z = max(max_z - min_z, 1)
 
