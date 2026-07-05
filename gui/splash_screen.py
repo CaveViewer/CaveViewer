@@ -694,7 +694,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     download_link = tk.Label(
         update_action_row,
         text="Download Update",
-        font=_LINK_FONT,
+        font=_SMALL_FONT,
         bg=_BG_COLOR,
         fg="#8ab4ff",
         cursor="hand2",
@@ -853,6 +853,12 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         _show_update_panel("", show_progress=False)
         update_action_row.pack(pady=(0, 2))
         download_link.pack()
+        # Lock the panel height now that it's at its tallest state (action row
+        # visible).  Without this, replacing the action row (~22 px) with the
+        # 4 px progress bar causes the rest of the window to jump upward.
+        root.update_idletasks()
+        update_panel.config(height=update_panel.winfo_reqheight())
+        update_panel.pack_propagate(False)
 
     def _start_check_updates(*, user_initiated: bool = False):
         if update_state["busy"]:
