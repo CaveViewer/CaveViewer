@@ -348,6 +348,13 @@ if [ -d "$bundled_font_dir" ]; then
 <fontconfig>
   <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
   <dir>$bundled_font_dir</dir>
+  <match target="font">
+    <edit name="antialias" mode="assign"><bool>true</bool></edit>
+    <edit name="hinting" mode="assign"><bool>true</bool></edit>
+    <edit name="hintstyle" mode="assign"><const>hintslight</const></edit>
+    <edit name="rgba" mode="assign"><const>rgb</const></edit>
+    <edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit>
+  </match>
 </fontconfig>
 FONTCONFIG_EOF
   export FONTCONFIG_FILE="${FONTCONFIG_FILE:-$fontconfig_file}"

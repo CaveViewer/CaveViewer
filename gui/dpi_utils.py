@@ -1,17 +1,18 @@
 """
 gui/dpi_utils.py
 
-Small Windows DPI helpers for Tk-based windows/dialogs.
+Small DPI helpers for Tk-based windows/dialogs.
 
-Without process DPI awareness, Windows can bitmap-scale Tk windows on
-high-DPI displays, making the entire splash screen look blocky even when
-the font itself is fine.
+Without process DPI awareness or explicit Tk scaling, high-DPI displays can
+make the entire splash screen look blocky or undersized even when the font
+itself is fine.
 """
 
 from __future__ import annotations
 
 import ctypes
 import os
+import sys
 
 
 _DPI_AWARENESS_CONFIGURED = False
@@ -51,21 +52,29 @@ def configure_process_dpi_awareness() -> None:
 
 def apply_tk_scaling(root) -> None:
     """Nudge Tk to use the current display DPI for font/layout scaling."""
-    if os.name != "nt":
+    if os.name != "nt" and not sys.platform.startswith("linux"):
         return
     try:
-        pixels_per_inch = float(root.winfo_fpixels("1i"))
-        if pixels_per_inch > 0:
-            root.tk.call("tk", "scaling", pixels_per_inch / 72.0)
+        override = os.getenv("CAVEVIEWER_TK_SCALE", "").strip()
+        if override:
+            scale = float(override)
+        else:
+            pixels_per_inch = float(root.winfo_fpixels("1i"))
+            scale = pixels_per_inch / 72.0 if pixels_per_inch > 0 else 0.0
+        if scale > 0:
+            root.tk.call("tk", "scaling", max(0.75, min(4.0, scale)))
     except Exception:
         pass
 
 
 def tk_display_scale(root) -> float:
     """Return display scale relative to 96 DPI for pixel-sized Tk layout values."""
-    if os.name != "nt":
+    if os.name != "nt" and not sys.platform.startswith("linux"):
         return 1.0
     try:
+        override = os.getenv("CAVEVIEWER_TK_SCALE", "").strip()
+        if override:
+            return max(0.75, min(4.0, float(override))) / (96.0 / 72.0)
         pixels_per_inch = float(root.winfo_fpixels("1i"))
         if pixels_per_inch > 0:
             return max(1.0, min(3.0, pixels_per_inch / 96.0))
