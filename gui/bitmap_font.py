@@ -86,14 +86,14 @@ def _get_aa_target() -> int:
     
     CAVEVIEWER_TEXT_AA_MODE can be:
     - 'lcd': LCD sub-pixel rendering (sharper on Retina/high-DPI, uses more memory)
-    - 'light': Light hinting (balanced quality/sharpness)
+    - 'light': Light auto-hinting (balanced quality/sharpness)
     - 'normal': Standard anti-aliasing (default)
     """
     mode = os.getenv("CAVEVIEWER_TEXT_AA_MODE", "normal").lower()
     if mode == "lcd":
         return freetype.FT_LOAD_TARGET_LCD
     elif mode == "light":
-        return freetype.FT_LOAD_TARGET_LIGHT
+        return freetype.FT_LOAD_TARGET_LIGHT | freetype.FT_LOAD_FORCE_AUTOHINT
     else:
         return freetype.FT_LOAD_TARGET_NORMAL
 

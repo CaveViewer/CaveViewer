@@ -339,6 +339,7 @@ export LD_LIBRARY_PATH="$gl_compat_dir:$bundled_internal_dir:$appdir/usr/lib/cav
 if [ -f "$bundled_ui_font" ]; then
   export CAVEVIEWER_UI_FONT="${CAVEVIEWER_UI_FONT:-$bundled_ui_font}"
 fi
+export CAVEVIEWER_TEXT_AA_MODE="${CAVEVIEWER_TEXT_AA_MODE:-light}"
 if [ -d "$bundled_font_dir" ]; then
   fontconfig_file="$gl_compat_dir/fonts.conf"
   cat > "$fontconfig_file" <<FONTCONFIG_EOF
@@ -376,6 +377,7 @@ fi
   echo "[CaveViewer AppRun] executable=$executable"
   echo "[CaveViewer AppRun] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
   echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
+  echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
@@ -386,6 +388,7 @@ if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] executable=$executable"
   echo "[CaveViewer AppRun] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
   echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
+  echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
