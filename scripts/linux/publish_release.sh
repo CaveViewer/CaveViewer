@@ -103,10 +103,6 @@ if ! grep -q '^APP_VERSION = "' "$version_file"; then
   exit 1
 fi
 
-source_tarball_name="CaveViewer-${normalized_version}-source.tar.gz"
-source_dist_dir="$repo_root/dist/source"
-source_tarball_path="$source_dist_dir/$source_tarball_name"
-
 current_version="$(cv_read_app_version "$version_file")"
 if [ "$current_version" != "$normalized_version" ]; then
   cv_set_app_version "$version_file" "$normalized_version"
@@ -127,10 +123,6 @@ else
   fi
 fi
 
-# Package source code
-echo "Packaging source code..."
-"$repo_root/scripts/common/package_source.sh" "$normalized_version"
-
 # Find all AppImages for this version regardless of architecture suffix.
 # When building both arm64 and amd64, both are uploaded to the release.
 collect_linux_artifacts
@@ -147,17 +139,12 @@ for _p in "${map_appimage_paths[@]}"; do
 done
 manifest_appimage_name="$(basename "$manifest_appimage_path")"
 
-if [ ! -f "$source_tarball_path" ]; then
-  echo "Error: expected source tarball not found: $source_tarball_path"
-  exit 1
-fi
-
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   echo "Release $tag already exists; uploading/replacing assets"
-  gh release upload "$tag" "${map_appimage_paths[@]}" "$source_tarball_path" --repo "$repo" --clobber
+  gh release upload "$tag" "${map_appimage_paths[@]}" --repo "$repo" --clobber
 else
-  echo "Creating release $tag and uploading Linux AppImages and source"
-  gh release create "$tag" "${map_appimage_paths[@]}" "$source_tarball_path" --repo "$repo" --title "$release_title" --notes "$release_notes"
+  echo "Creating release $tag and uploading Linux AppImages"
+  gh release create "$tag" "${map_appimage_paths[@]}" --repo "$repo" --title "$release_title" --notes "$release_notes"
 fi
 
 appimage_asset_url="$(gh api "repos/$repo/releases/tags/$tag" --jq ".assets[] | select(.name == \"$manifest_appimage_name\") | .browser_download_url")"
