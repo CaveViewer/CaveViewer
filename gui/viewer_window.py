@@ -2000,6 +2000,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         # macOS-friendly fallback: Option + pointer movement can drive
         # look even without a physical click/drag gesture.
         if self._option_look_active() or self._mouse_look_active:
+            # On the first event after mouse exclusivity is enabled the
+            # backend warps the cursor to the window centre, generating a
+            # large spurious delta.  _last_mouse_pos being None is the
+            # sentinel for "just activated": absorb that one event and
+            # record a real position so subsequent deltas are applied.
+            if self._last_mouse_pos is None:
+                self._last_mouse_pos = (x, y)
+                return
+            self._last_mouse_pos = (x, y)
             self.camera.look(dx, dy)
 
     def on_mouse_position_event(self, x, y, dx, dy):
@@ -2031,6 +2040,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 if self._option_look_active():
                     self._mouse_look_active = True
                     self._mouse_look_left_option_active = True
+                    self._last_mouse_pos = None
                     self.wnd.mouse_exclusivity = True
                     return
 
@@ -2148,10 +2158,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             # On Windows/Linux, left-click that doesn't hit any UI activates mouse look
             if look_button_name == "left":
                 self._mouse_look_active = True
+                self._last_mouse_pos = None
                 self.wnd.mouse_exclusivity = True
             return
         if button == look_button and look_button_name == "right":
             self._mouse_look_active = True
+            self._last_mouse_pos = None
             self.wnd.mouse_exclusivity = True
 
     mouse_press_event = on_mouse_press_event

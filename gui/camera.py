@@ -12,7 +12,9 @@ Controls (bound in gui/viewer_window.py, documented here for reference):
     W/S       - move forward/backward along view direction
     A/D       - strafe left/right
     E/Q       - move up/down along world Y (or could be view-relative; see note)
-    I,J,K,L   - look (yaw/pitch)    Z/X       - barrel roll (counterclockwise/clockwise from pilot perspective)    Shift     - speed boost multiplier
+    I,J,K,L   - look (yaw/pitch)
+    Z/X       - barrel roll (counterclockwise/clockwise from diver perspective)
+    Shift     - speed boost multiplier
     Scroll    - adjust base fly speed (useful since cave scale varies a lot)
 """
 
@@ -33,54 +35,149 @@ class FlyCamera:
     def __init__(self, position=(0.0, 0.0, 0.0), yaw_deg=-90.0, pitch_deg=0.0,
                  move_speed=4.0, mouse_sensitivity=0.12):
         self.position = np.array(position, dtype=np.float64)
-        self.yaw = math.radians(yaw_deg)      # rotation around world Y
-        self.pitch = math.radians(pitch_deg)  # rotation around local X
-        self.roll = 0.0                       # rotation around forward axis
-        self.move_speed = move_speed          # meters/second at 1x
+        self.move_speed = move_speed
         self.mouse_sensitivity = mouse_sensitivity
         self.fov_deg = 75.0
         self.near = 0.05
         self.far = 1000.0
-
+        # Kept for backward-compat: viewer_window reads this when clamping
+        # bookmark pitch values on load.
         self._pitch_limit = math.radians(89.0)
 
-    # -- orientation -----------------------------------------------------
+        # Orientation is stored as a 3×3 matrix whose rows are the
+        # world-space directions of the camera's local right (row 0),
+        # up (row 1), and forward (row 2) axes.  Storing orientation this
+        # way instead of three Euler scalars means that barrel-rolled look
+        # rotations are always applied around the *camera's own* axes, not
+        # world axes -- so a pilot who has rolled 90° and then moves the
+        # mouse sideways gets a yaw around their tilted local up (which
+        # happens to be the world side-axis), not a world-Y yaw that would
+        # slide them along a plane.
+        self._orient = np.eye(3, dtype=np.float64)
+        self._rebuild_from_euler(math.radians(yaw_deg), math.radians(pitch_deg), 0.0)
+
+    # -- orientation helpers -----------------------------------------------
+
+    def _rebuild_from_euler(self, yaw: float, pitch: float, roll: float) -> None:
+        """Reconstruct _orient from Euler yaw / pitch / roll angles."""
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cy, sy = math.cos(yaw),   math.sin(yaw)
+        f = np.array([cp * cy, sp, cp * sy], dtype=np.float64)
+        world_up = np.array([0.0, 1.0, 0.0])
+        r = np.cross(f, world_up)
+        rn = np.linalg.norm(r)
+        r = np.array([1.0, 0.0, 0.0]) if rn < 1e-9 else r / rn
+        u = _normalize(np.cross(r, f))
+        if roll != 0.0:
+            c, s = math.cos(roll), math.sin(roll)
+            r = _normalize(r * c + np.cross(f, r) * s)
+            u = _normalize(u * c + np.cross(f, u) * s)
+        self._orient = np.array([r, u, f], dtype=np.float64)
+
+    def _rotate_orient(self, axis: np.ndarray, angle: float) -> None:
+        """Rotate all three orientation rows around `axis` by `angle` (Rodrigues).
+
+        `axis` must already be a copy -- not a live view into self._orient --
+        when the axis is one of the orientation rows itself.
+        """
+        c, s = math.cos(angle), math.sin(angle)
+        k = axis  # assumed unit-length
+        for i in range(3):
+            v = self._orient[i]
+            self._orient[i] = v * c + np.cross(k, v) * s + k * np.dot(k, v) * (1.0 - c)
+
+    def _reorthonormalize(self) -> None:
+        """Gram-Schmidt pass to suppress floating-point drift."""
+        f = _normalize(self._orient[2])
+        r = self._orient[0] - np.dot(self._orient[0], f) * f
+        rn = np.linalg.norm(r)
+        if rn < 1e-9:
+            # Degenerate (right became parallel to forward): pick a safe fallback.
+            r = np.cross(f, np.array([0.0, 1.0, 0.0]))
+            rn = np.linalg.norm(r)
+            if rn < 1e-9:
+                r = np.cross(f, np.array([1.0, 0.0, 0.0]))
+                rn = np.linalg.norm(r)
+        r /= rn
+        u = np.cross(r, f)   # orthogonal by construction; normalize for safety
+        self._orient[0] = r
+        self._orient[1] = _normalize(u)
+        self._orient[2] = f
+
+    # -- orientation vectors -----------------------------------------------
 
     def forward(self) -> np.ndarray:
-        cp, sp = math.cos(self.pitch), math.sin(self.pitch)
-        cy, sy = math.cos(self.yaw), math.sin(self.yaw)
-        return _normalize(np.array([cp * cy, sp, cp * sy], dtype=np.float64))
+        return self._orient[2].copy()
 
     def right(self) -> np.ndarray:
-        # Compute base right vector: forward × world_up
-        f = self.forward()  # compute once; was called twice before
-        world_up = np.array([0.0, 1.0, 0.0])
-        base_right = _normalize(np.cross(f, world_up))
-
-        if self.roll == 0.0:
-            return base_right
-
-        # Rotate around forward axis by roll angle using Rodrigues' formula
-        # Rodrigues: v_rot = v*cos(θ) + (k × v)*sin(θ) + k*(k·v)*(1-cos(θ))
-        # where k is the rotation axis (forward) and v is the vector to rotate (base_right)
-        cr, sr = math.cos(self.roll), math.sin(self.roll)
-        k_cross_v = np.cross(f, base_right)
-        k_dot_v = np.dot(f, base_right)
-        rotated_right = (base_right * cr +
-                         k_cross_v * sr +
-                         f * k_dot_v * (1.0 - cr))
-        return _normalize(rotated_right)
+        return self._orient[0].copy()
 
     def up(self) -> np.ndarray:
-        # Up is simply the cross product of right and forward
-        # This ensures all three vectors remain orthonormal
-        return _normalize(np.cross(self.right(), self.forward()))
+        return self._orient[1].copy()
+
+    # -- Euler-angle properties (backward-compat for bookmark save / load) --
+    #
+    # viewer_window reads and writes camera.yaw / .pitch / .roll directly
+    # when saving and restoring bookmark slots.  These properties let that
+    # code continue to work unchanged while the real orientation state is
+    # the matrix above.
+
+    @property
+    def yaw(self) -> float:
+        f = self._orient[2]
+        return math.atan2(float(f[2]), float(f[0]))
+
+    @yaw.setter
+    def yaw(self, value: float) -> None:
+        self._rebuild_from_euler(value, self.pitch, self.roll)
+
+    @property
+    def pitch(self) -> float:
+        return math.asin(max(-1.0, min(1.0, float(self._orient[2][1]))))
+
+    @pitch.setter
+    def pitch(self, value: float) -> None:
+        self._rebuild_from_euler(self.yaw, value, self.roll)
+
+    @property
+    def roll(self) -> float:
+        f = self._orient[2]
+        world_up = np.array([0.0, 1.0, 0.0])
+        expected_r = np.cross(f, world_up)
+        en = np.linalg.norm(expected_r)
+        if en < 1e-9:
+            return 0.0
+        expected_r /= en
+        cos_a = max(-1.0, min(1.0, float(np.dot(expected_r, self._orient[0]))))
+        sin_a = float(np.dot(np.cross(expected_r, self._orient[0]), f))
+        return math.atan2(sin_a, cos_a)
+
+    @roll.setter
+    def roll(self, value: float) -> None:
+        self._rebuild_from_euler(self.yaw, self.pitch, value)
+
+    # -- look & movement ---------------------------------------------------
 
     def look(self, dx_pixels: float, dy_pixels: float) -> None:
-        """Apply mouse delta to yaw/pitch. dy positive = mouse moved down."""
-        self.yaw += math.radians(dx_pixels * self.mouse_sensitivity)
-        self.pitch -= math.radians(dy_pixels * self.mouse_sensitivity)
-        self.pitch = max(-self._pitch_limit, min(self._pitch_limit, self.pitch))
+        """Apply mouse (or keyboard) delta to orientation.
+
+        Rotations are applied around the camera's own local axes so that a
+        rolled camera behaves like a pilot in a plane: moving the mouse
+        left/right yaws around the *tilted* local up, and moving up/down
+        pitches around the *tilted* local right.  Before this fix, both
+        axes were world-fixed, so after a barrel roll the mouse was stuck
+        sliding the view along the original world plane.
+        """
+        if dx_pixels:
+            # Yaw around local up.  Negated so mouse-right → turn right,
+            # matching the original Euler convention.
+            up_axis = self._orient[1].copy()
+            self._rotate_orient(up_axis, -math.radians(dx_pixels * self.mouse_sensitivity))
+        if dy_pixels:
+            # Pitch around local right.
+            right_axis = self._orient[0].copy()
+            self._rotate_orient(right_axis, -math.radians(dy_pixels * self.mouse_sensitivity))
+        self._reorthonormalize()
 
     # -- movement ----------------------------------------------------------
 
@@ -105,38 +202,37 @@ class FlyCamera:
         self.move_speed = max(0.1, min(200.0, self.move_speed * factor))
 
     def barrel_roll(self, droll_rad: float) -> None:
-        """Apply barrel roll rotation around forward axis (positive = counterclockwise from pilot POV)."""
-        self.roll += droll_rad
+        """Roll around the local forward axis (positive = CCW from pilot POV)."""
+        fwd_axis = self._orient[2].copy()
+        self._rotate_orient(fwd_axis, droll_rad)
+        self._reorthonormalize()
 
     def reset_view(self) -> None:
-        """Reset roll to 0, making the view right-side up again."""
-        self.roll = 0.0
+        """Level the camera: keep forward direction, re-align up to world Y."""
+        f = self._orient[2].copy()
+        world_up = np.array([0.0, 1.0, 0.0])
+        r = np.cross(f, world_up)
+        rn = np.linalg.norm(r)
+        r = np.array([1.0, 0.0, 0.0]) if rn < 1e-9 else r / rn
+        self._orient[0] = r
+        self._orient[1] = _normalize(np.cross(r, f))
+        # self._orient[2] (forward) is intentionally left unchanged
 
-    # -- matrices ------------------------------------------------------------
+    # -- matrices ----------------------------------------------------------
 
     def view_matrix(self) -> np.ndarray:
-        # Compute f/r/u in one pass from a single forward() call.
-        # Calling self.right() and self.up() separately would invoke
-        # forward() 6 times total due to their internal call chains.
-        f = self.forward()
-        world_up = np.array([0.0, 1.0, 0.0])
-        r = _normalize(np.cross(f, world_up))
-        if self.roll != 0.0:
-            cr, sr = math.cos(self.roll), math.sin(self.roll)
-            k_cross_v = np.cross(f, r)
-            k_dot_v = np.dot(f, r)
-            r = _normalize(r * cr + k_cross_v * sr + f * k_dot_v * (1.0 - cr))
-        u = _normalize(np.cross(r, f))
+        r   = self._orient[0]
+        u   = self._orient[1]
+        f   = self._orient[2]
         pos = self.position
 
-        # standard lookAt-style matrix construction
         m = np.identity(4, dtype=np.float32)
         m[0, 0:3] = r
         m[1, 0:3] = u
-        m[2, 0:3] = -f
+        m[2, 0:3] = -f          # OpenGL convention: camera looks down -Z
         m[0, 3] = -np.dot(r, pos)
         m[1, 3] = -np.dot(u, pos)
-        m[2, 3] = np.dot(f, pos)
+        m[2, 3] =  np.dot(f, pos)
         return m
 
     def projection_matrix(self, aspect_ratio: float) -> np.ndarray:
