@@ -335,7 +335,16 @@ bundled_tk_dir="$bundled_internal_dir/_tk_data"
 bundled_ui_font="$appdir/usr/share/caveviewer/fonts/CaveViewerUI-Regular.ttf"
 bundled_font_dir="$appdir/usr/share/caveviewer/fonts"
 
-export LD_LIBRARY_PATH="$gl_compat_dir:$bundled_internal_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
+# Prefer the distro Tcl/Tk/font stack, matching the 1.0.38 Linux builds whose
+# splash text rendered correctly. The PyInstaller-bundled Tcl/Tk libraries are
+# kept available behind CAVEVIEWER_USE_BUNDLED_TK=1 for systems that truly need
+# them, but forcing them by default can lose Tk's normal Xft/fontconfig path and
+# make text look like old bitmap fonts.
+if [ "${CAVEVIEWER_USE_BUNDLED_TK:-0}" = "1" ]; then
+  export LD_LIBRARY_PATH="$gl_compat_dir:$bundled_internal_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
+else
+  export LD_LIBRARY_PATH="$gl_compat_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
+fi
 if [ -f "$bundled_ui_font" ]; then
   export CAVEVIEWER_UI_FONT="${CAVEVIEWER_UI_FONT:-$bundled_ui_font}"
 fi
@@ -359,12 +368,12 @@ if [ -d "$bundled_font_dir" ]; then
 FONTCONFIG_EOF
   export FONTCONFIG_FILE="${FONTCONFIG_FILE:-$fontconfig_file}"
 fi
-if [ -d "$bundled_tcl_dir" ]; then
+if [ "${CAVEVIEWER_USE_BUNDLED_TK:-0}" = "1" ] && [ -d "$bundled_tcl_dir" ]; then
   export TCL_LIBRARY="${TCL_LIBRARY:-$bundled_tcl_dir}"
 else
   export TCL_LIBRARY="${TCL_LIBRARY:-/usr/share/tcltk/tcl8.6}"
 fi
-if [ -d "$bundled_tk_dir" ]; then
+if [ "${CAVEVIEWER_USE_BUNDLED_TK:-0}" = "1" ] && [ -d "$bundled_tk_dir" ]; then
   export TK_LIBRARY="${TK_LIBRARY:-$bundled_tk_dir}"
 else
   export TK_LIBRARY="${TK_LIBRARY:-/usr/share/tcltk/tk8.6}"
@@ -383,6 +392,7 @@ fi
   echo "[CaveViewer AppRun] APPDIR=$appdir"
   echo "[CaveViewer AppRun] executable=$executable"
   echo "[CaveViewer AppRun] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "[CaveViewer AppRun] CAVEVIEWER_USE_BUNDLED_TK=${CAVEVIEWER_USE_BUNDLED_TK:-0}"
   echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
@@ -394,6 +404,7 @@ fi
 if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] executable=$executable"
   echo "[CaveViewer AppRun] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "[CaveViewer AppRun] CAVEVIEWER_USE_BUNDLED_TK=${CAVEVIEWER_USE_BUNDLED_TK:-0}"
   echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
@@ -409,6 +420,29 @@ if [ "$debug" = "1" ]; then
 else
   "$executable" "$@" >> "$log_file" 2>&1
   exit_code=$?
+fi
+
+if [ "$exit_code" -ne 0 ] && [ "${CAVEVIEWER_USE_BUNDLED_TK:-0}" != "1" ] &&
+   grep -Eq "lib(tcl|tk)[0-9.]*\.so.*cannot open shared object file" "$log_file"; then
+  echo "[CaveViewer AppRun] System Tcl/Tk library missing; retrying with bundled Tcl/Tk." | tee -a "$log_file"
+  export CAVEVIEWER_USE_BUNDLED_TK=1
+  export LD_LIBRARY_PATH="$gl_compat_dir:$bundled_internal_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
+  if [ -d "$bundled_tcl_dir" ]; then
+    export TCL_LIBRARY="$bundled_tcl_dir"
+  fi
+  if [ -d "$bundled_tk_dir" ]; then
+    export TK_LIBRARY="$bundled_tk_dir"
+  fi
+  if [ "$debug" = "1" ]; then
+    echo "[CaveViewer AppRun] Retry LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+    echo "[CaveViewer AppRun] Retry TCL_LIBRARY=$TCL_LIBRARY"
+    echo "[CaveViewer AppRun] Retry TK_LIBRARY=$TK_LIBRARY"
+    "$executable" "$@" 2>&1 | tee -a "$log_file"
+    exit_code=${PIPESTATUS[0]}
+  else
+    "$executable" "$@" >> "$log_file" 2>&1
+    exit_code=$?
+  fi
 fi
 set -e
 
