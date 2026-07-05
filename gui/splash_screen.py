@@ -664,147 +664,82 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         "mounted_payload": None,
         "mounted_app": None,
         "busy": False,
-        "link_enabled": True,
         "check_user_initiated": False,
     }
 
-    update_panel = tk.Frame(root, bg=_BG_COLOR)
-
-    update_status_label = tk.Label(
-        update_panel,
+    # Update status label — always packed so its height is always included in
+    # the window size.  State changes are text/color/cursor swaps only; no
+    # widgets are ever added or removed, so the window never needs to resize.
+    update_label = tk.Label(
+        root,
         text="",
         font=_SMALL_FONT,
         fg=_INSTRUCTION_COLOR,
         bg=_BG_COLOR,
-        justify="center",
-        wraplength=420,
+        cursor="arrow",
     )
+    update_label.pack(pady=(0, 4))
 
-    progress_canvas = tk.Canvas(
-        update_panel,
+    # Progress bar — always packed, always 4 px tall.  Initially its background
+    # matches the window so it is invisible; becomes visible during a download.
+    update_progress_canvas = tk.Canvas(
+        root,
         width=300,
         height=4,
-        bg="#1c1c24",
+        bg=_BG_COLOR,
         highlightthickness=0,
     )
-    progress_bar = progress_canvas.create_rectangle(0, 0, 0, 4, fill=_BUTTON_BG, width=0)
-
-    update_action_row = tk.Frame(update_panel, bg=_BG_COLOR)
-
-    download_link = tk.Label(
-        update_action_row,
-        text="Download Update",
-        font=_SMALL_FONT,
-        bg=_BG_COLOR,
-        fg="#8ab4ff",
-        cursor="hand2",
+    _update_progress_bar = update_progress_canvas.create_rectangle(
+        0, 0, 0, 4, fill=_BUTTON_BG, width=0
     )
+    update_progress_canvas.pack(pady=(0, 4))
 
-    close_install_button = tk.Button(
-        update_action_row,
-        text="Close app to install manually",
-        font=_SMALL_FONT,
-        bg=_BUTTON_BG,
-        fg=_BUTTON_FG,
-        activebackground=_BUTTON_BG,
-        activeforeground=_BUTTON_FG,
-        relief="flat",
-        borderwidth=0,
-        padx=12,
-        pady=5,
-        cursor="hand2",
-    )
+    def _set_update_label(text, fg=_INSTRUCTION_COLOR, clickable=False):
+        update_label.config(text=text, fg=fg,
+                            cursor="hand2" if clickable else "arrow")
 
-    dismiss_update_button = tk.Button(
-        update_action_row,
-        text="Later",
-        font=_SMALL_FONT,
-        bg="#2a2a33",
-        fg=_SUBTITLE_COLOR,
-        activebackground="#33333f",
-        activeforeground=_SUBTITLE_COLOR,
-        relief="flat",
-        borderwidth=0,
-        padx=12,
-        pady=5,
-        cursor="hand2",
-    )
-
-    def _hide_update_actions():
-        for w in (download_link, close_install_button, dismiss_update_button):
-            w.pack_forget()
-
-    def _set_link_enabled(is_enabled: bool):
-        update_state["link_enabled"] = bool(is_enabled)
-        if is_enabled:
-            download_link.config(fg="#8ab4ff", cursor="hand2")
-        else:
-            download_link.config(fg="#5d6f8a", cursor="arrow")
+    def _set_progress_bar_visible(visible: bool):
+        update_progress_canvas.config(bg="#1c1c24" if visible else _BG_COLOR)
+        if not visible:
+            update_progress_canvas.coords(_update_progress_bar, 0, 0, 0, 4)
 
     def _set_progress(frac: float):
         clamped = max(0.0, min(1.0, float(frac)))
-        progress_canvas.coords(progress_bar, 0, 0, int(300 * clamped), 4)
+        update_progress_canvas.coords(_update_progress_bar, 0, 0, int(300 * clamped), 4)
 
-    def _show_update_panel(message: str, *, show_progress: bool = False, progress_frac: float = 0.0):
-        update_status_label.config(text=message)
-        if message:
-            if not update_status_label.winfo_ismapped():
-                update_status_label.pack(pady=(0, 8))
-        else:
-            update_status_label.pack_forget()
-        if show_progress:
-            if not progress_canvas.winfo_ismapped():
-                progress_canvas.pack(pady=(0, 8))
-            _set_progress(progress_frac)
-        else:
-            progress_canvas.pack_forget()
-        _hide_update_actions()
-        update_action_row.pack_forget()
-
-    update_panel.pack(pady=(0, 0))
-
-    def _set_busy(is_busy: bool):
-        update_state["busy"] = bool(is_busy)
-        _set_link_enabled(not is_busy)
-
-    def _manual_install_success_message(payload_path: str) -> str:
-        return "Update downloaded"
+    def _close_and_install():
+        root.withdraw()
+        root.quit()
 
     def _on_download_complete(payload_path: str):
         update_state["downloaded_payload"] = payload_path
-        _set_busy(False)
+        update_state["busy"] = False
+        _set_progress_bar_visible(False)
         try:
             manual_install = _PLATFORM_ADAPTER.prepare_manual_install(payload_path)
             update_state["mounted_payload"] = manual_install.mounted_payload_path
             update_state["mounted_app"] = manual_install.mounted_app_path
-            _show_update_panel(_manual_install_success_message(payload_path), show_progress=False)
-        except Exception as e:
-            _show_update_panel(
-                "Update downloaded to:\n"
-                f"{payload_path}\n"
-                f"Install could not start: {e}",
-                show_progress=False,
-            )
-            update_action_row.pack(pady=(0, 2))
-            close_install_button.config(text="Close app to install manually")
-            close_install_button.pack(side="left", padx=(0, 8))
+            _set_update_label("Update ready  \u2014  click to quit & install",
+                              fg=_BUTTON_BG, clickable=True)
+            update_label.bind("<Button-1>", lambda _e: _close_and_install())
+        except Exception:
+            _set_update_label("Downloaded  \u2014  close app to install manually",
+                              fg=_SUBTITLE_COLOR)
 
     def _on_download_error(err: str):
-        _set_busy(False)
-        _show_update_panel("Download Update.", show_progress=False)
-        update_action_row.pack(pady=(0, 2))
-        download_link.pack()
+        update_state["busy"] = False
+        _set_progress_bar_visible(False)
+        _set_update_label("\u2193  Download failed \u2014 click to retry",
+                          fg="#ff9b90", clickable=True)
 
-    def _start_download():
+    def _start_download(_event=None):
         result = update_state.get("result")
-        if not result:
+        if not result or update_state.get("busy"):
             return
-
-        if not update_state.get("link_enabled", True):
-            return
-
-        _set_busy(True)
-        _show_update_panel("", show_progress=True, progress_frac=0.0)
+        update_state["busy"] = True
+        _set_update_label("Downloading\u2026", fg=_INSTRUCTION_COLOR)
+        _set_progress_bar_visible(True)
+        _set_progress(0.0)
 
         def worker():
             from gui.update_checker import download_update
@@ -814,9 +749,12 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
             def on_progress(downloaded, total):
                 frac = min(1.0, downloaded / total) if total else 0.0
+                pct = int(frac * 100)
 
                 def ui_update():
-                    _show_update_panel("", show_progress=True, progress_frac=frac)
+                    _set_update_label(f"Downloading\u2026 {pct}%",
+                                      fg=_INSTRUCTION_COLOR)
+                    _set_progress(frac)
 
                 root.after(0, ui_update)
 
@@ -838,32 +776,28 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_check_result(result):
-        _set_busy(False)
+        update_state["busy"] = False
         if result.error:
-            message = "Your app is up to date." if update_state.get("check_user_initiated") else ""
-            _show_update_panel(message, show_progress=False)
+            if update_state.get("check_user_initiated"):
+                _set_update_label("Your app is up to date.")
             return
 
         if not result.update_available:
-            message = "Your app is up to date." if update_state.get("check_user_initiated") else ""
-            _show_update_panel(message, show_progress=False)
+            if update_state.get("check_user_initiated"):
+                _set_update_label("Your app is up to date.")
             return
 
         update_state["result"] = result
-        _show_update_panel("", show_progress=False)
-        update_action_row.pack(pady=(0, 2))
-        download_link.pack()
-        # Panel height was already reserved at startup; no resize needed here.
+        _set_update_label("\u2193  Download Update", fg="#8ab4ff", clickable=True)
+        update_label.bind("<Button-1>", _start_download)
 
     def _start_check_updates(*, user_initiated: bool = False):
         if update_state["busy"]:
             return
-        _set_busy(True)
+        update_state["busy"] = True
         update_state["check_user_initiated"] = bool(user_initiated)
         if user_initiated:
-            _show_update_panel("Checking for updates...", show_progress=False)
-        else:
-            _show_update_panel("", show_progress=False)
+            _set_update_label("Checking for updates\u2026")
 
         def worker():
             from gui.update_checker import check_for_update
@@ -875,13 +809,6 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             root.after(0, lambda: _on_check_result(result))
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def _close_and_install():
-        root.withdraw()
-        root.quit()
-
-    download_link.bind("<Button-1>", lambda _event: _start_download())
-    close_install_button.config(command=_close_and_install)
 
     # -- browse button + instructions ---------------------------------------------
     def _show_invalid_map_dialog(message: str) -> None:
@@ -1373,23 +1300,6 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     # -- footer note ----------------------------------------------------------------
 
     browse_button.focus_set()
-
-    # Reserve space for the update panel before the window is measured and
-    # frozen.  Without this the panel has zero height at sizing time, the
-    # window is too short, and the download link appears below the visible
-    # area when the background update check returns 350 ms later.
-    # Strategy: temporarily pack the tallest update-panel state (action row
-    # + link), measure it, lock the panel at that height with
-    # pack_propagate(False), then immediately hide the children so the
-    # panel appears empty at startup.
-    update_action_row.pack(pady=(0, 2))
-    download_link.pack()
-    root.update_idletasks()
-    update_panel.config(height=update_panel.winfo_reqheight())
-    update_panel.pack_propagate(False)
-    update_action_row.pack_forget()
-    _hide_update_actions()
-
     root.update_idletasks()
     final_height = max(
         px(_SPLASH_WINDOW_MIN_HEIGHT),
