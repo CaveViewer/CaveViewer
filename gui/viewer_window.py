@@ -134,7 +134,10 @@ class CaveViewerWindow(mglw.WindowConfig):
     # aspect_ratio unlocked so manual resizing remains fully flexible.
     window_size = (1600, 1000)
     resizable = True
-    vsync = True
+    # Allow disabling vsync via env var -- useful on VMs where the virtual
+    # display driver can block swap_buffers() long enough to freeze the
+    # render thread and make the window appear hung during heavy imports.
+    vsync = os.environ.get("CAVEVIEWER_VSYNC", "1").strip() not in ("0", "false", "no")
     aspect_ratio = None  # don't letterbox; we recompute from actual window size
 
     # Set on the class itself (not passed through __init__ kwargs) before
@@ -1269,10 +1272,25 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.ctx.clear(0.02, 0.02, 0.03)
             self._drain_import_queue()
             if self._import_active:   # still running after draining
+                fraction = self._import_progress_fraction
+                # When the real fraction is near zero (numpy is crunching
+                # faces and can't report sub-step progress), pulse the ring
+                # gently between 0 and 2 % so it looks alive.  The pulse is
+                # capped below the first real progress step (3 %) so the
+                # max() inside import_progress_panel takes over cleanly once
+                # measurable progress begins.
+                if fraction < 0.021:
+                    t = time.perf_counter()
+                    fraction = abs(math.sin(t * 1.2)) * 0.02
                 self.import_progress_panel.render(
                     self.wnd.size, self._import_map_name,
-                    self._import_progress_stage, self._import_progress_fraction,
+                    self._import_progress_stage, fraction,
                 )
+            # 30 fps cap: the progress ring doesn't need more, and without
+            # this the render loop spins at hundreds of fps during import,
+            # consuming 50-70% CPU for no visual benefit -- especially
+            # noticeable on VMs where vsync may not throttle reliably.
+            time.sleep(1.0 / 30.0)
             return
 
         if not self._has_map_loaded:

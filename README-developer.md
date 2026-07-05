@@ -214,6 +214,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Global scale multiplier for all in-app overlay text (loading screens, controls overlay, HUD). `1.0` is the base size. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
 | `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing (matches macOS CoreText style); `lcd` = LCD sub-pixel rendering. |
+| `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Useful on virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
 
 ### Streaming Performance
 
