@@ -195,7 +195,22 @@ def local_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
     one subfolder per map, named after its display name (so it reads
     clearly in a file browser), inside the shared sample_maps folder.
     """
-    return os.path.join(install_dir, SAMPLE_MAPS_DIRNAME, sample.display_name)
+    return os.path.join(_sample_maps_container_dir(install_dir), sample.display_name)
+
+
+def _sample_maps_container_dir(install_dir: str) -> str:
+    """
+    Return the folder that should directly contain individual sample maps.
+
+    The dialog asks where to save sample maps, and CaveViewer normally creates
+    a shared sample_maps/ folder inside that selected directory. If the user
+    already chooses a folder named sample_maps, treat that folder itself as the
+    container instead of creating sample_maps/sample_maps/... .
+    """
+    normalized = os.path.normpath(install_dir)
+    if os.path.basename(normalized).lower() == SAMPLE_MAPS_DIRNAME.lower():
+        return normalized
+    return os.path.join(normalized, SAMPLE_MAPS_DIRNAME)
 
 
 def is_sample_map_already_downloaded(install_dir: str, sample: SampleMapInfo) -> bool:
@@ -206,7 +221,33 @@ def is_sample_map_already_downloaded(install_dir: str, sample: SampleMapInfo) ->
     re-downloading tens to hundreds of MB unnecessarily every time.
     """
     path = local_sample_map_path(install_dir, sample)
-    return os.path.isdir(path) and len(os.listdir(path)) > 0
+    return _folder_has_contents(path) or _folder_has_contents(_legacy_nested_sample_map_path(install_dir, sample))
+
+
+def existing_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
+    """Return the actual existing local path for a sample map, if one exists."""
+    path = local_sample_map_path(install_dir, sample)
+    if _folder_has_contents(path):
+        return path
+    legacy_path = _legacy_nested_sample_map_path(install_dir, sample)
+    if _folder_has_contents(legacy_path):
+        return legacy_path
+    return path
+
+
+def _folder_has_contents(path: str) -> bool:
+    try:
+        return os.path.isdir(path) and len(os.listdir(path)) > 0
+    except OSError:
+        return False
+
+
+def _legacy_nested_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
+    """Path used by older builds when users selected an existing sample_maps folder."""
+    normalized = os.path.normpath(install_dir)
+    if os.path.basename(normalized).lower() != SAMPLE_MAPS_DIRNAME.lower():
+        return ""
+    return os.path.join(normalized, SAMPLE_MAPS_DIRNAME, sample.display_name)
 
 
 def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo, progress_cb=None) -> str:
@@ -232,7 +273,7 @@ def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo, pro
                           f"(asset {sample.asset_name!r} not found on the sample-data release).")
 
     dest_dir = local_sample_map_path(install_dir, sample)
-    os.makedirs(os.path.join(install_dir, SAMPLE_MAPS_DIRNAME), exist_ok=True)
+    os.makedirs(_sample_maps_container_dir(install_dir), exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="caveviewer_samplemap_") as tmp_dir:
         zip_path = os.path.join(tmp_dir, sample.asset_name)
@@ -254,4 +295,5 @@ def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo, pro
             shutil.rmtree(dest_dir)
         shutil.copytree(source_root, dest_dir)
 
+    _LOG.info("Sample map extracted: %s", dest_dir)
     return dest_dir

@@ -53,7 +53,7 @@ def show_sample_maps_dialog(parent, install_dir):
         _validate_selected_map_folder
     from gui.sample_maps import (
         KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog, is_sample_map_already_downloaded,
-        download_and_extract_sample_map, local_sample_map_path,
+        download_and_extract_sample_map, existing_sample_map_path, local_sample_map_path,
     )
 
     selected_folder = [None]
@@ -440,7 +440,7 @@ def show_sample_maps_dialog(parent, install_dir):
             btn.config(text=text, command=command)
 
     def on_pick(sample):
-        sample_path = local_sample_map_path(sample_maps_root_dir, sample)
+        sample_path = existing_sample_map_path(sample_maps_root_dir, sample)
 
         # Only treat the map as openable if its folder still contains a usable
         # map. The folder can go stale between opening this dialog and clicking
