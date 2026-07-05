@@ -155,6 +155,8 @@ def _configure_runtime_tk_fonts(root) -> None:
                 "Noto Sans",
                 "DejaVu Sans",
                 "Liberation Sans",
+                "sans-serif",
+                "Sans",
             ])
 
         resolved_family = None
@@ -166,7 +168,11 @@ def _configure_runtime_tk_fonts(root) -> None:
                 break
 
         if not resolved_family:
-            resolved_family = tkfont.nametofont("TkDefaultFont").actual("family")
+            fallback_family = tkfont.nametofont("TkDefaultFont").actual("family")
+            if _LINUX_SPLASH_LAYOUT and str(fallback_family).lower() == "nimbus sans l":
+                resolved_family = "sans-serif"
+            else:
+                resolved_family = fallback_family
 
         if resolved_family:
             _UI_FONT_FAMILY = resolved_family

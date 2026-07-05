@@ -333,7 +333,6 @@ bundled_internal_dir="$appdir/usr/lib/caveviewer/_internal"
 bundled_tcl_dir="$bundled_internal_dir/_tcl_data"
 bundled_tk_dir="$bundled_internal_dir/_tk_data"
 bundled_ui_font="$appdir/usr/share/caveviewer/fonts/CaveViewerUI-Regular.ttf"
-bundled_font_dir="$appdir/usr/share/caveviewer/fonts"
 
 # Prefer the distro Tcl/Tk/font stack, matching the 1.0.38 Linux builds whose
 # splash text rendered correctly. The PyInstaller-bundled Tcl/Tk libraries are
@@ -349,25 +348,6 @@ if [ -f "$bundled_ui_font" ]; then
   export CAVEVIEWER_UI_FONT="${CAVEVIEWER_UI_FONT:-$bundled_ui_font}"
 fi
 export CAVEVIEWER_TEXT_AA_MODE="${CAVEVIEWER_TEXT_AA_MODE:-light}"
-if [ -d "$bundled_font_dir" ]; then
-  fontconfig_file="$gl_compat_dir/fonts.conf"
-  cat > "$fontconfig_file" <<FONTCONFIG_EOF
-<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
-<fontconfig>
-  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
-  <dir>$bundled_font_dir</dir>
-  <match target="font">
-    <edit name="antialias" mode="assign"><bool>true</bool></edit>
-    <edit name="hinting" mode="assign"><bool>true</bool></edit>
-    <edit name="hintstyle" mode="assign"><const>hintslight</const></edit>
-    <edit name="rgba" mode="assign"><const>rgb</const></edit>
-    <edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit>
-  </match>
-</fontconfig>
-FONTCONFIG_EOF
-  export FONTCONFIG_FILE="${FONTCONFIG_FILE:-$fontconfig_file}"
-fi
 if [ "${CAVEVIEWER_USE_BUNDLED_TK:-0}" = "1" ] && [ -d "$bundled_tcl_dir" ]; then
   export TCL_LIBRARY="${TCL_LIBRARY:-$bundled_tcl_dir}"
 else
