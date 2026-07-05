@@ -301,7 +301,14 @@ class ControlsOverlay:
         # bottleneck and chunks pile up in the ready queue between frames.
         total = max(0, loaded + pending + ready)
         if total > 0:
-            frac = max(0.0, min(1.0, float(loaded) / float(total)))
+            # Give partial credit so the ring moves as soon as background
+            # decode starts (pending), not only once GPU uploads finish:
+            #   pending  0.25  decode in progress
+            #   ready    0.75  decode done, upload queued
+            #   loaded   1.00  fully on GPU
+            frac = max(0.0, min(1.0,
+                (loaded + 0.75 * ready + 0.25 * pending) / float(total)
+            ))
             # Keep progress monotonic so the bar doesn't jump backward
             # when pending work is reprioritized across frames.
             self._progress_fraction = max(self._progress_fraction, frac)

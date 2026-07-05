@@ -1066,11 +1066,18 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _initial_chunk_load_progress(self, stats: dict) -> float:
         loaded = max(0, int(stats.get("loaded", 0)))
         ready = max(0, int(stats.get("ready", 0)))
+        pending = max(0, int(stats.get("pending", 0)))
         total_available = max(1, int(stats.get("total_available", 1)))
         max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
         wanted = max(1, int(stats.get("wanted", self._INITIAL_LOAD_MIN_CHUNKS)))
         needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded, wanted)
-        return max(0.0, min(1.0, float(loaded + ready) / float(needed)))
+        # Give partial credit so the ring moves as soon as background
+        # decode starts, not only once GPU uploads complete:
+        #   pending  0.25  decode in progress
+        #   ready    0.75  decode done, upload queued
+        #   loaded   1.00  fully on GPU
+        effective = loaded + 0.75 * ready + 0.25 * min(pending, needed)
+        return max(0.0, min(1.0, effective / needed))
 
     @staticmethod
     def _frustum_planes(view: np.ndarray, proj: np.ndarray) -> np.ndarray:
