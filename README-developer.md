@@ -176,3 +176,70 @@ On Windows (PowerShell):
 - `python3 not found` (macOS/Linux): install Python 3.10+ and rerun setup.
 - Broken `.venv-dev`: remove it and rerun `./scripts/dev/install.sh`.
 - Windows PowerShell policy blocks setup script: run with `-ExecutionPolicy Bypass` as shown above.
+
+---
+
+## Environment Variables
+
+All variables are optional. Set them in your shell before launching or prefix them inline:
+
+```bash
+CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
+```
+
+### Development & Launch
+
+| Variable | Default | Description |
+|---|---|---|
+| `CAVEVIEWER_DEV_VENV` | `.venv-dev` | Path to the development virtual environment used by `run_caveviewer.sh` and `scripts/dev/install.sh`. |
+| `CAVEVIEWER_MACOS_BUILD_VENV` | _(none)_ | Path to the venv used by the macOS build scripts. |
+| `CAVEVIEWER_LINUX_BUILD_VENV` | _(none)_ | Path to the venv used by the Linux build scripts. |
+| `CAVEVIEWER_HOME` | _(none)_ | Override the home directory CaveViewer uses for preferences and cache files. |
+| `CAVEVIEWER_APP_ICON` | _(bundled icon)_ | Path to a custom application icon file. |
+| `CAVEVIEWER_FORCE_STARTUP_FOCUS` | `0` | Set to `1` to force the main window to the front on startup. Disabled by default on frozen macOS builds to avoid window-placement jumps. |
+| `CAVEVIEWER_LOG_LEVEL` | `INFO` | Logging verbosity. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+
+### Update Checking
+
+| Variable | Default | Description |
+|---|---|---|
+| `CAVEVIEWER_GITHUB_REPO` | `KernalPanic/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork. |
+| `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
+| `CAVEVIEWER_FORCE_UPDATE_PROMPT` | `0` | Set to `1` (or `true`/`yes`) to always show the "Download Update" prompt regardless of the manifest version. Also available as `--force-update-prompt` CLI flag. For testing the update UI without waiting for the CDN cache or changing version numbers. |
+
+### UI & Rendering
+
+| Variable | Default | Description |
+|---|---|---|
+| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Global scale multiplier for all in-app overlay text (loading screens, controls overlay, HUD). `1.0` is the base size. |
+| `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
+| `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing (matches macOS CoreText style); `lcd` = LCD sub-pixel rendering. |
+
+### Streaming Performance
+
+| Variable | Default | Description |
+|---|---|---|
+| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `12` | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
+| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | Override the GPU memory size (in GB) used by the streaming budget. Useful when auto-detection reports an incorrect value. |
+| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | Percentage of GPU memory the streaming system targets. |
+| `CAVEVIEWER_IO_WORKERS` | `CPU count − 3` | Number of background threads for loading chunk files from disk. |
+| `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | CPU cores to keep free when auto-computing `CAVEVIEWER_IO_WORKERS`. |
+| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. Range: 1–16. |
+| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | Soft per-frame time budget (ms) for GPU uploads. Range: 0.5–50. |
+
+### Map Import (First-Time Parsing)
+
+| Variable | Default | Description |
+|---|---|---|
+| `CAVEVIEWER_CHUNK_SIZE_METERS` | `8` | Spatial chunk size in metres used when building a new chunk cache. Does not affect already-cached maps. |
+| `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | Milliseconds to yield between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
+| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `CPU count − 2` | Threads used while writing chunk files during import. |
+| `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | CPU cores to keep free when auto-computing `CAVEVIEWER_CHUNK_BUILD_WORKERS`. |
+
+### Sample Maps
+
+| Variable | Default | Description |
+|---|---|---|
+| `CAVEVIEWER_SAMPLE_MAPS_REPO` | `KernalPanic/CaveViewer` | GitHub `owner/repo` for the sample maps release. |
+| `CAVEVIEWER_SAMPLE_DATA_TAG` | `sample-data` | Release tag to fetch sample map assets from. |
+| `CAVEVIEWER_SAMPLE_MAPS_API_URL` | _(derived from repo + tag)_ | Full GitHub release API URL. Overrides the repo/tag variables when set. |

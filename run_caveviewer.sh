@@ -10,4 +10,4 @@ if [ ! -x "$venv_dir/bin/python" ]; then
 fi
 
 cd "$repo_root"
-exec "$venv_dir/bin/python" "$repo_root/caveviewer.py"
+exec "$venv_dir/bin/python" "$repo_root/caveviewer.py" "$@"

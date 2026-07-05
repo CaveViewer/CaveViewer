@@ -56,6 +56,7 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_CHUNK_SIZE_METERS",
     "CAVEVIEWER_DEV_VENV",
     "CAVEVIEWER_FORCE_STARTUP_FOCUS",
+    "CAVEVIEWER_FORCE_UPDATE_PROMPT",
     "CAVEVIEWER_GITHUB_REPO",
     "CAVEVIEWER_GPU_MEMORY_GB",
     "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
@@ -634,6 +635,19 @@ def main():
     _LOG.info("=" * 60)
     _print_caveviewer_environment_settings()
 
+    # Debug flag: forces the update prompt to appear regardless of the
+    # current version.  Useful for testing the update notification UI
+    # without waiting for CDN cache or editing version numbers.
+    # Usage: ./run_caveviewer.sh --force-update-prompt
+    #        CAVEVIEWER_FORCE_UPDATE_PROMPT=1 ./run_caveviewer.sh
+    _force_update_prompt = (
+        "--force-update-prompt" in sys.argv
+        or os.getenv("CAVEVIEWER_FORCE_UPDATE_PROMPT", "").strip()
+        in ("1", "true", "yes")
+    )
+    if _force_update_prompt:
+        sys.argv = [a for a in sys.argv if a != "--force-update-prompt"]
+
     # CLI argument: open that path and exit when the viewer closes.
     if len(sys.argv) > 1 and sys.argv[1].strip():
         _run_map_session(sys.argv[1].strip())
@@ -641,9 +655,10 @@ def main():
 
     # GUI mode: show the splash screen, run the viewer, then show the
     # splash screen again so the user can open another map or exit.
+    _splash_version = "0.0.0" if _force_update_prompt else __version__
     while True:
         from gui.splash_screen import show_splash_screen
-        folder = show_splash_screen(program_name=APP_NAME, version=__version__)
+        folder = show_splash_screen(program_name=APP_NAME, version=_splash_version)
 
         if folder == _UPDATE_STARTED_SENTINEL:
             _LOG.info("Update is being installed; exiting the current instance.")
