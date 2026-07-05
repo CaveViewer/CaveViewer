@@ -294,7 +294,12 @@ class ControlsOverlay:
         loaded = streaming_stats.get("loaded", 0)
         pending = streaming_stats.get("pending", 0)
         ready  = streaming_stats.get("ready",   0)
-        total = max(0, loaded + pending)
+        # Include ready (decoded-but-not-yet-uploaded) in the denominator so
+        # the ring reflects all in-flight work.  Without this, when pending
+        # briefly hits 0 while ready > 0, total becomes 0 and the ring
+        # freezes -- noticeable on slower machines where decode is the
+        # bottleneck and chunks pile up in the ready queue between frames.
+        total = max(0, loaded + pending + ready)
         if total > 0:
             frac = max(0.0, min(1.0, float(loaded) / float(total)))
             # Keep progress monotonic so the bar doesn't jump backward
