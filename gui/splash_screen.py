@@ -554,6 +554,14 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     apply_tk_scaling(root)
     _configure_runtime_tk_fonts(root)
     splash_scale = tk_display_scale(root)
+    if _LINUX_SPLASH_LAYOUT:
+        try:
+            _LOG.info(
+                "Tk display scale: "
+                f"{splash_scale:.2f}; tk scaling: {float(root.tk.call('tk', 'scaling')):.2f}"
+            )
+        except Exception:
+            pass
 
     def px(value: float) -> int:
         return int(round(value * splash_scale))
