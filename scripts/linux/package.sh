@@ -307,9 +307,21 @@ if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] OpenGL compatibility check complete."
 fi
 
-export LD_LIBRARY_PATH="$gl_compat_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
-export TCL_LIBRARY="${TCL_LIBRARY:-/usr/share/tcltk/tcl8.6}"
-export TK_LIBRARY="${TK_LIBRARY:-/usr/share/tcltk/tk8.6}"
+bundled_internal_dir="$appdir/usr/lib/caveviewer/_internal"
+bundled_tcl_dir="$bundled_internal_dir/_tcl_data"
+bundled_tk_dir="$bundled_internal_dir/_tk_data"
+
+export LD_LIBRARY_PATH="$gl_compat_dir:$bundled_internal_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
+if [ -d "$bundled_tcl_dir" ]; then
+  export TCL_LIBRARY="${TCL_LIBRARY:-$bundled_tcl_dir}"
+else
+  export TCL_LIBRARY="${TCL_LIBRARY:-/usr/share/tcltk/tcl8.6}"
+fi
+if [ -d "$bundled_tk_dir" ]; then
+  export TK_LIBRARY="${TK_LIBRARY:-$bundled_tk_dir}"
+else
+  export TK_LIBRARY="${TK_LIBRARY:-/usr/share/tcltk/tk8.6}"
+fi
 
 executable="$appdir/usr/lib/caveviewer/CaveViewer"
 if [ ! -x "$executable" ]; then
