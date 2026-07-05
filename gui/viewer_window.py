@@ -17,7 +17,9 @@ from __future__ import annotations
 import json
 import math
 import os
+import queue
 import sys
+import threading
 import time
 
 import numpy as np
@@ -357,6 +359,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_prep_completion_armed = False
         self._window_resources_released = False
 
+        # Background import state.  Import runs on a worker thread so the
+        # render loop stays live (resize, repaint, vsync) the whole time.
+        self._import_active: bool = False
+        self._import_is_startup: bool = False
+        self._import_thread: threading.Thread | None = None
+        self._import_queue: queue.Queue | None = None
+        self._import_map_name: str = ""
+        self._import_progress_stage: str = ""
+        self._import_progress_fraction: float = 0.0
+
         if have_ready_cache:
             self._load_map(
                 CaveViewerWindow.cave_cache_dir,
@@ -657,12 +669,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         CaveViewerWindow.cave_manifest = None
         CaveViewerWindow.cave_pending_import = None
 
-    def _present_import_progress_frame(self) -> None:
-        if hasattr(self.wnd, "swap_buffers"):
-            self.wnd.swap_buffers()
-        else:
-            self.ctx.finish()
-
     def load_new_map(self, cache_dir: str, textures_dir: str, manifest: dict) -> None:
         """
         Switches the viewer to a different map without closing the
@@ -748,54 +754,95 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
         map_name = os.path.basename(source_path)
+        self._start_import_async(model_descriptor, folder, map_name, is_startup=False)
 
-        # If there's no valid cache yet, this is the same one-time import
-        # cost as opening any brand-new map for the first time -- show
-        # the progress panel so it's visible what's happening rather than
-        # the window appearing to freeze with no explanation.
-        already_cached = chunker_module.cache_is_valid(source_path)
+    def _start_import_async(
+        self,
+        model_descriptor: dict,
+        textures_dir: str,
+        map_name: str,
+        is_startup: bool = False,
+    ) -> None:
+        """Start the OBJ/GLB import on a background worker thread.
 
-        def on_progress(stage: str, fraction: float):
-            self.import_progress_panel.render(self.wnd.size, map_name, stage, fraction)
-            # Explicitly push this frame to the screen -- the normal
-            # render loop is paused while import_and_cache_any() runs
-            # synchronously below, so without this, nothing drawn here
-            # would actually become visible until the import finishes
-            # and the next regular frame happens to render.
-            #
-            # swap_buffers() is moderngl-window's standard, long-standing
-            # method for this and should be present on any version in
-            # use -- but since this project has already hit real
-            # cross-version API differences before (see _resolve_key,
-            # and the render()/on_render() hook rename), this is wrapped
-            # defensively rather than assumed: if swap_buffers truly
-            # isn't there on some version, ctx.finish() at least forces
-            # the GPU to complete the draw rather than crashing outright,
-            # even though it can't guarantee the frame reaches the
-            # screen without a real swap.
-            self._present_import_progress_frame()
+        The worker posts three types of messages to self._import_queue:
+          ("progress", stage, fraction)  -- update the progress ring
+          ("done", cache_dir, textures_dir, manifest)  -- load the map
+          ("error", message)             -- log the error (close if startup)
 
-        try:
-            if not already_cached:
-                on_progress("starting import", 0.0)
-                cache_dir = import_and_cache_any(model_descriptor, folder, force_rebuild=False,
-                                                   extra_progress_cb=on_progress)
-            else:
-                on_progress("loading cached map", 1.0)
-                cache_dir = chunker_module.get_cache_dir(source_path)
-        except Exception as e:
-            _LOG.error(f"Failed to import this map: {e}")
+        on_render() drains the queue every frame and handles each message
+        on the main thread where OpenGL calls are legal.
+        """
+        self._import_active = True
+        self._import_is_startup = is_startup
+        self._import_map_name = map_name
+        self._import_progress_stage = "starting import"
+        self._import_progress_fraction = 0.0
+        self._import_queue = queue.Queue()
+        q = self._import_queue
+        source_path = (model_descriptor.get("obj_path")
+                       or model_descriptor.get("glb_path"))
+
+        def worker():
+            from caveviewer import import_and_cache_any
+            from core import chunker as _ck
+
+            def on_progress(stage: str, fraction: float):
+                q.put(("progress", stage, fraction))
+
+            try:
+                if _ck.cache_is_valid(source_path):
+                    on_progress("loading cached map", 1.0)
+                    cache_dir = _ck.get_cache_dir(source_path)
+                else:
+                    on_progress("starting import", 0.0)
+                    cache_dir = import_and_cache_any(
+                        model_descriptor, textures_dir,
+                        force_rebuild=False,
+                        extra_progress_cb=on_progress,
+                    )
+                manifest = _ck.load_manifest(cache_dir)
+                q.put(("done", cache_dir, textures_dir, manifest))
+            except Exception as exc:
+                q.put(("error", str(exc)))
+
+        self._import_thread = threading.Thread(target=worker, daemon=True)
+        self._import_thread.start()
+
+    def _drain_import_queue(self) -> None:
+        """Called from on_render() while _import_active is True.
+        Processes all messages currently in the import queue on the main
+        thread (OpenGL calls, load_new_map, etc. are all safe here).
+        """
+        if self._import_queue is None:
             return
-
-        try:
-            new_manifest = chunker_module.load_manifest(cache_dir)
-        except Exception as e:
-            _LOG.error(f"Failed to load the new map's manifest after import: {e}")
-            return
-
-        _LOG.info(f"Switching to: {map_name}")
-        self.load_new_map(cache_dir, folder, new_manifest)
-        _LOG.info(f"Now viewing: {map_name}")
+        while True:
+            try:
+                msg = self._import_queue.get_nowait()
+            except queue.Empty:
+                break
+            kind = msg[0]
+            if kind == "progress":
+                self._import_progress_stage = msg[1]
+                self._import_progress_fraction = msg[2]
+            elif kind == "done":
+                _, cache_dir, textures_dir, manifest = msg
+                self._import_active = False
+                self._import_queue = None
+                self._import_thread = None
+                self.load_new_map(cache_dir, textures_dir, manifest)
+                break  # queue is gone; nothing more to drain
+            elif kind == "error":
+                error_msg = msg[1]
+                self._import_active = False
+                self._import_queue = None
+                self._import_thread = None
+                _LOG.error(f"Import failed: {error_msg}")
+                if self._import_is_startup:
+                    _LOG.error("Closing -- no map to show without a successful import.")
+                    if hasattr(self.wnd, "close"):
+                        self.wnd.close()
+                break  # queue is gone; nothing more to drain
 
     def _run_pending_import(self) -> None:
         """
@@ -830,47 +877,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         pending = CaveViewerWindow.cave_pending_import
         model_descriptor = pending["model_descriptor"]
         textures_dir = pending["textures_dir"]
-        fmt = model_descriptor["format"]
         source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
         map_name = os.path.basename(source_path)
-
-        from caveviewer import import_and_cache_any
-        from core import chunker as chunker_module
-
-        already_cached = chunker_module.cache_is_valid(source_path)
-
-        def on_progress(stage: str, fraction: float):
-            self.import_progress_panel.render(self.wnd.size, map_name, stage, fraction)
-            self._present_import_progress_frame()
-
-        try:
-            if not already_cached:
-                on_progress("starting import", 0.0)
-                cache_dir = import_and_cache_any(model_descriptor, textures_dir, force_rebuild=False,
-                                                   extra_progress_cb=on_progress)
-            else:
-                on_progress("loading cached map", 1.0)
-                cache_dir = chunker_module.get_cache_dir(source_path)
-
-            new_manifest = chunker_module.load_manifest(cache_dir)
-        except Exception as e:
-            _LOG.error(f"Failed to import this map: {e}")
-            _LOG.error("Closing -- there's no map to show without a successful import.")
-            # wnd.close() is moderngl-window's standard way to request a
-            # clean shutdown, but -- same reasoning as the swap_buffers
-            # defensive check above -- this project has hit real cross-
-            # version API differences before, so this is wrapped rather
-            # than assumed. Worst case if .close() isn't present: the
-            # window stays open showing the neutral background from the
-            # on_render() guard above (since _has_map_loaded stays False
-            # and the import won't be retried), rather than crashing
-            # inside this already-error-handling block.
-            if hasattr(self.wnd, "close"):
-                self.wnd.close()
-            return
-
-        _LOG.info(f"Now viewing: {map_name}")
-        self.load_new_map(cache_dir, textures_dir, new_manifest)
+        self._start_import_async(model_descriptor, textures_dir, map_name, is_startup=True)
 
     # -- chunk GPU lifecycle ------------------------------------------------
 
@@ -1232,6 +1241,19 @@ class CaveViewerWindow(mglw.WindowConfig):
             time.sleep(0.12)
             return
 
+        # Background import in flight: render the progress panel every frame
+        # so the ring animates smoothly and the window stays fully responsive
+        # to resize, move, and repaint events.
+        if self._import_active:
+            self.ctx.clear(0.02, 0.02, 0.03)
+            self._drain_import_queue()
+            if self._import_active:   # still running after draining
+                self.import_progress_panel.render(
+                    self.wnd.size, self._import_map_name,
+                    self._import_progress_stage, self._import_progress_fraction,
+                )
+            return
+
         if not self._has_map_loaded:
             # First frame with no map loaded yet: just clear to a neutral
             # background and let this frame actually reach the screen
@@ -1241,8 +1263,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             # off AFTER this first real frame has rendered (see the
             # _pending_import_started check below), specifically so the
             # window is confirmed visibly open first, rather than risking
-            # the blocking import starting before anything has actually
-            # been drawn to the screen even once.
+            # the import starting before anything has actually been drawn
+            # to the screen even once.
             self.ctx.clear(0.02, 0.02, 0.03)
             if self._pending_import_started:
                 return
