@@ -161,9 +161,7 @@ echo "Linux AppImage asset URL (manifest): $appimage_asset_url"
   "$manifest_appimage_path" \
   "$release_notes"
 
-echo "Committing version bump and updated manifest..."
-git -C "$repo_root" add caveviewer_version.py updates/linux/stable.json
-git -C "$repo_root" commit -m "Release $tag"
-git -C "$repo_root" push
+echo "Manifest written locally: updates/linux/stable.json"
+echo "Skipping automatic git commit/push from Linux publish."
 
-echo "Done. Release $tag is published and manifest is live."
+echo "Done. Release $tag is published."
