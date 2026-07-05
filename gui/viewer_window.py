@@ -162,10 +162,6 @@ class CaveViewerWindow(mglw.WindowConfig):
     # one place instead of tuning every overlay module individually.
     UI_TEXT_SCALE = 1.18
 
-    # Hold the completed import bar briefly so the transition into the
-    # loaded map view feels intentional instead of abrupt.
-    IMPORT_COMPLETE_PAUSE_SECONDS = 1.0
-
     # Shared backplate behind the always-visible right-side HUD controls.
     # This keeps section labels readable over bright cave surfaces without
     # adding a separate background to every individual widget.
@@ -659,6 +655,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         CaveViewerWindow.cave_manifest = None
         CaveViewerWindow.cave_pending_import = None
 
+    def _present_import_progress_frame(self) -> None:
+        if hasattr(self.wnd, "swap_buffers"):
+            self.wnd.swap_buffers()
+        else:
+            self.ctx.finish()
+
     def load_new_map(self, cache_dir: str, textures_dir: str, manifest: dict) -> None:
         """
         Switches the viewer to a different map without closing the
@@ -750,10 +752,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         # the progress panel so it's visible what's happening rather than
         # the window appearing to freeze with no explanation.
         already_cached = chunker_module.cache_is_valid(source_path)
-        did_pause_on_complete = False
 
         def on_progress(stage: str, fraction: float):
-            nonlocal did_pause_on_complete
             self.import_progress_panel.render(self.wnd.size, map_name, stage, fraction)
             # Explicitly push this frame to the screen -- the normal
             # render loop is paused while import_and_cache_any() runs
@@ -771,14 +771,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             # the GPU to complete the draw rather than crashing outright,
             # even though it can't guarantee the frame reaches the
             # screen without a real swap.
-            if hasattr(self.wnd, "swap_buffers"):
-                self.wnd.swap_buffers()
-            else:
-                self.ctx.finish()
-
-            if fraction >= 1.0 and not did_pause_on_complete:
-                did_pause_on_complete = True
-                time.sleep(self.IMPORT_COMPLETE_PAUSE_SECONDS)
+            self._present_import_progress_frame()
 
         try:
             if not already_cached:
@@ -843,19 +836,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         from core import chunker as chunker_module
 
         already_cached = chunker_module.cache_is_valid(source_path)
-        did_pause_on_complete = False
 
         def on_progress(stage: str, fraction: float):
-            nonlocal did_pause_on_complete
             self.import_progress_panel.render(self.wnd.size, map_name, stage, fraction)
-            if hasattr(self.wnd, "swap_buffers"):
-                self.wnd.swap_buffers()
-            else:
-                self.ctx.finish()
-
-            if fraction >= 1.0 and not did_pause_on_complete:
-                did_pause_on_complete = True
-                time.sleep(self.IMPORT_COMPLETE_PAUSE_SECONDS)
+            self._present_import_progress_frame()
 
         try:
             if not already_cached:
@@ -1018,7 +1002,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     _AMBIENT_MAX = 0.9
     _INITIAL_LOAD_MIN_CHUNKS = 6
     _CHUNK_PREP_MAX_FRACTION = 0.97
-    _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.35
+    _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.85
 
     def _initial_chunk_load_is_ready(self, stats: dict) -> bool:
         loaded = max(0, int(stats.get("loaded", 0)))
@@ -1317,9 +1301,11 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         if self._chunk_prep_complete_until is not None and now < self._chunk_prep_complete_until:
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+            remaining = self._chunk_prep_complete_until - now
+            completion_t = 1.0 - max(0.0, remaining / self._CHUNK_PREP_COMPLETE_HOLD_SECONDS)
             self.import_progress_panel.render(
                 self.wnd.size, _map_name, "loading chunks", 1.0,
-                title="Preparing Map", note="",
+                title="Preparing Map", note="", completion_t=completion_t,
             )
             return
 
@@ -1849,6 +1835,15 @@ class CaveViewerWindow(mglw.WindowConfig):
     def on_key_event(self, key, action, modifiers: KeyModifiers):
         keys = self.wnd.keys
         if action == keys.ACTION_PRESS:
+            if self.controls_overlay.is_waiting_for_begin:
+                space_key = self._resolve_key_optional(keys, "SPACE", "SPACEBAR")
+                if (
+                    space_key is not None
+                    and key == space_key
+                    and self.controls_overlay.is_ready_to_begin
+                ):
+                    self.controls_overlay.dismiss_begin_screen()
+                return
             if self._handle_bookmark_hotkey(key, modifiers):
                 return
             if self._handle_reset_view_shortcut(key, modifiers):
@@ -2015,11 +2010,19 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_position_event = on_mouse_position_event
 
     def on_mouse_drag_event(self, x, y, dx, dy):
+        if self.controls_overlay.is_waiting_for_begin:
+            return
         self._handle_mouse_look_motion(x, y, dx, dy)
 
     mouse_drag_event = on_mouse_drag_event
 
     def on_mouse_press_event(self, x, y, button):
+        if self.controls_overlay.is_waiting_for_begin:
+            return
+        if self.controls_overlay.is_manual_mode:
+            self.controls_overlay.hide_help()
+            return
+
         look_button_name = self._platform_adapter.mouse_look_button_name()
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
 

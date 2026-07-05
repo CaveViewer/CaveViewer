@@ -62,58 +62,71 @@ _SPLASH_PROGRESS_TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)  # #1c1c24
 _SPLASH_PROGRESS_FILL_RGBA = (0.7922, 0.6353, 0.2431, 1.0)    # #caa23e
 
 
-def _get_platform_control_rows() -> list[tuple[str, str]]:
-    """Generate platform-specific control rows for display."""
+def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
+    """Generate platform-specific control sections for display."""
     adapter = get_platform_adapter()
     bookmark_modifier = adapter.bookmark_save_modifier()
     look_button = adapter.mouse_look_button_name()
-    
-    # Build the control rows dynamically based on platform
-    rows = [
+
+    movement = [
         ("W A S D", "Move / strafe"),
         ("E", "Move up"),
         ("Q", "Move down"),
+        ("Shift", "Speed boost"),
+        ("Scroll", "Adjust fly speed"),
     ]
-    
-    # Platform-specific look controls
+
+    look = []
     if look_button == "right":
-        rows.append(("Right click + mouse", "Look around"))
-        rows.append(("Option + left click + mouse", "Look around (alternative)"))
+        look.append(("Right click + mouse", "Look around"))
+        look.append(("Option + left click + mouse", "Look around (alternative)"))
     else:  # left
-        rows.append(("Left click + mouse", "Look around"))
-    
-    rows.extend([
+        look.append(("Left click + mouse", "Look around"))
+
+    look.extend([
         ("J L I K", "Look around"),
         ("Z X", "Barrel roll"),
     ])
-    
-    # Platform-specific reset view control
     if sys.platform == "darwin":
-        rows.append(("Cmd + 0", "Reset view (level horizon)"))
+        look.append(("Cmd + 0", "Reset view (level horizon)"))
     else:  # Windows/Linux
-        rows.append(("Ctrl + 0", "Reset view (level horizon)"))
-    
-    # Platform-specific bookmark save control
+        look.append(("Ctrl + 0", "Reset view (level horizon)"))
+
+    navigation = []
     if bookmark_modifier == "command":
-        rows.append(("Cmd + 1..9", "Save camera bookmark slot"))
+        navigation.append(("Cmd + 1..9", "Save camera bookmark slot"))
     else:  # control
-        rows.append(("Ctrl + 1..9", "Save camera bookmark slot"))
-    
-    rows.extend([
+        navigation.append(("Ctrl + 1..9", "Save camera bookmark slot"))
+
+    navigation.extend([
         ("1..9", "Recall camera bookmark slot"),
-        ("Shift", "Speed boost"),
-        ("Scroll", "Adjust fly speed"),
-        ("Brightness +/-", "Adjust headlamp brightness"),
-        ("Global light +/-", "Adjust ambient fill light"),
-        ("Mesh button", "Toggle wireframe"),
-        ("Texture button", "Toggle photo texture"),
         ("Minimap click", "Jump to that spot"),
-        ("View dist +/-", "Adjust render distance"),
-        ("Color button", "Change background color"),
         ("Open button", "Switch to a different map"),
         ("Esc", "Quit"),
     ])
-    
+
+    display = [
+        ("Brightness +/-", "Adjust headlamp brightness"),
+        ("Global light +/-", "Adjust ambient fill light"),
+        ("View dist +/-", "Adjust render distance"),
+        ("Mesh button", "Toggle wireframe"),
+        ("Texture button", "Toggle photo texture"),
+        ("Color button", "Change background color"),
+    ]
+
+    return [
+        ("Move", movement),
+        ("Look", look),
+        ("Navigate", navigation),
+        ("Display", display),
+    ]
+
+
+def _get_platform_control_rows() -> list[tuple[str, str]]:
+    """Generate a flattened platform-specific control list."""
+    rows = []
+    for _, section_rows in _get_platform_control_sections():
+        rows.extend(section_rows)
     return rows
 
 
@@ -128,8 +141,9 @@ class ControlsOverlay:
     # How long to hold the overlay up at minimum, even if chunks finish
     # loading instantly (e.g. a very fast machine or a small nearby area
     # already cached) -- a flash-then-gone overlay is more confusing than
-    # informative, so there's a floor on how long it stays visible.
-    MIN_DISPLAY_SECONDS_FULLSCREEN = 1.5
+    # informative, so the fullscreen controls reference gets enough real
+    # reading time while the compact teleport panel stays brief.
+    MIN_DISPLAY_SECONDS_FULLSCREEN = 6.0
     MIN_DISPLAY_SECONDS_PANEL = 0.8
 
     # How long the fade-out transition takes once dismiss conditions are met.
@@ -156,12 +170,17 @@ class ControlsOverlay:
         self._active = False
         self._fullscreen = True
         self._manual_mode = False
+        self._awaiting_begin = False
+        self._ready_to_begin = False
         self._start_time = 0.0
         self._fade_start_time = None
         self._progress_fraction = 0.0
         
-        # Generate platform-specific control rows
-        self._control_rows = _get_platform_control_rows()
+        # Generate platform-specific control rows.
+        self._control_sections = _get_platform_control_sections()
+        self._control_rows = [
+            row for _, section_rows in self._control_sections for row in section_rows
+        ]
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -170,6 +189,8 @@ class ControlsOverlay:
         self._active = True
         self._fullscreen = True
         self._manual_mode = False
+        self._awaiting_begin = True
+        self._ready_to_begin = False
         self._start_time = time.perf_counter()
         self._fade_start_time = None
         self._progress_fraction = 0.0
@@ -179,6 +200,8 @@ class ControlsOverlay:
         self._active = True
         self._fullscreen = False
         self._manual_mode = False
+        self._awaiting_begin = False
+        self._ready_to_begin = False
         self._start_time = time.perf_counter()
         self._fade_start_time = None
         self._progress_fraction = 0.0
@@ -196,6 +219,8 @@ class ControlsOverlay:
         self._active = True
         self._fullscreen = True
         self._manual_mode = True
+        self._awaiting_begin = False
+        self._ready_to_begin = True
         self._fade_start_time = None
 
     def hide_help(self) -> None:
@@ -206,6 +231,16 @@ class ControlsOverlay:
         if self._manual_mode:
             self._active = False
             self._manual_mode = False
+            self._awaiting_begin = False
+            self._ready_to_begin = False
+            self._fade_start_time = None
+
+    def dismiss_begin_screen(self) -> None:
+        """Dismiss the startup controls screen after the user presses Space."""
+        if self._awaiting_begin and self._ready_to_begin:
+            self._active = False
+            self._awaiting_begin = False
+            self._ready_to_begin = False
             self._fade_start_time = None
 
     @property
@@ -216,6 +251,14 @@ class ControlsOverlay:
         whether a click should show or hide."""
         return self._manual_mode
 
+    @property
+    def is_waiting_for_begin(self) -> bool:
+        return self._active and self._awaiting_begin
+
+    @property
+    def is_ready_to_begin(self) -> bool:
+        return self._active and self._awaiting_begin and self._ready_to_begin
+
     def update(self, streaming_stats: dict) -> None:
         """
         Call once per frame with the StreamingWorld.stats() dict. Handles
@@ -224,11 +267,9 @@ class ControlsOverlay:
         finishes, the overlay deactivates entirely (render() becomes a
         no-op).
 
-        The fullscreen (startup) and panel (teleport) variants use
-        slightly different completion criteria:
-          - Fullscreen waits for `pending == 0` too -- at startup there's
-            nothing else to look at yet, so it's fine (good, even) for it
-            to stay up until the initial spawn area is fully settled.
+        The startup fullscreen screen remains visible until the map is
+        ready, then until Space is pressed. The auto-dismiss logic below
+        still applies to the compact panel variant:
           - Panel (teleport) does NOT require pending to fully reach zero
             -- a teleport can land somewhere needing many chunks loaded
             (especially if it's a totally new, previously-uncached area of
@@ -244,13 +285,6 @@ class ControlsOverlay:
         """
         if not self._active:
             return
-        if self._manual_mode:
-            return
-
-        now = time.perf_counter()
-        elapsed = now - self._start_time
-        min_display = self.MIN_DISPLAY_SECONDS_FULLSCREEN if self._fullscreen else self.MIN_DISPLAY_SECONDS_PANEL
-
         loaded = streaming_stats.get("loaded", 0)
         pending = streaming_stats.get("pending", 0)
         total = max(0, loaded + pending)
@@ -259,6 +293,16 @@ class ControlsOverlay:
             # Keep progress monotonic so the bar doesn't jump backward
             # when pending work is reprioritized across frames.
             self._progress_fraction = max(self._progress_fraction, frac)
+
+        if self._awaiting_begin and loaded >= self.MIN_CHUNKS_TO_DISMISS and pending == 0:
+            self._ready_to_begin = True
+
+        if self._manual_mode or self._awaiting_begin:
+            return
+
+        now = time.perf_counter()
+        elapsed = now - self._start_time
+        min_display = self.MIN_DISPLAY_SECONDS_FULLSCREEN if self._fullscreen else self.MIN_DISPLAY_SECONDS_PANEL
 
         if self._fullscreen:
             enough_loaded = loaded >= self.MIN_CHUNKS_TO_DISMISS and pending == 0
@@ -354,44 +398,33 @@ class ControlsOverlay:
     def _build_fullscreen(self, add_quad_px, add_text, window_size):
         w, h = window_size
 
-        # Dim the 3D view with a very dark, slightly blue transparent layer.
-        add_quad_px(0, 0, w, h, (0.004, 0.008, 0.014, 0.78))
+        # Dim the 3D view heavily while the controls reference is shown.
+        add_quad_px(0, 0, w, h, (0.002, 0.004, 0.008, 0.91))
 
-        glow_w = min(760.0, w * 0.82)
-        glow_h = min(520.0, h * 0.70)
-        glow_x0 = (w - glow_w) / 2.0
-        glow_y0 = h * 0.09
-        glow_x1 = glow_x0 + glow_w
-        glow_y1 = glow_y0 + glow_h
-        for i, alpha in enumerate((0.045, 0.032, 0.022)):
-            pad = 70.0 + i * 46.0
-            add_quad_px(
-                glow_x0 - pad, glow_y0 - pad * 0.45,
-                glow_x1 + pad, glow_y1 + pad * 0.45,
-                (0.08, 0.28, 0.36, alpha),
-            )
-
-        # Title/subtitle differ depending on why this screen is showing:
-        # the original "loading" wording makes sense at startup, but
-        # would read oddly if shown manually mid-flight via the HELP
-        # button (there's no actual loading happening to wait on then).
+        # Manual help has a title; startup help is intentionally lighter:
+        # the map is already visually loading, so the only text needed
+        # above the controls is the explicit begin prompt.
         if self._manual_mode:
             title = "Controls"
-            subtitle = "Press Help again to close this screen"
+            subtitle = "Click anywhere on the screen to close"
         else:
-            title = "Loading cave"
-            subtitle = "Loading in progress. These controls will help you navigate."
+            title = ""
+            subtitle = "Press Space to begin" if self._ready_to_begin else "Loading map..."
 
         title_size = 4.3
-        title_w = bitmap_font.text_width_px(title, title_size)
-        title_x = (w - title_w) / 2.0
         title_y = h * 0.12
-        add_text(title, title_x, title_y, title_size, _SPLASH_TITLE_RGBA)
+        if title:
+            title_w = bitmap_font.text_width_px(title, title_size)
+            title_x = (w - title_w) / 2.0
+            add_text(title, title_x, title_y, title_size, _SPLASH_TITLE_RGBA)
+            subtitle_y = title_y + bitmap_font.text_height_px(title_size) + 18
+        else:
+            subtitle_y = title_y
 
         sub_size = 2.2
         sub_w = bitmap_font.text_width_px(subtitle, sub_size)
         sub_x = (w - sub_w) / 2.0
-        sub_y = title_y + bitmap_font.text_height_px(title_size) + 18
+        sub_y = subtitle_y
         add_text(subtitle, sub_x, sub_y, sub_size, _SPLASH_SUBTITLE_RGBA)
 
         bar_bottom_y = sub_y + bitmap_font.text_height_px(sub_size)
@@ -411,51 +444,166 @@ class ControlsOverlay:
         else:
             table_start_offset = 36.0
 
-        # Compute the table's real total width from actual content (same
-        # approach now used for the panel variant) so the whole table can
-        # be correctly centered as a unit, rather than assuming a fixed
-        # label_col_width that may not match the real longest label.
-        label_size = 2.6
-        desc_size = 2.6
-        gap = 26
-        row_height = 34
-
-        # Help mode can be invoked on smaller Linux/Windows windows where
-        # the full-size table overflows vertically. Keep macOS unchanged
-        # and shrink text/row spacing only when needed to fit.
-        if self._manual_mode and sys.platform != "darwin":
-            label_size = 2.3
-            desc_size = 2.3
-            row_height = 29
-
         table_top_y = bar_bottom_y + table_start_offset
-        available_table_height = h - table_top_y - 20
-        table_height = len(self._control_rows) * row_height
-        if available_table_height > 0 and table_height > available_table_height:
-            fit_ratio = available_table_height / table_height
-            # Keep sizes readable while ensuring the list fits in shorter windows.
-            label_size = max(1.8, label_size * fit_ratio)
-            desc_size = max(1.8, desc_size * fit_ratio)
-            row_height = max(21, int(row_height * fit_ratio))
-            gap = max(18, int(gap * fit_ratio))
-
-        max_label_w = max(bitmap_font.text_width_px(label, label_size) for label, _ in self._control_rows)
-        max_desc_w = max(bitmap_font.text_width_px(desc, desc_size) for _, desc in self._control_rows)
-        table_w = max_label_w + gap + max_desc_w
-        table_left_x = (w - table_w) / 2.0
-        label_col_right_x = table_left_x + max_label_w
-
-        self._draw_control_table(
-            add_quad_px, add_text,
-            label_col_right_x=label_col_right_x,
+        self._draw_grouped_controls(
+            add_quad_px,
+            add_text,
+            window_size=window_size,
             top_y=table_top_y,
-            label_size=label_size,
-            desc_size=desc_size,
-            row_height=row_height,
-            gap=gap,
+            available_height=max(80.0, h - table_top_y - 20.0),
         )
 
         return None
+
+    def _draw_grouped_controls(self, add_quad_px, add_text, window_size, top_y, available_height):
+        w, h = window_size
+
+        heading_size = 1.65
+        key_size = 1.78
+        desc_size = 1.78
+        row_height = 30.0
+        section_gap = 18.0
+        key_pad_x = 10.0
+        key_pad_y = 5.0
+        key_desc_gap = 18.0
+        column_gap = 58.0
+
+        if self._manual_mode and sys.platform != "darwin":
+            heading_size = 1.55
+            key_size = 1.62
+            desc_size = 1.62
+            row_height = 27.0
+            section_gap = 15.0
+
+        two_columns = w >= 900 and h >= 620
+        columns = self._split_control_sections(two_columns)
+        metrics = [
+            self._measure_control_column(
+                sections, heading_size, key_size, desc_size, row_height,
+                section_gap, key_pad_x, key_desc_gap
+            )
+            for sections in columns
+        ]
+
+        max_height = max((metric["height"] for metric in metrics), default=0.0)
+        if max_height > available_height:
+            fit_ratio = max(0.72, min(1.0, available_height / max_height))
+            heading_size = max(1.18, heading_size * fit_ratio)
+            key_size = max(1.24, key_size * fit_ratio)
+            desc_size = max(1.24, desc_size * fit_ratio)
+            row_height = max(21.0, row_height * fit_ratio)
+            section_gap = max(10.0, section_gap * fit_ratio)
+            key_pad_x = max(7.0, key_pad_x * fit_ratio)
+            key_pad_y = max(3.0, key_pad_y * fit_ratio)
+            key_desc_gap = max(12.0, key_desc_gap * fit_ratio)
+            metrics = [
+                self._measure_control_column(
+                    sections, heading_size, key_size, desc_size, row_height,
+                    section_gap, key_pad_x, key_desc_gap
+                )
+                for sections in columns
+            ]
+
+        total_width = sum(metric["width"] for metric in metrics)
+        if len(columns) > 1:
+            total_width += column_gap * (len(columns) - 1)
+
+        x = max(28.0, (w - total_width) / 2.0)
+        for sections, metric in zip(columns, metrics):
+            self._draw_control_column(
+                add_quad_px, add_text, sections,
+                x=x,
+                top_y=top_y,
+                key_col_width=metric["key_col_width"],
+                heading_size=heading_size,
+                key_size=key_size,
+                desc_size=desc_size,
+                row_height=row_height,
+                section_gap=section_gap,
+                key_pad_x=key_pad_x,
+                key_pad_y=key_pad_y,
+                key_desc_gap=key_desc_gap,
+            )
+            x += metric["width"] + column_gap
+
+    def _split_control_sections(self, two_columns: bool):
+        if not two_columns:
+            return [self._control_sections]
+        return [
+            self._control_sections[:2],
+            self._control_sections[2:],
+        ]
+
+    def _measure_control_column(
+        self, sections, heading_size, key_size, desc_size, row_height,
+        section_gap, key_pad_x, key_desc_gap
+    ):
+        key_col_width = 0.0
+        desc_col_width = 0.0
+        heading_width = 0.0
+        height = 0.0
+        heading_height = bitmap_font.text_height_px(heading_size)
+
+        for heading, rows in sections:
+            heading_width = max(heading_width, bitmap_font.text_width_px(heading.upper(), heading_size))
+            height += heading_height + 10.0
+            for key, desc in rows:
+                key_col_width = max(
+                    key_col_width,
+                    bitmap_font.text_width_px(key, key_size) + key_pad_x * 2.0,
+                )
+                desc_col_width = max(desc_col_width, bitmap_font.text_width_px(desc, desc_size))
+                height += row_height
+            height += section_gap
+
+        if sections:
+            height -= section_gap
+
+        width = max(heading_width, key_col_width + key_desc_gap + desc_col_width)
+        return {
+            "width": width,
+            "height": height,
+            "key_col_width": key_col_width,
+        }
+
+    def _draw_control_column(
+        self, add_quad_px, add_text, sections, x, top_y, key_col_width,
+        heading_size, key_size, desc_size, row_height, section_gap,
+        key_pad_x, key_pad_y, key_desc_gap
+    ):
+        y = top_y
+        heading_height = bitmap_font.text_height_px(heading_size)
+        key_text_height = bitmap_font.text_height_px(key_size)
+        desc_text_height = bitmap_font.text_height_px(desc_size)
+
+        for heading, rows in sections:
+            add_text(heading.upper(), x, y, heading_size, _SPLASH_TITLE_RGBA)
+            y += heading_height + 10.0
+
+            for key, desc in rows:
+                key_w = bitmap_font.text_width_px(key, key_size) + key_pad_x * 2.0
+                key_h = key_text_height + key_pad_y * 2.0
+                key_x = x
+                key_y = y + (row_height - key_h) / 2.0
+                self._draw_keycap(add_quad_px, key_x, key_y, key_x + key_w, key_y + key_h)
+                add_text(key, key_x + key_pad_x, key_y + key_pad_y, key_size, _SPLASH_TITLE_RGBA)
+
+                desc_x = x + key_col_width + key_desc_gap
+                desc_y = y + (row_height - desc_text_height) / 2.0
+                add_text(desc, desc_x, desc_y, desc_size, _SPLASH_SUBTITLE_RGBA)
+                y += row_height
+
+            y += section_gap
+
+    def _draw_keycap(self, add_quad_px, x0, y0, x1, y1):
+        fill = (0.020, 0.030, 0.045, 0.78)
+        border = (0.235, 0.365, 0.450, 0.56)
+        highlight = (0.360, 0.520, 0.600, 0.32)
+        add_quad_px(x0, y0, x1, y1, fill)
+        add_quad_px(x0, y0, x1, y0 + 1.0, highlight)
+        add_quad_px(x0, y1 - 1.0, x1, y1, border)
+        add_quad_px(x0, y0, x0 + 1.0, y1, border)
+        add_quad_px(x1 - 1.0, y0, x1, y1, border)
 
     # -- layout: small panel variant (used after teleport) ----------------------
 

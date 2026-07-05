@@ -22,10 +22,13 @@ the much larger work of moving the parser to a background thread.
 
 from __future__ import annotations
 
+import math
+import os
+import sys
+
 import moderngl
 import numpy as np
-
-from gui import bitmap_font
+from PIL import Image
 
 
 _VERT_SRC = """
@@ -48,52 +51,158 @@ void main() {
 }
 """
 
+_LOGO_VERT_SRC = """
+#version 330
+in vec2 in_pos;
+in vec2 in_uv;
+out vec2 v_uv;
+void main() {
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+    v_uv = in_uv;
+}
+"""
+
+_LOGO_FRAG_SRC = """
+#version 330
+uniform sampler2D u_texture;
+uniform float u_alpha;
+uniform float u_progress;
+in vec2 v_uv;
+out vec4 f_color;
+bool is_amber(vec4 color) {
+    return (
+        color.a > 0.05 &&
+        color.r > 0.45 &&
+        color.g > 0.26 &&
+        color.b < 0.22 &&
+        color.r > color.b * 2.2 &&
+        color.g > color.b * 1.6
+    );
+}
+void use_nearby_amber(vec2 offset, inout vec4 tex_color, inout bool amber_pixel) {
+    vec4 sample_color = texture(u_texture, v_uv + offset);
+    if (is_amber(sample_color) && sample_color.a > tex_color.a) {
+        tex_color = sample_color;
+        tex_color.a *= 0.88;
+        amber_pixel = true;
+    }
+}
+void main() {
+    vec4 tex_color = texture(u_texture, v_uv);
+    bool amber_pixel = is_amber(tex_color);
+    if (!amber_pixel) {
+        vec2 ring_expand = vec2(0.010, 0.010);
+        use_nearby_amber(vec2( ring_expand.x, 0.0), tex_color, amber_pixel);
+        use_nearby_amber(vec2(-ring_expand.x, 0.0), tex_color, amber_pixel);
+        use_nearby_amber(vec2(0.0,  ring_expand.y), tex_color, amber_pixel);
+        use_nearby_amber(vec2(0.0, -ring_expand.y), tex_color, amber_pixel);
+        use_nearby_amber(vec2( ring_expand.x,  ring_expand.y), tex_color, amber_pixel);
+        use_nearby_amber(vec2(-ring_expand.x,  ring_expand.y), tex_color, amber_pixel);
+        use_nearby_amber(vec2( ring_expand.x, -ring_expand.y), tex_color, amber_pixel);
+        use_nearby_amber(vec2(-ring_expand.x, -ring_expand.y), tex_color, amber_pixel);
+    }
+    if (amber_pixel) {
+        vec2 centered = v_uv - vec2(0.5, 0.5);
+        float angle = atan(centered.x, centered.y);
+        if (angle < 0.0) {
+            angle += 6.28318530718;
+        }
+        float pixel_progress = angle / 6.28318530718;
+        if (pixel_progress > clamp(u_progress, 0.0, 1.0)) {
+            float lum = dot(tex_color.rgb, vec3(0.299, 0.587, 0.114));
+            tex_color.rgb = mix(vec3(lum), vec3(0.39, 0.40, 0.44), 0.72);
+        }
+    }
+    f_color = vec4(tex_color.rgb, tex_color.a * u_alpha);
+}
+"""
+
+def _resource_base_dir() -> str:
+    if getattr(sys, "frozen", False):
+        return sys._MEIPASS  # type: ignore[attr-defined]
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+_ASSETS_DIR = os.path.join(_resource_base_dir(), "gui", "assets")
+_LOGO_PATH = os.path.join(_ASSETS_DIR, "app_mark_transparent.png")
+
 
 class ImportProgressPanel:
-    # Match splash-screen update and sample-download bars: thin dark track
-    # with amber fill, no border.
-    BAR_WIDTH = 300
-    BAR_HEIGHT = 4
+    LOGO_SIZE = 132.0
+    _BURST_PARTICLE_COUNT = 170
 
     _BACKDROP_RGBA = (0.0039, 0.0078, 0.0118, 0.88)  # near-black blue
-    _PANEL_RGBA = (0.0157, 0.0275, 0.0392, 0.56)
-    _GLOW_RGBA = (0.0784, 0.2706, 0.3569, 0.10)
-    _TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)   # #1c1c24
-    _FILL_RGBA = (0.7922, 0.6353, 0.2431, 1.00)    # #caa23e (_BUTTON_BG)
-    _TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)    # #f2d98c (_TITLE_COLOR)
-    _SUBTITLE_RGBA = (0.8000, 0.8039, 0.8392, 1.0) # #cccdd6 (_SUBTITLE_COLOR)
-    _NOTE_RGBA = (0.6039, 0.6039, 0.6510, 1.0)     # #9a9aa6 (_INSTRUCTION_COLOR)
 
     def __init__(self, ctx: moderngl.Context):
         self.ctx = ctx
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
 
-        self._max_verts = 2000
+        self._max_verts = 4000
         self._vbo = ctx.buffer(reserve=self._max_verts * 6 * 4)
         self._vao = ctx.vertex_array(
             self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
         )
 
+        self.logo_program = ctx.program(vertex_shader=_LOGO_VERT_SRC, fragment_shader=_LOGO_FRAG_SRC)
+        self._logo_vbo = ctx.buffer(reserve=6 * 4 * 4)
+        self._logo_vao = ctx.vertex_array(
+            self.logo_program, [(self._logo_vbo, "2f 2f", "in_pos", "in_uv")]
+        )
+        self._logo_texture = None
+        self._logo_aspect = 1.0
+        self._load_logo_texture()
+
         self._display_fraction = 0.0
         self._progress_token = None
+        self._burst_particles = self._make_burst_particles()
+
+    def _make_burst_particles(self) -> list[tuple[float, float, float, float, float, tuple[float, float, float]]]:
+        particles = []
+        golden_angle = math.pi * (3.0 - math.sqrt(5.0))
+        for i in range(self._BURST_PARTICLE_COUNT):
+            angle = i * golden_angle
+            speed = 150.0 + ((i * 47) % 290)
+            start_radius = 39.0 + ((i * 19) % 22)
+            size = 0.35 + ((i * 13) % 18) / 32.0
+            delay = ((i * 29) % 100) / 520.0
+            if i % 5 == 0:
+                color = (0.7922, 0.6353, 0.2431)
+            elif i % 3 == 0:
+                color = (0.4745, 0.8078, 0.9255)
+            else:
+                color = (0.3451, 0.3882, 0.4235)
+            particles.append((angle, speed, start_radius, size, delay, color))
+        return particles
+
+    def _load_logo_texture(self) -> None:
+        try:
+            img = Image.open(_LOGO_PATH).convert("RGBA")
+            self._logo_aspect = img.size[0] / img.size[1]
+            self._logo_texture = self.ctx.texture(img.size, 4, img.tobytes())
+            self._logo_texture.build_mipmaps()
+        except Exception:
+            self._logo_texture = None
+            self._logo_aspect = 1.0
+
+    def release(self) -> None:
+        for attr in ("_logo_texture", "_logo_vao", "_logo_vbo", "logo_program"):
+            obj = getattr(self, attr, None)
+            if obj is not None and hasattr(obj, "release"):
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+            setattr(self, attr, None)
 
     def reset_progress(self) -> None:
         """Reset monotonic progress state between distinct loading runs."""
         self._display_fraction = 0.0
         self._progress_token = None
 
-    def _format_stage_label(self, stage: str) -> str:
-        text = (stage or "").strip()
-        if not text:
-            return "Preparing data"
-        text = text.replace("_", " ").replace("-", " ")
-        text = " ".join(text.split())
-        text = text.rstrip(" .,:;!?")
-        return text[:1].upper() + text[1:]
-
     def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float,
                title: str = "Preparing Map",
-               note: str = "First-time setup in progress. Next time, this map will open much faster.") -> None:
+               note: str = "First-time setup in progress. Next time, this map will open much faster.",
+               completion_t: float | None = None) -> None:
         verts = []
         w, h = window_size
 
@@ -112,54 +221,34 @@ class ImportProgressPanel:
             for (x, y) in quad:
                 verts.append((x, y, *rgba))
 
-        def add_text(text, x, y, pixel_size, rgba):
-            r, g, b, a = rgba
-            for glyph in bitmap_font.iter_text_pixels(text, x, y, pixel_size):
-                px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
-                glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
-                add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
+        def add_dust_particles(cx, cy, t):
+            if t <= 0.0:
+                return
+            for angle, speed, start_radius, size, delay, color in self._burst_particles:
+                local_t = max(0.0, min(1.0, (t - delay) / max(1.0 - delay, 0.001)))
+                if local_t <= 0.0:
+                    continue
+                ease = 1.0 - (1.0 - local_t) ** 3
+                drift = start_radius + speed * ease
+                swirl = math.sin(local_t * math.tau + angle * 0.37) * 18.0 * (1.0 - local_t)
+                x = cx + math.cos(angle) * drift - math.sin(angle) * swirl
+                y = cy + math.sin(angle) * drift + math.cos(angle) * swirl
+                particle_size = size * (1.0 + local_t * 0.55)
+                alpha = 0.62 * max(0.0, (1.0 - local_t) ** 1.55)
+                r, g, b = color
+                add_quad_px(
+                    x - particle_size, y - particle_size,
+                    x + particle_size, y + particle_size,
+                    (r, g, b, alpha),
+                )
 
         add_quad_px(0, 0, w, h, self._BACKDROP_RGBA)
 
-        panel_w = min(620.0, w * 0.78)
-        panel_h = 230.0
-        panel_x0 = (w - panel_w) / 2.0
+        panel_h = 310.0
         panel_y0 = h * 0.33
-        panel_x1 = panel_x0 + panel_w
-        panel_y1 = panel_y0 + panel_h
 
-        # Layered translucent rectangles approximate a soft glow without
-        # introducing image assets or backend-specific window transparency.
-        glow_pad = 110.0
-        for i, alpha_scale in enumerate((0.24, 0.16, 0.10, 0.06)):
-            pad = glow_pad - i * 24.0
-            r, g, b, a = self._GLOW_RGBA
-            add_quad_px(
-                panel_x0 - pad, panel_y0 - pad * 0.45,
-                panel_x1 + pad, panel_y1 + pad * 0.45,
-                (r, g, b, a * alpha_scale),
-            )
-        add_quad_px(panel_x0, panel_y0, panel_x1, panel_y1, self._PANEL_RGBA)
-
-        title_size = 3.5
-        title_w = bitmap_font.text_width_px(title, title_size)
-        title_y = panel_y0 + 34.0
-        add_text(title, (w - title_w) / 2.0, title_y, title_size, self._TITLE_RGBA)
-
-        name_size = 1.9
-        name_text = map_name.upper()
-        name_w = bitmap_font.text_width_px(name_text, name_size)
-        name_y = title_y + bitmap_font.text_height_px(title_size) + 16
-        add_text(name_text, (w - name_w) / 2.0, name_y, name_size, self._SUBTITLE_RGBA)
-
-        bar_x0 = (w - self.BAR_WIDTH) / 2.0
-        bar_y0 = name_y + bitmap_font.text_height_px(name_size) + 30
-        bar_x1 = bar_x0 + self.BAR_WIDTH
-        bar_y1 = bar_y0 + self.BAR_HEIGHT
-
-        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._TRACK_RGBA)
         fraction_clamped = max(0.0, min(1.0, fraction))
-        token = (map_name, title)
+        token = (map_name, title, stage)
         if self._progress_token != token:
             self.reset_progress()
             self._progress_token = token
@@ -170,21 +259,12 @@ class ImportProgressPanel:
             self._display_fraction = 0.0
 
         self._display_fraction = max(self._display_fraction, fraction_clamped)
-        fill_x1 = bar_x0 + self._display_fraction * self.BAR_WIDTH
-        if fill_x1 > bar_x0:
-            add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, self._FILL_RGBA)
 
-        stage_size = 1.75
-        stage_text = self._format_stage_label(stage)
-        stage_w = bitmap_font.text_width_px(stage_text, stage_size)
-        stage_y = bar_y1 + 12
-        add_text(stage_text, (w - stage_w) / 2.0, stage_y, stage_size, self._SUBTITLE_RGBA)
-
-        note_size = 1.4
-        note_y = stage_y + bitmap_font.text_height_px(stage_size) + 20
-        if note:
-            note_w = bitmap_font.text_width_px(note, note_size)
-            add_text(note, (w - note_w) / 2.0, note_y, note_size, self._NOTE_RGBA)
+        logo_cx = w / 2.0
+        logo_cy = panel_y0 + panel_h * 0.50
+        burst_t = None if completion_t is None else max(0.0, min(1.0, completion_t))
+        if burst_t is not None:
+            add_dust_particles(logo_cx, logo_cy, burst_t)
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:
@@ -202,6 +282,53 @@ class ImportProgressPanel:
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
+        self._render_logo(logo_cx, logo_cy, window_size, self._display_fraction, burst_t)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
+
+    def _render_logo(
+        self,
+        center_x: float,
+        center_y: float,
+        window_size: tuple[int, int],
+        progress: float,
+        completion_t: float | None = None,
+    ) -> None:
+        if self._logo_texture is None:
+            return
+
+        burst_t = 0.0 if completion_t is None else max(0.0, min(1.0, completion_t))
+        burst_ease = 1.0 - (1.0 - burst_t) ** 3
+        size_px = self.LOGO_SIZE * (1.0 + burst_ease * 1.35)
+        alpha = 1.0 if completion_t is None else max(0.0, 1.0 - burst_t * 1.2)
+        if self._logo_aspect >= 1.0:
+            half_w = size_px / 2.0
+            half_h = (size_px / self._logo_aspect) / 2.0
+        else:
+            half_h = size_px / 2.0
+            half_w = (size_px * self._logo_aspect) / 2.0
+
+        w, h = window_size
+        x0, x1 = center_x - half_w, center_x + half_w
+        y0, y1 = center_y - half_h, center_y + half_h
+
+        def px_to_ndc(x, y):
+            return (x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0
+
+        vertices = [
+            (*px_to_ndc(x0, y1), 0.0, 0.0),
+            (*px_to_ndc(x1, y1), 1.0, 0.0),
+            (*px_to_ndc(x1, y0), 1.0, 1.0),
+            (*px_to_ndc(x0, y1), 0.0, 0.0),
+            (*px_to_ndc(x1, y0), 1.0, 1.0),
+            (*px_to_ndc(x0, y0), 0.0, 1.0),
+        ]
+
+        data = np.array(vertices, dtype=np.float32)
+        self._logo_vbo.write(data.tobytes())
+        self._logo_texture.use(location=0)
+        self.logo_program["u_texture"].value = 0
+        self.logo_program["u_alpha"].value = alpha
+        self.logo_program["u_progress"].value = max(0.0, min(1.0, progress))
+        self._logo_vao.render(moderngl.TRIANGLES, vertices=6)
