@@ -4,7 +4,7 @@ set -euo pipefail
 # Build package artifacts for all supported platforms from one entrypoint.
 #
 # Usage:
-#   ./scripts/all_package.sh --version=X.Y.Z [--linux-arch=arm64|amd64|both] [--linux-build=auto|native|docker] [--rebuild] [--skip=macos,linux,windows] [--publish] [--release-notes="..."]
+#   ./scripts/all_package.sh --version=X.Y.Z [--linux-arch=arm64|x86_64|both] [--linux-build=auto|native|docker] [--rebuild] [--skip=macos,linux-arm64,linux-x86_64,windows] [--publish] [--release-notes="..."]
 #
 # Notes:
 # - linux arch defaults to "both".
@@ -25,6 +25,8 @@ publish=false
 release_notes=""
 skip_macos=false
 skip_linux=false
+skip_linux_arm64=false
+skip_linux_x86_64=false
 skip_windows=false
 
 linux_artifact_exists_for_arch() {
@@ -44,9 +46,50 @@ linux_artifact_exists_for_arch() {
   [ -f "$repo_root/dist/linux/$arch_dir/packages/CaveViewer-${normalized_version}-${suffix}.AppImage" ]
 }
 
+linux_arch_is_selected() {
+  local arch="$1"
+  case "$linux_arch" in
+    both) ;;
+    arm64) [ "$arch" = "arm64" ] || return 1 ;;
+    amd64) [ "$arch" = "amd64" ] || return 1 ;;
+    *) return 1 ;;
+  esac
+
+  case "$arch" in
+    arm64) ! $skip_linux_arm64 ;;
+    amd64) ! $skip_linux_x86_64 ;;
+    *) return 1 ;;
+  esac
+}
+
+effective_linux_arch() {
+  local want_arm64=false
+  local want_amd64=false
+  linux_arch_is_selected arm64 && want_arm64=true
+  linux_arch_is_selected amd64 && want_amd64=true
+
+  if $want_arm64 && $want_amd64; then
+    echo "both"
+  elif $want_arm64; then
+    echo "arm64"
+  elif $want_amd64; then
+    echo "amd64"
+  else
+    echo "none"
+  fi
+}
+
+linux_arch_display_name() {
+  case "$1" in
+    amd64) echo "x86_64" ;;
+    *) echo "$1" ;;
+  esac
+}
+
 linux_artifacts_ready() {
+  local selected_linux_arch="$1"
   if $run_linux_docker; then
-    case "$linux_arch" in
+    case "$selected_linux_arch" in
       both)
         linux_artifact_exists_for_arch arm64 && linux_artifact_exists_for_arch amd64
         ;;
@@ -61,7 +104,7 @@ linux_artifacts_ready() {
   fi
 
   if $run_linux_native; then
-    local target_arch="$linux_arch"
+    local target_arch="$selected_linux_arch"
     if [ "$target_arch" = "both" ]; then
       target_arch="$native_arch"
     fi
@@ -79,12 +122,13 @@ Usage:
 
 Options:
   --version=X.Y.Z                   Required. Set APP_VERSION before packaging (accepts optional leading v)
-  --linux-arch=arm64|amd64|both    Linux build architecture(s). Default: both
+  --linux-arch=arm64|x86_64|both   Linux build architecture(s). Default: both. amd64 is accepted as an alias for x86_64.
   --linux-build=auto|native|docker  Linux build mode. Default: auto
   --rebuild                         Force Docker Linux image rebuild
   --publish                         After build succeeds, publish artifacts to GitHub via platform publish scripts
   --release-notes="text"            Release notes used when --publish is set (default: "Release X.Y.Z")
-  --skip=macos,linux,windows        Comma-separated targets to skip
+  --skip=macos,linux-arm64,linux-x86_64,windows
+                                    Comma-separated targets to skip. "linux" skips both Linux architectures.
   -h, --help                        Show this help
 EOF
 }
@@ -106,6 +150,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --linux-arch=*)
       linux_arch="${1#--linux-arch=}"
+      [ "$linux_arch" = "x86_64" ] && linux_arch="amd64"
       shift
       ;;
     --linux-build=*)
@@ -141,7 +186,13 @@ while [ "$#" -gt 0 ]; do
         IFS="$old_ifs"
         case "${item// /}" in
           macos) skip_macos=true ;;
-          linux) skip_linux=true ;;
+          linux)
+            skip_linux=true
+            skip_linux_arm64=true
+            skip_linux_x86_64=true
+            ;;
+          linux-arm64|linux-aarch64) skip_linux_arm64=true ;;
+          linux-x86_64|linux-amd64) skip_linux_x86_64=true ;;
           windows) skip_windows=true ;;
           "") ;;
           *)
@@ -175,7 +226,7 @@ fi
 case "$linux_arch" in
   arm64|amd64|both) ;;
   *)
-    echo "Error: invalid --linux-arch '$linux_arch' (expected arm64|amd64|both)"
+    echo "Error: invalid --linux-arch '$linux_arch' (expected arm64|x86_64|both; amd64 is accepted as an alias)"
     exit 1
     ;;
 esac
@@ -186,6 +237,11 @@ case "$linux_build" in
     exit 1
     ;;
 esac
+
+selected_linux_arch="$(effective_linux_arch)"
+if [ "$selected_linux_arch" = "none" ]; then
+  skip_linux=true
+fi
 
 normalized_version="${release_version#v}"
 if [ -z "$normalized_version" ]; then
@@ -215,7 +271,8 @@ fi
 echo "====================================================="
 echo "CaveViewer unified packaging"
 echo "Host OS: $host_os"
-echo "Linux arch: $linux_arch"
+echo "Linux arch requested: $(linux_arch_display_name "$linux_arch")"
+echo "Linux arch selected: $(linux_arch_display_name "$selected_linux_arch")"
 echo "Linux build mode: $linux_build"
 echo "Publish mode: $publish"
 echo "====================================================="
@@ -223,7 +280,9 @@ echo "====================================================="
 run_linux_native=false
 run_linux_docker=false
 native_arch=""
-if [ "$host_os" = "Darwin" ]; then
+if $skip_linux; then
+  :
+elif [ "$host_os" = "Darwin" ]; then
   if [ "$linux_build" = "native" ]; then
     echo "Error: --linux-build=native is not supported on macOS."
     exit 1
@@ -243,20 +302,21 @@ elif [ "$host_os" = "Linux" ]; then
       exit 1
     fi
   elif [ "$linux_build" = "native" ]; then
-    if [ "$linux_arch" = "both" ] || [ "$linux_arch" != "$native_arch" ]; then
-      echo "Error: --linux-build=native cannot build linux arch '$linux_arch' on native '$native_arch' host."
+    if [ "$selected_linux_arch" = "both" ] || [ "$selected_linux_arch" != "$native_arch" ]; then
+      echo "Error: --linux-build=native cannot build linux arch '$selected_linux_arch' on native '$native_arch' host."
       exit 1
     fi
     run_linux_native=true
-  elif [ "$linux_arch" = "both" ] || [ "$linux_arch" != "$native_arch" ]; then
+  elif [ "$selected_linux_arch" = "both" ] || [ "$selected_linux_arch" != "$native_arch" ]; then
     if command -v docker >/dev/null 2>&1; then
       run_linux_docker=true
     else
-      if [ "$linux_arch" = "both" ]; then
+      if [ "$selected_linux_arch" = "both" ]; then
         echo "[linux] Docker not found; falling back to native-only build."
+        selected_linux_arch="$native_arch"
         run_linux_native=true
       else
-        echo "Error: requested linux arch '$linux_arch' on native '$native_arch' host without Docker."
+        echo "Error: requested linux arch '$selected_linux_arch' on native '$native_arch' host without Docker."
         exit 1
       fi
     fi
@@ -284,15 +344,15 @@ else
 fi
 
 if ! $skip_linux; then
-  if $publish && ! $rebuild && linux_artifacts_ready; then
+  if $publish && ! $rebuild && linux_artifacts_ready "$selected_linux_arch"; then
     echo "[linux] Reusing existing package artifact(s) for version $normalized_version."
   else
     if $run_linux_docker; then
       echo "[linux] Building package(s) via Docker..."
       if $rebuild; then
-        "$script_dir/linux/build_linux_in_docker.sh" "--arch=$linux_arch" --rebuild
+        "$script_dir/linux/build_linux_in_docker.sh" "--arch=$selected_linux_arch" --rebuild
       else
-        "$script_dir/linux/build_linux_in_docker.sh" "--arch=$linux_arch"
+        "$script_dir/linux/build_linux_in_docker.sh" "--arch=$selected_linux_arch"
       fi
     elif $run_linux_native; then
       echo "[linux] Building package natively..."
@@ -347,21 +407,11 @@ if [ "$host_os" = "Darwin" ] && ! $skip_macos; then
 fi
 
 if ! $skip_linux; then
-  linux_found=false
-  if [ -d "$repo_root/dist/linux" ]; then
-    linux_artifact_list="$(mktemp)"
-    find "$repo_root/dist/linux" -path "*/packages/CaveViewer-${version}-*.AppImage" -print 2>/dev/null | sort > "$linux_artifact_list"
-    if [ -s "$linux_artifact_list" ]; then
-      linux_found=true
-      while IFS= read -r appimage; do
-        print_artifact "Linux AppImage" "$appimage"
-      done < "$linux_artifact_list"
-    fi
-    rm -f "$linux_artifact_list"
+  if linux_arch_is_selected arm64; then
+    print_artifact "Linux ARM64 AppImage" "$repo_root/dist/linux/arm64/packages/CaveViewer-${version}-aarch64.AppImage"
   fi
-  if ! $linux_found; then
-    echo "Linux AppImage"
-    echo "  missing"
+  if linux_arch_is_selected amd64; then
+    print_artifact "Linux x86_64 AppImage" "$repo_root/dist/linux/x86_64/packages/CaveViewer-${version}-x86_64.AppImage"
   fi
 fi
 
@@ -395,7 +445,7 @@ if $publish; then
           "$script_dir/linux/$arch/publish.sh" --skip-build "$normalized_version" "$effective_release_notes"
       }
 
-      case "$linux_arch" in
+      case "$selected_linux_arch" in
         both)
           if linux_artifact_exists_for_arch arm64; then
             publish_linux_arch arm64

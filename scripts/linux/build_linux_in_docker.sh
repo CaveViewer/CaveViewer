@@ -6,10 +6,10 @@ set -euo pipefail
 # on the host, which linux/<arch>/publish.sh then uploads when run from macOS.
 #
 # Usage:
-#   ./scripts/linux/build_linux_in_docker.sh [--arch=arm64|amd64|both] [--rebuild]
+#   ./scripts/linux/build_linux_in_docker.sh [--arch=arm64|x86_64|both] [--rebuild]
 #
 # Default builds BOTH architectures. arm64 runs natively on Apple Silicon;
-# amd64 runs under QEMU (slower). Each arch gets its own Docker image tag so
+# x86_64/amd64 runs under QEMU (slower). Each arch gets its own Docker image tag so
 # switching between them doesn't force a full image rebuild.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,6 +36,7 @@ for arg in "$@"; do
   case "$arg" in
     --rebuild) rebuild=true ;;
     --arch=both) archs=("arm64" "amd64") ;;
+    --arch=x86_64) archs=("amd64") ;;
     --arch=*) archs=("${arg#--arch=}") ;;
   esac
 done

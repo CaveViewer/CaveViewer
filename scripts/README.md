@@ -33,12 +33,12 @@ Default behavior:
 
 Options:
 - --version=X.Y.Z (required; accepts optional leading v; sets APP_VERSION before packaging)
-- --linux-arch=arm64|amd64|both (default: both)
+- --linux-arch=arm64|x86_64|both (default: both; amd64 is accepted as an alias)
 - --linux-build=auto|native|docker (default: auto)
 - --rebuild
 - --publish (publish artifacts after build via platform publish scripts)
 - --release-notes="text" (used when --publish is set; default: "Release X.Y.Z")
-- --skip=macos,linux,windows
+- --skip=macos,linux-arm64,linux-x86_64,windows (`linux` skips both Linux architectures)
 - --help
 
 When `--publish` is set, existing versioned artifacts are reused when available.
@@ -49,9 +49,10 @@ Examples:
 ```bash
 ./scripts/release.sh all-package --version=1.2.45
 ./scripts/release.sh all-package --linux-arch=both
-./scripts/release.sh all-package --linux-arch=amd64 --linux-build=docker
+./scripts/release.sh all-package --linux-arch=x86_64 --linux-build=docker
 ./scripts/release.sh all-package --rebuild
 ./scripts/release.sh all-package --skip=windows
+./scripts/release.sh all-package --skip=linux-x86_64
 ./scripts/release.sh all-package --version=1.2.45 --publish --release-notes="Bug fixes and stability improvements"
 ```
 
