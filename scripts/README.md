@@ -21,24 +21,18 @@ Target:
 This runs a host-aware packaging flow using existing platform scripts.
 
 Default behavior:
-- Linux architecture defaults to both.
-- On macOS host:
-  - Build macOS package
-  - Build Linux packages via Docker
-  - Build Windows package
-- On Linux host:
-  - Build Linux package (native or Docker, depending on arch request and Docker availability)
-  - Build Windows package
-  - Skip macOS package with a message
+- Targets default to all: `macos`, `linux-arm64`, `linux-x86_64`, and `windows`.
+- On macOS host, Linux targets build via Docker.
+- On Linux host, Linux targets build natively when possible or via Docker when needed.
+- macOS targets are skipped with a message on non-macOS hosts.
 
 Options:
 - --version=X.Y.Z (required; accepts optional leading v; sets APP_VERSION before packaging)
-- --linux-arch=arm64|x86_64|both (default: both; amd64 is accepted as an alias)
+- --targets=macos,linux-arm64,linux-x86_64,windows (default: all; `linux` and `all` are accepted groups)
 - --linux-build=auto|native|docker (default: auto)
 - --rebuild
 - --publish (publish artifacts after build via platform publish scripts)
 - --release-notes="text" (used when --publish is set; default: "Release X.Y.Z")
-- --skip=macos,linux-arm64,linux-x86_64,windows (`linux` skips both Linux architectures)
 - --help
 
 When `--publish` is set, existing versioned artifacts are reused when available.
@@ -48,11 +42,10 @@ Examples:
 
 ```bash
 ./scripts/release.sh all-package --version=1.2.45
-./scripts/release.sh all-package --linux-arch=both
-./scripts/release.sh all-package --linux-arch=x86_64 --linux-build=docker
+./scripts/release.sh all-package --version=1.2.45 --targets=linux
+./scripts/release.sh all-package --version=1.2.45 --targets=linux-x86_64 --linux-build=docker
 ./scripts/release.sh all-package --rebuild
-./scripts/release.sh all-package --skip=windows
-./scripts/release.sh all-package --skip=linux-x86_64
+./scripts/release.sh all-package --version=1.2.45 --targets=macos,linux-arm64
 ./scripts/release.sh all-package --version=1.2.45 --publish --release-notes="Bug fixes and stability improvements"
 ```
 
