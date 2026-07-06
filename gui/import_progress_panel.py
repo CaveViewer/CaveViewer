@@ -105,7 +105,7 @@ void main() {
     float fill_active = step(pixel_progress, clamp(u_progress, 0.0, 1.0));
 
     vec3 track_rgb = vec3(0.315, 0.325, 0.360);
-    vec3 fill_rgb = vec3(0.7922, 0.6353, 0.2431);
+    vec3 fill_rgb = vec3(0.8980, 0.6314, 0.1216);
     vec4 ring_color = vec4(mix(track_rgb, fill_rgb, fill_active), ring_alpha * mix(0.58, 1.0, fill_active));
 
     float out_alpha = tex_color.a + ring_color.a * (1.0 - tex_color.a);

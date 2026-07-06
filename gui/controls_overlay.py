@@ -59,7 +59,7 @@ _SPLASH_TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)       # #f2d98c
 _SPLASH_SUBTITLE_RGBA = (0.8000, 0.8039, 0.8392, 1.0)    # #cccdd6
 _SPLASH_INSTRUCTION_RGBA = (0.6039, 0.6039, 0.6510, 1.0) # #9a9aa6
 _SPLASH_PROGRESS_TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)  # #1c1c24
-_SPLASH_PROGRESS_FILL_RGBA = (0.7922, 0.6353, 0.2431, 1.0)    # #caa23e
+_SPLASH_PROGRESS_FILL_RGBA = (0.8980, 0.6314, 0.1216, 1.0)    # #e5a11f
 
 
 def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
