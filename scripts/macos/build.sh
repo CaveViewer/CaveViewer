@@ -6,6 +6,28 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  build.sh [--help]
+
+Builds the intermediate macOS CaveViewer.app bundle.
+EOF
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  print_usage
+  exit 0
+fi
+
+if [ "$#" -gt 0 ]; then
+  echo "Error: unknown argument '$1'"
+  echo ""
+  print_usage
+  exit 1
+fi
+
 venv_dir="${CAVEVIEWER_MACOS_BUILD_VENV:-$repo_root/.venv-macos-build}"
 spec_file="$repo_root/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/macos/app"
@@ -99,4 +121,4 @@ echo "Build complete: $app_path"
 echo "App icon source: $logo_png"
 echo "Generated app icon: $icon_icns"
 echo "Note: CaveViewer.app is an intermediate build artifact."
-echo "Run ./scripts/macos/package_macos_dmg.sh to generate the distributable DMG in dist/macos/packages/."
+echo "Run ./scripts/macos/package.sh to generate the distributable DMG in dist/macos/packages/."

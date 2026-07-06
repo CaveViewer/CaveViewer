@@ -6,12 +6,25 @@ set -euo pipefail
 # updater flow.
 #
 # Usage:
-#   ./scripts/linux/common/publish.sh [--skip-build] <version> [release_notes]
+#   ./scripts/linux/common/publish.sh [--skip-build] [--pre-release] <version> [release_notes]
 #
 # Example:
 #   ./scripts/linux/common/publish.sh 1.0.2 "Bug fixes and stability improvements"
 #
 skip_build=false
+pre_release=false
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  publish.sh [--skip-build] [--pre-release] <version> [release_notes]
+  publish.sh --help
+
+Internal shared publisher. Prefer:
+  ./scripts/linux/arm64/publish.sh <version> "Release notes"
+  ./scripts/linux/x86_64/publish.sh <version> "Release notes"
+EOF
+}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -19,9 +32,12 @@ while [ "$#" -gt 0 ]; do
       skip_build=true
       shift
       ;;
+    --pre-release)
+      pre_release=true
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $0 [--skip-build] <version> [release_notes]"
-      echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
+      print_usage
       exit 0
       ;;
     --)
@@ -30,6 +46,8 @@ while [ "$#" -gt 0 ]; do
       ;;
     -*)
       echo "Error: unknown option '$1'"
+      echo ""
+      print_usage
       exit 1
       ;;
     *)
@@ -39,14 +57,14 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$#" -gt 0 ] && [ "$1" = "-h" -o "$1" = "--help" ]; then
-  echo "Usage: $0 [--skip-build] <version> [release_notes]"
-  echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
+  print_usage
   exit 0
 fi
 
 if [ "$#" -lt 1 ]; then
-  echo "Usage: $0 <version> [release_notes]"
-  echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
+  echo "Error: version is required."
+  echo ""
+  print_usage
   exit 1
 fi
 
@@ -91,6 +109,7 @@ fi
 echo "Using repository: $repo"
 echo "Version: $normalized_version"
 echo "Tag: $tag"
+echo "Prerelease: $pre_release"
 
 if [ ! -f "$version_file" ]; then
   echo "Error: version file not found: $version_file"
@@ -113,13 +132,9 @@ fi
 if $skip_build; then
   echo "Skipping build/package step (--skip-build)."
 else
-  # Build only on Linux. On macOS, assume Docker build was already done.
-  if [[ "$OSTYPE" != "darwin"* ]]; then
-	  "$script_dir/build.sh"
-	  "$script_dir/package.sh"
-  else
-    echo "[skip] Build on macOS (use: ./scripts/linux/build_linux_in_docker.sh)"
-  fi
+  linux_build_arch="${CAVEVIEWER_LINUX_UPDATE_ARCH:-both}"
+  echo "Building Linux release artifacts in Docker for: $linux_build_arch"
+  "$repo_root/scripts/linux/build_linux_in_docker.sh" --arch="$linux_build_arch" --step=all
 fi
 
 # Find all AppImages for this version regardless of architecture suffix.
@@ -127,7 +142,7 @@ fi
 collect_linux_artifacts
 
 if [ ${#map_appimage_paths[@]} -eq 0 ]; then
-  echo "Error: no AppImage found in $linux_packages_dir for version $normalized_version"
+  echo "Error: no Linux AppImage found under dist/linux/*/packages for version $normalized_version"
   exit 1
 fi
 
@@ -179,7 +194,9 @@ if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   gh release upload "$tag" "${upload_appimage_paths[@]}" --repo "$repo" --clobber
 else
   echo "Creating release $tag and uploading Linux AppImages"
-  gh release create "$tag" "${upload_appimage_paths[@]}" --repo "$repo" --title "$release_title" --notes "$release_notes"
+  create_args=("$tag" "${upload_appimage_paths[@]}" --repo "$repo" --title "$release_title" --notes "$release_notes")
+  $pre_release && create_args+=(--prerelease)
+  gh release create "${create_args[@]}"
 fi
 
 appimage_asset_url="$(gh api "repos/$repo/releases/tags/$tag" --jq ".assets[] | select(.name == \"$manifest_appimage_name\") | .browser_download_url")"

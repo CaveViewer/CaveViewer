@@ -800,9 +800,15 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 final_payload_path = _PLATFORM_ADAPTER.persist_downloaded_payload(
                     payload_path, result.download_url
                 )
+                _LOG.info("Update payload saved for installation: %s", final_payload_path)
                 root.after(1800, lambda: _on_download_complete(final_payload_path))
             except Exception as e:
                 err = str(e)
+                _LOG.warning(
+                    "Update download workflow failed: %s: %s",
+                    type(e).__name__,
+                    err,
+                )
                 root.after(0, lambda err=err: _on_download_error(err))
 
         threading.Thread(target=worker, daemon=True).start()

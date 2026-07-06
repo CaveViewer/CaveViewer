@@ -7,92 +7,78 @@ This directory contains build, packaging, and release scripts.
 Use the dispatcher script:
 
 ```bash
-./scripts/release.sh <target> [args...]
+release.sh --target=<target> --version=<version> --notes=<notes> --action=<action> [options]
+release.sh [--help]
+release.sh --target=<target> --help
 ```
 
-## Unified Packaging (All Platforms)
+Targets:
 
-Target:
+- `all`
+- `macos`
+- `windows`
+- `linux-arm64`
+- `linux-x86`
 
-```bash
-./scripts/release.sh all-package --version=X.Y.Z [options]
-```
+Actions:
 
-This runs a host-aware packaging flow using existing platform scripts.
-
-Default behavior:
-- Targets default to all: `macos`, `linux-arm64`, `linux-x86_64`, and `windows`.
-- On macOS host, Linux targets build via Docker.
-- On Linux host, Linux targets build natively when possible or via Docker when needed.
-- macOS targets are skipped with a message on non-macOS hosts.
-
-Options:
-- --version=X.Y.Z (required; accepts optional leading v; sets APP_VERSION before packaging)
-- --targets=macos,linux-arm64,linux-x86_64,windows (default: all; `linux` and `all` are accepted groups)
-- --linux-build=auto|native|docker (default: auto)
-- --rebuild
-- --publish (publish artifacts after build via platform publish scripts)
-- --release-notes="text" (used when --publish is set; default: "Release X.Y.Z")
-- --help
-
-When `--publish` is set, existing versioned artifacts are reused when available.
-Use `--rebuild` to force fresh rebuilds before publishing.
+- `build`: create an intermediate app bundle
+- `package`: create a distributable artifact
+- `release`: publish/upload artifacts and write update manifests
 
 Examples:
 
 ```bash
-./scripts/release.sh all-package --version=1.2.45
-./scripts/release.sh all-package --version=1.2.45 --targets=linux
-./scripts/release.sh all-package --version=1.2.45 --targets=linux-x86_64 --linux-build=docker
-./scripts/release.sh all-package --rebuild
-./scripts/release.sh all-package --version=1.2.45 --targets=macos,linux-arm64
-./scripts/release.sh all-package --version=1.2.45 --publish --release-notes="Bug fixes and stability improvements"
+release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=build
+release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+release.sh --target=linux-arm64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
+release.sh --target=linux-arm64,linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=all,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
 ```
 
-## Existing Dispatcher Targets
+## All Target
 
-- macos-package
-- macos-publish
-- macos-dist-layout
-- windows-package
-- windows-publish
-- linux-package
-- linux-arm64-publish
-- linux-x86_64-publish
+`--target` accepts a single target or a comma-separated list. If `all` appears
+anywhere in the list, it takes precedence and all platforms are selected.
 
-Example:
+Option:
+
+- `--rebuild`
+- `--pre-release`
+
+Examples:
 
 ```bash
-./scripts/release.sh macos-package
+release.sh --target=linux-arm64,linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=build
+release.sh --target=linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=macos,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+release.sh --target=all,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
 ## Directory Layout
 
-- scripts/common: Shared helpers (version parsing, artifact metadata, GitHub helper functions)
-- scripts/macos: macOS build/package/publish scripts
-- scripts/linux/common: Shared Linux build/package helpers
-- scripts/linux/arm64: Linux ARM64 platform entrypoints
-- scripts/linux/x86_64: Linux x86_64 platform entrypoints
-- scripts/windows: Windows package/publish scripts
-- scripts/dev: Developer bootstrap scripts
+- `scripts/common`: shared helpers
+- `scripts/macos`: macOS build/package/publish scripts
+- `scripts/linux/common`: shared Linux build/package/publish internals
+- `scripts/linux/arm64`: Linux ARM64 entry points
+- `scripts/linux/x86_64`: Linux x86_64 entry points
+- `scripts/windows`: Windows build/package/publish scripts
+- `scripts/dev`: developer bootstrap scripts
 
 ## Build Virtual Environments
 
-Packaging scripts now use platform-isolated virtual environments by default to
-avoid cross-platform overwrites.
+Packaging scripts use platform-isolated virtual environments by default.
 
 - macOS build: `.venv-macos-build`
   - Override with `CAVEVIEWER_MACOS_BUILD_VENV=/path/to/venv`
-- Linux native build (auto-detected arch):
-  - arm64: `.venv-linux-build-arm64`
-  - amd64: `.venv-linux-build-amd64`
-  - Override with `CAVEVIEWER_LINUX_BUILD_VENV=/path/to/venv`
-- Linux Docker multi-arch build:
+- Linux Docker build:
   - Default template: `.venv-linux-build-{arch}`
   - Override with `CAVEVIEWER_LINUX_BUILD_VENV=/path/with-{arch}-token`
 
 Developer setup remains independent:
+
 - `./scripts/dev/install.sh` uses `.venv-dev` for local app development/runtime.
 - Override with `CAVEVIEWER_DEV_VENV=/path/to/venv`.
 
-For Linux-specific packaging details, see scripts/linux/README.md.
+For Linux-specific packaging details, see `scripts/linux/README.md`.

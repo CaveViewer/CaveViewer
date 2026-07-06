@@ -393,23 +393,34 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
         bool(expected_sha256),
     )
 
-    with urllib.request.urlopen(request, timeout=30, context=make_ssl_context()) as response:
-        total = expected_size_bytes or int(response.headers.get("Content-Length", 0)) or None
-        downloaded = 0
-        chunk_size = 65536
+    try:
+        with urllib.request.urlopen(request, timeout=30, context=make_ssl_context()) as response:
+            total = expected_size_bytes or int(response.headers.get("Content-Length", 0)) or None
+            downloaded = 0
+            chunk_size = 65536
 
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        with open(dest_path, "wb") as f:
-            while True:
-                chunk = response.read(chunk_size)
-                if not chunk:
-                    break
-                f.write(chunk)
-                downloaded += len(chunk)
-                if progress_cb:
-                    progress_cb(downloaded, total or downloaded)
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            with open(dest_path, "wb") as f:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_cb:
+                        progress_cb(downloaded, total or downloaded)
+    except urllib.error.HTTPError as e:
+        _LOG.warning("Update payload download failed with HTTP %s: %s", e.code, download_url)
+        raise
+    except urllib.error.URLError as e:
+        _LOG.warning("Update payload download failed: %s", e)
+        raise
+    except OSError as e:
+        _LOG.warning("Update payload download failed while writing %s: %s", dest_path, e)
+        raise
 
     actual_size = os.path.getsize(dest_path)
+    _LOG.info("Downloaded update payload: bytes=%d, path=%s", actual_size, dest_path)
     if expected_size_bytes is not None and actual_size != expected_size_bytes:
         _LOG.warning(
             "Update payload security check failed: size mismatch actual=%d expected=%d",

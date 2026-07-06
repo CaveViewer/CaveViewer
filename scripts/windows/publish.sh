@@ -5,12 +5,24 @@ set -euo pipefail
 # GitHub release, and writes updates/windows/stable.json for the Windows updater flow.
 #
 # Usage:
-#   ./scripts/windows/publish.sh [--skip-build] <version> [release_notes]
+#   ./scripts/windows/publish.sh [--skip-build] [--pre-release] <version> [release_notes]
 #
 # Example:
 #   ./scripts/windows/publish.sh 1.0.2 "Bug fixes and stability improvements"
 #
 skip_build=false
+pre_release=false
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  publish.sh [--skip-build] [--pre-release] <version> [release_notes]
+  publish.sh --help
+
+Example:
+  publish.sh 1.0.2 "Bug fixes and stability improvements"
+EOF
+}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -18,9 +30,12 @@ while [ "$#" -gt 0 ]; do
       skip_build=true
       shift
       ;;
+    --pre-release)
+      pre_release=true
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $0 [--skip-build] <version> [release_notes]"
-      echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
+      print_usage
       exit 0
       ;;
     --)
@@ -29,6 +44,8 @@ while [ "$#" -gt 0 ]; do
       ;;
     -*)
       echo "Error: unknown option '$1'"
+      echo ""
+      print_usage
       exit 1
       ;;
     *)
@@ -38,14 +55,14 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$#" -gt 0 ] && [ "$1" = "-h" -o "$1" = "--help" ]; then
-  echo "Usage: $0 [--skip-build] <version> [release_notes]"
-  echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
+  print_usage
   exit 0
 fi
 
 if [ "$#" -lt 1 ]; then
-  echo "Usage: $0 <version> [release_notes]"
-  echo "Example: $0 1.0.2 \"Bug fixes and stability improvements\""
+  echo "Error: version is required."
+  echo ""
+  print_usage
   exit 1
 fi
 
@@ -83,6 +100,7 @@ fi
 echo "Using repository: $repo"
 echo "Version: $normalized_version"
 echo "Tag: $tag"
+echo "Prerelease: $pre_release"
 
 if [ ! -f "$version_file" ]; then
   echo "Error: version file not found: $version_file"
@@ -135,7 +153,9 @@ if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   gh release upload "$tag" "$app_zip_path" "$app_meta_path" "$app_update_meta_path" --repo "$repo" --clobber
 else
   echo "Creating release $tag and uploading Windows assets"
-  gh release create "$tag" "$app_zip_path" "$app_meta_path" "$app_update_meta_path" --repo "$repo" --title "$release_title" --notes "$release_notes"
+  create_args=("$tag" "$app_zip_path" "$app_meta_path" "$app_update_meta_path" --repo "$repo" --title "$release_title" --notes "$release_notes")
+  $pre_release && create_args+=(--prerelease)
+  gh release create "${create_args[@]}"
 fi
 
 zip_asset_url="$(gh api "repos/$repo/releases/tags/$tag" --jq ".assets[] | select(.name == \"$app_zip_name\") | .browser_download_url")"

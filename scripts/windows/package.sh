@@ -12,6 +12,28 @@ source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/artifacts.sh"
 source "$repo_root/scripts/common/github.sh"
 
+print_usage() {
+  cat <<'EOF'
+Usage:
+  package.sh [base_download_url]
+  package.sh --help
+
+Builds the Windows portable source bundle and metadata.
+EOF
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  print_usage
+  exit 0
+fi
+
+if [ "$#" -gt 1 ]; then
+	echo "Error: too many arguments."
+	echo ""
+	print_usage
+	exit 1
+fi
+
 version_file="$repo_root/caveviewer_version.py"
 packages_dir="$repo_root/dist/windows/packages"
 metadata_dir="$repo_root/dist/windows/metadata"

@@ -2,13 +2,44 @@
 set -euo pipefail
 
 # Package a standalone Linux app bundle as a standard AppDir/AppImage.
+# Internal Docker-only entry point used by scripts/linux/build_linux_in_docker.sh.
 #
-# Usage:
-#   ./scripts/linux/common/package.sh
+# Do not run this script directly. Use scripts/release.sh or
+# scripts/linux/build_linux_in_docker.sh.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
 icon_src="$repo_root/gui/assets/app_icon_macos.png"
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  package.sh --help
+
+Internal Docker-only script. Use one of:
+  ./scripts/release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=package
+  ./scripts/release.sh --target=linux-x86 --version=<version> --notes "Release notes" --action=package
+EOF
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  print_usage
+  exit 0
+fi
+
+if [ "${CAVEVIEWER_LINUX_DOCKER_BUILD:-}" != "1" ]; then
+  echo "Error: Linux release packages must be created through Docker."
+  echo ""
+  print_usage
+  exit 1
+fi
+
+if [ "$#" -gt 0 ]; then
+  echo "Error: unknown argument '$1'"
+  echo ""
+  print_usage
+  exit 1
+fi
 
 # Extract version info from Python file.
 APP_NAME=$(grep "^APP_NAME = " "$repo_root/caveviewer_version.py" | grep -oP '"\K[^"]+')
@@ -134,7 +165,11 @@ dist_packages_dir="$repo_root/dist/linux/$linux_dist_arch/packages"
 
 if [ ! -d "$app_dir" ]; then
   echo "Error: app directory not found at $app_dir"
-  echo "Run ./scripts/linux/common/build.sh first."
+  release_target="linux-x86"
+  if [ "$linux_dist_arch" = "arm64" ]; then
+    release_target="linux-arm64"
+  fi
+  echo "Run ./scripts/release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=build first."
   exit 1
 fi
 

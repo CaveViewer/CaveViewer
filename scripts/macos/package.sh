@@ -12,6 +12,28 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+print_usage() {
+  cat <<'EOF'
+Usage:
+  package.sh [base_download_url]
+  package.sh --help
+
+Builds the macOS app bundle and packages it as a DMG.
+EOF
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  print_usage
+  exit 0
+fi
+
+if [ "$#" -gt 1 ]; then
+  echo "Error: too many arguments."
+  echo ""
+  print_usage
+  exit 1
+fi
+
 base_download_url="${1:-}"
 
 "$script_dir/build.sh"

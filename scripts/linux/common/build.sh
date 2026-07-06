@@ -2,13 +2,44 @@
 set -euo pipefail
 
 # Build a standalone Linux application bundle from source using PyInstaller.
-# This is an intermediate artifact for AppImage packaging.
+# Internal Docker-only entry point used by scripts/linux/build_linux_in_docker.sh.
 #
-# Usage:
-#   ./scripts/linux/common/build.sh
+# Do not run this script directly. Use scripts/release.sh or
+# scripts/linux/build_linux_in_docker.sh.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  build.sh --help
+
+Internal Docker-only script. Use one of:
+  ./scripts/release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=build
+  ./scripts/release.sh --target=linux-x86 --version=<version> --notes "Release notes" --action=build
+EOF
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  print_usage
+  exit 0
+fi
+
+if [ "${CAVEVIEWER_LINUX_DOCKER_BUILD:-}" != "1" ]; then
+  echo "Error: Linux release builds must run through Docker."
+  echo ""
+  print_usage
+  exit 1
+fi
+
+if [ "$#" -gt 0 ]; then
+  echo "Error: unknown argument '$1'"
+  echo ""
+  print_usage
+  exit 1
+fi
+
 linux_arch_tag=""
 linux_dist_arch=""
 case "$(uname -m)" in
@@ -296,4 +327,8 @@ fi
 
 echo "Build complete: $app_dir"
 echo "Note: CaveViewer/ is an intermediate build artifact."
-echo "Run ./scripts/linux/common/package.sh to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."
+release_target="linux-x86"
+if [ "$linux_dist_arch" = "arm64" ]; then
+  release_target="linux-arm64"
+fi
+echo "Run ./scripts/release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=package to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."
