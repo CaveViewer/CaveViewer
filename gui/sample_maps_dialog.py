@@ -49,7 +49,7 @@ def show_sample_maps_dialog(parent, install_dir):
     import tkinter as tk
     from tkinter import messagebox, filedialog
     from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
-        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_HOVER_BG, _BUTTON_FG, _BORDER_COLOR, _UI_FONT_FAMILY, \
+        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_HOVER_BG, _BUTTON_BORDER_COLOR, _BUTTON_FG, _BORDER_COLOR, _UI_FONT_FAMILY, \
         _validate_selected_map_folder
     from gui.sample_maps import (
         KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog, is_sample_map_already_downloaded,
@@ -401,6 +401,9 @@ def show_sample_maps_dialog(parent, install_dir):
                 padx=8, pady=6,
                 cursor="hand2" if enabled else "arrow",
                 takefocus=enabled,
+                highlightthickness=1,
+                highlightbackground=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
+                highlightcolor=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
             )
             btn._cv_command = command
             btn._cv_enabled = enabled
@@ -424,7 +427,10 @@ def show_sample_maps_dialog(parent, install_dir):
             bg=_BUTTON_BG if enabled else _BORDER_COLOR,
             fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
             activebackground=_BUTTON_HOVER_BG, activeforeground=_BUTTON_FG,
-            relief="flat", borderwidth=0,
+            relief="flat", borderwidth=1,
+            highlightthickness=1,
+            highlightbackground=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
+            highlightcolor=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
             width=10,
             padx=8, pady=6,
             state="normal" if enabled else "disabled",

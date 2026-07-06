@@ -110,6 +110,7 @@ _SUBTITLE_COLOR = "#cccdd6"     # light gray, matches in-app subtitle/body text
 _INSTRUCTION_COLOR = "#9a9aa6"  # dimmer gray, matches in-app secondary/note text
 _BUTTON_BG = "#e5a11f"          # calmer amber derived from the splash logo gold
 _BUTTON_HOVER_BG = "#f0b13a"    # brighter hover state in the same logo-gold family
+_BUTTON_BORDER_COLOR = "#9c6f18" # subtle darker amber edge for action buttons
 _BUTTON_FG = "#1a1408"          # dark text on the amber button, matches in-app active-button text
 _BORDER_COLOR = "#5c5c6e"
 _PLATFORM_ADAPTER = get_splash_platform_adapter()
@@ -859,8 +860,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 cursor="hand2",
                 takefocus=True,
                 highlightthickness=1,
-                highlightbackground="#3a4454",
-                highlightcolor="#7e96b8",
+                highlightbackground=_BUTTON_BORDER_COLOR,
+                highlightcolor=_BUTTON_BORDER_COLOR,
             )
             ok_button.bind("<Button-1>", _dismiss)
             ok_button.bind("<Return>", _dismiss)
@@ -878,7 +879,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 activebackground=_BUTTON_HOVER_BG,
                 activeforeground=_BUTTON_FG,
                 relief="flat",
-                borderwidth=0,
+                borderwidth=1,
+                highlightthickness=1,
+                highlightbackground=_BUTTON_BORDER_COLOR,
+                highlightcolor=_BUTTON_BORDER_COLOR,
                 padx=16,
                 pady=6,
                 cursor="hand2",
@@ -941,6 +945,9 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         pady=11,
         cursor="hand2",
         takefocus=True,
+        highlightthickness=1,
+        highlightbackground=_BUTTON_BORDER_COLOR,
+        highlightcolor=_BUTTON_BORDER_COLOR,
     )
     browse_button.bind("<Button-1>", lambda _event: on_browse())
     browse_button.bind("<Return>", lambda _event: on_browse())
@@ -1123,7 +1130,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             dialog.destroy()
 
         if sys.platform == "darwin":
-            def _make_action_label(parent, text, command, bg, fg, hover_bg, padx):
+            def _make_action_label(parent, text, command, bg, fg, hover_bg, padx, border_color):
                 label = tk.Label(
                     parent,
                     text=text,
@@ -1135,8 +1142,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     cursor="hand2",
                     takefocus=True,
                     highlightthickness=1,
-                    highlightbackground="#3a4454",
-                    highlightcolor="#7e96b8",
+                    highlightbackground=border_color,
+                    highlightcolor=border_color,
                 )
 
                 def _invoke(_event=None):
@@ -1158,6 +1165,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 fg=_SUBTITLE_COLOR,
                 hover_bg="#33333f",
                 padx=12,
+                border_color="#3a4454",
             )
             apply_button = _make_action_label(
                 button_row,
@@ -1167,6 +1175,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 fg=_BUTTON_FG,
                 hover_bg=_BUTTON_HOVER_BG,
                 padx=16,
+                border_color=_BUTTON_BORDER_COLOR,
             )
         else:
             cancel_button = tk.Button(
@@ -1179,7 +1188,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 activebackground="#33333f",
                 activeforeground=_SUBTITLE_COLOR,
                 relief="flat",
-                borderwidth=0,
+                borderwidth=1,
+                highlightthickness=1,
+                highlightbackground="#3a4454",
+                highlightcolor="#3a4454",
                 padx=12,
                 pady=6,
                 cursor="hand2",
@@ -1195,7 +1207,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 activebackground=_BUTTON_HOVER_BG,
                 activeforeground=_BUTTON_FG,
                 relief="flat",
-                borderwidth=0,
+                borderwidth=1,
+                highlightthickness=1,
+                highlightbackground=_BUTTON_BORDER_COLOR,
+                highlightcolor=_BUTTON_BORDER_COLOR,
                 padx=16,
                 pady=6,
                 cursor="hand2",
