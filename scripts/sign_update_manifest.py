@@ -6,11 +6,6 @@ import base64
 import os
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
-
-
-DEFAULT_PRIVATE_KEY_PATH = "~/.caveviewer/release_signing_private_key.pem"
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -19,11 +14,11 @@ def main() -> int:
     parser.add_argument("manifest", help="Path to stable.json")
     parser.add_argument(
         "--private-key",
-        default=os.environ.get("CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY", DEFAULT_PRIVATE_KEY_PATH),
+        default=os.environ.get("CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY"),
         help=(
             "Path to the PEM private key. Defaults to "
-            "$CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY or "
-            f"{DEFAULT_PRIVATE_KEY_PATH}."
+            "$CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY. Required if the "
+            "environment variable is not set."
         ),
     )
     parser.add_argument(
@@ -33,6 +28,11 @@ def main() -> int:
     args = parser.parse_args()
 
     manifest_path = Path(args.manifest).expanduser().resolve()
+    if not args.private_key:
+        raise SystemExit(
+            "Private key path is required. Set CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY "
+            "or pass --private-key."
+        )
     private_key_path = Path(args.private_key).expanduser().resolve()
     signature_path = (
         Path(args.signature).expanduser().resolve()
@@ -44,6 +44,8 @@ def main() -> int:
         raise SystemExit(f"Manifest not found: {manifest_path}")
     if not private_key_path.is_file():
         raise SystemExit(f"Private key not found: {private_key_path}")
+
+    from cryptography.hazmat.primitives import serialization
 
     private_key = serialization.load_pem_private_key(
         private_key_path.read_bytes(),

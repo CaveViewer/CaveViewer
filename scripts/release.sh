@@ -396,6 +396,11 @@ case "$notes" in
     ;;
 esac
 
+if [ "$action" = "release" ] && [ -z "${CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:-}" ]; then
+  echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY must be set when --action=release."
+  exit 1
+fi
+
 if [ ! -f "$version_file" ]; then
   echo "Error: version file not found: $version_file"
   exit 1
