@@ -5,10 +5,10 @@ set -euo pipefail
 # GitHub release, and writes updates/windows/stable.json for the Windows updater flow.
 #
 # Usage:
-#   ./scripts/windows/publish_release.sh [--skip-build] <version> [release_notes]
+#   ./scripts/windows/publish.sh [--skip-build] <version> [release_notes]
 #
 # Example:
-#   ./scripts/windows/publish_release.sh 1.0.2 "Bug fixes and stability improvements"
+#   ./scripts/windows/publish.sh 1.0.2 "Bug fixes and stability improvements"
 #
 skip_build=false
 
@@ -147,7 +147,7 @@ fi
 
 echo "Windows zip asset URL: $zip_asset_url"
 
-"$script_dir/write_update_manifest.sh" \
+"$script_dir/update_manifest.sh" \
   "$normalized_version" \
   "$zip_asset_url" \
   "$app_zip_path" \

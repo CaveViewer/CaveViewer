@@ -9,8 +9,9 @@ export PYTHONPATH="$CAVEVIEWER_HOME"
 # Optional: configure update checks.
 # Explicit manifest URL (highest priority):
 # export CAVEVIEWER_UPDATE_MANIFEST_URL="https://raw.githubusercontent.com/KernalPanic/CaveViewerPlus/main/updates/macos/stable.json"
-# Or set a repo and let the app derive:
+# Or set a repo/branch and let the app derive the platform-specific manifest URL:
 export CAVEVIEWER_GITHUB_REPO="KernalPanic/CaveViewerPlus"
+# export CAVEVIEWER_UPDATE_BRANCH="feature/pubkey"
 
 # You can add additional environment configurations here as necessary
 

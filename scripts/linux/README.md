@@ -42,10 +42,10 @@ sudo pacman -S file fontconfig noto-fonts freetype mesa
 Creates a self-contained Python environment with all dependencies:
 
 ```bash
-./scripts/linux/build_linux_app.sh
+./scripts/linux/common/build.sh
 ```
 
-**Output:** `dist/linux/app/CaveViewer/` - a complete self-contained application directory
+**Output:** `dist/linux/<arch>/app/CaveViewer/` - a complete self-contained application directory
 
 **What it does:**
 - Creates/uses an architecture-specific Python virtual environment by default:
@@ -60,10 +60,10 @@ Creates a self-contained Python environment with all dependencies:
 Wraps the PyInstaller output into a distributable AppImage:
 
 ```bash
-./scripts/linux/package.sh
+./scripts/linux/common/package.sh
 ```
 
-**Output:** `dist/linux/packages/CaveViewer-VERSION-x86_64.AppImage` - ready to distribute
+**Output:** `dist/linux/<arch>/packages/CaveViewer-VERSION-ARCH.AppImage` - ready to distribute
 
 **What it does:**
 - Creates AppDir structure (standard AppImage format)
@@ -77,15 +77,17 @@ Wraps the PyInstaller output into a distributable AppImage:
   tool into `dist/linux/tools/`.
 
 ### Step 3: Full Release Workflow
-One-command build + package + manifest generation:
+Each Linux architecture is published as its own platform target:
 
 ```bash
-./scripts/linux/publish_release.sh
+./scripts/linux/arm64/publish.sh
+# or
+./scripts/linux/x86_64/publish.sh
 ```
 
 **Output:**
-- AppImage executable (dist/linux/packages/)
-- Release manifest with SHA256 and size info
+- AppImage executable (`dist/linux/<arch>/packages/`)
+- Architecture-specific release manifest with SHA256 and size info
 - Ready for GitHub release upload
 
 ## Usage
@@ -105,11 +107,11 @@ chmod +x CaveViewer-1.2.45-x86_64.AppImage
 ### For CI/CD Integration
 ```bash
 # In your GitHub Actions workflow (must run on a Linux runner):
-./scripts/linux/build_linux_app.sh
-./scripts/linux/package.sh
+./scripts/linux/common/build.sh
+./scripts/linux/common/package.sh
 
 # Upload to GitHub release:
-gh release upload v1.2.45 dist/linux/packages/*.AppImage
+gh release upload v1.2.45 dist/linux/x86_64/packages/*.AppImage
 ```
 
 ## Advantages of This Approach
@@ -190,10 +192,10 @@ pip install pyinstaller==6.21.0
 python -m PyInstaller --onedir CaveViewer.spec
 
 # 4. Inspect bundle
-ls -la dist/linux/app/CaveViewer/
+ls -la dist/linux/x86_64/app/CaveViewer/
 
 # 5. Test before AppImage packaging
-./dist/linux/app/CaveViewer/CaveViewer
+./dist/linux/x86_64/app/CaveViewer/CaveViewer
 ```
 
 ### Custom AppImage Creation
@@ -210,4 +212,6 @@ chmod +x linuxdeploy-x86_64.AppImage
 ## See Also
 - [AppImage Documentation](https://docs.appimage.org/)
 - [PyInstaller Manual](https://pyinstaller.org/en/stable/)
-- [Linux update manifest](../updates/linux/stable.json)
+- Linux update manifests:
+  - `updates/linux/arm64/stable.json`
+  - `updates/linux/x86_64/stable.json`

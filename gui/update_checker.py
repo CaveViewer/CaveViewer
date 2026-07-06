@@ -76,11 +76,13 @@ def make_ssl_context() -> ssl.SSLContext:
 # - Set CAVEVIEWER_UPDATE_MANIFEST_URL to a hosted JSON file
 #   (recommended and explicit).
 # - If omitted, we derive a default raw-GitHub URL from
-#   CAVEVIEWER_GITHUB_REPO to make fork setup simple.
+#   CAVEVIEWER_GITHUB_REPO and CAVEVIEWER_UPDATE_BRANCH to make fork
+#   and branch testing simple.
 _PLATFORM_ADAPTER = get_platform_adapter()
 _DEFAULT_REPO = os.getenv("CAVEVIEWER_GITHUB_REPO", _PLATFORM_ADAPTER.default_update_repo()).strip()
+_DEFAULT_BRANCH = os.getenv("CAVEVIEWER_UPDATE_BRANCH", "main").strip() or "main"
 GITHUB_REPO = _DEFAULT_REPO  # Export for use by other modules (e.g. sample_maps.py)
-_DEFAULT_MANIFEST_URL = _PLATFORM_ADAPTER.default_update_manifest_url(_DEFAULT_REPO)
+_DEFAULT_MANIFEST_URL = _PLATFORM_ADAPTER.default_update_manifest_url(_DEFAULT_REPO, _DEFAULT_BRANCH)
 _MANIFEST_URL = os.getenv("CAVEVIEWER_UPDATE_MANIFEST_URL", _DEFAULT_MANIFEST_URL).strip()
 _MANIFEST_SIGNATURE_URL = os.getenv(
     "CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL",
@@ -194,24 +196,14 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
         _LOG.info("Downloaded update manifest: bytes=%d", len(manifest_bytes))
-        signature_bytes = _fetch_url_bytes(
-            _MANIFEST_SIGNATURE_URL,
-            headers={
-                "Accept": "text/plain, application/octet-stream",
-                "User-Agent": _PLATFORM_ADAPTER.update_check_user_agent(),
-            },
-            timeout=_REQUEST_TIMEOUT_SECONDS,
-        )
-        _LOG.info("Downloaded update manifest signature: bytes=%d", len(signature_bytes))
-        verify_update_manifest_signature(manifest_bytes, signature_bytes)
+        _verify_manifest_signature_if_available(manifest_bytes)
         data = json.loads(manifest_bytes.decode("utf-8"))
     except urllib.error.HTTPError as e:
-        _LOG.warning("Update manifest/signature fetch failed with HTTP %s.", e.code)
+        _LOG.warning("Update manifest fetch failed with HTTP %s.", e.code)
         if e.code == 404:
             manifest_channel = install_channel or _PLATFORM_ADAPTER.install_channel()
             error_msg = (
-                "Update manifest or signature not found (HTTP 404). Check "
-                "CAVEVIEWER_UPDATE_MANIFEST_URL, CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL, "
+                "Update manifest not found (HTTP 404). Check CAVEVIEWER_UPDATE_MANIFEST_URL "
                 f"or the platform-specific manifest for {manifest_channel} in your repository."
             )
             return UpdateCheckResult(update_available=False, current_version=current_version, error=error_msg)
@@ -219,17 +211,10 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
             error_msg = f"Update manifest server returned an error (HTTP {e.code})."
             return UpdateCheckResult(update_available=False, current_version=current_version, error=error_msg)
     except urllib.error.URLError as e:
-        _LOG.warning("Update manifest/signature fetch failed: %s", e)
+        _LOG.warning("Update manifest fetch failed: %s", e)
         return UpdateCheckResult(
             update_available=False, current_version=current_version,
             error="Couldn't reach the update manifest URL -- check your internet connection."
-        )
-    except SignatureVerificationError as e:
-        _LOG.warning("Update manifest signature verification failed hard: %s", e)
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            error=f"Update manifest signature verification failed: {e}"
         )
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         _LOG.warning("Update manifest parsing failed: %s", e)
@@ -326,6 +311,62 @@ def _fetch_url_bytes(url: str, headers: dict[str, str], timeout: int) -> bytes:
     with urllib.request.urlopen(request, timeout=timeout,
                                  context=make_ssl_context()) as response:
         return response.read()
+
+
+def _verify_manifest_signature_if_available(manifest_bytes: bytes) -> bool:
+    if not _MANIFEST_SIGNATURE_URL:
+        _LOG.warning(
+            "Update manifest is unsigned: no signature URL configured. "
+            "Continuing without UI changes."
+        )
+        return False
+
+    try:
+        signature_bytes = _fetch_url_bytes(
+            _MANIFEST_SIGNATURE_URL,
+            headers={
+                "Accept": "text/plain, application/octet-stream",
+                "User-Agent": _PLATFORM_ADAPTER.update_check_user_agent(),
+            },
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            _LOG.warning(
+                "Update manifest is unsigned: signature not found at %s. "
+                "Continuing without UI changes.",
+                _MANIFEST_SIGNATURE_URL,
+            )
+        else:
+            _LOG.warning(
+                "Could not fetch update manifest signature from %s: HTTP %s. "
+                "Continuing without UI changes.",
+                _MANIFEST_SIGNATURE_URL,
+                e.code,
+            )
+        return False
+    except urllib.error.URLError as e:
+        _LOG.warning(
+            "Could not fetch update manifest signature from %s: %s. "
+            "Continuing without UI changes.",
+            _MANIFEST_SIGNATURE_URL,
+            e,
+        )
+        return False
+
+    _LOG.info("Downloaded update manifest signature: bytes=%d", len(signature_bytes))
+    try:
+        verify_update_manifest_signature(manifest_bytes, signature_bytes)
+    except SignatureVerificationError as e:
+        _LOG.warning(
+            "Update manifest signature verification failed: %s. "
+            "Continuing without UI changes.",
+            e,
+        )
+        return False
+
+    _LOG.info("Update manifest is signed and verified.")
+    return True
 
 
 def download_update(download_url: str, expected_size_bytes, dest_path: str,

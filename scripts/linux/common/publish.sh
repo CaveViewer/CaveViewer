@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # Builds the Linux app AppImage release artifact, publishes (or updates) a
-# GitHub release, and writes updates/linux/stable.json for the Linux AppImage
+# GitHub release, and writes an architecture-specific updates/linux/*/stable.json for the Linux AppImage
 # updater flow.
 #
 # Usage:
-#   ./scripts/linux/publish_release.sh [--skip-build] <version> [release_notes]
+#   ./scripts/linux/common/publish.sh [--skip-build] <version> [release_notes]
 #
 # Example:
-#   ./scripts/linux/publish_release.sh 1.0.2 "Bug fixes and stability improvements"
+#   ./scripts/linux/common/publish.sh 1.0.2 "Bug fixes and stability improvements"
 #
 skip_build=false
 
@@ -58,17 +58,16 @@ normalized_version="${version#v}"
 tag="v$normalized_version"
 release_title="$tag"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/../.." && pwd)"
+repo_root="$(cd "$script_dir/../../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/github.sh"
 version_file="$repo_root/caveviewer_version.py"
-linux_packages_dir="$repo_root/dist/linux/packages"
 
 collect_linux_artifacts() {
   map_appimage_paths=()
   while IFS= read -r -d '' f; do
     map_appimage_paths+=("$f")
-  done < <(find "$linux_packages_dir" -maxdepth 1 -name "CaveViewer-${normalized_version}-*.AppImage" -print0 2>/dev/null | sort -z)
+  done < <(find "$repo_root/dist/linux" -path "*/packages/CaveViewer-${normalized_version}-*.AppImage" -print0 2>/dev/null | sort -z)
 }
 
 cv_require_cmd gh
@@ -116,8 +115,8 @@ if $skip_build; then
 else
   # Build only on Linux. On macOS, assume Docker build was already done.
   if [[ "$OSTYPE" != "darwin"* ]]; then
-    "$script_dir/build_linux_app.sh"
-    "$script_dir/package.sh"
+	  "$script_dir/build.sh"
+	  "$script_dir/package.sh"
   else
     echo "[skip] Build on macOS (use: ./scripts/linux/build_linux_in_docker.sh)"
   fi
@@ -133,18 +132,54 @@ if [ ${#map_appimage_paths[@]} -eq 0 ]; then
 fi
 
 # Prefer x86_64 for the update manifest (largest installed base); fall back to first found.
+# Set CAVEVIEWER_LINUX_UPDATE_ARCH=arm64 or x86_64 to choose a specific architecture.
 manifest_appimage_path="${map_appimage_paths[0]}"
-for _p in "${map_appimage_paths[@]}"; do
-  [[ "$_p" == *x86_64* ]] && manifest_appimage_path="$_p" && break
-done
+linux_update_arch="${CAVEVIEWER_LINUX_UPDATE_ARCH:-}"
+if [ -n "$linux_update_arch" ]; then
+  case "$linux_update_arch" in
+    arm64)
+      linux_update_suffix="aarch64"
+      linux_manifest_arch_dir="arm64"
+      ;;
+    amd64|x86|x86_64)
+      linux_update_suffix="x86_64"
+      linux_manifest_arch_dir="x86_64"
+      ;;
+    *)
+      echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected arm64, amd64, x86, or x86_64)"
+      exit 1
+      ;;
+  esac
+
+  manifest_appimage_path=""
+  for _p in "${map_appimage_paths[@]}"; do
+    [[ "$_p" == *"$linux_update_suffix"* ]] && manifest_appimage_path="$_p" && break
+  done
+  if [ -z "$manifest_appimage_path" ]; then
+    echo "Error: no Linux AppImage found for update architecture '$linux_update_arch' ($linux_update_suffix)"
+    exit 1
+  fi
+else
+  for _p in "${map_appimage_paths[@]}"; do
+    [[ "$_p" == *x86_64* ]] && manifest_appimage_path="$_p" && break
+  done
+  if [[ "$manifest_appimage_path" == *aarch64* ]]; then
+    linux_manifest_arch_dir="arm64"
+  else
+    linux_manifest_arch_dir="x86_64"
+  fi
+fi
 manifest_appimage_name="$(basename "$manifest_appimage_path")"
+update_manifest_path="$repo_root/updates/linux/$linux_manifest_arch_dir/stable.json"
+update_manifest_signature_path="$update_manifest_path.sig"
+upload_appimage_paths=("$manifest_appimage_path")
 
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   echo "Release $tag already exists; uploading/replacing assets"
-  gh release upload "$tag" "${map_appimage_paths[@]}" --repo "$repo" --clobber
+  gh release upload "$tag" "${upload_appimage_paths[@]}" --repo "$repo" --clobber
 else
   echo "Creating release $tag and uploading Linux AppImages"
-  gh release create "$tag" "${map_appimage_paths[@]}" --repo "$repo" --title "$release_title" --notes "$release_notes"
+  gh release create "$tag" "${upload_appimage_paths[@]}" --repo "$repo" --title "$release_title" --notes "$release_notes"
 fi
 
 appimage_asset_url="$(gh api "repos/$repo/releases/tags/$tag" --jq ".assets[] | select(.name == \"$manifest_appimage_name\") | .browser_download_url")"
@@ -155,13 +190,38 @@ if [ -z "$appimage_asset_url" ]; then
 fi
 
 echo "Linux AppImage asset URL (manifest): $appimage_asset_url"
-"$script_dir/write_update_manifest.sh" \
+CAVEVIEWER_LINUX_UPDATE_ARCH="$linux_manifest_arch_dir" \
+"$script_dir/update_manifest.sh" \
   "$normalized_version" \
   "$appimage_asset_url" \
   "$manifest_appimage_path" \
   "$release_notes"
 
-echo "Manifest written locally: updates/linux/stable.json"
-echo "Skipping automatic git commit/push from Linux publish."
+signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
+if [ -z "$signing_python" ]; then
+  linux_build_venv="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux-build}"
+  if [ -x "$linux_build_venv/bin/python" ]; then
+    signing_python="$linux_build_venv/bin/python"
+  elif [ -x "$repo_root/.venv-dev/bin/python" ]; then
+    signing_python="$repo_root/.venv-dev/bin/python"
+  else
+    signing_python="python3"
+  fi
+fi
+
+echo "Signing Linux update manifest: $update_manifest_path"
+"$signing_python" "$repo_root/scripts/sign_update_manifest.py" \
+  "$update_manifest_path" \
+  --signature "$update_manifest_signature_path"
+
+echo "Manifest written locally: updates/linux/$linux_manifest_arch_dir/stable.json"
+echo "Manifest signature written locally: updates/linux/$linux_manifest_arch_dir/stable.json.sig"
+echo "Committing version bump and updated Linux $linux_manifest_arch_dir manifest..."
+git -C "$repo_root" add \
+  caveviewer_version.py \
+  "updates/linux/$linux_manifest_arch_dir/stable.json" \
+  "updates/linux/$linux_manifest_arch_dir/stable.json.sig"
+git -C "$repo_root" commit -m "Release $tag Linux $linux_manifest_arch_dir"
+git -C "$repo_root" push
 
 echo "Done. Release $tag is published."

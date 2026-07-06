@@ -14,5 +14,5 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 base_download_url="${1:-}"
 
-"$script_dir/build_macos_app.sh"
+"$script_dir/build.sh"
 "$script_dir/package_macos_dmg.sh" "$base_download_url"

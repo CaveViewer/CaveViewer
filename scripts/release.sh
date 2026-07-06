@@ -9,12 +9,13 @@ set -euo pipefail
 # Targets:
 #   all-package         -> scripts/all_package.sh
 #   macos-package       -> scripts/macos/package.sh
-#   macos-publish       -> scripts/macos/publish_release.sh
+#   macos-publish       -> scripts/macos/publish.sh
 #   macos-dist-layout   -> scripts/macos/show_dist_layout.sh
 #   windows-package     -> scripts/windows/package.sh
-#   windows-publish     -> scripts/windows/publish_release.sh
-#   linux-package       -> scripts/linux/package.sh
-#   linux-publish       -> scripts/linux/publish_release.sh
+#   windows-publish     -> scripts/windows/publish.sh
+#   linux-package       -> scripts/linux/common/package.sh
+#   linux-arm64-publish -> scripts/linux/arm64/publish.sh
+#   linux-x86_64-publish -> scripts/linux/x86_64/publish.sh
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -35,7 +36,7 @@ case "$target" in
     exec "$script_dir/macos/package.sh" "$@"
     ;;
   macos-publish)
-    exec "$script_dir/macos/publish_release.sh" "$@"
+    exec "$script_dir/macos/publish.sh" "$@"
     ;;
   macos-dist-layout)
     exec "$script_dir/macos/show_dist_layout.sh" "$@"
@@ -44,13 +45,16 @@ case "$target" in
     exec "$script_dir/windows/package.sh" "$@"
     ;;
   windows-publish)
-    exec "$script_dir/windows/publish_release.sh" "$@"
+    exec "$script_dir/windows/publish.sh" "$@"
     ;;
   linux-package)
-    exec "$script_dir/linux/package.sh" "$@"
+    exec "$script_dir/linux/common/package.sh" "$@"
     ;;
-  linux-publish)
-    exec "$script_dir/linux/publish_release.sh" "$@"
+  linux-arm64-publish)
+    exec "$script_dir/linux/arm64/publish.sh" "$@"
+    ;;
+  linux-x86_64-publish|linux-amd64-publish)
+    exec "$script_dir/linux/x86_64/publish.sh" "$@"
     ;;
   *)
     echo "Error: unknown target '$target'"

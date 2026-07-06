@@ -4,14 +4,10 @@ set -euo pipefail
 # Package a standalone Linux app bundle as a standard AppDir/AppImage.
 #
 # Usage:
-#   ./scripts/linux/package.sh
+#   ./scripts/linux/common/package.sh
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/../.." && pwd)"
-dist_app_dir="$repo_root/dist/linux/app"
-app_dir="$dist_app_dir/CaveViewer"
-appdir="$dist_app_dir/CaveViewer.AppDir"
-dist_packages_dir="$repo_root/dist/linux/packages"
+repo_root="$(cd "$script_dir/../../.." && pwd)"
 icon_src="$repo_root/gui/assets/app_icon_macos.png"
 
 # Extract version info from Python file.
@@ -25,12 +21,6 @@ fi
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Error: this script must be run on Linux."
-  exit 1
-fi
-
-if [ ! -d "$app_dir" ]; then
-  echo "Error: app directory not found at $app_dir"
-  echo "Run ./scripts/linux/build_linux_app.sh first."
   exit 1
 fi
 
@@ -122,10 +112,31 @@ ensure_appimagetool() {
 
 ARCH="$(uname -m)"
 case "$ARCH" in
-  x86_64) appimage_arch="x86_64" ;;
-  aarch64|arm64) appimage_arch="aarch64" ;;
+  x86_64)
+    appimage_arch="x86_64"
+    linux_dist_arch="x86_64"
+    ;;
+  aarch64|arm64)
+    appimage_arch="aarch64"
+    linux_dist_arch="arm64"
+    ;;
   *) appimage_arch="$ARCH" ;;
 esac
+if [ -z "${linux_dist_arch:-}" ]; then
+  echo "Error: unsupported Linux architecture $ARCH"
+  exit 1
+fi
+
+dist_app_dir="$repo_root/dist/linux/$linux_dist_arch/app"
+app_dir="$dist_app_dir/CaveViewer"
+appdir="$dist_app_dir/CaveViewer.AppDir"
+dist_packages_dir="$repo_root/dist/linux/$linux_dist_arch/packages"
+
+if [ ! -d "$app_dir" ]; then
+  echo "Error: app directory not found at $app_dir"
+  echo "Run ./scripts/linux/common/build.sh first."
+  exit 1
+fi
 
 appimagetool_path="$(ensure_appimagetool "$appimage_arch")"
 echo "Using appimagetool: $appimagetool_path"

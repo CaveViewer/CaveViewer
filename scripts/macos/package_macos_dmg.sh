@@ -28,7 +28,7 @@ fi
 
 if [ ! -d "$app_bundle" ]; then
   echo "Error: app bundle not found at $app_bundle"
-  echo "Build it first with: ./scripts/macos/build_macos_app.sh"
+  echo "Build it first with: ./scripts/macos/build.sh"
   exit 1
 fi
 

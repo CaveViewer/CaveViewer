@@ -5,15 +5,26 @@ set -euo pipefail
 # This is an intermediate artifact for AppImage packaging.
 #
 # Usage:
-#   ./scripts/linux/build_linux_app.sh
+#   ./scripts/linux/common/build.sh
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/../.." && pwd)"
+repo_root="$(cd "$script_dir/../../.." && pwd)"
 linux_arch_tag=""
+linux_dist_arch=""
 case "$(uname -m)" in
-  x86_64) linux_arch_tag="amd64" ;;
-  aarch64|arm64) linux_arch_tag="arm64" ;;
+  x86_64)
+    linux_arch_tag="amd64"
+    linux_dist_arch="x86_64"
+    ;;
+  aarch64|arm64)
+    linux_arch_tag="arm64"
+    linux_dist_arch="arm64"
+    ;;
 esac
+if [ -z "$linux_dist_arch" ]; then
+  echo "Error: unsupported Linux architecture $(uname -m)"
+  exit 1
+fi
 linux_venv_default="$repo_root/.venv-linux-build"
 if [ -n "$linux_arch_tag" ]; then
   linux_venv_default="$repo_root/.venv-linux-build-$linux_arch_tag"
@@ -21,8 +32,8 @@ fi
 # Keep Linux build dependencies isolated from the main developer venv.
 venv_dir="${CAVEVIEWER_LINUX_BUILD_VENV:-$linux_venv_default}"
 spec_file="$repo_root/CaveViewer.spec"
-dist_app_dir="$repo_root/dist/linux/app"
-work_dir="$repo_root/build/pyinstaller"
+dist_app_dir="$repo_root/dist/linux/$linux_dist_arch/app"
+work_dir="$repo_root/build/pyinstaller/linux/$linux_dist_arch"
 
 # python-build-standalone: Python binaries compiled against glibc 2.17 so the
 # bundled libpython3.12.so won't require GLIBC_2.38 on older distros.
@@ -285,4 +296,4 @@ fi
 
 echo "Build complete: $app_dir"
 echo "Note: CaveViewer/ is an intermediate build artifact."
-echo "Run ./scripts/linux/package.sh to generate the distributable AppImage in dist/linux/packages/."
+echo "Run ./scripts/linux/common/package.sh to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."

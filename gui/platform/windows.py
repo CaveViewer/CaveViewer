@@ -13,8 +13,8 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def default_update_repo(self) -> str:
         return super().default_update_repo()
 
-    def default_update_manifest_url(self, repo: str) -> str:
-        return f"https://raw.githubusercontent.com/{repo}/main/updates/windows/stable.json"
+    def default_update_manifest_url(self, repo: str, branch: str) -> str:
+        return f"https://raw.githubusercontent.com/{repo}/{branch}/updates/windows/stable.json"
 
     def install_channel(self) -> str:
         return "windows_app"

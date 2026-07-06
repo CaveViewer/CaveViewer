@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Writes updates/macos/stable.json for the in-app updater.
 # Usage:
-#   ./scripts/macos/write_update_manifest.sh <version> <macos_dmg_url> <macos_dmg_file> [release_notes]
+#   ./scripts/macos/update_manifest.sh <version> <macos_dmg_url> <macos_dmg_file> [release_notes]
 # Example:
-#   ./scripts/macos/write_update_manifest.sh 1.0.1 \
+#   ./scripts/macos/update_manifest.sh 1.0.1 \
 #     "https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1.dmg" \
 #     "dist/macos/packages/CaveViewer-1.0.1.dmg" \
 #     "Bug fixes and performance improvements"

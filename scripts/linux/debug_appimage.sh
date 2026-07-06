@@ -1,7 +1,7 @@
 #!/bin/bash
 # Debug script to run Linux AppImage and capture all errors
 
-APPIMAGE=/Users/vitaliy/Dev/cave-viewer/CaveViewerMac/dist/linux/packages/CaveViewer-1.2.45-x86_64.AppImage
+APPIMAGE="${APPIMAGE:-/Users/vitaliy/Dev/cave-viewer/CaveViewerMac/dist/linux/x86_64/packages/CaveViewer-1.2.45-x86_64.AppImage}"
 
 if [ ! -f "$APPIMAGE" ]; then
   echo "Error: AppImage not found at $APPIMAGE"

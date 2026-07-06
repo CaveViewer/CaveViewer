@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Build the Linux app inside a Docker container so a Linux machine is not
-# required. Produces dist/linux/packages/ artifacts on the host, which
-# linux/publish_release.sh then uploads when run from macOS.
+# required. Produces architecture-specific dist/linux/*/packages/ artifacts
+# on the host, which linux/<arch>/publish.sh then uploads when run from macOS.
 #
 # Usage:
 #   ./scripts/linux/build_linux_in_docker.sh [--arch=arm64|amd64|both] [--rebuild]
@@ -109,9 +109,9 @@ for arch in "${archs[@]}"; do
     -v "$repo_root:/workspace" \
     -w /workspace \
     "$image_name" \
-    bash -c "./scripts/linux/build_linux_app.sh && ./scripts/linux/package.sh"
+    bash -c "./scripts/linux/common/build.sh && ./scripts/linux/common/package.sh"
 done
 
 echo ""
 echo "Done. Artifacts:"
-ls -lh "$repo_root/dist/linux/packages/" 2>/dev/null || echo "  (dist/linux/packages/ not found -- check build output above)"
+find "$repo_root/dist/linux" -path "*/packages/*.AppImage" -print 2>/dev/null | sort || echo "  (dist/linux/*/packages/ not found -- check build output above)"

@@ -29,13 +29,19 @@ skip_windows=false
 
 linux_artifact_exists_for_arch() {
   local arch="$1"
-  local suffix=""
+  local suffix="" arch_dir=""
   case "$arch" in
-    arm64) suffix="aarch64" ;;
-    amd64) suffix="x86_64" ;;
+    arm64)
+      suffix="aarch64"
+      arch_dir="arm64"
+      ;;
+    amd64)
+      suffix="x86_64"
+      arch_dir="x86_64"
+      ;;
     *) return 1 ;;
   esac
-  [ -f "$repo_root/dist/linux/packages/CaveViewer-${normalized_version}-${suffix}.AppImage" ]
+  [ -f "$repo_root/dist/linux/$arch_dir/packages/CaveViewer-${normalized_version}-${suffix}.AppImage" ]
 }
 
 linux_artifacts_ready() {
@@ -290,8 +296,8 @@ if ! $skip_linux; then
       fi
     elif $run_linux_native; then
       echo "[linux] Building package natively..."
-      "$script_dir/linux/build_linux_app.sh"
-      "$script_dir/linux/package.sh"
+      "$script_dir/linux/common/build.sh"
+      "$script_dir/linux/common/package.sh"
     else
       echo "[linux] Skipped: unsupported host setup."
     fi
@@ -342,9 +348,9 @@ fi
 
 if ! $skip_linux; then
   linux_found=false
-  if [ -d "$repo_root/dist/linux/packages" ]; then
+  if [ -d "$repo_root/dist/linux" ]; then
     linux_artifact_list="$(mktemp)"
-    find "$repo_root/dist/linux/packages" -maxdepth 1 -name "CaveViewer-${version}-*.AppImage" -print 2>/dev/null | sort > "$linux_artifact_list"
+    find "$repo_root/dist/linux" -path "*/packages/CaveViewer-${version}-*.AppImage" -print 2>/dev/null | sort > "$linux_artifact_list"
     if [ -s "$linux_artifact_list" ]; then
       linux_found=true
       while IFS= read -r appimage; do
@@ -372,7 +378,7 @@ if $publish; then
   if ! $skip_macos; then
     if [ "$host_os" = "Darwin" ]; then
       echo "[macos] Publishing release assets..."
-        "$script_dir/macos/publish_release.sh" --skip-build "$normalized_version" "$effective_release_notes"
+        "$script_dir/macos/publish.sh" --skip-build "$normalized_version" "$effective_release_notes"
     else
       echo "[macos] Skipped publish: requires macOS host."
     fi
@@ -382,8 +388,29 @@ if $publish; then
 
   if ! $skip_linux; then
     if $run_linux_docker || $run_linux_native; then
-      echo "[linux] Publishing release assets..."
-        "$script_dir/linux/publish_release.sh" --skip-build "$normalized_version" "$effective_release_notes"
+      publish_linux_arch() {
+        local arch="$1"
+        echo "[linux-$arch] Publishing release assets..."
+        CAVEVIEWER_LINUX_UPDATE_ARCH="$arch" \
+          "$script_dir/linux/$arch/publish.sh" --skip-build "$normalized_version" "$effective_release_notes"
+      }
+
+      case "$linux_arch" in
+        both)
+          if linux_artifact_exists_for_arch arm64; then
+            publish_linux_arch arm64
+          fi
+          if linux_artifact_exists_for_arch amd64; then
+            publish_linux_arch x86_64
+          fi
+          ;;
+        arm64)
+          publish_linux_arch arm64
+          ;;
+        amd64)
+          publish_linux_arch x86_64
+          ;;
+      esac
     else
       echo "[linux] Skipped publish: unsupported host setup."
     fi
@@ -393,7 +420,7 @@ if $publish; then
 
   if ! $skip_windows; then
     echo "[windows] Publishing release assets..."
-      "$script_dir/windows/publish_release.sh" --skip-build "$normalized_version" "$effective_release_notes"
+      "$script_dir/windows/publish.sh" --skip-build "$normalized_version" "$effective_release_notes"
   else
     echo "[windows] Publish skipped by option."
   fi

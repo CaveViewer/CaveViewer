@@ -71,6 +71,7 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_TEXT_AA_MODE",
     "CAVEVIEWER_UI_FONT",
     "CAVEVIEWER_UI_TEXT_SCALE",
+    "CAVEVIEWER_UPDATE_BRANCH",
     "CAVEVIEWER_UPDATE_MANIFEST_URL",
     "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
     "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
@@ -153,6 +154,29 @@ def _print_caveviewer_environment_settings() -> None:
             if effective_default is not None:
                 display_value = f"{display_value} (effective: {effective_default})"
         _LOG.info(f"  {key}={display_value}")
+
+
+def _consume_update_branch_arg(argv: list[str]) -> tuple[list[str], str | None]:
+    cleaned: list[str] = []
+    update_branch: str | None = None
+    idx = 0
+    while idx < len(argv):
+        arg = argv[idx]
+        if arg == "--update-branch":
+            if idx + 1 >= len(argv) or not argv[idx + 1].strip():
+                raise ValueError("--update-branch requires a non-empty branch name.")
+            update_branch = argv[idx + 1].strip()
+            idx += 2
+            continue
+        if arg.startswith("--update-branch="):
+            update_branch = arg.split("=", 1)[1].strip()
+            if not update_branch:
+                raise ValueError("--update-branch requires a non-empty branch name.")
+            idx += 1
+            continue
+        cleaned.append(arg)
+        idx += 1
+    return cleaned, update_branch
 
 
 def find_input_files(folder: str) -> tuple[str, str]:
@@ -634,6 +658,17 @@ def main():
     _LOG.info("=" * 60)
     _LOG.info(f"  {APP_NAME} {__version__}")
     _LOG.info("=" * 60)
+
+    try:
+        sys.argv, _update_branch = _consume_update_branch_arg(sys.argv)
+    except ValueError as e:
+        _LOG.error(str(e))
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+    if _update_branch:
+        os.environ["CAVEVIEWER_UPDATE_BRANCH"] = _update_branch
+        _LOG.info("Using update branch override: %s", _update_branch)
+
     _print_caveviewer_environment_settings()
 
     # Debug flag: forces the update prompt to appear regardless of the
@@ -641,6 +676,7 @@ def main():
     # without waiting for CDN cache or editing version numbers.
     # Usage: ./run_caveviewer.sh --force-update-prompt
     #        CAVEVIEWER_FORCE_UPDATE_PROMPT=1 ./run_caveviewer.sh
+    #        ./run_caveviewer.sh --update-branch feature/pubkey
     _force_update_prompt = (
         "--force-update-prompt" in sys.argv
         or os.getenv("CAVEVIEWER_FORCE_UPDATE_PROMPT", "").strip()

@@ -63,7 +63,8 @@ Examples:
 - windows-package
 - windows-publish
 - linux-package
-- linux-publish
+- linux-arm64-publish
+- linux-x86_64-publish
 
 Example:
 
@@ -75,7 +76,9 @@ Example:
 
 - scripts/common: Shared helpers (version parsing, artifact metadata, GitHub helper functions)
 - scripts/macos: macOS build/package/publish scripts
-- scripts/linux: Linux build/package/publish scripts (including Docker cross-build)
+- scripts/linux/common: Shared Linux build/package helpers
+- scripts/linux/arm64: Linux ARM64 platform entrypoints
+- scripts/linux/x86_64: Linux x86_64 platform entrypoints
 - scripts/windows: Windows package/publish scripts
 - scripts/dev: Developer bootstrap scripts
 

@@ -6,10 +6,10 @@ set -euo pipefail
 # updater flow.
 #
 # Usage:
-#   ./scripts/macos/publish_release.sh [--skip-build] <version> [release_notes]
+#   ./scripts/macos/publish.sh [--skip-build] <version> [release_notes]
 #
 # Example:
-#   ./scripts/macos/publish_release.sh 1.0.2 "Bug fixes and stability improvements"
+#   ./scripts/macos/publish.sh 1.0.2 "Bug fixes and stability improvements"
 #
 skip_build=false
 
@@ -64,6 +64,8 @@ source "$repo_root/scripts/common/github.sh"
 version_file="$repo_root/caveviewer_version.py"
 macos_packages_dir="$repo_root/dist/macos/packages"
 macos_metadata_dir="$repo_root/dist/macos/metadata"
+update_manifest_path="$repo_root/updates/macos/stable.json"
+update_manifest_signature_path="$update_manifest_path.sig"
 
 cv_require_cmd gh
 cv_require_cmd git
@@ -113,7 +115,7 @@ fi
 if $skip_build; then
   echo "Skipping build/package step (--skip-build)."
 else
-  "$script_dir/build_macos_app.sh"
+  "$script_dir/build.sh"
   "$script_dir/package_macos_dmg.sh" "https://github.com/$repo/releases/download/$tag"
 fi
 
@@ -150,14 +152,31 @@ fi
 
 echo "macOS DMG asset URL: $dmg_asset_url"
 echo "macOS metadata URL: $meta_asset_url"
-"$script_dir/write_update_manifest.sh" \
+"$script_dir/update_manifest.sh" \
   "$normalized_version" \
   "$dmg_asset_url" \
   "$app_dmg_path" \
   "$release_notes"
 
+signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
+if [ -z "$signing_python" ]; then
+  macos_build_venv="${CAVEVIEWER_MACOS_BUILD_VENV:-$repo_root/.venv-macos-build}"
+  if [ -x "$macos_build_venv/bin/python" ]; then
+    signing_python="$macos_build_venv/bin/python"
+  elif [ -x "$repo_root/.venv-dev/bin/python" ]; then
+    signing_python="$repo_root/.venv-dev/bin/python"
+  else
+    signing_python="python3"
+  fi
+fi
+
+echo "Signing macOS update manifest: $update_manifest_path"
+"$signing_python" "$repo_root/scripts/sign_update_manifest.py" \
+  "$update_manifest_path" \
+  --signature "$update_manifest_signature_path"
+
 echo "Committing version bump and updated manifest..."
-git -C "$repo_root" add caveviewer_version.py updates/macos/stable.json
+git -C "$repo_root" add caveviewer_version.py updates/macos/stable.json updates/macos/stable.json.sig
 git -C "$repo_root" commit -m "Release $tag"
 git -C "$repo_root" push
 
