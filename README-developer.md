@@ -205,7 +205,24 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 |---|---|---|
 | `CAVEVIEWER_GITHUB_REPO` | `KernalPanic/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
+| `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
 | `CAVEVIEWER_FORCE_UPDATE_PROMPT` | `0` | Set to `1` (or `true`/`yes`) to always show the "Download Update" prompt regardless of the manifest version. Also available as `--force-update-prompt` CLI flag. For testing the update UI without waiting for the CDN cache or changing version numbers. |
+
+Update manifests are signed with the release Ed25519 private key. The bundled
+public key lives at `security/release_signing_public_key.pem`, and the app will
+reject an update manifest unless the corresponding `.sig` verifies.
+
+Sign a manifest:
+
+```bash
+python3 scripts/sign_update_manifest.py \
+  updates/macos/stable.json \
+  --private-key /path/to/release_signing_private_key.pem
+```
+
+This writes `updates/macos/stable.json.sig`. If the private key path is stored
+in `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`, the `--private-key` option can be
+omitted.
 
 ### UI & Rendering
 

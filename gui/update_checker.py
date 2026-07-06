@@ -31,7 +31,13 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Optional
 
+from core.logging_utils import get_logger
 from gui.platform import get_platform_adapter
+from gui.update_signature import (
+    SignatureVerificationError,
+    default_manifest_signature_url,
+    verify_update_manifest_signature,
+)
 
 
 def make_ssl_context() -> ssl.SSLContext:
@@ -76,8 +82,13 @@ _DEFAULT_REPO = os.getenv("CAVEVIEWER_GITHUB_REPO", _PLATFORM_ADAPTER.default_up
 GITHUB_REPO = _DEFAULT_REPO  # Export for use by other modules (e.g. sample_maps.py)
 _DEFAULT_MANIFEST_URL = _PLATFORM_ADAPTER.default_update_manifest_url(_DEFAULT_REPO)
 _MANIFEST_URL = os.getenv("CAVEVIEWER_UPDATE_MANIFEST_URL", _DEFAULT_MANIFEST_URL).strip()
+_MANIFEST_SIGNATURE_URL = os.getenv(
+    "CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL",
+    default_manifest_signature_url(_MANIFEST_URL) if _MANIFEST_URL else "",
+).strip()
 
 _REQUEST_TIMEOUT_SECONDS = 8
+_LOG = get_logger("UpdateChecker")
 
 _ALLOWED_PACKAGE_KINDS_BY_CHANNEL = {
     "macos_app": {"dmg", "pkg"},
@@ -158,6 +169,7 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
     message rather than a stack trace.
     """
     if not _MANIFEST_URL:
+        _LOG.info("Update check skipped: update manifest URL is not configured.")
         return UpdateCheckResult(
             update_available=False,
             current_version=current_version,
@@ -165,43 +177,72 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
         )
 
     try:
+        _LOG.info(
+            "Checking for updates: current_version=%s, manifest_url=%s, signature_url=%s",
+            current_version,
+            _MANIFEST_URL,
+            _MANIFEST_SIGNATURE_URL,
+        )
         headers = {
             "Accept": "application/json",
             "User-Agent": _PLATFORM_ADAPTER.update_check_user_agent(),
         }
 
-        request = urllib.request.Request(
+        manifest_bytes = _fetch_url_bytes(
             _MANIFEST_URL,
             headers=headers,
+            timeout=_REQUEST_TIMEOUT_SECONDS,
         )
-        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS,
-                                     context=make_ssl_context()) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        _LOG.info("Downloaded update manifest: bytes=%d", len(manifest_bytes))
+        signature_bytes = _fetch_url_bytes(
+            _MANIFEST_SIGNATURE_URL,
+            headers={
+                "Accept": "text/plain, application/octet-stream",
+                "User-Agent": _PLATFORM_ADAPTER.update_check_user_agent(),
+            },
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+        _LOG.info("Downloaded update manifest signature: bytes=%d", len(signature_bytes))
+        verify_update_manifest_signature(manifest_bytes, signature_bytes)
+        data = json.loads(manifest_bytes.decode("utf-8"))
     except urllib.error.HTTPError as e:
+        _LOG.warning("Update manifest/signature fetch failed with HTTP %s.", e.code)
         if e.code == 404:
             manifest_channel = install_channel or _PLATFORM_ADAPTER.install_channel()
             error_msg = (
-                "Update manifest not found (HTTP 404). Check CAVEVIEWER_UPDATE_MANIFEST_URL "
+                "Update manifest or signature not found (HTTP 404). Check "
+                "CAVEVIEWER_UPDATE_MANIFEST_URL, CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL, "
                 f"or the platform-specific manifest for {manifest_channel} in your repository."
             )
             return UpdateCheckResult(update_available=False, current_version=current_version, error=error_msg)
         else:
             error_msg = f"Update manifest server returned an error (HTTP {e.code})."
             return UpdateCheckResult(update_available=False, current_version=current_version, error=error_msg)
-    except urllib.error.URLError:
+    except urllib.error.URLError as e:
+        _LOG.warning("Update manifest/signature fetch failed: %s", e)
         return UpdateCheckResult(
             update_available=False, current_version=current_version,
             error="Couldn't reach the update manifest URL -- check your internet connection."
         )
+    except SignatureVerificationError as e:
+        _LOG.warning("Update manifest signature verification failed hard: %s", e)
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            error=f"Update manifest signature verification failed: {e}"
+        )
     except (json.JSONDecodeError, KeyError, TypeError) as e:
+        _LOG.warning("Update manifest parsing failed: %s", e)
         return UpdateCheckResult(
             update_available=False, current_version=current_version,
             error=f"Got an unexpected update manifest format: {e}"
         )
 
     resolved_channel = (install_channel or _PLATFORM_ADAPTER.install_channel()).strip().lower()
+    _LOG.info("Update manifest parsed: latest_version=%r, channel=%s", data.get("latest_version") or data.get("version"), resolved_channel)
 
     if not _PLATFORM_ADAPTER.supports_install_channel(resolved_channel):
+        _LOG.warning("Update check failed: unsupported install channel %r.", resolved_channel)
         return UpdateCheckResult(
             update_available=False,
             current_version=current_version,
@@ -221,9 +262,20 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
         data, _PLATFORM_ADAPTER.channel_sha256_keys(resolved_channel)
     ).lower()
     package_kind = _PLATFORM_ADAPTER.detect_package_kind(download_url, resolved_channel)
+    _LOG.info(
+        "Update manifest package details: package_kind=%s, size=%s, sha256_present=%s",
+        package_kind,
+        download_size_bytes,
+        bool(download_sha256),
+    )
 
     allowed_package_kinds = _ALLOWED_PACKAGE_KINDS_BY_CHANNEL.get(resolved_channel)
     if allowed_package_kinds is not None and package_kind not in allowed_package_kinds:
+        _LOG.warning(
+            "Update manifest rejected: package_kind=%r is not allowed for channel=%r.",
+            package_kind,
+            resolved_channel,
+        )
         return UpdateCheckResult(
             update_available=False,
             current_version=current_version,
@@ -250,6 +302,12 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
         )
 
     is_newer = _parse_version(latest_tag) > _parse_version(current_version)
+    _LOG.info(
+        "Update check complete: update_available=%s, current_version=%s, latest_version=%s",
+        is_newer,
+        current_version,
+        latest_tag,
+    )
 
     return UpdateCheckResult(
         update_available=is_newer,
@@ -261,6 +319,13 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
         package_kind=package_kind,
         release_notes=release_notes.strip(),
     )
+
+
+def _fetch_url_bytes(url: str, headers: dict[str, str], timeout: int) -> bytes:
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=timeout,
+                                 context=make_ssl_context()) as response:
+        return response.read()
 
 
 def download_update(download_url: str, expected_size_bytes, dest_path: str,
@@ -279,6 +344,12 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
     request = urllib.request.Request(
         download_url,
         headers={"User-Agent": _PLATFORM_ADAPTER.update_check_user_agent()},
+    )
+    _LOG.info(
+        "Downloading update payload: url=%s, expected_size=%s, sha256_expected=%s",
+        download_url,
+        expected_size_bytes,
+        bool(expected_sha256),
     )
 
     with urllib.request.urlopen(request, timeout=30, context=make_ssl_context()) as response:
@@ -299,6 +370,11 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
 
     actual_size = os.path.getsize(dest_path)
     if expected_size_bytes is not None and actual_size != expected_size_bytes:
+        _LOG.warning(
+            "Update payload security check failed: size mismatch actual=%d expected=%d",
+            actual_size,
+            expected_size_bytes,
+        )
         os.remove(dest_path)
         raise IOError(
             f"Downloaded file size ({actual_size} bytes) doesn't match the "
@@ -309,14 +385,23 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
     if expected_sha256:
         import hashlib
 
+        _LOG.info("Verifying update payload SHA-256.")
         sha256 = hashlib.sha256()
         with open(dest_path, "rb") as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 sha256.update(chunk)
         actual_sha = sha256.hexdigest().lower()
         if actual_sha != expected_sha256.strip().lower():
+            _LOG.warning(
+                "Update payload security check failed: SHA-256 mismatch actual=%s expected=%s",
+                actual_sha,
+                expected_sha256.strip().lower(),
+            )
             os.remove(dest_path)
             raise IOError(
                 "Downloaded file hash doesn't match the expected SHA-256. "
                 "The download may be corrupted or tampered."
             )
+        _LOG.info("Update payload security check passed: SHA-256 verified.")
+    else:
+        _LOG.warning("Update payload security check skipped: no expected SHA-256 provided.")
