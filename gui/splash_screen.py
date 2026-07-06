@@ -108,7 +108,8 @@ _PANEL_COLOR = "#12121a"        # slightly lighter panel background
 _TITLE_COLOR = "#f2d98c"        # amber/gold, matches the in-app title text color
 _SUBTITLE_COLOR = "#cccdd6"     # light gray, matches in-app subtitle/body text
 _INSTRUCTION_COLOR = "#9a9aa6"  # dimmer gray, matches in-app secondary/note text
-_BUTTON_BG = "#caa23e"          # amber button, matches the in-app active-button color
+_BUTTON_BG = "#e5a11f"          # calmer amber derived from the splash logo gold
+_BUTTON_HOVER_BG = "#f0b13a"    # brighter hover state in the same logo-gold family
 _BUTTON_FG = "#1a1408"          # dark text on the amber button, matches in-app active-button text
 _BORDER_COLOR = "#5c5c6e"
 _PLATFORM_ADAPTER = get_splash_platform_adapter()
@@ -864,7 +865,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             ok_button.bind("<Button-1>", _dismiss)
             ok_button.bind("<Return>", _dismiss)
             ok_button.bind("<space>", _dismiss)
-            ok_button.bind("<Enter>", lambda _event: ok_button.config(bg="#d8b34d"))
+            ok_button.bind("<Enter>", lambda _event: ok_button.config(bg=_BUTTON_HOVER_BG))
             ok_button.bind("<Leave>", lambda _event: ok_button.config(bg=_BUTTON_BG))
         else:
             ok_button = tk.Button(
@@ -874,7 +875,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 font=_SMALL_FONT,
                 bg=_BUTTON_BG,
                 fg=_BUTTON_FG,
-                activebackground="#d8b34d",
+                activebackground=_BUTTON_HOVER_BG,
                 activeforeground=_BUTTON_FG,
                 relief="flat",
                 borderwidth=0,
@@ -944,7 +945,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     browse_button.bind("<Button-1>", lambda _event: on_browse())
     browse_button.bind("<Return>", lambda _event: on_browse())
     browse_button.bind("<space>", lambda _event: on_browse())
-    browse_button.bind("<Enter>", lambda _event: browse_button.config(bg="#d8b34d"))
+    browse_button.bind("<Enter>", lambda _event: browse_button.config(bg=_BUTTON_HOVER_BG))
     browse_button.bind("<Leave>", lambda _event: browse_button.config(bg=_BUTTON_BG))
     browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
 
@@ -1164,7 +1165,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 command=on_apply,
                 bg=_BUTTON_BG,
                 fg=_BUTTON_FG,
-                hover_bg="#d8b34d",
+                hover_bg=_BUTTON_HOVER_BG,
                 padx=16,
             )
         else:
@@ -1191,7 +1192,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 font=_SMALL_FONT,
                 bg=_BUTTON_BG,
                 fg=_BUTTON_FG,
-                activebackground=_BUTTON_BG,
+                activebackground=_BUTTON_HOVER_BG,
                 activeforeground=_BUTTON_FG,
                 relief="flat",
                 borderwidth=0,

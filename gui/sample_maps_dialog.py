@@ -49,7 +49,7 @@ def show_sample_maps_dialog(parent, install_dir):
     import tkinter as tk
     from tkinter import messagebox, filedialog
     from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
-        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_FG, _BORDER_COLOR, _UI_FONT_FAMILY, \
+        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_HOVER_BG, _BUTTON_FG, _BORDER_COLOR, _UI_FONT_FAMILY, \
         _validate_selected_map_folder
     from gui.sample_maps import (
         KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog, is_sample_map_already_downloaded,
@@ -414,7 +414,7 @@ def show_sample_maps_dialog(parent, install_dir):
                 btn.bind("<Button-1>", _invoke)
                 btn.bind("<Return>", _invoke)
                 btn.bind("<space>", _invoke)
-                btn.bind("<Enter>", lambda _event, _b=btn: _b.config(bg="#d8b34d"))
+                btn.bind("<Enter>", lambda _event, _b=btn: _b.config(bg=_BUTTON_HOVER_BG))
                 btn.bind("<Leave>", lambda _event, _b=btn: _b.config(bg=_BUTTON_BG))
             return btn
 
@@ -423,7 +423,7 @@ def show_sample_maps_dialog(parent, install_dir):
             font=(_UI_FONT_FAMILY, 10, "bold"),
             bg=_BUTTON_BG if enabled else _BORDER_COLOR,
             fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
-            activebackground=_BUTTON_BG, activeforeground=_BUTTON_FG,
+            activebackground=_BUTTON_HOVER_BG, activeforeground=_BUTTON_FG,
             relief="flat", borderwidth=0,
             width=10,
             padx=8, pady=6,
