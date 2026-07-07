@@ -76,13 +76,22 @@ def make_ssl_context() -> ssl.SSLContext:
 # - Set CAVEVIEWER_UPDATE_MANIFEST_URL to a hosted JSON file
 #   (recommended and explicit).
 # - If omitted, we derive a default raw-GitHub URL from
-#   CAVEVIEWER_GITHUB_REPO and CAVEVIEWER_UPDATE_BRANCH to make fork,
-#   branch, and packaged-app testing simple.
+#   CAVEVIEWER_GITHUB_REPO, CAVEVIEWER_UPDATE_BRANCH, and
+#   CAVEVIEWER_UPDATE_CHANNEL to make fork, branch, channel, and packaged-app
+#   testing simple.
 _PLATFORM_ADAPTER = get_platform_adapter()
 _DEFAULT_REPO = os.getenv("CAVEVIEWER_GITHUB_REPO", _PLATFORM_ADAPTER.default_update_repo()).strip()
 _DEFAULT_BRANCH = os.getenv("CAVEVIEWER_UPDATE_BRANCH", "main").strip() or "main"
+_DEFAULT_CHANNEL = os.getenv("CAVEVIEWER_UPDATE_CHANNEL", "stable").strip().lower() or "stable"
+if _DEFAULT_CHANNEL not in {"stable", "prerelease"}:
+    _DEFAULT_CHANNEL = "stable"
 GITHUB_REPO = _DEFAULT_REPO  # Export for use by other modules (e.g. sample_maps.py)
-_DEFAULT_MANIFEST_URL = _PLATFORM_ADAPTER.default_update_manifest_url(_DEFAULT_REPO, _DEFAULT_BRANCH)
+_STABLE_MANIFEST_URL = _PLATFORM_ADAPTER.default_update_manifest_url(_DEFAULT_REPO, _DEFAULT_BRANCH)
+_DEFAULT_MANIFEST_URL = (
+    _STABLE_MANIFEST_URL
+    if _DEFAULT_CHANNEL == "stable"
+    else _STABLE_MANIFEST_URL.removesuffix("/stable.json") + f"/{_DEFAULT_CHANNEL}.json"
+)
 _MANIFEST_URL = os.getenv("CAVEVIEWER_UPDATE_MANIFEST_URL", _DEFAULT_MANIFEST_URL).strip()
 _MANIFEST_SIGNATURE_URL = os.getenv(
     "CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL",
@@ -91,6 +100,13 @@ _MANIFEST_SIGNATURE_URL = os.getenv(
 
 _REQUEST_TIMEOUT_SECONDS = 8
 _LOG = get_logger("UpdateChecker")
+
+_RAW_UPDATE_CHANNEL = os.getenv("CAVEVIEWER_UPDATE_CHANNEL", "stable").strip().lower() or "stable"
+if _RAW_UPDATE_CHANNEL not in {"stable", "prerelease"}:
+    _LOG.warning(
+        "Invalid CAVEVIEWER_UPDATE_CHANNEL=%r; using stable. Expected stable or prerelease.",
+        _RAW_UPDATE_CHANNEL,
+    )
 
 _ALLOWED_PACKAGE_KINDS_BY_CHANNEL = {
     "macos_app": {"dmg", "pkg"},

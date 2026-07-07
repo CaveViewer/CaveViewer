@@ -12,6 +12,7 @@ export PYTHONPATH="$CAVEVIEWER_HOME"
 # Or set a repo/branch and let the app derive the platform-specific manifest URL:
 export CAVEVIEWER_GITHUB_REPO="KernalPanic/CaveViewerPlus"
 # export CAVEVIEWER_UPDATE_BRANCH="feature/pubkey"
+# export CAVEVIEWER_UPDATE_CHANNEL="prerelease"
 
 # You can add additional environment configurations here as necessary
 

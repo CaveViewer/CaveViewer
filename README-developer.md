@@ -256,6 +256,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 |---|---|---|
 | `CAVEVIEWER_GITHUB_REPO` | `KernalPanic/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork or testing a package from Terminal. |
 | `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for updater testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
+| `CAVEVIEWER_UPDATE_CHANNEL` | `stable` | Update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
 | `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to always show the "Download Update" prompt regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
@@ -273,6 +274,15 @@ Prerelease publish runs mark the GitHub release as a prerelease and update the
 separate `prerelease.json` channel, leaving `stable.json` unchanged. For
 debugging, explicit environment variables can point a source run or packaged
 app launched from Terminal at another branch or manifest URL.
+
+Prerelease branch testing can use the derived prerelease manifest URL:
+
+```bash
+CAVEVIEWER_FORCE_UPDATE=1 \
+CAVEVIEWER_UPDATE_BRANCH=feature/pubkey \
+CAVEVIEWER_UPDATE_CHANNEL=prerelease \
+./CaveViewer-1.0.60-aarch64.AppImage
+```
 
 Linux manifests are architecture-specific:
 
