@@ -1,6 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Development environment installer.
+# Creates/updates the local virtual environment and writes run_caveviewer.sh.
+#
+# Usage:
+#   install.sh
+#   install.sh --help
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  install.sh
+  install.sh --help
+
+Creates or updates the CaveViewer development virtual environment.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      echo ""
+      print_usage
+      exit 1
+      ;;
+    *)
+      echo "Error: positional arguments are not supported: '$1'"
+      echo ""
+      print_usage
+      exit 1
+      ;;
+  esac
+done
+
 # Location helpers (script can be run from anywhere)
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

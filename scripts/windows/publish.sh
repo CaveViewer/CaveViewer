@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds the Windows zip release artifact, publishes (or updates) a
-# GitHub release, and writes updates/windows/<channel>.json for the updater flow.
+# Windows publisher.
+# Builds or reuses the Windows zip, publishes/uploads a GitHub release, and
+# writes an updater manifest for the selected channel.
 #
 # Usage:
 #   ./scripts/windows/publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]

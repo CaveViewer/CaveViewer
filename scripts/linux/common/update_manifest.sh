@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Writes the Linux in-app updater manifest.
+# Linux updater manifest writer.
+# Writes updates/linux/<arch>/<channel>.json with version, download URL,
+# package size, SHA-256, and release notes for the in-app updater.
+#
 # Usage:
 #   ./scripts/linux/common/update_manifest.sh --version=<version> --download-url=<appimage_url> --artifact-file=<appimage_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:
@@ -101,7 +104,7 @@ case "$linux_update_arch" in
     esac
     ;;
   *)
-    echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected arm64, amd64, x86, or x86_64)"
+    echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected arm64 or x86_64)"
     exit 1
     ;;
 esac

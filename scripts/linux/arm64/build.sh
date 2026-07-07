@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ARM64 Linux build wrapper.
+# Runs the Docker-backed Linux build driver for the ARM64/aarch64 target.
+# Prefer the top-level scripts/release.sh dispatcher for normal release work.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
 

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Thin build target for the Windows release pipeline.
-# Today this delegates to package.sh, which creates the Windows-ready source
-# bundle and metadata. Keep this wrapper as the stable entry point for the
-# future installer build.
+# Windows build wrapper.
+# Stable build entry point for the Windows release pipeline. Currently delegates
+# to package.sh, which creates the portable source bundle and metadata.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -50,4 +49,4 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-exec "$script_dir/package.sh" "${remaining_args[@]}"
+exec "$script_dir/package.sh" ${remaining_args[@]+"${remaining_args[@]}"}

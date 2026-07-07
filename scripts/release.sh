@@ -20,7 +20,7 @@ Usage:
   release.sh --target=<target> --help
 
 Required arguments:
-  --target             Target list: all, macos, windows, linux-arm64, linux-x86
+  --target             Target list: all, macos, windows, linux-arm64, linux-x86_64
   --action             One of: build, package, release
   --version            Release version, for example 1.0.60
   --notes              Release notes, quoted if they contain spaces
@@ -63,12 +63,12 @@ EOF
     linux-arm64)
       echo "Usage: release.sh --target=linux-arm64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--pre-release]"
       ;;
-    linux-x86|linux-x86_64|linux-amd64)
-      echo "Usage: release.sh --target=linux-x86 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--pre-release]"
+    linux-x86_64|linux-x86|linux-amd64)
+      echo "Usage: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--pre-release]"
       ;;
     *)
       echo "Error: unknown target '$1'"
-      echo "Expected one of: all, macos, windows, linux-arm64, linux-x86"
+      echo "Expected one of: all, macos, windows, linux-arm64, linux-x86_64"
       exit 1
       ;;
   esac
@@ -76,7 +76,7 @@ EOF
 
 is_known_target() {
   case "$1" in
-    all|macos|windows|linux-arm64|linux-x86|linux-x86_64|linux-amd64)
+    all|macos|windows|linux-arm64|linux-x86_64|linux-x86|linux-amd64)
       return 0
       ;;
     *)
@@ -116,7 +116,7 @@ removed_target_message() {
     linux-x86_64-build|linux-x86_64-package|linux-amd64-build|linux-amd64-package)
       echo "Error: target '$1' was removed."
       local action="${1##*-}"
-      echo "Use: release.sh --target=linux-x86 --version=<version> --notes=<notes> --action=$action"
+      echo "Use: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=$action"
       return 0
       ;;
     *)
@@ -152,14 +152,14 @@ add_target_selection() {
     linux-arm64|linux-aarch64)
       selected_linux_arm64=true
       ;;
-    linux-x86|linux-x86_64|linux-amd64)
+    linux-x86_64|linux-x86|linux-amd64)
       selected_linux_x86=true
       ;;
     "")
       ;;
     *)
       echo "Error: unknown --target entry '$selected'"
-      echo "Expected one of: all, macos, windows, linux-arm64, linux-x86"
+      echo "Expected one of: all, macos, windows, linux-arm64, linux-x86_64"
       exit 1
       ;;
   esac
@@ -200,7 +200,7 @@ canonical_single_target() {
   elif $selected_linux_arm64 && ! $selected_macos && ! $selected_windows && ! $selected_linux_x86; then
     echo "linux-arm64"
   elif $selected_linux_x86 && ! $selected_macos && ! $selected_windows && ! $selected_linux_arm64; then
-    echo "linux-x86"
+    echo "linux-x86_64"
   else
     echo "multi"
   fi
@@ -210,7 +210,7 @@ selected_target_summary() {
   local targets=()
   $selected_macos && targets+=("macos")
   $selected_linux_arm64 && targets+=("linux-arm64")
-  $selected_linux_x86 && targets+=("linux-x86")
+  $selected_linux_x86 && targets+=("linux-x86_64")
   $selected_windows && targets+=("windows")
 
   if [ "${#targets[@]}" -eq 0 ]; then
@@ -428,10 +428,10 @@ run_selected_releases() {
 
   if $selected_linux_x86; then
     if linux_artifact_exists_for_arch x86_64; then
-      echo "[linux-x86] Publishing release assets..."
+      echo "[linux-x86_64] Publishing release assets..."
       "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
     else
-      echo "[linux-x86] Publish skipped: artifact missing."
+      echo "[linux-x86_64] Publish skipped: artifact missing."
     fi
   fi
 
@@ -587,6 +587,13 @@ if $pre_release && [ "$action" != "release" ]; then
   exit 1
 fi
 
+parse_target_selection "$target"
+
+if $rebuild && ! has_linux_target; then
+  echo "Error: --rebuild is only valid when a Linux target is selected."
+  exit 1
+fi
+
 pre_release_args=()
 if $pre_release; then
   pre_release_args+=(--pre-release)
@@ -635,7 +642,6 @@ if [ "$current_version" != "$normalized_version" ]; then
 fi
 
 set +u
-parse_target_selection "$target"
 dispatch_target="$(canonical_single_target)"
 
 case "$dispatch_target:$action" in
@@ -675,13 +681,13 @@ case "$dispatch_target:$action" in
   linux-arm64:release)
     exec "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
     ;;
-  linux-x86:build)
+  linux-x86_64:build)
     exec "$script_dir/linux/x86_64/build.sh" "${passthrough_args[@]}"
     ;;
-  linux-x86:package)
+  linux-x86_64:package)
     exec "$script_dir/linux/x86_64/package.sh" "${passthrough_args[@]}"
     ;;
-  linux-x86:release)
+  linux-x86_64:release)
     exec "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
     ;;
   multi:build)

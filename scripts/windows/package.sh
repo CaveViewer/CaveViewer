@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a Windows-ready source bundle and metadata.
+# Windows package builder.
+# Creates the portable Windows source bundle, release metadata, and update
+# metadata under dist/windows.
 #
 # Usage:
 #   ./scripts/windows/package.sh [--base-download-url=<url>]

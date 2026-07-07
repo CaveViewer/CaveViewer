@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# x86_64 Linux package wrapper.
+# Runs the Docker-backed Linux package step and creates the x86_64 AppImage.
+# Prefer the top-level scripts/release.sh dispatcher for normal release work.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
 

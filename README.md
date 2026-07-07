@@ -118,6 +118,31 @@ In practice:
 - Adjust Chunk uploads per frame, Upload budget (ms), and memory targets to tune smoothness without re-importing.
 - Adjust Import chunk size (m) when you want a different chunk layout, then rebuild/import the map to test it.
 
+### If You See an Out-of-Memory Error
+
+Large photogrammetry maps can exceed the practical memory available on a 16 GB computer, especially while CaveViewer is importing a new map or decoding textures. Start with conservative settings, then increase them only after the map opens reliably.
+
+In Advanced Settings, try this first:
+
+| Setting | Safer value |
+|---|---:|
+| System RAM target (%) | 6 to 8 |
+| GPU memory target (%) | 40 to 50 |
+| Worker count | 1 or 2 |
+| CPU cores to keep free | 3 or 4 |
+| Chunk uploads per frame | 1 |
+| Upload budget (ms) | 1 to 3 |
+| Import worker count | 1 |
+| Import CPUs to keep free | 3 or 4 |
+
+If the error happens while importing a map, lower Import worker count first. Import workers can temporarily hold more geometry and texture data in memory, so one worker is the safest option on a constrained machine.
+
+If the error happens while moving around an already-imported map, lower System RAM target (%) and GPU memory target (%). These settings reduce how many chunks CaveViewer tries to keep resident around the camera.
+
+If the map still cannot import, rebuild the cache with a larger Import chunk size such as 16 m, 24 m, or 32 m. Larger chunks reduce total chunk count and bookkeeping overhead, but do not push this too high on a 16 GB machine because each chunk becomes heavier to load.
+
+Close other memory-heavy applications before importing. Browsers, photo tools, video editors, and other 3D apps can leave too little headroom for a large model even when the computer reports 16 GB of installed RAM.
+
 ### Recommended Map Parsing Approach
 
 Each imported map writes its chunk cache to an `_cache` folder inside that map directory. To try different import strategies for the same map (for example, different chunk sizes), you can either remove `_cache` and re-import, or rename it first (for example `_cache_32m`, `_cache_64m`) to preserve earlier results.

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ARM64 Linux publish wrapper.
+# Selects the ARM64 updater manifest target and delegates to the common publisher.
+# Prefer the top-level scripts/release.sh dispatcher for normal release work.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 print_usage() {
@@ -14,7 +18,7 @@ EOF
 }
 
 if [ "$#" -eq 0 ]; then
-  echo "Error: version is required."
+  echo "Error: --version is required."
   echo ""
   print_usage
   exit 1

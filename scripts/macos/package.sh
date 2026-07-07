@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and package the macOS DMG in one command.
+# macOS package wrapper.
+# Builds the macOS app bundle and packages it into a versioned DMG.
 #
 # Usage:
 #   ./scripts/macos/package.sh [--base-download-url=<url>]

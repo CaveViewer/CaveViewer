@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds the macOS app DMG release artifact, publishes (or updates) a
-# GitHub release, and writes updates/macos/<channel>.json for the updater flow.
+# macOS publisher.
+# Builds or reuses the macOS DMG, publishes/uploads a GitHub release, and
+# writes a signed updater manifest for the selected channel.
 #
 # Usage:
 #   ./scripts/macos/publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]

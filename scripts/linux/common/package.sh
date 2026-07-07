@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Package a standalone Linux app bundle as a standard AppDir/AppImage.
-# Internal Docker-only entry point used by scripts/linux/build_linux_in_docker.sh.
+# Linux AppImage packager.
+# Internal Docker-only entry point that packages the built app bundle as an
+# AppDir/AppImage under dist/linux/<arch>/packages.
 #
 # Do not run this script directly. Use scripts/release.sh or
 # scripts/linux/build_linux_in_docker.sh.
@@ -18,7 +19,7 @@ Usage:
 
 Internal Docker-only script. Use one of:
   ./scripts/release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=package
-  ./scripts/release.sh --target=linux-x86 --version=<version> --notes "Release notes" --action=package
+  ./scripts/release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=package
 EOF
 }
 
@@ -169,7 +170,7 @@ dist_packages_dir="$repo_root/dist/linux/$linux_dist_arch/packages"
 
 if [ ! -d "$app_dir" ]; then
   echo "Error: app directory not found at $app_dir"
-  release_target="linux-x86"
+  release_target="linux-x86_64"
   if [ "$linux_dist_arch" = "arm64" ]; then
     release_target="linux-arm64"
   fi

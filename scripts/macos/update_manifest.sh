@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Writes updates/macos/<channel>.json for the in-app updater.
+# macOS updater manifest writer.
+# Writes updates/macos/<channel>.json with version, download URL, package size,
+# SHA-256, and release notes for the in-app updater.
+#
 # Usage:
 #   ./scripts/macos/update_manifest.sh --version=<version> --download-url=<macos_dmg_url> --artifact-file=<macos_dmg_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:

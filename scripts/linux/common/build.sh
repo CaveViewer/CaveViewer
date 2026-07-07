@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a standalone Linux application bundle from source using PyInstaller.
-# Internal Docker-only entry point used by scripts/linux/build_linux_in_docker.sh.
+# Linux app bundle builder.
+# Internal Docker-only entry point that builds a standalone PyInstaller app
+# bundle under dist/linux/<arch>/app.
 #
 # Do not run this script directly. Use scripts/release.sh or
 # scripts/linux/build_linux_in_docker.sh.
@@ -17,7 +18,7 @@ Usage:
 
 Internal Docker-only script. Use one of:
   ./scripts/release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=build
-  ./scripts/release.sh --target=linux-x86 --version=<version> --notes "Release notes" --action=build
+  ./scripts/release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=build
 EOF
 }
 
@@ -331,7 +332,7 @@ fi
 
 echo "Build complete: $app_dir"
 echo "Note: CaveViewer/ is an intermediate build artifact."
-release_target="linux-x86"
+release_target="linux-x86_64"
 if [ "$linux_dist_arch" = "arm64" ]; then
   release_target="linux-arm64"
 fi

@@ -27,20 +27,20 @@ Build a PyInstaller app bundle for one architecture:
 
 ```bash
 ./scripts/release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=build
-./scripts/release.sh --target=linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=build
+./scripts/release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
 ```
 
 Package an existing app bundle as an AppImage:
 
 ```bash
 ./scripts/release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
-./scripts/release.sh --target=linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=package
+./scripts/release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
 Build, package, and publish selected targets:
 
 ```bash
-./scripts/release.sh --target=linux-arm64,linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=release
+./scripts/release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=release
 ./scripts/release.sh --target=linux-arm64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
 ```
 
@@ -61,7 +61,7 @@ For debugging the Linux release container itself, call the Docker driver:
 ./scripts/linux/build_linux_in_docker.sh --arch=both --step=all --rebuild
 ```
 
-Supported `--arch` values are `arm64`, `x86_64`, `amd64`, and `both`.
+Supported `--arch` values are `arm64`, `x86_64`, and `both`.
 Supported `--step` values are `build`, `package`, and `all`.
 
 ## Publishing

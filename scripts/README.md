@@ -2,6 +2,8 @@
 
 This directory contains build, packaging, and release scripts.
 
+For script CLI conventions and naming rules, see `STANDARDS.md`.
+
 ## Main Entry Point
 
 Use the dispatcher script:
@@ -18,7 +20,7 @@ Targets:
 - `macos`
 - `windows`
 - `linux-arm64`
-- `linux-x86`
+- `linux-x86_64`
 
 Actions:
 
@@ -33,7 +35,7 @@ release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --acti
 release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
 release.sh --target=linux-arm64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
-release.sh --target=linux-arm64,linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=release
 ```
 
@@ -52,8 +54,8 @@ Options:
 Examples:
 
 ```bash
-release.sh --target=linux-arm64,linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=build
-release.sh --target=linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
+release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=macos,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```

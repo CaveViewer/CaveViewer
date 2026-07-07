@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-if [ -z "${BASH_VERSION:-}" ]; then
+if [ "${BASH##*/}" != "bash" ]; then
   echo "Error: build_linux_in_docker.sh must be run with bash, not sh."
   echo "Use: ./scripts/linux/build_linux_in_docker.sh ..."
   exit 1
@@ -7,15 +7,16 @@ fi
 
 set -euo pipefail
 
-# Build the Linux app inside a Docker container. This is the only supported
-# Linux release build path; the common build/package scripts refuse direct
-# host execution.
+# Host-side Linux Docker build driver.
+# Builds and/or packages Linux release artifacts inside the Docker build
+# container. This is the supported host entry point for Linux release artifacts;
+# scripts/linux/common/*.sh are container-only internals.
 #
 # Usage:
 #   ./scripts/linux/build_linux_in_docker.sh [--arch=<arm64|x86_64|both>] [--step=<build|package|all>] [--rebuild]
 #
 # Default builds BOTH architectures. arm64 runs without emulation on Apple
-# Silicon; x86_64/amd64 runs under QEMU (slower). Each arch gets its own Docker
+# Silicon; x86_64 runs under QEMU (slower). Each arch gets its own Docker
 # image tag so switching between them doesn't force a full image rebuild.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,7 +27,7 @@ linux_build_venv_template="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux
 print_help() {
   cat <<'EOF'
 Usage:
-  build_linux_in_docker.sh [--arch=<arm64|x86_64|amd64|both>] [--step=<build|package|all>] [--rebuild]
+  build_linux_in_docker.sh [--arch=<arm64|x86_64|both>] [--step=<build|package|all>] [--rebuild]
 
 Options:
   --arch=<arch>    Linux architecture to build. Default: both
@@ -117,7 +118,7 @@ for arch in "${archs[@]}"; do
   case "$arch" in
     arm64|amd64) ;;
     *)
-      echo "Error: invalid Linux architecture '$arch' (expected arm64, x86_64, amd64, or both)"
+      echo "Error: invalid Linux architecture '$arch' (expected arm64, x86_64, or both)"
       exit 1
       ;;
   esac

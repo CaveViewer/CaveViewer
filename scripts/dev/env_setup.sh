@@ -1,6 +1,43 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# This script sets up the environment for running the CaveViewer application on macOS.
+# Development environment variable helper.
+# Source this file to set CaveViewer environment variables for local runs.
+#
+# Usage:
+#   source env_setup.sh
+#   source env_setup.sh --help
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  source env_setup.sh
+  source env_setup.sh --help
+
+Sets CaveViewer development environment variables in the current shell.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      print_usage
+      return 0 2>/dev/null || exit 0
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      echo ""
+      print_usage
+      return 1 2>/dev/null || exit 1
+      ;;
+    *)
+      echo "Error: positional arguments are not supported: '$1'"
+      echo ""
+      print_usage
+      return 1 2>/dev/null || exit 1
+      ;;
+  esac
+done
 
 # Set environment variables if needed
 export CAVEVIEWER_HOME="$(pwd)"

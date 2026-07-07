@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Packages dist/macos/app/CaveViewer.app into a versioned DMG and includes
-# README.md and license notices inside the DMG for end-user instructions.
+# macOS DMG packager.
+# Packages dist/macos/app/CaveViewer.app into a versioned DMG and writes
+# matching release metadata under dist/macos/metadata.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"

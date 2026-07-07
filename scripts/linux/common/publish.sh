@@ -7,9 +7,10 @@ fi
 
 set -euo pipefail
 
-# Builds the Linux app AppImage release artifact, publishes (or updates) a
-# GitHub release, and writes an architecture-specific updates/linux/*/<channel>.json
-# manifest for the Linux AppImage updater flow.
+# Shared Linux publisher.
+# Builds or reuses Linux AppImage artifacts, publishes/uploads a GitHub release,
+# and writes a signed architecture-specific updater manifest for the selected
+# channel: updates/linux/<arch>/<stable|prerelease>.json.
 #
 # Usage:
 #   ./scripts/linux/common/publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--pre-release]
@@ -194,7 +195,7 @@ else
 fi
 
 # Find all AppImages for this version regardless of architecture suffix.
-# When building both arm64 and amd64, both are uploaded to the release.
+# When building both arm64 and x86_64, both are uploaded to the release.
 collect_linux_artifacts
 
 if [ ${#map_appimage_paths[@]} -eq 0 ]; then
@@ -217,7 +218,7 @@ if [ -n "$linux_update_arch" ]; then
       linux_manifest_arch_dir="x86_64"
       ;;
     *)
-      echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected arm64, amd64, x86, or x86_64)"
+      echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected arm64 or x86_64)"
       exit 1
       ;;
   esac

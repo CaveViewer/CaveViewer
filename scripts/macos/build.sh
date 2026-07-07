@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a standalone macOS app bundle from source using PyInstaller.
-# This is an intermediate artifact for DMG packaging.
+# macOS app bundle builder.
+# Builds the intermediate CaveViewer.app bundle with PyInstaller under
+# dist/macos/app for later DMG packaging.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
