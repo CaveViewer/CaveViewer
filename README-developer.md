@@ -177,56 +177,22 @@ On Windows (PowerShell):
 - Broken `.venv-dev`: remove it and rerun `./scripts/dev/install.sh`.
 - Windows PowerShell policy blocks setup script: run with `-ExecutionPolicy Bypass` as shown above.
 
-### Parallels / VM GPU Hangs
+### Virtual Machine Runs
 
-On Linux guests in Parallels or another VM, a hung CaveViewer process may show a
-`D` state with a wait channel like:
-
-```text
-virtio_gpu_queue_ctrl_sgs
-```
-
-That means the process is blocked inside the guest virtual GPU driver while
-queueing a GPU command. `kill -9` usually will not remove a process from `D`
-state; the virtual GPU path has to return first.
-
-Non-reboot recovery steps to try:
-
-```bash
-sudo systemctl restart prltoolsd
-```
-
-Then try Parallels Desktop actions:
-
-- Pause the VM, wait a few seconds, then resume.
-- Toggle Coherence, full screen, or windowed mode.
-- Resize the VM window.
-- Suspend the VM, then resume it.
-
-You can inspect the wait channel with:
-
-```bash
-ps -o pid,stat,wchan:32,cmd -p <PID>
-```
-
-For smoother VM runs, disable vsync:
+When running CaveViewer inside Parallels or another VM, launch with vsync
+disabled. Some virtual GPU drivers can hang or crash when vsync is enabled.
 
 ```bash
 CAVEVIEWER_VSYNC=0 ./run_caveviewer.sh
 ```
 
-If the VM still stalls while loading large maps, reduce per-frame GPU upload
-pressure:
+For large maps in a VM, also reduce per-frame GPU upload pressure:
 
 ```bash
 CAVEVIEWER_VSYNC=0 CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1 CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=1 ./run_caveviewer.sh
 ```
 
-The generated `run_caveviewer.sh` detects common VM guests with
-`systemd-detect-virt` or DMI strings such as Parallels, VMware, VirtualBox,
-QEMU/KVM, Hyper-V, and bhyve. When it detects a VM and `CAVEVIEWER_VSYNC` is not
-already set, it exports `CAVEVIEWER_VSYNC=0` before launching CaveViewer. Set
-`CAVEVIEWER_VSYNC=1` explicitly to force vsync back on.
+Do not rely on VM auto-detection; set these variables explicitly.
 
 ---
 
@@ -313,7 +279,7 @@ pass `--private-key`.
 | `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Global scale multiplier for all in-app overlay text (loading screens, controls overlay, HUD). `1.0` is the base size. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
 | `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing (matches macOS CoreText style); `lcd` = LCD sub-pixel rendering. |
-| `CAVEVIEWER_VSYNC` | `1` (`run_caveviewer.sh` auto-sets `0` on detected VMs) | Set to `0` to disable vertical sync. Useful on virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
+| `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
 
 ### Streaming Performance
 
