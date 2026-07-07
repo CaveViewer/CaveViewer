@@ -34,18 +34,20 @@ release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --acti
 release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
 release.sh --target=linux-arm64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
 release.sh --target=linux-arm64,linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=package
-release.sh --target=all,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=release
 ```
 
-## All Target
+## Target Selection
 
 `--target` accepts a single target or a comma-separated list. If `all` appears
 anywhere in the list, it takes precedence and all platforms are selected.
+Multi-target package and release orchestration is handled by `release.sh`
+directly; platform scripts remain the per-target implementation details.
 
-Option:
+Options:
 
 - `--rebuild`
-- `--pre-release`
+- `--pre-release`: publish GitHub prerelease assets and update `prerelease.json` instead of `stable.json`
 
 Examples:
 
@@ -53,7 +55,7 @@ Examples:
 release.sh --target=linux-arm64,linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=build
 release.sh --target=linux-x86 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=macos,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
-release.sh --target=all,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
 ## Directory Layout

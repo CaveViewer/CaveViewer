@@ -11,23 +11,43 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 print_usage() {
   cat <<'EOF'
 Usage:
-  build.sh [base_download_url]
+  build.sh [--base-download-url=<url>]
   build.sh --help
 
 Builds the Windows release bundle. This currently delegates to package.sh.
 EOF
 }
 
-if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  print_usage
-  exit 0
-fi
+remaining_args=("$@")
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --base-download-url=*)
+      shift
+      ;;
+    --base-download-url)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --base-download-url requires a value."
+        exit 1
+      fi
+      shift
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      echo ""
+      print_usage
+      exit 1
+      ;;
+    *)
+      echo "Error: positional arguments are not supported: '$1'"
+      echo "Use --base-download-url=<url>."
+      exit 1
+      ;;
+  esac
+done
 
-if [ "$#" -gt 1 ]; then
-  echo "Error: too many arguments."
-  echo ""
-  print_usage
-  exit 1
-fi
-
-exec "$script_dir/package.sh" "$@"
+exec "$script_dir/package.sh" "${remaining_args[@]}"

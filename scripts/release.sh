@@ -9,6 +9,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 source "$script_dir/common/version.sh"
+source "$script_dir/common/artifacts.sh"
 version_file="$repo_root/caveviewer_version.py"
 
 print_help() {
@@ -39,7 +40,7 @@ Examples:
   release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=release
   release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=release --pre-release
   release.sh --target=macos,linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
-  release.sh --target=all,linux-arm64 --version=1.0.60 --notes "Alpha." --action=release
+  release.sh --target=all --version=1.0.60 --notes "Alpha." --action=release
 EOF
 }
 
@@ -205,19 +206,238 @@ canonical_single_target() {
   fi
 }
 
-selected_targets_for_all_package() {
-  if $selected_all; then
-    echo "all"
+selected_target_summary() {
+  local targets=()
+  $selected_macos && targets+=("macos")
+  $selected_linux_arm64 && targets+=("linux-arm64")
+  $selected_linux_x86 && targets+=("linux-x86")
+  $selected_windows && targets+=("windows")
+
+  if [ "${#targets[@]}" -eq 0 ]; then
+    echo "none"
   else
-    local targets=()
-    $selected_macos && targets+=("macos")
-    $selected_windows && targets+=("windows")
-    $selected_linux_arm64 && targets+=("linux-arm64")
-    $selected_linux_x86 && targets+=("linux-x86_64")
     local old_ifs="$IFS"
     IFS=','
     echo "${targets[*]}"
     IFS="$old_ifs"
+  fi
+}
+
+has_linux_target() {
+  $selected_linux_arm64 || $selected_linux_x86
+}
+
+selected_linux_arch() {
+  if $selected_linux_arm64 && $selected_linux_x86; then
+    echo "both"
+  elif $selected_linux_arm64; then
+    echo "arm64"
+  elif $selected_linux_x86; then
+    echo "x86_64"
+  else
+    echo "none"
+  fi
+}
+
+linux_artifact_exists_for_arch() {
+  local arch="$1"
+  local suffix="" arch_dir=""
+  case "$arch" in
+    arm64)
+      suffix="aarch64"
+      arch_dir="arm64"
+      ;;
+    x86_64|amd64)
+      suffix="x86_64"
+      arch_dir="x86_64"
+      ;;
+    *) return 1 ;;
+  esac
+  [ -f "$repo_root/dist/linux/$arch_dir/packages/CaveViewer-${normalized_version}-${suffix}.AppImage" ]
+}
+
+linux_artifacts_ready() {
+  local linux_arch="$1"
+  case "$linux_arch" in
+    both)
+      linux_artifact_exists_for_arch arm64 && linux_artifact_exists_for_arch x86_64
+      ;;
+    arm64|x86_64)
+      linux_artifact_exists_for_arch "$linux_arch"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+print_artifact() {
+  local label="$1"
+  local path="$2"
+  if [ -f "$path" ]; then
+    local bytes sha
+    bytes="$(cv_size_bytes "$path")"
+    sha="$(cv_sha256 "$path")"
+    echo "$label"
+    echo "  path: $path"
+    echo "  size_bytes: $bytes"
+    echo "  sha256: $sha"
+  else
+    echo "$label"
+    echo "  missing"
+  fi
+}
+
+run_selected_builds() {
+  local host_os
+  host_os="$(uname -s)"
+
+  if $selected_macos; then
+    if [ "$host_os" = "Darwin" ]; then
+      "$script_dir/macos/build.sh"
+    else
+      echo "[macos] Skipped: requires macOS host."
+    fi
+  fi
+
+  $selected_windows && "$script_dir/windows/build.sh"
+  $selected_linux_arm64 && "$script_dir/linux/arm64/build.sh" "${passthrough_args[@]}"
+  $selected_linux_x86 && "$script_dir/linux/x86_64/build.sh" "${passthrough_args[@]}"
+}
+
+run_selected_packages() {
+  local host_os linux_arch
+  host_os="$(uname -s)"
+  linux_arch="$(selected_linux_arch)"
+
+  if [ "$(selected_target_summary)" = "none" ]; then
+    echo "Error: no release targets selected."
+    exit 1
+  fi
+
+  if [ "${#multi_target_unknown_args[@]}" -gt 0 ]; then
+    echo "Error: unsupported option for multi-target package/release: '${multi_target_unknown_args[0]}'"
+    exit 1
+  fi
+
+  echo "====================================================="
+  echo "CaveViewer packaging"
+  echo "Host OS: $host_os"
+  echo "Targets: $(selected_target_summary)"
+  echo "Linux build mode: docker"
+  echo "====================================================="
+
+  if has_linux_target; then
+    if ! command -v docker >/dev/null 2>&1; then
+      echo "Error: Docker is required for Linux release builds."
+      exit 1
+    fi
+  fi
+
+  if $selected_macos; then
+    if [ "$host_os" = "Darwin" ]; then
+      local macos_dmg_path="$repo_root/dist/macos/packages/CaveViewer-${normalized_version}.dmg"
+      if $reuse_existing_artifacts && ! $rebuild && [ -f "$macos_dmg_path" ]; then
+        echo "[macos] Reusing existing package: $macos_dmg_path"
+      else
+        echo "[macos] Building package..."
+        "$script_dir/macos/package.sh"
+      fi
+    else
+      echo "[macos] Skipped: requires macOS host."
+    fi
+  fi
+
+  if has_linux_target; then
+    if $reuse_existing_artifacts && ! $rebuild && linux_artifacts_ready "$linux_arch"; then
+      echo "[linux] Reusing existing package artifact(s) for version $normalized_version."
+    else
+      echo "[linux] Building package(s) via Docker..."
+      if $rebuild; then
+        "$script_dir/linux/build_linux_in_docker.sh" "--arch=$linux_arch" --rebuild
+      else
+        "$script_dir/linux/build_linux_in_docker.sh" "--arch=$linux_arch"
+      fi
+    fi
+  fi
+
+  if $selected_windows; then
+    local windows_zip_path="$repo_root/dist/windows/packages/CaveViewer-${normalized_version}-windows.zip"
+    if $reuse_existing_artifacts && ! $rebuild && [ -f "$windows_zip_path" ]; then
+      echo "[windows] Reusing existing package: $windows_zip_path"
+    else
+      echo "[windows] Building package..."
+      "$script_dir/windows/package.sh"
+    fi
+  fi
+
+  echo ""
+  echo "====================================================="
+  echo "Artifact summary (version $normalized_version)"
+  echo "====================================================="
+
+  if $selected_macos && [ "$host_os" = "Darwin" ]; then
+    print_artifact "macOS DMG" "$repo_root/dist/macos/packages/CaveViewer-${normalized_version}.dmg"
+  fi
+
+  if $selected_linux_arm64; then
+    print_artifact "Linux ARM64 AppImage" "$repo_root/dist/linux/arm64/packages/CaveViewer-${normalized_version}-aarch64.AppImage"
+  fi
+
+  if $selected_linux_x86; then
+    print_artifact "Linux x86_64 AppImage" "$repo_root/dist/linux/x86_64/packages/CaveViewer-${normalized_version}-x86_64.AppImage"
+  fi
+
+  if $selected_windows; then
+    print_artifact "Windows ZIP" "$repo_root/dist/windows/packages/CaveViewer-${normalized_version}-windows.zip"
+  fi
+}
+
+run_selected_releases() {
+  local host_os publish_args=()
+  host_os="$(uname -s)"
+
+  reuse_existing_artifacts=true
+  run_selected_packages
+
+  publish_args+=(--use-existing-artifacts)
+  $pre_release && publish_args+=(--pre-release)
+
+  echo ""
+  echo "====================================================="
+  echo "Publishing artifacts"
+  echo "====================================================="
+
+  if $selected_macos; then
+    if [ "$host_os" = "Darwin" ]; then
+      echo "[macos] Publishing release assets..."
+      "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
+    else
+      echo "[macos] Skipped publish: requires macOS host."
+    fi
+  fi
+
+  if $selected_linux_arm64; then
+    if linux_artifact_exists_for_arch arm64; then
+      echo "[linux-arm64] Publishing release assets..."
+      "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
+    else
+      echo "[linux-arm64] Publish skipped: artifact missing."
+    fi
+  fi
+
+  if $selected_linux_x86; then
+    if linux_artifact_exists_for_arch x86_64; then
+      echo "[linux-x86] Publishing release assets..."
+      "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
+    else
+      echo "[linux-x86] Publish skipped: artifact missing."
+    fi
+  fi
+
+  if $selected_windows; then
+    echo "[windows] Publishing release assets..."
+    "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
   fi
 }
 
@@ -227,8 +447,10 @@ version=""
 notes=""
 show_help=false
 pre_release=false
+rebuild=false
+reuse_existing_artifacts=false
 passthrough_args=()
-all_package_args=()
+multi_target_unknown_args=()
 
 if [ "$#" -eq 0 ]; then
   print_help
@@ -300,8 +522,8 @@ while [ "$#" -gt 0 ]; do
       exit 1
       ;;
     --rebuild)
+      rebuild=true
       passthrough_args+=("$arg")
-      all_package_args+=("$arg")
       shift
       ;;
     --pre-release)
@@ -312,13 +534,13 @@ while [ "$#" -gt 0 ]; do
       shift
       while [ "$#" -gt 0 ]; do
         passthrough_args+=("$1")
-        all_package_args+=("$1")
+        multi_target_unknown_args+=("$1")
         shift
       done
       ;;
     --*)
       passthrough_args+=("$arg")
-      all_package_args+=("$arg")
+      multi_target_unknown_args+=("$arg")
       shift
       ;;
     *)
@@ -415,27 +637,16 @@ fi
 set +u
 parse_target_selection "$target"
 dispatch_target="$(canonical_single_target)"
-all_package_target_list="$(selected_targets_for_all_package)"
 
 case "$dispatch_target:$action" in
   all:build)
-    host_os="$(uname -s)"
-    if $selected_macos; then
-      if [ "$host_os" = "Darwin" ]; then
-        "$script_dir/macos/build.sh"
-      else
-        echo "[macos] Skipped: requires macOS host."
-      fi
-    fi
-    $selected_windows && "$script_dir/windows/build.sh"
-    $selected_linux_arm64 && "$script_dir/linux/arm64/build.sh" "${passthrough_args[@]}"
-    $selected_linux_x86 && "$script_dir/linux/x86_64/build.sh" "${passthrough_args[@]}"
+    run_selected_builds
     ;;
   all:package)
-    exec "$script_dir/all_package.sh" --version "$normalized_version" --release-notes "$notes" --targets="$all_package_target_list" "${all_package_args[@]}"
+    run_selected_packages
     ;;
   all:release)
-    exec "$script_dir/all_package.sh" --version "$normalized_version" --release-notes "$notes" --targets="$all_package_target_list" --publish "${pre_release_args[@]}" "${all_package_args[@]}"
+    run_selected_releases
     ;;
   macos:build)
     exec "$script_dir/macos/build.sh" "${passthrough_args[@]}"
@@ -444,7 +655,7 @@ case "$dispatch_target:$action" in
     exec "$script_dir/macos/package.sh" "${passthrough_args[@]}"
     ;;
   macos:release)
-    exec "$script_dir/macos/publish.sh" "${pre_release_args[@]}" "${passthrough_args[@]}" "$normalized_version" "$notes"
+    exec "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
     ;;
   windows:build)
     exec "$script_dir/windows/build.sh" "${passthrough_args[@]}"
@@ -453,7 +664,7 @@ case "$dispatch_target:$action" in
     exec "$script_dir/windows/package.sh" "${passthrough_args[@]}"
     ;;
   windows:release)
-    exec "$script_dir/windows/publish.sh" "${pre_release_args[@]}" "${passthrough_args[@]}" "$normalized_version" "$notes"
+    exec "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
     ;;
   linux-arm64:build)
     exec "$script_dir/linux/arm64/build.sh" "${passthrough_args[@]}"
@@ -462,7 +673,7 @@ case "$dispatch_target:$action" in
     exec "$script_dir/linux/arm64/package.sh" "${passthrough_args[@]}"
     ;;
   linux-arm64:release)
-    exec "$script_dir/linux/arm64/publish.sh" "${pre_release_args[@]}" "${passthrough_args[@]}" "$normalized_version" "$notes"
+    exec "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
     ;;
   linux-x86:build)
     exec "$script_dir/linux/x86_64/build.sh" "${passthrough_args[@]}"
@@ -471,26 +682,16 @@ case "$dispatch_target:$action" in
     exec "$script_dir/linux/x86_64/package.sh" "${passthrough_args[@]}"
     ;;
   linux-x86:release)
-    exec "$script_dir/linux/x86_64/publish.sh" "${pre_release_args[@]}" "${passthrough_args[@]}" "$normalized_version" "$notes"
+    exec "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
     ;;
   multi:build)
-    host_os="$(uname -s)"
-    if $selected_macos; then
-      if [ "$host_os" = "Darwin" ]; then
-        "$script_dir/macos/build.sh"
-      else
-        echo "[macos] Skipped: requires macOS host."
-      fi
-    fi
-    $selected_windows && "$script_dir/windows/build.sh"
-    $selected_linux_arm64 && "$script_dir/linux/arm64/build.sh" "${passthrough_args[@]}"
-    $selected_linux_x86 && "$script_dir/linux/x86_64/build.sh" "${passthrough_args[@]}"
+    run_selected_builds
     ;;
   multi:package)
-    exec "$script_dir/all_package.sh" --version "$normalized_version" --release-notes "$notes" --targets="$all_package_target_list" "${all_package_args[@]}"
+    run_selected_packages
     ;;
   multi:release)
-    exec "$script_dir/all_package.sh" --version "$normalized_version" --release-notes "$notes" --targets="$all_package_target_list" --publish "${pre_release_args[@]}" "${all_package_args[@]}"
+    run_selected_releases
     ;;
   *)
     echo "Error: unsupported target/action combination: $target/$action"

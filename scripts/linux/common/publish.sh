@@ -1,35 +1,81 @@
 #!/usr/bin/env bash
+if [ "${BASH##*/}" != "bash" ]; then
+  echo "Error: scripts/linux/common/publish.sh must be run with bash, not sh."
+  echo "Use: ./scripts/linux/arm64/publish.sh ... or ./scripts/linux/x86_64/publish.sh ..."
+  exit 1
+fi
+
 set -euo pipefail
 
 # Builds the Linux app AppImage release artifact, publishes (or updates) a
-# GitHub release, and writes an architecture-specific updates/linux/*/stable.json for the Linux AppImage
-# updater flow.
+# GitHub release, and writes an architecture-specific updates/linux/*/<channel>.json
+# manifest for the Linux AppImage updater flow.
 #
 # Usage:
-#   ./scripts/linux/common/publish.sh [--skip-build] [--pre-release] <version> [release_notes]
+#   ./scripts/linux/common/publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--pre-release]
 #
 # Example:
-#   ./scripts/linux/common/publish.sh 1.0.2 "Bug fixes and stability improvements"
+#   ./scripts/linux/common/publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 #
-skip_build=false
+use_existing_artifacts=false
+rebuild=false
 pre_release=false
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  publish.sh [--skip-build] [--pre-release] <version> [release_notes]
+  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--pre-release]
   publish.sh --help
 
+Options:
+  --version=<version>       Release version, for example 1.0.2
+  --notes=<notes>           Release notes (default: "Release <version>")
+  --use-existing-artifacts  Publish existing artifacts without rebuilding
+  --rebuild                 Rebuild the Linux Docker image before building artifacts
+  --pre-release             Mark the GitHub release as a prerelease and write prerelease.json
+
 Internal shared publisher. Prefer:
-  ./scripts/linux/arm64/publish.sh <version> "Release notes"
-  ./scripts/linux/x86_64/publish.sh <version> "Release notes"
+  ./scripts/linux/arm64/publish.sh --version=<version> --notes="Release notes"
+  ./scripts/linux/x86_64/publish.sh --version=<version> --notes="Release notes"
 EOF
 }
 
+version=""
+release_notes=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --skip-build)
-      skip_build=true
+    --version=*)
+      version="${1#--version=}"
+      shift
+      ;;
+    --version)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --version requires a value."
+        exit 1
+      fi
+      version="$1"
+      shift
+      ;;
+    --notes=*)
+      release_notes="${1#--notes=}"
+      shift
+      ;;
+    --notes)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --notes requires a value."
+        exit 1
+      fi
+      release_notes="$1"
+      shift
+      ;;
+    --use-existing-artifacts)
+      use_existing_artifacts=true
+      shift
+      ;;
+    --rebuild)
+      rebuild=true
       shift
       ;;
     --pre-release)
@@ -51,7 +97,9 @@ while [ "$#" -gt 0 ]; do
       exit 1
       ;;
     *)
-      break
+      echo "Error: positional arguments are not supported: '$1'"
+      echo "Use --version=<version> and --notes=<release_notes>."
+      exit 1
       ;;
   esac
 done
@@ -61,15 +109,21 @@ if [ "$#" -gt 0 ] && [ "$1" = "-h" -o "$1" = "--help" ]; then
   exit 0
 fi
 
-if [ "$#" -lt 1 ]; then
-  echo "Error: version is required."
+if [ -z "$version" ]; then
+  echo "Error: --version is required."
   echo ""
   print_usage
   exit 1
 fi
 
-version="$1"
-release_notes="${2:-Release $version}"
+if [ -z "$release_notes" ]; then
+  release_notes="Release $version"
+fi
+
+if [ -z "${CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:-}" ]; then
+  echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY must be set when publishing signed Linux update manifests."
+  exit 1
+fi
 
 # Keep filename/version fields normalized while still creating tags in vX.Y.Z format.
 normalized_version="${version#v}"
@@ -129,12 +183,14 @@ else
   echo "APP_VERSION already at $normalized_version"
 fi
 
-if $skip_build; then
-  echo "Skipping build/package step (--skip-build)."
+if $use_existing_artifacts; then
+  echo "Using existing build/package artifacts (--use-existing-artifacts)."
 else
   linux_build_arch="${CAVEVIEWER_LINUX_UPDATE_ARCH:-both}"
   echo "Building Linux release artifacts in Docker for: $linux_build_arch"
-  "$repo_root/scripts/linux/build_linux_in_docker.sh" --arch="$linux_build_arch" --step=all
+  build_args=(--arch="$linux_build_arch" --step=all)
+  $rebuild && build_args+=(--rebuild)
+  "$repo_root/scripts/linux/build_linux_in_docker.sh" "${build_args[@]}"
 fi
 
 # Find all AppImages for this version regardless of architecture suffix.
@@ -185,7 +241,9 @@ else
   fi
 fi
 manifest_appimage_name="$(basename "$manifest_appimage_path")"
-update_manifest_path="$repo_root/updates/linux/$linux_manifest_arch_dir/stable.json"
+manifest_channel="stable"
+$pre_release && manifest_channel="prerelease"
+update_manifest_path="$repo_root/updates/linux/$linux_manifest_arch_dir/$manifest_channel.json"
 update_manifest_signature_path="$update_manifest_path.sig"
 upload_appimage_paths=("$manifest_appimage_path")
 
@@ -207,12 +265,14 @@ if [ -z "$appimage_asset_url" ]; then
 fi
 
 echo "Linux AppImage asset URL (manifest): $appimage_asset_url"
+
 CAVEVIEWER_LINUX_UPDATE_ARCH="$linux_manifest_arch_dir" \
 "$script_dir/update_manifest.sh" \
-  "$normalized_version" \
-  "$appimage_asset_url" \
-  "$manifest_appimage_path" \
-  "$release_notes"
+  --version "$normalized_version" \
+  --download-url "$appimage_asset_url" \
+  --artifact-file "$manifest_appimage_path" \
+  --notes "$release_notes" \
+  --channel "$manifest_channel"
 
 signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
 if [ -z "$signing_python" ]; then
@@ -231,14 +291,14 @@ echo "Signing Linux update manifest: $update_manifest_path"
   "$update_manifest_path" \
   --signature "$update_manifest_signature_path"
 
-echo "Manifest written locally: updates/linux/$linux_manifest_arch_dir/stable.json"
-echo "Manifest signature written locally: updates/linux/$linux_manifest_arch_dir/stable.json.sig"
-echo "Committing version bump and updated Linux $linux_manifest_arch_dir manifest..."
+echo "Manifest written locally: updates/linux/$linux_manifest_arch_dir/$manifest_channel.json"
+echo "Manifest signature written locally: updates/linux/$linux_manifest_arch_dir/$manifest_channel.json.sig"
+echo "Committing version bump and updated Linux $linux_manifest_arch_dir $manifest_channel manifest..."
 git -C "$repo_root" add \
   caveviewer_version.py \
-  "updates/linux/$linux_manifest_arch_dir/stable.json" \
-  "updates/linux/$linux_manifest_arch_dir/stable.json.sig"
-git -C "$repo_root" commit -m "Release $tag Linux $linux_manifest_arch_dir"
+  "updates/linux/$linux_manifest_arch_dir/$manifest_channel.json" \
+  "updates/linux/$linux_manifest_arch_dir/$manifest_channel.json.sig"
+git -C "$repo_root" commit -m "Release $tag Linux $linux_manifest_arch_dir $manifest_channel"
 git -C "$repo_root" push
 
 echo "Done. Release $tag is published."

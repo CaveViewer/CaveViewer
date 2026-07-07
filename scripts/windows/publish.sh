@@ -2,32 +2,66 @@
 set -euo pipefail
 
 # Builds the Windows zip release artifact, publishes (or updates) a
-# GitHub release, and writes updates/windows/stable.json for the Windows updater flow.
+# GitHub release, and writes updates/windows/<channel>.json for the updater flow.
 #
 # Usage:
-#   ./scripts/windows/publish.sh [--skip-build] [--pre-release] <version> [release_notes]
+#   ./scripts/windows/publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
 #
 # Example:
-#   ./scripts/windows/publish.sh 1.0.2 "Bug fixes and stability improvements"
+#   ./scripts/windows/publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 #
-skip_build=false
+use_existing_artifacts=false
 pre_release=false
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  publish.sh [--skip-build] [--pre-release] <version> [release_notes]
+  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
   publish.sh --help
 
+Options:
+  --version=<version>      Release version, for example 1.0.2
+  --notes=<notes>          Release notes (default: "Release <version>")
+  --use-existing-artifacts  Publish existing artifacts without rebuilding
+  --pre-release             Mark the GitHub release as a prerelease and write prerelease.json
+
 Example:
-  publish.sh 1.0.2 "Bug fixes and stability improvements"
+  publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 EOF
 }
 
+version=""
+release_notes=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --skip-build)
-      skip_build=true
+    --version=*)
+      version="${1#--version=}"
+      shift
+      ;;
+    --version)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --version requires a value."
+        exit 1
+      fi
+      version="$1"
+      shift
+      ;;
+    --notes=*)
+      release_notes="${1#--notes=}"
+      shift
+      ;;
+    --notes)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --notes requires a value."
+        exit 1
+      fi
+      release_notes="$1"
+      shift
+      ;;
+    --use-existing-artifacts)
+      use_existing_artifacts=true
       shift
       ;;
     --pre-release)
@@ -49,7 +83,9 @@ while [ "$#" -gt 0 ]; do
       exit 1
       ;;
     *)
-      break
+      echo "Error: positional arguments are not supported: '$1'"
+      echo "Use --version=<version> and --notes=<release_notes>."
+      exit 1
       ;;
   esac
 done
@@ -59,15 +95,16 @@ if [ "$#" -gt 0 ] && [ "$1" = "-h" -o "$1" = "--help" ]; then
   exit 0
 fi
 
-if [ "$#" -lt 1 ]; then
-  echo "Error: version is required."
+if [ -z "$version" ]; then
+  echo "Error: --version is required."
   echo ""
   print_usage
   exit 1
 fi
 
-version="$1"
-release_notes="${2:-Release $version}"
+if [ -z "$release_notes" ]; then
+  release_notes="Release $version"
+fi
 
 normalized_version="${version#v}"
 tag="v$normalized_version"
@@ -81,6 +118,8 @@ source "$repo_root/scripts/common/github.sh"
 version_file="$repo_root/caveviewer_version.py"
 windows_packages_dir="$repo_root/dist/windows/packages"
 windows_metadata_dir="$repo_root/dist/windows/metadata"
+manifest_channel="stable"
+$pre_release && manifest_channel="prerelease"
 
 cv_require_cmd gh
 cv_require_cmd git
@@ -127,10 +166,10 @@ else
   echo "APP_VERSION already at $normalized_version"
 fi
 
-if $skip_build; then
-  echo "Skipping package step (--skip-build)."
+if $use_existing_artifacts; then
+  echo "Using existing package artifacts (--use-existing-artifacts)."
 else
-  "$script_dir/package.sh" "https://github.com/$repo/releases/download/$tag"
+  "$script_dir/package.sh" --base-download-url "https://github.com/$repo/releases/download/$tag"
 fi
 
 if [ ! -f "$app_zip_path" ]; then
@@ -168,14 +207,15 @@ fi
 echo "Windows zip asset URL: $zip_asset_url"
 
 "$script_dir/update_manifest.sh" \
-  "$normalized_version" \
-  "$zip_asset_url" \
-  "$app_zip_path" \
-  "$release_notes"
+  --version "$normalized_version" \
+  --download-url "$zip_asset_url" \
+  --artifact-file "$app_zip_path" \
+  --notes "$release_notes" \
+  --channel "$manifest_channel"
 
-echo "Committing version bump and updated manifest..."
-git -C "$repo_root" add caveviewer_version.py updates/windows/stable.json
-git -C "$repo_root" commit -m "Release $tag"
+echo "Committing version bump and updated $manifest_channel manifest..."
+git -C "$repo_root" add caveviewer_version.py "updates/windows/$manifest_channel.json"
+git -C "$repo_root" commit -m "Release $tag Windows $manifest_channel"
 git -C "$repo_root" push
 
-echo "Done. Release $tag is published and manifest is live."
+echo "Done. Release $tag is published and $manifest_channel manifest is live."

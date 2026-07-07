@@ -22,8 +22,14 @@ fi
 for arg in "$@"; do
   case "$arg" in
     --rebuild) ;;
+    -*)
+      echo "Error: unknown option '$arg'"
+      echo ""
+      print_usage
+      exit 1
+      ;;
     *)
-      echo "Error: unknown argument '$arg'"
+      echo "Error: positional arguments are not supported: '$arg'"
       echo ""
       print_usage
       exit 1

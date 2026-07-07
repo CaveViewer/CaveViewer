@@ -76,8 +76,8 @@ def make_ssl_context() -> ssl.SSLContext:
 # - Set CAVEVIEWER_UPDATE_MANIFEST_URL to a hosted JSON file
 #   (recommended and explicit).
 # - If omitted, we derive a default raw-GitHub URL from
-#   CAVEVIEWER_GITHUB_REPO and CAVEVIEWER_UPDATE_BRANCH to make fork
-#   and branch testing simple.
+#   CAVEVIEWER_GITHUB_REPO and CAVEVIEWER_UPDATE_BRANCH to make fork,
+#   branch, and packaged-app testing simple.
 _PLATFORM_ADAPTER = get_platform_adapter()
 _DEFAULT_REPO = os.getenv("CAVEVIEWER_GITHUB_REPO", _PLATFORM_ADAPTER.default_update_repo()).strip()
 _DEFAULT_BRANCH = os.getenv("CAVEVIEWER_UPDATE_BRANCH", "main").strip() or "main"

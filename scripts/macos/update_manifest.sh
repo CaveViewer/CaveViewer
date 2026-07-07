@@ -1,29 +1,98 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Writes updates/macos/stable.json for the in-app updater.
+# Writes updates/macos/<channel>.json for the in-app updater.
 # Usage:
-#   ./scripts/macos/update_manifest.sh <version> <macos_dmg_url> <macos_dmg_file> [release_notes]
+#   ./scripts/macos/update_manifest.sh --version=<version> --download-url=<macos_dmg_url> --artifact-file=<macos_dmg_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:
-#   ./scripts/macos/update_manifest.sh 1.0.1 \
-#     "https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1.dmg" \
-#     "dist/macos/packages/CaveViewer-1.0.1.dmg" \
-#     "Bug fixes and performance improvements"
+#   ./scripts/macos/update_manifest.sh --version=1.0.1 \
+#     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1.dmg" \
+#     --artifact-file="dist/macos/packages/CaveViewer-1.0.1.dmg" \
+#     --notes="Bug fixes and performance improvements"
 
-if [ "$#" -lt 3 ]; then
-  echo "Usage: $0 <version> <macos_dmg_url> <macos_dmg_file> [release_notes]"
+print_usage() {
+  cat <<'EOF'
+Usage:
+  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+EOF
+}
+
+version=""
+macos_dmg_url=""
+macos_dmg_file=""
+release_notes=""
+channel="stable"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version=*) version="${1#--version=}" ; shift ;;
+    --version)
+      shift
+      if [ "$#" -eq 0 ]; then echo "Error: --version requires a value."; exit 1; fi
+      version="$1"
+      shift
+      ;;
+    --download-url=*) macos_dmg_url="${1#--download-url=}" ; shift ;;
+    --download-url)
+      shift
+      if [ "$#" -eq 0 ]; then echo "Error: --download-url requires a value."; exit 1; fi
+      macos_dmg_url="$1"
+      shift
+      ;;
+    --artifact-file=*) macos_dmg_file="${1#--artifact-file=}" ; shift ;;
+    --artifact-file)
+      shift
+      if [ "$#" -eq 0 ]; then echo "Error: --artifact-file requires a value."; exit 1; fi
+      macos_dmg_file="$1"
+      shift
+      ;;
+    --notes=*) release_notes="${1#--notes=}" ; shift ;;
+    --notes)
+      shift
+      if [ "$#" -eq 0 ]; then echo "Error: --notes requires a value."; exit 1; fi
+      release_notes="$1"
+      shift
+      ;;
+    --channel=*) channel="${1#--channel=}" ; shift ;;
+    --channel)
+      shift
+      if [ "$#" -eq 0 ]; then echo "Error: --channel requires a value."; exit 1; fi
+      channel="$1"
+      shift
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      print_usage
+      exit 1
+      ;;
+    *)
+      echo "Error: positional arguments are not supported: '$1'"
+      print_usage
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z "$version" ] || [ -z "$macos_dmg_url" ] || [ -z "$macos_dmg_file" ]; then
+  echo "Error: --version, --download-url, and --artifact-file are required."
+  print_usage
   exit 1
 fi
-
-version="$1"
-macos_dmg_url="$2"
-macos_dmg_file="$3"
-release_notes="${4:-}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/artifacts.sh"
-manifest_path="$repo_root/updates/macos/stable.json"
+case "$channel" in
+  stable|prerelease) ;;
+  *)
+    echo "Error: invalid --channel '$channel' (expected stable or prerelease)"
+    exit 1
+    ;;
+esac
+manifest_path="$repo_root/updates/macos/$channel.json"
 
 macos_dmg_size_bytes="null"
 macos_dmg_sha256_value=""

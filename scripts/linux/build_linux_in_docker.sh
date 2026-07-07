@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "Error: build_linux_in_docker.sh must be run with bash, not sh."
+  echo "Use: ./scripts/linux/build_linux_in_docker.sh ..."
+  exit 1
+fi
+
 set -euo pipefail
 
 # Build the Linux app inside a Docker container. This is the only supported
@@ -6,7 +12,7 @@ set -euo pipefail
 # host execution.
 #
 # Usage:
-#   ./scripts/linux/build_linux_in_docker.sh [--arch=arm64|x86_64|both] [--step=build|package|all] [--rebuild]
+#   ./scripts/linux/build_linux_in_docker.sh [--arch=<arm64|x86_64|both>] [--step=<build|package|all>] [--rebuild]
 #
 # Default builds BOTH architectures. arm64 runs without emulation on Apple
 # Silicon; x86_64/amd64 runs under QEMU (slower). Each arch gets its own Docker
@@ -20,11 +26,11 @@ linux_build_venv_template="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux
 print_help() {
   cat <<'EOF'
 Usage:
-  build_linux_in_docker.sh [--arch=arm64|x86_64|amd64|both] [--step=build|package|all] [--rebuild]
+  build_linux_in_docker.sh [--arch=<arm64|x86_64|amd64|both>] [--step=<build|package|all>] [--rebuild]
 
 Options:
-  --arch=value     Linux architecture to build. Default: both
-  --step=value     Build step to run. Default: all
+  --arch=<arch>    Linux architecture to build. Default: both
+  --step=<step>    Build step to run. Default: all
   --rebuild        Rebuild the Docker image and clear the cached build venv
   -h, --help       Show this help
 EOF
@@ -41,24 +47,67 @@ rebuild=false
 archs=("arm64" "amd64")  # default: build both
 step="all"
 
-for arg in "$@"; do
-  case "$arg" in
+set_arch() {
+  case "$1" in
+    both) archs=("arm64" "amd64") ;;
+    amd64|x86_64) archs=("amd64") ;;
+    *) archs=("$1") ;;
+  esac
+}
+
+set_step() {
+  case "$1" in
+    build|package|all) step="$1" ;;
+    *)
+      echo "Error: invalid --step '$1' (expected build, package, or all)"
+      exit 1
+      ;;
+  esac
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     -h|--help)
       print_help
       exit 0
       ;;
-    --rebuild) rebuild=true ;;
-    --arch=both) archs=("arm64" "amd64") ;;
-    --arch=amd64) archs=("amd64") ;;
-    --arch=x86_64) archs=("amd64") ;;
-    --arch=*) archs=("${arg#--arch=}") ;;
-    --step=build|--step=package|--step=all) step="${arg#--step=}" ;;
+    --rebuild)
+      rebuild=true
+      shift
+      ;;
+    --arch=*)
+      set_arch "${1#--arch=}"
+      shift
+      ;;
+    --arch)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --arch requires a value."
+        exit 1
+      fi
+      set_arch "$1"
+      shift
+      ;;
     --step=*)
-      echo "Error: invalid ${arg} (expected --step=build, --step=package, or --step=all)"
-      exit 1
+      set_step "${1#--step=}"
+      shift
+      ;;
+    --step)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --step requires a value."
+        exit 1
+      fi
+      set_step "$1"
+      shift
       ;;
     -*)
-      echo "Error: unknown option '$arg'"
+      echo "Error: unknown option '$1'"
+      exit 1
+      ;;
+    *)
+      echo "Error: positional arguments are not supported: '$1'"
+      print_help
       exit 1
       ;;
   esac

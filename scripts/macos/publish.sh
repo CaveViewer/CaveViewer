@@ -2,33 +2,66 @@
 set -euo pipefail
 
 # Builds the macOS app DMG release artifact, publishes (or updates) a
-# GitHub release, and writes updates/macos/stable.json for the macOS DMG
-# updater flow.
+# GitHub release, and writes updates/macos/<channel>.json for the updater flow.
 #
 # Usage:
-#   ./scripts/macos/publish.sh [--skip-build] [--pre-release] <version> [release_notes]
+#   ./scripts/macos/publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
 #
 # Example:
-#   ./scripts/macos/publish.sh 1.0.2 "Bug fixes and stability improvements"
+#   ./scripts/macos/publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 #
-skip_build=false
+use_existing_artifacts=false
 pre_release=false
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  publish.sh [--skip-build] [--pre-release] <version> [release_notes]
+  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
   publish.sh --help
 
+Options:
+  --version=<version>      Release version, for example 1.0.2
+  --notes=<notes>          Release notes (default: "Release <version>")
+  --use-existing-artifacts  Publish existing artifacts without rebuilding
+  --pre-release             Mark the GitHub release as a prerelease and write prerelease.json
+
 Example:
-  publish.sh 1.0.2 "Bug fixes and stability improvements"
+  publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 EOF
 }
 
+version=""
+release_notes=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --skip-build)
-      skip_build=true
+    --version=*)
+      version="${1#--version=}"
+      shift
+      ;;
+    --version)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --version requires a value."
+        exit 1
+      fi
+      version="$1"
+      shift
+      ;;
+    --notes=*)
+      release_notes="${1#--notes=}"
+      shift
+      ;;
+    --notes)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --notes requires a value."
+        exit 1
+      fi
+      release_notes="$1"
+      shift
+      ;;
+    --use-existing-artifacts)
+      use_existing_artifacts=true
       shift
       ;;
     --pre-release)
@@ -50,7 +83,9 @@ while [ "$#" -gt 0 ]; do
       exit 1
       ;;
     *)
-      break
+      echo "Error: positional arguments are not supported: '$1'"
+      echo "Use --version=<version> and --notes=<release_notes>."
+      exit 1
       ;;
   esac
 done
@@ -60,15 +95,21 @@ if [ "$#" -gt 0 ] && [ "$1" = "-h" -o "$1" = "--help" ]; then
   exit 0
 fi
 
-if [ "$#" -lt 1 ]; then
-  echo "Error: version is required."
+if [ -z "$version" ]; then
+  echo "Error: --version is required."
   echo ""
   print_usage
   exit 1
 fi
 
-version="$1"
-release_notes="${2:-Release $version}"
+if [ -z "$release_notes" ]; then
+  release_notes="Release $version"
+fi
+
+if [ -z "${CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:-}" ]; then
+  echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY must be set when publishing signed macOS update manifests."
+  exit 1
+fi
 
 # Keep filename/version fields normalized while still creating tags in vX.Y.Z format.
 normalized_version="${version#v}"
@@ -81,7 +122,9 @@ source "$repo_root/scripts/common/github.sh"
 version_file="$repo_root/caveviewer_version.py"
 macos_packages_dir="$repo_root/dist/macos/packages"
 macos_metadata_dir="$repo_root/dist/macos/metadata"
-update_manifest_path="$repo_root/updates/macos/stable.json"
+manifest_channel="stable"
+$pre_release && manifest_channel="prerelease"
+update_manifest_path="$repo_root/updates/macos/$manifest_channel.json"
 update_manifest_signature_path="$update_manifest_path.sig"
 
 cv_require_cmd gh
@@ -130,11 +173,11 @@ else
   echo "APP_VERSION already at $normalized_version"
 fi
 
-if $skip_build; then
-  echo "Skipping build/package step (--skip-build)."
+if $use_existing_artifacts; then
+  echo "Using existing build/package artifacts (--use-existing-artifacts)."
 else
   "$script_dir/build.sh"
-  "$script_dir/package_macos_dmg.sh" "https://github.com/$repo/releases/download/$tag"
+  "$script_dir/package_macos_dmg.sh" --base-download-url "https://github.com/$repo/releases/download/$tag"
 fi
 
 if [ ! -f "$app_dmg_path" ]; then
@@ -172,11 +215,13 @@ fi
 
 echo "macOS DMG asset URL: $dmg_asset_url"
 echo "macOS metadata URL: $meta_asset_url"
+
 "$script_dir/update_manifest.sh" \
-  "$normalized_version" \
-  "$dmg_asset_url" \
-  "$app_dmg_path" \
-  "$release_notes"
+  --version "$normalized_version" \
+  --download-url "$dmg_asset_url" \
+  --artifact-file "$app_dmg_path" \
+  --notes "$release_notes" \
+  --channel "$manifest_channel"
 
 signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
 if [ -z "$signing_python" ]; then
@@ -190,14 +235,14 @@ if [ -z "$signing_python" ]; then
   fi
 fi
 
-echo "Signing macOS update manifest: $update_manifest_path"
+echo "Signing macOS $manifest_channel update manifest: $update_manifest_path"
 "$signing_python" "$repo_root/scripts/sign_update_manifest.py" \
   "$update_manifest_path" \
   --signature "$update_manifest_signature_path"
 
-echo "Committing version bump and updated manifest..."
-git -C "$repo_root" add caveviewer_version.py updates/macos/stable.json updates/macos/stable.json.sig
-git -C "$repo_root" commit -m "Release $tag"
+echo "Committing version bump and updated $manifest_channel manifest..."
+git -C "$repo_root" add caveviewer_version.py "updates/macos/$manifest_channel.json" "updates/macos/$manifest_channel.json.sig"
+git -C "$repo_root" commit -m "Release $tag macOS $manifest_channel"
 git -C "$repo_root" push
 
-echo "Done. Release $tag is published and manifest is live."
+echo "Done. Release $tag is published and $manifest_channel manifest is live."

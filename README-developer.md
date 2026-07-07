@@ -254,8 +254,8 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_GITHUB_REPO` | `KernalPanic/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork. |
-| `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for local updater testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
+| `CAVEVIEWER_GITHUB_REPO` | `KernalPanic/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork or testing a package from Terminal. |
+| `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for updater testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
 | `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to always show the "Download Update" prompt regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
@@ -266,11 +266,21 @@ public key lives at `security/release_signing_public_key.pem`. During the
 transition period, the app logs a warning and continues if a manifest signature
 is missing or invalid.
 
+Default update checks read the committed main-branch
+`updates/<platform>/stable.json` manifests, not GitHub's latest-release or
+prerelease metadata. Stable publish runs update and sign `stable.json`.
+Prerelease publish runs mark the GitHub release as a prerelease and update the
+separate `prerelease.json` channel, leaving `stable.json` unchanged. For
+debugging, explicit environment variables can point a source run or packaged
+app launched from Terminal at another branch or manifest URL.
+
 Linux manifests are architecture-specific:
 
 ```text
 updates/linux/arm64/stable.json
+updates/linux/arm64/prerelease.json
 updates/linux/x86_64/stable.json
+updates/linux/x86_64/prerelease.json
 ```
 
 Sign a manifest:
@@ -283,8 +293,8 @@ python3 scripts/sign_update_manifest.py \
 
 This writes `updates/macos/stable.json.sig`. Release publish scripts do not use
 a default private-key path; set `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` before
-running them. When signing manually, either set that variable or pass
-`--private-key`.
+running stable releases. When signing manually, either set that variable or
+pass `--private-key`.
 
 ### UI & Rendering
 

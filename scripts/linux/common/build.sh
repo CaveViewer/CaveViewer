@@ -34,7 +34,11 @@ if [ "${CAVEVIEWER_LINUX_DOCKER_BUILD:-}" != "1" ]; then
 fi
 
 if [ "$#" -gt 0 ]; then
-  echo "Error: unknown argument '$1'"
+  if [[ "$1" == -* ]]; then
+    echo "Error: unknown option '$1'"
+  else
+    echo "Error: positional arguments are not supported: '$1'"
+  fi
   echo ""
   print_usage
   exit 1
