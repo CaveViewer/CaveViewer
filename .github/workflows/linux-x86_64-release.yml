@@ -25,6 +25,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: caveviewer-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-linux-x86_64:
     runs-on: ubuntu-latest
