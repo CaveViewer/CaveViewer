@@ -11,7 +11,7 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 print_usage() {
   cat <<'EOF'
 Usage:
-  build.sh [--help]
+  build.sh --help
 
 Builds the intermediate macOS CaveViewer.app bundle.
 EOF

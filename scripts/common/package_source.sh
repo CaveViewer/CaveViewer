@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Package source code for GitHub releases
 # Usage:
-#   ./scripts/common/package_source.sh --version=<version>
+#   package_source.sh --version=<version>
 # Example:
-#   ./scripts/common/package_source.sh --version=1.2.45
+#   package_source.sh --version=1.2.45
 
 print_usage() {
   cat <<'EOF'

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# GitHub helper functions.
+# Source this file from release scripts that need command checks or repository
+# owner/name inference.
+
 cv_require_cmd() {
   local cmd="$1"
   if ! command -v "$cmd" >/dev/null 2>&1; then

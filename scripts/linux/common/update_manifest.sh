@@ -6,9 +6,9 @@ set -euo pipefail
 # package size, SHA-256, and release notes for the in-app updater.
 #
 # Usage:
-#   ./scripts/linux/common/update_manifest.sh --version=<version> --download-url=<appimage_url> --artifact-file=<appimage_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh --version=<version> --download-url=<appimage_url> --artifact-file=<appimage_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:
-#   ./scripts/linux/common/update_manifest.sh --version=1.0.1 \
+#   update_manifest.sh --version=1.0.1 \
 #     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-x86_64.AppImage" \
 #     --artifact-file="dist/linux/x86_64/packages/CaveViewer-1.0.1-x86_64.AppImage" \
 #     --notes="Bug fixes and performance improvements"

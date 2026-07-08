@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 if [ "${BASH##*/}" != "bash" ]; then
   echo "Error: build_linux_in_docker.sh must be run with bash, not sh."
-  echo "Use: ./scripts/linux/build_linux_in_docker.sh ..."
+  echo "Use: build_linux_in_docker.sh ..."
   exit 1
 fi
 
@@ -13,7 +13,7 @@ set -euo pipefail
 # scripts/linux/common/*.sh are container-only internals.
 #
 # Usage:
-#   ./scripts/linux/build_linux_in_docker.sh [--arch=<arm64|x86_64|both>] [--step=<build|package|all>] [--rebuild]
+#   build_linux_in_docker.sh [--arch=<arm64|x86_64|both>] [--step=<build|package|all>] [--rebuild]
 #
 # Default builds BOTH architectures. arm64 runs without emulation on Apple
 # Silicon; x86_64 runs under QEMU (slower). Each arch gets its own Docker

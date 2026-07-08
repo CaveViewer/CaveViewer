@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 if [ "${BASH##*/}" != "bash" ]; then
-  echo "Error: scripts/linux/common/publish.sh must be run with bash, not sh."
-  echo "Use: ./scripts/linux/arm64/publish.sh ... or ./scripts/linux/x86_64/publish.sh ..."
+  echo "Error: publish.sh must be run with bash, not sh."
+  echo "Use: arm64/publish.sh ... or x86_64/publish.sh ..."
   exit 1
 fi
 
@@ -13,10 +13,10 @@ set -euo pipefail
 # channel: updates/linux/<arch>/<stable|prerelease>.json.
 #
 # Usage:
-#   ./scripts/linux/common/publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--pre-release]
+#   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--pre-release]
 #
 # Example:
-#   ./scripts/linux/common/publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
+#   publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 #
 use_existing_artifacts=false
 rebuild=false
@@ -36,8 +36,8 @@ Options:
   --pre-release             Mark the GitHub release as a prerelease and write prerelease.json
 
 Internal shared publisher. Prefer:
-  ./scripts/linux/arm64/publish.sh --version=<version> --notes="Release notes"
-  ./scripts/linux/x86_64/publish.sh --version=<version> --notes="Release notes"
+  arm64/publish.sh --version=<version> --notes="Release notes"
+  x86_64/publish.sh --version=<version> --notes="Release notes"
 EOF
 }
 
@@ -86,10 +86,6 @@ while [ "$#" -gt 0 ]; do
     -h|--help)
       print_usage
       exit 0
-      ;;
-    --)
-      shift
-      break
       ;;
     -*)
       echo "Error: unknown option '$1'"

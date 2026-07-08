@@ -6,7 +6,7 @@ set -euo pipefail
 # metadata under dist/windows.
 #
 # Usage:
-#   ./scripts/windows/package.sh [--base-download-url=<url>]
+#   package.sh [--base-download-url=<url>]
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"

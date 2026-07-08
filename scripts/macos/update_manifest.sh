@@ -6,9 +6,9 @@ set -euo pipefail
 # SHA-256, and release notes for the in-app updater.
 #
 # Usage:
-#   ./scripts/macos/update_manifest.sh --version=<version> --download-url=<macos_dmg_url> --artifact-file=<macos_dmg_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh --version=<version> --download-url=<macos_dmg_url> --artifact-file=<macos_dmg_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:
-#   ./scripts/macos/update_manifest.sh --version=1.0.1 \
+#   update_manifest.sh --version=1.0.1 \
 #     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1.dmg" \
 #     --artifact-file="dist/macos/packages/CaveViewer-1.0.1.dmg" \
 #     --notes="Bug fixes and performance improvements"

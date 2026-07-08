@@ -301,8 +301,8 @@ run_selected_builds() {
   fi
 
   $selected_windows && "$script_dir/windows/build.sh"
-  $selected_linux_arm64 && "$script_dir/linux/arm64/build.sh" "${passthrough_args[@]}"
-  $selected_linux_x86 && "$script_dir/linux/x86_64/build.sh" "${passthrough_args[@]}"
+  $selected_linux_arm64 && "$script_dir/linux/arm64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
+  $selected_linux_x86 && "$script_dir/linux/x86_64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
 }
 
 run_selected_packages() {
@@ -411,7 +411,7 @@ run_selected_releases() {
   if $selected_macos; then
     if [ "$host_os" = "Darwin" ]; then
       echo "[macos] Publishing release assets..."
-      "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
+      "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
     else
       echo "[macos] Skipped publish: requires macOS host."
     fi
@@ -420,7 +420,7 @@ run_selected_releases() {
   if $selected_linux_arm64; then
     if linux_artifact_exists_for_arch arm64; then
       echo "[linux-arm64] Publishing release assets..."
-      "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
+      "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
     else
       echo "[linux-arm64] Publish skipped: artifact missing."
     fi
@@ -429,7 +429,7 @@ run_selected_releases() {
   if $selected_linux_x86; then
     if linux_artifact_exists_for_arch x86_64; then
       echo "[linux-x86_64] Publishing release assets..."
-      "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
+      "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
     else
       echo "[linux-x86_64] Publish skipped: artifact missing."
     fi
@@ -437,7 +437,7 @@ run_selected_releases() {
 
   if $selected_windows; then
     echo "[windows] Publishing release assets..."
-    "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" "${publish_args[@]}"
+    "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
   fi
 }
 
@@ -460,7 +460,7 @@ fi
 while [ "$#" -gt 0 ]; do
   arg="$(trim_leading_whitespace "$1")"
   case "$arg" in
-    -h|--help|help)
+    -h|--help)
       show_help=true
       shift
       ;;
@@ -655,40 +655,40 @@ case "$dispatch_target:$action" in
     run_selected_releases
     ;;
   macos:build)
-    exec "$script_dir/macos/build.sh" "${passthrough_args[@]}"
+    exec "$script_dir/macos/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   macos:package)
-    exec "$script_dir/macos/package.sh" "${passthrough_args[@]}"
+    exec "$script_dir/macos/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   macos:release)
-    exec "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
+    exec "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   windows:build)
-    exec "$script_dir/windows/build.sh" "${passthrough_args[@]}"
+    exec "$script_dir/windows/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   windows:package)
-    exec "$script_dir/windows/package.sh" "${passthrough_args[@]}"
+    exec "$script_dir/windows/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   windows:release)
-    exec "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
+    exec "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-arm64:build)
-    exec "$script_dir/linux/arm64/build.sh" "${passthrough_args[@]}"
+    exec "$script_dir/linux/arm64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-arm64:package)
-    exec "$script_dir/linux/arm64/package.sh" "${passthrough_args[@]}"
+    exec "$script_dir/linux/arm64/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-arm64:release)
-    exec "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
+    exec "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-x86_64:build)
-    exec "$script_dir/linux/x86_64/build.sh" "${passthrough_args[@]}"
+    exec "$script_dir/linux/x86_64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-x86_64:package)
-    exec "$script_dir/linux/x86_64/package.sh" "${passthrough_args[@]}"
+    exec "$script_dir/linux/x86_64/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-x86_64:release)
-    exec "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" "${pre_release_args[@]}" "${passthrough_args[@]}"
+    exec "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   multi:build)
     run_selected_builds

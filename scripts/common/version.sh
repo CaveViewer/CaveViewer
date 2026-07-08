@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Version helper functions.
+# Source this file from release scripts that need to read or update
+# caveviewer_version.py.
+
 cv_read_app_field() {
   local version_file="$1"
   local field_name="$2"

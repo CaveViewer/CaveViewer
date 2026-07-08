@@ -5,11 +5,11 @@ set -euo pipefail
 # Builds the macOS app bundle and packages it into a versioned DMG.
 #
 # Usage:
-#   ./scripts/macos/package.sh [--base-download-url=<url>]
+#   package.sh [--base-download-url=<url>]
 #
 # Example:
-#   ./scripts/macos/package.sh
-#   ./scripts/macos/package.sh --base-download-url="https://github.com/owner/CaveViewerPlus/releases/download/v1.2.3"
+#   package.sh
+#   package.sh --base-download-url="https://github.com/owner/CaveViewerPlus/releases/download/v1.2.3"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

@@ -5,8 +5,7 @@ set -euo pipefail
 # Internal Docker-only entry point that builds a standalone PyInstaller app
 # bundle under dist/linux/<arch>/app.
 #
-# Do not run this script directly. Use scripts/release.sh or
-# scripts/linux/build_linux_in_docker.sh.
+# Do not run this script directly. Use release.sh or build_linux_in_docker.sh.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
@@ -17,8 +16,8 @@ Usage:
   build.sh --help
 
 Internal Docker-only script. Use one of:
-  ./scripts/release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=build
-  ./scripts/release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=build
+  release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=build
+  release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=build
 EOF
 }
 
@@ -336,4 +335,4 @@ release_target="linux-x86_64"
 if [ "$linux_dist_arch" = "arm64" ]; then
   release_target="linux-arm64"
 fi
-echo "Run ./scripts/release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=package to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."
+echo "Run release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=package to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."

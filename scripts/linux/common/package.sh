@@ -5,8 +5,7 @@ set -euo pipefail
 # Internal Docker-only entry point that packages the built app bundle as an
 # AppDir/AppImage under dist/linux/<arch>/packages.
 #
-# Do not run this script directly. Use scripts/release.sh or
-# scripts/linux/build_linux_in_docker.sh.
+# Do not run this script directly. Use release.sh or build_linux_in_docker.sh.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
@@ -18,8 +17,8 @@ Usage:
   package.sh --help
 
 Internal Docker-only script. Use one of:
-  ./scripts/release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=package
-  ./scripts/release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=package
+  release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=package
+  release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=package
 EOF
 }
 
@@ -174,7 +173,7 @@ if [ ! -d "$app_dir" ]; then
   if [ "$linux_dist_arch" = "arm64" ]; then
     release_target="linux-arm64"
   fi
-  echo "Run ./scripts/release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=build first."
+  echo "Run release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=build first."
   exit 1
 fi
 

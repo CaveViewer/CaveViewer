@@ -6,9 +6,9 @@ set -euo pipefail
 # size, SHA-256, and release notes for the in-app updater.
 #
 # Usage:
-#   ./scripts/windows/update_manifest.sh --version=<version> --download-url=<windows_zip_url> --artifact-file=<windows_zip_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh --version=<version> --download-url=<windows_zip_url> --artifact-file=<windows_zip_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:
-#   ./scripts/windows/update_manifest.sh --version=1.0.1 \
+#   update_manifest.sh --version=1.0.1 \
 #     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-windows.zip" \
 #     --artifact-file="dist/windows/packages/CaveViewer-1.0.1-windows.zip" \
 #     --notes="Bug fixes and performance improvements"

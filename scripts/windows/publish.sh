@@ -6,10 +6,10 @@ set -euo pipefail
 # writes an updater manifest for the selected channel.
 #
 # Usage:
-#   ./scripts/windows/publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
+#   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
 #
 # Example:
-#   ./scripts/windows/publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
+#   publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 #
 use_existing_artifacts=false
 pre_release=false
@@ -72,10 +72,6 @@ while [ "$#" -gt 0 ]; do
     -h|--help)
       print_usage
       exit 0
-      ;;
-    --)
-      shift
-      break
       ;;
     -*)
       echo "Error: unknown option '$1'"
