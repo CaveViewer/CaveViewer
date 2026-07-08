@@ -41,7 +41,7 @@ Download the AppImage matching your CPU from https://github.com/KernalPanic/Cave
 - `CaveViewer-<version>-x86_64.AppImage` (amd64 / x86_64)
 - `CaveViewer-<version>-aarch64.AppImage` (arm64)
 
-The change the permissions to make the file executable and run.
+Then change the permissions to make the file executable and run.
 
 ```bash
 chmod +x CaveViewer-*.AppImage
@@ -51,6 +51,26 @@ chmod +x CaveViewer-*.AppImage
 # or
 ./CaveViewer-*-aarch64.AppImage  # arm64
 ```
+
+### Virtual Machines or GPU Driver Problems
+
+If CaveViewer crashes, freezes, or leaves a stuck process when running inside a
+virtual machine such as Parallels, start it with virtual sync disabled:
+
+```bash
+CAVEVIEWER_VSYNC=0 ./CaveViewer-*.AppImage
+```
+
+If the problem still happens, force software OpenGL rendering as a stronger
+fallback:
+
+```bash
+LIBGL_ALWAYS_SOFTWARE=1 CAVEVIEWER_VSYNC=0 ./CaveViewer-*.AppImage
+```
+
+`LIBGL_ALWAYS_SOFTWARE=1` tells the Linux OpenGL stack to use software rendering
+instead of the GPU driver. This can be slower, but it can avoid crashes or
+kernel-level hangs caused by virtual GPU drivers or unstable graphics drivers.
 
 ## Getting Started with Sample Maps
 
@@ -64,6 +84,26 @@ If you want to try CaveViewer without your own scan, use the built-in sample map
 
 Sample maps are a good way to confirm that CaveViewer is working before you import your own data. You can also reopen them later from the same sample maps dialog.
 
+## Recording a Flight
+
+CaveViewer can record a clean MP4 of your flight through the cave. The app uses
+`ffmpeg` for MP4 encoding.
+
+Use the `REC` button to arm recording. The minimap, controls, and control panel
+disappear immediately, a 3-to-0 countdown appears in the amber loading ring,
+and then recording begins. Press `Shift+R` to cancel the countdown or stop
+recording.
+
+Videos are saved to:
+
+```text
+~/Movies/CaveViewer/
+```
+
+Frames are streamed directly to the video encoder while you fly. CaveViewer does
+not keep the recording in memory. Recordings are scaled to a 1080-pixel maximum
+height by default so they play back smoothly on normal video players.
+
 
 ## Importing and Streaming Preferences
 
@@ -74,6 +114,7 @@ These values are validated in the UI, applied to environment variables for the c
 - Saved settings file: ~/.caveviewer/advanced_settings.json
 - Streaming section controls runtime chunk loading and upload behavior.
 - Map Parsing section controls cache-build/import behavior.
+- Recordings section controls the default folder used when saving MP4 flight recordings.
 
 ### Map Chunking
 
@@ -105,6 +146,12 @@ Why this matters: chunk size is one of the most important map settings because i
 | OBJ scan throttle (ms) | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Yield/throttle behavior during OBJ scanning. |
 | Import worker count | — | logical CPUs minus 2 (minimum 1) | integer, at least 1 | Number of worker threads used while writing chunk cache files. |
 | Import CPUs to keep free | — | 2 | integer, at least 0 | CPU cores reserved during cache build/import. |
+
+### Recordings
+
+| Preference | Environment variable | Default | Valid range | What it changes |
+|---|---|---:|---|---|
+| Movie recording directory | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | writable folder, or a folder that can be created | Folder where MP4 flight recordings are saved. |
 
 ### Streaming vs Chunking: What Changes Now vs Later
 

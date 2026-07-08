@@ -186,10 +186,24 @@ disabled. Some virtual GPU drivers can hang or crash when vsync is enabled.
 CAVEVIEWER_VSYNC=0 ./run_caveviewer.sh
 ```
 
+If the VM or GPU driver still hangs or crashes, force software OpenGL rendering:
+
+```bash
+LIBGL_ALWAYS_SOFTWARE=1 CAVEVIEWER_VSYNC=0 ./run_caveviewer.sh
+```
+
+`LIBGL_ALWAYS_SOFTWARE=1` bypasses the GPU driver and asks Mesa to render in
+software. It may be slower, but it is useful on VMs or machines with unreliable
+OpenGL drivers.
+
 For large maps in a VM, also reduce per-frame GPU upload pressure:
 
 ```bash
-CAVEVIEWER_VSYNC=0 CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1 CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=1 ./run_caveviewer.sh
+LIBGL_ALWAYS_SOFTWARE=1 \
+CAVEVIEWER_VSYNC=0 \
+CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1 \
+CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=1 \
+./run_caveviewer.sh
 ```
 
 Do not rely on VM auto-detection; set these variables explicitly.
@@ -280,6 +294,14 @@ pass `--private-key`.
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
 | `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing (matches macOS CoreText style); `lcd` = LCD sub-pixel rendering. |
 | `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
+| `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a VM or GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |
+| `CAVEVIEWER_NAVIGATION_GUARD` | `1` | Set to `0` to disable the navigation boundary that keeps free-fly movement near occupied map chunks. |
+| `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | `2` | Number of chunk cells around occupied map chunks that remain navigable. Larger values allow more free space around the cave; smaller values keep users closer to rendered chunks. |
+| `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
+| `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Directory where clean MP4 flight recordings are saved. The Advanced Settings panel saves this value. |
+| `CAVEVIEWER_RECORDING_FPS` | `30` | Target MP4 recording frame rate. Range: 1–60. Frames are streamed to `ffmpeg`; they are not buffered in memory. |
+| `CAVEVIEWER_RECORDING_MAX_HEIGHT` | `1080` | Maximum output video height. The framebuffer is downscaled before encoding to keep MP4 playback smooth. |
+| `CAVEVIEWER_RECORDING_CRF` | `23` | H.264 quality value passed to `ffmpeg`. Lower is larger/higher quality; higher is smaller/lower quality. Range: 0–51. |
 
 ### Streaming Performance
 

@@ -68,6 +68,7 @@ _LOGO_FRAG_SRC = """
 uniform sampler2D u_texture;
 uniform float u_alpha;
 uniform float u_progress;
+uniform float u_logo_alpha;
 in vec2 v_uv;
 out vec4 f_color;
 
@@ -87,6 +88,7 @@ void main() {
     if (is_amber(tex_color)) {
         tex_color.a = 0.0;
     }
+    tex_color.a *= u_logo_alpha;
 
     vec2 centered = v_uv - vec2(0.5, 0.5);
     float dist = length(centered);
@@ -266,6 +268,7 @@ class ImportProgressPanel:
         window_size: tuple[int, int],
         progress: float,
         alpha: float = 1.0,
+        logo_alpha: float = 1.0,
     ) -> None:
         if self._logo_texture is None:
             return
@@ -300,6 +303,7 @@ class ImportProgressPanel:
         self.logo_program["u_texture"].value = 0
         self.logo_program["u_alpha"].value = alpha
         self.logo_program["u_progress"].value = max(0.0, min(1.0, progress))
+        self.logo_program["u_logo_alpha"].value = max(0.0, min(1.0, logo_alpha))
         self._logo_vao.render(moderngl.TRIANGLES, vertices=6)
 
     def draw_logo(
@@ -318,6 +322,129 @@ class ImportProgressPanel:
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self._render_logo(center_x, center_y, window_size, progress, alpha)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
+
+    def draw_countdown_number(
+        self,
+        center_x: float,
+        center_y: float,
+        window_size: tuple[int, int],
+        number: int,
+        progress: float,
+        alpha: float = 1.0,
+    ) -> None:
+        """Render the loading ring with a centered countdown number."""
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._render_logo(center_x, center_y, window_size, progress, alpha, logo_alpha=0.0)
+
+        verts = []
+        w, h = window_size
+
+        def px_to_ndc(x, y):
+            return (x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0
+
+        def add_quad_px(x0, y0, x1, y1, rgba):
+            (nx0, ny0) = px_to_ndc(x0, y0)
+            (nx1, ny1) = px_to_ndc(x1, y1)
+            top, bottom = max(ny0, ny1), min(ny0, ny1)
+            left, right = min(nx0, nx1), max(nx0, nx1)
+            quad = [
+                (left, bottom), (right, bottom), (right, top),
+                (left, bottom), (right, top), (left, top),
+            ]
+            for (vx, vy) in quad:
+                verts.append((vx, vy, *rgba))
+
+        text = str(max(0, min(9, int(number))))
+        pixel_size = 9.0
+        bounds = bitmap_font.text_bounds_px(text, pixel_size)
+        text_w = bounds[2] - bounds[0]
+        text_h = bounds[3] - bounds[1]
+        origin_x = center_x - text_w / 2.0 - bounds[0]
+        origin_y = center_y - text_h / 2.0 - bounds[1]
+        r, g, b, a = (0.8980, 0.6314, 0.1216, alpha)
+        for glyph in bitmap_font.iter_text_pixels(text, origin_x, origin_y, pixel_size):
+            px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
+            glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
+            add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
+
+        if verts:
+            data = np.array(verts, dtype=np.float32)
+            if data.nbytes > self._max_verts * 6 * 4:
+                self._vbo.release()
+                self._max_verts = max(self._max_verts * 2, len(verts))
+                self._vbo = self.ctx.buffer(reserve=self._max_verts * 6 * 4)
+                self._vao = self.ctx.vertex_array(
+                    self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
+                )
+            self._vbo.write(data.tobytes())
+            self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
+
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
+
+    def draw_ring_label(
+        self,
+        center_x: float,
+        center_y: float,
+        window_size: tuple[int, int],
+        label: str,
+        progress: float = 1.0,
+        pixel_size: float = 5.4,
+        alpha: float = 1.0,
+    ) -> None:
+        """Render the loading ring with a centered text label."""
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._render_logo(center_x, center_y, window_size, progress, alpha, logo_alpha=0.0)
+
+        verts = []
+        w, h = window_size
+
+        def px_to_ndc(x, y):
+            return (x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0
+
+        def add_quad_px(x0, y0, x1, y1, rgba):
+            (nx0, ny0) = px_to_ndc(x0, y0)
+            (nx1, ny1) = px_to_ndc(x1, y1)
+            top, bottom = max(ny0, ny1), min(ny0, ny1)
+            left, right = min(nx0, nx1), max(nx0, nx1)
+            quad = [
+                (left, bottom), (right, bottom), (right, top),
+                (left, bottom), (right, top), (left, top),
+            ]
+            for (vx, vy) in quad:
+                verts.append((vx, vy, *rgba))
+
+        bounds = bitmap_font.text_bounds_px(label, pixel_size)
+        text_w = bounds[2] - bounds[0]
+        text_h = bounds[3] - bounds[1]
+        origin_x = center_x - text_w / 2.0 - bounds[0]
+        origin_y = center_y - text_h / 2.0 - bounds[1]
+        r, g, b, a = (0.8980, 0.6314, 0.1216, alpha)
+        for glyph in bitmap_font.iter_text_pixels(label, origin_x, origin_y, pixel_size):
+            px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
+            glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
+            add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
+
+        if verts:
+            data = np.array(verts, dtype=np.float32)
+            if data.nbytes > self._max_verts * 6 * 4:
+                self._vbo.release()
+                self._max_verts = max(self._max_verts * 2, len(verts))
+                self._vbo = self.ctx.buffer(reserve=self._max_verts * 6 * 4)
+                self._vao = self.ctx.vertex_array(
+                    self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
+                )
+            self._vbo.write(data.tobytes())
+            self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
+
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)

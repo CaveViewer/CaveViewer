@@ -143,7 +143,7 @@ _ADVANCED_DIALOG_MIN_WIDTH = 1320 if sys.platform == "win32" else 0
 _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
     "BottomLine Projects Scientific Dive Team.\n"
-    "Engineering and design by mr_v.\n\n"
+    "Engineering and design by magic mr_v.\n\n"
     "Licensed under the GNU General Public License v3.0.\n")
 
 
@@ -347,11 +347,19 @@ _ADVANCED_SETTING_FIELDS = (
         "value_type": "int",
         "min": 0,
     },
+    {
+        "section": "downloads",
+        "key": "recording_dir",
+        "env_var": "CAVEVIEWER_RECORDING_DIR",
+        "label": "Movie recording directory",
+        "hint": "Folder where MP4 flight recordings are saved.",
+        "value_type": "path_create",
+    },
 )
 
-_ADVANCED_SETTING_SECTIONS = (
-    ("streaming", "Streaming Performance"),
-    ("parsing", "Map Parsing"),
+_ADVANCED_SETTING_COLUMNS = (
+    (("streaming", "Streaming Performance"),),
+    (("parsing", "Map Parsing"), ("downloads", "Recordings")),
 )
 
 
@@ -394,7 +402,15 @@ def _advanced_setting_defaults() -> dict[str, str]:
         "chunk_build_workers": _env_setting_or_default(
             "CAVEVIEWER_CHUNK_BUILD_WORKERS", str(max(1, logical_cpus - 2))
         ),
+        "recording_dir": _default_recording_dir(),
     }
+
+
+def _default_recording_dir() -> str:
+    configured = os.getenv("CAVEVIEWER_RECORDING_DIR", "").strip()
+    if configured:
+        return os.path.abspath(os.path.expanduser(configured))
+    return os.path.abspath(os.path.expanduser(os.path.join("~", "Movies", "CaveViewer")))
 
 
 def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
@@ -447,6 +463,16 @@ def _format_advanced_range(field: dict) -> str:
     return "valid"
 
 
+def _directory_target_is_writable(path: str) -> bool:
+    current = path
+    while current and not os.path.exists(current):
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return bool(current and os.path.isdir(current) and os.access(current, os.W_OK))
+
+
 def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | None, dict[str, str], str | None]:
     normalized = _normalize_advanced_settings(values)
 
@@ -491,6 +517,27 @@ def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | Non
             if maximum is not None and value > maximum:
                 return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
             normalized[key] = f"{value:g}"
+            continue
+
+        if value_type == "path":
+            path = os.path.abspath(os.path.expanduser(text))
+            if not os.path.isdir(path):
+                return False, f"{label} must be an existing folder.", normalized, key
+            if not os.access(path, os.W_OK):
+                return False, f"{label} must be writable.", normalized, key
+            normalized[key] = path
+            continue
+
+        if value_type == "path_create":
+            path = os.path.abspath(os.path.expanduser(text))
+            if os.path.exists(path):
+                if not os.path.isdir(path):
+                    return False, f"{label} must be a folder.", normalized, key
+                if not os.access(path, os.W_OK):
+                    return False, f"{label} must be writable.", normalized, key
+            elif not _directory_target_is_writable(path):
+                return False, f"{label} must be inside a writable folder.", normalized, key
+            normalized[key] = path
 
     return True, None, normalized, None
 
@@ -1046,6 +1093,34 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         section_row = tk.Frame(body, bg=_BG_COLOR)
         section_row.pack(fill="both", expand=True, pady=(0, 10))
 
+        def _button_label(parent, text, command, bg="#2a2a33", fg=_SUBTITLE_COLOR,
+                          hover_bg="#33333f", padx=10, border_color="#3a4454"):
+            label = tk.Label(
+                parent,
+                text=text,
+                font=_SMALL_FONT,
+                bg=bg,
+                fg=fg,
+                padx=padx,
+                pady=5,
+                cursor="hand2",
+                takefocus=True,
+                highlightthickness=1,
+                highlightbackground=border_color,
+                highlightcolor=border_color,
+            )
+
+            def _invoke(_event=None):
+                command()
+                return "break"
+
+            label.bind("<Button-1>", _invoke)
+            label.bind("<Return>", _invoke)
+            label.bind("<space>", _invoke)
+            label.bind("<Enter>", lambda _event: label.config(bg=hover_bg))
+            label.bind("<Leave>", lambda _event: label.config(bg=bg))
+            return label
+
         def render_section(parent, title: str, section_key: str) -> None:
             section = tk.Frame(
                 parent,
@@ -1056,10 +1131,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 highlightbackground=_BORDER_COLOR,
                 highlightcolor=_BORDER_COLOR,
             )
-            if _ADVANCED_DIALOG_TWO_COLUMN:
-                section.pack(side="left", fill="both", expand=True, padx=(0, _ADVANCED_DIALOG_SECTION_GAP))
-            else:
-                section.pack(fill="x", pady=(0, 12))
+            section.pack(fill="both", expand=(section_key == "streaming"), pady=(0, 12))
 
             tk.Label(
                 section,
@@ -1090,8 +1162,15 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 var = tk.StringVar(master=dialog, value=effective_settings[field["key"]])
                 field_vars[field["key"]] = var
                 value_type = field.get("value_type", "")
+                entry_parent = row
+                entry_pack_options = {"anchor": "w", "pady": (4, 4)}
+                if value_type in {"path", "path_create"}:
+                    entry_parent = tk.Frame(row, bg=_BG_COLOR)
+                    entry_parent.pack(fill="x", pady=(4, 4))
+                    entry_pack_options = {"side": "left", "fill": "x", "expand": True}
+
                 entry = tk.Entry(
-                    row,
+                    entry_parent,
                     textvariable=var,
                     font=_BODY_FONT,
                     bg="#1c1c24",
@@ -1107,7 +1186,30 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 )
                 field_entries[field["key"]] = entry
                 var.trace_add("write", lambda *_args, key=field["key"]: _clear_field_error(key))
-                entry.pack(anchor="w", pady=(4, 4))
+                entry.pack(**entry_pack_options)
+
+                if value_type in {"path", "path_create"}:
+                    def choose_directory(var=var, title=field["label"]):
+                        initial_dir = os.path.expanduser(var.get().strip() or "~")
+                        if not os.path.isdir(initial_dir):
+                            initial_dir = os.path.dirname(initial_dir)
+                        if not os.path.isdir(initial_dir):
+                            initial_dir = os.path.expanduser("~")
+                        folder = filedialog.askdirectory(
+                            title=title,
+                            initialdir=initial_dir,
+                            parent=dialog,
+                        )
+                        if folder:
+                            var.set(folder)
+
+                    browse_button = _button_label(
+                        entry_parent,
+                        "Browse",
+                        choose_directory,
+                        padx=8,
+                    )
+                    browse_button.pack(side="left", padx=(8, 0))
 
                 tk.Label(
                     row,
@@ -1119,15 +1221,15 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     wraplength=_ADVANCED_DIALOG_WRAP,
                 ).pack(anchor="w")
 
-        for section_key, section_title in _ADVANCED_SETTING_SECTIONS:
-            render_section(section_row, section_title, section_key)
-
-        if _ADVANCED_DIALOG_TWO_COLUMN:
-            section_children = section_row.winfo_children()
-            for child in section_children[:-1]:
-                child.pack_configure(padx=(0, _ADVANCED_DIALOG_SECTION_GAP))
-            if section_children:
-                section_children[-1].pack_configure(padx=(0, 0))
+        for column_index, sections in enumerate(_ADVANCED_SETTING_COLUMNS):
+            column = tk.Frame(section_row, bg=_BG_COLOR)
+            if _ADVANCED_DIALOG_TWO_COLUMN:
+                pad_right = _ADVANCED_DIALOG_SECTION_GAP if column_index < len(_ADVANCED_SETTING_COLUMNS) - 1 else 0
+                column.pack(side="left", fill="both", expand=True, padx=(0, pad_right))
+            else:
+                column.pack(fill="x")
+            for section_key, section_title in sections:
+                render_section(column, section_title, section_key)
 
         error_label = tk.Label(
             body,

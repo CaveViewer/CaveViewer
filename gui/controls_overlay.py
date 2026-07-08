@@ -106,10 +106,16 @@ def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
         ("Esc", "Quit"),
     ])
 
+    recording = [
+        ("REC button", "Start clean MP4 recording countdown"),
+        ("Shift + R", "Stop or cancel recording"),
+    ]
+
     return [
         ("Move", movement),
         ("Look", look),
         ("Navigate", navigation),
+        ("Record", recording),
     ]
 
 
