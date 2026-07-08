@@ -26,8 +26,9 @@ independent of the main mesh rendering pipeline.
 
 from __future__ import annotations
 
+import concurrent.futures
 import math
-import math
+
 import moderngl
 import numpy as np
 
@@ -72,23 +73,35 @@ class Minimap:
         self.ctx = ctx
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
 
-        # Generous fixed allocation: one quad (6 verts) per occupied cell
-        # for the footprint outline, plus a handful more for the dot and
-        # panel background/border. Sized from the actual chunk count so
-        # large maps (thousands of chunks) don't overflow a fixed guess.
-        n_chunks = len(manifest.get("chunks", {}))
-        self._max_verts = max(256, (n_chunks + 20) * 6)
-        self._vbo = ctx.buffer(reserve=self._max_verts * 6 * 4)  # 2f pos + 4f color
-        self._vao = ctx.vertex_array(
-            self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
-        )
-
         self._compute_footprint(manifest)
-        # Static geometry cache: background + footprint tiles + border only
-        # need to be rebuilt when the window is resized, not every frame.
-        self._static_geom_bytes: bytes = b''
+
+        # Static geometry (background + footprint + border) and dynamic
+        # geometry (camera + bookmark markers) are kept in separate buffers.
+        # That avoids re-uploading thousands of static footprint vertices
+        # every frame just because the camera arrow moved.
+        self._max_static_verts = max(256, (len(self.occupied_xz) + 8) * 6)
+        self._static_vbo = ctx.buffer(reserve=self._max_static_verts * 6 * 4)  # 2f pos + 4f color
+        self._static_vao = ctx.vertex_array(
+            self.program, [(self._static_vbo, "2f 4f", "in_pos", "in_color")]
+        )
         self._static_vert_count: int = 0
         self._static_geom_window_size: tuple | None = None
+
+        self._max_dynamic_verts = 256
+        self._dynamic_vbo = ctx.buffer(reserve=self._max_dynamic_verts * 6 * 4)
+        self._dynamic_vao = ctx.vertex_array(
+            self.program, [(self._dynamic_vbo, "2f 4f", "in_pos", "in_color")]
+        )
+        self._dynamic_vert_count: int = 0
+
+        # CPU-only static byte generation can run off the render thread. The
+        # main thread still performs all OpenGL buffer writes/draws.
+        self._static_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="CaveViewerMinimap",
+        )
+        self._static_future: concurrent.futures.Future | None = None
+        self._static_future_window_size: tuple | None = None
 
     # -- footprint computation (done once, at startup) -----------------------
 
@@ -238,6 +251,57 @@ class Minimap:
 
     # -- rendering -----------------------------------------------------------
 
+    def _upload_static_geom(self, geom_bytes: bytes, vert_count: int,
+                            window_size: tuple[int, int]) -> None:
+        if len(geom_bytes) > self._max_static_verts * 6 * 4:
+            self._static_vao.release()
+            self._static_vbo.release()
+            self._max_static_verts = max(self._max_static_verts * 2, vert_count)
+            self._static_vbo = self.ctx.buffer(reserve=self._max_static_verts * 6 * 4)
+            self._static_vao = self.ctx.vertex_array(
+                self.program, [(self._static_vbo, "2f 4f", "in_pos", "in_color")]
+            )
+        self._static_vbo.write(geom_bytes)
+        self._static_vert_count = vert_count
+        self._static_geom_window_size = window_size
+
+    def _update_static_geom(self, window_size: tuple[int, int]) -> bool:
+        """
+        Keep static geometry current for the given window size.
+
+        Returns True when matching static GL buffers are ready to draw. If a
+        worker build is still in progress, render() can keep drawing the
+        previous size's static buffer during resize, or skip only the first
+        frame before the initial build completes.
+        """
+        if window_size == self._static_geom_window_size:
+            return True
+
+        if self._static_future is not None and self._static_future.done():
+            future = self._static_future
+            future_size = self._static_future_window_size
+            self._static_future = None
+            self._static_future_window_size = None
+            if future.cancelled():
+                return self._static_geom_window_size is not None
+            geom_bytes, vert_count = future.result()
+            if future_size == window_size:
+                self._upload_static_geom(geom_bytes, vert_count, window_size)
+                return True
+
+        if (
+            self._static_future is None
+            or self._static_future_window_size != window_size
+        ):
+            if self._static_future is not None:
+                self._static_future.cancel()
+            self._static_future_window_size = window_size
+            self._static_future = self._static_executor.submit(
+                self._build_static_geom, window_size
+            )
+
+        return self._static_geom_window_size is not None
+
     def _build_static_geom(self, window_size: tuple[int, int]) -> tuple[bytes, int]:
         """
         Builds the background + all footprint cell squares + border as
@@ -280,11 +344,9 @@ class Minimap:
     def render(self, window_size: tuple[int, int], camera_position: np.ndarray,
                camera_forward: np.ndarray,
                bookmarks: dict | None = None) -> None:
-        # Rebuild static geometry (background + footprint + border) only when
-        # window size changes; these tiles are map-independent and never move.
-        if window_size != self._static_geom_window_size:
-            self._static_geom_bytes, self._static_vert_count = self._build_static_geom(window_size)
-            self._static_geom_window_size = window_size
+        static_ready = self._update_static_geom(window_size)
+        if not static_ready:
+            return
 
         # Dynamic part: only the camera arrow/dot (3-36 verts) changes per frame.
         arrow_verts: list = []
@@ -362,19 +424,20 @@ class Minimap:
                     arrow_verts.append(((px / w) * 2.0 - 1.0, 1.0 - (py / h) * 2.0,
                                         1.0, 0.15, 0.15, 1.0))
 
-        arrow_bytes = np.array(arrow_verts, dtype=np.float32).tobytes() if arrow_verts else b''
-        full_bytes = self._static_geom_bytes + arrow_bytes
-        total_verts = self._static_vert_count + len(arrow_verts)
-
-        if len(full_bytes) > self._max_verts * 6 * 4:
-            self._vbo.release()
-            self._max_verts = max(self._max_verts * 2, total_verts)
-            self._vbo = self.ctx.buffer(reserve=self._max_verts * 6 * 4)
-            self._vao = self.ctx.vertex_array(
-                self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
-            )
-
-        self._vbo.write(full_bytes)
+        if arrow_verts:
+            arrow_bytes = np.array(arrow_verts, dtype=np.float32).tobytes()
+            if len(arrow_bytes) > self._max_dynamic_verts * 6 * 4:
+                self._dynamic_vao.release()
+                self._dynamic_vbo.release()
+                self._max_dynamic_verts = max(self._max_dynamic_verts * 2, len(arrow_verts))
+                self._dynamic_vbo = self.ctx.buffer(reserve=self._max_dynamic_verts * 6 * 4)
+                self._dynamic_vao = self.ctx.vertex_array(
+                    self.program, [(self._dynamic_vbo, "2f 4f", "in_pos", "in_color")]
+                )
+            self._dynamic_vbo.write(arrow_bytes)
+            self._dynamic_vert_count = len(arrow_verts)
+        else:
+            self._dynamic_vert_count = 0
 
         # Face culling is meaningless for a flat 2D overlay (there's no
         # "back" of a UI element that should ever be hidden), but the main
@@ -388,7 +451,25 @@ class Minimap:
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
-        self._vao.render(moderngl.TRIANGLES, vertices=total_verts)
+        if static_ready and self._static_vert_count:
+            self._static_vao.render(moderngl.TRIANGLES, vertices=self._static_vert_count)
+        if self._dynamic_vert_count:
+            self._dynamic_vao.render(moderngl.TRIANGLES, vertices=self._dynamic_vert_count)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
+
+    def release(self) -> None:
+        if self._static_future is not None:
+            self._static_future.cancel()
+            self._static_future = None
+        self._static_executor.shutdown(wait=False, cancel_futures=True)
+        for attr_name in ("_static_vao", "_static_vbo", "_dynamic_vao", "_dynamic_vbo", "program"):
+            resource = getattr(self, attr_name, None)
+            if resource is None:
+                continue
+            try:
+                resource.release()
+            except Exception:
+                pass
+            setattr(self, attr_name, None)

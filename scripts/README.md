@@ -17,7 +17,7 @@ release.sh --target=<target> --help
 Targets:
 
 - `all`
-- `macos`
+- `macos-15`
 - `windows`
 - `linux-arm64`
 - `linux-x86_64`
@@ -45,6 +45,8 @@ release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=relea
 anywhere in the list, it takes precedence and all platforms are selected.
 Multi-target package and release orchestration is handled by `release.sh`
 directly; platform scripts remain the per-target implementation details.
+The `macos-15` target names the release baseline used by CI. Local builds require
+a macOS host.
 
 Options:
 
@@ -56,14 +58,14 @@ Examples:
 ```bash
 release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
 release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
-release.sh --target=macos,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+release.sh --target=macos-15,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
 ## Directory Layout
 
 - `scripts/common`: shared helpers
-- `scripts/macos`: macOS build/package/publish scripts
+- `scripts/macos`: macOS 15 build/package/publish scripts
 - `scripts/linux/common`: shared Linux build/package/publish internals
 - `scripts/linux/arm64`: Linux ARM64 entry points
 - `scripts/linux/x86_64`: Linux x86_64 entry points
@@ -74,7 +76,7 @@ release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=packa
 
 Packaging scripts use platform-isolated virtual environments by default.
 
-- macOS build: `.venv-macos-build`
+- macOS 15 build: `.venv-macos-build`
   - Override with `CAVEVIEWER_MACOS_BUILD_VENV=/path/to/venv`
 - Linux Docker build:
   - Default template: `.venv-linux-build-{arch}`

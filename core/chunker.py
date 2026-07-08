@@ -43,6 +43,7 @@ CACHE_DIRNAME = "_cache"
 LEGACY_CACHE_DIRNAME = ".caveviewer_cache"
 MANIFEST_NAME = "manifest.json"
 CHUNKS_DIRNAME = "chunks"
+CROSS_SECTION_DIRNAME = "cross_section_triangles"
 
 CHUNK_SIZE_ENV_VAR = "CAVEVIEWER_CHUNK_SIZE_METERS"
 _DEFAULT_CHUNK_SIZE_FALLBACK = 8.0  # meters; preserve existing default behavior
@@ -70,6 +71,8 @@ DEFAULT_CHUNK_SIZE = _resolve_default_chunk_size()
 
 _MAGIC = b"CVCH"  # CaveViewer CHunk
 _VERSION = 1
+_CROSS_SECTION_MAGIC = b"CVXS"
+_CROSS_SECTION_VERSION = 1
 
 
 def configured_chunk_size() -> float:
@@ -125,7 +128,9 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     obj_dir = os.path.dirname(os.path.abspath(obj_path))
     cache_dir = os.path.join(obj_dir, CACHE_DIRNAME)
     chunks_dir = os.path.join(cache_dir, CHUNKS_DIRNAME)
+    cross_section_dir = os.path.join(cache_dir, CROSS_SECTION_DIRNAME)
     os.makedirs(chunks_dir, exist_ok=True)
+    os.makedirs(cross_section_dir, exist_ok=True)
 
     if progress_cb:
         progress_cb("computing face centroids", 0.0)
@@ -251,7 +256,9 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
 
     def _write_one_cell(cell_coord: tuple[int, int, int], groups: list[tuple[str, np.ndarray]]):
         cell_str = f"{cell_coord[0]}_{cell_coord[1]}_{cell_coord[2]}"
-        bounds_min, bounds_max, used_materials = _write_chunk_file(chunks_dir, cell_str, mesh, groups)
+        bounds_min, bounds_max, used_materials = _write_chunk_file(
+            chunks_dir, cross_section_dir, cell_str, mesh, groups
+        )
         return cell_str, bounds_min, bounds_max, used_materials
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -301,6 +308,11 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
         "chunks": manifest_chunks,
         "footprint_cell_size": footprint_cell_size,
         "footprint_cells": footprint_flat,
+        "cross_section_cache": {
+            "version": _CROSS_SECTION_VERSION,
+            "dir": CROSS_SECTION_DIRNAME,
+            "format": "triangle_positions_f32",
+        },
     }
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
@@ -311,7 +323,7 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     return cache_dir
 
 
-def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
+def _write_chunk_file(chunks_dir, cross_section_dir, cell_str, mesh, groups):
     """
     Write one chunk binary file containing all material groups for a cell.
     De-indexes faces into flat (position, uv, normal) vertex triples per
@@ -335,6 +347,7 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
     bounds_min = None
     bounds_max = None
     used_materials = []
+    cross_section_positions = []
 
     with open(path, "wb") as f:
         f.write(_MAGIC)
@@ -350,6 +363,8 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
             # unnecessary second conversion copy while still enforcing dtype
             # if a non-standard mesh source ever slips through.
             flat_pos = mesh.positions[pos_idx].astype(np.float32, copy=False)
+            if len(flat_pos):
+                cross_section_positions.append(flat_pos)
 
             if has_uvs and (uv_idx >= 0).all():
                 flat_uv = mesh.uvs[uv_idx].astype(np.float32, copy=False)
@@ -381,10 +396,31 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
 
             used_materials.append(mat_name)
 
+    _write_cross_section_triangle_file(cross_section_dir, cell_str, cross_section_positions)
+
     if bounds_min is None:
         bounds_min = np.zeros(3, dtype=np.float32)
         bounds_max = np.zeros(3, dtype=np.float32)
     return bounds_min, bounds_max, used_materials
+
+
+def _write_cross_section_triangle_file(cross_section_dir, cell_str, position_parts):
+    """
+    Write a compact positions-only triangle cache for section overlays.
+
+    The render chunk file stores positions, UVs, normals, and material
+    grouping. Longitudinal cross-section slicing only needs triangle vertex
+    positions, so this avoids loading and parsing the full render chunk on
+    the overlay worker.
+    """
+    path = os.path.join(cross_section_dir, f"{cell_str}.bin")
+    n_verts = sum(len(part) for part in position_parts)
+    with open(path, "wb") as f:
+        f.write(_CROSS_SECTION_MAGIC)
+        f.write(struct.pack("<I", _CROSS_SECTION_VERSION))
+        f.write(struct.pack("<I", n_verts))
+        for part in position_parts:
+            f.write(part.tobytes())
 
 
 def _compute_flat_normals(flat_pos: np.ndarray) -> np.ndarray:
@@ -547,6 +583,46 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
     return ChunkData(cell=cell, groups=groups, bounds_min=bmin, bounds_max=bmax)
 
 
+def load_cross_section_triangles(cache_dir: str, cell: tuple[int, int, int]) -> np.ndarray | None:
+    """
+    Load positions-only triangle data for cross-section slicing.
+
+    Returns an array shaped (N, 3, 3), or None when the cache does not have
+    the auxiliary cross-section file. Older map caches can then fall back to
+    loading full render chunks.
+    """
+    cell_str = f"{cell[0]}_{cell[1]}_{cell[2]}"
+    path = os.path.join(cache_dir, CROSS_SECTION_DIRNAME, f"{cell_str}.bin")
+    if not os.path.exists(path):
+        return None
+
+    with open(path, "rb") as f:
+        blob = f.read()
+
+    offset = 0
+    magic = blob[offset:offset + 4]
+    offset += 4
+    if magic != _CROSS_SECTION_MAGIC:
+        raise ValueError(f"Bad cross-section file magic in {path}")
+
+    version = struct.unpack_from("<I", blob, offset)[0]
+    offset += 4
+    if version != _CROSS_SECTION_VERSION:
+        raise ValueError(f"Unsupported cross-section version {version} in {path}")
+
+    n_verts = struct.unpack_from("<I", blob, offset)[0]
+    offset += 4
+    if n_verts % 3 != 0:
+        raise ValueError(f"Cross-section triangle file has non-triangle vertex count in {path}")
+
+    pos_count = n_verts * 3
+    expected_bytes = offset + pos_count * 4
+    if len(blob) < expected_bytes:
+        raise ValueError(f"Truncated cross-section triangle file in {path}")
+
+    return np.frombuffer(blob, dtype=np.float32, count=pos_count, offset=offset).reshape(n_verts // 3, 3, 3)
+
+
 def cache_is_valid(obj_path: str) -> bool:
     """Cache is valid if it exists and is newer than the source OBJ (cheap
     staleness check so re-running on the same map doesn't reparse 2GB)."""
@@ -559,9 +635,34 @@ def cache_is_valid(obj_path: str) -> bool:
         manifest_path = os.path.join(cache_dir, MANIFEST_NAME)
         if not os.path.exists(manifest_path):
             continue
-        if os.path.getmtime(manifest_path) >= os.path.getmtime(obj_path):
-            return True
+        if os.path.getmtime(manifest_path) < os.path.getmtime(obj_path):
+            continue
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+        except Exception:
+            continue
+        if not _has_current_cross_section_cache(cache_dir, manifest):
+            _LOG.info("Existing cache is missing cross-section acceleration data; rebuilding once.")
+            continue
+        return True
     return False
+
+
+def _has_current_cross_section_cache(cache_dir: str, manifest: dict) -> bool:
+    info = manifest.get("cross_section_cache")
+    if not isinstance(info, dict):
+        return False
+    try:
+        version = int(info.get("version", 0))
+    except (TypeError, ValueError):
+        return False
+    if version != _CROSS_SECTION_VERSION:
+        return False
+    cache_subdir = info.get("dir", CROSS_SECTION_DIRNAME)
+    if cache_subdir != CROSS_SECTION_DIRNAME:
+        return False
+    return os.path.isdir(os.path.join(cache_dir, CROSS_SECTION_DIRNAME))
 
 
 def get_cache_dir(obj_path: str) -> str:

@@ -20,7 +20,7 @@ Usage:
   release.sh --target=<target> --help
 
 Required arguments:
-  --target             Target list: all, macos, windows, linux-arm64, linux-x86_64
+  --target             Target list: all, macos-15, windows, linux-arm64, linux-x86_64
   --action             One of: build, package, release
   --version            Release version, for example 1.0.60
   --notes              Release notes, quoted if they contain spaces
@@ -39,7 +39,7 @@ Examples:
   release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
   release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=release
   release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=release --pre-release
-  release.sh --target=macos,linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
+  release.sh --target=macos-15,linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
   release.sh --target=all --version=1.0.60 --notes "Alpha." --action=release
 EOF
 }
@@ -54,8 +54,8 @@ Usage:
 If all appears in a comma-separated target list, it takes precedence.
 EOF
       ;;
-    macos)
-      echo "Usage: release.sh --target=macos --version=<version> --notes=<notes> --action=<build|package|release> [--pre-release]"
+    macos-15)
+      echo "Usage: release.sh --target=macos-15 --version=<version> --notes=<notes> --action=<build|package|release> [--pre-release]"
       ;;
     windows)
       echo "Usage: release.sh --target=windows --version=<version> --notes=<notes> --action=<build|package|release> [--pre-release]"
@@ -63,12 +63,12 @@ EOF
     linux-arm64)
       echo "Usage: release.sh --target=linux-arm64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--pre-release]"
       ;;
-    linux-x86_64|linux-x86|linux-amd64)
+    linux-x86_64)
       echo "Usage: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--pre-release]"
       ;;
     *)
       echo "Error: unknown target '$1'"
-      echo "Expected one of: all, macos, windows, linux-arm64, linux-x86_64"
+      echo "Expected one of: all, macos-15, windows, linux-arm64, linux-x86_64"
       exit 1
       ;;
   esac
@@ -76,7 +76,7 @@ EOF
 
 is_known_target() {
   case "$1" in
-    all|macos|windows|linux-arm64|linux-x86_64|linux-x86|linux-amd64)
+    all|macos-15|windows|linux-arm64|linux-x86_64)
       return 0
       ;;
     *)
@@ -88,35 +88,6 @@ is_known_target() {
 is_known_action() {
   case "$1" in
     build|package|release)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-removed_target_message() {
-  case "$1" in
-    macos-build|macos-package)
-      echo "Error: target '$1' was removed."
-      echo "Use: release.sh --target=macos --version=<version> --notes=<notes> --action=${1#macos-}"
-      return 0
-      ;;
-    windows-build|windows-package)
-      echo "Error: target '$1' was removed."
-      echo "Use: release.sh --target=windows --version=<version> --notes=<notes> --action=${1#windows-}"
-      return 0
-      ;;
-    linux-arm64-build|linux-arm64-package)
-      echo "Error: target '$1' was removed."
-      echo "Use: release.sh --target=linux-arm64 --version=<version> --notes=<notes> --action=${1#linux-arm64-}"
-      return 0
-      ;;
-    linux-x86_64-build|linux-x86_64-package|linux-amd64-build|linux-amd64-package)
-      echo "Error: target '$1' was removed."
-      local action="${1##*-}"
-      echo "Use: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=$action"
       return 0
       ;;
     *)
@@ -143,23 +114,23 @@ add_target_selection() {
       selected_linux_arm64=true
       selected_linux_x86=true
       ;;
-    macos)
+    macos-15)
       selected_macos=true
       ;;
     windows)
       selected_windows=true
       ;;
-    linux-arm64|linux-aarch64)
+    linux-arm64)
       selected_linux_arm64=true
       ;;
-    linux-x86_64|linux-x86|linux-amd64)
+    linux-x86_64)
       selected_linux_x86=true
       ;;
     "")
       ;;
     *)
       echo "Error: unknown --target entry '$selected'"
-      echo "Expected one of: all, macos, windows, linux-arm64, linux-x86_64"
+      echo "Expected one of: all, macos-15, windows, linux-arm64, linux-x86_64"
       exit 1
       ;;
   esac
@@ -194,7 +165,7 @@ canonical_single_target() {
   if $selected_all; then
     echo "all"
   elif $selected_macos && ! $selected_windows && ! $selected_linux_arm64 && ! $selected_linux_x86; then
-    echo "macos"
+    echo "macos-15"
   elif $selected_windows && ! $selected_macos && ! $selected_linux_arm64 && ! $selected_linux_x86; then
     echo "windows"
   elif $selected_linux_arm64 && ! $selected_macos && ! $selected_windows && ! $selected_linux_x86; then
@@ -208,7 +179,7 @@ canonical_single_target() {
 
 selected_target_summary() {
   local targets=()
-  $selected_macos && targets+=("macos")
+  $selected_macos && targets+=("macos-15")
   $selected_linux_arm64 && targets+=("linux-arm64")
   $selected_linux_x86 && targets+=("linux-x86_64")
   $selected_windows && targets+=("windows")
@@ -225,6 +196,13 @@ selected_target_summary() {
 
 has_linux_target() {
   $selected_linux_arm64 || $selected_linux_x86
+}
+
+require_macos_host() {
+  if [ "$(uname -s)" != "Darwin" ]; then
+    echo "Error: target macos-15 requires a macOS host."
+    exit 1
+  fi
 }
 
 selected_linux_arch() {
@@ -296,7 +274,7 @@ run_selected_builds() {
     if [ "$host_os" = "Darwin" ]; then
       "$script_dir/macos/build.sh"
     else
-      echo "[macos] Skipped: requires macOS host."
+      echo "[macos-15] Skipped: requires macOS host."
     fi
   fi
 
@@ -338,13 +316,13 @@ run_selected_packages() {
     if [ "$host_os" = "Darwin" ]; then
       local macos_dmg_path="$repo_root/dist/macos/packages/CaveViewer-${normalized_version}.dmg"
       if $reuse_existing_artifacts && ! $rebuild && [ -f "$macos_dmg_path" ]; then
-        echo "[macos] Reusing existing package: $macos_dmg_path"
+        echo "[macos-15] Reusing existing package: $macos_dmg_path"
       else
-        echo "[macos] Building package..."
+        echo "[macos-15] Building package..."
         "$script_dir/macos/package.sh"
       fi
     else
-      echo "[macos] Skipped: requires macOS host."
+      echo "[macos-15] Skipped: requires macOS host."
     fi
   fi
 
@@ -377,7 +355,7 @@ run_selected_packages() {
   echo "====================================================="
 
   if $selected_macos && [ "$host_os" = "Darwin" ]; then
-    print_artifact "macOS DMG" "$repo_root/dist/macos/packages/CaveViewer-${normalized_version}.dmg"
+    print_artifact "macOS 15 DMG" "$repo_root/dist/macos/packages/CaveViewer-${normalized_version}.dmg"
   fi
 
   if $selected_linux_arm64; then
@@ -410,10 +388,10 @@ run_selected_releases() {
 
   if $selected_macos; then
     if [ "$host_os" = "Darwin" ]; then
-      echo "[macos] Publishing release assets..."
+      echo "[macos-15] Publishing release assets..."
       "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
     else
-      echo "[macos] Skipped publish: requires macOS host."
+      echo "[macos-15] Skipped publish: requires macOS host."
     fi
   fi
 
@@ -517,8 +495,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --targets|--targets=*)
-      echo "Error: --targets was removed."
-      echo "Use a comma-separated --target value instead, for example: --target=macos,linux-arm64"
+      echo "Error: unknown option '$arg'"
       exit 1
       ;;
     --rebuild)
@@ -559,10 +536,6 @@ if $show_help; then
     print_help
   fi
   exit 0
-fi
-
-if removed_target_message "$target"; then
-  exit 1
 fi
 
 if [ -z "$target" ] || [ -z "$action" ] || [ -z "$version" ] || [ -z "$notes" ]; then
@@ -654,13 +627,16 @@ case "$dispatch_target:$action" in
   all:release)
     run_selected_releases
     ;;
-  macos:build)
+  macos-15:build)
+    require_macos_host
     exec "$script_dir/macos/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
-  macos:package)
+  macos-15:package)
+    require_macos_host
     exec "$script_dir/macos/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
-  macos:release)
+  macos-15:release)
+    require_macos_host
     exec "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   windows:build)
