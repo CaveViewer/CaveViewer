@@ -1,0 +1,99 @@
+# .github/workflows/windows-release.yml
+name: Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. 1.0.34"
+        required: true
+      release_notes:
+        description: "Release notes"
+        required: false
+        default: "Windows release"
+      pre_release:
+        description: "Publish as a GitHub prerelease and update prerelease.json"
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: "Publish the Windows ZIP to the GitHub release"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: caveviewer-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git identity
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure release signing key
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
+            echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required when publish is true."
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
+          chmod 600 "$key_path" || true
+          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
+
+      - name: Build Windows ZIP
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+          PRE_RELEASE: ${{ inputs.pre_release }}
+        run: |
+          release_args=(
+            --target=windows
+            --version="$RELEASE_VERSION"
+            --notes="$RELEASE_NOTES"
+          )
+
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            release_args+=(--action=release)
+            if [ "$PRE_RELEASE" = "true" ]; then
+              release_args+=(--pre-release)
+            fi
+          else
+            release_args+=(--action=package)
+          fi
+
+          ./scripts/release.sh "${release_args[@]}"
+
+      - name: Upload Windows ZIP for testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: CaveViewer-${{ inputs.version }}-windows
+          path: dist/windows/packages/CaveViewer-${{ inputs.version }}-windows.zip
+          if-no-files-found: error
