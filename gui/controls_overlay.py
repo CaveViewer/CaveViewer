@@ -573,7 +573,7 @@ class ControlsOverlay:
                 add_quad_px, add_text, sections,
                 x=x,
                 top_y=top_y,
-                key_col_width=metric["key_col_width"],
+                section_metrics=metric["sections"],
                 heading_size=heading_size,
                 key_size=key_size,
                 desc_size=desc_size,
@@ -590,14 +590,15 @@ class ControlsOverlay:
         self, sections, heading_size, key_size, desc_size, row_height,
         heading_gap, section_gap, key_pad_x, key_desc_gap
     ):
-        key_col_width = 0.0
-        desc_col_width = 0.0
-        heading_width = 0.0
+        section_metrics = []
+        width = 0.0
         height = 0.0
         heading_height = bitmap_font.text_height_px(heading_size)
 
         for heading, rows in sections:
-            heading_width = max(heading_width, bitmap_font.text_width_px(heading.upper(), heading_size))
+            key_col_width = 0.0
+            desc_col_width = 0.0
+            heading_width = bitmap_font.text_width_px(heading.upper(), heading_size)
             height += heading_height + heading_gap
             for key, desc in rows:
                 key_col_width = max(
@@ -607,19 +608,20 @@ class ControlsOverlay:
                 desc_col_width = max(desc_col_width, bitmap_font.text_width_px(desc, desc_size))
                 height += row_height
             height += section_gap
+            width = max(width, heading_width, key_col_width + key_desc_gap + desc_col_width)
+            section_metrics.append({"key_col_width": key_col_width})
 
         if sections:
             height -= section_gap
 
-        width = max(heading_width, key_col_width + key_desc_gap + desc_col_width)
         return {
             "width": width,
             "height": height,
-            "key_col_width": key_col_width,
+            "sections": section_metrics,
         }
 
     def _draw_control_column(
-        self, add_quad_px, add_text, sections, x, top_y, key_col_width,
+        self, add_quad_px, add_text, sections, x, top_y, section_metrics,
         heading_size, key_size, desc_size, row_height, heading_gap, section_gap,
         key_pad_x, key_pad_y, key_desc_gap
     ):
@@ -628,7 +630,8 @@ class ControlsOverlay:
         key_text_height = bitmap_font.text_height_px(key_size)
         desc_text_height = bitmap_font.text_height_px(desc_size)
 
-        for heading, rows in sections:
+        for section_index, (heading, rows) in enumerate(sections):
+            key_col_width = section_metrics[section_index]["key_col_width"]
             add_text(heading.upper(), x, y, heading_size, _SPLASH_TITLE_RGBA)
             y += heading_height + heading_gap
 
