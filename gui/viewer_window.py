@@ -788,14 +788,22 @@ class CaveViewerWindow(mglw.WindowConfig):
             "-pix_fmt", "yuv420p",
             output_path,
         ]
+        popen_kwargs = {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.PIPE,
+        }
+        if sys.platform == "win32":
+            # ffmpeg.exe is usually a console-subsystem executable; hide
+            # its console window when recording starts from the GUI.
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+            popen_kwargs["startupinfo"] = startupinfo
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
         try:
-            process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
+            process = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as exc:
             _LOG.warning(f"Cannot start recording: {exc}")
             self._recording_countdown_until = None
