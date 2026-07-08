@@ -56,6 +56,7 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+source "$repo_root/scripts/common/artifacts.sh"
 dist_dir="$repo_root/dist/source"
 
 normalized_version="${version#v}"
@@ -124,8 +125,8 @@ if [ ! -f "$source_tarball" ]; then
   exit 1
 fi
 
-size_bytes=$(stat -c%s "$source_tarball" 2>/dev/null || stat -f%z "$source_tarball")
-sha256_value=$(shasum -a 256 "$source_tarball" | cut -d' ' -f1)
+size_bytes="$(cv_size_bytes "$source_tarball")"
+sha256_value="$(cv_sha256 "$source_tarball")"
 
 echo ""
 echo "Source tarball created successfully!"
