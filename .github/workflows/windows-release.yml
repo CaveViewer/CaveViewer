@@ -1,5 +1,5 @@
-# .github/workflows/linux-x86_64-release.yml
-name: Linux x86_64 Release
+# .github/workflows/windows-release.yml
+name: Windows Release
 
 on:
   workflow_dispatch:
@@ -10,14 +10,14 @@ on:
       release_notes:
         description: "Release notes"
         required: false
-        default: "Linux x86_64 release"
+        default: "Windows release"
       pre_release:
         description: "Publish as a GitHub prerelease and update prerelease.json"
         required: false
         type: boolean
         default: false
       publish:
-        description: "Publish the AppImage to the GitHub release"
+        description: "Publish the Windows ZIP to the GitHub release"
         required: false
         type: boolean
         default: false
@@ -30,8 +30,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-linux-x86_64:
-    runs-on: ubuntu-latest
+  build-windows:
+    runs-on: windows-latest
 
     steps:
       - name: Check out repository
@@ -39,18 +39,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Configure git identity
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Verify Docker build environment
-        run: |
-          docker version
-          docker buildx version
-
       - name: Configure release signing key
         if: ${{ inputs.publish }}
+        shell: bash
         env:
           SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
         run: |
@@ -58,20 +60,22 @@ jobs:
             echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required when publish is true."
             exit 1
           fi
-          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$RUNNER_TEMP/release_signing_private_key.pem"
-          chmod 600 "$RUNNER_TEMP/release_signing_private_key.pem"
+          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
+          chmod 600 "$key_path" || true
+          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
 
-      - name: Build Linux x86_64 AppImage via Docker
+      - name: Build Windows ZIP
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ runner.temp }}/release_signing_private_key.pem
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
           PUBLISH_RELEASE: ${{ inputs.publish }}
           PRE_RELEASE: ${{ inputs.pre_release }}
         run: |
           release_args=(
-            --target=linux-x86_64
+            --target=windows
             --version="$RELEASE_VERSION"
             --notes="$RELEASE_NOTES"
           )
@@ -87,9 +91,9 @@ jobs:
 
           ./scripts/release.sh "${release_args[@]}"
 
-      - name: Upload Linux x86_64 AppImage for testing
+      - name: Upload Windows ZIP for testing
         uses: actions/upload-artifact@v4
         with:
-          name: CaveViewer-${{ inputs.version }}-linux-x86_64
-          path: dist/linux/x86_64/packages/CaveViewer-${{ inputs.version }}-x86_64.AppImage
+          name: CaveViewer-${{ inputs.version }}-windows
+          path: dist/windows/packages/CaveViewer-${{ inputs.version }}-windows.zip
           if-no-files-found: error

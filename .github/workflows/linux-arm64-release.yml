@@ -11,6 +11,11 @@ on:
         description: "Release notes"
         required: false
         default: "Linux ARM64 release"
+      pre_release:
+        description: "Publish as a GitHub prerelease and update prerelease.json"
+        required: false
+        type: boolean
+        default: false
       publish:
         description: "Publish the AppImage to the GitHub release"
         required: false
@@ -19,6 +24,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: caveviewer-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-linux-arm64:
@@ -40,30 +49,47 @@ jobs:
           docker version
           docker buildx version
 
+      - name: Configure release signing key
+        if: ${{ inputs.publish }}
+        env:
+          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
+            echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required when publish is true."
+            exit 1
+          fi
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$RUNNER_TEMP/release_signing_private_key.pem"
+          chmod 600 "$RUNNER_TEMP/release_signing_private_key.pem"
+
       - name: Build Linux ARM64 AppImage via Docker
         env:
           GH_TOKEN: ${{ github.token }}
+          CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ runner.temp }}/release_signing_private_key.pem
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+          PRE_RELEASE: ${{ inputs.pre_release }}
         run: |
-          if [ "${{ inputs.publish }}" = "true" ]; then
-            ./scripts/release.sh all-package \
-              --version="${{ inputs.version }}" \
-              --linux-arch=arm64 \
-              --linux-build=docker \
-              --skip=macos,windows \
-              --publish \
-              --release-notes="${{ inputs.release_notes }}"
+          release_args=(
+            --target=linux-arm64
+            --version="$RELEASE_VERSION"
+            --notes="$RELEASE_NOTES"
+          )
+
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            release_args+=(--action=release)
+            if [ "$PRE_RELEASE" = "true" ]; then
+              release_args+=(--pre-release)
+            fi
           else
-            ./scripts/release.sh all-package \
-              --version="${{ inputs.version }}" \
-              --linux-arch=arm64 \
-              --linux-build=docker \
-              --skip=macos,windows \
-              --release-notes="${{ inputs.release_notes }}"
+            release_args+=(--action=package)
           fi
+
+          ./scripts/release.sh "${release_args[@]}"
 
       - name: Upload Linux ARM64 AppImage for testing
         uses: actions/upload-artifact@v4
         with:
           name: CaveViewer-${{ inputs.version }}-linux-arm64
-          path: dist/linux/packages/CaveViewer-${{ inputs.version }}-aarch64.AppImage
+          path: dist/linux/arm64/packages/CaveViewer-${{ inputs.version }}-aarch64.AppImage
           if-no-files-found: error
