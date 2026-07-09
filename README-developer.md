@@ -34,8 +34,8 @@ The application About text should identify CaveViewer as licensed under the GNU 
 ## Clone the Repository
 
 ```bash
-git clone https://github.com/KernalPanic/CaveViewerPlus.git
-cd CaveViewerPlus
+git clone https://github.com/KernalPanic/CaveViewer.git
+cd CaveViewer
 ```
 
 Optional: check out the latest version tag.
@@ -256,14 +256,49 @@ separate `prerelease.json` channel, leaving `stable.json` unchanged. For
 debugging, explicit environment variables can point a source run or packaged
 app launched from Terminal at another branch or manifest URL.
 
-Prerelease branch testing can use the derived prerelease manifest URL:
+Prerelease branch testing can use the derived prerelease manifest URL after the
+selected branch contains the matching platform manifest and signature. For
+macOS, confirm the branch contains both files first:
+
+```bash
+git ls-tree -r release/<version> updates/macos
+```
+
+The output must include:
+
+```text
+updates/macos/prerelease.json
+updates/macos/prerelease.json.sig
+```
+
+Then test from a source checkout with `--update-branch` and `--force-update`:
+
+```bash
+CAVEVIEWER_UPDATE_CHANNEL=prerelease \
+./run_caveviewer.sh --update-branch release/<version> --force-update
+```
+
+For a packaged app launched from Terminal, use environment variables instead:
 
 ```bash
 CAVEVIEWER_FORCE_UPDATE=1 \
-CAVEVIEWER_UPDATE_BRANCH=feature/pubkey \
+CAVEVIEWER_UPDATE_BRANCH=release/<version> \
 CAVEVIEWER_UPDATE_CHANNEL=prerelease \
-./CaveViewer-1.0.60-aarch64.AppImage
+./CaveViewer-<version>-aarch64.AppImage
 ```
+
+If the update checker logs `Update manifest fetch failed with HTTP 404`, the
+derived branch/channel/platform manifest URL does not exist. Either publish that
+platform's prerelease manifest to the selected branch, switch to a branch that
+has it, or use `CAVEVIEWER_UPDATE_CHANNEL=stable` if you meant to test the
+stable manifest.
+
+If the update checker logs `Update manifest fetch failed with HTTP 429`, GitHub
+has rate-limited the unauthenticated `raw.githubusercontent.com` request. The
+splash interface stays unchanged. Wait for the limit to clear, switch networks,
+or set `CAVEVIEWER_UPDATE_MANIFEST_URL` to a staging/custom-hosted copy of the
+manifest; the signature URL defaults to `<manifest-url>.sig` unless
+`CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` is set explicitly.
 
 Linux manifests are architecture-specific:
 
