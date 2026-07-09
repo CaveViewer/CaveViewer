@@ -187,7 +187,7 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
     message rather than a stack trace.
     """
     if not _MANIFEST_URL:
-        _LOG.info("Update check skipped: update manifest URL is not configured.")
+        _LOG.error("Update check skipped: update manifest URL is not configured.")
         return UpdateCheckResult(
             update_available=False,
             current_version=current_version,
@@ -212,10 +212,9 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
         _LOG.info("Downloaded update manifest: bytes=%d", len(manifest_bytes))
-        _verify_manifest_signature_if_available(manifest_bytes)
         data = json.loads(manifest_bytes.decode("utf-8"))
     except urllib.error.HTTPError as e:
-        _LOG.warning("Update manifest fetch failed with HTTP %s.", e.code)
+        _LOG.error("Update manifest fetch failed with HTTP %s.", e.code)
         if e.code == 404:
             manifest_channel = install_channel or _PLATFORM_ADAPTER.install_channel()
             error_msg = (
@@ -227,13 +226,13 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
             error_msg = f"Update manifest server returned an error (HTTP {e.code})."
             return UpdateCheckResult(update_available=False, current_version=current_version, error=error_msg)
     except urllib.error.URLError as e:
-        _LOG.warning("Update manifest fetch failed: %s", e)
+        _LOG.error("Update manifest fetch failed: %s", e)
         return UpdateCheckResult(
             update_available=False, current_version=current_version,
             error="Couldn't reach the update manifest URL -- check your internet connection."
         )
     except (json.JSONDecodeError, KeyError, TypeError) as e:
-        _LOG.warning("Update manifest parsing failed: %s", e)
+        _LOG.error("Update manifest parsing failed: %s", e)
         return UpdateCheckResult(
             update_available=False, current_version=current_version,
             error=f"Got an unexpected update manifest format: {e}"
@@ -243,7 +242,7 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
     _LOG.info("Update manifest parsed: latest_version=%r, channel=%s", data.get("latest_version") or data.get("version"), resolved_channel)
 
     if not _PLATFORM_ADAPTER.supports_install_channel(resolved_channel):
-        _LOG.warning("Update check failed: unsupported install channel %r.", resolved_channel)
+        _LOG.error("Update check failed: unsupported install channel %r.", resolved_channel)
         return UpdateCheckResult(
             update_available=False,
             current_version=current_version,
@@ -272,7 +271,7 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
 
     allowed_package_kinds = _ALLOWED_PACKAGE_KINDS_BY_CHANNEL.get(resolved_channel)
     if allowed_package_kinds is not None and package_kind not in allowed_package_kinds:
-        _LOG.warning(
+        _LOG.error(
             "Update manifest rejected: package_kind=%r is not allowed for channel=%r.",
             package_kind,
             resolved_channel,
@@ -288,6 +287,7 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
         )
 
     if not latest_tag:
+        _LOG.error("Update manifest rejected: missing required field latest_version.")
         return UpdateCheckResult(
             update_available=False,
             current_version=current_version,
@@ -295,6 +295,7 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
         )
 
     if not download_url:
+        _LOG.error("Update manifest rejected: missing download URL for channel %r.", resolved_channel)
         return UpdateCheckResult(
             update_available=False,
             current_version=current_version,
@@ -310,8 +311,30 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
         latest_tag,
     )
 
+    if not is_newer:
+        _LOG.error(
+            "No update available: current_version=%s, latest_version=%s, manifest_url=%s",
+            current_version,
+            latest_tag,
+            _MANIFEST_URL,
+        )
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            latest_version=latest_tag,
+            release_notes=release_notes.strip(),
+        )
+
+    if not _verify_manifest_signature_required(manifest_bytes):
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            latest_version=latest_tag,
+            error="Update manifest signature could not be verified.",
+        )
+
     return UpdateCheckResult(
-        update_available=is_newer,
+        update_available=True,
         current_version=current_version,
         latest_version=latest_tag,
         download_url=download_url,
@@ -329,11 +352,10 @@ def _fetch_url_bytes(url: str, headers: dict[str, str], timeout: int) -> bytes:
         return response.read()
 
 
-def _verify_manifest_signature_if_available(manifest_bytes: bytes) -> bool:
+def _verify_manifest_signature_required(manifest_bytes: bytes) -> bool:
     if not _MANIFEST_SIGNATURE_URL:
-        _LOG.warning(
-            "Update manifest is unsigned: no signature URL configured. "
-            "Continuing without UI changes."
+        _LOG.error(
+            "Update manifest signature verification failed: no signature URL configured."
         )
         return False
 
@@ -348,23 +370,20 @@ def _verify_manifest_signature_if_available(manifest_bytes: bytes) -> bool:
         )
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            _LOG.warning(
-                "Update manifest is unsigned: signature not found at %s. "
-                "Continuing without UI changes.",
+            _LOG.error(
+                "Update manifest signature verification failed: signature not found at %s.",
                 _MANIFEST_SIGNATURE_URL,
             )
         else:
-            _LOG.warning(
-                "Could not fetch update manifest signature from %s: HTTP %s. "
-                "Continuing without UI changes.",
+            _LOG.error(
+                "Update manifest signature fetch failed from %s: HTTP %s.",
                 _MANIFEST_SIGNATURE_URL,
                 e.code,
             )
         return False
     except urllib.error.URLError as e:
-        _LOG.warning(
-            "Could not fetch update manifest signature from %s: %s. "
-            "Continuing without UI changes.",
+        _LOG.error(
+            "Update manifest signature fetch failed from %s: %s.",
             _MANIFEST_SIGNATURE_URL,
             e,
         )
@@ -374,9 +393,8 @@ def _verify_manifest_signature_if_available(manifest_bytes: bytes) -> bool:
     try:
         verify_update_manifest_signature(manifest_bytes, signature_bytes)
     except SignatureVerificationError as e:
-        _LOG.warning(
-            "Update manifest signature verification failed: %s. "
-            "Continuing without UI changes.",
+        _LOG.error(
+            "Update manifest signature verification failed: %s.",
             e,
         )
         return False

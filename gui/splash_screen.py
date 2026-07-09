@@ -760,15 +760,6 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         root.withdraw()
         root.quit()
 
-    def _set_security_check_state(state: str, *, passed: bool):
-        color = _BUTTON_BG if passed else "#ff9b90"
-        label = "Checking security..." if passed else "Security check failed"
-        _set_update_label(label, fg=color)
-        if passed:
-            _LOG.info("Update payload security check: pass")
-        else:
-            _LOG.warning("Update payload security check: fail")
-
     def _on_download_complete(payload_path: str):
         update_state["downloaded_payload"] = payload_path
         update_state["busy"] = False
@@ -803,8 +794,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         update_state["busy"] = False
         _set_progress_bar_visible(False)
         if _download_error_looks_security_related(err):
-            _set_security_check_state("fail", passed=False)
             _LOG.warning("Update download stopped by security check: %s", err)
+            _set_update_label("Download verification failed", fg="#ff9b90")
             return
         _set_update_label("\u2193  Download failed \u2014 click to retry",
                           fg="#ff9b90", clickable=True)
@@ -843,12 +834,11 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     expected_sha256=result.download_sha256,
                     progress_cb=on_progress,
                 )
-                root.after(0, lambda: _set_security_check_state("pass", passed=True))
                 final_payload_path = _PLATFORM_ADAPTER.persist_downloaded_payload(
                     payload_path, result.download_url
                 )
                 _LOG.info("Update payload saved for installation: %s", final_payload_path)
-                root.after(1800, lambda: _on_download_complete(final_payload_path))
+                root.after(0, lambda: _on_download_complete(final_payload_path))
             except Exception as e:
                 err = str(e)
                 _LOG.warning(

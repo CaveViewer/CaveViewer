@@ -243,9 +243,10 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | _(auto)_ | Linux publish helper only. Set to `arm64` or `x86_64` to choose which AppImage is written to the Linux update manifest. |
 
 Update manifests are signed with the release Ed25519 private key. The bundled
-public key lives at `security/release_signing_public_key.pem`. During the
-transition period, the app logs a warning and continues if a manifest signature
-is missing or invalid.
+public key lives at `security/release_signing_public_key.pem`. Startup update
+checks read the branch/channel manifest first; if it advertises a newer version,
+the app verifies the manifest signature before offering the download. Missing or
+invalid signatures are logged as errors and do not change the splash interface.
 
 Default update checks read the committed main-branch
 `updates/<platform>/stable.json` manifests, not GitHub's latest-release or
