@@ -31,6 +31,14 @@ The application About text should identify CaveViewer as licensed under the GNU 
 - Git
 - Python 3.10+
 
+You also need to run a typical workstation setup with C++ and other compilers if you desired to compile from source.
+
+Ubuntu should work out of the box. Fedora 44 is special, so you have to install additional packages
+```bash
+sudo dnf install gcc gcc-c++ make python3-devel \
+    mesa-libGL-devel mesa-libEGL-devel libX11-devel sudo python3.14-tkinter
+```
+
 ## Clone the Repository
 
 ```bash
