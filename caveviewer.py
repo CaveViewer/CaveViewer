@@ -16,9 +16,7 @@ Workflow:
      where the user flies, so frame rate stays smooth regardless of total
      map size.
 
-Bare-bones UI for now per your request -- a Tkinter folder-picker dialog
-and a console progress readout, nothing fancier. We can layer a nicer UI
-on top later without touching any of the core/ engine code.
+[magic_mr_v] $ _
 """
 
 import os
