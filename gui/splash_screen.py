@@ -376,7 +376,7 @@ def _advanced_setting_defaults() -> dict[str, str]:
     logical_cpus = max(1, os.cpu_count() or 1)
     return {
         "memory_target_percent": _env_setting_or_default(
-            "CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "12"
+            "CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "40"
         ),
         "gpu_memory_target_percent": _env_setting_or_default(
             "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET", "70"

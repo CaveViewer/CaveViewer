@@ -343,7 +343,7 @@ pass `--private-key`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `12` | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
+| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `40` | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
 | `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | Override the GPU memory size (in GB) used by the streaming budget. Useful when auto-detection reports an incorrect value. |
 | `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | Percentage of GPU memory the streaming system targets. |
 | `CAVEVIEWER_IO_WORKERS` | `CPU count − 3` | Number of background threads for loading chunk files from disk. |

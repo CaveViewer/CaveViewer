@@ -107,7 +107,7 @@ def _parse_memory_target_fraction(raw_value: str | None) -> float:
     Accepts either fraction (0.10) or percent-style (10, 25, 40).
     Returns a conservative default when unset/invalid.
     """
-    return _parse_target_fraction(raw_value, conservative_default=0.12)
+    return _parse_target_fraction(raw_value, conservative_default=0.40)
 
 
 def _parse_gpu_target_fraction(raw_value: str | None) -> float:
