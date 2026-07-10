@@ -431,6 +431,14 @@ color and control tokens through `gui/tk_theme.py`. Map-folder validation lives
 in `gui/map_selection.py`, allowing both map-selection dialogs to reuse it
 without importing private splash-screen implementation details.
 
+Runtime chunk streaming is also split by policy boundary:
+`core/hardware_memory.py` detects system/GPU memory and parses target fractions;
+`core/streaming_budget.py` contains pure chunk-size estimation and residency-cap
+calculation; `core/streaming_scheduler.py` owns the bounded ready backlog,
+spatial selection, and eviction policy; and `core/streaming_world.py` coordinates
+worker lifecycle and render-thread callbacks. The longitudinal cross-section
+map retains its independent single-worker profile pipeline and cache.
+
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
 | `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |

@@ -17,250 +17,82 @@ This keeps the streaming *logic* unit-testable without an OpenGL context
 
 from __future__ import annotations
 
-import heapq
 import os
-from pathlib import Path
-import subprocess
-import sys
 import threading
 import queue
 import time
-import ctypes
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
 
-from core import chunker
+from core import chunker, hardware_memory
 from core.worker_config import resolve_worker_count
 from core.chunker import ChunkData
 from core.logging_utils import get_logger
+from core.streaming_budget import (
+    calculate_residency_budget,
+    estimate_chunk_bytes,
+)
+from core.streaming_scheduler import (
+    BoundedReadyBacklog,
+    cell_distance_sq,
+    cell_in_cube_radius,
+    cells_outside_cube_radius,
+    select_evictions,
+    select_wanted_cells,
+)
 
 
 _LOG = get_logger("StreamingWorld")
 
-_AMD_PCI_VENDOR_ID = 0x1002
-_LINUX_DRM_ROOT = "/sys/class/drm"
+# Compatibility hooks for existing diagnostics/tests that patch these names
+# through core.streaming_world rather than core.hardware_memory.
+subprocess = hardware_memory.subprocess
+sys = hardware_memory.sys
+
+_AMD_PCI_VENDOR_ID = hardware_memory.AMD_PCI_VENDOR_ID
+_LINUX_DRM_ROOT = hardware_memory.LINUX_DRM_ROOT
 
 
 def _detect_total_ram_bytes() -> int:
-    """Best-effort total physical RAM detection without extra dependencies."""
-    try:
-        if os.name == "nt":
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            stat = MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-                return int(stat.ullTotalPhys)
-            return 8 * 1024 * 1024 * 1024
-
-        if hasattr(os, "sysconf"):
-            page_size = os.sysconf("SC_PAGE_SIZE")
-            pages = os.sysconf("SC_PHYS_PAGES")
-            if isinstance(page_size, int) and isinstance(pages, int) and page_size > 0 and pages > 0:
-                return int(page_size * pages)
-    except Exception:
-        return 8 * 1024 * 1024 * 1024
-
-    return 8 * 1024 * 1024 * 1024
+    return hardware_memory.detect_total_ram_bytes()
 
 
 def _parse_target_fraction(raw_value: str | None, conservative_default: float) -> float:
-    """
-    Parse memory target from env.
-
-    Accepts either fraction (0.10) or percent-style (10, 25, 40).
-    Returns a conservative default when unset/invalid.
-
-    This value is interpreted as a share of TOTAL physical RAM
-    (best-effort detected), not currently free RAM.
-    """
-    if raw_value is None:
-        return conservative_default
-
-    text = raw_value.strip()
-    if not text:
-        return conservative_default
-
-    try:
-        value = float(text)
-    except ValueError:
-        return conservative_default
-
-    if value > 1.0:
-        value = value / 100.0
-
-    # Guardrails: allow explicit tuning but keep pathological values out.
-    return max(0.01, min(0.80, value))
+    return hardware_memory.parse_target_fraction(
+        raw_value, conservative_default
+    )
 
 
 def _parse_memory_target_fraction(raw_value: str | None) -> float:
-    """
-    Parse system-RAM residency target from env.
-
-    Accepts either fraction (0.10) or percent-style (10, 25, 40).
-    Returns a conservative default when unset/invalid.
-    """
-    return _parse_target_fraction(raw_value, conservative_default=0.08)
+    return hardware_memory.parse_memory_target_fraction(raw_value)
 
 
 def _parse_gpu_target_fraction(raw_value: str | None) -> float:
-    """
-    Parse GPU-memory residency target from env.
-
-    Defaults higher than the RAM target because this only applies when a
-    dedicated GPU memory size can be detected or explicitly configured.
-    """
-    return _parse_target_fraction(raw_value, conservative_default=0.70)
+    return hardware_memory.parse_gpu_target_fraction(raw_value)
 
 
-def _read_positive_sysfs_int(path: Path) -> int | None:
-    """Read a positive decimal/hex integer from sysfs, or return None."""
-    try:
-        value = int(path.read_text(encoding="ascii").strip(), 0)
-    except (OSError, ValueError):
-        return None
-    return value if value > 0 else None
+_read_positive_sysfs_int = hardware_memory.read_positive_sysfs_int
 
 
 def _detect_linux_amd_gpu_memory_bytes(
     drm_root: str | os.PathLike[str] = _LINUX_DRM_ROOT,
 ) -> int | None:
-    """Detect AMD VRAM through the Linux DRM/amdgpu sysfs interface.
-
-    amdgpu exposes ``mem_info_vram_total`` in bytes for each DRM card.  Prefer
-    the boot/primary adapter when multiple AMD cards are present; if none is
-    marked primary, use the largest valid AMD VRAM value.  Connector entries
-    such as ``card1-eDP-1`` are deliberately ignored.
-    """
-    root = Path(drm_root)
-    try:
-        entries = sorted(root.iterdir(), key=lambda path: path.name)
-    except OSError:
-        return None
-
-    candidates: list[tuple[bool, int]] = []
-    for card_path in entries:
-        if not card_path.name.startswith("card"):
-            continue
-        card_index = card_path.name.removeprefix("card")
-        if not card_index.isdigit():
-            continue
-
-        device_path = card_path / "device"
-        vendor_id = _read_positive_sysfs_int(device_path / "vendor")
-        if vendor_id != _AMD_PCI_VENDOR_ID:
-            continue
-
-        vram_bytes = _read_positive_sysfs_int(
-            device_path / "mem_info_vram_total"
-        )
-        if vram_bytes is None:
-            continue
-
-        is_boot_gpu = _read_positive_sysfs_int(device_path / "boot_vga") == 1
-        candidates.append((is_boot_gpu, vram_bytes))
-
-    if not candidates:
-        return None
-
-    # A primary adapter is more likely to own the OpenGL context.  The memory
-    # size breaks ties and provides a useful fallback on systems whose driver
-    # does not expose boot_vga.
-    _is_boot_gpu, vram_bytes = max(
-        candidates, key=lambda candidate: (candidate[0], candidate[1])
-    )
-    return vram_bytes
+    return hardware_memory.detect_linux_amd_gpu_memory_bytes(drm_root)
 
 
 def _detect_nvidia_gpu_memory_bytes() -> int | None:
-    """Detect NVIDIA VRAM with nvidia-smi when it is available."""
-    try:
-        result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-        )
-        first_line = result.stdout.strip().splitlines()[0].strip()
-        total_mb = int(first_line.split()[0])
-        if total_mb > 0:
-            return total_mb * 1024 * 1024
-    except Exception:
-        pass
-    return None
+    return hardware_memory.detect_nvidia_gpu_memory_bytes()
 
 
 def _detect_total_gpu_memory_bytes(gpu_vendor: str | None = None) -> int | None:
-    """Best-effort dedicated GPU memory detection.
-
-    CAVEVIEWER_GPU_MEMORY_GB is an explicit override for systems where
-    automatic detection is unavailable. NVIDIA uses nvidia-smi when present;
-    AMD GPUs on Linux use the amdgpu DRM sysfs interface.  When the active
-    OpenGL vendor is known, only its matching detector runs so a secondary
-    GPU cannot accidentally determine the primary GPU's memory budget.
-    """
-    override_gb = os.environ.get("CAVEVIEWER_GPU_MEMORY_GB", "").strip()
-    if override_gb:
-        try:
-            value = float(override_gb)
-            if value > 0.0:
-                memory_bytes = int(value * (1024 ** 3))
-                _LOG.info(
-                    "Using configured GPU memory override: %.1f GB.",
-                    memory_bytes / (1024 ** 3),
-                )
-                return memory_bytes
-        except ValueError:
-            pass
-
-    normalized_vendor = (gpu_vendor or "").strip().casefold()
-    vendor_is_nvidia = "nvidia" in normalized_vendor
-    vendor_is_amd = (
-        "amd" in normalized_vendor
-        or "advanced micro devices" in normalized_vendor
-        or normalized_vendor.startswith("ati ")
+    return hardware_memory.detect_total_gpu_memory_bytes(
+        gpu_vendor,
+        nvidia_detector=_detect_nvidia_gpu_memory_bytes,
+        amd_detector=_detect_linux_amd_gpu_memory_bytes,
+        logger=_LOG,
     )
-
-    # Preserve the historical NVIDIA-first fallback when no OpenGL vendor is
-    # available.  If the context identified its vendor, avoid consulting a
-    # different adapter that merely happens to be installed in the machine.
-    if vendor_is_nvidia or not normalized_vendor:
-        memory_bytes = _detect_nvidia_gpu_memory_bytes()
-        if memory_bytes is not None:
-            _LOG.info(
-                "Detected NVIDIA GPU memory via nvidia-smi: %.1f GB.",
-                memory_bytes / (1024 ** 3),
-            )
-            return memory_bytes
-
-    if sys.platform.startswith("linux") and (vendor_is_amd or not normalized_vendor):
-        memory_bytes = _detect_linux_amd_gpu_memory_bytes()
-        if memory_bytes is not None:
-            _LOG.info(
-                "Detected AMD GPU memory via Linux DRM sysfs: %.1f GB.",
-                memory_bytes / (1024 ** 3),
-            )
-            return memory_bytes
-
-    return None
 
 
 @dataclass
@@ -287,6 +119,9 @@ class StreamingConfig:
         thrashing load/unload near a boundary.
         """
         return self.load_radius_cells + self.unload_radius_margin
+
+
+_BoundedReadyBacklog = BoundedReadyBacklog
 
 
 class StreamingWorld:
@@ -349,8 +184,8 @@ class StreamingWorld:
         # Cap how many fully-decoded chunk payloads can wait in RAM.
         # This bounds worst-case worker-ahead memory spikes when the
         # render thread is temporarily slower than background decoding.
-        ready_queue_capacity = max(16, min(256, self.config.max_loaded_chunks))
-        self._ready_queue: "queue.Queue[ChunkData]" = queue.Queue(maxsize=ready_queue_capacity)
+        ready_backlog_capacity = max(16, min(256, self.config.max_loaded_chunks))
+        self._ready_backlog = _BoundedReadyBacklog(ready_backlog_capacity)
         self._lock = threading.Lock()
         self._worker_pool_size = resolve_worker_count(
             os.environ.get("CAVEVIEWER_IO_WORKERS"),
@@ -373,56 +208,21 @@ class StreamingWorld:
 
     def _estimate_chunk_ram_bytes(self, chunk_keys: list[str]) -> int:
         """Estimate in-RAM cost per loaded chunk from cache chunk file sizes."""
-        chunks_dir = os.path.join(self.cache_dir, chunker.CHUNKS_DIRNAME)
-        if not chunk_keys:
-            return 2 * 1024 * 1024
-
-        sampled_sizes: list[int] = []
-        for cell_str in chunk_keys:
-            path = os.path.join(chunks_dir, f"{cell_str}.bin")
-            try:
-                size = os.path.getsize(path)
-                if size > 0:
-                    sampled_sizes.append(size)
-            except OSError:
-                continue
-
-        if not sampled_sizes:
-            return 2 * 1024 * 1024
-
-        sampled_sizes.sort()
-        median_size = sampled_sizes[len(sampled_sizes) // 2]
-        # Keep conservative headroom for numpy arrays, Python object overhead,
-        # and GPU-side residency associated with a loaded chunk.
-        overhead_multiplier = 6.0
-        return max(int(median_size * overhead_multiplier), 512 * 1024)
+        return estimate_chunk_bytes(
+            self.cache_dir,
+            chunk_keys,
+            chunks_dirname=chunker.CHUNKS_DIRNAME,
+            overhead_multiplier=6.0,
+        )
 
     def _estimate_chunk_gpu_bytes(self, chunk_keys: list[str]) -> int:
         """Estimate GPU-resident cost per loaded chunk from cache chunk sizes."""
-        chunks_dir = os.path.join(self.cache_dir, chunker.CHUNKS_DIRNAME)
-        if not chunk_keys:
-            return 2 * 1024 * 1024
-
-        sampled_sizes: list[int] = []
-        for cell_str in chunk_keys:
-            path = os.path.join(chunks_dir, f"{cell_str}.bin")
-            try:
-                size = os.path.getsize(path)
-                if size > 0:
-                    sampled_sizes.append(size)
-            except OSError:
-                continue
-
-        if not sampled_sizes:
-            return 2 * 1024 * 1024
-
-        sampled_sizes.sort()
-        median_size = sampled_sizes[len(sampled_sizes) // 2]
-        # A chunk's VBO is roughly the position/uv/normal payload size.
-        # Use headroom for driver allocation overhead and texture residency
-        # shared across loaded chunks.
-        overhead_multiplier = 2.5
-        return max(int(median_size * overhead_multiplier), 512 * 1024)
+        return estimate_chunk_bytes(
+            self.cache_dir,
+            chunk_keys,
+            chunks_dirname=chunker.CHUNKS_DIRNAME,
+            overhead_multiplier=2.5,
+        )
 
     def _configure_chunk_budget_from_memory_targets(self) -> None:
         """Derive max_loaded_chunks from system RAM and GPU memory targets.
@@ -435,34 +235,32 @@ class StreamingWorld:
         if self._estimated_chunk_ram_bytes <= 0:
             return
 
-        ram_budget_bytes = int(self._total_ram_bytes * self._memory_target_fraction)
-        ram_budget_chunks = max(1, ram_budget_bytes // self._estimated_chunk_ram_bytes)
-        budget_chunks = ram_budget_chunks
-
-        gpu_budget_chunks = None
-        if self._total_gpu_memory_bytes is not None and self._estimated_chunk_gpu_bytes > 0:
-            gpu_budget_bytes = int(self._total_gpu_memory_bytes * self._gpu_target_fraction)
-            gpu_budget_chunks = max(1, gpu_budget_bytes // self._estimated_chunk_gpu_bytes)
-            budget_chunks = min(budget_chunks, gpu_budget_chunks)
-
-        budget_chunks = min(budget_chunks, len(self.available_cells))
+        budget = calculate_residency_budget(
+            available_cell_count=len(self.available_cells),
+            total_ram_bytes=self._total_ram_bytes,
+            ram_target_fraction=self._memory_target_fraction,
+            estimated_chunk_ram_bytes=self._estimated_chunk_ram_bytes,
+            total_gpu_memory_bytes=self._total_gpu_memory_bytes,
+            gpu_target_fraction=self._gpu_target_fraction,
+            estimated_chunk_gpu_bytes=self._estimated_chunk_gpu_bytes,
+        )
 
         # Apply the memory-derived budget directly so env tuning can both
         # raise and lower residency as intended.
-        self.config.max_loaded_chunks = int(budget_chunks)
+        self.config.max_loaded_chunks = budget.max_loaded_chunks
         _LOG.info(
             "Memory target %.0f%% of %.1f GB => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
             self._memory_target_fraction * 100.0,
             self._total_ram_bytes / (1024 ** 3),
-            ram_budget_chunks,
+            budget.ram_budget_chunks,
             self._estimated_chunk_ram_bytes / (1024 ** 2),
         )
-        if gpu_budget_chunks is not None:
+        if budget.gpu_budget_chunks is not None:
             _LOG.info(
                 "GPU memory target %.0f%% of %.1f GB => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
                 self._gpu_target_fraction * 100.0,
                 self._total_gpu_memory_bytes / (1024 ** 3),
-                gpu_budget_chunks,
+                budget.gpu_budget_chunks,
                 self._estimated_chunk_gpu_bytes / (1024 ** 2),
             )
             _LOG.info("Effective max_loaded_chunks=%d after RAM/GPU limits.", self.config.max_loaded_chunks)
@@ -478,6 +276,9 @@ class StreamingWorld:
             self._work_queue.put(None)  # sentinel to unblock get()
         for w in self._workers:
             w.join(timeout=2.0)
+        self._ready_backlog.clear()
+        with self._lock:
+            self._pending.clear()
 
     def pause(self):
         self._paused_event.set()
@@ -487,6 +288,14 @@ class StreamingWorld:
 
     def is_paused(self) -> bool:
         return self._paused_event.is_set()
+
+    def _cell_is_wanted(self, cell: tuple[int, int, int]) -> bool:
+        with self._lock:
+            return cell in self._last_wanted_cells
+
+    def _clear_pending_cell(self, cell: tuple[int, int, int]) -> None:
+        with self._lock:
+            self._pending.discard(cell)
 
     def _worker_loop(self):
         while not self._stop_event.is_set():
@@ -508,7 +317,10 @@ class StreamingWorld:
                 time.sleep(0.1)
                 continue
 
+            handed_off = False
             try:
+                if not self._cell_is_wanted(cell):
+                    continue
                 data = chunker.load_chunk_file(self.cache_dir, cell)
                 chunker.prepare_chunk_upload_groups(data)
                 if self.on_decode_textures is not None:
@@ -520,9 +332,13 @@ class StreamingWorld:
                         # becoming ready -- worst case, acquire() falls back
                         # to a synchronous decode on the main thread later.
                         _LOG.warning(f"texture pre-decode failed for {cell}: {e}")
-                while not self._stop_event.is_set():
+                while (
+                    not self._stop_event.is_set()
+                    and self._cell_is_wanted(cell)
+                ):
                     try:
-                        self._ready_queue.put(data, timeout=0.2)
+                        self._ready_backlog.put(data, timeout=0.2)
+                        handed_off = True
                         break
                     except queue.Full:
                         continue
@@ -533,6 +349,9 @@ class StreamingWorld:
                 # don't crash the worker thread on a single bad chunk file;
                 # surface via print so it's visible without killing render
                 _LOG.warning(f"failed to load chunk {cell}: {e}")
+            finally:
+                if not handed_off:
+                    self._clear_pending_cell(cell)
 
     def cell_for_position(self, position: np.ndarray) -> tuple[int, int, int]:
         return chunker.world_to_cell(position, self.config.chunk_size)
@@ -553,22 +372,35 @@ class StreamingWorld:
         # slider at a standstill would silently do nothing until the
         # camera happened to cross a cell boundary on its own -- the
         # slider would feel completely broken on first try.
-        if cam_cell == self._last_camera_cell and current_radius == self._last_load_radius:
-            return
+        same_view = (
+            cam_cell == self._last_camera_cell
+            and current_radius == self._last_load_radius
+        )
+        if same_view:
+            # Worker failures and stale-result cleanup can remove a pending
+            # cell asynchronously while the camera remains stationary. Only
+            # early-out when every wanted cell is still loaded or in flight;
+            # otherwise reconcile the same view and enqueue the missing work.
+            with self._lock:
+                unresolved = (
+                    self._last_wanted_cells
+                    - self.loaded_cells
+                    - self._pending
+                )
+            if not unresolved:
+                return
         self._last_camera_cell = cam_cell
         self._last_load_radius = current_radius
 
         load_r = self.config.load_radius_cells
-        wanted = self._available_cells_in_radius(cam_cell, load_r)
-        if len(wanted) > self.config.max_loaded_chunks:
-            ordered_wanted = sorted(
-                wanted,
-                key=lambda cell: self._cell_distance_sq(cell, cam_cell),
-            )
-            wanted = set(ordered_wanted[:max(1, self.config.max_loaded_chunks)])
-        self._last_wanted_cells = wanted
-
+        wanted = select_wanted_cells(
+            self.available_cells,
+            cam_cell,
+            load_r,
+            self.config.max_loaded_chunks,
+        )
         with self._lock:
+            self._last_wanted_cells = wanted
             to_request = wanted - self.loaded_cells - self._pending
             # Dispatch closest-to-camera first. Without this, chunks load in
             # whatever arbitrary order set-iteration and thread scheduling
@@ -585,39 +417,37 @@ class StreamingWorld:
                 self._pending.add(cell)
                 self._work_queue.put(cell)
 
+        stale_ready = self._ready_backlog.discard_if(
+            lambda data: data.cell not in wanted
+        )
+        if stale_ready:
+            with self._lock:
+                for data in stale_ready:
+                    self._pending.discard(data.cell)
+
         # eviction uses a larger radius than load, so a chunk isn't dropped
         # the instant it's outside the tight load ring -- avoids reload
         # thrashing if the camera oscillates near a boundary.
         unload_r = self.config.unload_radius_cells
-        self._cells_to_unload_next_drain = {
-            cell
-            for cell in self.loaded_cells
-            if not self._cell_in_cube_radius(cell, cam_cell, unload_r)
-        }
+        self._cells_to_unload_next_drain = cells_outside_cube_radius(
+            self.loaded_cells, cam_cell, unload_r
+        )
         self._last_cam_cell_for_priority = cam_cell
 
     def _cell_distance_sq(self, cell: tuple[int, int, int], center: tuple[int, int, int]) -> int:
-        return (cell[0] - center[0]) ** 2 + (cell[1] - center[1]) ** 2 + (cell[2] - center[2]) ** 2
+        return cell_distance_sq(cell, center)
 
     def _available_cells_in_radius(self, center: tuple[int, int, int], radius: int) -> set[tuple[int, int, int]]:
-        cx, cy, cz = center
-        available = self.available_cells
-        wanted: set[tuple[int, int, int]] = set()
-        for dx in range(-radius, radius + 1):
-            for dy in range(-radius, radius + 1):
-                for dz in range(-radius, radius + 1):
-                    cell = (cx + dx, cy + dy, cz + dz)
-                    if cell in available:
-                        wanted.add(cell)
-        return wanted
+        return select_wanted_cells(
+            self.available_cells,
+            center,
+            radius,
+            max_loaded_chunks=len(self.available_cells),
+        )
 
     @staticmethod
     def _cell_in_cube_radius(cell: tuple[int, int, int], center: tuple[int, int, int], radius: int) -> bool:
-        return (
-            abs(cell[0] - center[0]) <= radius
-            and abs(cell[1] - center[1]) <= radius
-            and abs(cell[2] - center[2]) <= radius
-        )
+        return cell_in_cube_radius(cell, center, radius)
 
     def drain_ready_chunks(self, on_chunk_ready: Callable[[ChunkData], None],
                              on_chunk_unload: Callable[[tuple], None],
@@ -641,47 +471,44 @@ class StreamingWorld:
             if several expensive chunks land in the same frame. The time
             budget catches that case; the count cap is just a backstop.
 
-        Ready chunks are also re-sorted by distance to the camera's last
-        known cell before draining, so if multiple chunks became ready
-        between frames, the ones closest to the camera (most likely to
-        cause a visible hole if delayed) are uploaded first.
+        Each chunk is selected by distance to the camera's last known cell,
+        so if multiple chunks are ready, the one most likely to cause a visible
+        hole if delayed is uploaded first. Deferred chunks remain in the same
+        bounded backlog for a later frame.
         """
         if self._paused_event.is_set():
             return
 
-        # Drain everything currently sitting in the ready queue into a list
-        # so we can sort by distance before uploading any of it -- this is
-        # cheap (CPU-side list ops on ChunkData references, no GPU work yet).
-        pending_ready = []
-        while True:
-            try:
-                pending_ready.append(self._ready_queue.get_nowait())
-            except queue.Empty:
-                break
-
         cam_cell = getattr(self, "_last_cam_cell_for_priority", None)
-        if cam_cell is not None and pending_ready:
-            pending_ready.sort(key=lambda d: self._cell_distance_sq(d.cell, cam_cell))
+        distance_key = None
+        if cam_cell is not None:
+            distance_key = lambda data: self._cell_distance_sq(data.cell, cam_cell)
 
         start = time.perf_counter()
         n = 0
-        leftover = []
-        for data in pending_ready:
+        while n < max_per_frame:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
-            if n >= max_per_frame or elapsed_ms >= time_budget_ms:
-                leftover.append(data)
+            if elapsed_ms >= time_budget_ms:
+                break
+            try:
+                data = self._ready_backlog.get_closest_nowait(distance_key)
+            except queue.Empty:
+                break
+            with self._lock:
+                is_wanted = data.cell in self._last_wanted_cells
+                if not is_wanted:
+                    self._pending.discard(data.cell)
+            if not is_wanted:
                 continue
+            try:
+                on_chunk_ready(data)
+            except BaseException:
+                self._clear_pending_cell(data.cell)
+                raise
             with self._lock:
                 self._pending.discard(data.cell)
                 self.loaded_cells.add(data.cell)
-            on_chunk_ready(data)
             n += 1
-
-        # anything we didn't get to this frame goes back in the queue,
-        # still in priority order, so the next frame picks up where this
-        # one left off rather than re-sorting from scratch each time
-        for data in leftover:
-            self._ready_queue.put(data)
 
         unload_now = getattr(self, "_cells_to_unload_next_drain", set())
         if unload_now:
@@ -695,37 +522,14 @@ class StreamingWorld:
         # evict farthest chunks first (prefer those outside the immediate
         # wanted set) until within max_loaded_chunks.
         with self._lock:
-            loaded_count = len(self.loaded_cells)
-            # Never evict below the current wanted set; that causes chunk
-            # thrash and repeated reloading while the camera is stationary.
-            effective_cap = max(self.config.max_loaded_chunks, len(self._last_wanted_cells))
-            over_budget = loaded_count - effective_cap
-            if over_budget > 0:
-                cam_cell = getattr(self, "_last_cam_cell_for_priority", None)
-                if cam_cell is not None:
-                    preferred = heapq.nlargest(
-                        over_budget,
-                        (c for c in self.loaded_cells if c not in self._last_wanted_cells),
-                        key=lambda c: self._cell_distance_sq(c, cam_cell),
-                    )
-                    remaining = over_budget - len(preferred)
-                    if remaining > 0:
-                        fallback = heapq.nlargest(
-                            remaining,
-                            (c for c in self.loaded_cells if c in self._last_wanted_cells),
-                            key=lambda c: self._cell_distance_sq(c, cam_cell),
-                        )
-                        to_evict = preferred + fallback
-                    else:
-                        to_evict = preferred
-                else:
-                    to_evict = list(self.loaded_cells)[:over_budget]
-                for cell in to_evict:
-                    self.loaded_cells.discard(cell)
-
-                evicted_cells = to_evict
-            else:
-                evicted_cells = []
+            evicted_cells = select_evictions(
+                self.loaded_cells,
+                self._last_wanted_cells,
+                getattr(self, "_last_cam_cell_for_priority", None),
+                self.config.max_loaded_chunks,
+            )
+            for cell in evicted_cells:
+                self.loaded_cells.discard(cell)
 
         for cell in evicted_cells:
             on_chunk_unload(cell)
@@ -734,7 +538,7 @@ class StreamingWorld:
         return {
             "loaded": len(self.loaded_cells),
             "pending": len(self._pending),
-            "ready": self._ready_queue.qsize(),
+            "ready": self._ready_backlog.qsize(),
             "wanted": len(self._last_wanted_cells),
             "total_available": len(self.available_cells),
         }
