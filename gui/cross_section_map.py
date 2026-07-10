@@ -19,13 +19,17 @@ from __future__ import annotations
 
 import concurrent.futures
 import math
-import os
+import threading
 from collections import OrderedDict
 
 import moderngl
 import numpy as np
 
 from core import chunker
+from core.logging_utils import get_logger
+
+
+_LOG = get_logger("LongitudinalMap")
 
 
 _VERT_SRC = """
@@ -61,7 +65,7 @@ class CrossSectionMap:
     PANEL_HEIGHT = 120
 
     RAW_ALONG_STEP = 8.0              # meters between raw section rebuilds
-    DISPLAY_ALONG_STEP = 1.0          # meters between visible cross-section redraws
+    DISPLAY_ALONG_STEP = 4.0          # meters between visible cross-section redraws
     LATERAL_AXIS_STEP = 1.5           # meters; tolerate side-to-side camera drift
     HEADING_STEP_RADIANS = math.radians(5.0)
     MAX_VIEW_LENGTH = 36.0            # meters shown along the travel axis
@@ -74,14 +78,25 @@ class CrossSectionMap:
     ENVELOPE_BIN_COUNT = 48
     SLAB_HALF_WIDTH = 3.0             # coarse local corridor width
     SLAB_SAMPLE_COUNT = 3
-    RECOVERY_SLAB_HALF_WIDTH = 4.5
-    RECOVERY_SLAB_SAMPLE_COUNT = 5
+    # A tight slice is not a reliable inside/outside test: a camera inside a
+    # broad chamber can miss the surface while a camera outside can still
+    # intersect nearby mesh. Use a targeted wider search when needed.
+    RECOVERY_SLAB_HALF_WIDTH = 24.0
+    RECOVERY_SLAB_SAMPLE_COUNT = 3
     RAW_CACHE_LIMIT = 8
-    TRIANGLE_CACHE_LIMIT = 24
-    RAW_PENDING_LIMIT = 4
-    PREFETCH_AHEAD_COUNT = 1
+    # A typical local section touches 40-150 small positions-only files.
+    # Retaining the whole working set avoids rereading it during the nearest-
+    # geometry probe and the targeted recovery slice that immediately follows.
+    TRIANGLE_CACHE_LIMIT = 256
+    # One running build plus one replaceable latest request. A single feeder
+    # avoids out-of-order completions and is fast enough for the ~50 ms local
+    # profile workload.
+    RAW_PENDING_LIMIT = 2
+    # Live navigation always wins over speculative work. Nearby completed
+    # views are already retained in _raw_cache, so prefetching here mostly
+    # competes with the diver's current view during fast travel.
+    PREFETCH_AHEAD_COUNT = 0
     PREFETCH_BEHIND_COUNT = 0
-    WORKER_COUNT_ENV_VAR = "CAVEVIEWER_CROSS_SECTION_WORKERS"
     PLANE_MARGIN = 1e-4
 
     def __init__(self, ctx: moderngl.Context, cache_dir: str, manifest: dict):
@@ -104,11 +119,13 @@ class CrossSectionMap:
         self._active_segments: list[RawSegment] = []
         self._raw_cache: OrderedDict[tuple, list[RawSegment]] = OrderedDict()
         self._triangle_cache: OrderedDict[tuple[int, int, int], np.ndarray] = OrderedDict()
+        self._triangle_cache_lock = threading.Lock()
         self._pending_raw_builds: OrderedDict[tuple, concurrent.futures.Future] = OrderedDict()
+        self._profile_stop_event = threading.Event()
         self._uploaded_frame_key: tuple | None = None
 
         self._slice_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=self._configured_worker_count(),
+            max_workers=1,
             thread_name_prefix="CaveViewerLongSection",
         )
 
@@ -196,17 +213,6 @@ class CrossSectionMap:
                     index.setdefault((gx, gz), []).append(idx)
         self._chunk_spatial_index = index
 
-    def _configured_worker_count(self) -> int:
-        raw = os.environ.get(self.WORKER_COUNT_ENV_VAR, "").strip()
-        if not raw:
-            logical_cpus = os.cpu_count() or 1
-            return 3 if logical_cpus >= 6 else 2
-        try:
-            return max(1, min(4, int(raw)))
-        except ValueError:
-            logical_cpus = os.cpu_count() or 1
-            return 3 if logical_cpus >= 6 else 2
-
     # -- panel mapping -----------------------------------------------------
 
     def _panel_rect_px(self, window_size: tuple[int, int]) -> tuple[float, float, float, float]:
@@ -275,11 +281,10 @@ class CrossSectionMap:
     def _display_along(self, camera_along: float) -> float:
         return round(camera_along / self.DISPLAY_ALONG_STEP) * self.DISPLAY_ALONG_STEP
 
-    def _active_segments_can_reproject(self, raw_key: tuple, camera_along: float) -> bool:
-        if self._active_raw_key is None or not self._active_segments:
-            return False
-        active_center, _active_lateral, _active_angle = self._active_raw_key
-        return abs(camera_along - active_center) <= self.RAW_WINDOW_MARGIN
+    @staticmethod
+    def _camera_along_for_key(camera_position: np.ndarray, raw_key: tuple) -> float:
+        angle = raw_key[2]
+        return float(camera_position[0]) * math.cos(angle) + float(camera_position[2]) * math.sin(angle)
 
     # -- CPU draw helpers --------------------------------------------------
 
@@ -318,14 +323,32 @@ class CrossSectionMap:
 
     # -- slicing -----------------------------------------------------------
 
-    def _build_raw_segments(self, raw_key: tuple) -> list[RawSegment]:
+    def _abort_if_profile_build_stopped(self, cancellable: bool) -> None:
+        if cancellable and self._profile_stop_event.is_set():
+            raise concurrent.futures.CancelledError()
+
+    def _build_raw_segments(
+        self, raw_key: tuple, cancellable: bool = False
+    ) -> list[RawSegment]:
+        self._abort_if_profile_build_stopped(cancellable)
         segments = self._build_raw_segments_for_slab(
-            raw_key, self.SLAB_HALF_WIDTH, self.SLAB_SAMPLE_COUNT
+            raw_key, self.SLAB_HALF_WIDTH, self.SLAB_SAMPLE_COUNT, cancellable
         )
         if segments:
             return segments
+        self._abort_if_profile_build_stopped(cancellable)
+
+        recovery_offset = self._nearest_recovery_plane_offset(raw_key, cancellable)
+        if recovery_offset is None:
+            return []
+        recovery_offsets = sorted({
+            max(-self.RECOVERY_SLAB_HALF_WIDTH, recovery_offset - 1.5),
+            recovery_offset,
+            min(self.RECOVERY_SLAB_HALF_WIDTH, recovery_offset + 1.5),
+        })
         return self._build_raw_segments_for_slab(
-            raw_key, self.RECOVERY_SLAB_HALF_WIDTH, self.RECOVERY_SLAB_SAMPLE_COUNT
+            raw_key, self.RECOVERY_SLAB_HALF_WIDTH, self.RECOVERY_SLAB_SAMPLE_COUNT,
+            cancellable, recovery_offsets,
         )
 
     def _build_raw_segments_for_slab(
@@ -333,7 +356,10 @@ class CrossSectionMap:
         raw_key: tuple,
         slab_half_width: float,
         slab_sample_count: int,
+        cancellable: bool = False,
+        sample_offsets: list[float] | None = None,
     ) -> list[RawSegment]:
+        self._abort_if_profile_build_stopped(cancellable)
         raw_center_along, lateral, angle = raw_key
         dir_x = math.cos(angle)
         dir_z = math.sin(angle)
@@ -352,13 +378,19 @@ class CrossSectionMap:
             )
         ]
 
-        if slab_sample_count <= 1:
+        if sample_offsets is not None:
+            offsets = sample_offsets
+        elif slab_sample_count <= 1:
             offsets = [0.0]
         else:
             offsets = np.linspace(-slab_half_width, slab_half_width, slab_sample_count).tolist()
 
         segments: list[RawSegment] = []
         for cell in candidate_cells:
+            # A newer camera key can arrive while this worker is reading or
+            # slicing hundreds of candidate chunks. Stop between chunks so
+            # an obsolete view cannot monopolize a profile worker.
+            self._abort_if_profile_build_stopped(cancellable)
             section_tris = self._load_cached_section_triangles(cell)
             if section_tris is not None:
                 self._append_slab_intersections(
@@ -375,24 +407,101 @@ class CrossSectionMap:
             )
         return segments
 
+    def _nearest_recovery_plane_offset(
+        self, raw_key: tuple, cancellable: bool
+    ) -> float | None:
+        """Find a useful nearby slice plane without sweeping the whole slab."""
+        raw_center_along, lateral, angle = raw_key
+        dir_x = math.cos(angle)
+        dir_z = math.sin(angle)
+        normal_x = -dir_z
+        normal_z = dir_x
+        u_min = raw_center_along - self._look_behind - self.RAW_WINDOW_MARGIN
+        u_max = raw_center_along + self._look_ahead + self.RAW_WINDOW_MARGIN
+        half_width = self.RECOVERY_SLAB_HALF_WIDTH
+
+        candidates = self._candidate_chunk_bounds_for_section_window(
+            lateral, dir_x, dir_z, normal_x, normal_z, u_min, u_max, half_width
+        )
+        best_offset: float | None = None
+        best_distance = float("inf")
+        eps = 1e-4
+
+        for cell, bmin, bmax in candidates:
+            self._abort_if_profile_build_stopped(cancellable)
+            if not self._chunk_aabb_intersects_section_window(
+                lateral, dir_x, dir_z, normal_x, normal_z,
+                u_min, u_max, half_width, bmin, bmax,
+            ):
+                continue
+            tris = self._load_cached_section_triangles(cell)
+            if tris is None:
+                continue
+            tris = self._filter_triangles_for_section_window(
+                tris, lateral, half_width, u_min, u_max,
+                dir_x, dir_z, normal_x, normal_z,
+            )
+            if len(tris) == 0:
+                continue
+
+            signed = tris[:, :, 0] * normal_x + tris[:, :, 2] * normal_z - lateral
+            lows = signed.min(axis=1)
+            highs = signed.max(axis=1)
+            widths = highs - lows
+            valid = widths > eps
+            if not np.any(valid):
+                continue
+            lows = lows[valid]
+            highs = highs[valid]
+            widths = widths[valid]
+
+            offsets = np.where(
+                lows > 0.0,
+                lows + np.minimum(widths * 0.25, 0.5),
+                np.where(
+                    highs < 0.0,
+                    highs - np.minimum(widths * 0.25, 0.5),
+                    0.0,
+                ),
+            )
+            idx = int(np.argmin(np.abs(offsets)))
+            distance = abs(float(offsets[idx]))
+            if distance < best_distance:
+                best_distance = distance
+                best_offset = float(offsets[idx])
+                if best_distance <= eps:
+                    break
+
+        return best_offset
+
     def _load_cached_section_triangles(self, cell: tuple[int, int, int]) -> np.ndarray | None:
         if not self._has_cross_section_cache:
             return None
-        cached = self._triangle_cache.get(cell)
-        if cached is not None:
-            self._triangle_cache.move_to_end(cell)
-            return cached
+        with self._triangle_cache_lock:
+            cached = self._triangle_cache.get(cell)
+            if cached is not None:
+                self._triangle_cache.move_to_end(cell)
+                return cached
         try:
             tris = chunker.load_cross_section_triangles(self.cache_dir, cell)
-        except Exception:
+        except Exception as exc:
+            _LOG.warning("Could not read profile triangles for chunk %s: %s", cell, exc)
             return None
         if tris is None:
             return None
-        self._triangle_cache[cell] = tris
-        self._triangle_cache.move_to_end(cell)
-        while len(self._triangle_cache) > self.TRIANGLE_CACHE_LIMIT:
-            self._triangle_cache.popitem(last=False)
-        return tris
+        with self._triangle_cache_lock:
+            # Another profile worker may have loaded the same cell while
+            # this thread was reading it. Keep the existing array in that
+            # case so all LRU operations remain serialized.
+            cached = self._triangle_cache.get(cell)
+            if cached is not None:
+                self._triangle_cache.move_to_end(cell)
+                return cached
+            self._triangle_cache[cell] = tris
+            self._triangle_cache.move_to_end(cell)
+            while len(self._triangle_cache) > self.TRIANGLE_CACHE_LIMIT:
+                self._triangle_cache.popitem(last=False)
+            return tris
 
     def _append_legacy_chunk_intersections(
         self,
@@ -817,6 +926,28 @@ class CrossSectionMap:
         while len(self._raw_cache) > self.RAW_CACHE_LIMIT:
             self._raw_cache.popitem(last=False)
 
+    def prime(self, camera_position: np.ndarray, camera_forward: np.ndarray) -> None:
+        """Build the initial profile before chunk streaming starts.
+
+        Chunk upload throughput must not decide whether the longitudinal
+        map appears.  Priming one small local view synchronously gives the
+        first render ready-to-upload geometry; subsequent camera views still
+        use the background executor.
+        """
+        raw_key, _camera_along = self._view_for_camera(
+            (self.PANEL_WIDTH, self.PANEL_HEIGHT), camera_position, camera_forward
+        )
+        try:
+            segments = self._build_raw_segments(raw_key)
+        except Exception as exc:
+            _LOG.exception("Initial longitudinal profile build failed: %s", exc)
+            return
+        self._cache_put(raw_key, segments)
+        self._active_raw_key = raw_key
+        self._active_segments = segments
+        if not segments:
+            _LOG.warning("Initial longitudinal profile contained no cave intersections.")
+
     def _offset_raw_key(self, raw_key: tuple, offset_steps: int) -> tuple:
         center_along, lateral, angle = raw_key
         return center_along + self.RAW_ALONG_STEP * offset_steps, lateral, angle
@@ -832,16 +963,26 @@ class CrossSectionMap:
                 continue
             try:
                 segments = future.result()
-            except Exception:
+            except concurrent.futures.CancelledError:
+                continue
+            except Exception as exc:
+                _LOG.exception("Longitudinal profile build failed for %s: %s", raw_key, exc)
                 continue
             self._cache_put(raw_key, segments)
+            # Never replace a useful visible profile with an empty result.
+            # With a single worker, non-empty completions arrive in request
+            # order and can be displayed immediately while the queued latest
+            # request catches up.
+            if segments:
+                self._active_raw_key = raw_key
+                self._active_segments = segments
 
-    def _schedule_raw_build(self, raw_key: tuple) -> None:
+    def _schedule_raw_build(self, raw_key: tuple) -> bool:
         if raw_key in self._raw_cache:
-            return
+            return True
         if raw_key in self._pending_raw_builds:
             self._pending_raw_builds.move_to_end(raw_key)
-            return
+            return True
 
         while len(self._pending_raw_builds) >= self.RAW_PENDING_LIMIT:
             cancelled_key = None
@@ -850,12 +991,17 @@ class CrossSectionMap:
                     cancelled_key = old_key
                     break
             if cancelled_key is None:
-                break
+                # Every slot is already executing. Do not submit another
+                # job: rapidly changing camera keys would otherwise grow an
+                # unbounded executor backlog, leaving the current profile
+                # stuck behind stale views that are no longer useful.
+                return False
             self._pending_raw_builds.pop(cancelled_key, None)
 
         self._pending_raw_builds[raw_key] = self._slice_executor.submit(
-            self._build_raw_segments, raw_key
+            self._build_raw_segments, raw_key, True
         )
+        return True
 
     def _schedule_prefetch_near(self, raw_key: tuple) -> None:
         for offset in range(1, self.PREFETCH_AHEAD_COUNT + 1):
@@ -864,12 +1010,20 @@ class CrossSectionMap:
             self._schedule_raw_build(self._offset_raw_key(raw_key, -offset))
 
     def _ensure_segments_for_view(self, raw_key: tuple) -> bool:
+        # Remove obsolete work that has not started. The one running build is
+        # allowed to finish and become the next visible update; the one queued
+        # slot is continuously replaced with the newest camera request.
+        for pending_key, future in list(self._pending_raw_builds.items()):
+            if pending_key != raw_key and future.cancel():
+                self._pending_raw_builds.pop(pending_key, None)
+
         self._process_completed_futures()
 
         cached = self._cache_get(raw_key)
         if cached is not None:
-            self._active_raw_key = raw_key
-            self._active_segments = cached
+            if cached:
+                self._active_raw_key = raw_key
+                self._active_segments = cached
             self._schedule_prefetch_near(raw_key)
             return True
 
@@ -893,16 +1047,19 @@ class CrossSectionMap:
     def render(self, window_size: tuple[int, int],
                camera_position: np.ndarray,
                camera_forward: np.ndarray) -> None:
-        raw_key, camera_along = self._view_for_camera(window_size, camera_position, camera_forward)
-        have_segments = self._ensure_segments_for_view(raw_key)
-
-        can_reproject_active = (
-            have_segments
-            or self._active_segments_can_reproject(raw_key, camera_along)
+        raw_key, _camera_along = self._view_for_camera(
+            window_size, camera_position, camera_forward
         )
+        self._ensure_segments_for_view(raw_key)
 
-        if can_reproject_active:
-            display_along = self._display_along(camera_along)
+        # Visibility has exactly one rule: draw the most recently completed
+        # non-empty profile. It remains on screen while the feeder builds a
+        # replacement, whether the diver is moving or stationary.
+        if self._active_raw_key is not None and self._active_segments:
+            profile_camera_along = self._camera_along_for_key(
+                camera_position, self._active_raw_key
+            )
+            display_along = self._display_along(profile_camera_along)
             frame_key = (self._active_raw_key, window_size, display_along)
             if frame_key != self._uploaded_frame_key:
                 geom_bytes, vert_count = self._build_frame_geom(
@@ -910,12 +1067,17 @@ class CrossSectionMap:
                 )
                 self._upload_geom(geom_bytes, vert_count)
                 self._uploaded_frame_key = frame_key
-        elif self._uploaded_frame_key is None:
-            geom_bytes, vert_count = self._build_frame_geom(
-                window_size, self._display_along(camera_along), []
-            )
-            self._upload_geom(geom_bytes, vert_count)
-            self._uploaded_frame_key = (None, window_size, None)
+        else:
+            # This is limited to maps whose initial synchronous prime found no
+            # intersections. Keep the panel location visible while waiting for
+            # the first useful feeder result.
+            empty_frame_key = (None, window_size, raw_key)
+            if empty_frame_key != self._uploaded_frame_key:
+                geom_bytes, vert_count = self._build_frame_geom(
+                    window_size, self._display_along(_camera_along), []
+                )
+                self._upload_geom(geom_bytes, vert_count)
+                self._uploaded_frame_key = empty_frame_key
 
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
@@ -927,11 +1089,13 @@ class CrossSectionMap:
         self.ctx.enable(moderngl.CULL_FACE)
 
     def release(self) -> None:
+        self._profile_stop_event.set()
         for future in self._pending_raw_builds.values():
             future.cancel()
         self._pending_raw_builds.clear()
         self._raw_cache.clear()
-        self._triangle_cache.clear()
+        with self._triangle_cache_lock:
+            self._triangle_cache.clear()
         self._active_segments.clear()
         self._slice_executor.shutdown(wait=False, cancel_futures=True)
         for attr_name in ("_vao", "_vbo", "program"):
