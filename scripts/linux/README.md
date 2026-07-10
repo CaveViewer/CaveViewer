@@ -1,213 +1,120 @@
-# Linux AppImage Build Guide
+# Linux AppImage Release Builds
 
-This guide explains how to build a self-contained AppImage for CaveViewer on Linux.
+Linux release artifacts are built only through Docker. Prefer the top-level
+`scripts/release.sh` dispatcher for normal release work. The Linux architecture
+wrappers and release targets route into `scripts/linux/build_linux_in_docker.sh`,
+which is the host-side Docker driver.
+
+`scripts/linux/common/build.sh` and `scripts/linux/common/package.sh` are
+internal container entry points and refuse direct host execution.
+`scripts/linux/common/publish.sh` and `scripts/linux/common/update_manifest.sh`
+are shared publisher helpers used by the architecture wrappers.
 
 ## Prerequisites
 
-### System Requirements
-- Linux (Ubuntu, Fedora, Arch, Debian, etc.)
-- Python 3.10+
-- `appimagetool` (AppImage creation tool)
+- Docker installed and running on the release machine
+- GitHub CLI authenticated when publishing with `scripts/linux/*/publish.sh`
+- `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` set when publishing signed manifests
 
-### Install appimagetool
+Docker provides the Linux build environment, build dependencies, portable Python
+tooling, PyInstaller, and AppImage packaging tools. The Docker driver maintains
+a host-side cached build venv under `.venv-linux-build-{arch}` by default; do
+not create or activate a separate host Linux venv for release builds.
 
-```bash
-# Download the latest appimagetool
-wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+## Build Targets
 
-# Make it executable
-chmod +x appimagetool-x86_64.AppImage
-
-# Install to system PATH
-sudo mv appimagetool-x86_64.AppImage /usr/local/bin/appimagetool
-```
-
-### System Libraries
-The build will automatically bundle most libraries, but ensure you have development headers:
+Build a PyInstaller app bundle for one architecture:
 
 ```bash
-# Ubuntu/Debian
-sudo apt-get install file fontconfig fonts-noto-core libfreetype6-dev libgl1-mesa-dev
-
-# Fedora/RHEL
-sudo dnf install file fontconfig google-noto-sans-fonts freetype-devel mesa-libGL-devel
-
-# Arch
-sudo pacman -S file fontconfig noto-fonts freetype mesa
+./scripts/release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=build
+./scripts/release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
 ```
 
-## Build Steps
-
-### Step 1: Build PyInstaller Bundle
-Creates a self-contained Python environment with all dependencies:
+Package an existing app bundle as an AppImage:
 
 ```bash
-./scripts/linux/build_linux_app.sh
+./scripts/release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
+./scripts/release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
-**Output:** `dist/linux/app/CaveViewer/` - a complete self-contained application directory
-
-**What it does:**
-- Creates/uses an architecture-specific Python virtual environment by default:
-    - `.venv-linux-build-arm64` on arm64
-    - `.venv-linux-build-amd64` on amd64
-- You can override with `CAVEVIEWER_LINUX_BUILD_VENV=/path/to/venv`
-- Installs all dependencies from `requirements.txt`
-- Runs PyInstaller to bundle Python + all packages + assets
-- Uses `--onedir` mode (easier for AppImage integration)
-
-### Step 2: Package as AppImage
-Wraps the PyInstaller output into a distributable AppImage:
+Build, package, and publish selected targets:
 
 ```bash
-./scripts/linux/package.sh
+./scripts/release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+./scripts/release.sh --target=linux-arm64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
 ```
 
-**Output:** `dist/linux/packages/CaveViewer-VERSION-x86_64.AppImage` - ready to distribute
+`--action=package` packages an existing Linux app bundle. Run
+`--action=build` first if `dist/linux/<arch>/app/CaveViewer` does not exist.
+`--action=release` publishes artifacts and writes signed update manifests.
+Stable releases write `stable.json`; `--pre-release` marks the GitHub release
+as a prerelease and writes `prerelease.json` instead. Both require
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`.
 
-**What it does:**
-- Creates AppDir structure (standard AppImage format)
-- Adds `.desktop` file for app menu integration
-- Includes app icons in standard hicolor sizes for GNOME/Fedora/Ubuntu lookup
-- Creates `AppRun` wrapper script
-- Runs `appimagetool` to create final `.AppImage` executable
-- Validates that `appimagetool` both matches the CPU architecture and can
-  execute in the current build container. If the cached/system tool is missing,
-  wrong, or unusable, the script downloads the matching `x86_64` or `aarch64`
-  tool into `dist/linux/tools/`.
+## Direct Docker Driver
 
-### Step 3: Full Release Workflow
-One-command build + package + manifest generation:
+For debugging the Linux release container itself, call the Docker driver:
 
 ```bash
-./scripts/linux/publish_release.sh
+./scripts/linux/build_linux_in_docker.sh --arch=arm64 --step=all
+./scripts/linux/build_linux_in_docker.sh --arch=x86_64 --step=package
+./scripts/linux/build_linux_in_docker.sh --arch=both --step=all --rebuild
 ```
 
-**Output:**
-- AppImage executable (dist/linux/packages/)
-- Release manifest with SHA256 and size info
-- Ready for GitHub release upload
+Supported `--arch` values are `arm64`, `x86_64`, and `both`.
+Supported `--step` values are `build`, `package`, and `all`.
 
-## Usage
+## Publishing
 
-### For End Users
+Each Linux architecture publishes through its own wrapper:
+
 ```bash
-# Download from GitHub release
-wget https://github.com/.../CaveViewer-1.2.45-x86_64.AppImage
-
-# Make executable
-chmod +x CaveViewer-1.2.45-x86_64.AppImage
-
-# Run
-./CaveViewer-1.2.45-x86_64.AppImage
+./scripts/linux/arm64/publish.sh --version=1.2.45 --notes "Release 1.2.45"
+./scripts/linux/x86_64/publish.sh --version=1.2.45 --notes "Release 1.2.45"
 ```
 
-### For CI/CD Integration
+Those wrappers set the manifest architecture and call the common publisher,
+which builds through Docker unless `--use-existing-artifacts` is supplied. Use
+`--use-existing-artifacts` only when the matching AppImage already exists under
+`dist/linux/<arch>/packages`.
+
 ```bash
-# In your GitHub Actions workflow (must run on a Linux runner):
-./scripts/linux/build_linux_app.sh
-./scripts/linux/package.sh
-
-# Upload to GitHub release:
-gh release upload v1.2.45 dist/linux/packages/*.AppImage
+./scripts/linux/arm64/publish.sh --version=1.2.45 --notes "Release 1.2.45" --use-existing-artifacts
 ```
 
-## Advantages of This Approach
+## Outputs
 
-✓ **Fully self-contained** - Works on any Linux distro without system dependency hell
-✓ **Single executable** - Just download and run, no installation needed
-✓ **Auto-updates** - Integrates with existing CaveViewer update checker
-✓ **Desktop integration** - Appears in app menus and launchers
-✓ **Sandboxed** - Doesn't interfere with system Python or packages
-
-## File Structure
-
-```
+```text
 dist/linux/
-├── app/
-│   ├── CaveViewer/               # PyInstaller bundle (intermediate)
-│   │   ├── CaveViewer            # Main executable
-│   │   ├── lib/                  # Bundled libraries
-│   │   ├── libPython.so.x.y      # Bundled Python runtime
-│   │   └── ...
-│   └── CaveViewer.AppDir/        # AppImage staging directory
-│       ├── AppRun                # Entry point script
-│       ├── CaveViewer            # Symlink to bundled executable
-│       ├── caveviewer.desktop
-│       ├── caveviewer.png
-│       ├── usr/lib/caveviewer/   # Copied PyInstaller bundle
-│       ├── usr/share/
-│       │   ├── applications/
-│       │   │   └── caveviewer.desktop
-│       │   └── icons/
-│       │       └── hicolor/
-│       │           ├── 48x48/apps/caveviewer.png
-│       │           ├── 64x64/apps/caveviewer.png
-│       │           ├── 128x128/apps/caveviewer.png
-│       │           ├── 256x256/apps/caveviewer.png
-│       │           └── 512x512/apps/caveviewer.png
-│       └── lib/                  # Libraries (copied from bundle)
-└── packages/
-    └── CaveViewer-1.2.45-x86_64.AppImage  # Final distributable
+├── arm64/
+│   ├── app/CaveViewer/
+│   └── packages/CaveViewer-1.2.45-aarch64.AppImage
+└── x86_64/
+    ├── app/CaveViewer/
+    └── packages/CaveViewer-1.2.45-x86_64.AppImage
 ```
 
-## Troubleshooting
+Update manifests are architecture-specific:
 
-### "appimagetool not found"
-Install it as described in Prerequisites section above.
-
-### Build fails on dependency
-Make sure `requirements.txt` is up to date and compatible with Python 3.10+:
-```bash
-pip install -r requirements.txt
+```text
+updates/linux/arm64/stable.json
+updates/linux/arm64/stable.json.sig
+updates/linux/arm64/prerelease.json
+updates/linux/arm64/prerelease.json.sig
+updates/linux/x86_64/stable.json
+updates/linux/x86_64/stable.json.sig
+updates/linux/x86_64/prerelease.json
+updates/linux/x86_64/prerelease.json.sig
 ```
 
-### AppImage won't start
-Try running with verbose output to debug:
-```bash
-./CaveViewer-1.2.45-x86_64.AppImage --verbose
-```
+## Notes
 
-### OpenGL errors at runtime
-The bundled libGL might conflict with system libraries. Workaround:
-```bash
-QT_QPA_PLATFORM_PLUGIN_PATH="" ./CaveViewer-1.2.45-x86_64.AppImage
-```
-
-## For Developers
-
-### Manual Build Steps (debugging)
-```bash
-# 1. Create venv
-python3 -m venv .venv-linux-build-amd64
-source .venv-linux-build-amd64/bin/activate
-
-# 2. Install deps
-pip install -r requirements.txt
-pip install pyinstaller==6.21.0
-
-# 3. Build with PyInstaller
-python -m PyInstaller --onedir CaveViewer.spec
-
-# 4. Inspect bundle
-ls -la dist/linux/app/CaveViewer/
-
-# 5. Test before AppImage packaging
-./dist/linux/app/CaveViewer/CaveViewer
-```
-
-### Custom AppImage Creation
-If you need finer control, you can use `linuxdeploy` for better library bundling:
-```bash
-# Install linuxdeploy
-wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-chmod +x linuxdeploy-x86_64.AppImage
-
-# Use in package.sh instead of direct appimagetool
-./linuxdeploy-x86_64.AppImage --appdir=$appdir --deploy-deps-only --output=appimage
-```
-
-## See Also
-- [AppImage Documentation](https://docs.appimage.org/)
-- [PyInstaller Manual](https://pyinstaller.org/en/stable/)
-- [Linux update manifest](../updates/linux/stable.json)
+- Scripts use named options only; positional arguments are rejected.
+- `scripts/linux/common/build.sh` and `scripts/linux/common/package.sh` are not
+  public entry points.
+- `CAVEVIEWER_LINUX_BUILD_VENV` may override the host-side cached build venv
+  template used by Docker. The default is `.venv-linux-build-{arch}`.
+- `--rebuild` rebuilds the Docker image and clears the matching cached Linux
+  build venv.
+- `--pre-release` publishes prerelease assets and advances
+  `updates/linux/<arch>/prerelease.json`, leaving `stable.json` untouched.

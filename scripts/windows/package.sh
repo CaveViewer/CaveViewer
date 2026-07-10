@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a Windows-ready source bundle and metadata.
+# Windows package builder.
+# Creates the portable Windows source bundle, release metadata, and update
+# metadata under dist/windows.
 #
 # Usage:
-#   ./scripts/windows/package.sh [base_download_url]
+#   package.sh [--base-download-url=<url>]
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
@@ -12,11 +14,54 @@ source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/artifacts.sh"
 source "$repo_root/scripts/common/github.sh"
 
+print_usage() {
+  cat <<'EOF'
+Usage:
+  package.sh [--base-download-url=<url>]
+  package.sh --help
+
+Builds the Windows portable source bundle and metadata.
+EOF
+}
+
+base_download_url=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--base-download-url=*)
+			base_download_url="${1#--base-download-url=}"
+			shift
+			;;
+		--base-download-url)
+			shift
+			if [ "$#" -eq 0 ]; then
+				echo "Error: --base-download-url requires a value."
+				exit 1
+			fi
+			base_download_url="$1"
+			shift
+			;;
+		-h|--help)
+			print_usage
+			exit 0
+			;;
+		-*)
+			echo "Error: unknown option '$1'"
+			echo ""
+			print_usage
+			exit 1
+			;;
+		*)
+			echo "Error: positional arguments are not supported: '$1'"
+			echo "Use --base-download-url=<url>."
+			exit 1
+			;;
+	esac
+done
+
 version_file="$repo_root/caveviewer_version.py"
 packages_dir="$repo_root/dist/windows/packages"
 metadata_dir="$repo_root/dist/windows/metadata"
 app_root="$repo_root/dist/windows/app"
-base_download_url="${1:-}"
 
 if [ ! -f "$version_file" ]; then
 	echo "Error: version file not found: $version_file"

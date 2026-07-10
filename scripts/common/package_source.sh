@@ -3,18 +3,60 @@ set -euo pipefail
 
 # Package source code for GitHub releases
 # Usage:
-#   ./scripts/common/package_source.sh <version>
+#   package_source.sh --version=<version>
 # Example:
-#   ./scripts/common/package_source.sh 1.2.45
+#   package_source.sh --version=1.2.45
 
-if [ "$#" -lt 1 ]; then
-  echo "Usage: $0 <version>"
+print_usage() {
+  cat <<'EOF'
+Usage:
+  package_source.sh --version=<version>
+  package_source.sh --help
+EOF
+}
+
+version=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version=*)
+      version="${1#--version=}"
+      shift
+      ;;
+    --version)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --version requires a value."
+        exit 1
+      fi
+      version="$1"
+      shift
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      print_usage
+      exit 1
+      ;;
+    *)
+      echo "Error: positional arguments are not supported: '$1'"
+      print_usage
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z "$version" ]; then
+  echo "Error: --version is required."
+  print_usage
   exit 1
 fi
 
-version="$1"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+source "$repo_root/scripts/common/artifacts.sh"
 dist_dir="$repo_root/dist/source"
 
 normalized_version="${version#v}"
@@ -83,8 +125,8 @@ if [ ! -f "$source_tarball" ]; then
   exit 1
 fi
 
-size_bytes=$(stat -c%s "$source_tarball" 2>/dev/null || stat -f%z "$source_tarball")
-sha256_value=$(shasum -a 256 "$source_tarball" | cut -d' ' -f1)
+size_bytes="$(cv_size_bytes "$source_tarball")"
+sha256_value="$(cv_sha256 "$source_tarball")"
 
 echo ""
 echo "Source tarball created successfully!"

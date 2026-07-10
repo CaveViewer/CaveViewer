@@ -1,7 +1,7 @@
 """
 gui/render_mode_buttons.py
 
-Five small buttons, stacked just below the headlamp brightness slider on
+Small buttons, stacked just below the headlamp brightness slider on
 the right side of the screen:
   - "Mesh"    toggles wireframe display on/off (see the actual triangle
               edges/mesh density -- useful for inspecting scan quality).
@@ -24,6 +24,9 @@ the right side of the screen:
               map without closing the program. Always stateless/one-shot
               -- there's no "is open mode active" toggle state, a click
               just triggers viewer_window.py's map-switch flow once.
+  - "Rec"     starts the clean MP4 recording countdown. Recording state
+              lives in viewer_window.py because it owns the framebuffer
+              and ffmpeg process lifecycle.
 
 Mesh and Texture are independent toggles (not mutually exclusive), giving
 four possible combined states:
@@ -96,7 +99,7 @@ class RenderModeButtons:
         # state reflects how it was actually imported.
         self.smooth_shading_enabled = smooth_shading_enabled
 
-        # Sized generously for six buttons, two section headers, and separator.
+        # Sized generously for seven buttons, two section headers, and separator.
         self._max_verts = 5000
         self._vbo = ctx.buffer(reserve=self._max_verts * 6 * 4)
         self._vao = ctx.vertex_array(
@@ -107,12 +110,12 @@ class RenderModeButtons:
 
     @classmethod
     def total_stack_height(cls, scale: float = 1.0) -> float:
-        """Full height of the grouped 6-button stack, at a given
+        """Full height of the grouped 7-button stack, at a given
         scale factor -- used by viewer_window.py to figure out how much
         vertical room this whole block needs when laying out the
         bottom-anchored right-side column."""
         view_group_h = 3 * (cls.BUTTON_HEIGHT * scale) + 2 * (cls.BUTTON_GAP * scale)
-        utility_group_h = 3 * (cls.BUTTON_HEIGHT * scale) + 2 * (cls.BUTTON_GAP * scale)
+        utility_group_h = 4 * (cls.BUTTON_HEIGHT * scale) + 3 * (cls.BUTTON_GAP * scale)
         return view_group_h + (cls.GROUP_GAP * scale) + utility_group_h
 
     def _group_layout(self, window_size: tuple[int, int], top_y: float) -> dict:
@@ -145,7 +148,7 @@ class RenderModeButtons:
     def _button_rect_px(self, index: int, window_size: tuple[int, int], top_y: float,
                         right_inset: float | None = None) -> tuple[float, float, float, float]:
         """Returns (x0, y0, x1, y1) for button `index`
-        (0=Mesh, 1=Texture, 2=Shade, 3=Open, 4=Help, 5=Color).
+        (0=Mesh, 1=Texture, 2=Shade, 3=Open, 4=Help, 5=Color, 6=Rec).
         top_y is where the FIRST button (Mesh) starts -- passed in by the
         caller, which owns the overall column layout."""
         w, _h = window_size
@@ -187,6 +190,9 @@ class RenderModeButtons:
     def _open_button_rect(self, window_size, top_y, right_inset: float | None = None):
         return self._button_rect_px(3, window_size, top_y, right_inset)
 
+    def _record_button_rect(self, window_size, top_y, right_inset: float | None = None):
+        return self._button_rect_px(6, window_size, top_y, right_inset)
+
     @staticmethod
     def _px_to_ndc(x: float, y: float, window_size: tuple[int, int]) -> tuple[float, float]:
         w, h = window_size
@@ -226,12 +232,17 @@ class RenderModeButtons:
         x0, y0, x1, y1 = self._open_button_rect(window_size, top_y, right_inset)
         return x0 <= x <= x1 and y0 <= y <= y1
 
+    def hit_test_record(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
+                        right_inset: float | None = None) -> bool:
+        x0, y0, x1, y1 = self._record_button_rect(window_size, top_y, right_inset)
+        return x0 <= x <= x1 and y0 <= y <= y1
+
     def on_mouse_press(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
                        right_inset: float | None = None) -> str | None:
         """
         Returns a string identifying which button was clicked ("mesh",
-        "texture", "shade", "help", "color", or "open"), or None if the
-        click missed all six -- the caller (viewer_window.py) acts on the
+        "texture", "shade", "help", "color", "open", or "record"), or None if the
+        click missed all seven -- the caller (viewer_window.py) acts on the
         result, since Help/Color/Open's actual behavior depends on state
         this module doesn't have access to (see the module docstring for
         why they're intentionally stateless here). top_y is where this
@@ -253,12 +264,15 @@ class RenderModeButtons:
             return "color"
         if self.hit_test_open(x, y, window_size, top_y, right_inset):
             return "open"
+        if self.hit_test_record(x, y, window_size, top_y, right_inset):
+            return "record"
         return None
 
     # -- rendering --------------------------------------------------------------
 
     def render(self, window_size: tuple[int, int], top_y: float, help_active: bool = False,
-               color_active: bool = False, right_inset: float | None = None) -> None:
+               color_active: bool = False, recording_armed: bool = False,
+               right_inset: float | None = None) -> None:
         verts = []
 
         def add_quad_px(x0, y0, x1, y1, rgba):
@@ -282,14 +296,16 @@ class RenderModeButtons:
         # unpolished. A single shared size keeps them visually matched.
         available_w = self.BUTTON_WIDTH - 16
         available_h = self.BUTTON_HEIGHT - 10
-        shared_pixel_size = 3.1
-        while shared_pixel_size > 0.5:
+        nominal_pixel_size = 3.1
+        shared_pixel_size = bitmap_font.pixel_size_at_text_scale(nominal_pixel_size, 1.28)
+        while nominal_pixel_size > 0.5:
             w = bitmap_font.text_width_px("TEXTURE", shared_pixel_size)
             _bx0, _by0, _bx1, _by1 = bitmap_font.text_bounds_px("TEXTURE", shared_pixel_size)
             h = _by1 - _by0
             if w <= available_w and h <= available_h:
                 break
-            shared_pixel_size -= 0.1
+            nominal_pixel_size -= 0.1
+            shared_pixel_size = bitmap_font.pixel_size_at_text_scale(nominal_pixel_size, 1.28)
 
         def draw_toggle_button(rect, is_on: bool, label: str):
             x0, y0, x1, y1 = rect
@@ -359,6 +375,7 @@ class RenderModeButtons:
         draw_toggle_button(self._open_button_rect(window_size, top_y, right_inset), False, "OPEN")
         draw_toggle_button(self._help_button_rect(window_size, top_y, right_inset), help_active, "HELP")
         draw_toggle_button(self._color_button_rect(window_size, top_y, right_inset), color_active, "COLOR")
+        draw_toggle_button(self._record_button_rect(window_size, top_y, right_inset), recording_armed, "REC")
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:

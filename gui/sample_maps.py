@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from core.logging_utils import get_logger
-from gui.update_checker import download_update, make_ssl_context
+from gui.update_checker import DownloadCancelled, download_update, make_ssl_context
 
 
 _LOG = get_logger("SampleMaps")
@@ -250,15 +250,17 @@ def _legacy_nested_sample_map_path(install_dir: str, sample: SampleMapInfo) -> s
     return os.path.join(normalized, SAMPLE_MAPS_DIRNAME, sample.display_name)
 
 
-def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo, progress_cb=None) -> str:
+def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo,
+                                    progress_cb=None, cancel_cb=None) -> str:
     """
     Downloads the given sample map's zip to a temp location, verifies
     its size, extracts it into its own folder under sample_maps/, and
     cleans up the temp zip. Returns the local folder path the map was
     extracted to (the same thing local_sample_map_path() would compute).
 
-    Raises on any failure (network error, size mismatch, bad zip) --
-    the caller is expected to catch this and show a clear message; a
+    Raises on any failure (network error, size mismatch, bad zip), or raises
+    DownloadCancelled when cancel_cb reports cancellation. The caller is
+    expected to catch this and show a clear message; a
     failed/partial download should never leave a half-extracted map
     sitting around looking like it succeeded.
 
@@ -272,18 +274,33 @@ def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo, pro
         raise ValueError(f"No download URL available for {sample.display_name!r} "
                           f"(asset {sample.asset_name!r} not found on the sample-data release).")
 
+    def raise_if_cancelled() -> None:
+        if cancel_cb and cancel_cb():
+            raise DownloadCancelled("Sample map download cancelled")
+
+    raise_if_cancelled()
     dest_dir = local_sample_map_path(install_dir, sample)
     os.makedirs(_sample_maps_container_dir(install_dir), exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="caveviewer_samplemap_") as tmp_dir:
         zip_path = os.path.join(tmp_dir, sample.asset_name)
 
-        download_update(sample.download_url, sample.size_bytes, zip_path, progress_cb=progress_cb)
+        download_update(
+            sample.download_url,
+            sample.size_bytes,
+            zip_path,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+        )
+        raise_if_cancelled()
 
         staging_dir = os.path.join(tmp_dir, "extracted")
         os.makedirs(staging_dir, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(staging_dir)
+            for member in zf.infolist():
+                raise_if_cancelled()
+                zf.extract(member, staging_dir)
+        raise_if_cancelled()
 
         staging_contents = os.listdir(staging_dir)
         if len(staging_contents) == 1 and os.path.isdir(os.path.join(staging_dir, staging_contents[0])):
@@ -291,6 +308,7 @@ def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo, pro
         else:
             source_root = staging_dir
 
+        raise_if_cancelled()
         if os.path.isdir(dest_dir):
             shutil.rmtree(dest_dir)
         shutil.copytree(source_root, dest_dir)

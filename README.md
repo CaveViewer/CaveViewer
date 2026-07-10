@@ -20,7 +20,7 @@ Support for additional operating systems and distributions may be added in the f
 
 ### macOS
 
-Download the latest DMG from https://github.com/KernalPanic/CaveViewerPlus/releases, open it, and drag CaveViewer into Applications. 
+Download the latest DMG from https://github.com/KernalPanic/CaveViewer/releases, open it, and drag CaveViewer into Applications.
 
 If this is your first time installing the app, you have to go to Settings -> Privacy & Security and then allow the system to open CaveViewer. These steps are necessary because the app is not published through the App Store.
 
@@ -30,18 +30,18 @@ NOTE: Intel Macs are not supported yet.
 
 ### Windows
 
-Download the latest zip from https://github.com/KernalPanic/CaveViewerPlus/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install. 
+Download the latest zip from https://github.com/KernalPanic/CaveViewer/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install.
 
 ### Linux
 
 The best-practice distribution format for Linux is the self-contained AppImage — a single executable file that bundles Python, all dependencies, and the app itself. No system-wide installation or package manager involvement required.
 
-Download the AppImage matching your CPU from https://github.com/KernalPanic/CaveViewerPlus/releases:
+Download the AppImage matching your CPU from https://github.com/KernalPanic/CaveViewer/releases:
 
 - `CaveViewer-<version>-x86_64.AppImage` (amd64 / x86_64)
 - `CaveViewer-<version>-aarch64.AppImage` (arm64)
 
-The change the permissions to make the file executable and run.
+Then change the permissions to make the file executable and run.
 
 ```bash
 chmod +x CaveViewer-*.AppImage
@@ -51,6 +51,26 @@ chmod +x CaveViewer-*.AppImage
 # or
 ./CaveViewer-*-aarch64.AppImage  # arm64
 ```
+
+### Virtual Machines or GPU Driver Problems
+
+If CaveViewer crashes, freezes, or leaves a stuck process when running inside a
+virtual machine such as Parallels, start it with virtual sync disabled:
+
+```bash
+CAVEVIEWER_VSYNC=0 ./CaveViewer-*.AppImage
+```
+
+If the problem still happens, force software OpenGL rendering as a stronger
+fallback:
+
+```bash
+LIBGL_ALWAYS_SOFTWARE=1 CAVEVIEWER_VSYNC=0 ./CaveViewer-*.AppImage
+```
+
+`LIBGL_ALWAYS_SOFTWARE=1` tells the Linux OpenGL stack to use software rendering
+instead of the GPU driver. This can be slower, but it can avoid crashes or
+kernel-level hangs caused by virtual GPU drivers or unstable graphics drivers.
 
 ## Getting Started with Sample Maps
 
@@ -64,6 +84,26 @@ If you want to try CaveViewer without your own scan, use the built-in sample map
 
 Sample maps are a good way to confirm that CaveViewer is working before you import your own data. You can also reopen them later from the same sample maps dialog.
 
+## Recording a Flight
+
+CaveViewer can record a clean MP4 of your flight through the cave. The app uses
+`ffmpeg` for MP4 encoding.
+
+Use the `REC` button to arm recording. The minimap, controls, and control panel
+disappear immediately, a 3-to-0 countdown appears in the amber loading ring,
+and then recording begins. Press `Shift+R` to cancel the countdown or stop
+recording.
+
+Videos are saved to:
+
+```text
+~/Movies/CaveViewer/
+```
+
+Frames are streamed directly to the video encoder while you fly. CaveViewer does
+not keep the recording in memory. Recordings are scaled to a 1080-pixel maximum
+height by default so they play back smoothly on normal video players.
+
 
 ## Importing and Streaming Preferences
 
@@ -74,6 +114,7 @@ These values are validated in the UI, applied to environment variables for the c
 - Saved settings file: ~/.caveviewer/advanced_settings.json
 - Streaming section controls runtime chunk loading and upload behavior.
 - Map Parsing section controls cache-build/import behavior.
+- Recordings section controls the default folder used when saving MP4 flight recordings.
 
 ### Map Chunking
 
@@ -89,13 +130,17 @@ Why this matters: chunk size is one of the most important map settings because i
 
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
-| System RAM target (%) | — | 12 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
+| System RAM target (%) | — | 8 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
 | GPU memory target (%) | — | 70 | 1 to 80 | Target share of detected GPU memory used for loaded chunks. |
 | GPU memory override (GB) | — | empty | greater than 0 and up to 1024 | Manual GPU memory size when auto-detection is unavailable or inaccurate. |
-| Worker count | — | logical CPUs minus 3 (minimum 1) | integer, at least 1 | Number of background chunk-loading worker threads. |
-| CPU cores to keep free | — | 3 | integer, at least 0 | Reserve CPU cores instead of using them for streaming workers. |
+| Chunk-loading workers | — | 2 | integer, at least 1 | Number of background chunk-loading worker threads. |
+| Loading CPUs to keep free | — | 3 | integer, 2 to 32 | Reserve CPU cores instead of using them for streaming workers. |
 | Chunk uploads per frame | — | 1 | integer, 1 to 16 | Hard cap for how many ready chunks are uploaded each frame on the render thread. |
 | Upload budget (ms) | — | 3.0 | 0.5 to 50.0 ms | Soft time budget per frame for chunk uploads. |
+
+GPU memory is detected automatically through Linux DRM sysfs for AMD GPUs and
+through `nvidia-smi` for NVIDIA GPUs. Use the GPU memory override only when
+automatic detection is unavailable or does not match the active adapter.
 
 ### Map Parsing
 
@@ -103,8 +148,14 @@ Why this matters: chunk size is one of the most important map settings because i
 |---|---|---:|---|---|
 | Import chunk size (m) | — | 8 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
 | OBJ scan throttle (ms) | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Yield/throttle behavior during OBJ scanning. |
-| Import worker count | — | logical CPUs minus 2 (minimum 1) | integer, at least 1 | Number of worker threads used while writing chunk cache files. |
-| Import CPUs to keep free | — | 2 | integer, at least 0 | CPU cores reserved during cache build/import. |
+| Cache-building workers | — | 1 | integer, at least 1 | Number of worker threads used while writing chunk cache files. |
+| Cache-build CPUs to keep free | — | 2 | integer, 2 to 32 | CPU cores reserved during cache building. |
+
+### Recordings
+
+| Preference | Environment variable | Default | Valid range | What it changes |
+|---|---|---:|---|---|
+| Movie recording directory | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | writable folder, or a folder that can be created | Folder where MP4 flight recordings are saved. |
 
 ### Streaming vs Chunking: What Changes Now vs Later
 
@@ -117,6 +168,31 @@ In practice:
 
 - Adjust Chunk uploads per frame, Upload budget (ms), and memory targets to tune smoothness without re-importing.
 - Adjust Import chunk size (m) when you want a different chunk layout, then rebuild/import the map to test it.
+
+### If You See an Out-of-Memory Error
+
+Large photogrammetry maps can exceed the practical memory available on a 16 GB computer, especially while CaveViewer is importing a new map or decoding textures. Start with conservative settings, then increase them only after the map opens reliably.
+
+In Advanced Settings, try this first:
+
+| Setting | Safer value |
+|---|---:|
+| System RAM target (%) | 6 to 8 |
+| GPU memory target (%) | 40 to 50 |
+| Chunk-loading workers | 1 or 2 |
+| Loading CPUs to keep free | 3 or 4 |
+| Chunk uploads per frame | 1 |
+| Upload budget (ms) | 1 to 3 |
+| Cache-building workers | 1 |
+| Cache-build CPUs to keep free | 3 or 4 |
+
+If the error happens while importing a map, lower Cache-building workers first. Cache-building workers can temporarily hold more geometry and texture data in memory, so one worker is the safest option on a constrained machine.
+
+If the error happens while moving around an already-imported map, lower System RAM target (%) and GPU memory target (%). These settings reduce how many chunks CaveViewer tries to keep resident around the camera.
+
+If the map still cannot import, rebuild the cache with a larger Import chunk size such as 16 m, 24 m, or 32 m. Larger chunks reduce total chunk count and bookkeeping overhead, but do not push this too high on a 16 GB machine because each chunk becomes heavier to load.
+
+Close other memory-heavy applications before importing. Browsers, photo tools, video editors, and other 3D apps can leave too little headroom for a large model even when the computer reports 16 GB of installed RAM.
 
 ### Recommended Map Parsing Approach
 
@@ -138,9 +214,15 @@ Try a few Import chunk size values (for example 16, 32, 64, then 100 m for very 
 If pop-in is too visible, raise Chunk uploads per frame gradually (1, then 2, then 3) and increase Upload budget carefully (for example from 3 to 5 ms).
 
 6. Balance quality and stability.
-If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Import worker count or reduce Import CPUs to keep free.
+If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Cache-building workers or reduce Cache-build CPUs to keep free.
 
 Important: there is no single best value for all maps. The best result comes from trying several import strategies and streaming settings for your map and your hardware.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the change workflow and
+[`docs/development/`](docs/development/README.md) for architecture, repository
+layout, coding, testing, and AI-assisted development standards.
 
 ## License
 

@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Pre-install all build prerequisites so the build script's apt step is a no-op.
 # python3-venv: needed for the venv the build script creates.
-# sudo: build_linux_app.sh calls sudo apt-get; pre-installing everything means
+# sudo: build.sh calls sudo apt-get; pre-installing everything means
 #       those calls are skipped, but sudo must exist so the script doesn't error.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     sudo \
     git
 
-# AppImageKit is used by scripts/linux/package.sh to create the final
+# AppImageKit is used by scripts/linux/common/package.sh to create the final
 # launcher-integrated AppImage from the staged AppDir.
 RUN arch="$(uname -m)" && \
     case "$arch" in \
@@ -47,7 +47,7 @@ RUN arch="$(uname -m)" && \
     chmod +x /usr/local/bin/appimagetool
 
 # Copy the real Python 3.12 binary (not a symlink) into a portable cache
-# structure so build_linux_app.sh finds it immediately and skips its own
+# structure so build.sh finds it immediately and skips its own
 # download. A real binary is required -- the venv module fails when the source
 # Python is a symlink chain on a bind-mounted filesystem.
 RUN mkdir -p /opt/portable-python/python/bin && \

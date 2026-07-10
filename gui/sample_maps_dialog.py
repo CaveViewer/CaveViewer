@@ -20,7 +20,24 @@ import sys
 import threading
 import time
 
+from gui.map_selection import (
+    validate_selected_map_folder as _validate_selected_map_folder,
+)
+from gui.platform import get_splash_platform_adapter
 from gui.preferences import migrate_preference_file
+from gui.tk_theme import DARK_THEME
+
+
+_BG_COLOR = DARK_THEME.background
+_PANEL_COLOR = DARK_THEME.panel
+_TITLE_COLOR = DARK_THEME.title
+_SUBTITLE_COLOR = DARK_THEME.body_text
+_INSTRUCTION_COLOR = DARK_THEME.secondary_text
+_BUTTON_BG = DARK_THEME.primary_button
+_BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
+_BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
+_BUTTON_FG = DARK_THEME.primary_button_text
+_BORDER_COLOR = DARK_THEME.border
 
 
 _LAST_SAMPLE_MAPS_DIR_FILE = migrate_preference_file(
@@ -29,11 +46,47 @@ _LAST_SAMPLE_MAPS_DIR_FILE = migrate_preference_file(
 )
 
 
-class _SampleMapDownloadCancelled(Exception):
-    pass
+def _activate_download_cancel_button(action_button, set_action_button):
+    """Turn a row's existing action button into its cancellation control."""
+    cancel_event = threading.Event()
+    set_action_button(action_button, "Cancel", cancel_event.set)
+    return cancel_event
 
 
-def show_sample_maps_dialog(parent, install_dir):
+def _ask_directory_in_front(filedialog, owner, *, title, initialdir):
+    """Open an owned native directory chooser above the application's windows."""
+    previous_topmost = False
+    try:
+        previous_topmost = owner.attributes("-topmost")
+    except Exception:
+        pass
+
+    try:
+        # Supplying parent establishes native window ownership. Temporarily
+        # promoting that owner also keeps its native child above CaveViewer's
+        # other windows on window managers that do not honor ownership alone.
+        owner.attributes("-topmost", True)
+        owner.lift()
+        owner.focus_force()
+        owner.update_idletasks()
+        return filedialog.askdirectory(
+            title=title,
+            initialdir=initialdir,
+            parent=owner,
+        )
+    finally:
+        try:
+            owner.attributes("-topmost", previous_topmost)
+            if owner.winfo_exists():
+                owner.lift()
+                owner.focus_force()
+        except Exception:
+            pass
+
+
+def show_sample_maps_dialog(
+    parent, install_dir, *, ui_font_family: str | None = None
+):
     """
     Shows the sample maps list as a modal dialog over `parent` (the
     splash screen's Tk root). Blocks until the person either picks a map
@@ -48,12 +101,14 @@ def show_sample_maps_dialog(parent, install_dir):
     """
     import tkinter as tk
     from tkinter import messagebox, filedialog
-    from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
-        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_HOVER_BG, _BUTTON_BORDER_COLOR, _BUTTON_FG, _BORDER_COLOR, _UI_FONT_FAMILY, \
-        _validate_selected_map_folder
     from gui.sample_maps import (
-        KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog, is_sample_map_already_downloaded,
+        DownloadCancelled, KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog,
+        is_sample_map_already_downloaded,
         download_and_extract_sample_map, existing_sample_map_path, local_sample_map_path,
+    )
+
+    _UI_FONT_FAMILY = (
+        ui_font_family or get_splash_platform_adapter().ui_font_family()
     )
 
     selected_folder = [None]
@@ -269,11 +324,12 @@ def show_sample_maps_dialog(parent, install_dir):
             )
             return
 
-        # Ask user where to save the map. Intentionally no parent= here: on
-        # macOS passing a parent makes Tk present this as a document-modal
-        # sheet attached to the window, which animates in and can feel slow;
-        # a standalone app-modal panel appears more immediately.
-        save_dir = filedialog.askdirectory(
+        # Keep the OS-native chooser owned by and above this dialog. Without
+        # an owner, some window managers place it behind the Sample Maps
+        # window, making Save To appear unresponsive.
+        save_dir = _ask_directory_in_front(
+            filedialog,
+            dialog,
             title=f"Save {sample.display_name} to...",
             initialdir=initial_save_dir[0],
         )
@@ -286,15 +342,19 @@ def show_sample_maps_dialog(parent, install_dir):
         if not _dialog_exists():
             return
 
-        # Hide button and show progress bar canvas (container already packed with fixed height)
+        # Reuse the existing Save/Open action area for cancellation, and show
+        # the progress strip. Keeping the same widget avoids shifting the row
+        # when a download begins.
         action_btn = action_buttons[sample.display_name]
         if not _widget_exists(action_btn):
             return
         progress_bar_container, progress_bar_canvas, progress_bar = progress_bars[sample.display_name]
         if not _widget_exists(progress_bar_canvas):
             return
+        cancel_event = _activate_download_cancel_button(
+            action_btn, _set_action_button
+        )
         try:
-            action_btn.pack_forget()
             progress_bar_canvas.pack(fill="x", padx=14, pady=(6, 0))
             # Force layout update to get accurate canvas width
             dialog.update_idletasks()
@@ -302,8 +362,11 @@ def show_sample_maps_dialog(parent, install_dir):
             return
 
         def on_progress(downloaded, total):
+            if cancel_event.is_set():
+                raise DownloadCancelled("Sample map download cancelled")
             if not _dialog_exists() or not _widget_exists(progress_bar_canvas):
-                raise _SampleMapDownloadCancelled()
+                cancel_event.set()
+                raise DownloadCancelled("Sample map download cancelled")
             if total > 0:
                 try:
                     frac = min(1.0, downloaded / total)
@@ -312,25 +375,37 @@ def show_sample_maps_dialog(parent, install_dir):
                     if canvas_width > 1:  # winfo_width() returns 1 before widget is displayed
                         progress_bar_canvas.coords(progress_bar, 0, 0, int(canvas_width * frac), 4)
                     progress_bar_canvas.update()
-                    if not _dialog_exists():
-                        raise _SampleMapDownloadCancelled()
+                    if cancel_event.is_set() or not _dialog_exists():
+                        cancel_event.set()
+                        raise DownloadCancelled("Sample map download cancelled")
                 except tk.TclError:
-                    raise _SampleMapDownloadCancelled()
+                    cancel_event.set()
+                    raise DownloadCancelled("Sample map download cancelled")
 
         try:
-            result_path = download_and_extract_sample_map(save_dir, sample, progress_cb=on_progress)
+            result_path = download_and_extract_sample_map(
+                save_dir,
+                sample,
+                progress_cb=on_progress,
+                cancel_cb=cancel_event.is_set,
+            )
         except Exception as e:
-            if isinstance(e, _SampleMapDownloadCancelled):
-                return
             if not _dialog_exists():
                 return
             try:
                 if _widget_exists(progress_bar_canvas):
                     progress_bar_canvas.pack_forget()
+                    progress_bar_canvas.coords(progress_bar, 0, 0, 0, 4)
                 action_btn = action_buttons.get(sample.display_name)
                 if _widget_exists(action_btn):
-                    action_btn.pack(side="right", padx=(8, 16), pady=12)
+                    _set_action_button(
+                        action_btn,
+                        "Save to...",
+                        lambda s=sample: _download_flow(s),
+                    )
             except tk.TclError:
+                return
+            if isinstance(e, DownloadCancelled):
                 return
             messagebox.showerror(
                 "Download Failed",
@@ -350,7 +425,7 @@ def show_sample_maps_dialog(parent, install_dir):
             return
         downloaded_paths[sample.display_name] = result_path
         
-        # Update button text to "Open Map", change command, and show it
+        # Update the same action-area button to Open.
         action_btn = action_buttons[sample.display_name]
         if not _widget_exists(action_btn):
             return
@@ -358,10 +433,6 @@ def show_sample_maps_dialog(parent, install_dir):
             action_btn, "Open",
             lambda s=sample, rp=result_path: on_open_map(s, rp),
         )
-        try:
-            action_btn.pack(side="right", padx=(8, 16), pady=12)
-        except tk.TclError:
-            return
 
     def on_open_map(sample, result_path):
         is_valid, error_message = _validate_selected_map_folder(result_path)
@@ -487,10 +558,12 @@ def show_sample_maps_dialog(parent, install_dir):
         progress_bar_container = tk.Frame(row, bg=_PANEL_COLOR, height=10)
         progress_bar_container.pack(side="bottom", fill="x", padx=0, pady=0)
         progress_bar_container.pack_propagate(False)  # Maintain fixed height
-        
+
         progress_bar_canvas = tk.Canvas(
-            progress_bar_container, height=4, bg="#1c1c24",
-            highlightthickness=0
+            progress_bar_container,
+            height=4,
+            bg=DARK_THEME.entry_background,
+            highlightthickness=0,
         )
         # Don't pack initially - will be packed when download starts
         progress_bar = progress_bar_canvas.create_rectangle(0, 0, 0, 4, fill=_BUTTON_BG, width=0)

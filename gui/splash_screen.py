@@ -31,9 +31,6 @@ without extra modal pop-ups.
 
 from __future__ import annotations
 
-import glob
-import json
-import math
 import os
 import subprocess
 import sys
@@ -41,9 +38,24 @@ import tempfile
 import threading
 from caveviewer_version import APP_NAME, APP_VERSION
 from core.logging_utils import get_logger
-from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness, tk_display_scale
+from gui.advanced_settings import (
+    apply_advanced_settings_to_env as _apply_advanced_settings_to_env,
+    load_advanced_settings as _load_advanced_settings,
+)
+from gui.advanced_settings_dialog import (
+    show_advanced_settings_dialog as _show_advanced_settings_dialog,
+)
+from gui.dpi_utils import (
+    apply_tk_scaling,
+    configure_process_dpi_awareness,
+    tk_display_scale,
+)
+from gui.map_selection import (
+    validate_selected_map_folder as _validate_selected_map_folder,
+)
 from gui.platform import get_splash_platform_adapter
 from gui.preferences import migrate_preference_file
+from gui.tk_theme import DARK_THEME
 
 
 # Resolve asset paths for both dev and PyInstaller bundle environments
@@ -97,22 +109,21 @@ elif sys.platform == "win32":
 else:
     _APP_ICON_PATH = _resolve_asset_path("app_icon_macos.png")
 _LAST_BROWSE_PATH_FILE = migrate_preference_file("last_browse_path", ".caveviewer_last_browse_path")
-_ADVANCED_SETTINGS_FILE = migrate_preference_file("advanced_settings.json", ".caveviewer_advanced_settings.json")
 
 # URL for example maps link -- empty/None means link is disabled
 _EXAMPLE_MAPS_URL = None
 _LOG = get_logger("CaveViewer")
 
-_BG_COLOR = "#0a0a0d"           # near-black, matches the in-app overlay backgrounds
-_PANEL_COLOR = "#12121a"        # slightly lighter panel background
-_TITLE_COLOR = "#f2d98c"        # amber/gold, matches the in-app title text color
-_SUBTITLE_COLOR = "#cccdd6"     # light gray, matches in-app subtitle/body text
-_INSTRUCTION_COLOR = "#9a9aa6"  # dimmer gray, matches in-app secondary/note text
-_BUTTON_BG = "#e5a11f"          # calmer amber derived from the splash logo gold
-_BUTTON_HOVER_BG = "#f0b13a"    # brighter hover state in the same logo-gold family
-_BUTTON_BORDER_COLOR = "#9c6f18" # subtle darker amber edge for action buttons
-_BUTTON_FG = "#1a1408"          # dark text on the amber button, matches in-app active-button text
-_BORDER_COLOR = "#5c5c6e"
+_BG_COLOR = DARK_THEME.background
+_PANEL_COLOR = DARK_THEME.panel
+_TITLE_COLOR = DARK_THEME.title
+_SUBTITLE_COLOR = DARK_THEME.body_text
+_INSTRUCTION_COLOR = DARK_THEME.secondary_text
+_BUTTON_BG = DARK_THEME.primary_button
+_BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
+_BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
+_BUTTON_FG = DARK_THEME.primary_button_text
+_BORDER_COLOR = DARK_THEME.border
 _PLATFORM_ADAPTER = get_splash_platform_adapter()
 _WINDOWS_SPLASH_LAYOUT = sys.platform == "win32"
 _LINUX_SPLASH_LAYOUT = sys.platform.startswith("linux")
@@ -134,16 +145,10 @@ _TITLE_TO_ACTION_GAP = 72 if _LINUX_SPLASH_LAYOUT else (58 if _WINDOWS_SPLASH_LA
 _BROWSE_BUTTON_BOTTOM_GAP = 42 if _LINUX_SPLASH_LAYOUT else (32 if _WINDOWS_SPLASH_LAYOUT else 16)
 _INSTRUCTION_BOTTOM_GAP = 30 if _LINUX_SPLASH_LAYOUT else (20 if _WINDOWS_SPLASH_LAYOUT else 0)
 _SECONDARY_LINK_ROW_TOP_GAP = 40 if _LINUX_SPLASH_LAYOUT else (30 if _WINDOWS_SPLASH_LAYOUT else 16)
-_ADVANCED_DIALOG_TWO_COLUMN = True
-_ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
-_ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
-_ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
-_ADVANCED_DIALOG_SECTION_GAP = 44 if sys.platform == "win32" else 18
-_ADVANCED_DIALOG_MIN_WIDTH = 1320 if sys.platform == "win32" else 0
 _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
     "BottomLine Projects Scientific Dive Team.\n"
-    "Engineering and design by mr_v.\n\n"
+    "Engineering and design by magic mr_v.\n\n"
     "Licensed under the GNU General Public License v3.0.\n")
 
 
@@ -232,343 +237,6 @@ def _set_tk_window_icon(window) -> None:
     except Exception as e:
         _LOG.warning(f"could not set application window icon ({e}); continuing without it.")
 
-_ADVANCED_SETTING_FIELDS = (
-    {
-        "section": "streaming",
-        "key": "memory_target_percent",
-        "env_var": "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
-        "label": "System RAM target (%)",
-        "hint": "System RAM limit for loaded chunks.",
-        "value_type": "float",
-        "min": 1.0,
-        "max": 80.0,
-        "units": "percent",
-    },
-    {
-        "section": "streaming",
-        "key": "gpu_memory_target_percent",
-        "env_var": "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
-        "label": "GPU memory target (%)",
-        "hint": "GPU memory limit for loaded chunks.",
-        "value_type": "float",
-        "min": 1.0,
-        "max": 80.0,
-        "units": "percent",
-    },
-    {
-        "section": "streaming",
-        "key": "gpu_memory_gb",
-        "env_var": "CAVEVIEWER_GPU_MEMORY_GB",
-        "label": "GPU memory override (GB)",
-        "hint": "Optional GPU memory override.",
-        "value_type": "float",
-        "min": 0.0,
-        "min_exclusive": True,
-        "max": 1024.0,
-        "units": "GB",
-    },
-    {
-        "section": "streaming",
-        "key": "io_workers",
-        "env_var": "CAVEVIEWER_IO_WORKERS",
-        "label": "Worker count",
-        "hint": "Background chunk-loading threads.",
-        "value_type": "int",
-        "min": 1,
-    },
-    {
-        "section": "streaming",
-        "key": "io_reserved_cpus",
-        "env_var": "CAVEVIEWER_IO_RESERVED_CPUS",
-        "label": "CPU cores to keep free",
-        "hint": "CPU cores reserved from streaming.",
-        "value_type": "int",
-        "min": 0,
-    },
-    {
-        "section": "streaming",
-        "key": "upload_chunks_per_frame",
-        "env_var": "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
-        "label": "Chunk uploads per frame",
-        "hint": "Ready chunks uploaded per frame.",
-        "value_type": "int",
-        "min": 1,
-        "max": 16,
-    },
-    {
-        "section": "streaming",
-        "key": "upload_time_budget_ms",
-        "env_var": "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
-        "label": "Upload budget (ms)",
-        "hint": "Soft per-frame upload budget.",
-        "value_type": "float",
-        "min": 0.5,
-        "max": 50.0,
-        "units": "ms",
-    },
-    {
-        "section": "parsing",
-        "key": "chunk_size_meters",
-        "env_var": "CAVEVIEWER_CHUNK_SIZE_METERS",
-        "label": "Import chunk size (m)",
-        "hint": "Chunk size for new caches.",
-        "value_type": "float",
-        "min": 0.0,
-        "min_exclusive": True,
-        "max": 512.0,
-        "units": "m",
-    },
-    {
-        "section": "parsing",
-        "key": "obj_scan_throttle_ms",
-        "env_var": "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
-        "label": "OBJ scan throttle (ms)",
-        "hint": "Yield during OBJ scanning.",
-        "value_type": "float",
-        "min": 0.0,
-        "max": 50.0,
-        "units": "ms",
-    },
-    {
-        "section": "parsing",
-        "key": "chunk_build_workers",
-        "env_var": "CAVEVIEWER_CHUNK_BUILD_WORKERS",
-        "label": "Import worker count",
-        "hint": "Threads used while writing chunks.",
-        "value_type": "int",
-        "min": 1,
-    },
-    {
-        "section": "parsing",
-        "key": "chunk_build_reserved_cpus",
-        "env_var": "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
-        "label": "Import CPUs to keep free",
-        "hint": "CPU cores reserved from import.",
-        "value_type": "int",
-        "min": 0,
-    },
-)
-
-_ADVANCED_SETTING_SECTIONS = (
-    ("streaming", "Streaming Performance"),
-    ("parsing", "Map Parsing"),
-)
-
-
-def _default_advanced_settings() -> dict[str, str]:
-    return {field["key"]: "" for field in _ADVANCED_SETTING_FIELDS}
-
-
-def _env_setting_or_default(env_var: str, default: str) -> str:
-    value = os.getenv(env_var, "").strip()
-    return value if value else default
-
-
-def _advanced_setting_defaults() -> dict[str, str]:
-    logical_cpus = max(1, os.cpu_count() or 1)
-    return {
-        "memory_target_percent": _env_setting_or_default(
-            "CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "12"
-        ),
-        "gpu_memory_target_percent": _env_setting_or_default(
-            "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET", "70"
-        ),
-        "gpu_memory_gb": os.getenv("CAVEVIEWER_GPU_MEMORY_GB", "").strip(),
-        "io_reserved_cpus": _env_setting_or_default("CAVEVIEWER_IO_RESERVED_CPUS", "3"),
-        "io_workers": _env_setting_or_default(
-            "CAVEVIEWER_IO_WORKERS", str(max(1, logical_cpus - 3))
-        ),
-        "upload_chunks_per_frame": _env_setting_or_default(
-            "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "1"
-        ),
-        "upload_time_budget_ms": _env_setting_or_default(
-            "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", "3.0"
-        ),
-        "chunk_size_meters": _env_setting_or_default("CAVEVIEWER_CHUNK_SIZE_METERS", "8"),
-        "obj_scan_throttle_ms": _env_setting_or_default(
-            "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS", "1" if sys.platform.startswith("win") else "0"
-        ),
-        "chunk_build_reserved_cpus": _env_setting_or_default(
-            "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS", "2"
-        ),
-        "chunk_build_workers": _env_setting_or_default(
-            "CAVEVIEWER_CHUNK_BUILD_WORKERS", str(max(1, logical_cpus - 2))
-        ),
-    }
-
-
-def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
-    normalized = _normalize_advanced_settings(values)
-    defaults = _advanced_setting_defaults()
-    return {
-        key: (normalized.get(key, "") or defaults[key])
-        for key in defaults
-    }
-
-
-def _normalize_advanced_settings(values: dict | None) -> dict[str, str]:
-    normalized = _default_advanced_settings()
-    if not isinstance(values, dict):
-        return normalized
-    for field in _ADVANCED_SETTING_FIELDS:
-        raw = values.get(field["key"], "")
-        normalized[field["key"]] = str(raw).strip() if raw is not None else ""
-    return normalized
-
-
-def _load_advanced_settings() -> dict[str, str]:
-    try:
-        with open(_ADVANCED_SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return _normalize_advanced_settings(json.load(f))
-    except Exception:
-        return _default_advanced_settings()
-
-
-def _save_advanced_settings(values: dict[str, str]) -> None:
-    try:
-        with open(_ADVANCED_SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(_normalize_advanced_settings(values), f, indent=2)
-    except Exception as e:
-        _LOG.warning(f"could not save advanced settings ({e})")
-
-
-def _format_advanced_range(field: dict) -> str:
-    minimum = field.get("min")
-    maximum = field.get("max")
-    units = field.get("units", "")
-    suffix = f" {units}" if units else ""
-    if minimum is not None and maximum is not None:
-        lower = f"greater than {minimum:g}" if field.get("min_exclusive") else f"at least {minimum:g}"
-        return f"{lower} and no more than {maximum:g}{suffix}"
-    if minimum is not None:
-        return f"greater than {minimum:g}{suffix}" if field.get("min_exclusive") else f"at least {minimum:g}{suffix}"
-    if maximum is not None:
-        return f"no more than {maximum:g}{suffix}"
-    return "valid"
-
-
-def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | None, dict[str, str], str | None]:
-    normalized = _normalize_advanced_settings(values)
-
-    for field in _ADVANCED_SETTING_FIELDS:
-        key = field["key"]
-        text = normalized[key]
-        if not text:
-            continue
-
-        label = field["label"]
-        value_type = field.get("value_type")
-        minimum = field.get("min")
-        maximum = field.get("max")
-        min_exclusive = bool(field.get("min_exclusive"))
-
-        if minimum is not None and minimum >= 0 and text.startswith("-"):
-            return False, f"{label} cannot be negative.", normalized, key
-
-        if value_type == "int":
-            try:
-                value = int(text)
-            except ValueError:
-                return False, f"{label} must be a whole number.", normalized, key
-            if minimum is not None and value < minimum:
-                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
-            if maximum is not None and value > maximum:
-                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
-            normalized[key] = str(value)
-            continue
-
-        if value_type == "float":
-            try:
-                value = float(text)
-            except ValueError:
-                return False, f"{label} must be a number.", normalized, key
-            if not math.isfinite(value):
-                return False, f"{label} must be a finite number.", normalized, key
-            if minimum is not None:
-                below_minimum = value <= minimum if min_exclusive else value < minimum
-                if below_minimum:
-                    return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
-            if maximum is not None and value > maximum:
-                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
-            normalized[key] = f"{value:g}"
-
-    return True, None, normalized, None
-
-
-def _apply_advanced_settings_to_env(values: dict[str, str]) -> None:
-    normalized = _effective_advanced_settings(values)
-    for field in _ADVANCED_SETTING_FIELDS:
-        value = normalized[field["key"]]
-        os.environ[field["env_var"]] = value
-
-
-def _has_precompiled_cache(folder: str) -> bool:
-    try:
-        from core import chunker as _ck
-    except Exception:
-        return False
-
-    # Support both layouts used by caveviewer.py:
-    # 1) <map folder>/_cache/manifest.json
-    # 2) <map folder>/.caveviewer_cache/manifest.json (legacy)
-    # 3) <selected folder>/manifest.json (folder is cache root)
-    candidates = [
-        os.path.join(folder, _ck.CACHE_DIRNAME),
-        os.path.join(folder, _ck.LEGACY_CACHE_DIRNAME),
-        folder,
-    ]
-    for candidate in candidates:
-        if os.path.exists(os.path.join(candidate, _ck.MANIFEST_NAME)):
-            return True
-    return False
-
-
-def _validate_selected_map_folder(folder: str) -> tuple[bool, str]:
-    if not folder or not os.path.isdir(folder):
-        return False, "The selected path is not a valid folder."
-
-    glb_candidates = glob.glob(os.path.join(folder, "*.glb"))
-    if glb_candidates:
-        return True, ""
-
-    obj_candidates = glob.glob(os.path.join(folder, "*.obj"))
-    if obj_candidates:
-        obj_path = obj_candidates[0]
-        mtl_name = None
-        try:
-            with open(obj_path, "r", errors="replace") as f:
-                for line in f:
-                    if line.startswith("mtllib "):
-                        mtl_name = line.split(maxsplit=1)[1].strip()
-                        break
-        except Exception:
-            # If the OBJ can't be inspected, continue with fallback checks.
-            pass
-
-        if mtl_name and os.path.exists(os.path.join(folder, mtl_name)):
-            return True, ""
-
-        if glob.glob(os.path.join(folder, "*.mtl")):
-            return True, ""
-
-        if _has_precompiled_cache(folder):
-            return True, ""
-
-        return False, (
-            "Found an .obj file, but no matching .mtl file in that folder.\n\n"
-            "Select a folder with a .glb file, or with both .obj and .mtl files, "
-            "or a folder that already contains a CaveViewer pre-compiled cache."
-        )
-
-    if _has_precompiled_cache(folder):
-        return True, ""
-
-    return False, (
-        "No supported map files were found in that folder.\n\n"
-        "Select a folder with a .glb file, or with both .obj and .mtl files, "
-        "or a folder that already contains a CaveViewer pre-compiled cache."
-    )
-
 
 def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION) -> str | None:
     """
@@ -581,8 +249,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     from tkinter import filedialog
 
     selected_folder: list[str | None] = [None]
-    advanced_settings = _effective_advanced_settings(_load_advanced_settings())
-    _apply_advanced_settings_to_env(advanced_settings)
+    _apply_advanced_settings_to_env(_load_advanced_settings())
 
     configure_process_dpi_awareness()
     root = tk.Tk(className=APP_NAME)
@@ -701,7 +368,9 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                             cursor="hand2" if clickable else "arrow")
 
     def _set_progress_bar_visible(visible: bool):
-        update_progress_canvas.config(bg="#1c1c24" if visible else _BG_COLOR)
+        update_progress_canvas.config(
+            bg=DARK_THEME.entry_background if visible else _BG_COLOR
+        )
         if not visible:
             update_progress_canvas.coords(_update_progress_bar, 0, 0, 0, 4)
 
@@ -728,9 +397,28 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             _set_update_label("Downloaded  \u2014  close app to install manually",
                               fg=_SUBTITLE_COLOR)
 
+    def _download_error_looks_security_related(err: str) -> bool:
+        text = (err or "").lower()
+        return any(
+            marker in text
+            for marker in (
+                "hash",
+                "sha-256",
+                "sha256",
+                "tampered",
+                "size",
+                "corrupt",
+                "security",
+            )
+        )
+
     def _on_download_error(err: str):
         update_state["busy"] = False
         _set_progress_bar_visible(False)
+        if _download_error_looks_security_related(err):
+            _LOG.warning("Update download stopped by security check: %s", err)
+            _set_update_label("Download verification failed", fg="#ff9b90")
+            return
         _set_update_label("\u2193  Download failed \u2014 click to retry",
                           fg="#ff9b90", clickable=True)
 
@@ -771,9 +459,16 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 final_payload_path = _PLATFORM_ADAPTER.persist_downloaded_payload(
                     payload_path, result.download_url
                 )
+                _LOG.info("Update payload saved for installation: %s", final_payload_path)
                 root.after(0, lambda: _on_download_complete(final_payload_path))
             except Exception as e:
-                root.after(0, lambda: _on_download_error(str(e)))
+                err = str(e)
+                _LOG.warning(
+                    "Update download workflow failed: %s: %s",
+                    type(e).__name__,
+                    err,
+                )
+                root.after(0, lambda err=err: _on_download_error(err))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -966,304 +661,17 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     )
     instruction_label.pack(pady=(0, _INSTRUCTION_BOTTOM_GAP))
 
-    def _show_advanced_settings_dialog() -> None:
-        nonlocal advanced_settings
-        advanced_settings = _effective_advanced_settings(_load_advanced_settings())
-        _apply_advanced_settings_to_env(advanced_settings)
-
-        dialog = tk.Toplevel(root)
-        dialog.withdraw()
-        dialog.title("Advanced Settings")
-        dialog.configure(bg=_BG_COLOR)
-        dialog.resizable(False, False)
-        dialog.transient(root)
-
-        body = tk.Frame(dialog, bg=_BG_COLOR, padx=_ADVANCED_DIALOG_BODY_PAD_X, pady=18)
-        body.pack(fill="both", expand=True)
-
-        field_vars: dict[str, tk.StringVar] = {}
-        field_entries: dict[str, tk.Entry] = {}
-        effective_settings = _effective_advanced_settings(advanced_settings)
-
-        def _is_numeric_entry_candidate(value_type: str, candidate: str) -> bool:
-            if candidate == "":
-                return True
-            if value_type == "int":
-                return candidate.isdigit()
-            if value_type == "float":
-                if candidate == ".":
-                    return True
-                if candidate.count(".") > 1:
-                    return False
-                return all(ch.isdigit() or ch == "." for ch in candidate)
-            return True
-
-        numeric_entry_validator = dialog.register(_is_numeric_entry_candidate)
-
-        def _clear_field_error(key: str) -> None:
-            entry = field_entries.get(key)
-            if entry is not None:
-                entry.config(highlightbackground="#30303a", highlightcolor="#5d6f8a")
-            if error_label.winfo_exists():
-                error_label.config(text="")
-
-        section_row = tk.Frame(body, bg=_BG_COLOR)
-        section_row.pack(fill="both", expand=True, pady=(0, 10))
-
-        def render_section(parent, title: str, section_key: str) -> None:
-            section = tk.Frame(
-                parent,
-                bg=_BG_COLOR,
-                padx=14,
-                pady=12,
-                highlightthickness=1,
-                highlightbackground=_BORDER_COLOR,
-                highlightcolor=_BORDER_COLOR,
-            )
-            if _ADVANCED_DIALOG_TWO_COLUMN:
-                section.pack(side="left", fill="both", expand=True, padx=(0, _ADVANCED_DIALOG_SECTION_GAP))
-            else:
-                section.pack(fill="x", pady=(0, 12))
-
-            tk.Label(
-                section,
-                text=title,
-                font=_VERSION_FONT,
-                fg=_TITLE_COLOR,
-                bg=_BG_COLOR,
-            ).pack(anchor="w", pady=(0, 10))
-
-            fields = [field for field in _ADVANCED_SETTING_FIELDS if field.get("section") == section_key]
-            for field in fields:
-                row = tk.Frame(section, bg=_BG_COLOR)
-                row.pack(fill="x", pady=(0, 9))
-
-                tk.Label(
-                    row,
-                    text=field["label"],
-                    font=_BODY_FONT,
-                    fg=_SUBTITLE_COLOR,
-                    bg=_BG_COLOR,
-                    anchor="w",
-                ).pack(anchor="w")
-
-                # macOS keeps prior splash Tk roots alive for the app-menu About
-                # handler, so implicit StringVars can attach to an old hidden
-                # root after returning from the viewer. Bind each variable to
-                # this dialog's root so entry defaults render reliably.
-                var = tk.StringVar(master=dialog, value=effective_settings[field["key"]])
-                field_vars[field["key"]] = var
-                value_type = field.get("value_type", "")
-                entry = tk.Entry(
-                    row,
-                    textvariable=var,
-                    font=_BODY_FONT,
-                    bg="#1c1c24",
-                    fg=_SUBTITLE_COLOR,
-                    insertbackground=_SUBTITLE_COLOR,
-                    relief="flat",
-                    highlightthickness=1,
-                    highlightbackground="#30303a",
-                    highlightcolor="#5d6f8a",
-                    width=_ADVANCED_DIALOG_ENTRY_WIDTH,
-                    validate="key",
-                    validatecommand=(numeric_entry_validator, value_type, "%P"),
-                )
-                field_entries[field["key"]] = entry
-                var.trace_add("write", lambda *_args, key=field["key"]: _clear_field_error(key))
-                entry.pack(anchor="w", pady=(4, 4))
-
-                tk.Label(
-                    row,
-                    text=field["hint"],
-                    font=_SMALL_FONT,
-                    fg=_INSTRUCTION_COLOR,
-                    bg=_BG_COLOR,
-                    justify="left",
-                    wraplength=_ADVANCED_DIALOG_WRAP,
-                ).pack(anchor="w")
-
-        for section_key, section_title in _ADVANCED_SETTING_SECTIONS:
-            render_section(section_row, section_title, section_key)
-
-        if _ADVANCED_DIALOG_TWO_COLUMN:
-            section_children = section_row.winfo_children()
-            for child in section_children[:-1]:
-                child.pack_configure(padx=(0, _ADVANCED_DIALOG_SECTION_GAP))
-            if section_children:
-                section_children[-1].pack_configure(padx=(0, 0))
-
-        error_label = tk.Label(
-            body,
-            text="",
-            font=_SMALL_FONT,
-            fg="#ff9b90",
-            bg=_BG_COLOR,
-            justify="left",
-            wraplength=_ADVANCED_DIALOG_WRAP,
-        )
-        error_label.pack(anchor="w", pady=(4, 10))
-
-        button_row = tk.Frame(body, bg=_BG_COLOR)
-        button_row.pack(fill="x")
-
-        def on_cancel():
-            dialog.destroy()
-
-        def on_apply():
-            for entry in field_entries.values():
-                entry.config(highlightbackground="#30303a", highlightcolor="#5d6f8a")
-            proposed = {key: var.get() for key, var in field_vars.items()}
-            ok, message, normalized, error_key = _validate_advanced_settings(proposed)
-            if not ok:
-                error_label.config(text=message or "Invalid advanced settings.")
-                if error_key and error_key in field_entries:
-                    bad_entry = field_entries[error_key]
-                    bad_entry.config(highlightbackground="#ff6b6b", highlightcolor="#ff6b6b")
-                    bad_entry.focus_set()
-                    bad_entry.selection_range(0, "end")
-                return
-
-            advanced_settings = _effective_advanced_settings(normalized)
-            _apply_advanced_settings_to_env(advanced_settings)
-            _save_advanced_settings(advanced_settings)
-            dialog.destroy()
-
-        if sys.platform == "darwin":
-            def _make_action_label(parent, text, command, bg, fg, hover_bg, padx, border_color):
-                label = tk.Label(
-                    parent,
-                    text=text,
-                    font=_SMALL_FONT,
-                    bg=bg,
-                    fg=fg,
-                    padx=padx,
-                    pady=6,
-                    cursor="hand2",
-                    takefocus=True,
-                    highlightthickness=1,
-                    highlightbackground=border_color,
-                    highlightcolor=border_color,
-                )
-
-                def _invoke(_event=None):
-                    command()
-                    return "break"
-
-                label.bind("<Button-1>", _invoke)
-                label.bind("<Return>", _invoke)
-                label.bind("<space>", _invoke)
-                label.bind("<Enter>", lambda _event: label.config(bg=hover_bg))
-                label.bind("<Leave>", lambda _event: label.config(bg=bg))
-                return label
-
-            cancel_button = _make_action_label(
-                button_row,
-                text="Cancel",
-                command=on_cancel,
-                bg="#2a2a33",
-                fg=_SUBTITLE_COLOR,
-                hover_bg="#33333f",
-                padx=12,
-                border_color="#3a4454",
-            )
-            apply_button = _make_action_label(
-                button_row,
-                text="Apply",
-                command=on_apply,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                hover_bg=_BUTTON_HOVER_BG,
-                padx=16,
-                border_color=_BUTTON_BORDER_COLOR,
-            )
-        else:
-            cancel_button = tk.Button(
-                button_row,
-                text="Cancel",
-                command=on_cancel,
-                font=_SMALL_FONT,
-                bg="#2a2a33",
-                fg=_SUBTITLE_COLOR,
-                activebackground="#33333f",
-                activeforeground=_SUBTITLE_COLOR,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground="#3a4454",
-                highlightcolor="#3a4454",
-                padx=12,
-                pady=6,
-                cursor="hand2",
-            )
-
-            apply_button = tk.Button(
-                button_row,
-                text="Apply",
-                command=on_apply,
-                font=_SMALL_FONT,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                activebackground=_BUTTON_HOVER_BG,
-                activeforeground=_BUTTON_FG,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=_BUTTON_BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR,
-                padx=16,
-                pady=6,
-                cursor="hand2",
-                default="active",
-            )
-
-        apply_button.pack(side="right")
-        cancel_button.pack(side="right", padx=(0, 8))
-
-        dialog.bind("<Escape>", lambda _event: on_cancel())
-        dialog.bind("<Return>", lambda _event: on_apply())
-        dialog.update_idletasks()
-        geometry_applied = False
-        try:
-            root.update_idletasks()
-            dialog_w = max(dialog.winfo_reqwidth(), _ADVANCED_DIALOG_MIN_WIDTH)
-            dialog_h = dialog.winfo_reqheight()
-            screen_w = dialog.winfo_screenwidth()
-            screen_h = dialog.winfo_screenheight()
-            dialog_w = min(dialog_w, max(320, screen_w - 16))
-            parent_x = root.winfo_rootx()
-            parent_y = root.winfo_rooty()
-            parent_w = root.winfo_width()
-            # Keep the dialog anchored near the splash window's top-right
-            # corner. This matters more now that the Windows dialog is wider:
-            # if the window manager places it low, the action buttons can
-            # end up off-screen on shorter displays.
-            protrusion_x = 72
-            inset_y = 8
-            desired_x = parent_x + parent_w - dialog_w + protrusion_x
-            desired_y = parent_y + inset_y
-            clamped_x = max(8, min(desired_x, screen_w - dialog_w - 8))
-            clamped_y = max(8, min(desired_y, screen_h - 328))
-            dialog_h = min(dialog_h, max(320, screen_h - clamped_y - 8))
-            dialog.geometry(f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}")
-            geometry_applied = True
-        except Exception:
-            pass
-        if not geometry_applied:
-            dialog.geometry("+%d+%d" % (root.winfo_rootx() + 24, root.winfo_rooty() + 24))
-        dialog.deiconify()
-        dialog.lift(root)
-        dialog.wait_visibility()
-        dialog.grab_set()
-        apply_button.focus_set()
-        dialog.focus_force()
+    def _on_advanced_settings_click():
+        _show_advanced_settings_dialog(root, ui_font_family=_UI_FONT_FAMILY)
 
     # Example maps link - opens the sample maps dialog
     def _on_example_maps_click():
         from gui.sample_maps_dialog import show_sample_maps_dialog
         import os
         install_dir = os.path.expanduser("~")
-        result = show_sample_maps_dialog(root, install_dir)
+        result = show_sample_maps_dialog(
+            root, install_dir, ui_font_family=_UI_FONT_FAMILY
+        )
         if result:
             selected_folder[0] = result
             root.withdraw()
@@ -1280,7 +688,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         bg=_BG_COLOR,
         cursor="hand2",
     )
-    advanced_link.bind("<Button-1>", lambda _event: _show_advanced_settings_dialog())
+    advanced_link.bind("<Button-1>", lambda _event: _on_advanced_settings_click())
     advanced_link.pack(side="left")
 
     secondary_separator = tk.Label(

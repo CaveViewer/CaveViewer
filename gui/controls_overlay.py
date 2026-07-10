@@ -106,10 +106,16 @@ def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
         ("Esc", "Quit"),
     ])
 
+    recording = [
+        ("REC button", "Start clean MP4 recording countdown"),
+        ("Shift + R", "Stop or cancel recording"),
+    ]
+
     return [
         ("Move", movement),
         ("Look", look),
         ("Navigate", navigation),
+        ("Record", recording),
     ]
 
 
@@ -476,12 +482,14 @@ class ControlsOverlay:
             subtitle_y = title_y
 
         sub_size = 2.2
-        sub_w = bitmap_font.text_width_px(subtitle, sub_size)
-        sub_x = (w - sub_w) / 2.0
         sub_y = subtitle_y
-        add_text(subtitle, sub_x, sub_y, sub_size, _SPLASH_SUBTITLE_RGBA)
-
-        bar_bottom_y = sub_y + bitmap_font.text_height_px(sub_size)
+        if not self._manual_mode and subtitle == "Press Space to begin":
+            bar_bottom_y = self._draw_begin_prompt(add_quad_px, add_text, w, sub_y, sub_size)
+        else:
+            sub_w = bitmap_font.text_width_px(subtitle, sub_size)
+            sub_x = (w - sub_w) / 2.0
+            add_text(subtitle, sub_x, sub_y, sub_size, _SPLASH_SUBTITLE_RGBA)
+            bar_bottom_y = sub_y + bitmap_font.text_height_px(sub_size)
         if not self._manual_mode:
             bar_w = 300.0
             bar_h = 4.0
@@ -494,9 +502,9 @@ class ControlsOverlay:
             fill_x1 = bar_x0 + self._progress_fraction * bar_w
             if fill_x1 > bar_x0:
                 add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
-            table_start_offset = 84.0
+            table_start_offset = 126.0
         else:
-            table_start_offset = 58.0
+            table_start_offset = 126.0
 
         table_top_y = bar_bottom_y + table_start_offset
         self._draw_grouped_controls(
@@ -509,6 +517,35 @@ class ControlsOverlay:
 
         return None
 
+    def _draw_begin_prompt(self, add_quad_px, add_text, window_width, y, text_size):
+        key_label = "Space"
+        key_size = 1.95
+        key_pad_x = 10.0
+        key_pad_y = 5.0
+        gap = 10.0
+
+        left_text = "Press"
+        right_text = "to begin"
+        left_w = bitmap_font.text_width_px(left_text, text_size)
+        right_w = bitmap_font.text_width_px(right_text, text_size)
+        key_w = self._measure_keycap_sequence(key_label, key_size, key_pad_x)
+        text_h = bitmap_font.text_height_px(text_size)
+        key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
+        prompt_h = max(text_h, key_h)
+        total_w = left_w + gap + key_w + gap + right_w
+
+        x = (window_width - total_w) / 2.0
+        text_y = y + (prompt_h - text_h) / 2.0
+        key_y = y + (prompt_h - key_h) / 2.0
+
+        add_text(left_text, x, text_y, text_size, _SPLASH_SUBTITLE_RGBA)
+        x += left_w + gap
+        self._draw_keycap_sequence(add_quad_px, add_text, key_label, x, key_y, key_size, key_pad_x, key_pad_y)
+        x += key_w + gap
+        add_text(right_text, x, text_y, text_size, _SPLASH_SUBTITLE_RGBA)
+
+        return y + prompt_h
+
     def _draw_grouped_controls(self, add_quad_px, add_text, window_size, top_y, available_height):
         w, h = window_size
 
@@ -517,10 +554,10 @@ class ControlsOverlay:
         desc_size = 1.80
         row_height = 31.0
         heading_gap = 13.0
-        section_gap = 38.0
+        section_gap = 58.0
         key_pad_x = 8.0
         key_pad_y = 4.0
-        key_desc_gap = 18.0
+        key_desc_gap = 20.0
 
         if self._manual_mode and sys.platform != "darwin":
             heading_size = 1.55
@@ -528,20 +565,46 @@ class ControlsOverlay:
             desc_size = 1.66
             row_height = 28.0
             heading_gap = 11.0
-            section_gap = 32.0
+            section_gap = 48.0
 
-        columns = [self._control_sections]
-        metrics = [
-            self._measure_control_column(
-                sections, heading_size, key_size, desc_size, row_height,
-                heading_gap, section_gap, key_pad_x, key_desc_gap
+        # CAVEVIEWER_UI_TEXT_SCALE changes the actual FreeType line metrics,
+        # while the values above describe the layout at its normal size.  Do
+        # not let a fixed row height become smaller than the scaled text (or
+        # its keycap), otherwise adjacent control rows overlap on high-DPI
+        # displays.
+        def ensure_text_fits_row(candidate_height):
+            return max(
+                candidate_height,
+                bitmap_font.text_height_px(key_size) + key_pad_y * 2.0,
+                bitmap_font.text_height_px(desc_size) + 8.0,
             )
-            for sections in columns
-        ]
 
+        row_height = ensure_text_fits_row(row_height)
+
+        columns = [
+            [self._control_sections[0]],
+            [self._control_sections[1], self._control_sections[3]],
+            [self._control_sections[2]],
+        ]
+        column_gap = max(34.0, min(72.0, w * 0.035))
+
+        def measure_columns():
+            return [
+                self._measure_control_column(
+                    sections, heading_size, key_size, desc_size, row_height,
+                    heading_gap, section_gap, key_pad_x, key_pad_y, key_desc_gap
+                )
+                for sections in columns
+            ]
+
+        metrics = measure_columns()
         max_height = max((metric["height"] for metric in metrics), default=0.0)
-        if max_height > available_height:
-            fit_ratio = max(0.72, min(1.0, available_height / max_height))
+        total_width = sum(metric["width"] for metric in metrics) + column_gap * max(0, len(columns) - 1)
+        available_width = max(240.0, w - 80.0)
+        if max_height > available_height or total_width > available_width:
+            height_ratio = available_height / max(max_height, 1.0)
+            width_ratio = available_width / max(total_width, 1.0)
+            fit_ratio = max(0.72, min(1.0, height_ratio, width_ratio))
             heading_size = max(1.18, heading_size * fit_ratio)
             key_size = max(1.24, key_size * fit_ratio)
             desc_size = max(1.24, desc_size * fit_ratio)
@@ -551,15 +614,11 @@ class ControlsOverlay:
             key_pad_x = max(7.0, key_pad_x * fit_ratio)
             key_pad_y = max(3.0, key_pad_y * fit_ratio)
             key_desc_gap = max(12.0, key_desc_gap * fit_ratio)
-            metrics = [
-                self._measure_control_column(
-                    sections, heading_size, key_size, desc_size, row_height,
-                    heading_gap, section_gap, key_pad_x, key_desc_gap
-                )
-                for sections in columns
-            ]
+            column_gap = max(28.0, column_gap * fit_ratio)
+            row_height = ensure_text_fits_row(row_height)
+            metrics = measure_columns()
 
-        total_width = sum(metric["width"] for metric in metrics)
+        total_width = sum(metric["width"] for metric in metrics) + column_gap * max(0, len(columns) - 1)
 
         x = max(28.0, (w - total_width) / 2.0)
         for sections, metric in zip(columns, metrics):
@@ -578,11 +637,11 @@ class ControlsOverlay:
                 key_pad_y=key_pad_y,
                 key_desc_gap=key_desc_gap,
             )
-            x += metric["width"]
+            x += metric["width"] + column_gap
 
     def _measure_control_column(
         self, sections, heading_size, key_size, desc_size, row_height,
-        heading_gap, section_gap, key_pad_x, key_desc_gap
+        heading_gap, section_gap, key_pad_x, key_pad_y, key_desc_gap
     ):
         key_col_width = 0.0
         desc_col_width = 0.0
@@ -622,20 +681,33 @@ class ControlsOverlay:
         key_text_height = bitmap_font.text_height_px(key_size)
         desc_text_height = bitmap_font.text_height_px(desc_size)
 
+        desc_x = x + key_col_width + key_desc_gap
+
         for heading, rows in sections:
-            add_text(heading.upper(), x, y, heading_size, _SPLASH_TITLE_RGBA)
+            heading_text = heading.upper()
+            heading_w = bitmap_font.text_width_px(heading_text, heading_size)
+            section_desc_width = max(
+                (bitmap_font.text_width_px(desc, desc_size) for _, desc in rows),
+                default=0.0,
+            )
+            section_content_width = max(
+                heading_w,
+                key_col_width + key_desc_gap + section_desc_width,
+            )
+            heading_x = x + (section_content_width - heading_w) / 2.0
+            add_text(heading_text, heading_x, y, heading_size, _SPLASH_TITLE_RGBA)
             y += heading_height + heading_gap
 
             for key, desc in rows:
                 key_h = key_text_height + key_pad_y * 2.0
-                key_x = x
+                key_sequence_width = self._measure_keycap_sequence(key, key_size, key_pad_x)
+                key_x = desc_x - key_desc_gap - key_sequence_width
                 key_y = y + (row_height - key_h) / 2.0
                 self._draw_keycap_sequence(
                     add_quad_px, add_text, key, key_x, key_y,
                     key_size, key_pad_x, key_pad_y,
                 )
 
-                desc_x = x + key_col_width + key_desc_gap
                 desc_y = y + (row_height - desc_text_height) / 2.0
                 add_text(desc, desc_x, desc_y, desc_size, _SPLASH_SUBTITLE_RGBA)
                 y += row_height

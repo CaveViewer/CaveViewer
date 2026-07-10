@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Packages dist/macos/app/CaveViewer.app into a versioned DMG and includes
-# README.md and license notices inside the DMG for end-user instructions.
+# macOS DMG packager.
+# Packages dist/macos/app/CaveViewer.app into a versioned DMG and writes
+# matching release metadata under dist/macos/metadata.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
@@ -15,6 +16,50 @@ license_path="$repo_root/LICENSE"
 third_party_notices_path="$repo_root/THIRD_PARTY_NOTICES.md"
 packages_dir="$repo_root/dist/macos/packages"
 metadata_dir="$repo_root/dist/macos/metadata"
+base_download_url=""
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  package_macos_dmg.sh [--base-download-url=<url>]
+  package_macos_dmg.sh --help
+
+Packages dist/macos/app/CaveViewer.app into a versioned DMG.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --base-download-url=*)
+      base_download_url="${1#--base-download-url=}"
+      shift
+      ;;
+    --base-download-url)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --base-download-url requires a value."
+        exit 1
+      fi
+      base_download_url="$1"
+      shift
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      echo ""
+      print_usage
+      exit 1
+      ;;
+    *)
+      echo "Error: positional arguments are not supported: '$1'"
+      echo "Use --base-download-url=<url>."
+      exit 1
+      ;;
+  esac
+done
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "Error: this script must be run on macOS."
@@ -28,7 +73,7 @@ fi
 
 if [ ! -d "$app_bundle" ]; then
   echo "Error: app bundle not found at $app_bundle"
-  echo "Build it first with: ./scripts/macos/build_macos_app.sh"
+  echo "Build it first with: ./scripts/macos/build.sh"
   exit 1
 fi
 
@@ -86,7 +131,6 @@ sha256="$(cv_sha256 "$artifact_path")"
 size_bytes="$(cv_size_bytes "$artifact_path")"
 created_at_utc="$(cv_created_at_utc)"
 
-base_download_url="${1:-}"
 download_url=""
 if [ -n "$base_download_url" ]; then
   base_trimmed="${base_download_url%/}"

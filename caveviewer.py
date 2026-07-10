@@ -16,9 +16,7 @@ Workflow:
      where the user flies, so frame rate stays smooth regardless of total
      map size.
 
-Bare-bones UI for now per your request -- a Tkinter folder-picker dialog
-and a console progress readout, nothing fancier. We can layer a nicer UI
-on top later without touching any of the core/ engine code.
+[magic_mr_v] $ _
 """
 
 import os
@@ -56,7 +54,7 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_CHUNK_SIZE_METERS",
     "CAVEVIEWER_DEV_VENV",
     "CAVEVIEWER_FORCE_STARTUP_FOCUS",
-    "CAVEVIEWER_FORCE_UPDATE_PROMPT",
+    "CAVEVIEWER_FORCE_UPDATE",
     "CAVEVIEWER_GITHUB_REPO",
     "CAVEVIEWER_GPU_MEMORY_GB",
     "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
@@ -71,6 +69,8 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_TEXT_AA_MODE",
     "CAVEVIEWER_UI_FONT",
     "CAVEVIEWER_UI_TEXT_SCALE",
+    "CAVEVIEWER_UPDATE_BRANCH",
+    "CAVEVIEWER_UPDATE_CHANNEL",
     "CAVEVIEWER_UPDATE_MANIFEST_URL",
     "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
     "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
@@ -95,11 +95,11 @@ def _console_newline() -> None:
 
 
 def _default_io_workers() -> str:
-    return str(max(1, (os.cpu_count() or 1) - 3))
+    return "2"
 
 
 def _default_chunk_build_workers() -> str:
-    return str(max(1, (os.cpu_count() or 1) - 2))
+    return "1"
 
 
 _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
@@ -110,7 +110,7 @@ _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
     "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET": "70",
     "CAVEVIEWER_IO_RESERVED_CPUS": "3",
     "CAVEVIEWER_IO_WORKERS": _default_io_workers,
-    "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "12",
+    "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "8",
     "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS": "1" if os.name == "nt" else "0",
     "CAVEVIEWER_TEXT_AA_MODE": "normal",
     "CAVEVIEWER_UI_TEXT_SCALE": "1.18",
@@ -153,6 +153,29 @@ def _print_caveviewer_environment_settings() -> None:
             if effective_default is not None:
                 display_value = f"{display_value} (effective: {effective_default})"
         _LOG.info(f"  {key}={display_value}")
+
+
+def _consume_update_branch_arg(argv: list[str]) -> tuple[list[str], str | None]:
+    cleaned: list[str] = []
+    update_branch: str | None = None
+    idx = 0
+    while idx < len(argv):
+        arg = argv[idx]
+        if arg == "--update-branch":
+            if idx + 1 >= len(argv) or not argv[idx + 1].strip():
+                raise ValueError("--update-branch requires a non-empty branch name.")
+            update_branch = argv[idx + 1].strip()
+            idx += 2
+            continue
+        if arg.startswith("--update-branch="):
+            update_branch = arg.split("=", 1)[1].strip()
+            if not update_branch:
+                raise ValueError("--update-branch requires a non-empty branch name.")
+            idx += 1
+            continue
+        cleaned.append(arg)
+        idx += 1
+    return cleaned, update_branch
 
 
 def find_input_files(folder: str) -> tuple[str, str]:
@@ -272,6 +295,11 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         _LOG.info(f"Found cache in: {cache_dir}")
         return cache_dir
 
+    # Reject imports that are unlikely to fit before parsing a potentially
+    # multi-gigabyte source. build_cache() repeats this check as a safety net
+    # for direct callers and for free-space changes during parsing.
+    chunker.ensure_sufficient_disk_space(obj_path)
+
     _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
@@ -373,6 +401,8 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
                   f"folder next to your {os.path.basename(source_path)} if you want to force a rebuild).")
         _LOG.info(f"Found cache in: {cache_dir}")
         return cache_dir
+
+    chunker.ensure_sufficient_disk_space(source_path)
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
@@ -634,20 +664,31 @@ def main():
     _LOG.info("=" * 60)
     _LOG.info(f"  {APP_NAME} {__version__}")
     _LOG.info("=" * 60)
+
+    try:
+        sys.argv, _update_branch = _consume_update_branch_arg(sys.argv)
+    except ValueError as e:
+        _LOG.error(str(e))
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+    if _update_branch:
+        os.environ["CAVEVIEWER_UPDATE_BRANCH"] = _update_branch
+        _LOG.info("Using update branch override: %s", _update_branch)
+
     _print_caveviewer_environment_settings()
 
-    # Debug flag: forces the update prompt to appear regardless of the
-    # current version.  Useful for testing the update notification UI
-    # without waiting for CDN cache or editing version numbers.
-    # Usage: ./run_caveviewer.sh --force-update-prompt
-    #        CAVEVIEWER_FORCE_UPDATE_PROMPT=1 ./run_caveviewer.sh
-    _force_update_prompt = (
-        "--force-update-prompt" in sys.argv
-        or os.getenv("CAVEVIEWER_FORCE_UPDATE_PROMPT", "").strip()
+    # Debug flag: forces the update prompt to appear regardless of the current
+    # version.
+    # Usage: ./run_caveviewer.sh --force-update
+    #        CAVEVIEWER_FORCE_UPDATE=1 ./run_caveviewer.sh
+    #        ./run_caveviewer.sh --update-branch feature/pubkey
+    _force_update = (
+        "--force-update" in sys.argv
+        or os.getenv("CAVEVIEWER_FORCE_UPDATE", "").strip()
         in ("1", "true", "yes")
     )
-    if _force_update_prompt:
-        sys.argv = [a for a in sys.argv if a != "--force-update-prompt"]
+    if _force_update:
+        sys.argv = [a for a in sys.argv if a != "--force-update"]
 
     # CLI argument: open that path and exit when the viewer closes.
     if len(sys.argv) > 1 and sys.argv[1].strip():
@@ -656,7 +697,7 @@ def main():
 
     # GUI mode: show the splash screen, run the viewer, then show the
     # splash screen again so the user can open another map or exit.
-    _splash_version = "0.0.0" if _force_update_prompt else __version__
+    _splash_version = "0.0.0" if _force_update else __version__
     while True:
         from gui.splash_screen import show_splash_screen
         folder = show_splash_screen(program_name=APP_NAME, version=_splash_version)

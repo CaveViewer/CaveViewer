@@ -31,7 +31,7 @@ class SplashPlatformAdapter(Protocol):
     def default_update_repo(self) -> str:
         ...
 
-    def default_update_manifest_url(self, repo: str) -> str:
+    def default_update_manifest_url(self, repo: str, branch: str) -> str:
         ...
 
     def update_check_user_agent(self) -> str:

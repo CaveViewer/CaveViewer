@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 
 from .base import ManualInstallResult
@@ -13,8 +14,16 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def ui_font_family(self) -> str:
         return "sans-serif"
 
-    def default_update_manifest_url(self, repo: str) -> str:
-        return f"https://raw.githubusercontent.com/{repo}/main/updates/linux/stable.json"
+    def default_update_manifest_url(self, repo: str, branch: str) -> str:
+        return f"https://raw.githubusercontent.com/{repo}/{branch}/updates/linux/{self._update_arch_slug()}/stable.json"
+
+    def _update_arch_slug(self) -> str:
+        machine = platform.machine().strip().lower()
+        if machine in {"aarch64", "arm64"}:
+            return "arm64"
+        if machine in {"x86_64", "amd64"}:
+            return "x86_64"
+        return "x86_64"
 
     def install_channel(self) -> str:
         return "linux_app"

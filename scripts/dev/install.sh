@@ -1,6 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Development environment installer.
+# Creates/updates the local virtual environment and writes run_caveviewer.sh.
+#
+# Usage:
+#   install.sh
+#   install.sh --help
+
+print_usage() {
+  cat <<'EOF'
+Usage:
+  install.sh
+  install.sh --help
+
+Creates or updates the CaveViewer development virtual environment.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "Error: unknown option '$1'"
+      echo ""
+      print_usage
+      exit 1
+      ;;
+    *)
+      echo "Error: positional arguments are not supported: '$1'"
+      echo ""
+      print_usage
+      exit 1
+      ;;
+  esac
+done
+
 # Location helpers (script can be run from anywhere)
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -65,14 +103,39 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 venv_dir="${CAVEVIEWER_DEV_VENV:-$repo_root/.venv-dev}"
 
+is_virtual_machine() {
+  if command -v systemd-detect-virt >/dev/null 2>&1; then
+    systemd-detect-virt --quiet --vm && return 0
+  fi
+
+  local dmi_value
+  for dmi_path in /sys/class/dmi/id/product_name /sys/class/dmi/id/sys_vendor; do
+    if [ -r "$dmi_path" ]; then
+      dmi_value="$(tr '[:upper:]' '[:lower:]' < "$dmi_path" 2>/dev/null || true)"
+      case "$dmi_value" in
+        *parallels*|*vmware*|*virtualbox*|*qemu*|*kvm*|*hyper-v*|*bhyve*)
+          return 0
+          ;;
+      esac
+    fi
+  done
+
+  return 1
+}
+
 if [ ! -x "$venv_dir/bin/python" ]; then
   echo "Error: python not found at $venv_dir/bin/python"
   echo "Run ./scripts/dev/install.sh to set up dependencies."
   exit 1
 fi
 
+if [ -z "${CAVEVIEWER_VSYNC+x}" ] && is_virtual_machine; then
+  export CAVEVIEWER_VSYNC=0
+  echo "Detected virtual machine; defaulting CAVEVIEWER_VSYNC=0."
+fi
+
 cd "$repo_root"
-exec "$venv_dir/bin/python" "$repo_root/caveviewer.py"
+exec "$venv_dir/bin/python" "$repo_root/caveviewer.py" "$@"
 EOF
 chmod +x "$launcher_path"
 

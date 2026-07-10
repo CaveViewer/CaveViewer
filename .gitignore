@@ -1,8 +1,12 @@
-.idea/*
+.vscode/
 .venv*
 .DS_Store
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 *.swp
 *.swo
 *.swn
@@ -17,3 +21,9 @@ update_log.txt
 .cache/
 _cache/
 .caveviewer_cache/
+*.private.pem
+release_signing_private_key.pem
+.caveviewer/
+run_caveviewer.sh
+.idea/
+.run

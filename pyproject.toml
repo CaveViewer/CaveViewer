@@ -1,0 +1,35 @@
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-config",
+    "--strict-markers",
+    "--timeout=10",
+]
+markers = [
+    "integration: multi-component or filesystem workflow tests",
+    "gui: tests requiring a windowing environment",
+    "gl: tests requiring an OpenGL context",
+    "slow: intentionally longer-running tests",
+    "network: tests with explicitly controlled network behavior",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["caveviewer", "core", "gui"]
+omit = [
+    "tests/*",
+    ".venv*/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.coverage.xml]
+output = "coverage.xml"

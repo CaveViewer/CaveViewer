@@ -18,6 +18,8 @@ import json
 import math
 import os
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -32,6 +34,7 @@ from core.logging_utils import get_logger
 from core.streaming_world import StreamingWorld, StreamingConfig
 from core.texture_manager import TextureManager
 from gui.camera import FlyCamera
+from gui.cross_section_map import CrossSectionMap
 from gui.minimap import Minimap
 from gui.render_mode_buttons import RenderModeButtons
 from gui.controls_overlay import ControlsOverlay
@@ -43,6 +46,43 @@ from gui.platform.factory import get_platform_adapter
 from caveviewer_version import APP_NAME, APP_VERSION
 
 _LOG = get_logger("CaveViewer")
+
+_DEFAULT_WINDOW_SIZE = (1600, 1000)
+_WINDOW_ASPECT_RATIO = _DEFAULT_WINDOW_SIZE[0] / _DEFAULT_WINDOW_SIZE[1]
+
+
+def _desktop_relative_window_size() -> tuple[int, int]:
+    """Return a large 16:10 window that fits comfortably on the desktop."""
+    root = None
+    try:
+        import tkinter as tk
+
+        root = tk.Tk(className=APP_NAME)
+        root.withdraw()
+        desktop_width = int(root.winfo_screenwidth())
+        desktop_height = int(root.winfo_screenheight())
+        if desktop_width <= 0 or desktop_height <= 0:
+            return _DEFAULT_WINDOW_SIZE
+
+        available_width = desktop_width * 0.90
+        available_height = desktop_height * 0.88
+        width = min(available_width, available_height * _WINDOW_ASPECT_RATIO)
+        height = width / _WINDOW_ASPECT_RATIO
+        window_size = max(1, int(round(width))), max(1, int(round(height)))
+        _LOG.info(
+            "Desktop size %dx%d; opening viewer at %dx%d.",
+            desktop_width, desktop_height, *window_size,
+        )
+        return window_size
+    except Exception as e:
+        _LOG.warning("Could not detect desktop size (%s); using %dx%d.", e, *_DEFAULT_WINDOW_SIZE)
+        return _DEFAULT_WINDOW_SIZE
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -63,6 +103,17 @@ def _env_float(name: str, default: float, minimum: float, maximum: float) -> flo
         return max(minimum, min(maximum, float(raw)))
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _resource_base_dir() -> str:
@@ -132,7 +183,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     # controls have comfortable vertical room on first launch.
     # Use a 16:10 baseline (more vertical space than 16:9) while keeping
     # aspect_ratio unlocked so manual resizing remains fully flexible.
-    window_size = (1600, 1000)
+    window_size = _DEFAULT_WINDOW_SIZE
     resizable = True
     # Allow disabling vsync via env var -- useful on VMs where the virtual
     # display driver can block swap_buffers() long enough to freeze the
@@ -181,6 +232,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     RIGHT_COLUMN_PANEL_FILL_RGBA = (0.09, 0.12, 0.16, 0.84)
     RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
     RIGHT_COLUMN_PANEL_BORDER_PX = 1.5
+    RECORDING_COUNTDOWN_START_NUMBER = 3
 
     # Startup focus forcing can make bundled macOS app windows appear in a
     # corner first and then jump as the window manager re-places them.
@@ -236,6 +288,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._hud_panel_program,
             [(self._hud_panel_vbo, "2f 4f", "in_pos", "in_color")],
         )
+        self._status_panel_max_verts = 12000
+        self._status_panel_vbo = self.ctx.buffer(reserve=self._status_panel_max_verts * 6 * 4)
+        self._status_panel_vao = self.ctx.vertex_array(
+            self._hud_panel_program,
+            [(self._status_panel_vbo, "2f 4f", "in_pos", "in_color")],
+        )
 
         self._keys_down = set()
         self._last_raw_modifiers = 0
@@ -256,9 +314,36 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._startup_focus_requested = False
         self._upload_chunks_per_frame = _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
         self._upload_time_budget_ms = _env_float("CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", 3.0, 0.5, 50.0)
+        self._navigation_guard_enabled = _env_bool("CAVEVIEWER_NAVIGATION_GUARD", True)
+        self._navigation_guard_radius_cells = _env_int("CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS", 2, 0, 12)
         self._platform_adapter = get_platform_adapter()
         self._bookmarks_path: str | None = None
         self._bookmarks: dict[int, dict] = {}
+        self._recording_fps = _env_int("CAVEVIEWER_RECORDING_FPS", 30, 1, 60)
+        self._recording_max_height = _env_int("CAVEVIEWER_RECORDING_MAX_HEIGHT", 1080, 240, 4320)
+        self._recording_crf = _env_int("CAVEVIEWER_RECORDING_CRF", 23, 0, 51)
+        self._recording_output_dir = os.path.expanduser(
+            os.getenv("CAVEVIEWER_RECORDING_DIR", os.path.join("~", "Movies", "CaveViewer"))
+        )
+        self._recording_countdown_started_at: float | None = None
+        self._recording_countdown_until: float | None = None
+        self._recording_process: subprocess.Popen | None = None
+        self._recording_output_path: str | None = None
+        self._recording_size: tuple[int, int] | None = None
+        self._recording_viewport: tuple[int, int, int, int] | None = None
+        self._recording_next_frame_time: float | None = None
+        self._recording_frame_interval = 1.0 / float(self._recording_fps)
+        self._recording_frame_queue: queue.Queue | None = None
+        self._recording_writer_thread: threading.Thread | None = None
+        self._recording_writer_error: Exception | None = None
+        self._recording_dropped_frames = 0
+        self._recording_stderr_thread: threading.Thread | None = None
+        self._recording_stderr_parts: list[str] = []
+        self._recording_stderr_lock = threading.Lock()
+        self._recording_status_message: str | None = None
+        self._recording_status_detail: str | None = None
+        self._recording_status_kind = "info"
+        self._recording_status_until: float | None = None
 
         self._install_backend_modifier_probe()
 
@@ -333,8 +418,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
-        # Map-specific state (world, manifest, camera, minimap, texture
-        # manager, chunk GPU objects) lives in its own method, separate
+        # Map-specific state (world, manifest, camera, cross-section map,
+        # minimap, texture manager, chunk GPU objects) lives in its own method, separate
         # from the one-time-per-window setup above, so the exact same
         # logic can run again later when switching to a different map via
         # the OPEN button -- see load_new_map() / _teardown_current_map().
@@ -343,6 +428,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.manifest = None
         self.world = None
         self.camera = None
+        self.cross_section_map = None
         self.minimap = None
         self.texture_manager = None
         self._chunk_gpu_objects: dict[tuple, list] = {}
@@ -354,6 +440,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Per-cell world-space AABBs for frustum culling, populated in
         # _load_map from the manifest's pre-computed bounding boxes.
         self._chunk_aabbs: dict[tuple, tuple] = {}
+        self._navigation_guard_cells: set[tuple[int, int, int]] = set()
+        self._navigation_guard_chunk_size: float | None = None
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
@@ -470,7 +558,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             load_radius_cells=self.render_distance_stepper.value,
             unload_radius_margin=1,
         )
-        self.world = StreamingWorld(self.cache_dir, config, on_decode_textures=predecode_textures_for_chunk)
+        self.world = StreamingWorld(
+            self.cache_dir,
+            config,
+            on_decode_textures=predecode_textures_for_chunk,
+            gpu_vendor=str(self.ctx.info.get("GL_VENDOR", "")),
+        )
 
         # pick a sane starting position: center of the first available chunk,
         # so the user doesn't spawn outside the mesh and see nothing
@@ -486,6 +579,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         # from the manifest's chunk bounding boxes -- no extra rendering
         # pass or GPU cost beyond this tiny 2D overlay.
         self.minimap = Minimap(self.ctx, self.manifest)
+        self.cross_section_map = CrossSectionMap(self.ctx, self.cache_dir, self.manifest)
+        # Build the first longitudinal view before the first world.update()
+        # queues any streaming work. This keeps profile availability
+        # independent of the configured number of chunk uploads per frame.
+        self.cross_section_map.prime(
+            self.camera.position,
+            self.camera.forward(),
+            self.wnd.size,
+        )
 
         # One-time texture diagnostic: print material/texture summary to
         # console so atlas feasibility can be judged without guessing.
@@ -510,8 +612,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             for i, cell_str in enumerate(_cells)
         }
+        self._navigation_guard_cells = set(self._chunk_aabbs.keys())
+        self._navigation_guard_chunk_size = chunk_size
         del _cells, _mins_raw, _maxs_raw, _mins_arr, _maxs_arr, _chunks
         _LOG.info("Chunk AABB table ready.")
+        if self._navigation_guard_enabled:
+            _LOG.info(
+                "Navigation guard enabled: "
+                f"{len(self._navigation_guard_cells)} occupied cells, "
+                f"radius={self._navigation_guard_radius_cells} cell(s)."
+            )
 
         # Render-distance slider's current value should drive the new
         # map's streaming config immediately, rather than resetting back
@@ -531,6 +641,514 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_prep_complete_until = None
         self._chunk_prep_completion_armed = False
         self.import_progress_panel.reset_progress()
+
+    def _navigation_position_is_allowed(self, position: np.ndarray) -> bool:
+        """
+        Keep free-fly navigation near occupied chunk cells, preventing users
+        from drifting into empty map space where nothing will render.
+        """
+        if not self._navigation_guard_enabled:
+            return True
+        if not self._navigation_guard_cells or self._navigation_guard_chunk_size is None:
+            return True
+
+        cell = chunker.world_to_cell(np.asarray(position, dtype=np.float32), self._navigation_guard_chunk_size)
+        radius = self._navigation_guard_radius_cells
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                for dz in range(-radius, radius + 1):
+                    if (cell[0] + dx, cell[1] + dy, cell[2] + dz) in self._navigation_guard_cells:
+                        return True
+        return False
+
+    def _nearest_navigation_guard_position(self, position: np.ndarray) -> np.ndarray | None:
+        """Return the nearest occupied chunk center for rare invalid camera positions."""
+        if not self._navigation_guard_cells or self._navigation_guard_chunk_size is None:
+            return None
+
+        pos = np.asarray(position, dtype=np.float64)
+        best_cell = None
+        best_dist_sq = None
+        chunk_size = float(self._navigation_guard_chunk_size)
+        for cell in self._navigation_guard_cells:
+            aabb = self._chunk_aabbs.get(cell)
+            if aabb is not None:
+                center = (aabb[0].astype(np.float64) + aabb[1].astype(np.float64)) * 0.5
+            else:
+                center = (np.array(cell, dtype=np.float64) + 0.5) * chunk_size
+            dist_sq = float(np.sum((center - pos) ** 2))
+            if best_dist_sq is None or dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_cell = cell
+
+        if best_cell is None:
+            return None
+
+        aabb = self._chunk_aabbs.get(best_cell)
+        if aabb is not None:
+            return (aabb[0].astype(np.float64) + aabb[1].astype(np.float64)) * 0.5
+        return (np.array(best_cell, dtype=np.float64) + 0.5) * chunk_size
+
+    def _move_camera_guarded(self, forward_amt: float, right_amt: float, up_amt: float,
+                             dt: float, speed_multiplier: float) -> None:
+        if self.camera is None:
+            return
+
+        old_position = self.camera.position.copy()
+        self.camera.move(forward_amt, right_amt, up_amt, dt, speed_multiplier)
+        if self._navigation_position_is_allowed(self.camera.position):
+            return
+
+        self.camera.position = old_position
+
+    def _recording_is_armed(self) -> bool:
+        return self._recording_countdown_until is not None or self._recording_process is not None
+
+    def _recording_hides_hud(self) -> bool:
+        return self._recording_is_armed()
+
+    def _toggle_recording(self) -> None:
+        if self._recording_process is not None:
+            self._stop_recording(show_message=True)
+            return
+
+        if self._recording_countdown_until is not None:
+            self._recording_countdown_started_at = None
+            self._recording_countdown_until = None
+            _LOG.info("Recording countdown canceled.")
+            self._show_recording_status("Recording canceled", kind="cancel")
+            return
+
+        self._start_recording_countdown()
+
+    def _start_recording_countdown(self) -> None:
+        if not self._has_map_loaded:
+            return
+        if self._resolve_ffmpeg_path() is None:
+            self._recording_unavailable("ffmpeg was not found. Install dependencies or set CAVEVIEWER_FFMPEG.")
+            return
+
+        self.color_picker.hide()
+        if self.controls_overlay.is_manual_mode:
+            self.controls_overlay.hide_help()
+        now = time.perf_counter()
+        self._recording_countdown_started_at = now
+        self._recording_countdown_until = now + self.RECORDING_COUNTDOWN_START_NUMBER + 1.0
+        _LOG.info("Recording countdown started. Press Shift+R to cancel or stop.")
+
+    def _resolve_ffmpeg_path(self) -> str | None:
+        configured = os.getenv("CAVEVIEWER_FFMPEG", "").strip()
+        if configured:
+            return configured
+
+        path = shutil.which("ffmpeg")
+        if path:
+            return path
+
+        try:
+            import imageio_ffmpeg
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return None
+
+    def _recording_unavailable(self, reason: str) -> None:
+        message = f"Cannot start recording: {reason}"
+        _LOG.warning(message)
+        self._show_recording_status(
+            "Recording unavailable",
+            reason,
+            kind="error",
+            duration=3.4,
+        )
+
+    def _recording_capture_viewport(self) -> tuple[int, int, int, int]:
+        for viewport in (
+            getattr(self.ctx, "viewport", None),
+            getattr(self.ctx.screen, "viewport", None),
+        ):
+            if viewport and len(viewport) >= 4:
+                x, y, width, height = (int(v) for v in viewport[:4])
+                if width > 0 and height > 0:
+                    return x, y, width, height
+
+        screen_size = getattr(self.ctx.screen, "size", None)
+        if screen_size:
+            width, height = screen_size
+            return 0, 0, int(width), int(height)
+
+        width, height = self.wnd.size
+        return 0, 0, int(width), int(height)
+
+    def _recording_framebuffer_size(self) -> tuple[int, int]:
+        _x, _y, width, height = self._recording_capture_viewport()
+        return width, height
+
+    def _recording_output_size(self, width: int, height: int) -> tuple[int, int]:
+        output_height = min(int(height), self._recording_max_height)
+        output_height = max(2, (output_height // 2) * 2)
+        output_width = max(2, int(round((width * output_height) / max(height, 1))))
+        output_width = (output_width // 2) * 2
+        return output_width, output_height
+
+    def _start_recording_encoder(self) -> bool:
+        ffmpeg_path = self._resolve_ffmpeg_path()
+        if ffmpeg_path is None:
+            self._recording_unavailable("ffmpeg was not found. Install dependencies or set CAVEVIEWER_FFMPEG.")
+            self._recording_countdown_until = None
+            self._recording_countdown_started_at = None
+            return False
+
+        viewport = self._recording_capture_viewport()
+        width, height = viewport[2], viewport[3]
+        if width <= 0 or height <= 0:
+            self._recording_countdown_until = None
+            self._recording_countdown_started_at = None
+            return False
+
+        try:
+            os.makedirs(self._recording_output_dir, exist_ok=True)
+        except OSError as exc:
+            _LOG.warning(f"Cannot start recording: failed to create output directory: {exc}")
+            self._recording_countdown_until = None
+            self._recording_countdown_started_at = None
+            self._show_recording_status(
+                "Recording unavailable",
+                f"Cannot save to {self._recording_display_path(self._recording_output_dir)}",
+                kind="error",
+                duration=3.4,
+            )
+            return False
+
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        output_path = os.path.join(self._recording_output_dir, f"CaveViewerDive-{timestamp}.mp4")
+        output_width, output_height = self._recording_output_size(width, height)
+        vf = f"vflip,scale={output_width}:{output_height}"
+        cmd = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel", "error",
+            "-y",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "-s", f"{width}x{height}",
+            "-r", str(self._recording_fps),
+            "-i", "-",
+            "-an",
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", str(self._recording_crf),
+            "-pix_fmt", "yuv420p",
+            output_path,
+        ]
+        popen_kwargs = {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.PIPE,
+        }
+        if sys.platform == "win32":
+            # ffmpeg.exe is usually a console-subsystem executable; hide
+            # its console window when recording starts from the GUI.
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+            popen_kwargs["startupinfo"] = startupinfo
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        try:
+            process = subprocess.Popen(cmd, **popen_kwargs)
+        except OSError as exc:
+            _LOG.warning(f"Cannot start recording: {exc}")
+            self._recording_countdown_until = None
+            self._recording_countdown_started_at = None
+            return False
+
+        self._recording_process = process
+        self._recording_frame_queue = queue.Queue(maxsize=2)
+        self._recording_writer_error = None
+        self._recording_dropped_frames = 0
+        self._recording_stderr_parts = []
+
+        self._recording_writer_thread = threading.Thread(
+            target=self._recording_writer_loop,
+            args=(process, self._recording_frame_queue),
+            daemon=True,
+        )
+        self._recording_writer_thread.start()
+
+        self._recording_stderr_thread = threading.Thread(
+            target=self._recording_stderr_reader,
+            args=(process,),
+            daemon=True,
+        )
+        self._recording_stderr_thread.start()
+
+        self._recording_output_path = output_path
+        self._recording_size = (width, height)
+        self._recording_viewport = viewport
+        now = time.perf_counter()
+        self._recording_next_frame_time = now
+        self._recording_countdown_until = None
+        self._recording_countdown_started_at = None
+        _LOG.info(
+            f"Recording started: {output_path} "
+            f"capture_viewport={viewport} output_size={output_width}x{output_height}"
+        )
+        return True
+
+    def _recording_writer_loop(self, process: subprocess.Popen, frame_queue: queue.Queue) -> None:
+        try:
+            while True:
+                frame = frame_queue.get()
+                if frame is None:
+                    break
+                stdin = process.stdin
+                if stdin is None:
+                    break
+                try:
+                    stdin.write(frame)
+                except (BrokenPipeError, OSError) as exc:
+                    self._recording_writer_error = exc
+                    break
+        finally:
+            try:
+                if process.stdin:
+                    process.stdin.close()
+            except OSError:
+                pass
+
+    def _recording_stderr_reader(self, process: subprocess.Popen) -> None:
+        pipe = process.stderr
+        if pipe is None:
+            return
+        try:
+            for line in iter(pipe.readline, b""):
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace")
+                with self._recording_stderr_lock:
+                    self._recording_stderr_parts.append(text)
+                    joined = "".join(self._recording_stderr_parts)
+                    if len(joined) > 16384:
+                        self._recording_stderr_parts = [joined[-16384:]]
+        except OSError:
+            return
+
+    def _recording_stderr_text(self) -> str:
+        with self._recording_stderr_lock:
+            return "".join(self._recording_stderr_parts).strip()
+
+    def _recording_signal_writer_stop(self, frame_queue: queue.Queue | None) -> None:
+        if frame_queue is None:
+            return
+        try:
+            frame_queue.put_nowait(None)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            frame_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        try:
+            frame_queue.put_nowait(None)
+        except queue.Full:
+            pass
+
+    def _recording_enqueue_frame(self, frame: bytes, frames_due: int) -> bool:
+        frame_queue = self._recording_frame_queue
+        if frame_queue is None:
+            self._stop_recording()
+            return False
+
+        for _ in range(frames_due):
+            try:
+                frame_queue.put_nowait(frame)
+            except queue.Full:
+                self._recording_dropped_frames += 1
+                if self._recording_dropped_frames == 1:
+                    _LOG.warning("Recording encoder is falling behind; dropping video frames.")
+                break
+        return True
+
+    def _recording_display_path(self, path: str | None) -> str | None:
+        if not path:
+            return None
+        home = os.path.expanduser("~")
+        try:
+            rel = os.path.relpath(path, home)
+        except ValueError:
+            return path
+        if rel.startswith(".."):
+            return path
+        return os.path.join("~", rel)
+
+    def _show_recording_status(
+        self,
+        message: str,
+        detail: str | None = None,
+        *,
+        kind: str = "info",
+        duration: float = 2.8,
+    ) -> None:
+        self._recording_status_message = message
+        self._recording_status_detail = detail
+        self._recording_status_kind = kind
+        self._recording_status_until = time.perf_counter() + duration
+
+    def _stop_recording(self, *, show_message: bool = False) -> None:
+        process = self._recording_process
+        output_path = self._recording_output_path
+        frame_queue = self._recording_frame_queue
+        writer_thread = self._recording_writer_thread
+        stderr_thread = self._recording_stderr_thread
+
+        self._recording_countdown_until = None
+        self._recording_countdown_started_at = None
+        self._recording_process = None
+        self._recording_output_path = None
+        self._recording_size = None
+        self._recording_viewport = None
+        self._recording_next_frame_time = None
+        self._recording_frame_queue = None
+        self._recording_writer_thread = None
+        self._recording_stderr_thread = None
+
+        if process is None:
+            return
+
+        self._recording_signal_writer_stop(frame_queue)
+        if writer_thread is not None:
+            writer_thread.join(timeout=2.0)
+            if writer_thread.is_alive():
+                _LOG.warning("Recording writer did not finish promptly; forcing encoder shutdown.")
+                try:
+                    if process.stdin:
+                        process.stdin.close()
+                except OSError:
+                    pass
+
+        try:
+            process.wait(timeout=8.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        if writer_thread is not None and writer_thread.is_alive():
+            writer_thread.join(timeout=1.0)
+
+        if stderr_thread is not None:
+            stderr_thread.join(timeout=1.0)
+
+        stderr_text = self._recording_stderr_text()
+        writer_error = self._recording_writer_error
+        dropped_frames = self._recording_dropped_frames
+        self._recording_writer_error = None
+        self._recording_dropped_frames = 0
+
+        if process.returncode == 0:
+            _LOG.info(f"Recording saved: {output_path}")
+            if dropped_frames:
+                _LOG.warning(f"Recording saved after dropping {dropped_frames} frame(s).")
+            if show_message:
+                self._show_recording_status(
+                    "Recording saved",
+                    self._recording_display_path(output_path),
+                    kind="success",
+                    duration=3.2,
+                )
+        else:
+            if stderr_text and writer_error:
+                detail = f": {stderr_text}; writer_error={writer_error}"
+            elif stderr_text:
+                detail = f": {stderr_text}"
+            elif writer_error:
+                detail = f": writer_error={writer_error}"
+            else:
+                detail = ""
+            _LOG.warning(f"Recording encoder exited with code {process.returncode}{detail}")
+            if show_message:
+                self._show_recording_status(
+                    "Recording failed",
+                    self._recording_failure_detail(stderr_text),
+                    kind="error",
+                    duration=3.4,
+                )
+
+    def _recording_failure_detail(self, stderr_text: str) -> str:
+        normalized = stderr_text.lower()
+        if "no space left" in normalized or "enospc" in normalized:
+            return "Disk may be full"
+        return "Video could not be saved"
+
+    def _recording_update_after_scene(self, now: float) -> None:
+        if self._recording_countdown_until is not None:
+            if now < self._recording_countdown_until:
+                return
+            if not self._start_recording_encoder():
+                return
+
+        if self._recording_process is None:
+            return
+
+        if self._recording_writer_error is not None or self._recording_process.poll() is not None:
+            _LOG.warning("Recording encoder stopped before recording was finalized.")
+            self._stop_recording(show_message=True)
+            return
+
+        if self._recording_viewport != self._recording_capture_viewport():
+            _LOG.warning("Recording stopped because the window size changed.")
+            self._stop_recording()
+            return
+
+        next_frame_time = self._recording_next_frame_time
+        if next_frame_time is not None and now < next_frame_time:
+            return
+
+        try:
+            frame = self.ctx.screen.read(
+                viewport=self._recording_viewport,
+                components=3,
+                alignment=1,
+            )
+            expected_bytes = self._recording_size[0] * self._recording_size[1] * 3
+            if len(frame) != expected_bytes:
+                _LOG.warning(
+                    "Recording stopped because framebuffer byte size changed: "
+                    f"actual={len(frame)} expected={expected_bytes}."
+                )
+                self._stop_recording()
+                return
+
+            frames_due = 1
+            if next_frame_time is not None:
+                late_by = max(0.0, now - next_frame_time)
+                frames_due = min(5, 1 + int(late_by / self._recording_frame_interval))
+
+            if not self._recording_enqueue_frame(frame, frames_due):
+                return
+            self._recording_next_frame_time = (next_frame_time or now) + frames_due * self._recording_frame_interval
+        except OSError as exc:
+            _LOG.warning(f"Recording stopped because frame capture failed: {exc}")
+            self._stop_recording(show_message=True)
+        finally:
+            frame = None
+
+    def _recording_countdown_display(self, now: float) -> tuple[int, float]:
+        if self._recording_countdown_until is None:
+            return 0, 1.0
+
+        duration = self.RECORDING_COUNTDOWN_START_NUMBER + 1.0
+        started_at = self._recording_countdown_started_at
+        if started_at is None:
+            started_at = self._recording_countdown_until - duration
+
+        elapsed = max(0.0, now - started_at)
+        remaining = max(0.0, self._recording_countdown_until - now)
+        number = max(0, min(self.RECORDING_COUNTDOWN_START_NUMBER, int(math.ceil(remaining)) - 1))
+        progress = max(0.0, min(1.0, elapsed / duration))
+        return number, progress
 
     def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
         """Print a one-time texture summary to console on map load."""
@@ -614,6 +1232,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not self._has_map_loaded:
             return
 
+        self._stop_recording()
         self.world.shutdown()
 
         for cell in list(self._chunk_gpu_objects.keys()):
@@ -625,13 +1244,25 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_gpu_objects.clear()
         self._chunk_normal_cache.clear()
         self._chunk_aabbs.clear()
+        self._navigation_guard_cells.clear()
+        self._navigation_guard_chunk_size = None
 
         if hasattr(self, "texture_manager") and self.texture_manager is not None:
             self.texture_manager.shutdown()
 
+        for overlay in (self.cross_section_map, self.minimap):
+            if overlay is None:
+                continue
+            if hasattr(overlay, "release"):
+                try:
+                    overlay.release()
+                except Exception:
+                    pass
+
         self._has_map_loaded = False
         self.world = None
         self.camera = None
+        self.cross_section_map = None
         self.minimap = None
         self.texture_manager = None
 
@@ -641,6 +1272,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         self._window_resources_released = True
 
+        self._stop_recording()
         self._keys_down.clear()
         self._mouse_look_active = False
         self._mouse_look_left_option_active = False
@@ -676,6 +1308,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             "controls_overlay",
             "color_picker",
             "import_progress_panel",
+            "cross_section_map",
             "minimap",
         )
         for name in components:
@@ -695,6 +1328,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         _release_attr(self, "program")
         _release_attr(self, "_hud_panel_vao")
         _release_attr(self, "_hud_panel_vbo")
+        _release_attr(self, "_status_panel_vao")
+        _release_attr(self, "_status_panel_vbo")
         _release_attr(self, "_hud_panel_program")
 
         CaveViewerWindow.cave_cache_dir = None
@@ -1142,7 +1777,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         # this stays correct if that label styling ever changes (rather
         # than a second hard-coded guess at the same number).
         from gui import bitmap_font
-        label_reserve = bitmap_font.text_height_px(1.5) + 8
+        fixed_label_size = bitmap_font.pixel_size_at_text_scale(1.5, self.UI_TEXT_SCALE)
+        label_reserve = bitmap_font.text_height_px(fixed_label_size) + 8
 
         button_block_height = RenderModeButtons.total_stack_height()
         content_right_inset = self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN + self.RIGHT_COLUMN_PANEL_SIDE_PAD
@@ -1184,7 +1820,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             column = self._right_column_layout(window_size)
 
         w, h = window_size
-        label_height = bitmap_font.text_height_px(self.RIGHT_COLUMN_PANEL_LABEL_SIZE)
+        fixed_label_size = bitmap_font.pixel_size_at_text_scale(
+            self.RIGHT_COLUMN_PANEL_LABEL_SIZE, self.UI_TEXT_SCALE
+        )
+        label_height = bitmap_font.text_height_px(fixed_label_size)
         buttons_top_y = column["buttons_top_y"]
 
         brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
@@ -1207,7 +1846,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             0, window_size, buttons_top_y, column["content_right_inset"]
         )
         _last_x0, _last_y0, _last_x1, button_bottom_y = self.render_mode_buttons._button_rect_px(
-            5, window_size, buttons_top_y, column["content_right_inset"]
+            6, window_size, buttons_top_y, column["content_right_inset"]
         )
 
         x0 = min(min(stepper_lefts), button_x0) - self.RIGHT_COLUMN_PANEL_SIDE_PAD
@@ -1258,6 +1897,160 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self._hud_panel_vao.render(moderngl.TRIANGLES, vertices=len(verts))
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
+
+    def _render_navigation_maps(self, window_size: tuple[int, int]) -> None:
+        """
+        Draw the left-side navigation maps as one HUD group.
+
+        This method is intentionally called only from the normal HUD branch
+        in render(), never from the recording branch. That keeps the new
+        cross-section map hidden in recordings exactly like the minimap, and
+        makes both maps reappear together as soon as recording stops.
+        """
+        if self.cross_section_map is not None:
+            self.cross_section_map.render(window_size, self.camera.position, self.camera.forward())
+        if self.minimap is not None:
+            self.minimap.render(window_size, self.camera.position, self.camera.forward(),
+                                self._bookmarks)
+
+    def _render_recording_status_message(self, window_size: tuple[int, int]) -> None:
+        message = self._recording_status_message
+        detail = self._recording_status_detail
+        kind = self._recording_status_kind
+        until = self._recording_status_until
+        if not message or until is None:
+            return
+
+        now = time.perf_counter()
+        if now >= until:
+            self._recording_status_message = None
+            self._recording_status_detail = None
+            self._recording_status_kind = "info"
+            self._recording_status_until = None
+            return
+
+        w, h = window_size
+        self._render_recording_countdown_scrim(window_size, alpha=0.42)
+
+        symbol = {
+            "success": "OK",
+            "error": "!",
+            "cancel": "X",
+        }.get(kind, "OK")
+        symbol_size = 5.2 if symbol == "OK" else 7.2
+        center_x = w / 2.0
+        ring_center_y = h / 2.0 - 54.0
+        self.import_progress_panel.draw_ring_label(
+            center_x=center_x,
+            center_y=ring_center_y,
+            window_size=window_size,
+            label=symbol,
+            progress=1.0,
+            pixel_size=symbol_size,
+            fixed_text_scale=self.UI_TEXT_SCALE,
+        )
+
+        verts = []
+
+        def px_to_ndc(x: float, y: float) -> tuple[float, float]:
+            return (x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0
+
+        def add_quad_px(qx0: float, qy0: float, qx1: float, qy1: float,
+                        rgba: tuple[float, float, float, float]) -> None:
+            nx0, ny0 = px_to_ndc(qx0, qy0)
+            nx1, ny1 = px_to_ndc(qx1, qy1)
+            top, bottom = max(ny0, ny1), min(ny0, ny1)
+            left, right = min(nx0, nx1), max(nx0, nx1)
+            quad = [
+                (left, bottom), (right, bottom), (right, top),
+                (left, bottom), (right, top), (left, top),
+            ]
+            for vx, vy in quad:
+                verts.append((vx, vy, *rgba))
+
+        def add_centered_text(
+            text: str,
+            y: float,
+            pixel_size: float,
+            rgba: tuple[float, float, float, float],
+        ) -> float:
+            pixel_size = bitmap_font.pixel_size_at_text_scale(pixel_size, self.UI_TEXT_SCALE)
+            min_pixel_size = bitmap_font.pixel_size_at_text_scale(1.35, self.UI_TEXT_SCALE)
+            bounds = bitmap_font.text_bounds_px(text, pixel_size)
+            text_w = bounds[2] - bounds[0]
+            max_w = max(120.0, w - 96.0)
+            if text_w > max_w:
+                pixel_size = max(min_pixel_size, pixel_size * max_w / text_w)
+                bounds = bitmap_font.text_bounds_px(text, pixel_size)
+                text_w = bounds[2] - bounds[0]
+            text_h = bounds[3] - bounds[1]
+            origin_x = (w - text_w) / 2.0 - bounds[0]
+            origin_y = y - bounds[1]
+            r, g, b, a = rgba
+            for glyph in bitmap_font.iter_text_pixels(text, origin_x, origin_y, pixel_size):
+                px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
+                glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
+                add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
+            return text_h
+
+        message_y = ring_center_y + 86.0
+        main_color = (0.8980, 0.6314, 0.1216, 1.0)
+        detail_color = (0.835, 0.855, 0.86, 0.88)
+        main_h = add_centered_text(message, message_y, 2.9, main_color)
+        if detail:
+            add_centered_text(detail, message_y + main_h + 18.0, 1.65, detail_color)
+
+        data = np.array(verts, dtype=np.float32)
+        if len(verts) > self._status_panel_max_verts:
+            self._status_panel_vbo.release()
+            self._status_panel_max_verts = max(self._status_panel_max_verts * 2, len(verts))
+            self._status_panel_vbo = self.ctx.buffer(reserve=self._status_panel_max_verts * 6 * 4)
+            self._status_panel_vao = self.ctx.vertex_array(
+                self._hud_panel_program,
+                [(self._status_panel_vbo, "2f 4f", "in_pos", "in_color")],
+            )
+
+        self._status_panel_vbo.write(data.tobytes())
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._status_panel_vao.render(moderngl.TRIANGLES, vertices=len(verts))
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
+
+    def _render_recording_countdown_scrim(self, window_size: tuple[int, int], alpha: float = 0.62) -> None:
+        """Darken the cave view behind the countdown ring without hiding it."""
+        w, h = window_size
+        verts = []
+
+        def px_to_ndc(x: float, y: float) -> tuple[float, float]:
+            return (x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0
+
+        def add_quad_px(qx0: float, qy0: float, qx1: float, qy1: float,
+                        rgba: tuple[float, float, float, float]) -> None:
+            nx0, ny0 = px_to_ndc(qx0, qy0)
+            nx1, ny1 = px_to_ndc(qx1, qy1)
+            top, bottom = max(ny0, ny1), min(ny0, ny1)
+            left, right = min(nx0, nx1), max(nx0, nx1)
+            quad = [
+                (left, bottom), (right, bottom), (right, top),
+                (left, bottom), (right, top), (left, top),
+            ]
+            for vx, vy in quad:
+                verts.append((vx, vy, *rgba))
+
+        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, alpha))
+        data = np.array(verts, dtype=np.float32)
+        self._status_panel_vbo.write(data.tobytes())
+
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._status_panel_vao.render(moderngl.TRIANGLES, vertices=len(verts))
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
@@ -1484,48 +2277,66 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._last_gpu_draw_ms = _gpu_q.elapsed / 1_000_000
         mesh_draw_ms = (time.perf_counter() - t0) * 1000.0
 
-        # Overlay HUD elements draw last, on top of the 3D scene, each with
-        # their own depth-disabled 2D pass.
-        t0 = time.perf_counter()
+        if self._recording_hides_hud():
+            now = time.perf_counter()
+            if self._recording_countdown_until is not None and now < self._recording_countdown_until:
+                countdown_number, countdown_progress = self._recording_countdown_display(now)
+                self._render_recording_countdown_scrim(self.wnd.size)
+                self.import_progress_panel.draw_countdown_number(
+                    center_x=self.wnd.size[0] / 2.0,
+                    center_y=self.wnd.size[1] / 2.0,
+                    window_size=self.wnd.size,
+                    number=countdown_number,
+                    progress=countdown_progress,
+                    fixed_text_scale=self.UI_TEXT_SCALE,
+                )
+            else:
+                self._recording_update_after_scene(now)
+            overlay_ms = 0.0
+        else:
+            # Overlay HUD elements draw last, on top of the 3D scene, each with
+            # their own depth-disabled 2D pass.
+            t0 = time.perf_counter()
 
-        # Whole right-side column -- brightness, global light, render
-        # distance, then the Mesh/Texture/Help/Color/Open buttons -- is
-        # laid out as one group anchored to the bottom-right corner. See
-        # _right_column_layout()'s docstring for why this is computed in
-        # one place rather than each piece anchoring itself independently.
-        column = self._right_column_layout(self.wnd.size)
-        brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
-        ambient_anchor_x, ambient_anchor_y = column["ambient_anchor"]
-        render_distance_anchor_x, render_distance_anchor_y = column["render_distance_anchor"]
-        buttons_top_y = column["buttons_top_y"]
+            # Whole right-side column -- brightness, global light, render
+            # distance, then the Mesh/Texture/Help/Color/Open/Rec buttons -- is
+            # laid out as one group anchored to the bottom-right corner. See
+            # _right_column_layout()'s docstring for why this is computed in
+            # one place rather than each piece anchoring itself independently.
+            column = self._right_column_layout(self.wnd.size)
+            brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
+            ambient_anchor_x, ambient_anchor_y = column["ambient_anchor"]
+            render_distance_anchor_x, render_distance_anchor_y = column["render_distance_anchor"]
+            buttons_top_y = column["buttons_top_y"]
 
-        self._render_right_column_panel(self.wnd.size, column)
-        self.light_stepper.render(self.wnd.size, brightness_anchor_x, brightness_anchor_y, label_above=True)
-        self.ambient_stepper.render(self.wnd.size, ambient_anchor_x, ambient_anchor_y, label_above=True)
-        self.render_distance_stepper.render(self.wnd.size, render_distance_anchor_x, render_distance_anchor_y,
-                                              label_above=True)
+            self._render_right_column_panel(self.wnd.size, column)
+            self.light_stepper.render(self.wnd.size, brightness_anchor_x, brightness_anchor_y, label_above=True)
+            self.ambient_stepper.render(self.wnd.size, ambient_anchor_x, ambient_anchor_y, label_above=True)
+            self.render_distance_stepper.render(self.wnd.size, render_distance_anchor_x, render_distance_anchor_y,
+                                                label_above=True)
 
-        self.minimap.render(self.wnd.size, self.camera.position, self.camera.forward(),
-                             self._bookmarks)
+            self._render_navigation_maps(self.wnd.size)
 
-        self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
-                          help_active=self.controls_overlay.is_manual_mode,
-                          color_active=self.color_picker.is_active,
-                          right_inset=column["content_right_inset"])
+            self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
+                              help_active=self.controls_overlay.is_manual_mode,
+                              color_active=self.color_picker.is_active,
+                              recording_armed=self._recording_is_armed(),
+                              right_inset=column["content_right_inset"])
 
-        # Color picker panel draws on top of the regular HUD elements (it
-        # dims the 3D view behind it, same visual language as the Help
-        # screen) but still below the controls overlay, consistent with
-        # Help also losing to a loading overlay if both somehow overlap.
-        self.color_picker.render(self.wnd.size)
+            # Color picker panel draws on top of the regular HUD elements (it
+            # dims the 3D view behind it, same visual language as the Help
+            # screen) but still below the controls overlay, consistent with
+            # Help also losing to a loading overlay if both somehow overlap.
+            self.color_picker.render(self.wnd.size)
 
-        # Controls/loading overlay draws last of all, on top of every
-        # other UI element -- while it's showing, it's meant to be the
-        # thing you're looking at (it's explaining what the other UI
-        # pieces do), so it should never be obscured by them.
-        self.controls_overlay.update(self.world.stats())
-        self.controls_overlay.render(self.wnd.size)
-        overlay_ms = (time.perf_counter() - t0) * 1000.0
+            # Controls/loading overlay draws last of all, on top of every
+            # other UI element -- while it's showing, it's meant to be the
+            # thing you're looking at (it's explaining what the other UI
+            # pieces do), so it should never be obscured by them.
+            self.controls_overlay.update(self.world.stats())
+            self.controls_overlay.render(self.wnd.size)
+            self._render_recording_status_message(self.wnd.size)
+            overlay_ms = (time.perf_counter() - t0) * 1000.0
 
         total_ms = (time.perf_counter() - frame_start) * 1000.0
 
@@ -1740,6 +2551,17 @@ class CaveViewerWindow(mglw.WindowConfig):
             "LCTRL", "RCTRL", "CONTROL", "LCONTROL", "RCONTROL",
         )
 
+    def _shift_is_down(self, modifiers: KeyModifiers) -> bool:
+        """Check if Shift modifier key is currently down."""
+        keys = self.wnd.keys
+        if hasattr(modifiers, "shift"):
+            try:
+                if bool(getattr(modifiers, "shift")):
+                    return True
+            except Exception:
+                pass
+        return self._key_is_down(keys, "LEFT_SHIFT", "RIGHT_SHIFT", "LSHIFT", "RSHIFT", "SHIFT")
+
     def _bookmark_save_modifier_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if the platform-specific bookmark save modifier is down."""
         save_modifier = self._platform_adapter.bookmark_save_modifier()
@@ -1815,6 +2637,11 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         pos = data["position"]
         self.camera.position = np.array([float(pos[0]), float(pos[1]), float(pos[2])], dtype=np.float64)
+        if not self._navigation_position_is_allowed(self.camera.position):
+            safe_position = self._nearest_navigation_guard_position(self.camera.position)
+            if safe_position is not None:
+                self.camera.position = safe_position
+                _LOG.info(f"Bookmark {slot} was outside the navigable map area; moved to nearest cave chunk.")
         self.camera.yaw = float(data["yaw"])
         pitch = float(data["pitch"])
         pitch_limit = getattr(self.camera, "_pitch_limit", None)
@@ -1907,7 +2734,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         shift_key = self._resolve_key(keys, "LEFT_SHIFT", "LSHIFT")
         speed_mult = 3.0 if shift_key in self._keys_down else 1.0
         if forward_amt or right_amt or up_amt:
-            self.camera.move(forward_amt, right_amt, up_amt, dt, speed_mult)
+            self._move_camera_guarded(forward_amt, right_amt, up_amt, dt, speed_mult)
 
         # Keyboard look fallback: arrow keys and I/J/K/L.
         # left/right or J/L = yaw, up/down or I/K = pitch.
@@ -1964,6 +2791,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
             if self._handle_bookmark_hotkey(key, modifiers):
                 return
+            if self._handle_recording_hotkey(key, modifiers):
+                return
             if self._handle_reset_view_shortcut(key, modifiers):
                 return
             self._keys_down.add(key)
@@ -1971,6 +2800,18 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._keys_down.discard(key)
 
     key_event = on_key_event
+
+    def _handle_recording_hotkey(self, key, modifiers: KeyModifiers) -> bool:
+        """Use Shift+R to cancel countdown or stop active recording."""
+        if not self._has_map_loaded or not self._recording_is_armed():
+            return False
+        record_key = self._resolve_key_optional(self.wnd.keys, "R")
+        if record_key is None or key != record_key:
+            return False
+        if not self._shift_is_down(modifiers):
+            return False
+        self._toggle_recording()
+        return True
 
     def _handle_reset_view_shortcut(self, key, modifiers: KeyModifiers) -> bool:
         """Handle CMD+0 (macOS) or CTRL+0 (Windows/Linux) to reset view."""
@@ -2153,6 +2994,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         look_button_name = self._platform_adapter.mouse_look_button_name()
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
 
+        if self._recording_hides_hud():
+            if button == self.wnd.mouse.left and sys.platform == "darwin" and self._option_look_active():
+                self._mouse_look_active = True
+                self._mouse_look_left_option_active = True
+                self._last_mouse_pos = None
+                self.wnd.mouse_exclusivity = True
+                return
+            if button == look_button:
+                self._mouse_look_active = True
+                self._last_mouse_pos = None
+                self.wnd.mouse_exclusivity = True
+            return
+
         if button == self.wnd.mouse.left:
             # macOS-friendly mouse-look: Option + left-drag avoids relying
             # on right-click behavior (which can vary across trackpads/mice).
@@ -2189,6 +3043,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
 
             if self.render_distance_stepper.on_mouse_press(x, y, render_distance_anchor_x, render_distance_anchor_y):
+                return
+
+            if self.render_mode_buttons.hit_test_record(
+                x, y, self.wnd.size, buttons_top_y, column["content_right_inset"]
+            ):
+                self._toggle_recording()
                 return
 
             if buttons_locked_for_loading:
@@ -2229,6 +3089,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
             elif clicked_button == "open":
                 self._handle_open_button_click()
+                return
+            elif clicked_button == "record":
+                self._toggle_recording()
                 return
             elif clicked_button is not None:
                 # "mesh" or "texture" -- already toggled internally by
@@ -2366,6 +3229,7 @@ def run_viewer(cache_dir: str, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
     CaveViewerWindow.cave_manifest = manifest
+    CaveViewerWindow.window_size = _desktop_relative_window_size()
 
     mglw.run_window_config(CaveViewerWindow, args=[])
 
@@ -2394,6 +3258,7 @@ def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = None
     CaveViewerWindow.cave_textures_dir = None
     CaveViewerWindow.cave_manifest = None
+    CaveViewerWindow.window_size = _desktop_relative_window_size()
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,
