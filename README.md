@@ -130,11 +130,11 @@ Why this matters: chunk size is one of the most important map settings because i
 
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
-| System RAM target (%) | — | 12 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
+| System RAM target (%) | — | 8 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
 | GPU memory target (%) | — | 70 | 1 to 80 | Target share of detected GPU memory used for loaded chunks. |
 | GPU memory override (GB) | — | empty | greater than 0 and up to 1024 | Manual GPU memory size when auto-detection is unavailable or inaccurate. |
-| Worker count | — | logical CPUs minus 3 (minimum 1) | integer, at least 1 | Number of background chunk-loading worker threads. |
-| CPU cores to keep free | — | 3 | integer, at least 0 | Reserve CPU cores instead of using them for streaming workers. |
+| Chunk-loading workers | — | 2 | integer, at least 1 | Number of background chunk-loading worker threads. |
+| Loading CPUs to keep free | — | 3 | integer, at least 0 | Reserve CPU cores instead of using them for streaming workers. |
 | Chunk uploads per frame | — | 1 | integer, 1 to 16 | Hard cap for how many ready chunks are uploaded each frame on the render thread. |
 | Upload budget (ms) | — | 3.0 | 0.5 to 50.0 ms | Soft time budget per frame for chunk uploads. |
 
@@ -144,8 +144,8 @@ Why this matters: chunk size is one of the most important map settings because i
 |---|---|---:|---|---|
 | Import chunk size (m) | — | 8 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
 | OBJ scan throttle (ms) | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Yield/throttle behavior during OBJ scanning. |
-| Import worker count | — | logical CPUs minus 2 (minimum 1) | integer, at least 1 | Number of worker threads used while writing chunk cache files. |
-| Import CPUs to keep free | — | 2 | integer, at least 0 | CPU cores reserved during cache build/import. |
+| Cache-building workers | — | 1 | integer, at least 1 | Number of worker threads used while writing chunk cache files. |
+| Cache-build CPUs to keep free | — | 2 | integer, at least 0 | CPU cores reserved during cache building. |
 
 ### Recordings
 
@@ -175,14 +175,14 @@ In Advanced Settings, try this first:
 |---|---:|
 | System RAM target (%) | 6 to 8 |
 | GPU memory target (%) | 40 to 50 |
-| Worker count | 1 or 2 |
-| CPU cores to keep free | 3 or 4 |
+| Chunk-loading workers | 1 or 2 |
+| Loading CPUs to keep free | 3 or 4 |
 | Chunk uploads per frame | 1 |
 | Upload budget (ms) | 1 to 3 |
-| Import worker count | 1 |
-| Import CPUs to keep free | 3 or 4 |
+| Cache-building workers | 1 |
+| Cache-build CPUs to keep free | 3 or 4 |
 
-If the error happens while importing a map, lower Import worker count first. Import workers can temporarily hold more geometry and texture data in memory, so one worker is the safest option on a constrained machine.
+If the error happens while importing a map, lower Cache-building workers first. Cache-building workers can temporarily hold more geometry and texture data in memory, so one worker is the safest option on a constrained machine.
 
 If the error happens while moving around an already-imported map, lower System RAM target (%) and GPU memory target (%). These settings reduce how many chunks CaveViewer tries to keep resident around the camera.
 
@@ -210,7 +210,7 @@ Try a few Import chunk size values (for example 16, 32, 64, then 100 m for very 
 If pop-in is too visible, raise Chunk uploads per frame gradually (1, then 2, then 3) and increase Upload budget carefully (for example from 3 to 5 ms).
 
 6. Balance quality and stability.
-If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Import worker count or reduce Import CPUs to keep free.
+If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Cache-building workers or reduce Cache-build CPUs to keep free.
 
 Important: there is no single best value for all maps. The best result comes from trying several import strategies and streaming settings for your map and your hardware.
 

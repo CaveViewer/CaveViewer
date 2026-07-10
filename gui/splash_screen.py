@@ -238,7 +238,7 @@ _ADVANCED_SETTING_FIELDS = (
         "key": "memory_target_percent",
         "env_var": "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
         "label": "System RAM target (%)",
-        "hint": "System RAM limit for loaded chunks.",
+        "hint": "Limits RAM used by loaded chunks only.",
         "value_type": "float",
         "min": 1.0,
         "max": 80.0,
@@ -271,8 +271,8 @@ _ADVANCED_SETTING_FIELDS = (
         "section": "streaming",
         "key": "io_workers",
         "env_var": "CAVEVIEWER_IO_WORKERS",
-        "label": "Worker count",
-        "hint": "Background chunk-loading threads.",
+        "label": "Chunk-loading workers",
+        "hint": "Threads used while viewing a cave.",
         "value_type": "int",
         "min": 1,
     },
@@ -280,8 +280,8 @@ _ADVANCED_SETTING_FIELDS = (
         "section": "streaming",
         "key": "io_reserved_cpus",
         "env_var": "CAVEVIEWER_IO_RESERVED_CPUS",
-        "label": "CPU cores to keep free",
-        "hint": "CPU cores reserved from streaming.",
+        "label": "Loading CPUs to keep free",
+        "hint": "CPUs reserved during cave viewing.",
         "value_type": "int",
         "min": 0,
     },
@@ -333,8 +333,8 @@ _ADVANCED_SETTING_FIELDS = (
         "section": "parsing",
         "key": "chunk_build_workers",
         "env_var": "CAVEVIEWER_CHUNK_BUILD_WORKERS",
-        "label": "Import worker count",
-        "hint": "Threads used while writing chunks.",
+        "label": "Cache-building workers",
+        "hint": "Threads used to build a new cache.",
         "value_type": "int",
         "min": 1,
     },
@@ -342,8 +342,8 @@ _ADVANCED_SETTING_FIELDS = (
         "section": "parsing",
         "key": "chunk_build_reserved_cpus",
         "env_var": "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
-        "label": "Import CPUs to keep free",
-        "hint": "CPU cores reserved from import.",
+        "label": "Cache-build CPUs to keep free",
+        "hint": "CPUs reserved while building a cache.",
         "value_type": "int",
         "min": 0,
     },
@@ -373,10 +373,9 @@ def _env_setting_or_default(env_var: str, default: str) -> str:
 
 
 def _advanced_setting_defaults() -> dict[str, str]:
-    logical_cpus = max(1, os.cpu_count() or 1)
     return {
         "memory_target_percent": _env_setting_or_default(
-            "CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "40"
+            "CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "8"
         ),
         "gpu_memory_target_percent": _env_setting_or_default(
             "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET", "70"
@@ -384,7 +383,7 @@ def _advanced_setting_defaults() -> dict[str, str]:
         "gpu_memory_gb": os.getenv("CAVEVIEWER_GPU_MEMORY_GB", "").strip(),
         "io_reserved_cpus": _env_setting_or_default("CAVEVIEWER_IO_RESERVED_CPUS", "3"),
         "io_workers": _env_setting_or_default(
-            "CAVEVIEWER_IO_WORKERS", str(max(1, logical_cpus - 3))
+            "CAVEVIEWER_IO_WORKERS", "2"
         ),
         "upload_chunks_per_frame": _env_setting_or_default(
             "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "1"
@@ -400,7 +399,7 @@ def _advanced_setting_defaults() -> dict[str, str]:
             "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS", "2"
         ),
         "chunk_build_workers": _env_setting_or_default(
-            "CAVEVIEWER_CHUNK_BUILD_WORKERS", str(max(1, logical_cpus - 2))
+            "CAVEVIEWER_CHUNK_BUILD_WORKERS", "1"
         ),
         "recording_dir": _default_recording_dir(),
     }

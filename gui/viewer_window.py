@@ -47,6 +47,43 @@ from caveviewer_version import APP_NAME, APP_VERSION
 
 _LOG = get_logger("CaveViewer")
 
+_DEFAULT_WINDOW_SIZE = (1600, 1000)
+_WINDOW_ASPECT_RATIO = _DEFAULT_WINDOW_SIZE[0] / _DEFAULT_WINDOW_SIZE[1]
+
+
+def _desktop_relative_window_size() -> tuple[int, int]:
+    """Return a large 16:10 window that fits comfortably on the desktop."""
+    root = None
+    try:
+        import tkinter as tk
+
+        root = tk.Tk(className=APP_NAME)
+        root.withdraw()
+        desktop_width = int(root.winfo_screenwidth())
+        desktop_height = int(root.winfo_screenheight())
+        if desktop_width <= 0 or desktop_height <= 0:
+            return _DEFAULT_WINDOW_SIZE
+
+        available_width = desktop_width * 0.90
+        available_height = desktop_height * 0.88
+        width = min(available_width, available_height * _WINDOW_ASPECT_RATIO)
+        height = width / _WINDOW_ASPECT_RATIO
+        window_size = max(1, int(round(width))), max(1, int(round(height)))
+        _LOG.info(
+            "Desktop size %dx%d; opening viewer at %dx%d.",
+            desktop_width, desktop_height, *window_size,
+        )
+        return window_size
+    except Exception as e:
+        _LOG.warning("Could not detect desktop size (%s); using %dx%d.", e, *_DEFAULT_WINDOW_SIZE)
+        return _DEFAULT_WINDOW_SIZE
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     raw = os.getenv(name, "").strip()
@@ -146,7 +183,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     # controls have comfortable vertical room on first launch.
     # Use a 16:10 baseline (more vertical space than 16:9) while keeping
     # aspect_ratio unlocked so manual resizing remains fully flexible.
-    window_size = (1600, 1000)
+    window_size = _DEFAULT_WINDOW_SIZE
     resizable = True
     # Allow disabling vsync via env var -- useful on VMs where the virtual
     # display driver can block swap_buffers() long enough to freeze the
@@ -3171,6 +3208,7 @@ def run_viewer(cache_dir: str, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
     CaveViewerWindow.cave_manifest = manifest
+    CaveViewerWindow.window_size = _desktop_relative_window_size()
 
     mglw.run_window_config(CaveViewerWindow, args=[])
 
@@ -3199,6 +3237,7 @@ def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = None
     CaveViewerWindow.cave_textures_dir = None
     CaveViewerWindow.cave_manifest = None
+    CaveViewerWindow.window_size = _desktop_relative_window_size()
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,

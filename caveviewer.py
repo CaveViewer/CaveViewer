@@ -95,11 +95,11 @@ def _console_newline() -> None:
 
 
 def _default_io_workers() -> str:
-    return str(max(1, (os.cpu_count() or 1) - 3))
+    return "2"
 
 
 def _default_chunk_build_workers() -> str:
-    return str(max(1, (os.cpu_count() or 1) - 2))
+    return "1"
 
 
 _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
@@ -110,7 +110,7 @@ _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
     "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET": "70",
     "CAVEVIEWER_IO_RESERVED_CPUS": "3",
     "CAVEVIEWER_IO_WORKERS": _default_io_workers,
-    "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "40",
+    "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "8",
     "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS": "1" if os.name == "nt" else "0",
     "CAVEVIEWER_TEXT_AA_MODE": "normal",
     "CAVEVIEWER_UI_TEXT_SCALE": "1.18",

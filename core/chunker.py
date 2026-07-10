@@ -235,20 +235,9 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
         try:
             worker_count = max(1, int(worker_count_env))
         except ValueError:
-            logical_cpus = max(1, os.cpu_count() or 1)
-            reserved = 2
-            worker_count = max(1, logical_cpus - reserved)
+            worker_count = 1
     else:
-        logical_cpus = max(1, os.cpu_count() or 1)
-        reserved_env = os.environ.get("CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS")
-        if reserved_env:
-            try:
-                reserved = max(0, int(reserved_env))
-            except ValueError:
-                reserved = 2
-        else:
-            reserved = 2
-        worker_count = max(1, logical_cpus - reserved)
+        worker_count = 1
 
     cell_items = list(per_cell_groups.items())
     total_cells = len(cell_items)

@@ -107,7 +107,7 @@ def _parse_memory_target_fraction(raw_value: str | None) -> float:
     Accepts either fraction (0.10) or percent-style (10, 25, 40).
     Returns a conservative default when unset/invalid.
     """
-    return _parse_target_fraction(raw_value, conservative_default=0.40)
+    return _parse_target_fraction(raw_value, conservative_default=0.08)
 
 
 def _parse_gpu_target_fraction(raw_value: str | None) -> float:
@@ -247,20 +247,9 @@ class StreamingWorld:
             try:
                 self._worker_pool_size = max(1, int(worker_env))
             except ValueError:
-                logical_cpus = max(1, os.cpu_count() or 1)
-                reserved = 3
-                self._worker_pool_size = max(1, logical_cpus - reserved)
+                self._worker_pool_size = 2
         else:
-            logical_cpus = max(1, os.cpu_count() or 1)
-            reserved_env = os.environ.get("CAVEVIEWER_IO_RESERVED_CPUS")
-            if reserved_env:
-                try:
-                    reserved = max(0, int(reserved_env))
-                except ValueError:
-                    reserved = 3
-            else:
-                reserved = 3
-            self._worker_pool_size = max(1, logical_cpus - reserved)
+            self._worker_pool_size = 2
         self._stop_event = threading.Event()
         self._paused_event = threading.Event()
         self._work_queue: "queue.Queue[tuple[int,int,int]]" = queue.Queue()
