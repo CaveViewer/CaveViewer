@@ -60,7 +60,6 @@ CaveViewer/
 │   └── pyinstaller/
 ├── scripts/
 ├── updates/
-├── .aiassistant/rules/
 └── .github/
     └── workflows/
 ```

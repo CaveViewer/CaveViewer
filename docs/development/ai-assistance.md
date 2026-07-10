@@ -24,8 +24,6 @@ the most convenient rule.
 
 - `/AGENTS.md`: canonical repository-wide agent entry point.
 - `/core/AGENTS.md`, `/gui/AGENTS.md`, `/tests/AGENTS.md`: scoped constraints.
-- `/.aiassistant/rules/project.md`: always-on JetBrains AI Assistant project
-  rule.
 - `/.github/copilot-instructions.md`: GitHub Copilot repository adapter.
 - `/.aiignore`: reduces accidental JetBrains AI Assistant access to generated
   output and likely secret files. It is defense in depth, not a security
