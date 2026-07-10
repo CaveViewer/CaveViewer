@@ -27,3 +27,4 @@ release_signing_private_key.pem
 run_caveviewer.sh
 .idea/
 .run
+.aiassistant/
