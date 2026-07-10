@@ -384,6 +384,26 @@ bundled_tcl_dir="$bundled_internal_dir/_tcl_data"
 bundled_tk_dir="$bundled_internal_dir/_tk_data"
 bundled_ui_font="$appdir/usr/share/caveviewer/fonts/CaveViewerUI-Regular.ttf"
 
+# PyInstaller's Tcl/Tk runtime can miss the X resource database DPI even when
+# the system Python/Tk sees it correctly.  CaveViewer uses CAVEVIEWER_TK_SCALE
+# for both Tk's point scaling and its explicitly pixel-sized splash geometry,
+# so pass the desktop's Xft DPI through explicitly when the user has not
+# supplied an override.  Tk scaling is pixels per typographic point (DPI/72),
+# hence 192 DPI becomes 2.6667 (a 2x CaveViewer display scale).
+if [ -z "${CAVEVIEWER_TK_SCALE:-}" ] && command -v xrdb >/dev/null 2>&1; then
+  desktop_xft_dpi=$(xrdb -query 2>/dev/null | awk '
+    tolower($1) == "xft.dpi:" && $2 ~ /^[0-9]+([.][0-9]+)?$/ {
+      if ($2 >= 54 && $2 <= 384) {
+        printf "%.6f", $2 / 72
+        exit
+      }
+    }
+  ')
+  if [ -n "$desktop_xft_dpi" ]; then
+    export CAVEVIEWER_TK_SCALE="$desktop_xft_dpi"
+  fi
+fi
+
 # Prefer the distro Tcl/Tk/font stack, matching the 1.0.38 Linux builds whose
 # splash text rendered correctly. The PyInstaller-bundled Tcl/Tk libraries are
 # kept available behind CAVEVIEWER_USE_BUNDLED_TK=1 for systems that truly need
@@ -425,6 +445,7 @@ fi
   echo "[CaveViewer AppRun] CAVEVIEWER_USE_BUNDLED_TK=${CAVEVIEWER_USE_BUNDLED_TK:-0}"
   echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
+  echo "[CaveViewer AppRun] CAVEVIEWER_TK_SCALE=${CAVEVIEWER_TK_SCALE:-}"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
@@ -437,6 +458,7 @@ if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] CAVEVIEWER_USE_BUNDLED_TK=${CAVEVIEWER_USE_BUNDLED_TK:-0}"
   echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
+  echo "[CaveViewer AppRun] CAVEVIEWER_TK_SCALE=${CAVEVIEWER_TK_SCALE:-}"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
