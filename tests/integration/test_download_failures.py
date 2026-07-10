@@ -93,6 +93,48 @@ def test_interrupted_update_download_removes_partial_file(tmp_path, monkeypatch)
 
 
 @pytest.mark.integration
+def test_cancelled_download_removes_partial_and_retry_does_not_resume(
+    tmp_path, monkeypatch
+):
+    destination = tmp_path / "downloads" / "sample-map.zip"
+    responses = iter([BytesResponse(b"partial"), BytesResponse(b"complete")])
+    requests = []
+
+    def open_response(request, **_kwargs):
+        requests.append(request)
+        return next(responses)
+
+    monkeypatch.setattr(update_checker.urllib.request, "urlopen", open_response)
+    cancel_requested = [False]
+
+    def request_cancellation(_downloaded, _total):
+        cancel_requested[0] = True
+
+    with pytest.raises(update_checker.DownloadCancelled):
+        update_checker.download_update(
+            "https://invalid.example/sample-map.zip",
+            None,
+            str(destination),
+            progress_cb=request_cancellation,
+            cancel_cb=lambda: cancel_requested[0],
+        )
+
+    assert not destination.exists()
+
+    cancel_requested[0] = False
+    update_checker.download_update(
+        "https://invalid.example/sample-map.zip",
+        len(b"complete"),
+        str(destination),
+        cancel_cb=lambda: cancel_requested[0],
+    )
+
+    assert destination.read_bytes() == b"complete"
+    assert len(requests) == 2
+    assert all(request.get_header("Range") is None for request in requests)
+
+
+@pytest.mark.integration
 def test_size_mismatch_removes_downloaded_file(tmp_path, monkeypatch):
     destination = tmp_path / "downloads" / "update.zip"
     monkeypatch.setattr(

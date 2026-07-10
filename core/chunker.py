@@ -28,10 +28,13 @@ at the camera's center of attention for long.
 from __future__ import annotations
 
 import concurrent.futures
+import errno
 import gc
 import json
 import os
+import shutil
 import struct
+import tempfile
 from dataclasses import dataclass
 
 import numpy as np
@@ -44,6 +47,7 @@ LEGACY_CACHE_DIRNAME = ".caveviewer_cache"
 MANIFEST_NAME = "manifest.json"
 CHUNKS_DIRNAME = "chunks"
 CROSS_SECTION_DIRNAME = "cross_section_triangles"
+IMPORT_DISK_SPACE_MULTIPLIER = 2
 
 CHUNK_SIZE_ENV_VAR = "CAVEVIEWER_CHUNK_SIZE_METERS"
 _DEFAULT_CHUNK_SIZE_FALLBACK = 8.0  # meters; preserve existing default behavior
@@ -73,6 +77,23 @@ _MAGIC = b"CVCH"  # CaveViewer CHunk
 _VERSION = 1
 _CROSS_SECTION_MAGIC = b"CVXS"
 _CROSS_SECTION_VERSION = 1
+
+
+class InsufficientDiskSpaceError(OSError):
+    """Raised before cache creation when the source disk lacks headroom."""
+
+    def __init__(self, source_path: str, required_bytes: int, available_bytes: int):
+        self.source_path = source_path
+        self.required_bytes = required_bytes
+        self.available_bytes = available_bytes
+        source_size = required_bytes // IMPORT_DISK_SPACE_MULTIPLIER
+        message = (
+            f"Not enough disk space to import {os.path.basename(source_path)!r}: "
+            f"{available_bytes:,} bytes are available, but at least "
+            f"{required_bytes:,} bytes are required (twice the "
+            f"{source_size:,}-byte map size). Free disk space and try again."
+        )
+        super().__init__(errno.ENOSPC, message)
 
 
 def configured_chunk_size() -> float:
@@ -116,6 +137,24 @@ def world_to_cell(point: np.ndarray, chunk_size: float) -> tuple[int, int, int]:
     return tuple(np.floor(point / chunk_size).astype(np.int64).tolist())
 
 
+def ensure_sufficient_disk_space(source_path: str) -> None:
+    """Require free space equal to at least twice the source map size.
+
+    Cache construction expands indexed source geometry into render-ready
+    chunks, so starting an import without this headroom is likely to fail
+    after doing substantial work. The check targets the filesystem that will
+    hold the cache: the directory containing source_path.
+    """
+    source_path = os.path.abspath(source_path)
+    source_size = os.path.getsize(source_path)
+    required_bytes = source_size * IMPORT_DISK_SPACE_MULTIPLIER
+    available_bytes = shutil.disk_usage(os.path.dirname(source_path)).free
+    if available_bytes < required_bytes:
+        raise InsufficientDiskSpaceError(
+            source_path, required_bytes, available_bytes
+        )
+
+
 def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
                  chunk_size: float = DEFAULT_CHUNK_SIZE,
                  progress_cb=None) -> str:
@@ -126,7 +165,71 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     progress_cb(stage: str, fraction: float)
     """
     obj_dir = os.path.dirname(os.path.abspath(obj_path))
+    ensure_sufficient_disk_space(obj_path)
+
     cache_dir = os.path.join(obj_dir, CACHE_DIRNAME)
+    staging_dir = tempfile.mkdtemp(prefix=f".{CACHE_DIRNAME}.tmp-", dir=obj_dir)
+    try:
+        _build_cache_in_directory(
+            obj_path,
+            mesh,
+            materials,
+            staging_dir,
+            chunk_size=chunk_size,
+            progress_cb=progress_cb,
+        )
+        _publish_cache_directory(staging_dir, cache_dir)
+    except BaseException:
+        # In particular, ENOSPC can be raised after several worker writes.
+        # Removing the private staging tree guarantees a failed build never
+        # leaves partial chunks looking like a usable cache.
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+    if progress_cb:
+        progress_cb("done", 1.0)
+
+    return cache_dir
+
+
+def _publish_cache_directory(staging_dir: str, cache_dir: str) -> None:
+    """Publish a completed staging tree while preserving an old cache on failure."""
+    backup_dir = f"{staging_dir}.previous"
+    moved_existing_cache = False
+
+    try:
+        if os.path.lexists(cache_dir):
+            os.replace(cache_dir, backup_dir)
+            moved_existing_cache = True
+        os.replace(staging_dir, cache_dir)
+    except BaseException:
+        if moved_existing_cache:
+            try:
+                os.replace(backup_dir, cache_dir)
+            except OSError as restore_error:
+                _LOG.error(
+                    "Could not restore previous cache %s after publish failure: %s",
+                    cache_dir,
+                    restore_error,
+                )
+        raise
+
+    if moved_existing_cache:
+        try:
+            shutil.rmtree(backup_dir)
+        except OSError as cleanup_error:
+            _LOG.warning(
+                "Could not remove replaced cache backup %s: %s",
+                backup_dir,
+                cleanup_error,
+            )
+
+
+def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
+                              cache_dir: str,
+                              chunk_size: float = DEFAULT_CHUNK_SIZE,
+                              progress_cb=None) -> str:
+    """Build all cache artifacts inside an unpublished staging directory."""
     chunks_dir = os.path.join(cache_dir, CHUNKS_DIRNAME)
     cross_section_dir = os.path.join(cache_dir, CROSS_SECTION_DIRNAME)
     os.makedirs(chunks_dir, exist_ok=True)
@@ -251,17 +354,54 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
         return cell_str, bounds_min, bounds_max, used_materials
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = [executor.submit(_write_one_cell, cell_coord, groups) for cell_coord, groups in cell_items]
-        for future in concurrent.futures.as_completed(futures):
-            cell_str, bounds_min, bounds_max, used_materials = future.result()
-            manifest_chunks[cell_str] = {
-                "materials": used_materials,
-                "bounds_min": bounds_min.tolist(),
-                "bounds_max": bounds_max.tolist(),
-            }
-            completed_cells += 1
-            if progress_cb and (completed_cells % 25 == 0 or completed_cells == total_cells):
-                progress_cb("writing chunk files", 0.65 + 0.33 * (completed_cells / max(total_cells, 1)))
+        cell_iterator = iter(cell_items)
+        active_futures = set()
+
+        def _submit_next_cell() -> bool:
+            try:
+                cell_coord, groups = next(cell_iterator)
+            except StopIteration:
+                return False
+            active_futures.add(executor.submit(_write_one_cell, cell_coord, groups))
+            return True
+
+        for _ in range(min(worker_count, total_cells)):
+            _submit_next_cell()
+
+        try:
+            while active_futures:
+                done_futures, active_futures = concurrent.futures.wait(
+                    active_futures,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+
+                # Resolve every completion in this batch before submitting
+                # replacements. If any write failed, no additional cell is
+                # allowed to start after that failure became observable.
+                completed_results = [future.result() for future in done_futures]
+                for cell_str, bounds_min, bounds_max, used_materials in completed_results:
+                    manifest_chunks[cell_str] = {
+                        "materials": used_materials,
+                        "bounds_min": bounds_min.tolist(),
+                        "bounds_max": bounds_max.tolist(),
+                    }
+                    completed_cells += 1
+                    if progress_cb and (
+                        completed_cells % 25 == 0 or completed_cells == total_cells
+                    ):
+                        progress_cb(
+                            "writing chunk files",
+                            0.65 + 0.33 * (completed_cells / max(total_cells, 1)),
+                        )
+
+                for _ in completed_results:
+                    _submit_next_cell()
+        except BaseException:
+            # Do not make a full-disk failure churn through every cell that
+            # was queued before the first failed write surfaced.
+            for pending_future in active_futures:
+                pending_future.cancel()
+            raise
 
     if progress_cb:
         progress_cb("writing manifest", 0.98)
@@ -305,9 +445,6 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
     }
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
-
-    if progress_cb:
-        progress_cb("done", 1.0)
 
     return cache_dir
 

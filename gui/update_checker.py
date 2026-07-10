@@ -115,6 +115,10 @@ _ALLOWED_PACKAGE_KINDS_BY_CHANNEL = {
 }
 
 
+class DownloadCancelled(Exception):
+    """Raised when a caller cooperatively cancels an active download."""
+
+
 @dataclass
 class UpdateCheckResult:
     update_available: bool
@@ -405,7 +409,7 @@ def _verify_manifest_signature_required(manifest_bytes: bytes) -> bool:
 
 def download_update(download_url: str, expected_size_bytes, dest_path: str,
                      expected_sha256: Optional[str] = None,
-                     progress_cb=None) -> None:
+                     progress_cb=None, cancel_cb=None) -> None:
     """
     Downloads the release payload to dest_path. Raises on any failure
     (network error, size mismatch) -- the caller is expected to catch
@@ -415,6 +419,11 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
 
     progress_cb(downloaded_bytes, total_bytes), if given, is called
     periodically during the download for a progress indicator.
+
+    cancel_cb(), if given, is checked between network reads. When it returns
+    true, DownloadCancelled is raised and any partial destination is removed.
+    A later call always starts from byte zero; partial downloads are never
+    retained for resuming.
     """
     request = urllib.request.Request(
         download_url,
@@ -441,23 +450,38 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
                 cleanup_exc,
             )
 
+    def raise_if_cancelled() -> None:
+        if cancel_cb and cancel_cb():
+            raise DownloadCancelled("Download cancelled")
+
     try:
+        raise_if_cancelled()
         with urllib.request.urlopen(request, timeout=30, context=make_ssl_context()) as response:
             total = expected_size_bytes or int(response.headers.get("Content-Length", 0)) or None
             downloaded = 0
             chunk_size = 65536
 
+            raise_if_cancelled()
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             with open(dest_path, "wb") as f:
                 download_started = True
                 while True:
+                    raise_if_cancelled()
                     chunk = response.read(chunk_size)
                     if not chunk:
+                        raise_if_cancelled()
                         break
+                    raise_if_cancelled()
                     f.write(chunk)
                     downloaded += len(chunk)
                     if progress_cb:
                         progress_cb(downloaded, total or downloaded)
+                    raise_if_cancelled()
+            raise_if_cancelled()
+    except DownloadCancelled:
+        remove_partial_download()
+        _LOG.info("Download cancelled; removed partial payload: %s", dest_path)
+        raise
     except urllib.error.HTTPError as e:
         remove_partial_download()
         _LOG.warning("Update payload download failed with HTTP %s: %s", e.code, download_url)

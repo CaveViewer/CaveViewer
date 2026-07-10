@@ -44,7 +44,7 @@ jobs:
           --cov=gui.sample_maps
           --cov=gui.update_checker
           --cov-branch
-          --cov-fail-under=45
+          --cov-fail-under=60
           --cov-report=term-missing
           --cov-report=xml
 
@@ -52,7 +52,13 @@ jobs:
         run: >-
           python -m coverage report
           --include=gui/sample_maps.py
-          --fail-under=50
+          --fail-under=85
+
+      - name: Enforce chunker coverage floor
+        run: >-
+          python -m coverage report
+          --include=core/chunker.py
+          --fail-under=60
 
       - name: Enforce update-checker coverage floor
         run: >-

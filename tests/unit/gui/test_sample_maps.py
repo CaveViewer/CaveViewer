@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -155,7 +156,8 @@ def test_successful_sample_download_extracts_expected_layout(
     destination.mkdir(parents=True)
     (destination / "obsolete.txt").write_text("old", encoding="utf-8")
 
-    def create_zip(_url, _size, zip_path, progress_cb=None):
+    def create_zip(_url, _size, zip_path, progress_cb=None, cancel_cb=None):
+        assert cancel_cb is None or not cancel_cb()
         prefix = "archive-root/" if nested else ""
         with zipfile.ZipFile(zip_path, "w") as archive:
             archive.writestr(prefix + "map.obj", "new mesh")
@@ -174,3 +176,90 @@ def test_successful_sample_download_extracts_expected_layout(
     assert (destination / "map.obj").read_text(encoding="utf-8") == "new mesh"
     assert not (destination / "obsolete.txt").exists()
     assert progress == [(1, 1)]
+
+
+def test_cancelled_sample_download_removes_temporary_files_and_preserves_install(
+    tmp_path, monkeypatch
+):
+    sample = sample_maps.SampleMapInfo(
+        "Test Cave", "test.zip", "https://example.invalid/test.zip", None
+    )
+    destination = Path(sample_maps.local_sample_map_path(str(tmp_path), sample))
+    destination.mkdir(parents=True)
+    marker = destination / "map.obj"
+    marker.write_text("existing map", encoding="utf-8")
+    temp_root = tmp_path / "temporary-downloads"
+    temp_root.mkdir()
+    monkeypatch.setattr(sample_maps.tempfile, "tempdir", str(temp_root))
+    cancel_requested = [False]
+    partial_paths = []
+
+    def cancel_partial_download(
+        _url, _size, zip_path, progress_cb=None, cancel_cb=None
+    ):
+        partial_path = Path(zip_path)
+        partial_path.write_bytes(b"partial map archive")
+        partial_paths.append(partial_path)
+        cancel_requested[0] = True
+        assert cancel_cb is not None and cancel_cb()
+        raise sample_maps.DownloadCancelled("cancelled")
+
+    monkeypatch.setattr(sample_maps, "download_update", cancel_partial_download)
+
+    with pytest.raises(sample_maps.DownloadCancelled):
+        sample_maps.download_and_extract_sample_map(
+            str(tmp_path),
+            sample,
+            cancel_cb=lambda: cancel_requested[0],
+        )
+
+    assert marker.read_text(encoding="utf-8") == "existing map"
+    assert partial_paths and not partial_paths[0].exists()
+    assert list(temp_root.iterdir()) == []
+
+
+def test_retry_after_cancellation_starts_a_fresh_sample_download(
+    tmp_path, monkeypatch
+):
+    sample = sample_maps.SampleMapInfo(
+        "Test Cave", "test.zip", "https://example.invalid/test.zip", None
+    )
+    cancel_requested = [False]
+    first_zip_path = [None]
+
+    def cancel_first_download(
+        _url, _size, zip_path, progress_cb=None, cancel_cb=None
+    ):
+        first_zip_path[0] = Path(zip_path)
+        first_zip_path[0].write_bytes(b"partial")
+        cancel_requested[0] = True
+        raise sample_maps.DownloadCancelled("cancelled")
+
+    monkeypatch.setattr(sample_maps, "download_update", cancel_first_download)
+    with pytest.raises(sample_maps.DownloadCancelled):
+        sample_maps.download_and_extract_sample_map(
+            str(tmp_path),
+            sample,
+            cancel_cb=lambda: cancel_requested[0],
+        )
+
+    cancel_requested[0] = False
+
+    def complete_fresh_download(
+        _url, _size, zip_path, progress_cb=None, cancel_cb=None
+    ):
+        assert Path(zip_path) != first_zip_path[0]
+        assert first_zip_path[0] is not None and not first_zip_path[0].exists()
+        assert cancel_cb is not None and not cancel_cb()
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr("map.obj", "complete map")
+            archive.writestr("map.mtl", "newmtl rock")
+
+    monkeypatch.setattr(sample_maps, "download_update", complete_fresh_download)
+    result = sample_maps.download_and_extract_sample_map(
+        str(tmp_path),
+        sample,
+        cancel_cb=lambda: cancel_requested[0],
+    )
+
+    assert Path(result, "map.obj").read_text(encoding="utf-8") == "complete map"

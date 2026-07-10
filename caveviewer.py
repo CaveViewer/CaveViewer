@@ -295,6 +295,11 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         _LOG.info(f"Found cache in: {cache_dir}")
         return cache_dir
 
+    # Reject imports that are unlikely to fit before parsing a potentially
+    # multi-gigabyte source. build_cache() repeats this check as a safety net
+    # for direct callers and for free-space changes during parsing.
+    chunker.ensure_sufficient_disk_space(obj_path)
+
     _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
@@ -396,6 +401,8 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
                   f"folder next to your {os.path.basename(source_path)} if you want to force a rebuild).")
         _LOG.info(f"Found cache in: {cache_dir}")
         return cache_dir
+
+    chunker.ensure_sufficient_disk_space(source_path)
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
