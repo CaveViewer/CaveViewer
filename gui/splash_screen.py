@@ -137,9 +137,17 @@ _SECONDARY_LINK_ROW_TOP_GAP = 40 if _LINUX_SPLASH_LAYOUT else (30 if _WINDOWS_SP
 _ADVANCED_DIALOG_TWO_COLUMN = True
 _ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
 _ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
+_ADVANCED_DIALOG_NUMERIC_ENTRY_WIDTH = 8
 _ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
 _ADVANCED_DIALOG_SECTION_GAP = 44 if sys.platform == "win32" else 18
-_ADVANCED_DIALOG_MIN_WIDTH = 1320 if sys.platform == "win32" else 0
+# Linux/Tk's requested width is noticeably tighter than the macOS rendering,
+# especially with two setting columns. Give it some horizontal breathing room;
+# the geometry code still clamps this to the available screen width.
+_ADVANCED_DIALOG_MIN_WIDTH = (
+    1320 if sys.platform == "win32" else
+    1040 if sys.platform.startswith("linux") else
+    0
+)
 _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
     "BottomLine Projects Scientific Dive Team.\n"
@@ -262,6 +270,7 @@ _ADVANCED_SETTING_FIELDS = (
         "label": "GPU memory override (GB)",
         "hint": "Optional GPU memory override.",
         "value_type": "float",
+        "optional": True,
         "min": 0.0,
         "min_exclusive": True,
         "max": 1024.0,
@@ -479,7 +488,9 @@ def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | Non
         key = field["key"]
         text = normalized[key]
         if not text:
-            continue
+            if field.get("optional", False):
+                continue
+            return False, f"{field['label']} is required.", normalized, key
 
         label = field["label"]
         value_type = field.get("value_type")
@@ -1050,6 +1061,24 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         dialog.resizable(False, False)
         dialog.transient(root)
 
+        # Keep Fedora/Linux DPI behavior from making this dense, two-column
+        # form feel oversized. These fonts are local to Advanced Settings;
+        # the splash screen and other Tk dialogs retain their existing fonts.
+        if _LINUX_SPLASH_LAYOUT:
+            advanced_section_font = (_UI_FONT_FAMILY, 10)
+            advanced_body_font = (_UI_FONT_FAMILY, 10)
+            advanced_small_font = (_UI_FONT_FAMILY, 9)
+            advanced_field_gap = 14
+            advanced_entry_pad_y = 6
+            advanced_section_pad_y = 15
+        else:
+            advanced_section_font = _VERSION_FONT
+            advanced_body_font = _BODY_FONT
+            advanced_small_font = _SMALL_FONT
+            advanced_field_gap = 9
+            advanced_entry_pad_y = 4
+            advanced_section_pad_y = 12
+
         body = tk.Frame(dialog, bg=_BG_COLOR, padx=_ADVANCED_DIALOG_BODY_PAD_X, pady=18)
         body.pack(fill="both", expand=True)
 
@@ -1072,12 +1101,35 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
         numeric_entry_validator = dialog.register(_is_numeric_entry_candidate)
 
+        def _compact_directory_path(path: str, max_chars: int = 42) -> str:
+            """Keep a saved directory recognizable without showing a long absolute path."""
+            expanded = os.path.abspath(os.path.expanduser(path.strip() or "~"))
+            home = os.path.abspath(os.path.expanduser("~"))
+            if expanded == home:
+                display = "~"
+            elif expanded.startswith(home + os.sep):
+                display = "~" + expanded[len(home):]
+            else:
+                display = expanded
+            if len(display) <= max_chars:
+                return display
+
+            drive, tail = os.path.splitdrive(display)
+            parts = [part for part in tail.split(os.sep) if part]
+            if len(parts) >= 2:
+                suffix = os.sep.join(parts[-2:])
+                prefix = "~" if display.startswith("~" + os.sep) else (drive + os.sep if drive else os.sep)
+                compact = prefix + "…" + os.sep + suffix
+                if len(compact) <= max_chars:
+                    return compact
+            return "…" + display[-(max_chars - 1):]
+
         def _clear_field_error(key: str) -> None:
             entry = field_entries.get(key)
             if entry is not None:
                 entry.config(highlightbackground="#30303a", highlightcolor="#5d6f8a")
             if error_label.winfo_exists():
-                error_label.config(text="")
+                _set_advanced_error("")
 
         section_row = tk.Frame(body, bg=_BG_COLOR)
         section_row.pack(fill="both", expand=True, pady=(0, 10))
@@ -1087,7 +1139,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             label = tk.Label(
                 parent,
                 text=text,
-                font=_SMALL_FONT,
+                font=advanced_small_font,
                 bg=bg,
                 fg=fg,
                 padx=padx,
@@ -1115,7 +1167,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 parent,
                 bg=_BG_COLOR,
                 padx=14,
-                pady=12,
+                pady=advanced_section_pad_y,
                 highlightthickness=1,
                 highlightbackground=_BORDER_COLOR,
                 highlightcolor=_BORDER_COLOR,
@@ -1125,7 +1177,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             tk.Label(
                 section,
                 text=title,
-                font=_VERSION_FONT,
+                font=advanced_section_font,
                 fg=_TITLE_COLOR,
                 bg=_BG_COLOR,
             ).pack(anchor="w", pady=(0, 10))
@@ -1133,12 +1185,12 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             fields = [field for field in _ADVANCED_SETTING_FIELDS if field.get("section") == section_key]
             for field in fields:
                 row = tk.Frame(section, bg=_BG_COLOR)
-                row.pack(fill="x", pady=(0, 9))
+                row.pack(fill="x", pady=(0, advanced_field_gap))
 
                 tk.Label(
                     row,
                     text=field["label"],
-                    font=_BODY_FONT,
+                    font=advanced_body_font,
                     fg=_SUBTITLE_COLOR,
                     bg=_BG_COLOR,
                     anchor="w",
@@ -1151,17 +1203,38 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 var = tk.StringVar(master=dialog, value=effective_settings[field["key"]])
                 field_vars[field["key"]] = var
                 value_type = field.get("value_type", "")
+                entry_width = (
+                    _ADVANCED_DIALOG_NUMERIC_ENTRY_WIDTH
+                    if value_type in {"int", "float"}
+                    else _ADVANCED_DIALOG_ENTRY_WIDTH
+                )
+                compact_path = field["key"] == "recording_dir"
+                entry_var = var
+                if compact_path:
+                    entry_var = tk.StringVar(master=dialog, value=_compact_directory_path(var.get()))
+                    var.trace_add(
+                        "write",
+                        lambda *_args, source=var, display=entry_var: display.set(
+                            _compact_directory_path(source.get())
+                        ),
+                    )
                 entry_parent = row
-                entry_pack_options = {"anchor": "w", "pady": (4, 4)}
+                entry_pack_options = {
+                    "anchor": "w",
+                    "pady": (advanced_entry_pad_y, advanced_entry_pad_y),
+                }
                 if value_type in {"path", "path_create"}:
                     entry_parent = tk.Frame(row, bg=_BG_COLOR)
-                    entry_parent.pack(fill="x", pady=(4, 4))
+                    entry_parent.pack(
+                        fill="x",
+                        pady=(advanced_entry_pad_y, advanced_entry_pad_y),
+                    )
                     entry_pack_options = {"side": "left", "fill": "x", "expand": True}
 
                 entry = tk.Entry(
                     entry_parent,
-                    textvariable=var,
-                    font=_BODY_FONT,
+                    textvariable=entry_var,
+                    font=advanced_body_font,
                     bg="#1c1c24",
                     fg=_SUBTITLE_COLOR,
                     insertbackground=_SUBTITLE_COLOR,
@@ -1169,8 +1242,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     highlightthickness=1,
                     highlightbackground="#30303a",
                     highlightcolor="#5d6f8a",
-                    width=_ADVANCED_DIALOG_ENTRY_WIDTH,
-                    validate="key",
+                    width=entry_width,
+                    state="readonly" if compact_path else "normal",
+                    readonlybackground="#1c1c24",
+                    validate="none" if compact_path else "key",
                     validatecommand=(numeric_entry_validator, value_type, "%P"),
                 )
                 field_entries[field["key"]] = entry
@@ -1200,39 +1275,80 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     )
                     browse_button.pack(side="left", padx=(8, 0))
 
-                tk.Label(
+                single_line_hint = field["key"] == "recording_dir"
+                hint_label = tk.Label(
                     row,
                     text=field["hint"],
-                    font=_SMALL_FONT,
+                    font=advanced_small_font,
                     fg=_INSTRUCTION_COLOR,
                     bg=_BG_COLOR,
                     justify="left",
-                    wraplength=_ADVANCED_DIALOG_WRAP,
-                ).pack(anchor="w")
+                    anchor="w",
+                    wraplength=0 if single_line_hint else _ADVANCED_DIALOG_WRAP,
+                )
+                hint_label.pack(anchor="w", fill="x")
+
+                if sys.platform.startswith("linux") and not single_line_hint:
+                    # Tk does not expand a label's fixed wraplength when its
+                    # parent column grows. Use the real row width so hints fill
+                    # the available line before wrapping onto the next one.
+                    def resize_hint(event, label=hint_label):
+                        wraplength = max(200, event.width - 4)
+                        if int(label.cget("wraplength")) != wraplength:
+                            label.configure(wraplength=wraplength)
+
+                    row.bind("<Configure>", resize_hint, add="+")
 
         for column_index, sections in enumerate(_ADVANCED_SETTING_COLUMNS):
             column = tk.Frame(section_row, bg=_BG_COLOR)
             if _ADVANCED_DIALOG_TWO_COLUMN:
-                pad_right = _ADVANCED_DIALOG_SECTION_GAP if column_index < len(_ADVANCED_SETTING_COLUMNS) - 1 else 0
-                column.pack(side="left", fill="both", expand=True, padx=(0, pad_right))
+                half_gap = _ADVANCED_DIALOG_SECTION_GAP // 2
+                pad_left = half_gap if column_index > 0 else 0
+                pad_right = half_gap if column_index < len(_ADVANCED_SETTING_COLUMNS) - 1 else 0
+                section_row.grid_columnconfigure(
+                    column_index,
+                    weight=1,
+                    uniform="advanced_settings_column",
+                )
+                column.grid(
+                    row=0,
+                    column=column_index,
+                    sticky="nsew",
+                    padx=(pad_left, pad_right),
+                )
             else:
                 column.pack(fill="x")
             for section_key, section_title in sections:
                 render_section(column, section_title, section_key)
 
+        button_row = tk.Frame(body, bg=_BG_COLOR)
+        error_parent = button_row if _LINUX_SPLASH_LAYOUT else body
         error_label = tk.Label(
-            body,
+            error_parent,
             text="",
-            font=_SMALL_FONT,
+            font=advanced_small_font,
             fg="#ff9b90",
             bg=_BG_COLOR,
             justify="left",
-            wraplength=_ADVANCED_DIALOG_WRAP,
+            anchor="w",
+            wraplength=620 if _LINUX_SPLASH_LAYOUT else _ADVANCED_DIALOG_WRAP,
         )
-        error_label.pack(anchor="w", pady=(4, 10))
+        if _LINUX_SPLASH_LAYOUT:
+            button_row.pack(fill="x")
+            error_label.pack(side="left", fill="x", expand=True, padx=(0, 12))
+        else:
+            error_label.pack(anchor="w", pady=(4, 10))
+            button_row.pack(fill="x")
 
-        button_row = tk.Frame(body, bg=_BG_COLOR)
-        button_row.pack(fill="x")
+        def _advanced_natural_height() -> int:
+            """Natural client height without space assigned by pack expansion."""
+            height = 36  # body's 18px top and bottom padding
+            height += section_row.winfo_reqheight() + 10  # section-row bottom pad
+            height += button_row.winfo_reqheight()
+            return height
+
+        def _set_advanced_error(message: str) -> None:
+            error_label.config(text=message)
 
         def on_cancel():
             dialog.destroy()
@@ -1243,7 +1359,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             proposed = {key: var.get() for key, var in field_vars.items()}
             ok, message, normalized, error_key = _validate_advanced_settings(proposed)
             if not ok:
-                error_label.config(text=message or "Invalid advanced settings.")
+                _set_advanced_error(message or "Invalid advanced settings.")
                 if error_key and error_key in field_entries:
                     bad_entry = field_entries[error_key]
                     bad_entry.config(highlightbackground="#ff6b6b", highlightcolor="#ff6b6b")
@@ -1261,7 +1377,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 label = tk.Label(
                     parent,
                     text=text,
-                    font=_SMALL_FONT,
+                    font=advanced_small_font,
                     bg=bg,
                     fg=fg,
                     padx=padx,
@@ -1309,7 +1425,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 button_row,
                 text="Cancel",
                 command=on_cancel,
-                font=_SMALL_FONT,
+                font=advanced_small_font,
                 bg="#2a2a33",
                 fg=_SUBTITLE_COLOR,
                 activebackground="#33333f",
@@ -1328,7 +1444,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 button_row,
                 text="Apply",
                 command=on_apply,
-                font=_SMALL_FONT,
+                font=advanced_small_font,
                 bg=_BUTTON_BG,
                 fg=_BUTTON_FG,
                 activebackground=_BUTTON_HOVER_BG,
@@ -1373,6 +1489,20 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             clamped_y = max(8, min(desired_y, screen_h - 328))
             dialog_h = min(dialog_h, max(320, screen_h - clamped_y - 8))
             dialog.geometry(f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}")
+            if _LINUX_SPLASH_LAYOUT:
+                # Applying the wider geometry lets responsive hint labels use
+                # longer lines. Measure again after those Configure callbacks
+                # run, otherwise the old narrow/two-line measurement leaves a
+                # large blank strip above the action buttons.
+                for _ in range(2):
+                    dialog.update_idletasks()
+                fitted_height = min(
+                    _advanced_natural_height(),
+                    max(320, screen_h - clamped_y - 8),
+                )
+                dialog.geometry(
+                    f"{dialog_w}x{fitted_height}+{clamped_x}+{clamped_y}"
+                )
             geometry_applied = True
         except Exception:
             pass
