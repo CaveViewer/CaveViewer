@@ -583,7 +583,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Build the first longitudinal view before the first world.update()
         # queues any streaming work. This keeps profile availability
         # independent of the configured number of chunk uploads per frame.
-        self.cross_section_map.prime(self.camera.position, self.camera.forward())
+        self.cross_section_map.prime(
+            self.camera.position,
+            self.camera.forward(),
+            self.wnd.size,
+        )
 
         # One-time texture diagnostic: print material/texture summary to
         # console so atlas feasibility can be judged without guessing.

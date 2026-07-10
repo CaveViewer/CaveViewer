@@ -32,6 +32,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from core import chunker
+from core.worker_config import resolve_worker_count
 from core.chunker import ChunkData
 from core.logging_utils import get_logger
 
@@ -351,14 +352,12 @@ class StreamingWorld:
         ready_queue_capacity = max(16, min(256, self.config.max_loaded_chunks))
         self._ready_queue: "queue.Queue[ChunkData]" = queue.Queue(maxsize=ready_queue_capacity)
         self._lock = threading.Lock()
-        worker_env = os.environ.get("CAVEVIEWER_IO_WORKERS")
-        if worker_env:
-            try:
-                self._worker_pool_size = max(1, int(worker_env))
-            except ValueError:
-                self._worker_pool_size = 2
-        else:
-            self._worker_pool_size = 2
+        self._worker_pool_size = resolve_worker_count(
+            os.environ.get("CAVEVIEWER_IO_WORKERS"),
+            os.environ.get("CAVEVIEWER_IO_RESERVED_CPUS"),
+            default_workers=2,
+            default_reserved_cpus=3,
+        )
         self._stop_event = threading.Event()
         self._paused_event = threading.Event()
         self._work_queue: "queue.Queue[tuple[int,int,int]]" = queue.Queue()

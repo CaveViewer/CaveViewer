@@ -31,7 +31,6 @@ without extra modal pop-ups.
 
 from __future__ import annotations
 
-import glob
 import os
 import subprocess
 import sys
@@ -40,18 +39,23 @@ import threading
 from caveviewer_version import APP_NAME, APP_VERSION
 from core.logging_utils import get_logger
 from gui.advanced_settings import (
-    ADVANCED_SETTING_COLUMNS as _ADVANCED_SETTING_COLUMNS,
-    ADVANCED_SETTING_FIELDS as _ADVANCED_SETTING_FIELDS,
-    advanced_setting_placeholder_text as _advanced_setting_placeholder_text,
     apply_advanced_settings_to_env as _apply_advanced_settings_to_env,
-    effective_advanced_settings as _effective_advanced_settings,
     load_advanced_settings as _load_advanced_settings,
-    save_advanced_settings as _save_advanced_settings,
-    validate_advanced_settings as _validate_advanced_settings,
 )
-from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness, tk_display_scale
+from gui.advanced_settings_dialog import (
+    show_advanced_settings_dialog as _show_advanced_settings_dialog,
+)
+from gui.dpi_utils import (
+    apply_tk_scaling,
+    configure_process_dpi_awareness,
+    tk_display_scale,
+)
+from gui.map_selection import (
+    validate_selected_map_folder as _validate_selected_map_folder,
+)
 from gui.platform import get_splash_platform_adapter
 from gui.preferences import migrate_preference_file
+from gui.tk_theme import DARK_THEME
 
 
 # Resolve asset paths for both dev and PyInstaller bundle environments
@@ -110,16 +114,16 @@ _LAST_BROWSE_PATH_FILE = migrate_preference_file("last_browse_path", ".caveviewe
 _EXAMPLE_MAPS_URL = None
 _LOG = get_logger("CaveViewer")
 
-_BG_COLOR = "#0a0a0d"           # near-black, matches the in-app overlay backgrounds
-_PANEL_COLOR = "#12121a"        # slightly lighter panel background
-_TITLE_COLOR = "#f2d98c"        # amber/gold, matches the in-app title text color
-_SUBTITLE_COLOR = "#cccdd6"     # light gray, matches in-app subtitle/body text
-_INSTRUCTION_COLOR = "#9a9aa6"  # dimmer gray, matches in-app secondary/note text
-_BUTTON_BG = "#e5a11f"          # calmer amber derived from the splash logo gold
-_BUTTON_HOVER_BG = "#f0b13a"    # brighter hover state in the same logo-gold family
-_BUTTON_BORDER_COLOR = "#9c6f18" # subtle darker amber edge for action buttons
-_BUTTON_FG = "#1a1408"          # dark text on the amber button, matches in-app active-button text
-_BORDER_COLOR = "#5c5c6e"
+_BG_COLOR = DARK_THEME.background
+_PANEL_COLOR = DARK_THEME.panel
+_TITLE_COLOR = DARK_THEME.title
+_SUBTITLE_COLOR = DARK_THEME.body_text
+_INSTRUCTION_COLOR = DARK_THEME.secondary_text
+_BUTTON_BG = DARK_THEME.primary_button
+_BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
+_BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
+_BUTTON_FG = DARK_THEME.primary_button_text
+_BORDER_COLOR = DARK_THEME.border
 _PLATFORM_ADAPTER = get_splash_platform_adapter()
 _WINDOWS_SPLASH_LAYOUT = sys.platform == "win32"
 _LINUX_SPLASH_LAYOUT = sys.platform.startswith("linux")
@@ -141,21 +145,6 @@ _TITLE_TO_ACTION_GAP = 72 if _LINUX_SPLASH_LAYOUT else (58 if _WINDOWS_SPLASH_LA
 _BROWSE_BUTTON_BOTTOM_GAP = 42 if _LINUX_SPLASH_LAYOUT else (32 if _WINDOWS_SPLASH_LAYOUT else 16)
 _INSTRUCTION_BOTTOM_GAP = 30 if _LINUX_SPLASH_LAYOUT else (20 if _WINDOWS_SPLASH_LAYOUT else 0)
 _SECONDARY_LINK_ROW_TOP_GAP = 40 if _LINUX_SPLASH_LAYOUT else (30 if _WINDOWS_SPLASH_LAYOUT else 16)
-_ADVANCED_DIALOG_TWO_COLUMN = True
-_ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
-_ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
-_ADVANCED_DIALOG_NUMERIC_ENTRY_WIDTH = 24
-_ADVANCED_DIALOG_PLACEHOLDER_COLOR = "#747481"
-_ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
-_ADVANCED_DIALOG_SECTION_GAP = 44 if sys.platform == "win32" else 18
-# Linux/Tk's requested width is noticeably tighter than the macOS rendering,
-# especially with two setting columns. Give it some horizontal breathing room;
-# the geometry code still clamps this to the available screen width.
-_ADVANCED_DIALOG_MIN_WIDTH = (
-    1320 if sys.platform == "win32" else
-    1040 if sys.platform.startswith("linux") else
-    0
-)
 _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
     "BottomLine Projects Scientific Dive Team.\n"
@@ -249,74 +238,6 @@ def _set_tk_window_icon(window) -> None:
         _LOG.warning(f"could not set application window icon ({e}); continuing without it.")
 
 
-def _has_precompiled_cache(folder: str) -> bool:
-    try:
-        from core import chunker as _ck
-    except Exception:
-        return False
-
-    # Support both layouts used by caveviewer.py:
-    # 1) <map folder>/_cache/manifest.json
-    # 2) <map folder>/.caveviewer_cache/manifest.json (legacy)
-    # 3) <selected folder>/manifest.json (folder is cache root)
-    candidates = [
-        os.path.join(folder, _ck.CACHE_DIRNAME),
-        os.path.join(folder, _ck.LEGACY_CACHE_DIRNAME),
-        folder,
-    ]
-    for candidate in candidates:
-        if os.path.exists(os.path.join(candidate, _ck.MANIFEST_NAME)):
-            return True
-    return False
-
-
-def _validate_selected_map_folder(folder: str) -> tuple[bool, str]:
-    if not folder or not os.path.isdir(folder):
-        return False, "The selected path is not a valid folder."
-
-    glb_candidates = glob.glob(os.path.join(folder, "*.glb"))
-    if glb_candidates:
-        return True, ""
-
-    obj_candidates = glob.glob(os.path.join(folder, "*.obj"))
-    if obj_candidates:
-        obj_path = obj_candidates[0]
-        mtl_name = None
-        try:
-            with open(obj_path, "r", errors="replace") as f:
-                for line in f:
-                    if line.startswith("mtllib "):
-                        mtl_name = line.split(maxsplit=1)[1].strip()
-                        break
-        except Exception:
-            # If the OBJ can't be inspected, continue with fallback checks.
-            pass
-
-        if mtl_name and os.path.exists(os.path.join(folder, mtl_name)):
-            return True, ""
-
-        if glob.glob(os.path.join(folder, "*.mtl")):
-            return True, ""
-
-        if _has_precompiled_cache(folder):
-            return True, ""
-
-        return False, (
-            "Found an .obj file, but no matching .mtl file in that folder.\n\n"
-            "Select a folder with a .glb file, or with both .obj and .mtl files, "
-            "or a folder that already contains a CaveViewer pre-compiled cache."
-        )
-
-    if _has_precompiled_cache(folder):
-        return True, ""
-
-    return False, (
-        "No supported map files were found in that folder.\n\n"
-        "Select a folder with a .glb file, or with both .obj and .mtl files, "
-        "or a folder that already contains a CaveViewer pre-compiled cache."
-    )
-
-
 def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION) -> str | None:
     """
     Shows the launch splash screen and blocks until the person either
@@ -328,8 +249,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     from tkinter import filedialog
 
     selected_folder: list[str | None] = [None]
-    advanced_settings = _effective_advanced_settings(_load_advanced_settings())
-    _apply_advanced_settings_to_env(advanced_settings)
+    _apply_advanced_settings_to_env(_load_advanced_settings())
 
     configure_process_dpi_awareness()
     root = tk.Tk(className=APP_NAME)
@@ -448,7 +368,9 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                             cursor="hand2" if clickable else "arrow")
 
     def _set_progress_bar_visible(visible: bool):
-        update_progress_canvas.config(bg="#1c1c24" if visible else _BG_COLOR)
+        update_progress_canvas.config(
+            bg=DARK_THEME.entry_background if visible else _BG_COLOR
+        )
         if not visible:
             update_progress_canvas.coords(_update_progress_bar, 0, 0, 0, 4)
 
@@ -739,572 +661,17 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     )
     instruction_label.pack(pady=(0, _INSTRUCTION_BOTTOM_GAP))
 
-    def _show_advanced_settings_dialog() -> None:
-        nonlocal advanced_settings
-        advanced_settings = _effective_advanced_settings(_load_advanced_settings())
-        _apply_advanced_settings_to_env(advanced_settings)
-
-        dialog = tk.Toplevel(root)
-        dialog.withdraw()
-        dialog.title("Advanced Settings")
-        dialog.configure(bg=_BG_COLOR)
-        dialog.resizable(False, False)
-        dialog.transient(root)
-
-        # Keep Fedora/Linux DPI behavior from making this dense, two-column
-        # form feel oversized. These fonts are local to Advanced Settings;
-        # the splash screen and other Tk dialogs retain their existing fonts.
-        if _LINUX_SPLASH_LAYOUT:
-            advanced_section_font = (_UI_FONT_FAMILY, 10)
-            advanced_body_font = (_UI_FONT_FAMILY, 10)
-            advanced_small_font = (_UI_FONT_FAMILY, 9)
-            advanced_field_gap = 14
-            advanced_entry_pad_y = 6
-            advanced_section_pad_y = 15
-        else:
-            advanced_section_font = _VERSION_FONT
-            advanced_body_font = _BODY_FONT
-            advanced_small_font = _SMALL_FONT
-            advanced_field_gap = 9
-            advanced_entry_pad_y = 4
-            advanced_section_pad_y = 12
-
-        body = tk.Frame(dialog, bg=_BG_COLOR, padx=_ADVANCED_DIALOG_BODY_PAD_X, pady=18)
-        body.pack(fill="both", expand=True)
-
-        field_vars: dict[str, tk.StringVar] = {}
-        field_entries: dict[str, tk.Entry] = {}
-        numeric_entry_states: dict[str, tuple] = {}
-        numeric_placeholder_keys: set[str] = set()
-        effective_settings = _effective_advanced_settings(advanced_settings)
-
-        def _is_numeric_entry_candidate(value_type: str, candidate: str) -> bool:
-            if candidate == "":
-                return True
-            if value_type == "int":
-                return candidate.isdigit()
-            if value_type == "float":
-                if candidate == ".":
-                    return True
-                if candidate.count(".") > 1:
-                    return False
-                return all(ch.isdigit() or ch == "." for ch in candidate)
-            return True
-
-        numeric_entry_validator = dialog.register(_is_numeric_entry_candidate)
-
-        def _show_numeric_placeholder(key: str) -> None:
-            state = numeric_entry_states.get(key)
-            if state is None:
-                return
-            entry, display_var, placeholder_text = state
-            if display_var.get():
-                return
-            numeric_placeholder_keys.add(key)
-            previous_validation = entry.cget("validate")
-            entry.configure(validate="none")
-            display_var.set(placeholder_text)
-            entry.configure(
-                fg=_ADVANCED_DIALOG_PLACEHOLDER_COLOR,
-                validate=previous_validation,
-            )
-
-        def _clear_numeric_placeholder(key: str) -> None:
-            if key not in numeric_placeholder_keys:
-                return
-            entry, display_var, _placeholder_text = numeric_entry_states[key]
-            previous_validation = entry.cget("validate")
-            entry.configure(validate="none")
-            numeric_placeholder_keys.discard(key)
-            display_var.set("")
-            entry.configure(fg=_SUBTITLE_COLOR, validate=previous_validation)
-            entry.icursor(0)
-
-        def _begin_numeric_edit_from_key(event, key: str):
-            if event.char or event.keysym in {"BackSpace", "Delete"}:
-                _clear_numeric_placeholder(key)
-
-        def _begin_numeric_edit_from_click(_event, key: str):
-            _clear_numeric_placeholder(key)
-
-        def _compact_directory_path(path: str, max_chars: int = 42) -> str:
-            """Keep a saved directory recognizable without showing a long absolute path."""
-            expanded = os.path.abspath(os.path.expanduser(path.strip() or "~"))
-            home = os.path.abspath(os.path.expanduser("~"))
-            if expanded == home:
-                display = "~"
-            elif expanded.startswith(home + os.sep):
-                display = "~" + expanded[len(home):]
-            else:
-                display = expanded
-            if len(display) <= max_chars:
-                return display
-
-            drive, tail = os.path.splitdrive(display)
-            parts = [part for part in tail.split(os.sep) if part]
-            if len(parts) >= 2:
-                suffix = os.sep.join(parts[-2:])
-                prefix = "~" if display.startswith("~" + os.sep) else (drive + os.sep if drive else os.sep)
-                compact = prefix + "…" + os.sep + suffix
-                if len(compact) <= max_chars:
-                    return compact
-            return "…" + display[-(max_chars - 1):]
-
-        def _clear_field_error(key: str) -> None:
-            entry = field_entries.get(key)
-            if entry is not None:
-                entry.config(highlightbackground="#30303a", highlightcolor="#5d6f8a")
-            if error_label.winfo_exists():
-                _set_advanced_error("")
-
-        section_row = tk.Frame(body, bg=_BG_COLOR)
-        section_row.pack(fill="both", expand=True, pady=(0, 10))
-
-        def _button_label(parent, text, command, bg="#2a2a33", fg=_SUBTITLE_COLOR,
-                          hover_bg="#33333f", padx=10, border_color="#3a4454"):
-            label = tk.Label(
-                parent,
-                text=text,
-                font=advanced_small_font,
-                bg=bg,
-                fg=fg,
-                padx=padx,
-                pady=5,
-                cursor="hand2",
-                takefocus=True,
-                highlightthickness=1,
-                highlightbackground=border_color,
-                highlightcolor=border_color,
-            )
-
-            def _invoke(_event=None):
-                command()
-                return "break"
-
-            label.bind("<Button-1>", _invoke)
-            label.bind("<Return>", _invoke)
-            label.bind("<space>", _invoke)
-            label.bind("<Enter>", lambda _event: label.config(bg=hover_bg))
-            label.bind("<Leave>", lambda _event: label.config(bg=bg))
-            return label
-
-        def render_section(parent, title: str, section_key: str) -> None:
-            section = tk.Frame(
-                parent,
-                bg=_BG_COLOR,
-                padx=14,
-                pady=advanced_section_pad_y,
-                highlightthickness=1,
-                highlightbackground=_BORDER_COLOR,
-                highlightcolor=_BORDER_COLOR,
-            )
-            section.pack(fill="both", expand=(section_key == "streaming"), pady=(0, 12))
-
-            tk.Label(
-                section,
-                text=title,
-                font=advanced_section_font,
-                fg=_TITLE_COLOR,
-                bg=_BG_COLOR,
-            ).pack(anchor="w", pady=(0, 10))
-
-            fields = [field for field in _ADVANCED_SETTING_FIELDS if field.get("section") == section_key]
-            for field in fields:
-                row = tk.Frame(section, bg=_BG_COLOR)
-                row.pack(fill="x", pady=(0, advanced_field_gap))
-
-                tk.Label(
-                    row,
-                    text=field["label"],
-                    font=advanced_body_font,
-                    fg=_SUBTITLE_COLOR,
-                    bg=_BG_COLOR,
-                    anchor="w",
-                ).pack(anchor="w")
-
-                # macOS keeps prior splash Tk roots alive for the app-menu About
-                # handler, so implicit StringVars can attach to an old hidden
-                # root after returning from the viewer. Bind each variable to
-                # this dialog's root so entry defaults render reliably.
-                var = tk.StringVar(master=dialog, value=effective_settings[field["key"]])
-                field_vars[field["key"]] = var
-                value_type = field.get("value_type", "")
-                entry_width = (
-                    _ADVANCED_DIALOG_NUMERIC_ENTRY_WIDTH
-                    if value_type in {"int", "float"}
-                    else _ADVANCED_DIALOG_ENTRY_WIDTH
-                )
-                compact_path = field["key"] == "recording_dir"
-                entry_var = var
-                placeholder_text = _advanced_setting_placeholder_text(field)
-                if placeholder_text:
-                    entry_var = tk.StringVar(master=dialog, value=var.get())
-                    if not var.get():
-                        entry_var.set(placeholder_text)
-                        numeric_placeholder_keys.add(field["key"])
-                elif compact_path:
-                    entry_var = tk.StringVar(master=dialog, value=_compact_directory_path(var.get()))
-                    var.trace_add(
-                        "write",
-                        lambda *_args, source=var, display=entry_var: display.set(
-                            _compact_directory_path(source.get())
-                        ),
-                    )
-                entry_parent = row
-                entry_pack_options = {
-                    "anchor": "w",
-                    "pady": (advanced_entry_pad_y, advanced_entry_pad_y),
-                }
-                if value_type in {"path", "path_create"}:
-                    entry_parent = tk.Frame(row, bg=_BG_COLOR)
-                    entry_parent.pack(
-                        fill="x",
-                        pady=(advanced_entry_pad_y, advanced_entry_pad_y),
-                    )
-                    entry_pack_options = {"side": "left", "fill": "x", "expand": True}
-
-                entry = tk.Entry(
-                    entry_parent,
-                    textvariable=entry_var,
-                    font=advanced_body_font,
-                    bg="#1c1c24",
-                    fg=(
-                        _ADVANCED_DIALOG_PLACEHOLDER_COLOR
-                        if field["key"] in numeric_placeholder_keys
-                        else _SUBTITLE_COLOR
-                    ),
-                    insertbackground=_SUBTITLE_COLOR,
-                    relief="flat",
-                    highlightthickness=1,
-                    highlightbackground="#30303a",
-                    highlightcolor="#5d6f8a",
-                    width=entry_width,
-                    state="readonly" if compact_path else "normal",
-                    readonlybackground="#1c1c24",
-                    validate="none" if compact_path else "key",
-                    validatecommand=(numeric_entry_validator, value_type, "%P"),
-                )
-                field_entries[field["key"]] = entry
-                if placeholder_text:
-                    key = field["key"]
-                    numeric_entry_states[key] = (entry, entry_var, placeholder_text)
-
-                    def sync_numeric_value(
-                        *_args,
-                        field_key=key,
-                        source=entry_var,
-                        target=var,
-                    ):
-                        if field_key not in numeric_placeholder_keys:
-                            value = source.get()
-                            target.set(value)
-                            if not value:
-                                # Let Tk finish the deletion, then replace the
-                                # empty display immediately; no focus change is
-                                # required to reveal the range placeholder.
-                                dialog.after_idle(
-                                    lambda key=field_key: _show_numeric_placeholder(
-                                        key
-                                    )
-                                )
-
-                    entry_var.trace_add("write", sync_numeric_value)
-                    entry.bind(
-                        "<KeyPress>",
-                        lambda event, field_key=key: _begin_numeric_edit_from_key(
-                            event, field_key
-                        ),
-                        add="+",
-                    )
-                    entry.bind(
-                        "<Button-1>",
-                        lambda event, field_key=key: _begin_numeric_edit_from_click(
-                            event, field_key
-                        ),
-                        add="+",
-                    )
-                    entry.bind(
-                        "<FocusOut>",
-                        lambda _event, field_key=key: _show_numeric_placeholder(
-                            field_key
-                        ),
-                        add="+",
-                    )
-                var.trace_add("write", lambda *_args, key=field["key"]: _clear_field_error(key))
-                entry.pack(**entry_pack_options)
-
-                if value_type in {"path", "path_create"}:
-                    def choose_directory(var=var, title=field["label"]):
-                        initial_dir = os.path.expanduser(var.get().strip() or "~")
-                        if not os.path.isdir(initial_dir):
-                            initial_dir = os.path.dirname(initial_dir)
-                        if not os.path.isdir(initial_dir):
-                            initial_dir = os.path.expanduser("~")
-                        folder = filedialog.askdirectory(
-                            title=title,
-                            initialdir=initial_dir,
-                            parent=dialog,
-                        )
-                        if folder:
-                            var.set(folder)
-
-                    browse_button = _button_label(
-                        entry_parent,
-                        "Browse",
-                        choose_directory,
-                        padx=8,
-                    )
-                    browse_button.pack(side="left", padx=(8, 0))
-
-                single_line_hint = field["key"] == "recording_dir"
-                hint_label = tk.Label(
-                    row,
-                    text=field["hint"],
-                    font=advanced_small_font,
-                    fg=_INSTRUCTION_COLOR,
-                    bg=_BG_COLOR,
-                    justify="left",
-                    anchor="w",
-                    wraplength=0 if single_line_hint else _ADVANCED_DIALOG_WRAP,
-                )
-                hint_label.pack(anchor="w", fill="x")
-
-                if sys.platform.startswith("linux") and not single_line_hint:
-                    # Tk does not expand a label's fixed wraplength when its
-                    # parent column grows. Use the real row width so hints fill
-                    # the available line before wrapping onto the next one.
-                    def resize_hint(event, label=hint_label):
-                        wraplength = max(200, event.width - 4)
-                        if int(label.cget("wraplength")) != wraplength:
-                            label.configure(wraplength=wraplength)
-
-                    row.bind("<Configure>", resize_hint, add="+")
-
-        for column_index, sections in enumerate(_ADVANCED_SETTING_COLUMNS):
-            column = tk.Frame(section_row, bg=_BG_COLOR)
-            if _ADVANCED_DIALOG_TWO_COLUMN:
-                half_gap = _ADVANCED_DIALOG_SECTION_GAP // 2
-                pad_left = half_gap if column_index > 0 else 0
-                pad_right = half_gap if column_index < len(_ADVANCED_SETTING_COLUMNS) - 1 else 0
-                section_row.grid_columnconfigure(
-                    column_index,
-                    weight=1,
-                    uniform="advanced_settings_column",
-                )
-                column.grid(
-                    row=0,
-                    column=column_index,
-                    sticky="nsew",
-                    padx=(pad_left, pad_right),
-                )
-            else:
-                column.pack(fill="x")
-            for section_key, section_title in sections:
-                render_section(column, section_title, section_key)
-
-        button_row = tk.Frame(body, bg=_BG_COLOR)
-        error_parent = button_row if _LINUX_SPLASH_LAYOUT else body
-        error_label = tk.Label(
-            error_parent,
-            text="",
-            font=advanced_small_font,
-            fg="#ff9b90",
-            bg=_BG_COLOR,
-            justify="left",
-            anchor="w",
-            wraplength=620 if _LINUX_SPLASH_LAYOUT else _ADVANCED_DIALOG_WRAP,
-        )
-        if _LINUX_SPLASH_LAYOUT:
-            button_row.pack(fill="x")
-            error_label.pack(side="left", fill="x", expand=True, padx=(0, 12))
-        else:
-            error_label.pack(anchor="w", pady=(4, 10))
-            button_row.pack(fill="x")
-
-        def _advanced_natural_height() -> int:
-            """Natural client height without space assigned by pack expansion."""
-            height = 36  # body's 18px top and bottom padding
-            height += section_row.winfo_reqheight() + 10  # section-row bottom pad
-            height += button_row.winfo_reqheight()
-            return height
-
-        def _set_advanced_error(message: str) -> None:
-            error_label.config(text=message)
-
-        def on_cancel():
-            dialog.destroy()
-
-        def on_apply():
-            for entry in field_entries.values():
-                entry.config(highlightbackground="#30303a", highlightcolor="#5d6f8a")
-            for key in numeric_entry_states:
-                _show_numeric_placeholder(key)
-            proposed = {key: var.get() for key, var in field_vars.items()}
-            ok, message, normalized, error_key = _validate_advanced_settings(proposed)
-            if not ok:
-                _set_advanced_error(message or "Invalid advanced settings.")
-                if error_key and error_key in field_entries:
-                    bad_entry = field_entries[error_key]
-                    bad_entry.config(highlightbackground="#ff6b6b", highlightcolor="#ff6b6b")
-                    bad_entry.focus_set()
-                    if error_key not in numeric_placeholder_keys:
-                        bad_entry.selection_range(0, "end")
-                return
-
-            advanced_settings = _effective_advanced_settings(normalized)
-            _apply_advanced_settings_to_env(advanced_settings)
-            _save_advanced_settings(advanced_settings)
-            dialog.destroy()
-
-        if sys.platform == "darwin":
-            def _make_action_label(parent, text, command, bg, fg, hover_bg, padx, border_color):
-                label = tk.Label(
-                    parent,
-                    text=text,
-                    font=advanced_small_font,
-                    bg=bg,
-                    fg=fg,
-                    padx=padx,
-                    pady=6,
-                    cursor="hand2",
-                    takefocus=True,
-                    highlightthickness=1,
-                    highlightbackground=border_color,
-                    highlightcolor=border_color,
-                )
-
-                def _invoke(_event=None):
-                    command()
-                    return "break"
-
-                label.bind("<Button-1>", _invoke)
-                label.bind("<Return>", _invoke)
-                label.bind("<space>", _invoke)
-                label.bind("<Enter>", lambda _event: label.config(bg=hover_bg))
-                label.bind("<Leave>", lambda _event: label.config(bg=bg))
-                return label
-
-            cancel_button = _make_action_label(
-                button_row,
-                text="Cancel",
-                command=on_cancel,
-                bg="#2a2a33",
-                fg=_SUBTITLE_COLOR,
-                hover_bg="#33333f",
-                padx=12,
-                border_color="#3a4454",
-            )
-            apply_button = _make_action_label(
-                button_row,
-                text="Apply",
-                command=on_apply,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                hover_bg=_BUTTON_HOVER_BG,
-                padx=16,
-                border_color=_BUTTON_BORDER_COLOR,
-            )
-        else:
-            cancel_button = tk.Button(
-                button_row,
-                text="Cancel",
-                command=on_cancel,
-                font=advanced_small_font,
-                bg="#2a2a33",
-                fg=_SUBTITLE_COLOR,
-                activebackground="#33333f",
-                activeforeground=_SUBTITLE_COLOR,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground="#3a4454",
-                highlightcolor="#3a4454",
-                padx=12,
-                pady=6,
-                cursor="hand2",
-            )
-
-            apply_button = tk.Button(
-                button_row,
-                text="Apply",
-                command=on_apply,
-                font=advanced_small_font,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                activebackground=_BUTTON_HOVER_BG,
-                activeforeground=_BUTTON_FG,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=_BUTTON_BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR,
-                padx=16,
-                pady=6,
-                cursor="hand2",
-                default="active",
-            )
-
-        apply_button.pack(side="right")
-        cancel_button.pack(side="right", padx=(0, 8))
-
-        dialog.bind("<Escape>", lambda _event: on_cancel())
-        dialog.bind("<Return>", lambda _event: on_apply())
-        dialog.update_idletasks()
-        geometry_applied = False
-        try:
-            root.update_idletasks()
-            dialog_w = max(dialog.winfo_reqwidth(), _ADVANCED_DIALOG_MIN_WIDTH)
-            dialog_h = dialog.winfo_reqheight()
-            screen_w = dialog.winfo_screenwidth()
-            screen_h = dialog.winfo_screenheight()
-            dialog_w = min(dialog_w, max(320, screen_w - 16))
-            parent_x = root.winfo_rootx()
-            parent_y = root.winfo_rooty()
-            parent_w = root.winfo_width()
-            # Keep the dialog anchored near the splash window's top-right
-            # corner. This matters more now that the Windows dialog is wider:
-            # if the window manager places it low, the action buttons can
-            # end up off-screen on shorter displays.
-            protrusion_x = 72
-            inset_y = 8
-            desired_x = parent_x + parent_w - dialog_w + protrusion_x
-            desired_y = parent_y + inset_y
-            clamped_x = max(8, min(desired_x, screen_w - dialog_w - 8))
-            clamped_y = max(8, min(desired_y, screen_h - 328))
-            dialog_h = min(dialog_h, max(320, screen_h - clamped_y - 8))
-            dialog.geometry(f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}")
-            if _LINUX_SPLASH_LAYOUT:
-                # Applying the wider geometry lets responsive hint labels use
-                # longer lines. Measure again after those Configure callbacks
-                # run, otherwise the old narrow/two-line measurement leaves a
-                # large blank strip above the action buttons.
-                for _ in range(2):
-                    dialog.update_idletasks()
-                fitted_height = min(
-                    _advanced_natural_height(),
-                    max(320, screen_h - clamped_y - 8),
-                )
-                dialog.geometry(
-                    f"{dialog_w}x{fitted_height}+{clamped_x}+{clamped_y}"
-                )
-            geometry_applied = True
-        except Exception:
-            pass
-        if not geometry_applied:
-            dialog.geometry("+%d+%d" % (root.winfo_rootx() + 24, root.winfo_rooty() + 24))
-        dialog.deiconify()
-        dialog.lift(root)
-        dialog.wait_visibility()
-        dialog.grab_set()
-        apply_button.focus_set()
-        dialog.focus_force()
+    def _on_advanced_settings_click():
+        _show_advanced_settings_dialog(root, ui_font_family=_UI_FONT_FAMILY)
 
     # Example maps link - opens the sample maps dialog
     def _on_example_maps_click():
         from gui.sample_maps_dialog import show_sample_maps_dialog
         import os
         install_dir = os.path.expanduser("~")
-        result = show_sample_maps_dialog(root, install_dir)
+        result = show_sample_maps_dialog(
+            root, install_dir, ui_font_family=_UI_FONT_FAMILY
+        )
         if result:
             selected_folder[0] = result
             root.withdraw()
@@ -1321,7 +688,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         bg=_BG_COLOR,
         cursor="hand2",
     )
-    advanced_link.bind("<Button-1>", lambda _event: _show_advanced_settings_dialog())
+    advanced_link.bind("<Button-1>", lambda _event: _on_advanced_settings_click())
     advanced_link.pack(side="left")
 
     secondary_separator = tk.Label(

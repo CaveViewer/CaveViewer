@@ -397,29 +397,58 @@ still override it for an individual run.
 
 ### Streaming Performance
 
-Advanced Settings opens numeric fields with their effective defaults. If a
-numeric value is cleared, its accepted range immediately appears inside the
-input as muted, unit-free placeholder text; the placeholder itself is never
-applied or saved as a value.
+Advanced Settings opens numeric fields with their effective defaults. Numeric
+inputs use a compact, consistent 12-character width. If a numeric value is
+cleared, only its accepted range immediately appears inside the input as
+muted, unit-free `minimum-maximum` placeholder text without comparison
+operators; the placeholder itself is never applied or saved as a value.
+Every field is validated as it changes. An invalid value is highlighted and
+keeps the shared validation message visible while the other inputs become
+temporarily read-only and the Apply button is disabled. Read-only inputs retain
+their normal dark appearance. Correcting the value immediately unlocks the
+form; valid values are normalized when focus leaves the field. A focused
+required field may remain temporarily empty while the user replaces its value;
+Apply is disabled immediately while any required value is blank, while the
+required message and read-only form lock appear only after focus leaves that
+empty field. Cancel, Escape, and window close remain available and discard
+unapplied edits. Advisory worker-thread warnings do not lock the form.
+
+The Advanced Settings implementation is split by responsibility:
+`gui/advanced_settings.py` owns the typed `SettingSpec` schema, validation,
+persistence, and environment mapping; `gui/advanced_settings_form.py` owns
+focus/change/blur/apply state transitions; `gui/advanced_settings_dialog.py`
+only renders that state into Tk widgets; and `core/worker_config.py` resolves
+the effective streaming/import worker counts while honoring reserved logical
+CPUs. Only immutable, validated `AdvancedSettings` snapshots may cross into
+persistence or the runtime environment. Invalid saved or environment values
+fall back independently to that field's valid default, so one stale value does
+not discard the rest of the configuration. Settings are saved through an
+atomic temporary-file replacement; a write failure remains visible in the
+dialog and does not close it or alter the previous settings file.
+
+The splash screen, Advanced Settings, and Sample Maps dialogs share their Tk
+color and control tokens through `gui/tk_theme.py`. Map-folder validation lives
+in `gui/map_selection.py`, allowing both map-selection dialogs to reuse it
+without importing private splash-screen implementation details.
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
-| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1–80% | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
-| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | >0 and ≤1024 GB (optional) | Override the GPU memory size used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; use this when detection is unavailable or inaccurate. |
-| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1–80% | Percentage of GPU memory the chunk streaming system targets. |
-| `CAVEVIEWER_IO_WORKERS` | `2` | Integer ≥1 | Number of background threads for loading chunk files from disk. |
-| `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer ≥0 | CPU cores to keep free when computing a custom `CAVEVIEWER_IO_WORKERS` value. |
-| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1–16 | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. |
-| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5–50 ms | Soft per-frame time budget for GPU uploads. |
+| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
+| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Override the GPU memory size used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; use this when detection is unavailable or inaccurate. |
+| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory the chunk streaming system targets. |
+| `CAVEVIEWER_IO_WORKERS` | `2` | Integer 1-32 | Requested maximum number of background threads for loading chunk files from disk. The runtime reduces this when necessary to honor `CAVEVIEWER_IO_RESERVED_CPUS`. Advanced Settings warns above 5 because high thread counts may reduce performance and cause out of memory errors on machines with less than 16 GB of RAM. |
+| `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer 2-32 | Logical CPUs kept out of the loading worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
+| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. |
+| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5-50 ms | Soft per-frame time budget for GPU uploads. |
 
 ### Map Import (First-Time Parsing)
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
-| `CAVEVIEWER_CHUNK_SIZE_METERS` | `8` | >0 and ≤512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
-| `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0–50 ms | Time yielded between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
-| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer ≥1 | Threads used while writing chunk files during import. |
-| `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer ≥0 | CPU cores to keep free when computing a custom `CAVEVIEWER_CHUNK_BUILD_WORKERS` value. |
+| `CAVEVIEWER_CHUNK_SIZE_METERS` | `8` | 0.01-512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
+| `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0-50 ms | Time yielded between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
+| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 | Requested maximum threads used while writing chunk files during import. The runtime reduces this when necessary to honor `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. Advanced Settings warns above 5 because high thread counts may reduce performance and cause out of memory errors on machines with less than 16 GB of RAM. |
+| `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 
 ### Sample Maps
 

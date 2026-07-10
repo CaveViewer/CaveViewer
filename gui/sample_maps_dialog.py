@@ -20,7 +20,24 @@ import sys
 import threading
 import time
 
+from gui.map_selection import (
+    validate_selected_map_folder as _validate_selected_map_folder,
+)
+from gui.platform import get_splash_platform_adapter
 from gui.preferences import migrate_preference_file
+from gui.tk_theme import DARK_THEME
+
+
+_BG_COLOR = DARK_THEME.background
+_PANEL_COLOR = DARK_THEME.panel
+_TITLE_COLOR = DARK_THEME.title
+_SUBTITLE_COLOR = DARK_THEME.body_text
+_INSTRUCTION_COLOR = DARK_THEME.secondary_text
+_BUTTON_BG = DARK_THEME.primary_button
+_BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
+_BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
+_BUTTON_FG = DARK_THEME.primary_button_text
+_BORDER_COLOR = DARK_THEME.border
 
 
 _LAST_SAMPLE_MAPS_DIR_FILE = migrate_preference_file(
@@ -67,7 +84,9 @@ def _ask_directory_in_front(filedialog, owner, *, title, initialdir):
             pass
 
 
-def show_sample_maps_dialog(parent, install_dir):
+def show_sample_maps_dialog(
+    parent, install_dir, *, ui_font_family: str | None = None
+):
     """
     Shows the sample maps list as a modal dialog over `parent` (the
     splash screen's Tk root). Blocks until the person either picks a map
@@ -82,13 +101,14 @@ def show_sample_maps_dialog(parent, install_dir):
     """
     import tkinter as tk
     from tkinter import messagebox, filedialog
-    from gui.splash_screen import _BG_COLOR, _PANEL_COLOR, _TITLE_COLOR, _SUBTITLE_COLOR, \
-        _INSTRUCTION_COLOR, _BUTTON_BG, _BUTTON_HOVER_BG, _BUTTON_BORDER_COLOR, _BUTTON_FG, _BORDER_COLOR, _UI_FONT_FAMILY, \
-        _validate_selected_map_folder
     from gui.sample_maps import (
         DownloadCancelled, KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog,
         is_sample_map_already_downloaded,
         download_and_extract_sample_map, existing_sample_map_path, local_sample_map_path,
+    )
+
+    _UI_FONT_FAMILY = (
+        ui_font_family or get_splash_platform_adapter().ui_font_family()
     )
 
     selected_folder = [None]
@@ -538,10 +558,12 @@ def show_sample_maps_dialog(parent, install_dir):
         progress_bar_container = tk.Frame(row, bg=_PANEL_COLOR, height=10)
         progress_bar_container.pack(side="bottom", fill="x", padx=0, pady=0)
         progress_bar_container.pack_propagate(False)  # Maintain fixed height
-        
+
         progress_bar_canvas = tk.Canvas(
-            progress_bar_container, height=4, bg="#1c1c24",
-            highlightthickness=0
+            progress_bar_container,
+            height=4,
+            bg=DARK_THEME.entry_background,
+            highlightthickness=0,
         )
         # Don't pack initially - will be packed when download starts
         progress_bar = progress_bar_canvas.create_rectangle(0, 0, 0, 4, fill=_BUTTON_BG, width=0)

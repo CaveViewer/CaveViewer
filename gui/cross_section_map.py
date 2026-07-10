@@ -926,13 +926,15 @@ class CrossSectionMap:
         while len(self._raw_cache) > self.RAW_CACHE_LIMIT:
             self._raw_cache.popitem(last=False)
 
-    def prime(self, camera_position: np.ndarray, camera_forward: np.ndarray) -> None:
-        """Build the initial profile before chunk streaming starts.
+    def prime(self, camera_position: np.ndarray, camera_forward: np.ndarray,
+              window_size: tuple[int, int] | None = None) -> None:
+        """Build and optionally upload the initial profile before streaming.
 
         Chunk upload throughput must not decide whether the longitudinal
-        map appears.  Priming one small local view synchronously gives the
-        first render ready-to-upload geometry; subsequent camera views still
-        use the background executor.
+        map appears. Priming one small local view synchronously and uploading
+        it immediately gives the panel a GPU-ready frame before any cave
+        chunks are queued. Subsequent camera views still use the background
+        executor. ``window_size`` is optional for CPU-only callers and tests.
         """
         raw_key, _camera_along = self._view_for_camera(
             (self.PANEL_WIDTH, self.PANEL_HEIGHT), camera_position, camera_forward
@@ -947,6 +949,17 @@ class CrossSectionMap:
         self._active_segments = segments
         if not segments:
             _LOG.warning("Initial longitudinal profile contained no cave intersections.")
+
+        if window_size is not None:
+            profile_camera_along = self._camera_along_for_key(
+                camera_position, raw_key
+            )
+            display_along = self._display_along(profile_camera_along)
+            geom_bytes, vert_count = self._build_frame_geom(
+                window_size, display_along, segments
+            )
+            self._upload_geom(geom_bytes, vert_count)
+            self._uploaded_frame_key = (raw_key, window_size, display_along)
 
     def _offset_raw_key(self, raw_key: tuple, offset_steps: int) -> tuple:
         center_along, lateral, angle = raw_key

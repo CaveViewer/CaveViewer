@@ -40,6 +40,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from core.logging_utils import get_logger
+from core.worker_config import resolve_worker_count
 from core.obj_parser import RawMesh, MaterialRange
 
 CACHE_DIRNAME = "_cache"
@@ -333,14 +334,12 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         mat_name = material_names[mat_id] if mat_id >= 0 else "__no_material__"
         per_cell_groups.setdefault(real_cell, []).append((mat_name, face_idx_in_order))
 
-    worker_count_env = os.environ.get("CAVEVIEWER_CHUNK_BUILD_WORKERS")
-    if worker_count_env:
-        try:
-            worker_count = max(1, int(worker_count_env))
-        except ValueError:
-            worker_count = 1
-    else:
-        worker_count = 1
+    worker_count = resolve_worker_count(
+        os.environ.get("CAVEVIEWER_CHUNK_BUILD_WORKERS"),
+        os.environ.get("CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS"),
+        default_workers=1,
+        default_reserved_cpus=2,
+    )
 
     cell_items = list(per_cell_groups.items())
     total_cells = len(cell_items)
