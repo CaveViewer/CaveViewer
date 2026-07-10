@@ -3,6 +3,10 @@
 .DS_Store
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 *.swp
 *.swo
 *.swn

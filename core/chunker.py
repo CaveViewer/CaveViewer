@@ -486,8 +486,16 @@ def load_manifest(cache_dir):
     if not os.path.exists(manifest_path):
         return None
 
-    with open(manifest_path, "r") as f:
-        return json.load(f)
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        _LOG.warning("could not read cache manifest %s: %s", manifest_path, exc)
+        return None
+    if not isinstance(manifest, dict):
+        _LOG.warning("cache manifest is not a JSON object: %s", manifest_path)
+        return None
+    return manifest
 
 
 def manifest_chunk_size(manifest: dict | None) -> float | None:
@@ -517,7 +525,12 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
     with open(path, "rb") as f:
         blob = f.read()
 
+    def require(offset: int, size: int, description: str) -> None:
+        if offset < 0 or size < 0 or offset + size > len(blob):
+            raise ValueError(f"Truncated chunk file while reading {description} in {path}")
+
     offset = 0
+    require(offset, 12, "header")
     magic = blob[offset:offset + 4]
     offset += 4
     if magic != _MAGIC:
@@ -535,11 +548,14 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
     bmin = None
     bmax = None
     for _ in range(n_groups):
+        require(offset, 4, "material name length")
         name_len = struct.unpack_from("<I", blob, offset)[0]
         offset += 4
+        require(offset, name_len, "material name")
         name = blob[offset:offset + name_len].decode("utf-8")
         offset += name_len
 
+        require(offset, 4, "vertex count")
         n_verts = struct.unpack_from("<I", blob, offset)[0]
         offset += 4
 
@@ -547,10 +563,13 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
         uv_count = n_verts * 2
         nrm_count = n_verts * 3
 
+        require(offset, pos_count * 4, "positions")
         positions = np.frombuffer(blob, dtype=np.float32, count=pos_count, offset=offset).reshape(n_verts, 3)
         offset += pos_count * 4
+        require(offset, uv_count * 4, "texture coordinates")
         uvs = np.frombuffer(blob, dtype=np.float32, count=uv_count, offset=offset).reshape(n_verts, 2)
         offset += uv_count * 4
+        require(offset, nrm_count * 4, "normals")
         normals = np.frombuffer(blob, dtype=np.float32, count=nrm_count, offset=offset).reshape(n_verts, 3)
         offset += nrm_count * 4
 
@@ -587,6 +606,9 @@ def load_cross_section_triangles(cache_dir: str, cell: tuple[int, int, int]) -> 
 
     with open(path, "rb") as f:
         blob = f.read()
+
+    if len(blob) < 12:
+        raise ValueError(f"Truncated cross-section triangle header in {path}")
 
     offset = 0
     magic = blob[offset:offset + 4]

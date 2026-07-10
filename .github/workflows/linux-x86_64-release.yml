@@ -30,7 +30,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  essential-tests:
+    uses: ./.github/workflows/tests.yml
+
   build-linux-x86_64:
+    needs: essential-tests
     runs-on: ubuntu-latest
 
     steps:
