@@ -334,6 +334,7 @@ class ImportProgressPanel:
         number: int,
         progress: float,
         alpha: float = 1.0,
+        fixed_text_scale: float | None = None,
     ) -> None:
         """Render the loading ring with a centered countdown number."""
         self.ctx.disable(moderngl.CULL_FACE)
@@ -361,6 +362,8 @@ class ImportProgressPanel:
 
         text = str(max(0, min(9, int(number))))
         pixel_size = 9.0
+        if fixed_text_scale is not None:
+            pixel_size = bitmap_font.pixel_size_at_text_scale(pixel_size, fixed_text_scale)
         bounds = bitmap_font.text_bounds_px(text, pixel_size)
         text_w = bounds[2] - bounds[0]
         text_h = bounds[3] - bounds[1]
@@ -397,6 +400,7 @@ class ImportProgressPanel:
         progress: float = 1.0,
         pixel_size: float = 5.4,
         alpha: float = 1.0,
+        fixed_text_scale: float | None = None,
     ) -> None:
         """Render the loading ring with a centered text label."""
         self.ctx.disable(moderngl.CULL_FACE)
@@ -422,6 +426,8 @@ class ImportProgressPanel:
             for (vx, vy) in quad:
                 verts.append((vx, vy, *rgba))
 
+        if fixed_text_scale is not None:
+            pixel_size = bitmap_font.pixel_size_at_text_scale(pixel_size, fixed_text_scale)
         bounds = bitmap_font.text_bounds_px(label, pixel_size)
         text_w = bounds[2] - bounds[0]
         text_h = bounds[3] - bounds[1]

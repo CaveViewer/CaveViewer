@@ -296,14 +296,16 @@ class RenderModeButtons:
         # unpolished. A single shared size keeps them visually matched.
         available_w = self.BUTTON_WIDTH - 16
         available_h = self.BUTTON_HEIGHT - 10
-        shared_pixel_size = 3.1
-        while shared_pixel_size > 0.5:
+        nominal_pixel_size = 3.1
+        shared_pixel_size = bitmap_font.pixel_size_at_text_scale(nominal_pixel_size, 1.28)
+        while nominal_pixel_size > 0.5:
             w = bitmap_font.text_width_px("TEXTURE", shared_pixel_size)
             _bx0, _by0, _bx1, _by1 = bitmap_font.text_bounds_px("TEXTURE", shared_pixel_size)
             h = _by1 - _by0
             if w <= available_w and h <= available_h:
                 break
-            shared_pixel_size -= 0.1
+            nominal_pixel_size -= 0.1
+            shared_pixel_size = bitmap_font.pixel_size_at_text_scale(nominal_pixel_size, 1.28)
 
         def draw_toggle_button(rect, is_on: bool, label: str):
             x0, y0, x1, y1 = rect

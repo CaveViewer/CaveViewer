@@ -57,6 +57,7 @@ class StepperControl:
     BUTTON_SIZE = 32
     VALUE_BOX_WIDTH = 44
     GAP = 6
+    FIXED_TEXT_SCALE = 1.28
 
     def __init__(self, ctx: moderngl.Context, label: str, initial_value: int,
                  min_value: int, max_value: int):
@@ -171,7 +172,7 @@ class StepperControl:
             add_quad_px(x0, y0, x0 + border, y1, border_color)
             add_quad_px(x1 - border, y0, x1, y1, border_color)
 
-            symbol_size = 2.8
+            symbol_size = bitmap_font.pixel_size_at_text_scale(2.8, self.FIXED_TEXT_SCALE)
             sbx0, sby0, sbx1, sby1 = bitmap_font.text_bounds_px(symbol, symbol_size)
             sym_w = sbx1 - sbx0
             sym_h = sby1 - sby0
@@ -195,14 +196,14 @@ class StepperControl:
         add_quad_px(vx1 - vborder, vy0, vx1, vy1, vborder_color)
 
         value_text = str(self.value)
-        value_size = 2.6
+        value_size = bitmap_font.pixel_size_at_text_scale(2.6, self.FIXED_TEXT_SCALE)
         vbx0, vby0, vbx1, vby1 = bitmap_font.text_bounds_px(value_text, value_size)
         vw_px = vbx1 - vbx0
         vh_px = vby1 - vby0
         vcx, vcy = (vx0 + vx1) / 2.0, (vy0 + vy1) / 2.0
         add_text(value_text, vcx - vw_px / 2.0 - vbx0, vcy - vh_px / 2.0 - vby0, value_size, (0.78, 0.88, 1.0, 1.0))
 
-        label_size = 1.7
+        label_size = bitmap_font.pixel_size_at_text_scale(1.7, self.FIXED_TEXT_SCALE)
         label_w = bitmap_font.text_width_px(self.label, label_size)
         if label_above:
             label_x = anchor_x + (self.total_width() - label_w) / 2.0

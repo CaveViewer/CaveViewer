@@ -567,6 +567,20 @@ class ControlsOverlay:
             heading_gap = 11.0
             section_gap = 48.0
 
+        # CAVEVIEWER_UI_TEXT_SCALE changes the actual FreeType line metrics,
+        # while the values above describe the layout at its normal size.  Do
+        # not let a fixed row height become smaller than the scaled text (or
+        # its keycap), otherwise adjacent control rows overlap on high-DPI
+        # displays.
+        def ensure_text_fits_row(candidate_height):
+            return max(
+                candidate_height,
+                bitmap_font.text_height_px(key_size) + key_pad_y * 2.0,
+                bitmap_font.text_height_px(desc_size) + 8.0,
+            )
+
+        row_height = ensure_text_fits_row(row_height)
+
         columns = [
             [self._control_sections[0]],
             [self._control_sections[1], self._control_sections[3]],
@@ -601,6 +615,7 @@ class ControlsOverlay:
             key_pad_y = max(3.0, key_pad_y * fit_ratio)
             key_desc_gap = max(12.0, key_desc_gap * fit_ratio)
             column_gap = max(28.0, column_gap * fit_ratio)
+            row_height = ensure_text_fits_row(row_height)
             metrics = measure_columns()
 
         total_width = sum(metric["width"] for metric in metrics) + column_gap * max(0, len(columns) - 1)

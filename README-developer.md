@@ -89,6 +89,14 @@ Run the app:
 ./run_caveviewer.sh
 ```
 
+Alternatively:
+
+```bash
+# If you activated the virtual environment, run the 'source' line below
+source .venv-dev/bin/activate
+.venv-dev/bin/python ./caveviewer.py
+```
+
 ## Windows: Run From Source
 
 Option A (recommended for technical users): manual venv flow.
@@ -324,9 +332,40 @@ pass `--private-key`.
 
 ### UI & Rendering
 
+#### OpenGL UI scaling
+
+The OpenGL viewer renders its overlay text directly with FreeType in screen
+pixels. It does not automatically inherit GNOME, KDE, X11, or Wayland desktop
+scaling. On a high-DPI display, set `CAVEVIEWER_UI_TEXT_SCALE` when starting
+CaveViewer. The built-in default is `1.28`; for example, applying an additional
+150% scale gives `1.28 * 1.5 = 1.92`:
+
+```bash
+CAVEVIEWER_UI_TEXT_SCALE=1.92 ./run_caveviewer.sh
+```
+
+The accepted range is `0.5` through `3.0`. The controls/help overlay derives
+its row height from the resulting FreeType line metrics, so increasing the text
+scale also reserves enough vertical space for each line and its keycap. Text
+inside the fixed-size right-side control panel (steppers and action buttons)
+stays at its designed size because that panel's geometry does not scale.
+
+To keep a development-machine override, export it in the shell profile or add
+the following before the final `exec` in `run_caveviewer.sh`:
+
+```bash
+export CAVEVIEWER_UI_TEXT_SCALE="${CAVEVIEWER_UI_TEXT_SCALE:-1.92}"
+```
+
+`scripts/dev/install.sh` regenerates `run_caveviewer.sh`, so edits made only to
+the generated launcher are replaced the next time the installer runs. For a
+repeatable project-specific default, add the same export to the launcher
+template in `scripts/dev/install.sh`; keep the `${...:-...}` form so callers can
+still override it for an individual run.
+
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Global scale multiplier for all in-app overlay text (loading screens, controls overlay, HUD). `1.0` is the base size. |
+| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Scale multiplier for adaptable in-app overlay text (loading screens, controls/help overlay, and HUD readouts). Text inside fixed-size control geometry is intentionally excluded. `1.0` is the base size. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
 | `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing (matches macOS CoreText style); `lcd` = LCD sub-pixel rendering. |
 | `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |

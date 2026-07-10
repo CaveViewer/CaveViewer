@@ -1764,7 +1764,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         # this stays correct if that label styling ever changes (rather
         # than a second hard-coded guess at the same number).
         from gui import bitmap_font
-        label_reserve = bitmap_font.text_height_px(1.5) + 8
+        fixed_label_size = bitmap_font.pixel_size_at_text_scale(1.5, self.UI_TEXT_SCALE)
+        label_reserve = bitmap_font.text_height_px(fixed_label_size) + 8
 
         button_block_height = RenderModeButtons.total_stack_height()
         content_right_inset = self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN + self.RIGHT_COLUMN_PANEL_SIDE_PAD
@@ -1806,7 +1807,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             column = self._right_column_layout(window_size)
 
         w, h = window_size
-        label_height = bitmap_font.text_height_px(self.RIGHT_COLUMN_PANEL_LABEL_SIZE)
+        fixed_label_size = bitmap_font.pixel_size_at_text_scale(
+            self.RIGHT_COLUMN_PANEL_LABEL_SIZE, self.UI_TEXT_SCALE
+        )
+        label_height = bitmap_font.text_height_px(fixed_label_size)
         buttons_top_y = column["buttons_top_y"]
 
         brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
@@ -1933,6 +1937,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             label=symbol,
             progress=1.0,
             pixel_size=symbol_size,
+            fixed_text_scale=self.UI_TEXT_SCALE,
         )
 
         verts = []
@@ -1959,11 +1964,13 @@ class CaveViewerWindow(mglw.WindowConfig):
             pixel_size: float,
             rgba: tuple[float, float, float, float],
         ) -> float:
+            pixel_size = bitmap_font.pixel_size_at_text_scale(pixel_size, self.UI_TEXT_SCALE)
+            min_pixel_size = bitmap_font.pixel_size_at_text_scale(1.35, self.UI_TEXT_SCALE)
             bounds = bitmap_font.text_bounds_px(text, pixel_size)
             text_w = bounds[2] - bounds[0]
             max_w = max(120.0, w - 96.0)
             if text_w > max_w:
-                pixel_size = max(1.35, pixel_size * max_w / text_w)
+                pixel_size = max(min_pixel_size, pixel_size * max_w / text_w)
                 bounds = bitmap_font.text_bounds_px(text, pixel_size)
                 text_w = bounds[2] - bounds[0]
             text_h = bounds[3] - bounds[1]
@@ -2268,6 +2275,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     window_size=self.wnd.size,
                     number=countdown_number,
                     progress=countdown_progress,
+                    fixed_text_scale=self.UI_TEXT_SCALE,
                 )
             else:
                 self._recording_update_after_scene(now)

@@ -9,6 +9,7 @@ change call sites:
 - text_height_px(pixel_size)
 - text_bounds_px(text, pixel_size, letter_spacing=0.0)
 - iter_text_pixels(text, origin_x, origin_y, pixel_size, letter_spacing=0.0)
+- pixel_size_at_text_scale(pixel_size, target_scale)
 
 iter_text_pixels yields tuples:
 (px_x0, px_y0, px_x1, px_y1, alpha)
@@ -39,6 +40,15 @@ def set_text_scale(scale: float) -> None:
     _TEXT_SCALE = clamped
     _load_face.cache_clear()
     _glyph_for.cache_clear()
+
+
+def pixel_size_at_text_scale(pixel_size: float, target_scale: float) -> float:
+    """Return a pixel-size argument that renders at ``target_scale``.
+
+    Fixed-geometry controls use this to retain their designed text dimensions
+    while other overlays follow the global UI text scale.
+    """
+    return float(pixel_size) * float(target_scale) / _TEXT_SCALE
 
 
 @dataclass(frozen=True)
