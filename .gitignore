@@ -21,4 +21,4 @@ _cache/
 release_signing_private_key.pem
 .caveviewer/
 run_caveviewer.sh
-idea/*
+.idea/
