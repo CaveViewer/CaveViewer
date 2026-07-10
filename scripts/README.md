@@ -62,6 +62,21 @@ release.sh --target=macos-15,linux-arm64 --version=1.2.45 --notes "Release 1.2.4
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
+## GitHub Actions
+
+Manual release workflows live under `.github/workflows/` for macOS 15,
+Windows, Linux ARM64, and Linux x86_64. Each workflow runs the shared essential
+test suite before invoking `release.sh` for its platform.
+
+When dispatching a workflow:
+
+- choose the source branch explicitly;
+- leave `publish` disabled to build and retain a test artifact only;
+- enable both `publish` and `pre_release` to publish a GitHub prerelease and
+  update that platform's `prerelease.json` rather than `stable.json`;
+- run platform publish workflows sequentially because each successful publish
+  commits its version and manifest update back to the selected branch.
+
 ## Directory Layout
 
 - `scripts/common`: shared helpers
