@@ -30,7 +30,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  essential-tests:
+    uses: ./.github/workflows/tests.yml
+
   build-windows:
+    needs: essential-tests
     runs-on: windows-latest
 
     steps:

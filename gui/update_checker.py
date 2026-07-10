@@ -426,6 +426,20 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
         expected_size_bytes,
         bool(expected_sha256),
     )
+    download_started = False
+
+    def remove_partial_download() -> None:
+        if not download_started:
+            return
+        try:
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+        except OSError as cleanup_exc:
+            _LOG.warning(
+                "could not remove partial update payload %s: %s",
+                dest_path,
+                cleanup_exc,
+            )
 
     try:
         with urllib.request.urlopen(request, timeout=30, context=make_ssl_context()) as response:
@@ -435,6 +449,7 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
 
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             with open(dest_path, "wb") as f:
+                download_started = True
                 while True:
                     chunk = response.read(chunk_size)
                     if not chunk:
@@ -444,12 +459,15 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
                     if progress_cb:
                         progress_cb(downloaded, total or downloaded)
     except urllib.error.HTTPError as e:
+        remove_partial_download()
         _LOG.warning("Update payload download failed with HTTP %s: %s", e.code, download_url)
         raise
     except urllib.error.URLError as e:
+        remove_partial_download()
         _LOG.warning("Update payload download failed: %s", e)
         raise
     except OSError as e:
+        remove_partial_download()
         _LOG.warning("Update payload download failed while writing %s: %s", dest_path, e)
         raise
 

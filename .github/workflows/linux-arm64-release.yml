@@ -30,7 +30,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  essential-tests:
+    uses: ./.github/workflows/tests.yml
+
   build-linux-arm64:
+    needs: essential-tests
     runs-on: ubuntu-24.04-arm
 
     steps:

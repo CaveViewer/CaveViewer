@@ -575,6 +575,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # pass or GPU cost beyond this tiny 2D overlay.
         self.minimap = Minimap(self.ctx, self.manifest)
         self.cross_section_map = CrossSectionMap(self.ctx, self.cache_dir, self.manifest)
+        # Build the first longitudinal view before the first world.update()
+        # queues any streaming work. This keeps profile availability
+        # independent of the configured number of chunk uploads per frame.
+        self.cross_section_map.prime(self.camera.position, self.camera.forward())
 
         # One-time texture diagnostic: print material/texture summary to
         # console so atlas feasibility can be judged without guessing.

@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import urllib.error
+import zipfile
+
+import pytest
+
+from gui import sample_maps, update_checker
+
+
+class BytesResponse:
+    def __init__(self, payload: bytes):
+        self._payload = payload
+        self._sent = False
+        self.headers = {"Content-Length": str(len(payload))}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self, _size=-1):
+        if self._sent:
+            return b""
+        self._sent = True
+        return self._payload
+
+
+class InterruptedResponse(BytesResponse):
+    def read(self, _size=-1):
+        if not self._sent:
+            self._sent = True
+            return self._payload
+        raise urllib.error.URLError("connection reset")
+
+
+@pytest.mark.integration
+def test_update_download_network_failure_leaves_no_file(tmp_path, monkeypatch):
+    destination = tmp_path / "downloads" / "update.zip"
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            urllib.error.URLError("offline")
+        ),
+    )
+
+    with pytest.raises(urllib.error.URLError):
+        update_checker.download_update(
+            "https://invalid.example/update.zip", None, str(destination)
+        )
+
+    assert not destination.exists()
+
+
+@pytest.mark.integration
+def test_network_failure_does_not_delete_preexisting_destination(tmp_path, monkeypatch):
+    destination = tmp_path / "downloads" / "update.zip"
+    destination.parent.mkdir()
+    destination.write_bytes(b"previous complete download")
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            urllib.error.URLError("offline")
+        ),
+    )
+
+    with pytest.raises(urllib.error.URLError):
+        update_checker.download_update(
+            "https://invalid.example/update.zip", None, str(destination)
+        )
+
+    assert destination.read_bytes() == b"previous complete download"
+
+
+@pytest.mark.integration
+def test_interrupted_update_download_removes_partial_file(tmp_path, monkeypatch):
+    destination = tmp_path / "downloads" / "update.zip"
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: InterruptedResponse(b"partial"),
+    )
+
+    with pytest.raises(urllib.error.URLError):
+        update_checker.download_update(
+            "https://invalid.example/update.zip", None, str(destination)
+        )
+
+    assert not destination.exists()
+
+
+@pytest.mark.integration
+def test_size_mismatch_removes_downloaded_file(tmp_path, monkeypatch):
+    destination = tmp_path / "downloads" / "update.zip"
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: BytesResponse(b"short"),
+    )
+
+    with pytest.raises(IOError, match="file size"):
+        update_checker.download_update(
+            "https://invalid.example/update.zip", 100, str(destination)
+        )
+
+    assert not destination.exists()
+
+
+@pytest.mark.integration
+def test_hash_mismatch_removes_downloaded_file(tmp_path, monkeypatch):
+    destination = tmp_path / "downloads" / "update.zip"
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: BytesResponse(b"payload"),
+    )
+
+    with pytest.raises(IOError, match="hash"):
+        update_checker.download_update(
+            "https://invalid.example/update.zip",
+            7,
+            str(destination),
+            expected_sha256="0" * 64,
+        )
+
+    assert not destination.exists()
+
+
+@pytest.mark.integration
+def test_sample_map_without_download_url_is_rejected(tmp_path):
+    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+    with pytest.raises(ValueError, match="No download URL"):
+        sample_maps.download_and_extract_sample_map(str(tmp_path), sample)
+
+
+@pytest.mark.integration
+def test_failed_sample_download_preserves_existing_install(tmp_path, monkeypatch):
+    sample = sample_maps.SampleMapInfo(
+        "Test Cave", "test.zip", "https://invalid.example/test.zip", 50
+    )
+    destination = sample_maps.local_sample_map_path(str(tmp_path), sample)
+    marker = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / sample.display_name / "map.obj"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("existing map", encoding="utf-8")
+
+    def fail_download(*_args, **_kwargs):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(sample_maps, "download_update", fail_download)
+
+    with pytest.raises(urllib.error.URLError):
+        sample_maps.download_and_extract_sample_map(str(tmp_path), sample)
+
+    assert marker.read_text(encoding="utf-8") == "existing map"
+    assert destination == str(marker.parent)
+
+
+@pytest.mark.integration
+def test_corrupt_sample_zip_preserves_existing_install(tmp_path, monkeypatch):
+    sample = sample_maps.SampleMapInfo(
+        "Test Cave", "test.zip", "https://invalid.example/test.zip", None
+    )
+    marker = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / sample.display_name / "map.obj"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("existing map", encoding="utf-8")
+
+    def write_corrupt_zip(_url, _size, destination, **_kwargs):
+        with open(destination, "wb") as file_obj:
+            file_obj.write(b"not a zip archive")
+
+    monkeypatch.setattr(sample_maps, "download_update", write_corrupt_zip)
+
+    with pytest.raises(zipfile.BadZipFile):
+        sample_maps.download_and_extract_sample_map(str(tmp_path), sample)
+
+    assert marker.read_text(encoding="utf-8") == "existing map"

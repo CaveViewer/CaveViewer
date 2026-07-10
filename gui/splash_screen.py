@@ -32,8 +32,6 @@ without extra modal pop-ups.
 from __future__ import annotations
 
 import glob
-import json
-import math
 import os
 import subprocess
 import sys
@@ -41,6 +39,15 @@ import tempfile
 import threading
 from caveviewer_version import APP_NAME, APP_VERSION
 from core.logging_utils import get_logger
+from gui.advanced_settings import (
+    ADVANCED_SETTING_COLUMNS as _ADVANCED_SETTING_COLUMNS,
+    ADVANCED_SETTING_FIELDS as _ADVANCED_SETTING_FIELDS,
+    apply_advanced_settings_to_env as _apply_advanced_settings_to_env,
+    effective_advanced_settings as _effective_advanced_settings,
+    load_advanced_settings as _load_advanced_settings,
+    save_advanced_settings as _save_advanced_settings,
+    validate_advanced_settings as _validate_advanced_settings,
+)
 from gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness, tk_display_scale
 from gui.platform import get_splash_platform_adapter
 from gui.preferences import migrate_preference_file
@@ -97,7 +104,6 @@ elif sys.platform == "win32":
 else:
     _APP_ICON_PATH = _resolve_asset_path("app_icon_macos.png")
 _LAST_BROWSE_PATH_FILE = migrate_preference_file("last_browse_path", ".caveviewer_last_browse_path")
-_ADVANCED_SETTINGS_FILE = migrate_preference_file("advanced_settings.json", ".caveviewer_advanced_settings.json")
 
 # URL for example maps link -- empty/None means link is disabled
 _EXAMPLE_MAPS_URL = None
@@ -239,324 +245,6 @@ def _set_tk_window_icon(window) -> None:
         window._cv_app_icon_photo = icon_photo
     except Exception as e:
         _LOG.warning(f"could not set application window icon ({e}); continuing without it.")
-
-_ADVANCED_SETTING_FIELDS = (
-    {
-        "section": "streaming",
-        "key": "memory_target_percent",
-        "env_var": "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
-        "label": "System RAM target (%)",
-        "hint": "Limits RAM used by loaded chunks only.",
-        "value_type": "float",
-        "min": 1.0,
-        "max": 80.0,
-        "units": "percent",
-    },
-    {
-        "section": "streaming",
-        "key": "gpu_memory_target_percent",
-        "env_var": "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
-        "label": "GPU memory target (%)",
-        "hint": "GPU memory limit for loaded chunks.",
-        "value_type": "float",
-        "min": 1.0,
-        "max": 80.0,
-        "units": "percent",
-    },
-    {
-        "section": "streaming",
-        "key": "gpu_memory_gb",
-        "env_var": "CAVEVIEWER_GPU_MEMORY_GB",
-        "label": "GPU memory override (GB)",
-        "hint": "Optional GPU memory override.",
-        "value_type": "float",
-        "optional": True,
-        "min": 0.0,
-        "min_exclusive": True,
-        "max": 1024.0,
-        "units": "GB",
-    },
-    {
-        "section": "streaming",
-        "key": "io_workers",
-        "env_var": "CAVEVIEWER_IO_WORKERS",
-        "label": "Chunk-loading workers",
-        "hint": "Threads used while viewing a cave.",
-        "value_type": "int",
-        "min": 1,
-    },
-    {
-        "section": "streaming",
-        "key": "io_reserved_cpus",
-        "env_var": "CAVEVIEWER_IO_RESERVED_CPUS",
-        "label": "Loading CPUs to keep free",
-        "hint": "CPUs reserved during cave viewing.",
-        "value_type": "int",
-        "min": 0,
-    },
-    {
-        "section": "streaming",
-        "key": "upload_chunks_per_frame",
-        "env_var": "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
-        "label": "Chunk uploads per frame",
-        "hint": "Ready chunks uploaded per frame.",
-        "value_type": "int",
-        "min": 1,
-        "max": 16,
-    },
-    {
-        "section": "streaming",
-        "key": "upload_time_budget_ms",
-        "env_var": "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
-        "label": "Upload budget (ms)",
-        "hint": "Soft per-frame upload budget.",
-        "value_type": "float",
-        "min": 0.5,
-        "max": 50.0,
-        "units": "ms",
-    },
-    {
-        "section": "parsing",
-        "key": "chunk_size_meters",
-        "env_var": "CAVEVIEWER_CHUNK_SIZE_METERS",
-        "label": "Import chunk size (m)",
-        "hint": "Chunk size for new caches.",
-        "value_type": "float",
-        "min": 0.0,
-        "min_exclusive": True,
-        "max": 512.0,
-        "units": "m",
-    },
-    {
-        "section": "parsing",
-        "key": "obj_scan_throttle_ms",
-        "env_var": "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
-        "label": "OBJ scan throttle (ms)",
-        "hint": "Yield during OBJ scanning.",
-        "value_type": "float",
-        "min": 0.0,
-        "max": 50.0,
-        "units": "ms",
-    },
-    {
-        "section": "parsing",
-        "key": "chunk_build_workers",
-        "env_var": "CAVEVIEWER_CHUNK_BUILD_WORKERS",
-        "label": "Cache-building workers",
-        "hint": "Threads used to build a new cache.",
-        "value_type": "int",
-        "min": 1,
-    },
-    {
-        "section": "parsing",
-        "key": "chunk_build_reserved_cpus",
-        "env_var": "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
-        "label": "Cache-build CPUs to keep free",
-        "hint": "CPUs reserved while building a cache.",
-        "value_type": "int",
-        "min": 0,
-    },
-    {
-        "section": "downloads",
-        "key": "recording_dir",
-        "env_var": "CAVEVIEWER_RECORDING_DIR",
-        "label": "Movie recording directory",
-        "hint": "Folder where MP4 flight recordings are saved.",
-        "value_type": "path_create",
-    },
-)
-
-_ADVANCED_SETTING_COLUMNS = (
-    (("streaming", "Streaming Performance"),),
-    (("parsing", "Map Parsing"), ("downloads", "Recordings")),
-)
-
-
-def _default_advanced_settings() -> dict[str, str]:
-    return {field["key"]: "" for field in _ADVANCED_SETTING_FIELDS}
-
-
-def _env_setting_or_default(env_var: str, default: str) -> str:
-    value = os.getenv(env_var, "").strip()
-    return value if value else default
-
-
-def _advanced_setting_defaults() -> dict[str, str]:
-    return {
-        "memory_target_percent": _env_setting_or_default(
-            "CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "8"
-        ),
-        "gpu_memory_target_percent": _env_setting_or_default(
-            "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET", "70"
-        ),
-        "gpu_memory_gb": os.getenv("CAVEVIEWER_GPU_MEMORY_GB", "").strip(),
-        "io_reserved_cpus": _env_setting_or_default("CAVEVIEWER_IO_RESERVED_CPUS", "3"),
-        "io_workers": _env_setting_or_default(
-            "CAVEVIEWER_IO_WORKERS", "2"
-        ),
-        "upload_chunks_per_frame": _env_setting_or_default(
-            "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "1"
-        ),
-        "upload_time_budget_ms": _env_setting_or_default(
-            "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", "3.0"
-        ),
-        "chunk_size_meters": _env_setting_or_default("CAVEVIEWER_CHUNK_SIZE_METERS", "8"),
-        "obj_scan_throttle_ms": _env_setting_or_default(
-            "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS", "1" if sys.platform.startswith("win") else "0"
-        ),
-        "chunk_build_reserved_cpus": _env_setting_or_default(
-            "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS", "2"
-        ),
-        "chunk_build_workers": _env_setting_or_default(
-            "CAVEVIEWER_CHUNK_BUILD_WORKERS", "1"
-        ),
-        "recording_dir": _default_recording_dir(),
-    }
-
-
-def _default_recording_dir() -> str:
-    configured = os.getenv("CAVEVIEWER_RECORDING_DIR", "").strip()
-    if configured:
-        return os.path.abspath(os.path.expanduser(configured))
-    return os.path.abspath(os.path.expanduser(os.path.join("~", "Movies", "CaveViewer")))
-
-
-def _effective_advanced_settings(values: dict | None = None) -> dict[str, str]:
-    normalized = _normalize_advanced_settings(values)
-    defaults = _advanced_setting_defaults()
-    return {
-        key: (normalized.get(key, "") or defaults[key])
-        for key in defaults
-    }
-
-
-def _normalize_advanced_settings(values: dict | None) -> dict[str, str]:
-    normalized = _default_advanced_settings()
-    if not isinstance(values, dict):
-        return normalized
-    for field in _ADVANCED_SETTING_FIELDS:
-        raw = values.get(field["key"], "")
-        normalized[field["key"]] = str(raw).strip() if raw is not None else ""
-    return normalized
-
-
-def _load_advanced_settings() -> dict[str, str]:
-    try:
-        with open(_ADVANCED_SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return _normalize_advanced_settings(json.load(f))
-    except Exception:
-        return _default_advanced_settings()
-
-
-def _save_advanced_settings(values: dict[str, str]) -> None:
-    try:
-        with open(_ADVANCED_SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(_normalize_advanced_settings(values), f, indent=2)
-    except Exception as e:
-        _LOG.warning(f"could not save advanced settings ({e})")
-
-
-def _format_advanced_range(field: dict) -> str:
-    minimum = field.get("min")
-    maximum = field.get("max")
-    units = field.get("units", "")
-    suffix = f" {units}" if units else ""
-    if minimum is not None and maximum is not None:
-        lower = f"greater than {minimum:g}" if field.get("min_exclusive") else f"at least {minimum:g}"
-        return f"{lower} and no more than {maximum:g}{suffix}"
-    if minimum is not None:
-        return f"greater than {minimum:g}{suffix}" if field.get("min_exclusive") else f"at least {minimum:g}{suffix}"
-    if maximum is not None:
-        return f"no more than {maximum:g}{suffix}"
-    return "valid"
-
-
-def _directory_target_is_writable(path: str) -> bool:
-    current = path
-    while current and not os.path.exists(current):
-        parent = os.path.dirname(current)
-        if parent == current:
-            break
-        current = parent
-    return bool(current and os.path.isdir(current) and os.access(current, os.W_OK))
-
-
-def _validate_advanced_settings(values: dict[str, str]) -> tuple[bool, str | None, dict[str, str], str | None]:
-    normalized = _normalize_advanced_settings(values)
-
-    for field in _ADVANCED_SETTING_FIELDS:
-        key = field["key"]
-        text = normalized[key]
-        if not text:
-            if field.get("optional", False):
-                continue
-            return False, f"{field['label']} is required.", normalized, key
-
-        label = field["label"]
-        value_type = field.get("value_type")
-        minimum = field.get("min")
-        maximum = field.get("max")
-        min_exclusive = bool(field.get("min_exclusive"))
-
-        if minimum is not None and minimum >= 0 and text.startswith("-"):
-            return False, f"{label} cannot be negative.", normalized, key
-
-        if value_type == "int":
-            try:
-                value = int(text)
-            except ValueError:
-                return False, f"{label} must be a whole number.", normalized, key
-            if minimum is not None and value < minimum:
-                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
-            if maximum is not None and value > maximum:
-                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
-            normalized[key] = str(value)
-            continue
-
-        if value_type == "float":
-            try:
-                value = float(text)
-            except ValueError:
-                return False, f"{label} must be a number.", normalized, key
-            if not math.isfinite(value):
-                return False, f"{label} must be a finite number.", normalized, key
-            if minimum is not None:
-                below_minimum = value <= minimum if min_exclusive else value < minimum
-                if below_minimum:
-                    return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
-            if maximum is not None and value > maximum:
-                return False, f"{label} must be {_format_advanced_range(field)}.", normalized, key
-            normalized[key] = f"{value:g}"
-            continue
-
-        if value_type == "path":
-            path = os.path.abspath(os.path.expanduser(text))
-            if not os.path.isdir(path):
-                return False, f"{label} must be an existing folder.", normalized, key
-            if not os.access(path, os.W_OK):
-                return False, f"{label} must be writable.", normalized, key
-            normalized[key] = path
-            continue
-
-        if value_type == "path_create":
-            path = os.path.abspath(os.path.expanduser(text))
-            if os.path.exists(path):
-                if not os.path.isdir(path):
-                    return False, f"{label} must be a folder.", normalized, key
-                if not os.access(path, os.W_OK):
-                    return False, f"{label} must be writable.", normalized, key
-            elif not _directory_target_is_writable(path):
-                return False, f"{label} must be inside a writable folder.", normalized, key
-            normalized[key] = path
-
-    return True, None, normalized, None
-
-
-def _apply_advanced_settings_to_env(values: dict[str, str]) -> None:
-    normalized = _effective_advanced_settings(values)
-    for field in _ADVANCED_SETTING_FIELDS:
-        value = normalized[field["key"]]
-        os.environ[field["env_var"]] = value
 
 
 def _has_precompiled_cache(folder: str) -> bool:

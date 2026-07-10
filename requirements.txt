@@ -7,3 +7,4 @@ pyglm>=2.7.1
 truststore>=0.10.0
 cryptography>=43.0.0
 imageio-ffmpeg>=0.5.1
+pygltflib==1.16.5

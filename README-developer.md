@@ -119,6 +119,23 @@ Notes:
 - `scripts/windows/setup.ps1` is designed to install prerequisites and set up a runnable local source environment.
 - `scripts/windows/launch.bat` is a launcher for the setup script.
 
+## Run Automated Tests
+
+Install the development-only test tools after the runtime dependencies:
+
+```bash
+.venv-dev/bin/python -m pip install -r requirements-dev.txt
+.venv-dev/bin/python -m pytest
+```
+
+On Windows, use `.venv-dev\Scripts\python` in place of `.venv-dev/bin/python`.
+
+The suite isolates the home/preferences directory, blocks uncontrolled network
+connections, and uses temporary directories for all generated files. The same
+essential suite and branch-coverage gate run automatically for pull requests
+and before every GitHub release workflow. Tests and development dependencies
+are not included in release archives.
+
 ## Sample Map Source Overrides
 
 By default, the built-in sample maps dialog reads release assets from:
