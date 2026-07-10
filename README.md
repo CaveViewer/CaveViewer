@@ -134,7 +134,7 @@ Why this matters: chunk size is one of the most important map settings because i
 | GPU memory target (%) | — | 70 | 1 to 80 | Target share of detected GPU memory used for loaded chunks. |
 | GPU memory override (GB) | — | empty | greater than 0 and up to 1024 | Manual GPU memory size when auto-detection is unavailable or inaccurate. |
 | Chunk-loading workers | — | 2 | integer, at least 1 | Number of background chunk-loading worker threads. |
-| Loading CPUs to keep free | — | 3 | integer, at least 0 | Reserve CPU cores instead of using them for streaming workers. |
+| Loading CPUs to keep free | — | 3 | integer, 2 to 32 | Reserve CPU cores instead of using them for streaming workers. |
 | Chunk uploads per frame | — | 1 | integer, 1 to 16 | Hard cap for how many ready chunks are uploaded each frame on the render thread. |
 | Upload budget (ms) | — | 3.0 | 0.5 to 50.0 ms | Soft time budget per frame for chunk uploads. |
 
@@ -149,7 +149,7 @@ automatic detection is unavailable or does not match the active adapter.
 | Import chunk size (m) | — | 8 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
 | OBJ scan throttle (ms) | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Yield/throttle behavior during OBJ scanning. |
 | Cache-building workers | — | 1 | integer, at least 1 | Number of worker threads used while writing chunk cache files. |
-| Cache-build CPUs to keep free | — | 2 | integer, at least 0 | CPU cores reserved during cache building. |
+| Cache-build CPUs to keep free | — | 2 | integer, 2 to 32 | CPU cores reserved during cache building. |
 
 ### Recordings
 
@@ -217,6 +217,12 @@ If pop-in is too visible, raise Chunk uploads per frame gradually (1, then 2, th
 If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Cache-building workers or reduce Cache-build CPUs to keep free.
 
 Important: there is no single best value for all maps. The best result comes from trying several import strategies and streaming settings for your map and your hardware.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the change workflow and
+[`docs/development/`](docs/development/README.md) for architecture, repository
+layout, coding, testing, and AI-assisted development standards.
 
 ## License
 

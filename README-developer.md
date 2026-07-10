@@ -6,6 +6,11 @@ Scope:
 
 - This document is intentionally focused on source-based development and local runs.
 
+Contributor workflow, architecture, repository layout, coding, testing, and
+AI-assistant guidance are indexed in
+[`docs/development/`](docs/development/README.md). See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) before preparing a change.
+
 ## Get Source Files
 
 You can start in either of these ways:

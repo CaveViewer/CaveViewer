@@ -1,0 +1,25 @@
+# Local environments and generated output
+.venv*/
+.cache/
+build/
+dist/
+htmlcov/
+coverage.xml
+.coverage*
+**/__pycache__/
+*.pyc
+
+# Application-generated map and preference data
+**/_cache/
+**/.caveviewer_cache/
+.caveviewer/
+
+# Private signing material and common credential files
+*.private.pem
+release_signing_private_key.pem
+.env
+.env.*
+
+# Per-user IDE state
+.idea/workspace.xml
+.run/
