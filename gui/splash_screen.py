@@ -42,6 +42,7 @@ from core.logging_utils import get_logger
 from gui.advanced_settings import (
     ADVANCED_SETTING_COLUMNS as _ADVANCED_SETTING_COLUMNS,
     ADVANCED_SETTING_FIELDS as _ADVANCED_SETTING_FIELDS,
+    advanced_setting_placeholder_text as _advanced_setting_placeholder_text,
     apply_advanced_settings_to_env as _apply_advanced_settings_to_env,
     effective_advanced_settings as _effective_advanced_settings,
     load_advanced_settings as _load_advanced_settings,
@@ -143,7 +144,8 @@ _SECONDARY_LINK_ROW_TOP_GAP = 40 if _LINUX_SPLASH_LAYOUT else (30 if _WINDOWS_SP
 _ADVANCED_DIALOG_TWO_COLUMN = True
 _ADVANCED_DIALOG_WRAP = 620 if sys.platform == "win32" else 340
 _ADVANCED_DIALOG_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
-_ADVANCED_DIALOG_NUMERIC_ENTRY_WIDTH = 8
+_ADVANCED_DIALOG_NUMERIC_ENTRY_WIDTH = 24
+_ADVANCED_DIALOG_PLACEHOLDER_COLOR = "#747481"
 _ADVANCED_DIALOG_BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
 _ADVANCED_DIALOG_SECTION_GAP = 44 if sys.platform == "win32" else 18
 # Linux/Tk's requested width is noticeably tighter than the macOS rendering,
@@ -772,6 +774,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
         field_vars: dict[str, tk.StringVar] = {}
         field_entries: dict[str, tk.Entry] = {}
+        numeric_entry_states: dict[str, tuple] = {}
+        numeric_placeholder_keys: set[str] = set()
         effective_settings = _effective_advanced_settings(advanced_settings)
 
         def _is_numeric_entry_candidate(value_type: str, candidate: str) -> bool:
@@ -788,6 +792,40 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
             return True
 
         numeric_entry_validator = dialog.register(_is_numeric_entry_candidate)
+
+        def _show_numeric_placeholder(key: str) -> None:
+            state = numeric_entry_states.get(key)
+            if state is None:
+                return
+            entry, display_var, placeholder_text = state
+            if display_var.get():
+                return
+            numeric_placeholder_keys.add(key)
+            previous_validation = entry.cget("validate")
+            entry.configure(validate="none")
+            display_var.set(placeholder_text)
+            entry.configure(
+                fg=_ADVANCED_DIALOG_PLACEHOLDER_COLOR,
+                validate=previous_validation,
+            )
+
+        def _clear_numeric_placeholder(key: str) -> None:
+            if key not in numeric_placeholder_keys:
+                return
+            entry, display_var, _placeholder_text = numeric_entry_states[key]
+            previous_validation = entry.cget("validate")
+            entry.configure(validate="none")
+            numeric_placeholder_keys.discard(key)
+            display_var.set("")
+            entry.configure(fg=_SUBTITLE_COLOR, validate=previous_validation)
+            entry.icursor(0)
+
+        def _begin_numeric_edit_from_key(event, key: str):
+            if event.char or event.keysym in {"BackSpace", "Delete"}:
+                _clear_numeric_placeholder(key)
+
+        def _begin_numeric_edit_from_click(_event, key: str):
+            _clear_numeric_placeholder(key)
 
         def _compact_directory_path(path: str, max_chars: int = 42) -> str:
             """Keep a saved directory recognizable without showing a long absolute path."""
@@ -898,7 +936,13 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                 )
                 compact_path = field["key"] == "recording_dir"
                 entry_var = var
-                if compact_path:
+                placeholder_text = _advanced_setting_placeholder_text(field)
+                if placeholder_text:
+                    entry_var = tk.StringVar(master=dialog, value=var.get())
+                    if not var.get():
+                        entry_var.set(placeholder_text)
+                        numeric_placeholder_keys.add(field["key"])
+                elif compact_path:
                     entry_var = tk.StringVar(master=dialog, value=_compact_directory_path(var.get()))
                     var.trace_add(
                         "write",
@@ -924,7 +968,11 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     textvariable=entry_var,
                     font=advanced_body_font,
                     bg="#1c1c24",
-                    fg=_SUBTITLE_COLOR,
+                    fg=(
+                        _ADVANCED_DIALOG_PLACEHOLDER_COLOR
+                        if field["key"] in numeric_placeholder_keys
+                        else _SUBTITLE_COLOR
+                    ),
                     insertbackground=_SUBTITLE_COLOR,
                     relief="flat",
                     highlightthickness=1,
@@ -937,6 +985,51 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     validatecommand=(numeric_entry_validator, value_type, "%P"),
                 )
                 field_entries[field["key"]] = entry
+                if placeholder_text:
+                    key = field["key"]
+                    numeric_entry_states[key] = (entry, entry_var, placeholder_text)
+
+                    def sync_numeric_value(
+                        *_args,
+                        field_key=key,
+                        source=entry_var,
+                        target=var,
+                    ):
+                        if field_key not in numeric_placeholder_keys:
+                            value = source.get()
+                            target.set(value)
+                            if not value:
+                                # Let Tk finish the deletion, then replace the
+                                # empty display immediately; no focus change is
+                                # required to reveal the range placeholder.
+                                dialog.after_idle(
+                                    lambda key=field_key: _show_numeric_placeholder(
+                                        key
+                                    )
+                                )
+
+                    entry_var.trace_add("write", sync_numeric_value)
+                    entry.bind(
+                        "<KeyPress>",
+                        lambda event, field_key=key: _begin_numeric_edit_from_key(
+                            event, field_key
+                        ),
+                        add="+",
+                    )
+                    entry.bind(
+                        "<Button-1>",
+                        lambda event, field_key=key: _begin_numeric_edit_from_click(
+                            event, field_key
+                        ),
+                        add="+",
+                    )
+                    entry.bind(
+                        "<FocusOut>",
+                        lambda _event, field_key=key: _show_numeric_placeholder(
+                            field_key
+                        ),
+                        add="+",
+                    )
                 var.trace_add("write", lambda *_args, key=field["key"]: _clear_field_error(key))
                 entry.pack(**entry_pack_options)
 
@@ -1044,6 +1137,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         def on_apply():
             for entry in field_entries.values():
                 entry.config(highlightbackground="#30303a", highlightcolor="#5d6f8a")
+            for key in numeric_entry_states:
+                _show_numeric_placeholder(key)
             proposed = {key: var.get() for key, var in field_vars.items()}
             ok, message, normalized, error_key = _validate_advanced_settings(proposed)
             if not ok:
@@ -1052,7 +1147,8 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
                     bad_entry = field_entries[error_key]
                     bad_entry.config(highlightbackground="#ff6b6b", highlightcolor="#ff6b6b")
                     bad_entry.focus_set()
-                    bad_entry.selection_range(0, "end")
+                    if error_key not in numeric_placeholder_keys:
+                        bad_entry.selection_range(0, "end")
                 return
 
             advanced_settings = _effective_advanced_settings(normalized)

@@ -397,24 +397,29 @@ still override it for an individual run.
 
 ### Streaming Performance
 
-| Variable | Default | Description |
-|---|---|---|
-| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
-| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | Override the GPU memory size (in GB) used by the streaming budget. Useful when auto-detection reports an incorrect value. |
-| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | Percentage of GPU memory the streaming system targets. |
-| `CAVEVIEWER_IO_WORKERS` | `2` | Number of background threads for loading chunk files from disk. |
-| `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | CPU cores to keep free when computing a custom `CAVEVIEWER_IO_WORKERS` value. |
-| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. Range: 1–16. |
-| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | Soft per-frame time budget (ms) for GPU uploads. Range: 0.5–50. |
+Advanced Settings opens numeric fields with their effective defaults. If a
+numeric value is cleared, its accepted range immediately appears inside the
+input as muted, unit-free placeholder text; the placeholder itself is never
+applied or saved as a value.
+
+| Variable | Default | Accepted range | Description |
+|---|---|---|---|
+| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1–80% | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
+| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | >0 and ≤1024 GB (optional) | Override the GPU memory size used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; use this when detection is unavailable or inaccurate. |
+| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1–80% | Percentage of GPU memory the chunk streaming system targets. |
+| `CAVEVIEWER_IO_WORKERS` | `2` | Integer ≥1 | Number of background threads for loading chunk files from disk. |
+| `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer ≥0 | CPU cores to keep free when computing a custom `CAVEVIEWER_IO_WORKERS` value. |
+| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1–16 | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. |
+| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5–50 ms | Soft per-frame time budget for GPU uploads. |
 
 ### Map Import (First-Time Parsing)
 
-| Variable | Default | Description |
-|---|---|---|
-| `CAVEVIEWER_CHUNK_SIZE_METERS` | `8` | Spatial chunk size in metres used when building a new chunk cache. Does not affect already-cached maps. |
-| `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | Milliseconds to yield between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
-| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Threads used while writing chunk files during import. |
-| `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | CPU cores to keep free when computing a custom `CAVEVIEWER_CHUNK_BUILD_WORKERS` value. |
+| Variable | Default | Accepted range | Description |
+|---|---|---|---|
+| `CAVEVIEWER_CHUNK_SIZE_METERS` | `8` | >0 and ≤512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
+| `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0–50 ms | Time yielded between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
+| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer ≥1 | Threads used while writing chunk files during import. |
+| `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer ≥0 | CPU cores to keep free when computing a custom `CAVEVIEWER_CHUNK_BUILD_WORKERS` value. |
 
 ### Sample Maps
 

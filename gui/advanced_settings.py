@@ -267,6 +267,38 @@ def _format_advanced_range(field: dict) -> str:
     return "valid"
 
 
+def advanced_setting_range_text(
+    field: dict, *, include_units: bool = True
+) -> str | None:
+    """Return a compact UI range for a numeric Advanced Settings field."""
+    if field.get("value_type") not in {"int", "float"}:
+        return None
+
+    minimum = field.get("min")
+    maximum = field.get("max")
+    units = field.get("units", "")
+    suffix = ""
+    if include_units:
+        suffix = "%" if units == "percent" else (f" {units}" if units else "")
+
+    if minimum is not None and maximum is not None:
+        if field.get("min_exclusive"):
+            return f">{minimum:g} and ≤{maximum:g}{suffix}"
+        return f"{minimum:g}–{maximum:g}{suffix}"
+    if minimum is not None:
+        operator = ">" if field.get("min_exclusive") else "≥"
+        return f"{operator}{minimum:g}{suffix}"
+    if maximum is not None:
+        return f"≤{maximum:g}{suffix}"
+    return None
+
+
+def advanced_setting_placeholder_text(field: dict) -> str | None:
+    """Return the muted in-field placeholder shown for an empty numeric field."""
+    range_text = advanced_setting_range_text(field, include_units=False)
+    return f"Range: {range_text}" if range_text else None
+
+
 def _directory_target_is_writable(path: str) -> bool:
     current = path
     while current and not os.path.exists(current):

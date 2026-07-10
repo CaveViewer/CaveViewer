@@ -558,7 +558,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             load_radius_cells=self.render_distance_stepper.value,
             unload_radius_margin=1,
         )
-        self.world = StreamingWorld(self.cache_dir, config, on_decode_textures=predecode_textures_for_chunk)
+        self.world = StreamingWorld(
+            self.cache_dir,
+            config,
+            on_decode_textures=predecode_textures_for_chunk,
+            gpu_vendor=str(self.ctx.info.get("GL_VENDOR", "")),
+        )
 
         # pick a sane starting position: center of the first available chunk,
         # so the user doesn't spawn outside the mesh and see nothing

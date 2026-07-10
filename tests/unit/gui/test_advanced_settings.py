@@ -222,6 +222,79 @@ def test_environment_overrides_are_used_as_defaults(monkeypatch):
     assert defaults["upload_chunks_per_frame"] == "3"
 
 
+def test_every_numeric_setting_has_a_display_range():
+    expected_ranges = {
+        "memory_target_percent": "1–80%",
+        "gpu_memory_target_percent": "1–80%",
+        "gpu_memory_gb": ">0 and ≤1024 GB",
+        "io_workers": "≥1",
+        "io_reserved_cpus": "≥0",
+        "upload_chunks_per_frame": "1–16",
+        "upload_time_budget_ms": "0.5–50 ms",
+        "chunk_size_meters": ">0 and ≤512 m",
+        "obj_scan_throttle_ms": "0–50 ms",
+        "chunk_build_workers": "≥1",
+        "chunk_build_reserved_cpus": "≥0",
+    }
+
+    numeric_fields = {
+        field["key"]: field
+        for field in settings.ADVANCED_SETTING_FIELDS
+        if field["value_type"] in {"int", "float"}
+    }
+    assert set(numeric_fields) == set(expected_ranges)
+    assert {
+        key: settings.advanced_setting_range_text(field)
+        for key, field in numeric_fields.items()
+    } == expected_ranges
+
+
+def test_every_numeric_setting_has_an_in_field_placeholder():
+    numeric_fields = [
+        field
+        for field in settings.ADVANCED_SETTING_FIELDS
+        if field["value_type"] in {"int", "float"}
+    ]
+    placeholders = {
+        field["key"]: settings.advanced_setting_placeholder_text(field)
+        for field in numeric_fields
+    }
+    assert placeholders == {
+        "memory_target_percent": "Range: 1–80",
+        "gpu_memory_target_percent": "Range: 1–80",
+        "gpu_memory_gb": "Range: >0 and ≤1024",
+        "io_workers": "Range: ≥1",
+        "io_reserved_cpus": "Range: ≥0",
+        "upload_chunks_per_frame": "Range: 1–16",
+        "upload_time_budget_ms": "Range: 0.5–50",
+        "chunk_size_meters": "Range: >0 and ≤512",
+        "obj_scan_throttle_ms": "Range: 0–50",
+        "chunk_build_workers": "Range: ≥1",
+        "chunk_build_reserved_cpus": "Range: ≥0",
+    }
+
+
+def test_required_numeric_settings_open_with_defaults():
+    defaults = settings.advanced_setting_defaults()
+    required_numeric_keys = {
+        field["key"]
+        for field in settings.ADVANCED_SETTING_FIELDS
+        if field["value_type"] in {"int", "float"}
+        and not field.get("optional", False)
+    }
+    assert all(defaults[key] for key in required_numeric_keys)
+
+
+def test_non_numeric_setting_has_no_display_range():
+    recording_dir = next(
+        field
+        for field in settings.ADVANCED_SETTING_FIELDS
+        if field["key"] == "recording_dir"
+    )
+    assert settings.advanced_setting_range_text(recording_dir) is None
+    assert settings.advanced_setting_placeholder_text(recording_dir) is None
+
+
 def test_apply_maps_every_setting_to_its_declared_environment_variable(
     valid_advanced_settings
 ):
@@ -248,5 +321,9 @@ def test_splash_dialog_uses_extracted_settings_logic():
     from gui import splash_screen
 
     assert splash_screen._ADVANCED_SETTING_FIELDS is settings.ADVANCED_SETTING_FIELDS
+    assert (
+        splash_screen._advanced_setting_placeholder_text
+        is settings.advanced_setting_placeholder_text
+    )
     assert splash_screen._validate_advanced_settings is settings.validate_advanced_settings
     assert splash_screen._save_advanced_settings is settings.save_advanced_settings

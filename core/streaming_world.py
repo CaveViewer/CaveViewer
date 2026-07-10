@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import heapq
 import os
+from pathlib import Path
 import subprocess
+import sys
 import threading
 import queue
 import time
@@ -35,6 +37,9 @@ from core.logging_utils import get_logger
 
 
 _LOG = get_logger("StreamingWorld")
+
+_AMD_PCI_VENDOR_ID = 0x1002
+_LINUX_DRM_ROOT = "/sys/class/drm"
 
 
 def _detect_total_ram_bytes() -> int:
@@ -120,22 +125,67 @@ def _parse_gpu_target_fraction(raw_value: str | None) -> float:
     return _parse_target_fraction(raw_value, conservative_default=0.70)
 
 
-def _detect_total_gpu_memory_bytes() -> int | None:
-    """Best-effort dedicated GPU memory detection.
+def _read_positive_sysfs_int(path: Path) -> int | None:
+    """Read a positive decimal/hex integer from sysfs, or return None."""
+    try:
+        value = int(path.read_text(encoding="ascii").strip(), 0)
+    except (OSError, ValueError):
+        return None
+    return value if value > 0 else None
 
-    CAVEVIEWER_GPU_MEMORY_GB is an explicit override for systems where
-    automatic detection is unavailable. On NVIDIA systems, nvidia-smi is
-    used when present.
+
+def _detect_linux_amd_gpu_memory_bytes(
+    drm_root: str | os.PathLike[str] = _LINUX_DRM_ROOT,
+) -> int | None:
+    """Detect AMD VRAM through the Linux DRM/amdgpu sysfs interface.
+
+    amdgpu exposes ``mem_info_vram_total`` in bytes for each DRM card.  Prefer
+    the boot/primary adapter when multiple AMD cards are present; if none is
+    marked primary, use the largest valid AMD VRAM value.  Connector entries
+    such as ``card1-eDP-1`` are deliberately ignored.
     """
-    override_gb = os.environ.get("CAVEVIEWER_GPU_MEMORY_GB", "").strip()
-    if override_gb:
-        try:
-            value = float(override_gb)
-            if value > 0.0:
-                return int(value * (1024 ** 3))
-        except ValueError:
-            pass
+    root = Path(drm_root)
+    try:
+        entries = sorted(root.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return None
 
+    candidates: list[tuple[bool, int]] = []
+    for card_path in entries:
+        if not card_path.name.startswith("card"):
+            continue
+        card_index = card_path.name.removeprefix("card")
+        if not card_index.isdigit():
+            continue
+
+        device_path = card_path / "device"
+        vendor_id = _read_positive_sysfs_int(device_path / "vendor")
+        if vendor_id != _AMD_PCI_VENDOR_ID:
+            continue
+
+        vram_bytes = _read_positive_sysfs_int(
+            device_path / "mem_info_vram_total"
+        )
+        if vram_bytes is None:
+            continue
+
+        is_boot_gpu = _read_positive_sysfs_int(device_path / "boot_vga") == 1
+        candidates.append((is_boot_gpu, vram_bytes))
+
+    if not candidates:
+        return None
+
+    # A primary adapter is more likely to own the OpenGL context.  The memory
+    # size breaks ties and provides a useful fallback on systems whose driver
+    # does not expose boot_vga.
+    _is_boot_gpu, vram_bytes = max(
+        candidates, key=lambda candidate: (candidate[0], candidate[1])
+    )
+    return vram_bytes
+
+
+def _detect_nvidia_gpu_memory_bytes() -> int | None:
+    """Detect NVIDIA VRAM with nvidia-smi when it is available."""
     try:
         result = subprocess.run(
             [
@@ -154,6 +204,60 @@ def _detect_total_gpu_memory_bytes() -> int | None:
             return total_mb * 1024 * 1024
     except Exception:
         pass
+    return None
+
+
+def _detect_total_gpu_memory_bytes(gpu_vendor: str | None = None) -> int | None:
+    """Best-effort dedicated GPU memory detection.
+
+    CAVEVIEWER_GPU_MEMORY_GB is an explicit override for systems where
+    automatic detection is unavailable. NVIDIA uses nvidia-smi when present;
+    AMD GPUs on Linux use the amdgpu DRM sysfs interface.  When the active
+    OpenGL vendor is known, only its matching detector runs so a secondary
+    GPU cannot accidentally determine the primary GPU's memory budget.
+    """
+    override_gb = os.environ.get("CAVEVIEWER_GPU_MEMORY_GB", "").strip()
+    if override_gb:
+        try:
+            value = float(override_gb)
+            if value > 0.0:
+                memory_bytes = int(value * (1024 ** 3))
+                _LOG.info(
+                    "Using configured GPU memory override: %.1f GB.",
+                    memory_bytes / (1024 ** 3),
+                )
+                return memory_bytes
+        except ValueError:
+            pass
+
+    normalized_vendor = (gpu_vendor or "").strip().casefold()
+    vendor_is_nvidia = "nvidia" in normalized_vendor
+    vendor_is_amd = (
+        "amd" in normalized_vendor
+        or "advanced micro devices" in normalized_vendor
+        or normalized_vendor.startswith("ati ")
+    )
+
+    # Preserve the historical NVIDIA-first fallback when no OpenGL vendor is
+    # available.  If the context identified its vendor, avoid consulting a
+    # different adapter that merely happens to be installed in the machine.
+    if vendor_is_nvidia or not normalized_vendor:
+        memory_bytes = _detect_nvidia_gpu_memory_bytes()
+        if memory_bytes is not None:
+            _LOG.info(
+                "Detected NVIDIA GPU memory via nvidia-smi: %.1f GB.",
+                memory_bytes / (1024 ** 3),
+            )
+            return memory_bytes
+
+    if sys.platform.startswith("linux") and (vendor_is_amd or not normalized_vendor):
+        memory_bytes = _detect_linux_amd_gpu_memory_bytes()
+        if memory_bytes is not None:
+            _LOG.info(
+                "Detected AMD GPU memory via Linux DRM sysfs: %.1f GB.",
+                memory_bytes / (1024 ** 3),
+            )
+            return memory_bytes
 
     return None
 
@@ -199,7 +303,8 @@ class StreamingWorld:
     """
 
     def __init__(self, cache_dir: str, config: StreamingConfig,
-                 on_decode_textures: Optional[Callable[[ChunkData], None]] = None):
+                 on_decode_textures: Optional[Callable[[ChunkData], None]] = None,
+                 gpu_vendor: str | None = None):
         """
         on_decode_textures, if given, is called from a background worker
         thread right after a chunk's geometry finishes loading, with the
@@ -210,6 +315,10 @@ class StreamingWorld:
         as an injected callback rather than importing TextureManager
         directly here preserves this module's GPU-API-agnostic design and
         keeps it unit-testable without any texture/GPU machinery at all.
+
+        gpu_vendor is the active OpenGL context's GL_VENDOR string when the
+        caller has one. It prevents a secondary adapter from supplying the
+        memory budget on hybrid-GPU systems.
         """
         self.cache_dir = cache_dir
         self.config = config
@@ -230,7 +339,7 @@ class StreamingWorld:
         self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes(sampled_chunk_keys)
         gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
         self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
-        self._total_gpu_memory_bytes = _detect_total_gpu_memory_bytes()
+        self._total_gpu_memory_bytes = _detect_total_gpu_memory_bytes(gpu_vendor)
         self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes(sampled_chunk_keys)
         self._configure_chunk_budget_from_memory_targets()
 
@@ -360,7 +469,8 @@ class StreamingWorld:
             _LOG.info("Effective max_loaded_chunks=%d after RAM/GPU limits.", self.config.max_loaded_chunks)
         else:
             _LOG.info(
-                "GPU memory limit not applied; set CAVEVIEWER_GPU_MEMORY_GB or install nvidia-smi for detection."
+                "GPU memory limit not applied; automatic detection was unavailable. "
+                "Set CAVEVIEWER_GPU_MEMORY_GB to provide an explicit value."
             )
 
     def shutdown(self):

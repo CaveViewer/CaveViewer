@@ -7,11 +7,13 @@ All notable changes to this project are documented in this file.
 ### Added
 - Advanced startup settings for streaming and map parsing.
 - Pre-compute and runtime streaming tuning options, including memory and worker-thread controls.
+- Automatic AMD GPU memory detection through Linux DRM sysfs.
 - Map parsing preferences with cache compatibility handling when preferences differ from existing manifests.
 - Logging framework and expanded runtime diagnostics.
 - Windows setup automation improvements and packaging/release support updates.
 
 ### Changed
+- Advanced Settings now shows numeric defaults initially and muted in-field range placeholders when values are cleared.
 - Splash/startup UI layout and sizing refined across macOS, Windows, and Linux, including DPI scaling updates.
 - Startup and viewer visual consistency improved, including progress bar behavior and control panel styling.
 - Build and release scripts streamlined, with Linux Docker-based multi-arch build flow updates.

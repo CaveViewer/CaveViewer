@@ -138,6 +138,10 @@ Why this matters: chunk size is one of the most important map settings because i
 | Chunk uploads per frame | — | 1 | integer, 1 to 16 | Hard cap for how many ready chunks are uploaded each frame on the render thread. |
 | Upload budget (ms) | — | 3.0 | 0.5 to 50.0 ms | Soft time budget per frame for chunk uploads. |
 
+GPU memory is detected automatically through Linux DRM sysfs for AMD GPUs and
+through `nvidia-smi` for NVIDIA GPUs. Use the GPU memory override only when
+automatic detection is unavailable or does not match the active adapter.
+
 ### Map Parsing
 
 | Preference | Environment variable | Default | Valid range | What it changes |
