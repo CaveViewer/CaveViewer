@@ -1,4 +1,4 @@
-.vscode
+.vscode/
 .venv*
 .DS_Store
 __pycache__/
@@ -26,3 +26,4 @@ release_signing_private_key.pem
 .caveviewer/
 run_caveviewer.sh
 .idea/
+.run
