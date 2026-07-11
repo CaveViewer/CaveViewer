@@ -57,7 +57,9 @@ updates/macos/x86_64/<stable|prerelease>.json
 Every platform publishes a matching `.json.sig` beside each manifest. macOS
 ARM64 publishing also copies the signed files to the legacy aliases at
 `updates/macos/<stable|prerelease>.json[.sig]`. Those aliases must remain
-byte-for-byte identical to the ARM64 files.
+byte-for-byte identical to the ARM64 files. `.gitattributes` forces every
+update JSON file to use LF line endings so Git cannot rewrite signed manifest
+bytes during a Windows checkout or commit.
 
 The application checks architecture-specific manifests from the selected
 branch and channel; it does not derive updates from GitHub's “latest release”
