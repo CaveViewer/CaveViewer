@@ -66,7 +66,10 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "skip_essential_tests" not in dispatch_contract, workflow_name
         assert "source_sha" not in dispatch_contract, workflow_name
         assert "ref: ${{ inputs.source_sha || github.sha }}" in workflow, workflow_name
-        assert "permissions:\n      contents: read" in workflow, workflow_name
+        workflow_header = workflow.split("\njobs:\n", 1)[0]
+        assert "permissions:\n  contents: write" in workflow_header, workflow_name
+        assert workflow.count("permissions:\n      contents: read") == 2, workflow_name
+        assert "permissions:\n      contents: write" in workflow, workflow_name
         assert f"group: caveviewer-build-{target}-" in workflow, workflow_name
         assert "--action=package" in workflow, workflow_name
         assert "--action=release" not in workflow, workflow_name
@@ -110,6 +113,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         job_positions.append(block_start)
         assert f"uses: ./.github/workflows/{called_workflow}" in job_block
         assert "needs: essential-tests" in job_block
+        assert "permissions:\n      contents: write" in job_block
         assert "publish: false" in job_block
         assert "source_sha: ${{ github.sha }}" in job_block
 

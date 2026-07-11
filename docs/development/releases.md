@@ -99,13 +99,16 @@ Normal pushes to `main` or `release/**` also trigger `.github/workflows/tests.ym
 those branch-CI runs are separate from the single gate inside All Platform
 Release.
 
-Platform jobs have read-only repository permissions and always run package-only
-operations. They upload their binaries and package metadata as workflow
-artifacts; they do not create GitHub releases, receive the signing key, write
-manifests, or push commits. If every requested package succeeds and `publish`
-is enabled, the finalizer downloads all artifacts, creates or updates the
-GitHub release once, writes and signs every requested manifest, updates
-`src/caveviewer/version.py`, and pushes one metadata commit.
+GitHub requires write permission to be preserved across each reusable-workflow
+call boundary because a nested workflow cannot elevate permissions later. The
+test and package jobs explicitly downgrade their own tokens to read-only and
+always run package-only operations. They upload their binaries and package
+metadata as workflow artifacts; they do not create GitHub releases, receive the
+signing key, write manifests, or push commits. If every requested package
+succeeds and `publish` is enabled, the finalizer uses the preserved write
+permission to download all artifacts, create or update the GitHub release once,
+write and sign every requested manifest, update `src/caveviewer/version.py`,
+and push one metadata commit.
 
 Every package checks out the workflow's starting commit rather than a moving
 branch head. Before publishing, the finalizer verifies that the selected branch
