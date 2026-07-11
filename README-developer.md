@@ -10,6 +10,8 @@ Contributor workflow, architecture, repository layout, coding, testing, and
 AI-assistant guidance are indexed in
 [`docs/development/`](docs/development/README.md). See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) before preparing a change.
+The canonical platform release sequence and verification checklist are in
+[`docs/development/releases.md`](docs/development/releases.md).
 
 ## Get Source Files
 
@@ -18,11 +20,13 @@ You can start in either of these ways:
 - Clone the repository with Git (recommended for contributors).
 - Download source files from GitHub and unpack them locally.
 
-The repository's source archive format is:
+The optional local source archive format is:
 
 - `CaveViewer-<version>-source.tar.gz`
 
-This format is produced by the existing source packaging flow in `scripts/common/package_source.sh`.
+This format is produced by `scripts/common/package_source.sh`. Current GitHub
+release workflows do not upload it; GitHub supplies its standard tag source
+archives automatically.
 
 Release packages should include:
 
@@ -148,9 +152,11 @@ On Windows, use `.venv-dev\Scripts\python` in place of `.venv-dev/bin/python`.
 The suite isolates the home/preferences directory, blocks uncontrolled network
 connections, and uses temporary directories for all generated files. The same
 essential suite and branch-coverage gate run automatically for pull requests
-and before every GitHub release workflow. Direct `scripts/release.sh` runs also
-execute the complete pytest suite before changing the application version or
-creating artifacts. It uses `.venv-dev` when available, then falls back to
+and before GitHub release builds. `All Platform Release` runs it once for the
+whole platform chain; a directly dispatched platform workflow runs its own
+gate. Direct `scripts/release.sh` runs also execute the complete pytest suite
+before changing the application version or creating artifacts. It uses
+`.venv-dev` when available, then falls back to
 `python3`/`python`; set `CAVEVIEWER_TEST_PYTHON=/path/to/python` to select
 another prepared interpreter. The interpreter must have `requirements.txt` and
 `requirements-dev.txt` installed.
@@ -158,12 +164,12 @@ another prepared interpreter. The interpreter must have `requirements.txt` and
 GitHub platform jobs pass `--skip-tests` because the application source has
 already passed an essential test gate with coverage. Individually dispatched
 platform workflows provide that gate themselves; `All Platform Release`
-provides it once before calling every platform workflow. Later stages in that
-chain may include the version and manifest commits produced by earlier stages,
-but those commits do not alter the tested application behavior. Do not use
+provides it once before calling every platform workflow. The gate precedes the
+controlled version bump; later stages check out the same application source
+plus the version and manifest commits produced by earlier stages. Do not use
 `--skip-tests` for an ordinary local release unless an equivalent external gate
-has completed successfully. Tests and development dependencies are not included
-in release archives.
+has completed successfully. Tests and development dependencies are not
+included in release archives.
 
 ## Sample Map Source Overrides
 
@@ -297,23 +303,30 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | Low-level macOS packaging override. The top-level release dispatcher uses `--target=macos-arm64` or `--target=macos-x86_64`; normal app update checks detect the running process architecture automatically. |
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | _(auto)_ | Linux publish helper only. Set to `arm64` or `x86_64` to choose which AppImage is written to the Linux update manifest. |
 
-Update manifests are signed with the release Ed25519 private key. The bundled
-public key lives at
+The update checker requires manifests to be signed with the release Ed25519
+private key. The bundled public key lives at
 `src/caveviewer/resources/release_signing_public_key.pem`. Startup update
 checks read the branch/channel manifest first; if it advertises a newer version,
 the app verifies the manifest signature before offering the download. Missing or
 invalid signatures are logged as errors and do not change the splash interface.
+Linux and macOS publishers create the companion `.sig` files. The current
+Windows publisher does not, so Windows in-app update discovery is unavailable
+until signing parity is implemented; use the GitHub Releases page for Windows
+updates. See [`docs/development/releases.md`](docs/development/releases.md) for
+the full release contract.
 
 Default update checks read committed, architecture-specific main-branch
 manifests, not GitHub's latest-release or prerelease metadata. macOS uses
 `updates/macos/<arm64|x86_64>/stable.json`; Linux follows the same architecture
 split. macOS selects the running process architecture, so a Rosetta-launched
 x86_64 build continues on the Intel update channel. Stable publish runs update
-and sign `stable.json`.
-Prerelease publish runs mark the GitHub release as a prerelease and update the
-separate `prerelease.json` channel, leaving `stable.json` unchanged. For
-debugging, explicit environment variables can point a source run or packaged
-app launched from Terminal at another branch or manifest URL.
+`stable.json`; the Linux and macOS publishers also sign it.
+Prerelease publish runs update the separate `prerelease.json` channel, leaving
+`stable.json` unchanged, and mark a newly created GitHub release as a
+prerelease. Uploading to an existing tag does not change that tag's
+prerelease/latest status. For debugging, explicit environment variables can
+point a source run or packaged app launched from Terminal at another branch or
+manifest URL.
 
 Prerelease branch testing can use the derived prerelease manifest URL after the
 selected branch contains the matching platform manifest and signature. For
@@ -400,8 +413,8 @@ python3 scripts/sign_update_manifest.py \
 
 This writes `updates/macos/arm64/stable.json.sig`. An ARM64 publish copies the
 signed manifest and signature to the top-level legacy aliases. Release publish
-scripts do not use a default private-key path; set
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` before running stable releases. When
+scripts for Linux and macOS do not use a default private-key path; set
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` before publishing either channel. When
 signing manually, either set that variable or pass `--private-key`.
 
 ### UI & Rendering
@@ -440,6 +453,7 @@ still override it for an individual run.
 | Variable | Default | Description |
 |---|---|---|
 | `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Scale multiplier for adaptable in-app overlay text (loading screens, controls/help overlay, and HUD readouts). Text inside fixed-size control geometry is intentionally excluded. `1.0` is the base size. |
+| `CAVEVIEWER_TK_SCALE` | _(display DPI)_ | Windows/Linux override for Tk dialog scaling, clamped to `0.75` through `4.0`. The Linux AppImage launcher normally derives this value from the desktop Xft DPI setting. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
 | `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing (matches macOS CoreText style); `lcd` = LCD sub-pixel rendering. |
 | `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |

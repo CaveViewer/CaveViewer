@@ -30,10 +30,9 @@ than system memory.
 - Run `git diff --check` and review the complete diff before submitting.
 - Update documentation and screenshots when user-visible behavior changes.
 
-## Repository migration
+## Repository layout
 
-The project is preparing for a conventional `src/caveviewer` package layout.
-The target and migration constraints are documented in
-[repository-layout.md](docs/development/repository-layout.md). Until a migration
-step is explicitly underway, use the current paths and do not create a second
-parallel package tree.
+The project uses the conventional `src/caveviewer` package layout. Its stable
+paths and completed migration sequence are documented in
+[repository-layout.md](docs/development/repository-layout.md). Use the current
+paths and do not create a second parallel package tree.

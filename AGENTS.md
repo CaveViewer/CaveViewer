@@ -12,8 +12,10 @@ inside a subdirectory supplements these rules for that area.
   changes.
 - `docs/development/coding-standards.md` and
   `docs/development/testing.md` define implementation and verification rules.
-- `README-developer.md` remains the detailed setup, packaging, and release
-  reference until that material is deliberately split into focused documents.
+- `docs/development/releases.md` defines release targets, workflow sequencing,
+  channels, signing, and verification.
+- `README-developer.md` remains the detailed source setup, packaging-variable,
+  and runtime-configuration reference.
 
 ## Working agreement
 
@@ -74,6 +76,7 @@ PYTHONPYCACHEPREFIX=/tmp/caveviewer-pycache \
 ## Definition of done
 
 - Add or update tests for observable behavior and failure cleanup.
+- Update comments in the code clearly outlining what new code does
 - Run focused tests first and the complete suite before handoff when practical.
 - Run `git diff --check` and inspect the final diff for unrelated changes.
 - Update user or developer documentation when commands, configuration,

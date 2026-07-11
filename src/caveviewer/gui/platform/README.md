@@ -19,7 +19,7 @@ platform/
 
 The module uses Python's **Protocol** pattern to define a contract (`SplashPlatformAdapter`) that each platform implementation must satisfy. This allows:
 
-- **No runtime conditionals**: Instead of `if sys.platform == "darwin": ...`, code calls adapter methods
+- **No scattered runtime conditionals**: One factory selects the adapter, and feature code calls adapter methods
 - **Easy testing**: Mock adapters can be injected for testing specific platforms
 - **Extensibility**: New platform-specific methods can be added to the protocol and implemented per-platform
 - **Maintainability**: Platform-specific logic is isolated in dedicated files
@@ -57,7 +57,7 @@ def get_platform_adapter() -> SplashPlatformAdapter:
 ```
 
 **How it works**:
-- Inspects `sys.platform` once at module load time
+- Inspects `sys.platform` whenever an adapter is requested
 - Returns the appropriate adapter instance
 - Falls back to `DefaultSplashPlatformAdapter` for unknown platforms
 
@@ -148,9 +148,11 @@ def my_new_feature(self) -> str:
     ...
 ```
 
-### Step 2: Implement in All Adapter Classes
+### Step 2: Implement the Default and Required Overrides
 
-Add the implementation to each platform file:
+Add shared behavior to `default.py`, then override only the platforms that
+need different behavior. The protocol records the complete structural
+contract.
 
 **`macos.py`:**
 ```python
@@ -158,13 +160,13 @@ def my_new_feature(self) -> str:
     return "value_for_mac"
 ```
 
-**`windows.py`:**
+**`windows.py` (only when Windows differs from the default):**
 ```python
 def my_new_feature(self) -> str:
     return "value_for_windows"
 ```
 
-**`linux.py`:**
+**`linux.py` (only when Linux differs from the default):**
 ```python
 def my_new_feature(self) -> str:
     return "value_for_linux"
@@ -265,3 +267,4 @@ class MockAdapter:
 - **`src/caveviewer/gui/controls_overlay.py`**: Uses `bookmark_save_modifier()` and `mouse_look_button_name()` to display platform-specific controls
 - **`src/caveviewer/gui/viewer_window.py`**: Uses adapters to bind keyboard/mouse events to platform-specific modifiers
 - **`src/caveviewer/gui/splash_screen.py`**: Primary consumer of installer and update-related adapter methods
+- **`docs/development/releases.md`**: Defines platform release artifacts, update manifest paths, and signing behavior
