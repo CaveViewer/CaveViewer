@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 
 import pytest
@@ -174,7 +175,7 @@ def test_update_check_rejects_missing_download_url(
 
 
 def test_current_version_does_not_require_signature(
-    configured_update_checker, monkeypatch
+    configured_update_checker, monkeypatch, caplog
 ):
     _set_manifest(
         monkeypatch,
@@ -189,10 +190,19 @@ def test_current_version_does_not_require_signature(
         "_verify_manifest_signature_required",
         lambda _payload: (_ for _ in ()).throw(AssertionError("must not verify")),
     )
-    result = update_checker.check_for_update("1.0.0")
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        result = update_checker.check_for_update("1.0.0")
+
     assert not result.update_available
     assert result.latest_version == "1.0.0"
     assert result.release_notes == "Already current"
+    no_update_records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("No update available:")
+    ]
+    assert len(no_update_records) == 1
+    assert no_update_records[0].levelno == logging.INFO
 
 
 def test_newer_update_requires_valid_signature(
