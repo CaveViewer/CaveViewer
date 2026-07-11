@@ -64,12 +64,10 @@ bundled with the application; private signing material must never enter the
 repository.
 
 Windows uses `updates/windows/<channel>.json`. Linux and macOS use
-architecture-specific `<arm64|x86_64>/<channel>.json` paths. Linux and macOS
-manifests have companion `.sig` files; top-level macOS manifests and signatures
-remain legacy ARM64 aliases. The update client requires a valid signature before
-offering a newer manifest. Windows publishing does not yet create that
-signature, so Windows in-app update discovery is currently unavailable; see
-[releases.md](releases.md#current-windows-signing-limitation).
+architecture-specific `<arm64|x86_64>/<channel>.json` paths. Every manifest has
+a companion `.sig` file; top-level macOS manifests and signatures remain legacy
+ARM64 aliases. The update client requires a valid signature before offering a
+newer manifest.
 
 Build, package, publish, and manifest-generation workflows live under
 `scripts/`. The PyInstaller contract lives at

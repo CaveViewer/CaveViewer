@@ -7,6 +7,7 @@ import os
 import numpy as np
 import pytest
 
+from caveviewer import app
 from caveviewer.app import find_input_files, find_model_file
 from caveviewer.core.glb_parser import parse_glb
 
@@ -58,10 +59,43 @@ def test_find_input_files_falls_back_to_available_mtl(tmp_path):
     assert find_input_files(str(tmp_path)) == (str(obj), str(fallback))
 
 
+def test_find_input_files_reports_multiple_obj_candidates(tmp_path, monkeypatch):
+    first = tmp_path / "first.obj"
+    second = tmp_path / "second.obj"
+    material = tmp_path / "map.mtl"
+    first.write_text("mtllib map.mtl\n", encoding="utf-8")
+    second.write_text("mtllib map.mtl\n", encoding="utf-8")
+    material.write_text("newmtl rock\n", encoding="utf-8")
+
+    messages = []
+    monkeypatch.setattr(app._LOG, "info", messages.append)
+
+    obj_path, mtl_path = find_input_files(str(tmp_path))
+
+    assert obj_path in {str(first), str(second)}
+    assert mtl_path == str(material)
+    assert any("multiple .obj files found" in message for message in messages)
+
+
 def test_find_model_returns_glb_descriptor_without_companion_files(tmp_path):
     glb = tmp_path / "cave.glb"
     glb.write_bytes(b"glTF")
     assert find_model_file(str(tmp_path)) == {"format": "glb", "glb_path": str(glb)}
+
+
+def test_find_model_reports_multiple_glb_candidates(tmp_path, monkeypatch):
+    first = tmp_path / "first.glb"
+    second = tmp_path / "second.glb"
+    first.write_bytes(b"glTF")
+    second.write_bytes(b"glTF")
+
+    messages = []
+    monkeypatch.setattr(app._LOG, "info", messages.append)
+
+    descriptor = find_model_file(str(tmp_path))
+
+    assert descriptor["glb_path"] in {str(first), str(second)}
+    assert any("multiple .glb files found" in message for message in messages)
 
 
 def test_find_model_prefers_obj_when_obj_and_glb_exist(tmp_path):

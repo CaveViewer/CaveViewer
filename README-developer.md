@@ -309,18 +309,17 @@ private key. The bundled public key lives at
 checks read the branch/channel manifest first; if it advertises a newer version,
 the app verifies the manifest signature before offering the download. Missing or
 invalid signatures are logged as errors and do not change the splash interface.
-Linux and macOS publishers create the companion `.sig` files. The current
-Windows publisher does not, so Windows in-app update discovery is unavailable
-until signing parity is implemented; use the GitHub Releases page for Windows
-updates. See [`docs/development/releases.md`](docs/development/releases.md) for
-the full release contract.
+Every platform publisher creates the companion `.sig` file before committing
+its manifest. See
+[`docs/development/releases.md`](docs/development/releases.md) for the full
+release contract.
 
 Default update checks read committed, architecture-specific main-branch
 manifests, not GitHub's latest-release or prerelease metadata. macOS uses
 `updates/macos/<arm64|x86_64>/stable.json`; Linux follows the same architecture
 split. macOS selects the running process architecture, so a Rosetta-launched
 x86_64 build continues on the Intel update channel. Stable publish runs update
-`stable.json`; the Linux and macOS publishers also sign it.
+and sign `stable.json`.
 Prerelease publish runs update the separate `prerelease.json` channel, leaving
 `stable.json` unchanged, and mark a newly created GitHub release as a
 prerelease. Uploading to an existing tag does not change that tag's
@@ -413,7 +412,7 @@ python3 scripts/sign_update_manifest.py \
 
 This writes `updates/macos/arm64/stable.json.sig`. An ARM64 publish copies the
 signed manifest and signature to the top-level legacy aliases. Release publish
-scripts for Linux and macOS do not use a default private-key path; set
+scripts do not use a default private-key path; set
 `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` before publishing either channel. When
 signing manually, either set that variable or pass `--private-key`.
 

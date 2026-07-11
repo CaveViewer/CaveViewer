@@ -35,9 +35,9 @@ CaveViewer opens the DMG for the normal manual installation.
 
 Download the latest zip from https://github.com/KernalPanic/CaveViewer/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install.
 
-Windows updates currently use the Releases page. The updater requires signed
-manifests, and Windows publishing does not yet create the companion signature
-that Linux and macOS releases provide.
+The splash screen checks the signed Windows stable manifest. A newer release
+can be downloaded and verified in-app, after which CaveViewer opens the ZIP in
+Explorer for the normal manual setup.
 
 ### Linux
 

@@ -56,6 +56,12 @@ jobs:
           --include=src/caveviewer/gui/sample_maps.py
           --fail-under=85
 
+      - name: Enforce application coverage floor
+        run: >-
+          python -m coverage report
+          --include=src/caveviewer/app.py
+          --fail-under=90
+
       - name: Enforce chunker coverage floor
         run: >-
           python -m coverage report

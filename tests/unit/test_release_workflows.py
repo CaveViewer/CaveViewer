@@ -234,9 +234,13 @@ def test_failed_release_test_gate_does_not_change_version(tmp_path):
     assert version_file.read_bytes() == version_before
 
 
-def test_essential_workflow_enforces_90_percent_chunker_coverage():
+def test_essential_workflow_enforces_module_coverage_floors():
     workflow = (WORKFLOWS_DIR / "tests.yml").read_text(encoding="utf-8")
 
+    assert (
+        "--include=src/caveviewer/app.py\n"
+        "          --fail-under=90"
+    ) in workflow
     assert (
         "--include=src/caveviewer/core/chunker.py\n"
         "          --fail-under=90"

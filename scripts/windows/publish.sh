@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Windows publisher.
 # Builds or reuses the Windows zip, publishes/uploads a GitHub release, and
-# writes an updater manifest for the selected channel.
+# writes and signs an updater manifest for the selected channel.
 #
 # Usage:
 #   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
@@ -103,6 +103,11 @@ if [ -z "$release_notes" ]; then
   release_notes="Release $version"
 fi
 
+if [ -z "${CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:-}" ]; then
+  echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY must be set when publishing signed Windows update manifests."
+  exit 1
+fi
+
 normalized_version="${version#v}"
 tag="v$normalized_version"
 release_title="$tag"
@@ -117,6 +122,8 @@ windows_packages_dir="$repo_root/dist/windows/packages"
 windows_metadata_dir="$repo_root/dist/windows/metadata"
 manifest_channel="stable"
 $pre_release && manifest_channel="prerelease"
+update_manifest_path="$repo_root/updates/windows/$manifest_channel.json"
+update_manifest_signature_path="$update_manifest_path.sig"
 
 cv_require_cmd gh
 cv_require_cmd git
@@ -210,9 +217,32 @@ echo "Windows zip asset URL: $zip_asset_url"
   --notes "$release_notes" \
   --channel "$manifest_channel"
 
-echo "Committing version bump and updated $manifest_channel manifest..."
-git -C "$repo_root" add src/caveviewer/version.py "updates/windows/$manifest_channel.json"
+signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
+if [ -z "$signing_python" ]; then
+  if [ -x "$repo_root/.venv-dev/Scripts/python.exe" ]; then
+    signing_python="$repo_root/.venv-dev/Scripts/python.exe"
+  elif [ -x "$repo_root/.venv-dev/bin/python" ]; then
+    signing_python="$repo_root/.venv-dev/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    signing_python="python3"
+  else
+    signing_python="python"
+  fi
+fi
+
+# A newer manifest is rejected by every installed client unless its exact
+# bytes have a companion Ed25519 signature made by the release key.
+echo "Signing Windows $manifest_channel update manifest: $update_manifest_path"
+"$signing_python" "$repo_root/scripts/sign_update_manifest.py" \
+  "$update_manifest_path" \
+  --signature "$update_manifest_signature_path"
+
+echo "Committing version bump and updated signed $manifest_channel manifest..."
+git -C "$repo_root" add \
+  src/caveviewer/version.py \
+  "updates/windows/$manifest_channel.json" \
+  "updates/windows/$manifest_channel.json.sig"
 git -C "$repo_root" commit -m "Release $tag Windows $manifest_channel"
 git -C "$repo_root" push
 
-echo "Done. Release $tag is published and $manifest_channel manifest is live."
+echo "Done. Release $tag is published and the signed $manifest_channel manifest is live."

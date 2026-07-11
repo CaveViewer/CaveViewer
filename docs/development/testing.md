@@ -61,6 +61,7 @@ Coverage thresholds are safety floors, not targets for writing low-value tests.
 The current CI workflow enforces:
 
 - 60% across its essential measured modules.
+- 90% for `src/caveviewer/app.py`.
 - 85% for `src/caveviewer/gui/sample_maps.py`.
 - 90% for `src/caveviewer/core/chunker.py`.
 - 50% for `src/caveviewer/gui/update_checker.py`.
