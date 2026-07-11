@@ -101,14 +101,15 @@ Release.
 
 GitHub requires write permission to be preserved across each reusable-workflow
 call boundary because a nested workflow cannot elevate permissions later. The
-test and package jobs explicitly downgrade their own tokens to read-only and
-always run package-only operations. They upload their binaries and package
-metadata as workflow artifacts; they do not create GitHub releases, receive the
-signing key, write manifests, or push commits. If every requested package
-succeeds and `publish` is enabled, the finalizer uses the preserved write
-permission to download all artifacts, create or update the GitHub release once,
-write and sign every requested manifest, update `src/caveviewer/version.py`,
-and push one metadata commit.
+test and build/package jobs explicitly downgrade their own tokens to read-only
+and never publish directly. Linux jobs run the separate build phase before
+packaging because their package phase consumes an existing app bundle. The jobs
+upload their binaries and package metadata as workflow artifacts; they do not
+create GitHub releases, receive the signing key, write manifests, or push
+commits. If every requested package succeeds and `publish` is enabled, the
+finalizer uses the preserved write permission to download all artifacts, create
+or update the GitHub release once, write and sign every requested manifest,
+update `src/caveviewer/version.py`, and push one metadata commit.
 
 Every package checks out the workflow's starting commit rather than a moving
 branch head. Before publishing, the finalizer verifies that the selected branch

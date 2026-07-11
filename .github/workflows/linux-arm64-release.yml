@@ -92,11 +92,20 @@ jobs:
           docker version
           docker buildx version
 
-      - name: Build Linux ARM64 AppImage via Docker
+      - name: Build and package Linux ARM64 AppImage via Docker
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
+          # A single-target Linux package consumes the app bundle produced by
+          # the separate build action, so a fresh runner must run both phases.
+          ./scripts/release.sh \
+            --target=linux-arm64 \
+            --version="$RELEASE_VERSION" \
+            --notes="$RELEASE_NOTES" \
+            --action=build \
+            --skip-tests
+
           ./scripts/release.sh \
             --target=linux-arm64 \
             --version="$RELEASE_VERSION" \
