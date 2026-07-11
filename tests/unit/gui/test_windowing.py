@@ -1,0 +1,279 @@
+"""Exercise Linux GLFW protocol selection, hints, and fallback boundaries."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from caveviewer.gui.platform.windowing import (
+    WINDOW_SYSTEM_ENV_VAR,
+    WindowBackendError,
+    WindowSystem,
+    resolve_window_backend_plan,
+    run_window_config,
+)
+from caveviewer.version import APPLICATION_ID
+
+
+class FakeGlfw:
+    PLATFORM = 1
+    PLATFORM_WAYLAND = 2
+    PLATFORM_X11 = 3
+    WAYLAND_APP_ID = 4
+    X11_CLASS_NAME = 5
+    X11_INSTANCE_NAME = 6
+    SCALE_TO_MONITOR = 7
+    TRUE = 1
+    FALSE = 0
+
+    def __init__(self, *, init_result=True, supported=True):
+        self.init_result = init_result
+        self.supported = supported
+        self.selected_platform = None
+        self.calls = []
+
+    def platform_supported(self, platform):
+        self.calls.append(("platform_supported", platform))
+        return self.supported
+
+    def init_hint(self, hint, value):
+        self.calls.append(("init_hint", hint, value))
+        self.selected_platform = value
+
+    def init(self):
+        self.calls.append(("init",))
+        return self.init_result
+
+    def get_error(self):
+        return 1, b"display unavailable"
+
+    def window_hint_string(self, hint, value):
+        self.calls.append(("window_hint_string", hint, value))
+
+    def get_platform(self):
+        return self.selected_platform
+
+    def terminate(self):
+        self.calls.append(("terminate",))
+
+    def get_primary_monitor(self):
+        self.calls.append(("get_primary_monitor",))
+        return "primary"
+
+    def get_monitor_workarea(self, monitor):
+        self.calls.append(("get_monitor_workarea", monitor))
+        return 0, 40, 1920, 1040
+
+    def window_hint(self, hint, value):
+        self.calls.append(("window_hint", hint, value))
+
+
+def test_auto_plan_prefers_wayland_then_x11_when_both_are_available():
+    plan = resolve_window_backend_plan(
+        environ={
+            "XDG_SESSION_TYPE": "wayland",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "DISPLAY": ":0",
+        },
+        platform_name="linux",
+    )
+
+    assert plan.mode is WindowSystem.AUTO
+    assert plan.attempts == (WindowSystem.WAYLAND, WindowSystem.X11)
+
+
+@pytest.mark.parametrize("mode", ["wayland", "x11"])
+def test_explicit_plan_never_adds_a_fallback(mode):
+    plan = resolve_window_backend_plan(
+        environ={WINDOW_SYSTEM_ENV_VAR: mode, "DISPLAY": ":0"},
+        platform_name="linux",
+    )
+
+    assert plan.attempts == (WindowSystem(mode),)
+
+
+def test_invalid_window_system_is_actionable():
+    with pytest.raises(WindowBackendError, match="expected one of"):
+        resolve_window_backend_plan(
+            environ={WINDOW_SYSTEM_ENV_VAR: "mir"}, platform_name="linux"
+        )
+
+
+def test_non_linux_platform_keeps_existing_moderngl_backend():
+    calls = []
+
+    run_window_config(
+        object,
+        runner=lambda config, args: calls.append((config, args)),
+        environ={},
+        platform_name="darwin",
+        glfw_loader=lambda _system: pytest.fail("GLFW must remain Linux-only"),
+    )
+
+    assert calls == [(object, [])]
+
+
+def test_glfw_hints_identity_before_window_creation(monkeypatch):
+    glfw = FakeGlfw()
+    calls = []
+    monkeypatch.setenv("MODERNGL_WINDOW", "pyglet")
+
+    run_window_config(
+        object,
+        runner=lambda config, args: calls.append(
+            (config, args, list(glfw.calls), os.environ["MODERNGL_WINDOW"])
+        ),
+        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
+        platform_name="linux",
+        glfw_loader=lambda _system: glfw,
+    )
+
+    assert calls[0][0:2] == (object, ["--window", "glfw"])
+    assert calls[0][3] == "glfw"
+    assert os.environ["MODERNGL_WINDOW"] == "pyglet"
+    calls_before_runner = calls[0][2]
+    assert ("init_hint", glfw.PLATFORM, glfw.PLATFORM_WAYLAND) in calls_before_runner
+    assert (
+        "window_hint_string",
+        glfw.WAYLAND_APP_ID,
+        APPLICATION_ID,
+    ) in calls_before_runner
+    assert (
+        "window_hint_string",
+        glfw.X11_CLASS_NAME,
+        APPLICATION_ID,
+    ) in calls_before_runner
+
+
+def test_relative_size_uses_glfw_workarea_without_duplicate_dpi_scaling():
+    glfw = FakeGlfw()
+
+    class Config:
+        window_size = (1600, 1000)
+
+    observed = []
+
+    def runner(config, args):
+        # Reproduce the pinned ModernGL-window GLFW backend's unconditional
+        # hint. The adapter must turn it off for an already-relative size.
+        glfw.window_hint(glfw.SCALE_TO_MONITOR, glfw.TRUE)
+        observed.append((config.window_size, args))
+
+    run_window_config(
+        Config,
+        runner=runner,
+        environ={WINDOW_SYSTEM_ENV_VAR: "x11"},
+        platform_name="linux",
+        glfw_loader=lambda _system: glfw,
+        window_size_fraction=0.8,
+        fallback_window_size=(1600, 1000),
+    )
+
+    assert observed == [((1536, 832), ["--window", "glfw"])]
+    assert ("window_hint", glfw.SCALE_TO_MONITOR, glfw.FALSE) in glfw.calls
+
+    # The override is scoped to window creation and does not mutate pyGLFW.
+    glfw.window_hint(glfw.SCALE_TO_MONITOR, glfw.TRUE)
+    assert glfw.calls[-1] == ("window_hint", glfw.SCALE_TO_MONITOR, glfw.TRUE)
+
+
+def test_relative_size_uses_safe_fallback_when_workarea_is_unavailable():
+    glfw = FakeGlfw()
+    glfw.get_primary_monitor = lambda: None
+
+    class Config:
+        window_size = (10, 10)
+
+    observed = []
+    run_window_config(
+        Config,
+        runner=lambda config, **_kwargs: observed.append(config.window_size),
+        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
+        platform_name="linux",
+        glfw_loader=lambda _system: glfw,
+        window_size_fraction=0.8,
+        fallback_window_size=(1280, 720),
+    )
+
+    assert observed == [(1280, 720)]
+
+
+def test_auto_mode_retries_x11_after_wayland_initialization_failure():
+    wayland = FakeGlfw(init_result=False)
+    x11 = FakeGlfw()
+    loaded = []
+    runs = []
+
+    def load(system):
+        loaded.append(system)
+        return wayland if system is WindowSystem.WAYLAND else x11
+
+    run_window_config(
+        object,
+        runner=lambda _config, args: runs.append(args),
+        environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
+        platform_name="linux",
+        glfw_loader=load,
+    )
+
+    assert loaded == [WindowSystem.WAYLAND, WindowSystem.X11]
+    assert ("terminate",) in wayland.calls
+    assert runs == [["--window", "glfw"]]
+
+
+def test_auto_mode_retries_only_known_window_creation_failure():
+    wayland = FakeGlfw()
+    x11 = FakeGlfw()
+    attempts = []
+
+    def runner(_config, args):
+        assert args == ["--window", "glfw"]
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise ValueError("Failed to create window")
+
+    run_window_config(
+        object,
+        runner=runner,
+        environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
+        platform_name="linux",
+        glfw_loader=lambda system: (
+            wayland if system is WindowSystem.WAYLAND else x11
+        ),
+    )
+
+    assert len(attempts) == 2
+
+
+def test_render_configuration_failure_does_not_trigger_backend_fallback():
+    loaded = []
+
+    with pytest.raises(RuntimeError, match="shader failed"):
+        run_window_config(
+            object,
+            runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("shader failed")
+            ),
+            environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
+            platform_name="linux",
+            glfw_loader=lambda system: loaded.append(system) or FakeGlfw(),
+        )
+
+    assert loaded == [WindowSystem.WAYLAND]
+
+
+def test_explicit_wayland_failure_does_not_fall_back():
+    loaded = []
+
+    with pytest.raises(WindowBackendError, match="wayland"):
+        run_window_config(
+            object,
+            runner=lambda *_args, **_kwargs: None,
+            environ={WINDOW_SYSTEM_ENV_VAR: "wayland", "DISPLAY": ":0"},
+            platform_name="linux",
+            glfw_loader=lambda system: loaded.append(system)
+            or FakeGlfw(init_result=False),
+        )
+
+    assert loaded == [WindowSystem.WAYLAND]

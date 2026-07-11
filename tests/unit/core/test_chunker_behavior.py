@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from caveviewer.core import chunker, obj_parser
+from caveviewer.core import chunker, hardware_memory, obj_parser
 
 
 def _attributed_mesh() -> obj_parser.RawMesh:
@@ -49,6 +49,30 @@ def _attributed_mesh() -> obj_parser.RawMesh:
         face_uv_idx=faces.copy(),
         face_nrm_idx=faces.copy(),
         material_ranges=[obj_parser.MaterialRange("rock", 0, 2)],
+    )
+
+
+def _mesh_with_cells(cell_count: int) -> obj_parser.RawMesh:
+    """Build one triangle per spatial cell for worker-pool lifecycle tests."""
+    positions = []
+    for cell_index in range(cell_count):
+        x = float(cell_index * 10)
+        positions.extend(
+            ((x, 0.0, 0.0), (x + 1.0, 0.0, 0.0), (x, 1.0, 0.0))
+        )
+    positions = np.asarray(positions, dtype=np.float32)
+    faces = np.arange(cell_count * 3, dtype=np.int32).reshape(cell_count, 3)
+    return obj_parser.RawMesh(
+        positions=positions,
+        uvs=np.zeros((cell_count * 3, 2), dtype=np.float32),
+        normals=np.tile(
+            np.array([[0.0, 0.0, 1.0]], dtype=np.float32),
+            (cell_count * 3, 1),
+        ),
+        face_pos_idx=faces,
+        face_uv_idx=faces.copy(),
+        face_nrm_idx=faces.copy(),
+        material_ranges=[obj_parser.MaterialRange("rock", 0, cell_count)],
     )
 
 
@@ -253,12 +277,12 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
         return real_cancel(future)
 
     def fail_one_write(_chunks_dir, cell_str, _mesh, _groups):
-        if cell_str == "0_0_0":
+        if cell_str == "1_0_0":
             assert slow_write_started.wait(timeout=2.0)
             raise OSError("chunk write failed")
-
-        slow_write_started.set()
-        assert release_slow_write.wait(timeout=2.0)
+        if cell_str == "2_0_0":
+            slow_write_started.set()
+            assert release_slow_write.wait(timeout=2.0)
         bounds = np.zeros(3, dtype=np.float32)
         return bounds, bounds.copy(), ["rock"]
 
@@ -266,14 +290,55 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
         chunker.concurrent.futures.Future, "cancel", release_worker_then_cancel
     )
     monkeypatch.setattr(chunker, "resolve_worker_count", lambda *_args, **_kwargs: 2)
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(100, 100),
+    )
     monkeypatch.setattr(chunker, "_write_chunk_file", fail_one_write)
 
     with pytest.raises(OSError, match="chunk write failed"):
         chunker._build_cache_in_directory(
-            str(source), _attributed_mesh(), {}, str(cache_dir)
+            str(source), _mesh_with_cells(4), {}, str(cache_dir)
         )
 
     assert cancel_calls == 1
+
+
+def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "map.obj"
+    source.write_text("map", encoding="utf-8")
+    cache_dir = tmp_path / "staging-cache"
+    worker_threads = []
+    written_cells = []
+    probe_write_counts = []
+
+    def write_cell(_chunks_dir, cell_str, _mesh, _groups):
+        worker_threads.append(threading.get_ident())
+        written_cells.append(cell_str)
+        bounds = np.zeros(3, dtype=np.float32)
+        return bounds, bounds.copy(), ["rock"]
+
+    def probe_ram():
+        probe_write_counts.append(len(written_cells))
+        return hardware_memory.RamSnapshot(100, 20)
+
+    monkeypatch.setattr(chunker, "resolve_worker_count", lambda *_args, **_kwargs: 8)
+    monkeypatch.setattr(
+        chunker.hardware_memory, "detect_ram_snapshot", probe_ram
+    )
+    monkeypatch.setattr(chunker, "_write_chunk_file", write_cell)
+
+    chunker._build_cache_in_directory(
+        str(source), _mesh_with_cells(6), {}, str(cache_dir)
+    )
+
+    assert len(written_cells) == 6
+    assert len(set(worker_threads)) == 1
+    assert probe_write_counts
+    assert min(probe_write_counts) >= 1
 
 
 def test_chunk_writer_preserves_attributes_and_bounds(tmp_path):

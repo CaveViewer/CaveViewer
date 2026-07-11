@@ -131,17 +131,9 @@ def test_consume_update_branch_arg_rejects_missing_values(argv):
         (b"unknown", ".img"),
     ],
 )
-def test_embedded_texture_writer_sniffs_format_and_preserves_bytes(
-    tmp_path, header, extension
-):
-    textures_dir = tmp_path / "nested" / "textures"
-
-    filename = app._write_embedded_texture_to_disk(
-        header, str(textures_dir), "limestone"
-    )
-
+def test_embedded_texture_filename_sniffs_image_format(header, extension):
+    filename = app._embedded_texture_filename(header, "limestone")
     assert filename == f"limestone{extension}"
-    assert (textures_dir / filename).read_bytes() == header
 
 
 @pytest.mark.parametrize(("selection", "expected"), [("/maps/cave", "/maps/cave"), ("", None)])

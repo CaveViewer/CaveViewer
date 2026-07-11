@@ -32,18 +32,19 @@ def test_linux_opens_download_directory_without_launching_package(
 ):
     payload = tmp_path / "CaveViewer.AppImage"
     payload.write_bytes(b"package")
-    launched = []
-    monkeypatch.setattr(
-        linux.subprocess,
-        "Popen",
-        lambda command: launched.append(command),
-    )
+    revealed = []
 
-    adapter = linux.LinuxSplashPlatformAdapter()
+    class FakeDesktopServices:
+        def reveal_path(self, path, *, parent=None):
+            revealed.append((path, parent))
+
+    adapter = linux.LinuxSplashPlatformAdapter(
+        desktop_services=FakeDesktopServices()
+    )
     adapter.reveal_downloaded_payload(str(payload))
 
     assert adapter.download_reveal_action_label() == "Open Download Folder"
-    assert launched == [["xdg-open", str(tmp_path)]]
+    assert revealed == [(str(payload), None)]
 
 
 def test_macos_mounts_dmg_read_only_and_reuses_mount_for_finder(

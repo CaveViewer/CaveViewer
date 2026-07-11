@@ -65,7 +65,7 @@ The current CI workflow enforces:
 - 90% for `src/caveviewer/app.py`.
 - 85% for `src/caveviewer/gui/sample_maps.py`.
 - 90% for `src/caveviewer/core/chunker.py`.
-- 50% for `src/caveviewer/gui/update_checker.py`.
+- 90% for `src/caveviewer/gui/update_checker.py`.
 
 The update manager's transition, retry, cancellation, cleanup, and
 platform-reveal contracts have direct unit coverage. Keep those tests

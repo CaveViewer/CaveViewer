@@ -338,3 +338,7 @@ def test_essential_workflow_enforces_module_coverage_floors():
         "--include=src/caveviewer/core/chunker.py\n"
         "          --fail-under=90"
     ) in workflow
+    assert (
+        "--include=src/caveviewer/gui/update_checker.py\n"
+        "          --fail-under=90"
+    ) in workflow

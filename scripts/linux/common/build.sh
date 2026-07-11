@@ -71,7 +71,9 @@ dist_app_dir="$repo_root/dist/linux/$linux_dist_arch/app"
 work_dir="$repo_root/build/pyinstaller/linux/$linux_dist_arch"
 
 # python-build-standalone: Python binaries compiled against glibc 2.17 so the
-# bundled libpython3.12.so won't require GLIBC_2.38 on older distros.
+# bundled libpython3.12.so won't require the build host's newer glibc. The
+# Linux GLFW wheel currently sets the packaged viewer's effective floor to
+# glibc 2.28, which covers the modern GNOME distributions targeted here.
 # Keep this on the Python series we support, but discover the exact patch
 # release from GitHub so a stale filename does not break CI release builds.
 # Override for reproducible/debug builds with:
@@ -317,7 +319,9 @@ CAVEVIEWER_APP_ICON="" \
   --name CaveViewer \
   --hidden-import=PIL._tkinter_finder \
   --hidden-import=tkinter \
-  --hidden-import=moderngl_window.context.pyglet \
+  --hidden-import=dbus_fast.aio \
+  --hidden-import=moderngl_window.context.glfw \
+  --collect-all=glfw \
   --add-data "$repo_root/src/caveviewer/resources/shaders:caveviewer/resources/shaders" \
   --add-data "$repo_root/src/caveviewer/resources/images:caveviewer/resources/images" \
   --add-data "$repo_root/src/caveviewer/resources/release_signing_public_key.pem:caveviewer/resources" \

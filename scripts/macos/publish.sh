@@ -274,7 +274,10 @@ if [ "$macos_arch" = "arm64" ]; then
 fi
 
 echo "Committing version bump and updated $macos_arch $manifest_channel manifest..."
-git -C "$repo_root" add src/caveviewer/version.py "${manifest_git_paths[@]}"
+git -C "$repo_root" add \
+  src/caveviewer/version.py \
+  packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml \
+  "${manifest_git_paths[@]}"
 git -C "$repo_root" commit -m "Release $tag macOS $macos_arch $manifest_channel"
 git -C "$repo_root" push
 

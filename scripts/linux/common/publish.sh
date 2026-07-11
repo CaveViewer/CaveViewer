@@ -293,6 +293,7 @@ echo "Manifest signature written locally: updates/linux/$linux_manifest_arch_dir
 echo "Committing version bump and updated Linux $linux_manifest_arch_dir $manifest_channel manifest..."
 git -C "$repo_root" add \
   src/caveviewer/version.py \
+  packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml \
   "updates/linux/$linux_manifest_arch_dir/$manifest_channel.json" \
   "updates/linux/$linux_manifest_arch_dir/$manifest_channel.json.sig"
 git -C "$repo_root" commit -m "Release $tag Linux $linux_manifest_arch_dir $manifest_channel"

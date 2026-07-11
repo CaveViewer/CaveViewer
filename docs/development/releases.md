@@ -73,6 +73,13 @@ branch and channel; it does not derive updates from GitHub's â€œlatest releaseâ€
 metadata. It verifies a newer manifest's Ed25519 signature before offering its
 artifact, then verifies the artifact size and SHA-256 while downloading.
 
+Linux packages install the stable application ID
+`io.github.kernalpanic.caveviewer`. The desktop filename, AppStream ID,
+hicolor icon basename, Wayland app ID, and X11 `StartupWMClass` must remain
+identical. Packaging renders `packaging/linux/*.desktop.in` rather than
+maintaining a second inline desktop entry. Release version updates prepend the
+matching AppStream release entry through `scripts/common/version.sh`.
+
 ## Recommended GitHub release
 
 Use [`.github/workflows/all-platform-release.yml`](../../.github/workflows/all-platform-release.yml)
@@ -206,3 +213,8 @@ Publishing also requires an authenticated GitHub CLI and
   package reveal on each available platform/architecture. Confirm CaveViewer
   neither executes nor installs the package, and report any platform that was
   not tested directly.
+- Validate the rendered Linux desktop file with `desktop-file-validate` and the
+  metainfo file with `appstreamcli validate --no-net --pedantic`.
+- Smoke-test the Linux AppImage on GNOME Wayland and Xorg. Confirm the logged
+  GLFW platform, launcher/icon grouping, portal selection/reveal, fractional
+  scaling, fullscreen transitions, and normal input controls.

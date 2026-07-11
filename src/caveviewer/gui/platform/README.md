@@ -8,6 +8,9 @@ This directory implements a **platform adapter pattern** that allows the CaveVie
 platform/
 ├── __init__.py              # Public API exports
 ├── base.py                  # SplashPlatformAdapter protocol definition
+├── desktop_services.py      # File selection/reveal capability contract
+├── portal.py                # Linux XDG Desktop Portal transport and states
+├── windowing.py             # Linux GLFW Wayland/X11 selection and fallback
 ├── factory.py               # Platform detection and adapter instantiation
 ├── macos.py                 # macOS-specific implementations
 ├── windows.py               # Windows-specific implementations
@@ -23,6 +26,17 @@ The module uses Python's **Protocol** pattern to define a contract (`SplashPlatf
 - **Easy testing**: Mock adapters can be injected for testing specific platforms
 - **Extensibility**: New platform-specific methods can be added to the protocol and implemented per-platform
 - **Maintainability**: Platform-specific logic is isolated in dedicated files
+
+`SplashPlatformAdapter` continues to own update-channel, control, font, and
+package behavior. `DesktopServices` is intentionally separate: splash, viewer,
+settings, and sample-map code all request directory selection through one
+capability instead of importing Tk or D-Bus directly. Linux implements that
+capability portal-first and retains a conservative fallback.
+
+`windowing.py` owns Linux display-protocol selection. Automatic mode attempts
+Wayland before X11 when both session endpoints exist and retries only an
+initialization/window-creation failure. Renderer and application exceptions
+must propagate without opening a second backend.
 
 ## Key Components
 
@@ -251,8 +265,8 @@ class MockAdapter:
 
 Revealing is deliberately manual and non-executing. macOS mounts the DMG
 read-only and reveals its `.app` in Finder, Windows selects the package in
-Explorer, and Linux opens the containing folder. Adapters must never launch an
-installer or execute a downloaded package.
+Explorer, and Linux uses `OpenURI.OpenDirectory` with `xdg-open` fallback.
+Adapters must never launch an installer or execute a downloaded package.
 
 ### UI Framework & Fonts
 **When**: Native UI elements (menus, fonts, dialogs) behave differently per-platform

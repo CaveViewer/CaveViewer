@@ -4,11 +4,15 @@ import os
 import platform
 import subprocess
 
+from .desktop_services import DesktopServices, get_desktop_services
 from .default import DefaultSplashPlatformAdapter
 
 
 class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     """Linux update metadata and manual package-reveal integration."""
+
+    def __init__(self, *, desktop_services: DesktopServices | None = None) -> None:
+        self._desktop_services = desktop_services or get_desktop_services()
 
     def ui_font_family(self) -> str:
         return "sans-serif"
@@ -88,11 +92,7 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         return "Open Download Folder"
 
     def reveal_downloaded_payload(self, payload_path: str) -> None:
-        self._open_payload_location(payload_path)
-
-    def _open_payload_location(self, payload_path: str) -> None:
-        containing_dir = os.path.dirname(os.path.abspath(payload_path)) or os.path.expanduser("~")
-        subprocess.Popen(["xdg-open", containing_dir])
+        self._desktop_services.reveal_path(payload_path)
 
     def font_candidates(self) -> list[str]:
         """Return Linux-specific font file paths in priority order."""

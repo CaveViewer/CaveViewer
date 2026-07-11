@@ -387,7 +387,10 @@ else
   gh release create "${create_args[@]}"
 fi
 
-git -C "$repo_root" add src/caveviewer/version.py "${manifest_git_paths[@]}"
+git -C "$repo_root" add \
+  src/caveviewer/version.py \
+  packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml \
+  "${manifest_git_paths[@]}"
 if git -C "$repo_root" diff --cached --quiet; then
   echo "Release metadata already matches $tag; no commit is required."
 else

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import sys
@@ -18,42 +19,122 @@ LINUX_DRM_ROOT = "/sys/class/drm"
 _LOG = get_logger("HardwareMemory")
 
 
+@dataclass(frozen=True)
+class RamSnapshot:
+    """One current system-RAM measurement used for worker admission."""
+
+    total_bytes: int
+    available_bytes: int
+
+    @property
+    def utilization_fraction(self) -> float:
+        """Return the fraction of physical RAM currently unavailable."""
+        if self.total_bytes <= 0:
+            return 1.0
+        available = max(0, min(self.available_bytes, self.total_bytes))
+        return 1.0 - (available / self.total_bytes)
+
+
+def _windows_ram_snapshot() -> RamSnapshot | None:
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
+
+    try:
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            total_bytes = int(stat.ullTotalPhys)
+            available_bytes = int(stat.ullAvailPhys)
+            if total_bytes > 0 and available_bytes >= 0:
+                return RamSnapshot(total_bytes, available_bytes)
+    except Exception:
+        pass
+    return None
+
+
+def _linux_ram_snapshot(
+    meminfo_path: str | os.PathLike[str] = "/proc/meminfo",
+) -> RamSnapshot | None:
+    """Read Linux's reclaim-aware MemAvailable measurement."""
+    try:
+        lines = Path(meminfo_path).read_text(encoding="ascii").splitlines()
+    except OSError:
+        return None
+
+    values: dict[str, int] = {}
+    for line in lines:
+        key, separator, raw_value = line.partition(":")
+        if not separator:
+            continue
+        fields = raw_value.strip().split()
+        if not fields:
+            continue
+        try:
+            value = int(fields[0])
+        except ValueError:
+            continue
+        multiplier = 1024 if len(fields) > 1 and fields[1].lower() == "kb" else 1
+        values[key] = value * multiplier
+
+    total_bytes = values.get("MemTotal", 0)
+    available_bytes = values.get("MemAvailable", values.get("MemFree", -1))
+    if total_bytes <= 0 or available_bytes < 0:
+        return None
+    return RamSnapshot(total_bytes, available_bytes)
+
+
+def _sysconf_ram_snapshot() -> RamSnapshot | None:
+    """Use POSIX page counters when the platform exposes available pages."""
+    if not hasattr(os, "sysconf"):
+        return None
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        total_pages = int(os.sysconf("SC_PHYS_PAGES"))
+        available_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+    except (OSError, TypeError, ValueError):
+        return None
+    if page_size <= 0 or total_pages <= 0 or available_pages < 0:
+        return None
+    return RamSnapshot(
+        total_bytes=page_size * total_pages,
+        available_bytes=page_size * available_pages,
+    )
+
+
+def detect_ram_snapshot() -> RamSnapshot | None:
+    """Best-effort current physical-RAM availability across desktop platforms."""
+    if os.name == "nt":
+        return _windows_ram_snapshot()
+    if sys.platform.startswith("linux"):
+        snapshot = _linux_ram_snapshot()
+        if snapshot is not None:
+            return snapshot
+    return _sysconf_ram_snapshot()
+
+
 def detect_total_ram_bytes() -> int:
     """Best-effort total physical RAM detection without extra dependencies."""
+    snapshot = detect_ram_snapshot()
+    if snapshot is not None:
+        return snapshot.total_bytes
     try:
-        if os.name == "nt":
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            stat = MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-                return int(stat.ullTotalPhys)
-            return 8 * 1024 * 1024 * 1024
-
         if hasattr(os, "sysconf"):
-            page_size = os.sysconf("SC_PAGE_SIZE")
-            pages = os.sysconf("SC_PHYS_PAGES")
-            if (
-                isinstance(page_size, int)
-                and isinstance(pages, int)
-                and page_size > 0
-                and pages > 0
-            ):
-                return int(page_size * pages)
-    except Exception:
-        return 8 * 1024 * 1024 * 1024
-
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            total_pages = int(os.sysconf("SC_PHYS_PAGES"))
+            if page_size > 0 and total_pages > 0:
+                return page_size * total_pages
+    except (OSError, TypeError, ValueError):
+        pass
     return 8 * 1024 * 1024 * 1024
 
 

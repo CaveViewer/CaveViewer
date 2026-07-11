@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from caveviewer.gui import sample_maps_dialog
+from caveviewer.gui.platform import DirectorySelection
 
 
 class FakeOwner:
@@ -32,16 +33,16 @@ class FakeOwner:
         return self.exists
 
 
-class FakeFileDialog:
+class FakeDesktopServices:
     def __init__(self, owner, result="/chosen/folder"):
         self.owner = owner
         self.result = result
         self.options = None
 
-    def askdirectory(self, **options):
+    def choose_directory(self, **options):
         assert self.owner.topmost is True
         self.options = options
-        return self.result
+        return DirectorySelection.from_path(self.result) if self.result else None
 
 
 def test_download_start_reuses_action_area_as_cancel_button_without_prompt():
@@ -68,19 +69,19 @@ def test_download_start_reuses_action_area_as_cancel_button_without_prompt():
 
 def test_save_directory_chooser_is_owned_focused_and_temporarily_topmost():
     owner = FakeOwner(topmost=False)
-    file_dialog = FakeFileDialog(owner)
+    desktop_services = FakeDesktopServices(owner)
 
     result = sample_maps_dialog._ask_directory_in_front(
-        file_dialog,
+        desktop_services,
         owner,
         title="Save Test Cave to...",
-        initialdir="/maps",
+        initial_dir="/maps",
     )
 
-    assert result == "/chosen/folder"
-    assert file_dialog.options == {
+    assert result.path == "/chosen/folder"
+    assert desktop_services.options == {
         "title": "Save Test Cave to...",
-        "initialdir": "/maps",
+        "initial_dir": "/maps",
         "parent": owner,
     }
     assert owner.topmost is False
@@ -99,17 +100,17 @@ def test_save_directory_chooser_is_owned_focused_and_temporarily_topmost():
 def test_save_directory_chooser_restores_topmost_state_after_failure():
     owner = FakeOwner(topmost=True)
 
-    class FailingFileDialog:
-        def askdirectory(self, **_options):
+    class FailingDesktopServices:
+        def choose_directory(self, **_options):
             assert owner.topmost is True
             raise RuntimeError("native chooser failed")
 
     try:
         sample_maps_dialog._ask_directory_in_front(
-            FailingFileDialog(),
+            FailingDesktopServices(),
             owner,
             title="Save Test Cave to...",
-            initialdir="/maps",
+            initial_dir="/maps",
         )
     except RuntimeError as error:
         assert str(error) == "native chooser failed"

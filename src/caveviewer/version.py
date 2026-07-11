@@ -2,3 +2,6 @@
 
 APP_NAME = "CaveViewer"
 APP_VERSION = "1.0.64"
+# This reverse-DNS identifier is a persistent Linux desktop contract.  It is
+# shared by the desktop file, AppStream metadata, icons, and Wayland app ID.
+APPLICATION_ID = "io.github.kernalpanic.caveviewer"

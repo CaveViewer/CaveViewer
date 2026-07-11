@@ -4,11 +4,27 @@ from __future__ import annotations
 
 import os
 
+from caveviewer.core.hardware_memory import RamSnapshot
+
 
 MIN_WORKERS = 1
 MAX_WORKERS = 32
 MIN_RESERVED_CPUS = 2
 MAX_RESERVED_CPUS = 32
+MAX_WORKER_RAM_UTILIZATION = 0.80
+
+
+def can_start_additional_worker(snapshot: RamSnapshot | None) -> bool:
+    """Allow pool growth only while current system RAM use is below 80%.
+
+    The first worker is always admitted by each pool. If current RAM cannot be
+    measured, callers conservatively keep that single worker instead of
+    honoring an aggressive configured maximum blindly.
+    """
+    return (
+        snapshot is not None
+        and snapshot.utilization_fraction < MAX_WORKER_RAM_UTILIZATION
+    )
 
 
 def _bounded_int(raw_value: str | None, default: int, minimum: int, maximum: int) -> int:

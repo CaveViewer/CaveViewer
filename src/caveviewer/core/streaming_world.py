@@ -27,7 +27,11 @@ from typing import Callable, Optional
 import numpy as np
 
 from caveviewer.core import chunker, hardware_memory
-from caveviewer.core.worker_config import resolve_worker_count
+from caveviewer.core.worker_config import (
+    MAX_WORKER_RAM_UTILIZATION,
+    can_start_additional_worker,
+    resolve_worker_count,
+)
 from caveviewer.core.chunker import ChunkData
 from caveviewer.core.logging_utils import get_logger
 from caveviewer.core.streaming_budget import (
@@ -57,6 +61,10 @@ _LINUX_DRM_ROOT = hardware_memory.LINUX_DRM_ROOT
 
 def _detect_total_ram_bytes() -> int:
     return hardware_memory.detect_total_ram_bytes()
+
+
+def _detect_ram_snapshot() -> hardware_memory.RamSnapshot | None:
+    return hardware_memory.detect_ram_snapshot()
 
 
 def _parse_target_fraction(raw_value: str | None, conservative_default: float) -> float:
@@ -196,12 +204,14 @@ class StreamingWorld:
         self._stop_event = threading.Event()
         self._paused_event = threading.Event()
         self._work_queue: "queue.Queue[tuple[int,int,int]]" = queue.Queue()
-        self._workers = [
-            threading.Thread(target=self._worker_loop, daemon=True)
-            for _ in range(self._worker_pool_size)
-        ]
-        for w in self._workers:
-            w.start()
+        self._worker_start_lock = threading.Lock()
+        self._worker_admission_blocked = False
+        self._workers: list[threading.Thread] = []
+        # The configured count is a maximum. Start one worker unconditionally;
+        # completed chunk work will make memory cost observable before each
+        # additional worker is admitted.
+        with self._worker_start_lock:
+            self._start_worker_locked()
 
         self._last_camera_cell: Optional[tuple[int, int, int]] = None
         self._last_load_radius: Optional[int] = None
@@ -270,11 +280,78 @@ class StreamingWorld:
                 "Set CAVEVIEWER_GPU_MEMORY_GB to provide an explicit value."
             )
 
+    def _start_worker_locked(self) -> None:
+        """Create one worker while the caller owns _worker_start_lock."""
+        worker_number = len(self._workers) + 1
+        worker = threading.Thread(
+            target=self._worker_loop,
+            name=f"CaveViewer-stream-{worker_number}",
+            daemon=True,
+        )
+        self._workers.append(worker)
+        try:
+            worker.start()
+        except BaseException:
+            self._workers.pop()
+            raise
+
+    def _maybe_start_additional_worker(self) -> bool:
+        """Grow streaming concurrency by one after measuring current RAM."""
+        worker_start_lock = getattr(self, "_worker_start_lock", None)
+        if worker_start_lock is None:
+            return False
+
+        with worker_start_lock:
+            if (
+                self._stop_event.is_set()
+                or self._paused_event.is_set()
+                or len(self._workers) >= self._worker_pool_size
+                or self._work_queue.empty()
+            ):
+                return False
+
+            snapshot = _detect_ram_snapshot()
+            if not can_start_additional_worker(snapshot):
+                if not self._worker_admission_blocked:
+                    if snapshot is None:
+                        _LOG.warning(
+                            "Could not measure available system RAM; keeping "
+                            "streaming at %d worker(s).",
+                            len(self._workers),
+                        )
+                    else:
+                        _LOG.warning(
+                            "System RAM utilization is %.1f%%; keeping streaming "
+                            "at %d worker(s) because the limit is %.0f%%.",
+                            snapshot.utilization_fraction * 100.0,
+                            len(self._workers),
+                            MAX_WORKER_RAM_UTILIZATION * 100.0,
+                        )
+                self._worker_admission_blocked = True
+                return False
+
+            self._start_worker_locked()
+            if self._worker_admission_blocked:
+                _LOG.info(
+                    "System RAM pressure eased; increasing streaming workers "
+                    "to %d of %d.",
+                    len(self._workers),
+                    self._worker_pool_size,
+                )
+            self._worker_admission_blocked = False
+            return True
+
     def shutdown(self):
         self._stop_event.set()
-        for _ in self._workers:
+        worker_start_lock = getattr(self, "_worker_start_lock", None)
+        if worker_start_lock is None:
+            workers = list(self._workers)
+        else:
+            with worker_start_lock:
+                workers = list(self._workers)
+        for _ in workers:
             self._work_queue.put(None)  # sentinel to unblock get()
-        for w in self._workers:
+        for w in workers:
             w.join(timeout=2.0)
         self._ready_backlog.clear()
         with self._lock:
@@ -352,6 +429,10 @@ class StreamingWorld:
             finally:
                 if not handed_off:
                     self._clear_pending_cell(cell)
+                else:
+                    # The ready payload is still resident, so this probe sees
+                    # the real geometry/texture memory cost before pool growth.
+                    self._maybe_start_additional_worker()
 
     def cell_for_position(self, position: np.ndarray) -> tuple[int, int, int]:
         return chunker.world_to_cell(position, self.config.chunk_size)

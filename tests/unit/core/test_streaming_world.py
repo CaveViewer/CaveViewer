@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from caveviewer.core import streaming_scheduler, streaming_world
+from caveviewer.core import hardware_memory, streaming_scheduler, streaming_world
 
 
 def _chunk(cell):
@@ -38,6 +38,49 @@ def _drain(world, ready, *, max_per_frame=4, time_budget_ms=100.0):
         lambda _cell: None,
         max_per_frame=max_per_frame,
         time_budget_ms=time_budget_ms,
+    )
+
+
+def _streaming_world_with_cells(monkeypatch, cells, *, ram_available, workers=8):
+    manifest = {
+        "chunks": {
+            f"{cell[0]}_{cell[1]}_{cell[2]}": {}
+            for cell in cells
+        }
+    }
+    monkeypatch.setattr(
+        streaming_world.chunker, "load_manifest", lambda _cache_dir: manifest
+    )
+    monkeypatch.setattr(
+        streaming_world.StreamingWorld,
+        "_estimate_chunk_ram_bytes",
+        lambda _self, _keys: 1,
+    )
+    monkeypatch.setattr(
+        streaming_world.StreamingWorld,
+        "_estimate_chunk_gpu_bytes",
+        lambda _self, _keys: 1,
+    )
+    monkeypatch.setattr(streaming_world, "_detect_total_ram_bytes", lambda: 1_000)
+    monkeypatch.setattr(
+        streaming_world, "_detect_total_gpu_memory_bytes", lambda _vendor=None: None
+    )
+    monkeypatch.setattr(
+        streaming_world,
+        "_detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(100, ram_available),
+    )
+    monkeypatch.setattr(
+        streaming_world,
+        "resolve_worker_count",
+        lambda *_args, **_kwargs: workers,
+    )
+    return streaming_world.StreamingWorld(
+        "unused",
+        streaming_world.StreamingConfig(
+            chunk_size=1.0,
+            load_radius_cells=max(abs(cell[0]) for cell in cells),
+        ),
     )
 
 
@@ -113,6 +156,74 @@ def test_deferred_chunks_use_the_latest_camera_priority():
 
     assert ready == [(1, 0, 0), (9, 0, 0)]
     assert world._ready_backlog.qsize() == 1
+
+
+def test_streaming_starts_one_worker_then_grows_after_completed_work(
+    monkeypatch,
+):
+    cells = {(index, 0, 0) for index in range(6)}
+    loaded_count = 0
+    loaded_lock = threading.Lock()
+    all_loaded = threading.Event()
+
+    def load_chunk(_cache_dir, cell):
+        nonlocal loaded_count
+        with loaded_lock:
+            loaded_count += 1
+            if loaded_count == len(cells):
+                all_loaded.set()
+        return _chunk(cell)
+
+    monkeypatch.setattr(streaming_world.chunker, "load_chunk_file", load_chunk)
+    monkeypatch.setattr(
+        streaming_world.chunker,
+        "prepare_chunk_upload_groups",
+        lambda data: data,
+    )
+    world = _streaming_world_with_cells(
+        monkeypatch, cells, ram_available=100, workers=8
+    )
+    try:
+        assert len(world._workers) == 1
+        world.update(np.zeros(3, dtype=np.float32))
+        assert all_loaded.wait(timeout=2.0)
+        assert len(world._workers) > 1
+        assert len(world._workers) <= len(cells)
+    finally:
+        world.shutdown()
+
+
+def test_streaming_stays_at_one_worker_at_eighty_percent_ram(
+    monkeypatch,
+):
+    cells = {(index, 0, 0) for index in range(4)}
+    all_loaded = threading.Event()
+    loaded_count = 0
+    loaded_lock = threading.Lock()
+
+    def load_chunk(_cache_dir, cell):
+        nonlocal loaded_count
+        with loaded_lock:
+            loaded_count += 1
+            if loaded_count == len(cells):
+                all_loaded.set()
+        return _chunk(cell)
+
+    monkeypatch.setattr(streaming_world.chunker, "load_chunk_file", load_chunk)
+    monkeypatch.setattr(
+        streaming_world.chunker,
+        "prepare_chunk_upload_groups",
+        lambda data: data,
+    )
+    world = _streaming_world_with_cells(
+        monkeypatch, cells, ram_available=20, workers=8
+    )
+    try:
+        world.update(np.zeros(3, dtype=np.float32))
+        assert all_loaded.wait(timeout=2.0)
+        assert len(world._workers) == 1
+    finally:
+        world.shutdown()
 
 
 def test_worker_load_failure_does_not_stop_later_ready_work(monkeypatch):

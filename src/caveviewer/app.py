@@ -59,8 +59,10 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_LINUX_BUILD_VENV",
     "CAVEVIEWER_LOG_LEVEL",
     "CAVEVIEWER_MACOS_BUILD_VENV",
+    "CAVEVIEWER_MAP_CACHE_DIR",
     "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
     "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
+    "CAVEVIEWER_PROJECT_ROOT",
     "CAVEVIEWER_TEXT_AA_MODE",
     "CAVEVIEWER_TK_SCALE",
     "CAVEVIEWER_UI_FONT",
@@ -71,6 +73,7 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
     "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
     "CAVEVIEWER_VSYNC",
+    "CAVEVIEWER_WINDOW_SYSTEM",
 )
 
 
@@ -284,19 +287,25 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     without needing its own separate copy of this function or changing
     the console output anyone running from a terminal already sees."""
     from caveviewer.core import chunker
+    from caveviewer.core.cache_paths import map_cache_build_dir
     from caveviewer.core.obj_parser import parse_obj, parse_mtl
 
     if not force_rebuild and chunker.cache_is_valid(obj_path):
         cache_dir = chunker.get_cache_dir(obj_path)
-        _LOG.info(f"Using existing chunk cache (delete the _cache "
-                  f"folder next to your .obj if you want to force a rebuild).")
+        _LOG.info(
+            "Using an existing chunk cache; remove the reported cache directory "
+            "to force a rebuild."
+        )
         _LOG.info(f"Found cache in: {cache_dir}")
         return cache_dir
 
     # Reject imports that are unlikely to fit before parsing a potentially
     # multi-gigabyte source. build_cache() repeats this check as a safety net
     # for direct callers and for free-space changes during parsing.
-    chunker.ensure_sufficient_disk_space(obj_path)
+    target_cache_dir = map_cache_build_dir(
+        obj_path, prefer_existing=force_rebuild
+    )
+    chunker.ensure_sufficient_disk_space(obj_path, target_cache_dir)
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
@@ -337,19 +346,19 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
 
     materials = parse_mtl(mtl_path)
 
-    target_cache_dir = os.path.join(os.path.dirname(os.path.abspath(obj_path)), chunker.CACHE_DIRNAME)
     _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
-    cache_dir = chunker.build_cache(obj_path, mesh, materials, progress_cb=cache_progress)
+    texture_assets = _file_texture_assets(
+        materials, os.path.dirname(os.path.abspath(mtl_path))
+    )
+    cache_dir = chunker.build_cache(
+        obj_path,
+        mesh,
+        materials,
+        progress_cb=cache_progress,
+        cache_dir=target_cache_dir,
+        assets=texture_assets,
+    )
     _console_newline()
-
-    import shutil
-    _src_tex_dir = os.path.dirname(os.path.abspath(obj_path))
-    for _mat in materials.values():
-        if _mat.diffuse_texture:
-            _src = os.path.join(_src_tex_dir, _mat.diffuse_texture)
-            _dst = os.path.join(cache_dir, _mat.diffuse_texture)
-            if os.path.exists(_src) and not os.path.exists(_dst):
-                shutil.copy2(_src, _dst)
 
     elapsed = time.time() - t_start
     n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
@@ -369,18 +378,13 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     format's parser converts into (see caveviewer.core.glb_parser's module
     docstring for the conversion details).
 
-    The one real bridging step this function does: GLB's embedded
-    texture images (raw bytes living inside the .glb file itself) get
-    written out to real files inside `textures_dir` here, ONCE, during
-    import -- rather than ever trying to store raw image bytes inside the
-    JSON manifest (which isn't JSON-serializable anyway, and would bloat
-    the manifest badly even if it were). Once written to disk, an
-    embedded GLB texture is indistinguishable from an OBJ's on-disk JPEG
-    from every other part of the pipeline's perspective (chunker.py,
-    TextureManager reading from textures_dir, the manifest format) --
-    no format-specific code needed anywhere downstream of this point.
+    GLB's embedded texture bytes are named here and handed to the cache
+    builder as staged assets. Once the complete cache is published, every
+    downstream consumer sees ordinary files beside the manifest without the
+    source folder ever needing to be writable.
     """
     from caveviewer.core import chunker
+    from caveviewer.core.cache_paths import map_cache_build_dir
     from caveviewer.core.obj_parser import Material
 
     fmt = model_descriptor["format"]
@@ -395,12 +399,17 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
 
     if not force_rebuild and chunker.cache_is_valid(source_path):
         cache_dir = chunker.get_cache_dir(source_path)
-        _LOG.info(f"Using existing chunk cache (delete the _cache "
-                  f"folder next to your {os.path.basename(source_path)} if you want to force a rebuild).")
+        _LOG.info(
+            "Using an existing chunk cache; remove the reported cache directory "
+            "to force a rebuild."
+        )
         _LOG.info(f"Found cache in: {cache_dir}")
         return cache_dir
 
-    chunker.ensure_sufficient_disk_space(source_path)
+    target_cache_dir = map_cache_build_dir(
+        source_path, prefer_existing=force_rebuild
+    )
+    chunker.ensure_sufficient_disk_space(source_path, target_cache_dir)
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
@@ -440,20 +449,28 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
         from caveviewer.core.glb_parser import parse_glb
         mesh, embedded_textures = parse_glb(source_path, progress_cb=parse_progress)
 
-        # Write each embedded texture out to a real file in textures_dir,
-        # once, so every downstream consumer (chunker.py's manifest,
-        # TextureManager) just sees an ordinary on-disk filename -- see
-        # this function's own docstring for why this is done here rather
-        # than threading raw bytes through the manifest/cache format.
+        # Embedded images become ordinary named cache assets. They remain in
+        # the private staging tree until the chunks and manifest are complete,
+        # so read-only portal source folders are supported without exposing a
+        # manifest whose textures have not been published yet.
         materials = {}
+        texture_assets = []
+        staged_texture_names = set()
         for mat_range in mesh.material_ranges:
             mat_name = mat_range.material_name
             if mat_name in embedded_textures:
                 image_bytes = embedded_textures[mat_name]
-                image_filename = _write_embedded_texture_to_disk(
-                    image_bytes, textures_dir, mat_name
+                image_filename = _embedded_texture_filename(
+                    image_bytes, mat_name
                 )
                 materials[mat_name] = Material(name=mat_name, diffuse_texture=image_filename)
+                if image_filename not in staged_texture_names:
+                    texture_assets.append(
+                        chunker.CacheAsset(
+                            relative_path=image_filename, data=image_bytes
+                        )
+                    )
+                    staged_texture_names.add(image_filename)
             else:
                 # no embedded texture found for this material under this
                 # name -- leave it untextured (the placeholder-texture
@@ -466,18 +483,16 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
 
     _console_newline()  # newline after the parse progress bar
 
-    target_cache_dir = os.path.join(os.path.dirname(os.path.abspath(source_path)), chunker.CACHE_DIRNAME)
     _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
-    cache_dir = chunker.build_cache(source_path, mesh, materials, progress_cb=cache_progress)
+    cache_dir = chunker.build_cache(
+        source_path,
+        mesh,
+        materials,
+        progress_cb=cache_progress,
+        cache_dir=target_cache_dir,
+        assets=texture_assets,
+    )
     _console_newline()
-
-    import shutil
-    for _mat in materials.values():
-        if _mat.diffuse_texture:
-            _src = os.path.join(textures_dir, _mat.diffuse_texture)
-            _dst = os.path.join(cache_dir, _mat.diffuse_texture)
-            if os.path.exists(_src) and not os.path.exists(_dst):
-                shutil.copy2(_src, _dst)
 
     elapsed = time.time() - t_start
     n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
@@ -487,56 +502,55 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     return cache_dir
 
 
-def _write_embedded_texture_to_disk(image_bytes: bytes, textures_dir: str, material_name: str) -> str:
-    """
-    Writes one GLB-embedded texture's raw bytes to a real file inside
-    textures_dir, sniffing the actual image format from the bytes
-    themselves (JPEG vs PNG, the two formats glTF supports for textures)
-    rather than trusting any file extension, since embedded image data
-    has no filename of its own to go by -- just the bytes. Returns the
-    filename (not full path) that was written, which the caller stores
-    as that material's diffuse_texture, the same as an OBJ's .mtl
-    map_Kd line would.
-    """
-    # JPEG files start with FF D8; PNG files start with the fixed 8-byte
-    # PNG signature -- checking the actual leading bytes is more reliable
-    # than guessing from context, since glTF doesn't store a format tag
-    # separately from the image bytes themselves for embedded images.
+def _file_texture_assets(materials: dict, textures_dir: str):
+    """Return unique on-disk textures for atomic cache publication."""
+    from caveviewer.core.chunker import CacheAsset
+
+    assets = []
+    seen_paths = set()
+    for material in materials.values():
+        relative_path = material.diffuse_texture
+        if not relative_path or relative_path in seen_paths:
+            continue
+        source_path = os.path.join(textures_dir, relative_path)
+        if os.path.isfile(source_path):
+            assets.append(
+                CacheAsset(relative_path=relative_path, source_path=source_path)
+            )
+            seen_paths.add(relative_path)
+    return assets
+
+
+def _embedded_texture_filename(image_bytes: bytes, material_name: str) -> str:
+    """Choose a deterministic extension for an embedded GLB texture."""
     if image_bytes[:2] == b"\xff\xd8":
         ext = ".jpg"
     elif image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
         ext = ".png"
     else:
-        # unrecognized format -- write it anyway with a generic
-        # extension; Pillow can often still sniff the real format from
-        # content when TextureManager later opens it, and if it truly
-        # can't, that degrades to the existing missing/corrupt-texture
-        # placeholder path rather than crashing here at write time.
         ext = ".img"
-
-    filename = f"{material_name}{ext}"
-    os.makedirs(textures_dir, exist_ok=True)
-    with open(os.path.join(textures_dir, filename), "wb") as f:
-        f.write(image_bytes)
-    return filename
+    return f"{material_name}{ext}"
 
 
-def pick_folder_dialog() -> str | None:
-    """Tkinter native folder picker. Tkinter ships with standard Python on
-    Windows/Mac, so this needs no extra install for the bare-bones UI."""
+def pick_folder_dialog(*, desktop_services=None) -> str | None:
+    """Open the platform directory chooser used by the in-viewer Open action."""
     import tkinter as tk
-    from tkinter import filedialog
     from caveviewer.gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
+    from caveviewer.gui.platform import get_desktop_services
 
     configure_process_dpi_awareness()
-    root = tk.Tk(className=APP_NAME)
-    apply_tk_scaling(root)
-    root.withdraw()
-    folder = filedialog.askdirectory(
-        title="Select folder containing your cave map (.obj, .mtl, .jpg)"
-    )
-    root.destroy()
-    return folder or None
+    root = tk.Tk(baseName=APP_NAME, className=APP_NAME)
+    try:
+        apply_tk_scaling(root)
+        root.withdraw()
+        services = desktop_services or get_desktop_services()
+        selection = services.choose_directory(
+            title="Select folder containing your cave map (.obj, .mtl, .jpg)",
+            parent=root,
+        )
+        return selection.path if selection else None
+    finally:
+        root.destroy()
 
 
 def _print_viewer_controls() -> None:
@@ -562,7 +576,7 @@ def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> No
         _LOG.info(
             f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}m, "
             "but existing/prebuilt caches always open with their manifest chunk size. "
-            "Delete or rebuild _cache to apply a different import chunk size."
+            "Rebuild the reported cache directory to apply a different import chunk size."
         )
 
 
@@ -620,14 +634,18 @@ def _run_map_session(folder: str) -> None:
         # Fast path, unchanged: a cache already exists, so there's no
         # import to show progress for -- launch straight in, same as
         # this has always worked.
-        _LOG.info("Using existing chunk cache (delete the _cache "
-                  "folder next to your model file if you want to force a rebuild).")
+        _LOG.info(
+            "Using an existing chunk cache; remove the reported cache directory "
+            "to force a rebuild."
+        )
         cache_dir = chunker.get_cache_dir(source_path)
+        from caveviewer.core.cache_paths import map_texture_dir
+        cache_textures_dir = map_texture_dir(source_path, cache_dir, folder)
         _LOG.info(f"Using cache directory: {cache_dir}")
         _log_cache_chunk_size(cache_dir, context="Existing chunk cache")
         from caveviewer.gui.viewer_window import run_viewer
         try:
-            run_viewer(cache_dir, textures_dir=folder)
+            run_viewer(cache_dir, textures_dir=cache_textures_dir)
         except Exception as e:
             _LOG.error(f"Error starting viewer: {e}")
             import traceback
@@ -727,17 +745,19 @@ def run() -> None:
         main()
     except Exception as e:
         import traceback
-        error_msg = f"Fatal error in CaveViewer: {e}\n\nTraceback:\n{traceback.format_exc()}"
+        user_error = f"{APP_NAME} encountered a fatal error:\n\n{e}"
+        error_msg = f"{user_error}\n\nTraceback:\n{traceback.format_exc()}"
         configure_logging()
         _LOG.error(error_msg)
         
         # Try to show error dialog if GUI is available
         try:
             import tkinter as tk
-            from tkinter import messagebox
-            root = tk.Tk(className=APP_NAME)
+            from caveviewer.gui.notifications import show_error
+
+            root = tk.Tk(baseName=APP_NAME, className=APP_NAME)
             root.withdraw()
-            messagebox.showerror("CaveViewer Error", error_msg)
+            show_error(user_error, parent=root)
         except Exception:
             pass
         

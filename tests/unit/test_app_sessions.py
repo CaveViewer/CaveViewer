@@ -346,6 +346,7 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
     recorder = _LogRecorder()
     configured = []
     dialog_calls = []
+    root_options = []
     monkeypatch.setattr(app, "_LOG", recorder)
     monkeypatch.setattr(app, "configure_logging", lambda: configured.append(True))
 
@@ -359,14 +360,15 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
         def withdraw(self):
             dialog_calls.append("withdraw")
 
-    def create_root(**_kwargs):
+    def create_root(**kwargs):
+        root_options.append(kwargs)
         if dialog_fails:
             raise RuntimeError("no display")
         return FakeRoot()
 
     tkinter.Tk = create_root
     tkinter.messagebox = SimpleNamespace(
-        showerror=lambda *args: dialog_calls.append(args)
+        showerror=lambda *args, **kwargs: dialog_calls.append((args, kwargs))
     )
     monkeypatch.setitem(sys.modules, "tkinter", tkinter)
 
@@ -376,8 +378,14 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
     assert raised.value.code == 1
     assert configured == [True]
     assert "startup exploded" in recorder.error_messages[-1]
+    assert "Traceback:" in recorder.error_messages[-1]
+    assert root_options == [{"baseName": app.APP_NAME, "className": app.APP_NAME}]
     if dialog_fails:
         assert dialog_calls == []
     else:
         assert dialog_calls[0] == "withdraw"
-        assert dialog_calls[1][0] == "CaveViewer Error"
+        args, kwargs = dialog_calls[1]
+        assert args[0] == app.APP_NAME
+        assert "startup exploded" in args[1]
+        assert "Traceback:" not in args[1]
+        assert kwargs["parent"].__class__ is FakeRoot

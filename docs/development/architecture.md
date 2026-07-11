@@ -7,6 +7,7 @@ contract is documented in [repository-layout.md](repository-layout.md).
 
 ```text
 caveviewer.app
+    ├── caveviewer.storage_paths XDG and portable storage roots
     ├── caveviewer.core       parsing, cache construction, streaming policy
     └── caveviewer.gui        dialogs, rendering, platform integration
           └── caveviewer.core
@@ -21,8 +22,18 @@ behavior is selected through `caveviewer.gui.platform` adapters.
 The application entry point discovers a supported model and dispatches it to
 the OBJ or GLB parser. Parsers produce CPU-side mesh and material data.
 `src/caveviewer/core/chunker.py` partitions that data and builds a cache in a
-private staging directory. Only a complete cache is published to `_cache`;
-failures must remove staging output and preserve any previously valid cache.
+private staging directory. On Linux, new caches are selected through
+`core.cache_paths` under the XDG cache root; existing adjacent `_cache` and
+`.caveviewer_cache` directories remain higher-priority compatibility inputs.
+Chunks, the manifest, and referenced texture assets are published in one
+atomic directory transaction. Failures must remove staging output and preserve
+any previously valid cache.
+
+Chunk-file construction treats its configured worker count as a maximum. It
+starts with one task, samples current system RAM after completed work, and
+admits only one additional concurrent worker per sample while utilization is
+below 80%. Unknown availability or memory pressure keeps the build at its
+already-admitted concurrency, with one worker always able to make progress.
 
 The cache manifest records chunk metadata, spatial bounds, material references,
 and the minimap occupancy footprint. A cache-format change must either remain
@@ -36,13 +47,20 @@ caches remain readable while new imports write only the active cache artifacts.
 `src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
 render-thread callbacks. Supporting modules own focused policy:
 
-- `caveviewer.core.hardware_memory`: RAM/GPU detection and target parsing.
+- `caveviewer.core.hardware_memory`: total/current RAM and GPU detection plus
+  target parsing.
+- `caveviewer.core.worker_config`: CPU caps and shared worker RAM admission.
 - `caveviewer.core.streaming_budget`: chunk-size estimation and residency limits.
 - `caveviewer.core.streaming_scheduler`: backlog, selection, and eviction.
 
 Workers load and prepare CPU payloads. The viewer performs OpenGL uploads and
 unloads on the render thread. Internal residency state and external GPU state
 must remain transactionally consistent when callbacks fail.
+Streaming starts one worker and considers one additional worker only after a
+prepared chunk is resident in the bounded ready queue, so each memory sample
+includes real decode cost. Pool growth stops when system RAM utilization
+reaches 80% or availability cannot be measured and may resume if pressure
+later falls.
 
 ## UI and platform boundaries
 
@@ -51,9 +69,41 @@ model modules. `caveviewer.gui.platform` contains OS-specific focus, update,
 and system integration behavior. Unsupported platforms use the default
 adapter.
 
+Directory selection and file reveal use the separate `DesktopServices`
+capability. Linux asks XDG Desktop Portal first and falls back to Tk or
+`xdg-open` only when the portal is unavailable. Portal requests use explicit
+states:
+
+```text
+IDLE -> REQUESTING -> WAITING -> {COMPLETED, CANCELLED, FAILED}
+```
+
+Linux viewer windows use GLFW 3.4. `CAVEVIEWER_WINDOW_SYSTEM=auto` prefers
+Wayland when a compositor is present and retries X11 only for a recognized
+GLFW initialization/window-creation failure. Explicit `wayland` and `x11`
+modes never silently switch protocols. The Wayland application ID and X11
+window class both use `io.github.kernalpanic.caveviewer`. Initial window
+geometry is 80% of GLFW's primary-monitor work area in screen coordinates.
+Framebuffer DPI scaling remains enabled, while duplicate X11 monitor scaling
+of that already-relative geometry is suppressed during window creation.
+
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL
 objects.
+
+## User storage
+
+`caveviewer.storage_paths` is the platform-neutral path boundary. Linux uses
+the XDG configuration, data, cache, state, and runtime roots. Advanced settings
+are configuration; remembered chooser locations are state; generated map
+caches are rebuildable cache data. `CAVEVIEWER_HOME` creates isolated
+`config/`, `data/`, `cache/`, `state/`, and `runtime/` children for portable or
+test runs. Relative XDG variables are ignored as required by the specification,
+and relative CaveViewer overrides are rejected.
+
+Migration from `~/.caveviewer/` and older `~/.caveviewer_*` files is copy-once
+and non-destructive. Managed map cache keys derive from the canonical source
+path without reading or hashing a multi-gigabyte map.
 
 The GUI process owns one `caveviewer.gui.update_manager.UpdateManager`, created
 by `caveviewer.app` before the splash/viewer session loop and shut down when
@@ -77,7 +127,8 @@ temporary files to be removed.
 Verified packages are persisted to the user's Downloads folder. Platform
 adapters only reveal them for manual handling: Finder mounts macOS DMGs
 read-only and reveals the `.app`, Explorer selects the Windows payload, and
-Linux opens its containing folder. No adapter executes or installs an update.
+Linux asks the desktop portal to reveal it with a containing-folder fallback.
+No adapter executes or installs an update.
 
 ## Updates and release assets
 

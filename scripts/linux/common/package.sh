@@ -48,11 +48,15 @@ fi
 # Extract version info from Python file.
 APP_NAME=$(grep "^APP_NAME = " "$repo_root/src/caveviewer/version.py" | grep -oP '"\K[^"]+')
 APP_VERSION=$(grep "^APP_VERSION = " "$repo_root/src/caveviewer/version.py" | grep -oP '"\K[^"]+')
+APPLICATION_ID=$(grep "^APPLICATION_ID = " "$repo_root/src/caveviewer/version.py" | grep -oP '"\K[^"]+')
 
-if [[ -z "$APP_NAME" || -z "$APP_VERSION" ]]; then
-  echo "Error: Could not extract APP_NAME or APP_VERSION from src/caveviewer/version.py"
+if [[ -z "$APP_NAME" || -z "$APP_VERSION" || -z "$APPLICATION_ID" ]]; then
+  echo "Error: Could not extract APP_NAME, APP_VERSION, or APPLICATION_ID from src/caveviewer/version.py"
   exit 1
 fi
+
+desktop_template="$repo_root/packaging/linux/${APPLICATION_ID}.desktop.in"
+metainfo_src="$repo_root/packaging/linux/${APPLICATION_ID}.metainfo.xml"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Error: this script must be run on Linux."
@@ -61,6 +65,10 @@ fi
 
 if [ ! -f "$icon_src" ]; then
   echo "Error: app icon not found at $icon_src"
+  exit 1
+fi
+if [ ! -f "$desktop_template" ] || [ ! -f "$metainfo_src" ]; then
+  echo "Error: canonical Linux desktop metadata is missing for $APPLICATION_ID"
   exit 1
 fi
 
@@ -191,6 +199,7 @@ rm -f "$output_appimage"
 mkdir -p \
   "$appdir/usr/lib/caveviewer" \
   "$appdir/usr/share/applications" \
+  "$appdir/usr/share/metainfo" \
   "$appdir/usr/share/icons/hicolor"
 
 cp -a "$app_dir/." "$appdir/usr/lib/caveviewer/"
@@ -217,7 +226,7 @@ if [ ! -f "$bundled_ui_font" ]; then
 fi
 
 icon_hicolor_dir="$appdir/usr/share/icons/hicolor"
-icon_root="$appdir/caveviewer.png"
+icon_root="$appdir/${APPLICATION_ID}.png"
 linux_arch_tag=""
 case "$(uname -m)" in
   x86_64) linux_arch_tag="amd64" ;;
@@ -245,31 +254,24 @@ for size in sizes:
     resized.thumbnail((size, size), Image.LANCZOS)
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     canvas.alpha_composite(resized, ((size - resized.width) // 2, (size - resized.height) // 2))
-    dest = icon_dir / f"{size}x{size}" / "apps" / "caveviewer.png"
+    dest = icon_dir / f"{size}x{size}" / "apps" / (root_dest.stem + ".png")
     dest.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(dest)
 
-root_256 = icon_dir / "256x256" / "apps" / "caveviewer.png"
+root_256 = icon_dir / "256x256" / "apps" / (root_dest.stem + ".png")
 root_dest.write_bytes(root_256.read_bytes())
 ' "$icon_src" "$icon_hicolor_dir" "$icon_root"
 else
   mkdir -p "$icon_hicolor_dir/256x256/apps"
-  cp "$icon_src" "$icon_hicolor_dir/256x256/apps/caveviewer.png"
+  cp "$icon_src" "$icon_hicolor_dir/256x256/apps/${APPLICATION_ID}.png"
   cp "$icon_src" "$icon_root"
 fi
 
-cat > "$appdir/caveviewer.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=CaveViewer
-Comment=Explore large 3-D cave maps
-Exec=AppRun
-Icon=caveviewer
-Terminal=false
-Categories=Graphics;Science;Viewer;
-StartupWMClass=CaveViewer
-EOF
-cp "$appdir/caveviewer.desktop" "$appdir/usr/share/applications/caveviewer.desktop"
+desktop_root="$appdir/${APPLICATION_ID}.desktop"
+sed 's|@EXEC@|AppRun|' "$desktop_template" > "$desktop_root"
+cp "$desktop_root" "$appdir/usr/share/applications/${APPLICATION_ID}.desktop"
+cp "$metainfo_src" "$appdir/usr/share/metainfo/${APPLICATION_ID}.metainfo.xml"
+ln -s "${APPLICATION_ID}.png" "$appdir/.DirIcon"
 
 cat > "$appdir/AppRun" <<'APP_RUN_EOF'
 #!/usr/bin/env bash
@@ -317,7 +319,9 @@ install_desktop_integration() {
   data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
   applications_dir="$data_home/applications"
   icons_hicolor_dir="$data_home/icons/hicolor"
-  desktop_path="$applications_dir/caveviewer.desktop"
+  application_id="io.github.kernalpanic.caveviewer"
+  desktop_path="$applications_dir/${application_id}.desktop"
+  desktop_source="$appdir/usr/share/applications/${application_id}.desktop"
 
   mkdir -p "$applications_dir"
   if [ -d "$appdir/usr/share/icons/hicolor" ]; then
@@ -325,19 +329,24 @@ install_desktop_integration() {
     cp -R "$appdir/usr/share/icons/hicolor/." "$icons_hicolor_dir/"
   fi
 
-  cat > "$desktop_path" <<DESKTOP_EOF
-[Desktop Entry]
-Type=Application
-Name=CaveViewer
-Comment=Explore large 3-D cave maps
-Exec="$APPIMAGE"
-Icon=caveviewer
-Terminal=false
-Categories=Graphics;Science;Viewer;
-StartupWMClass=CaveViewer
-DESKTOP_EOF
+  # Render the packaged canonical desktop file with the current AppImage path.
+  # Escape the characters that are significant inside a quoted Exec value.
+  escaped_appimage="${APPIMAGE//\\/\\\\}"
+  escaped_appimage="${escaped_appimage//\"/\\\"}"
+  escaped_appimage="${escaped_appimage//&/\\&}"
+  escaped_appimage="${escaped_appimage//|/\\|}"
+  sed "s|^Exec=.*$|Exec=\"$escaped_appimage\"|" "$desktop_source" > "$desktop_path"
   chmod 0644 "$desktop_path" 2>/dev/null || true
-  find "$icons_hicolor_dir" -path "*/apps/caveviewer.png" -exec chmod 0644 {} \; 2>/dev/null || true
+  find "$icons_hicolor_dir" -path "*/apps/${application_id}.png" -exec chmod 0644 {} \; 2>/dev/null || true
+
+  # Remove only the desktop entry generated by CaveViewer releases before the
+  # stable application ID was introduced. This prevents duplicate GNOME apps.
+  legacy_desktop_path="$applications_dir/caveviewer.desktop"
+  if [ -f "$legacy_desktop_path" ] && \
+      grep -q '^Name=CaveViewer$' "$legacy_desktop_path" && \
+      grep -q '^Icon=caveviewer$' "$legacy_desktop_path"; then
+    rm -f "$legacy_desktop_path"
+  fi
   if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -q -t "$icons_hicolor_dir" >/dev/null 2>&1 || true
   fi
@@ -347,7 +356,7 @@ DESKTOP_EOF
 
   if [ "$debug" = "1" ]; then
     echo "[CaveViewer AppRun] Desktop file: $desktop_path"
-    echo "[CaveViewer AppRun] Desktop icons: $icons_hicolor_dir/*/apps/caveviewer.png"
+    echo "[CaveViewer AppRun] Desktop icons: $icons_hicolor_dir/*/apps/${application_id}.png"
   fi
 }
 

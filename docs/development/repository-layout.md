@@ -11,13 +11,16 @@ been removed rather than kept as compatibility copies.
 ```text
 src/caveviewer/app.py                         startup and import workflow
 src/caveviewer/version.py                     release identity
+src/caveviewer/storage_paths.py               XDG/portable application roots
 src/caveviewer/core/                          parsing, cache, and streaming policy
+src/caveviewer/core/cache_paths.py             map-cache location policy
 src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
 src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
 src/caveviewer/resources/                     shaders, images, and public key
 tests/                                        unit and integration tests
 docs/                                         site and development documentation
 packaging/pyinstaller/CaveViewer.spec         PyInstaller configuration
+packaging/linux/                              desktop and AppStream metadata
 scripts/                                      development and release automation
 updates/                                      published update manifests/signatures
 ```
@@ -38,6 +41,7 @@ CaveViewer/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── app.py
+│       ├── storage_paths.py
 │       ├── core/
 │       ├── gui/
 │       │   └── platform/
@@ -53,6 +57,7 @@ CaveViewer/
 │   ├── images/
 │   └── development/
 ├── packaging/
+│   ├── linux/
 │   └── pyinstaller/
 ├── scripts/
 ├── updates/

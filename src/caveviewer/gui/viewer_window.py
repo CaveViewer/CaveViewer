@@ -42,33 +42,33 @@ from caveviewer.gui.color_picker import ColorPicker
 from caveviewer.gui.import_progress_panel import ImportProgressPanel
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform.windowing import run_window_config
 from caveviewer.resources import image_path, resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
 
 _LOG = get_logger("CaveViewer")
 
 _DEFAULT_WINDOW_SIZE = (1600, 1000)
-_WINDOW_ASPECT_RATIO = _DEFAULT_WINDOW_SIZE[0] / _DEFAULT_WINDOW_SIZE[1]
+_DESKTOP_WINDOW_SCALE = 0.80
 
 
 def _desktop_relative_window_size() -> tuple[int, int]:
-    """Return a large 16:10 window that fits comfortably on the desktop."""
+    """Return an 80%-of-screen fallback for non-GLFW desktop backends."""
     root = None
     try:
         import tkinter as tk
 
-        root = tk.Tk(className=APP_NAME)
+        root = tk.Tk(baseName=APP_NAME, className=APP_NAME)
         root.withdraw()
         desktop_width = int(root.winfo_screenwidth())
         desktop_height = int(root.winfo_screenheight())
         if desktop_width <= 0 or desktop_height <= 0:
             return _DEFAULT_WINDOW_SIZE
 
-        available_width = desktop_width * 0.90
-        available_height = desktop_height * 0.88
-        width = min(available_width, available_height * _WINDOW_ASPECT_RATIO)
-        height = width / _WINDOW_ASPECT_RATIO
-        window_size = max(1, int(round(width))), max(1, int(round(height)))
+        window_size = (
+            max(1, int(round(desktop_width * _DESKTOP_WINDOW_SCALE))),
+            max(1, int(round(desktop_height * _DESKTOP_WINDOW_SCALE))),
+        )
         _LOG.info(
             "Desktop size %dx%d; opening viewer at %dx%d.",
             desktop_width, desktop_height, *window_size,
@@ -158,10 +158,8 @@ void main() {
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = APP_NAME
-    # Start larger on desktop platforms so the HELP overlay and right-side
-    # controls have comfortable vertical room on first launch.
-    # Use a 16:10 baseline (more vertical space than 16:9) while keeping
-    # aspect_ratio unlocked so manual resizing remains fully flexible.
+    # The launch helpers replace this fallback with an 80%-of-desktop size.
+    # Keep aspect_ratio unlocked so manual resizing remains fully flexible.
     window_size = _DEFAULT_WINDOW_SIZE
     resizable = True
     # Allow disabling vsync via env var -- useful on VMs where the virtual
@@ -522,7 +520,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         if chunk_size is None:
             raise ValueError(
                 "Map cache manifest is missing a valid chunk_size. "
-                "Rebuild the _cache folder with this version of CaveViewer."
+                "Rebuild this map's reported cache directory with this version "
+                "of CaveViewer."
             )
         configured_chunk_size = chunker.configured_chunk_size()
         _LOG.info(f"Opening map cache with manifest chunk size: {chunk_size:g}m.")
@@ -1421,6 +1420,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         def worker():
             from caveviewer.app import import_and_cache_any
             from caveviewer.core import chunker as _ck
+            from caveviewer.core.cache_paths import map_texture_dir
 
             def on_progress(stage: str, fraction: float):
                 q.put(("progress", stage, fraction))
@@ -1429,6 +1429,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                 if _ck.cache_is_valid(source_path):
                     on_progress("loading cached map", 1.0)
                     cache_dir = _ck.get_cache_dir(source_path)
+                    resolved_textures_dir = map_texture_dir(
+                        source_path, cache_dir, textures_dir
+                    )
                 else:
                     on_progress("starting import", 0.0)
                     cache_dir = import_and_cache_any(
@@ -1436,8 +1439,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                         force_rebuild=False,
                         extra_progress_cb=on_progress,
                     )
+                    # Every new cache publishes its referenced textures in the
+                    # same atomic staging transaction as its chunks.
+                    resolved_textures_dir = cache_dir
                 manifest = _ck.load_manifest(cache_dir)
-                q.put(("done", cache_dir, textures_dir, manifest))
+                q.put(("done", cache_dir, resolved_textures_dir, manifest))
             except Exception as exc:
                 q.put(("error", str(exc)))
 
@@ -3173,6 +3179,21 @@ class CaveViewerWindow(mglw.WindowConfig):
     close = on_close
 
 
+def _launch_viewer_window() -> None:
+    """Launch with dimensions expressed in the selected backend's coordinates."""
+    if sys.platform.startswith("linux"):
+        # Linux GLFW sizing happens after the Wayland/X11 backend is selected,
+        # using that backend's DPI-aware work-area coordinate system.
+        CaveViewerWindow.window_size = _DEFAULT_WINDOW_SIZE
+    else:
+        CaveViewerWindow.window_size = _desktop_relative_window_size()
+    run_window_config(
+        CaveViewerWindow,
+        runner=mglw.run_window_config,
+        window_size_fraction=_DESKTOP_WINDOW_SCALE,
+        fallback_window_size=_DEFAULT_WINDOW_SIZE,
+    )
+
 
 def run_viewer(cache_dir: str, textures_dir: str):
     manifest = chunker.load_manifest(cache_dir)
@@ -3184,9 +3205,8 @@ def run_viewer(cache_dir: str, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
     CaveViewerWindow.cave_manifest = manifest
-    CaveViewerWindow.window_size = _desktop_relative_window_size()
 
-    mglw.run_window_config(CaveViewerWindow, args=[])
+    _launch_viewer_window()
 
 
 def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
@@ -3213,14 +3233,13 @@ def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = None
     CaveViewerWindow.cave_textures_dir = None
     CaveViewerWindow.cave_manifest = None
-    CaveViewerWindow.window_size = _desktop_relative_window_size()
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,
     }
 
     try:
-        mglw.run_window_config(CaveViewerWindow, args=[])
+        _launch_viewer_window()
     except RuntimeError as e:
         # Suppress the known "no initial map" runtime error that can occur
         # when the viewer is launched without a preloaded map and the GUI

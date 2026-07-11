@@ -39,9 +39,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-# Set environment variables if needed
-export CAVEVIEWER_HOME="$(pwd)"
-export PYTHONPATH="$CAVEVIEWER_HOME"
+# The project root and user storage are separate concepts. CAVEVIEWER_HOME is
+# intentionally left unset unless a developer wants isolated generated state.
+export CAVEVIEWER_PROJECT_ROOT="$(pwd)"
+export PYTHONPATH="$CAVEVIEWER_PROJECT_ROOT/src"
 
 # Optional: configure update checks.
 # Explicit manifest URL (highest priority):

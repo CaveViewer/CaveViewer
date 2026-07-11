@@ -342,7 +342,7 @@ def test_default_settings_path_stays_inside_isolated_home(valid_advanced_setting
     snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
     settings.save_advanced_settings(snapshot)
     path = Path(settings.advanced_settings_file())
-    assert path.parent == Path(os.path.expanduser("~")) / ".caveviewer"
+    assert path.parent == Path(os.environ["XDG_CONFIG_HOME"]) / "caveviewer"
     assert path.is_file()
     assert settings.load_advanced_settings()["io_workers"] == valid_advanced_settings[
         "io_workers"

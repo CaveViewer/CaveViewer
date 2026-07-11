@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.kernalpanic.caveviewer</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>CaveViewer</name>
+  <summary>Explore very large 3D cave-survey maps</summary>
+  <description>
+    <p>
+      CaveViewer is an interactive viewer for very large OBJ and GLB cave
+      surveys. It builds a spatial cache and streams map chunks so scans can
+      be explored on systems with a wide range of memory and graphics hardware.
+    </p>
+    <p>
+      Navigate the survey in 3D, inspect a minimap and longitudinal profile,
+      save viewpoints, adjust rendering, and record the viewer when needed.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.kernalpanic.caveviewer.desktop</launchable>
+  <developer id="io.github.kernalpanic">
+    <name>CaveViewer contributors</name>
+  </developer>
+  <url type="homepage">https://github.com/KernalPanic/CaveViewer</url>
+  <url type="bugtracker">https://github.com/KernalPanic/CaveViewer/issues</url>
+  <url type="vcs-browser">https://github.com/KernalPanic/CaveViewer</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-hero.jpg</image>
+      <caption>Exploring a streamed 3D cave survey</caption>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="1.0.64" date="2026-07-11" />
+  </releases>
+</component>
