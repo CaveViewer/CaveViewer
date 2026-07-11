@@ -40,7 +40,7 @@ class FakeDesktopServices:
         self.options = None
 
     def choose_directory(self, **options):
-        assert self.owner.topmost is True
+        assert self.owner.topmost is False
         self.options = options
         return DirectorySelection.from_path(self.result) if self.result else None
 
@@ -67,7 +67,7 @@ def test_download_start_reuses_action_area_as_cancel_button_without_prompt():
     assert cancel_event.is_set()
 
 
-def test_save_directory_chooser_is_owned_focused_and_temporarily_topmost():
+def test_save_directory_chooser_is_owned_focused_and_not_left_topmost():
     owner = FakeOwner(topmost=False)
     desktop_services = FakeDesktopServices(owner)
 
@@ -92,6 +92,8 @@ def test_save_directory_chooser_is_owned_focused_and_temporarily_topmost():
         ("focus_force",),
         ("update_idletasks",),
         ("set_topmost", False),
+        ("update_idletasks",),
+        ("set_topmost", False),
         ("lift",),
         ("focus_force",),
     ]
@@ -102,7 +104,7 @@ def test_save_directory_chooser_restores_topmost_state_after_failure():
 
     class FailingDesktopServices:
         def choose_directory(self, **_options):
-            assert owner.topmost is True
+            assert owner.topmost is False
             raise RuntimeError("native chooser failed")
 
     try:

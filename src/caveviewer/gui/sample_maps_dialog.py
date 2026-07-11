@@ -64,19 +64,28 @@ def _ask_directory_in_front(
 ):
     """Open an owned native directory chooser above the application's windows."""
     previous_topmost = False
+    topmost_supported = False
     try:
         previous_topmost = owner.attributes("-topmost")
+        topmost_supported = True
     except Exception:
         pass
 
     try:
-        # Supplying parent establishes native window ownership. Temporarily
-        # promoting that owner also keeps its native child above CaveViewer's
-        # other windows on window managers that do not honor ownership alone.
-        owner.attributes("-topmost", True)
+        # Supplying parent establishes native window ownership where Tk can
+        # provide it.  On Linux portal/Wayland paths, however, the chooser may
+        # not become a real child of this Toplevel. Keeping this dialog topmost
+        # during the chooser call can then put Sample Maps above the chooser.
+        # Pulse topmost only to raise the owner, then clear it before the
+        # blocking native dialog request.
+        if topmost_supported:
+            owner.attributes("-topmost", True)
         owner.lift()
         owner.focus_force()
         owner.update_idletasks()
+        if topmost_supported:
+            owner.attributes("-topmost", False)
+            owner.update_idletasks()
         return desktop_services.choose_directory(
             title=title,
             initial_dir=initial_dir,
@@ -84,7 +93,8 @@ def _ask_directory_in_front(
         )
     finally:
         try:
-            owner.attributes("-topmost", previous_topmost)
+            if topmost_supported:
+                owner.attributes("-topmost", previous_topmost)
             if owner.winfo_exists():
                 owner.lift()
                 owner.focus_force()
