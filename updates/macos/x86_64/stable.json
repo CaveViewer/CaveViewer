@@ -1,0 +1,12 @@
+{
+  "latest_version": "1.0.63",
+  "platform": "macos",
+  "architecture": "x86_64",
+  "download_url": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.63/CaveViewer-1.0.63-macos-x86_64.dmg",
+  "download_size_bytes": 66598535,
+  "download_url_macosx_dmg": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.63/CaveViewer-1.0.63-macos-x86_64.dmg",
+  "download_size_bytes_macosx_dmg": 66598535,
+  "release_notes": "Major performance improvements and bug fixes.",
+  "sha256": "c84b02851d92d95e3d82f4fccd38abcc5f919aa0dac7169b75dc11888ae3de1c",
+  "sha256_macosx_dmg": "c84b02851d92d95e3d82f4fccd38abcc5f919aa0dac7169b75dc11888ae3de1c"
+}
