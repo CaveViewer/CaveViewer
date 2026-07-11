@@ -57,8 +57,10 @@ on:
         description: "Private key used to sign published update manifests"
         required: false
 
+# Nested reusable workflows cannot elevate permissions granted by their caller.
+# Keep write available for publish-macos-x86_64; executable jobs downgrade to read.
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: caveviewer-build-macos-x86_64-${{ github.ref }}-${{ inputs.version }}

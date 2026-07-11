@@ -41,8 +41,10 @@ jobs:
     name: Windows
     needs: essential-tests
     uses: ./.github/workflows/windows-release.yml
+    # Preserve write through the reusable-workflow call chain. The called
+    # workflow downgrades its test and package jobs to read-only.
     permissions:
-      contents: read
+      contents: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -56,7 +58,7 @@ jobs:
     needs: essential-tests
     uses: ./.github/workflows/linux-arm64-release.yml
     permissions:
-      contents: read
+      contents: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -70,7 +72,7 @@ jobs:
     needs: essential-tests
     uses: ./.github/workflows/linux-x86_64-release.yml
     permissions:
-      contents: read
+      contents: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -84,7 +86,7 @@ jobs:
     needs: essential-tests
     uses: ./.github/workflows/macos-arm64-release.yml
     permissions:
-      contents: read
+      contents: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -98,7 +100,7 @@ jobs:
     needs: essential-tests
     uses: ./.github/workflows/macos-x86_64-release.yml
     permissions:
-      contents: read
+      contents: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
