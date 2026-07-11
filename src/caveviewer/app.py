@@ -194,8 +194,6 @@ def find_input_files(folder: str) -> tuple[str, str]:
         _LOG.info(f"Note: multiple .obj files found, using the first one: {obj_candidates[0]}")
     obj_path = obj_candidates[0]
 
-    from caveviewer.core.obj_parser import parse_obj  # local import; heavy-ish module
-
     # peek at just the mtllib line rather than a full parse, to find the mtl
     # filename quickly even on a multi-GB obj
     mtl_name = None
