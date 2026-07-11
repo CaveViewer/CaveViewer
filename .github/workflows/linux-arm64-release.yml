@@ -42,6 +42,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_essential_tests:
+        description: "Skip this workflow's test gate when the caller already ran it"
+        required: false
+        type: boolean
+        default: false
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
         description: "Private key used to sign published update manifests"
@@ -56,10 +61,12 @@ concurrency:
 
 jobs:
   essential-tests:
+    if: ${{ inputs.skip_essential_tests != true }}
     uses: ./.github/workflows/tests.yml
 
   build-linux-arm64:
     needs: essential-tests
+    if: ${{ !cancelled() && (inputs.skip_essential_tests == true || needs.essential-tests.result == 'success') }}
     runs-on: ubuntu-24.04-arm
 
     steps:

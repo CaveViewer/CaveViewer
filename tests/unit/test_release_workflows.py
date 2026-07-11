@@ -51,6 +51,13 @@ def test_all_release_workflows_expose_publish_and_prerelease_inputs():
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:" in workflow, workflow_name
         assert "uses: ./.github/workflows/tests.yml" in workflow, workflow_name
         assert "needs: essential-tests" in workflow, workflow_name
+        assert "skip_essential_tests:" in workflow, workflow_name
+        assert "inputs.skip_essential_tests != true" in workflow, workflow_name
+        assert "inputs.skip_essential_tests == true" in workflow, workflow_name
+        assert "needs.essential-tests.result == 'success'" in workflow, workflow_name
+        assert "!cancelled()" in workflow, workflow_name
+        dispatch_contract = workflow.split("  workflow_call:", 1)[0]
+        assert "skip_essential_tests" not in dispatch_contract, workflow_name
         assert "ref: ${{ github.ref }}" in workflow, workflow_name
         assert "--skip-tests" in workflow, workflow_name
         assert "Install release test dependencies" not in workflow, workflow_name
@@ -61,7 +68,7 @@ def test_all_platform_release_workflow_calls_platforms_sequentially():
         encoding="utf-8"
     )
     job_contracts = (
-        ("windows", "windows-release.yml", None),
+        ("windows", "windows-release.yml", "essential-tests"),
         ("linux-arm64", "linux-arm64-release.yml", "windows"),
         ("linux-x86_64", "linux-x86_64-release.yml", "linux-arm64"),
         ("macos-arm64", "macos-arm64-release.yml", "linux-x86_64"),
@@ -72,6 +79,8 @@ def test_all_platform_release_workflow_calls_platforms_sequentially():
     assert "workflow_dispatch:" in workflow
     assert "contents: write" in workflow
     assert "group: caveviewer-all-platform-release-${{ github.ref }}" in workflow
+    assert workflow.count("uses: ./.github/workflows/tests.yml") == 1
+    assert workflow.count("skip_essential_tests: true") == len(job_contracts)
     assert workflow.count("secrets: inherit") == len(job_contracts)
 
     job_positions = []
