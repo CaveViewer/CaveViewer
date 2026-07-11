@@ -42,6 +42,16 @@ def test_desktop_relative_window_size_uses_eighty_percent_per_axis(monkeypatch):
     assert root.destroyed is True
 
 
+def test_window_pixel_ratio_uses_framebuffer_size():
+    window = SimpleNamespace(size=(1000, 700), buffer_size=(2000, 1400))
+
+    assert viewer_window._window_pixel_ratio(window) == 2.0
+
+
+def test_window_pixel_ratio_falls_back_for_missing_backend_data():
+    assert viewer_window._window_pixel_ratio(SimpleNamespace(size=(1000, 700))) == 1.0
+
+
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     calls = []
     monkeypatch.setattr(viewer_window.sys, "platform", "linux")

@@ -97,7 +97,17 @@ class StatsReadout:
         panel_w = max(float(panel_width or 0), text_w + self.PANEL_PAD_X * 2)
         panel_h = line_h + self.PANEL_PAD_Y * 2
 
-        cache_key = (fps_text, prefix_w, fps_color, window_size, bottom_left_x, bottom_y, panel_w, panel_h)
+        cache_key = (
+            fps_text,
+            prefix_w,
+            fps_color,
+            window_size,
+            bottom_left_x,
+            bottom_y,
+            panel_w,
+            panel_h,
+            bitmap_font.raster_scale(),
+        )
         if cache_key != self._render_cache_key:
             verts = []
 

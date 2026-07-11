@@ -27,11 +27,20 @@ class FakeGlfw:
     TRUE = 1
     FALSE = 0
 
-    def __init__(self, *, init_result=True, supported=True):
+    def __init__(
+        self,
+        *,
+        init_result=True,
+        supported=True,
+        content_scale=(1.0, 1.0),
+        video_mode=(1920, 1080),
+    ):
         self.init_result = init_result
         self.supported = supported
         self.selected_platform = None
         self.calls = []
+        self.content_scale = content_scale
+        self.video_mode = video_mode
 
     def platform_supported(self, platform):
         self.calls.append(("platform_supported", platform))
@@ -67,6 +76,14 @@ class FakeGlfw:
 
     def window_hint(self, hint, value):
         self.calls.append(("window_hint", hint, value))
+
+    def get_monitor_content_scale(self, monitor):
+        self.calls.append(("get_monitor_content_scale", monitor))
+        return self.content_scale
+
+    def get_video_mode(self, monitor):
+        self.calls.append(("get_video_mode", monitor))
+        return self.video_mode
 
 
 def test_auto_plan_prefers_wayland_then_x11_when_both_are_available():
@@ -172,10 +189,53 @@ def test_relative_size_uses_glfw_workarea_without_duplicate_dpi_scaling():
 
     assert observed == [((1536, 832), ["--window", "glfw"])]
     assert ("window_hint", glfw.SCALE_TO_MONITOR, glfw.FALSE) in glfw.calls
+    assert ("get_monitor_content_scale", "primary") not in glfw.calls
 
     # The override is scoped to window creation and does not mutate pyGLFW.
     glfw.window_hint(glfw.SCALE_TO_MONITOR, glfw.TRUE)
     assert glfw.calls[-1] == ("window_hint", glfw.SCALE_TO_MONITOR, glfw.TRUE)
+
+
+def test_wayland_relative_size_converts_physical_workarea_to_logical_coordinates():
+    glfw = FakeGlfw(content_scale=(2.0, 2.0), video_mode=(3840, 2160))
+    glfw.get_monitor_workarea = lambda monitor: (0, 40, 3840, 2160)
+
+    class Config:
+        window_size = (1600, 1000)
+
+    observed = []
+    run_window_config(
+        Config,
+        runner=lambda config, args: observed.append((config.window_size, args)),
+        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
+        platform_name="linux",
+        glfw_loader=lambda _system: glfw,
+        window_size_fraction=0.8,
+        fallback_window_size=(1600, 1000),
+    )
+
+    assert observed == [((1536, 864), ["--window", "glfw"])]
+
+
+def test_wayland_relative_size_keeps_already_logical_workarea_coordinates():
+    glfw = FakeGlfw(content_scale=(2.0, 2.0), video_mode=(3840, 2160))
+    glfw.get_monitor_workarea = lambda monitor: (0, 40, 1920, 1080)
+
+    class Config:
+        window_size = (1600, 1000)
+
+    observed = []
+    run_window_config(
+        Config,
+        runner=lambda config, args: observed.append((config.window_size, args)),
+        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
+        platform_name="linux",
+        glfw_loader=lambda _system: glfw,
+        window_size_fraction=0.8,
+        fallback_window_size=(1600, 1000),
+    )
+
+    assert observed == [((1536, 864), ["--window", "glfw"])]
 
 
 def test_relative_size_uses_safe_fallback_when_workarea_is_unavailable():

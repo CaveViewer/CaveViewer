@@ -102,7 +102,7 @@ def _default_chunk_build_workers() -> str:
 
 
 def _default_text_aa_mode() -> str:
-    return "light" if sys.platform == "darwin" else "normal"
+    return "light" if sys.platform == "darwin" or sys.platform.startswith("linux") else "normal"
 
 
 _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {

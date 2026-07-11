@@ -107,6 +107,7 @@ def run_window_config(
                 )
                 config_class.window_size = _glfw_workarea_window_size(
                     glfw_module,
+                    window_system=window_system,
                     fraction=window_size_fraction,
                     fallback=fallback,
                 )
@@ -165,10 +166,11 @@ def run_window_config(
 def _glfw_workarea_window_size(
     glfw_module: Any,
     *,
+    window_system: WindowSystem,
     fraction: float,
     fallback: tuple[int, int],
 ) -> tuple[int, int]:
-    """Scale GLFW work-area screen coordinates for a windowed launch."""
+    """Scale the primary monitor's usable work area for a windowed launch."""
     try:
         monitor = glfw_module.get_primary_monitor()
         if monitor is None:
@@ -186,6 +188,22 @@ def _glfw_workarea_window_size(
         )
         return fallback
 
+    content_scale = (
+        _glfw_monitor_content_scale(glfw_module, monitor)
+        if window_system is WindowSystem.WAYLAND
+        else (1.0, 1.0)
+    )
+    if _wayland_workarea_needs_logical_coordinates(
+        glfw_module,
+        monitor,
+        window_system=window_system,
+        work_width=work_width,
+        work_height=work_height,
+        content_scale=content_scale,
+    ):
+        work_width = int(round(work_width / content_scale[0]))
+        work_height = int(round(work_height / content_scale[1]))
+
     window_size = (
         max(1, int(round(work_width * fraction))),
         max(1, int(round(work_height * fraction))),
@@ -197,6 +215,72 @@ def _glfw_workarea_window_size(
         *window_size,
     )
     return window_size
+
+
+def _glfw_monitor_content_scale(glfw_module: Any, monitor: Any) -> tuple[float, float]:
+    getter = getattr(glfw_module, "get_monitor_content_scale", None)
+    if not callable(getter):
+        return 1.0, 1.0
+    try:
+        x_scale, y_scale = getter(monitor)
+        x_scale = float(x_scale)
+        y_scale = float(y_scale)
+        if x_scale <= 0.0 or y_scale <= 0.0:
+            return 1.0, 1.0
+        return x_scale, y_scale
+    except Exception:
+        return 1.0, 1.0
+
+
+def _wayland_workarea_needs_logical_coordinates(
+    glfw_module: Any,
+    monitor: Any,
+    *,
+    window_system: WindowSystem,
+    work_width: int,
+    work_height: int,
+    content_scale: tuple[float, float],
+) -> bool:
+    if window_system is not WindowSystem.WAYLAND:
+        return False
+    x_scale, y_scale = content_scale
+    if x_scale <= 1.0 and y_scale <= 1.0:
+        return False
+
+    video_mode = None
+    getter = getattr(glfw_module, "get_video_mode", None)
+    if callable(getter):
+        try:
+            video_mode = getter(monitor)
+        except Exception:
+            video_mode = None
+
+    mode_width, mode_height = _video_mode_size(video_mode)
+    if mode_width and mode_height:
+        logical_width = mode_width / x_scale
+        logical_height = mode_height / y_scale
+        return work_width > logical_width * 1.2 or work_height > logical_height * 1.2
+
+    return True
+
+
+def _video_mode_size(video_mode: Any) -> tuple[int | None, int | None]:
+    if video_mode is None:
+        return None, None
+    size = getattr(video_mode, "size", None)
+    if size is not None:
+        try:
+            if len(size) >= 2:
+                return int(size[0]), int(size[1])
+        except Exception:
+            pass
+    width = getattr(video_mode, "width", None)
+    height = getattr(video_mode, "height", None)
+    if width is not None and height is not None:
+        return int(width), int(height)
+    if isinstance(video_mode, tuple) and len(video_mode) >= 2:
+        return int(video_mode[0]), int(video_mode[1])
+    return None, None
 
 
 def _run_with_fixed_glfw_window_scale(

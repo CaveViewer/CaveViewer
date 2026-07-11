@@ -84,10 +84,17 @@ class RenderModeButtons:
     BUTTON_GAP = 10
     MARGIN_RIGHT = 18
     GROUP_GAP = 34
+    FIXED_TEXT_SCALE = 1.28
 
-    def __init__(self, ctx: moderngl.Context,
-                 texture_enabled: bool = True, wireframe_enabled: bool = False,
-                 smooth_shading_enabled: bool = True):
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        texture_enabled: bool = True,
+        wireframe_enabled: bool = False,
+        smooth_shading_enabled: bool = True,
+        text_scale: float = 1.0,
+        geometry_scale: float = 1.0,
+    ):
         self.ctx = ctx
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
 
@@ -109,6 +116,8 @@ class RenderModeButtons:
         # until a displayed state or layout input actually changes.
         self._render_cache_key: tuple | None = None
         self._render_cache_verts = 0
+        self._text_scale = max(0.35, float(text_scale))
+        self._geometry_scale = max(0.35, float(geometry_scale))
 
     # -- layout ---------------------------------------------------------------
 
@@ -126,11 +135,11 @@ class RenderModeButtons:
         """Compute grouped button/header geometry and a shared scale."""
         _w, h = window_size
 
-        full_stack_height = self.total_stack_height(scale=1.0)
+        full_stack_height = self.total_stack_height(scale=self._geometry_scale)
         available_height = h - top_y - 10  # 10px bottom breathing room
-        scale = 1.0
+        scale = self._geometry_scale
         if full_stack_height > available_height and available_height > 0:
-            scale = max(0.35, available_height / full_stack_height)
+            scale = max(0.35, self._geometry_scale * available_height / full_stack_height)
 
         button_h = self.BUTTON_HEIGHT * scale
         button_gap = self.BUTTON_GAP * scale
@@ -164,7 +173,7 @@ class RenderModeButtons:
             right_inset = self.MARGIN_RIGHT
 
         x1 = w - right_inset
-        x0 = x1 - self.BUTTON_WIDTH
+        x0 = x1 - self.BUTTON_WIDTH * layout["scale"]
         if index <= 2:
             group_top = layout["view_buttons_top_y"]
             index_in_group = index
@@ -287,6 +296,9 @@ class RenderModeButtons:
             self.texture_enabled,
             self.wireframe_enabled,
             self.smooth_shading_enabled,
+            self._text_scale,
+            self._geometry_scale,
+            bitmap_font.raster_scale(),
         )
         if cache_key != self._render_cache_key:
             self._rebuild_render_cache(
@@ -342,10 +354,14 @@ class RenderModeButtons:
         # sitting right next to it -- two adjacent buttons with
         # inconsistent text sizing is a large part of what reads as
         # unpolished. A single shared size keeps them visually matched.
-        available_w = self.BUTTON_WIDTH - 16
-        available_h = self.BUTTON_HEIGHT - 10
+        layout = self._group_layout(window_size, top_y)
+        available_w = self.BUTTON_WIDTH * layout["scale"] - 16
+        available_h = self.BUTTON_HEIGHT * layout["scale"] - 10
         nominal_pixel_size = 3.1
-        shared_pixel_size = bitmap_font.pixel_size_at_text_scale(nominal_pixel_size, 1.28)
+        shared_pixel_size = bitmap_font.pixel_size_at_text_scale(
+            nominal_pixel_size,
+            self.FIXED_TEXT_SCALE * self._text_scale,
+        )
         while nominal_pixel_size > 0.5:
             w = bitmap_font.text_width_px("TEXTURE", shared_pixel_size)
             _bx0, _by0, _bx1, _by1 = bitmap_font.text_bounds_px("TEXTURE", shared_pixel_size)
@@ -353,7 +369,10 @@ class RenderModeButtons:
             if w <= available_w and h <= available_h:
                 break
             nominal_pixel_size -= 0.1
-            shared_pixel_size = bitmap_font.pixel_size_at_text_scale(nominal_pixel_size, 1.28)
+            shared_pixel_size = bitmap_font.pixel_size_at_text_scale(
+                nominal_pixel_size,
+                self.FIXED_TEXT_SCALE * self._text_scale,
+            )
 
         def draw_toggle_button(rect, is_on: bool, label: str):
             x0, y0, x1, y1 = rect

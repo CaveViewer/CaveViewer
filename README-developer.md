@@ -456,10 +456,12 @@ signing manually, either set that variable or pass `--private-key`.
 #### OpenGL UI scaling
 
 The OpenGL viewer renders its overlay text directly with FreeType in screen
-pixels. It does not automatically inherit GNOME, KDE, X11, or Wayland desktop
-scaling. On a high-DPI display, set `CAVEVIEWER_UI_TEXT_SCALE` when starting
-CaveViewer. The built-in default is `1.28`; for example, applying an additional
-150% scale gives `1.28 * 1.5 = 1.92`:
+pixels. It automatically rasterizes glyphs at the active framebuffer pixel
+ratio so high-DPI and fractional-scale desktops do not stretch low-resolution
+font bitmaps. It does not automatically use GNOME, KDE, X11, or Wayland desktop
+scaling to make the UI physically larger; set `CAVEVIEWER_UI_TEXT_SCALE` when
+you want larger or smaller overlay controls. The built-in default is `1.28`;
+for example, applying an additional 150% scale gives `1.28 * 1.5 = 1.92`:
 
 ```bash
 CAVEVIEWER_UI_TEXT_SCALE=1.92 ./run_caveviewer.sh
@@ -475,7 +477,8 @@ The accepted range is `0.5` through `3.0`. The controls/help overlay derives
 its row height from the resulting FreeType line metrics, so increasing the text
 scale also reserves enough vertical space for each line and its keycap. Text
 inside the fixed-size right-side control panel (steppers and action buttons)
-stays at its designed size because that panel's geometry does not scale.
+stays at its panel-specific designed size because that compact control geometry
+does not follow the global overlay text scale.
 
 To keep a development-machine override, export it in the shell profile or add
 the following before the final `exec` in `run_caveviewer.sh`:
@@ -495,7 +498,7 @@ still override it for an individual run.
 | `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Scale multiplier for adaptable in-app overlay text (loading screens, controls/help overlay, and HUD readouts). Text inside fixed-size control geometry is intentionally excluded. `1.0` is the base size. |
 | `CAVEVIEWER_TK_SCALE` | _(display DPI)_ | Windows/Linux override for Tk dialog scaling, clamped to `0.75` through `4.0`. The Linux AppImage launcher normally derives this value from the desktop Xft DPI setting. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
-| `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing (matches macOS CoreText style); `lcd` = LCD sub-pixel rendering. |
+| `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS/Linux), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing; `lcd` = LCD sub-pixel rendering. |
 | `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
 | `CAVEVIEWER_WINDOW_SYSTEM` | `auto` | Linux viewer backend: `auto` prefers native Wayland and retries X11 on a recognized initialization failure; `wayland` and `x11` require that protocol without fallback. |
 | `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a VM or GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |

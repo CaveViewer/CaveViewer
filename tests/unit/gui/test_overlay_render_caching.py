@@ -6,6 +6,7 @@ import pytest
 
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.render_mode_buttons import RenderModeButtons
+from caveviewer.gui.stats_readout import StatsReadout
 from caveviewer.gui.stepper_control import StepperControl
 
 
@@ -102,6 +103,42 @@ def test_stepper_reuses_geometry_until_value_or_layout_changes():
     assert vertex_array.render_count == 5
 
 
+def test_stepper_geometry_scale_reduces_fixed_control_size():
+    control = StepperControl(
+        _TrackingContext(),
+        "BRIGHTNESS",
+        initial_value=5,
+        min_value=0,
+        max_value=10,
+        geometry_scale=0.86,
+    )
+
+    assert control.total_width() == pytest.approx((32 * 2 + 44 + 6 * 2) * 0.86)
+    assert control.total_height() == pytest.approx(32 * 0.86)
+
+
+def test_stepper_rebuilds_when_raster_scale_changes():
+    try:
+        bitmap_font.set_raster_scale(1.0)
+        control = StepperControl(
+            _TrackingContext(),
+            "BRIGHTNESS",
+            initial_value=5,
+            min_value=0,
+            max_value=10,
+        )
+
+        control.render((1920, 1080), 1700, 300)
+        buffer = control._vbo
+
+        bitmap_font.set_raster_scale(2.0)
+        control.render((1920, 1080), 1700, 300)
+
+        assert buffer.write_count == 2
+    finally:
+        bitmap_font.set_raster_scale(1.0)
+
+
 def test_render_mode_buttons_reuse_geometry_until_state_or_layout_changes():
     buttons = RenderModeButtons(_TrackingContext())
 
@@ -160,3 +197,66 @@ def test_render_mode_buttons_reuse_geometry_until_state_or_layout_changes():
     )
     assert buffer.write_count == 8
     assert vertex_array.render_count == 9
+
+
+def test_render_mode_button_geometry_scale_reduces_fixed_button_size():
+    buttons = RenderModeButtons(_TrackingContext(), geometry_scale=0.86)
+
+    x0, y0, x1, y1 = buttons._button_rect_px(
+        0,
+        (1600, 1000),
+        top_y=500,
+        right_inset=20,
+    )
+
+    assert x1 - x0 == pytest.approx(120 * 0.86)
+    assert y1 - y0 == pytest.approx(34 * 0.86)
+    assert buttons.total_stack_height(scale=0.86) == pytest.approx(
+        (3 * 34 + 2 * 10 + 34 + 4 * 34 + 3 * 10) * 0.86
+    )
+
+
+def test_render_mode_buttons_rebuild_when_raster_scale_changes():
+    try:
+        bitmap_font.set_raster_scale(1.0)
+        buttons = RenderModeButtons(_TrackingContext())
+
+        buttons.render((1920, 1080), 500, right_inset=24)
+        buffer = buttons._vbo
+
+        bitmap_font.set_raster_scale(2.0)
+        buttons.render((1920, 1080), 500, right_inset=24)
+
+        assert buffer.write_count == 2
+    finally:
+        bitmap_font.set_raster_scale(1.0)
+
+
+def test_stats_readout_rebuilds_when_raster_scale_changes():
+    try:
+        bitmap_font.set_raster_scale(1.0)
+        readout = StatsReadout(_TrackingContext())
+
+        readout.render(
+            (1920, 1080),
+            bottom_left_x=20,
+            bottom_y=1000,
+            fps=60.0,
+            chunks_loaded=10,
+            chunks_pending=0,
+        )
+        buffer = readout._vbo
+
+        bitmap_font.set_raster_scale(2.0)
+        readout.render(
+            (1920, 1080),
+            bottom_left_x=20,
+            bottom_y=1000,
+            fps=60.0,
+            chunks_loaded=10,
+            chunks_pending=0,
+        )
+
+        assert buffer.write_count == 2
+    finally:
+        bitmap_font.set_raster_scale(1.0)

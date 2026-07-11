@@ -85,6 +85,18 @@ def _desktop_relative_window_size() -> tuple[int, int]:
                 pass
 
 
+def _window_pixel_ratio(window) -> float:
+    """Return framebuffer pixels per logical window pixel for crisp UI text."""
+    try:
+        width, height = window.size
+        buffer_width, buffer_height = window.buffer_size
+        width = max(1, int(width))
+        height = max(1, int(height))
+        return max(1.0, min(4.0, max(buffer_width / width, buffer_height / height)))
+    except Exception:
+        return 1.0
+
+
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -206,6 +218,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     RIGHT_COLUMN_PANEL_BOTTOM_MARGIN = 20
     RIGHT_COLUMN_PANEL_LABEL_GAP = 10
     RIGHT_COLUMN_PANEL_LABEL_SIZE = 1.7
+    RIGHT_COLUMN_PANEL_SCALE = 0.86
+    RIGHT_COLUMN_PANEL_TEXT_SCALE = 0.92
     RIGHT_COLUMN_PANEL_FILL_RGBA = (0.09, 0.12, 0.16, 0.84)
     RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
     RIGHT_COLUMN_PANEL_BORDER_PX = 1.5
@@ -235,6 +249,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
         else:
             bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
+        bitmap_font.set_raster_scale(_window_pixel_ratio(getattr(self, "wnd", None)))
 
         have_ready_cache = CaveViewerWindow.cave_cache_dir is not None
         have_pending_import = CaveViewerWindow.cave_pending_import is not None
@@ -331,7 +346,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         # not), so this sidesteps the whole class of problem by using
         # discrete +/-1 clicks instead of continuous drag-tracking.
         # Range/default unchanged from the old slider (0-10, default 3).
-        self.light_stepper = StepperControl(self.ctx, "BRIGHTNESS", initial_value=5, min_value=0, max_value=10)
+        self.light_stepper = StepperControl(
+            self.ctx,
+            "BRIGHTNESS",
+            initial_value=5,
+            min_value=0,
+            max_value=10,
+            text_scale=self.RIGHT_COLUMN_PANEL_TEXT_SCALE,
+            geometry_scale=self.RIGHT_COLUMN_PANEL_SCALE,
+        )
 
         # Render distance control: a -/value/+ stepper, left side of the
         # screen, mirroring the brightness control's placement logic but
@@ -343,7 +366,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         # (see caveviewer.core.streaming_world) still applies underneath this as
         # a hard backstop regardless of what this is set to.
         self.render_distance_stepper = StepperControl(
-            self.ctx, "DISTANCE", initial_value=3, min_value=1, max_value=10
+            self.ctx,
+            "DISTANCE",
+            initial_value=3,
+            min_value=1,
+            max_value=10,
+            text_scale=self.RIGHT_COLUMN_PANEL_TEXT_SCALE,
+            geometry_scale=self.RIGHT_COLUMN_PANEL_SCALE,
         )
 
         # "Global illumination" control: not actual simulated light
@@ -357,15 +386,29 @@ class CaveViewerWindow(mglw.WindowConfig):
         # original fixed ambient value this app always used (0.04, a
         # tiny fill so unlit areas aren't pure black), so leaving this at
         # its default changes nothing from before this feature existed.
-        self.ambient_stepper = StepperControl(self.ctx, "GLOBAL LIGHT", initial_value=5, min_value=0, max_value=10)
+        self.ambient_stepper = StepperControl(
+            self.ctx,
+            "GLOBAL LIGHT",
+            initial_value=5,
+            min_value=0,
+            max_value=10,
+            text_scale=self.RIGHT_COLUMN_PANEL_TEXT_SCALE,
+            geometry_scale=self.RIGHT_COLUMN_PANEL_SCALE,
+        )
 
         # Mesh/Texture toggle buttons, stacked just below the brightness
         # slider. Mesh = wireframe overlay on/off; Texture = whether the
         # photo texture is sampled or the surface falls back to plain lit
         # gray. See caveviewer.gui.render_mode_buttons for the four resulting
         # combined display states.
-        self.render_mode_buttons = RenderModeButtons(self.ctx, texture_enabled=True, wireframe_enabled=False,
-                                                      smooth_shading_enabled=True)
+        self.render_mode_buttons = RenderModeButtons(
+            self.ctx,
+            texture_enabled=True,
+            wireframe_enabled=False,
+            smooth_shading_enabled=True,
+            text_scale=self.RIGHT_COLUMN_PANEL_TEXT_SCALE,
+            geometry_scale=self.RIGHT_COLUMN_PANEL_SCALE,
+        )
         # Loading-policy lock for right-side button effects. While a map
         # is loading, all render-mode toggles are forced off; once
         # loading completes, defaults become Texture ON, Mesh OFF,
@@ -1747,10 +1790,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         # this stays correct if that label styling ever changes (rather
         # than a second hard-coded guess at the same number).
         from caveviewer.gui import bitmap_font
-        fixed_label_size = bitmap_font.pixel_size_at_text_scale(1.5, self.UI_TEXT_SCALE)
-        label_reserve = bitmap_font.text_height_px(fixed_label_size) + 8
+        fixed_label_size = bitmap_font.pixel_size_at_text_scale(
+            1.5,
+            self.UI_TEXT_SCALE * self.RIGHT_COLUMN_PANEL_TEXT_SCALE,
+        )
+        panel_scale = self.RIGHT_COLUMN_PANEL_SCALE
+        label_reserve = bitmap_font.text_height_px(fixed_label_size) + 8 * panel_scale
 
-        button_block_height = RenderModeButtons.total_stack_height()
+        button_block_height = RenderModeButtons.total_stack_height(scale=panel_scale)
         content_right_inset = self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN + self.RIGHT_COLUMN_PANEL_SIDE_PAD
         content_bottom_inset = self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN + self.RIGHT_COLUMN_PANEL_BOTTOM_PAD
 
@@ -1759,13 +1806,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         buttons_bottom_y = h - content_bottom_inset
         buttons_top_y = buttons_bottom_y - button_block_height
 
-        render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_BUTTON_GROUP_GAP
+        render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_BUTTON_GROUP_GAP * panel_scale
         render_distance_anchor_y = render_distance_bottom_y - self.render_distance_stepper.total_height()
 
-        ambient_bottom_y = render_distance_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP
+        ambient_bottom_y = render_distance_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP * panel_scale
         ambient_anchor_y = ambient_bottom_y - self.ambient_stepper.total_height()
 
-        brightness_bottom_y = ambient_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP
+        brightness_bottom_y = ambient_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP * panel_scale
         brightness_anchor_y = brightness_bottom_y - self.light_stepper.total_height()
 
         right_x_brightness = w - content_right_inset - self.light_stepper.total_width()
@@ -1791,7 +1838,8 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         w, h = window_size
         fixed_label_size = bitmap_font.pixel_size_at_text_scale(
-            self.RIGHT_COLUMN_PANEL_LABEL_SIZE, self.UI_TEXT_SCALE
+            self.RIGHT_COLUMN_PANEL_LABEL_SIZE,
+            self.UI_TEXT_SCALE * self.RIGHT_COLUMN_PANEL_TEXT_SCALE,
         )
         label_height = bitmap_font.text_height_px(fixed_label_size)
         buttons_top_y = column["buttons_top_y"]
@@ -1806,10 +1854,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             ambient_anchor_x + self.ambient_stepper.total_width(),
             render_distance_anchor_x + self.render_distance_stepper.total_width(),
         ]
+        label_gap = self.RIGHT_COLUMN_PANEL_LABEL_GAP * self.RIGHT_COLUMN_PANEL_SCALE
         label_tops = [
-            brightness_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
-            ambient_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
-            render_distance_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
+            brightness_anchor_y - label_height - label_gap,
+            ambient_anchor_y - label_height - label_gap,
+            render_distance_anchor_y - label_height - label_gap,
         ]
 
         button_x0, _button_y0, button_x1, _button_y1 = self.render_mode_buttons._button_rect_px(
@@ -2019,6 +2068,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     def on_render(self, current_time: float, frame_time: float):
         if self._closing_requested:
             return
+        bitmap_font.set_raster_scale(_window_pixel_ratio(self.wnd))
 
         # Keep render-mode button effects synced to loading state even
         # on frames that early-return before normal HUD interaction.

@@ -59,13 +59,23 @@ class StepperControl:
     GAP = 6
     FIXED_TEXT_SCALE = 1.28
 
-    def __init__(self, ctx: moderngl.Context, label: str, initial_value: int,
-                 min_value: int, max_value: int):
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        label: str,
+        initial_value: int,
+        min_value: int,
+        max_value: int,
+        text_scale: float = 1.0,
+        geometry_scale: float = 1.0,
+    ):
         self.ctx = ctx
         self.label = label
         self.value = max(min_value, min(max_value, int(initial_value)))
         self.min_value = min_value
         self.max_value = max_value
+        self._text_scale = max(0.35, float(text_scale))
+        self._geometry_scale = max(0.35, float(geometry_scale))
 
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
         self._max_verts = 1200
@@ -77,6 +87,21 @@ class StepperControl:
         # until a displayed value or layout input actually changes.
         self._render_cache_key: tuple | None = None
         self._render_cache_verts = 0
+
+    def _scaled_text_size(self, base_pixel_size: float) -> float:
+        return bitmap_font.pixel_size_at_text_scale(
+            base_pixel_size,
+            self.FIXED_TEXT_SCALE * self._text_scale,
+        )
+
+    def _button_size(self) -> float:
+        return self.BUTTON_SIZE * self._geometry_scale
+
+    def _value_box_width(self) -> float:
+        return self.VALUE_BOX_WIDTH * self._geometry_scale
+
+    def _gap(self) -> float:
+        return self.GAP * self._geometry_scale
 
     # -- value adjustment -------------------------------------------------------
 
@@ -93,21 +118,22 @@ class StepperControl:
     # just lays out its three pieces relative to that one anchor point.
 
     def _minus_button_rect(self, anchor_x: float, anchor_y: float) -> tuple[float, float, float, float]:
-        return (anchor_x, anchor_y, anchor_x + self.BUTTON_SIZE, anchor_y + self.BUTTON_SIZE)
+        button_size = self._button_size()
+        return (anchor_x, anchor_y, anchor_x + button_size, anchor_y + button_size)
 
     def _value_box_rect(self, anchor_x: float, anchor_y: float) -> tuple[float, float, float, float]:
-        x0 = anchor_x + self.BUTTON_SIZE + self.GAP
-        return (x0, anchor_y, x0 + self.VALUE_BOX_WIDTH, anchor_y + self.BUTTON_SIZE)
+        x0 = anchor_x + self._button_size() + self._gap()
+        return (x0, anchor_y, x0 + self._value_box_width(), anchor_y + self._button_size())
 
     def _plus_button_rect(self, anchor_x: float, anchor_y: float) -> tuple[float, float, float, float]:
-        x0 = anchor_x + self.BUTTON_SIZE + self.GAP + self.VALUE_BOX_WIDTH + self.GAP
-        return (x0, anchor_y, x0 + self.BUTTON_SIZE, anchor_y + self.BUTTON_SIZE)
+        x0 = anchor_x + self._button_size() + self._gap() + self._value_box_width() + self._gap()
+        return (x0, anchor_y, x0 + self._button_size(), anchor_y + self._button_size())
 
     def total_width(self) -> float:
-        return self.BUTTON_SIZE * 2 + self.VALUE_BOX_WIDTH + self.GAP * 2
+        return self._button_size() * 2 + self._value_box_width() + self._gap() * 2
 
     def total_height(self) -> float:
-        return self.BUTTON_SIZE
+        return self._button_size()
 
     @staticmethod
     def _px_to_ndc(x: float, y: float, window_size: tuple[int, int]) -> tuple[float, float]:
@@ -149,6 +175,9 @@ class StepperControl:
             self.value,
             self.min_value,
             self.max_value,
+            self._text_scale,
+            self._geometry_scale,
+            bitmap_font.raster_scale(),
         )
         if cache_key != self._render_cache_key:
             self._rebuild_render_cache(
@@ -215,7 +244,7 @@ class StepperControl:
             add_quad_px(x0, y0, x0 + border, y1, border_color)
             add_quad_px(x1 - border, y0, x1, y1, border_color)
 
-            symbol_size = bitmap_font.pixel_size_at_text_scale(2.8, self.FIXED_TEXT_SCALE)
+            symbol_size = self._scaled_text_size(2.8)
             sbx0, sby0, sbx1, sby1 = bitmap_font.text_bounds_px(symbol, symbol_size)
             sym_w = sbx1 - sbx0
             sym_h = sby1 - sby0
@@ -239,7 +268,7 @@ class StepperControl:
         add_quad_px(vx1 - vborder, vy0, vx1, vy1, vborder_color)
 
         value_text = str(self.value)
-        value_size = bitmap_font.pixel_size_at_text_scale(2.6, self.FIXED_TEXT_SCALE)
+        value_size = self._scaled_text_size(2.6)
         vbx0, vby0, vbx1, vby1 = bitmap_font.text_bounds_px(value_text, value_size)
         vw_px = vbx1 - vbx0
         vh_px = vby1 - vby0
@@ -247,14 +276,15 @@ class StepperControl:
         add_text(value_text, vcx - vw_px / 2.0 - vbx0, vcy - vh_px / 2.0 - vby0,
                  value_size, (0.78, 0.88, 1.0, 1.0))
 
-        label_size = bitmap_font.pixel_size_at_text_scale(1.7, self.FIXED_TEXT_SCALE)
+        label_size = self._scaled_text_size(1.7)
         label_w = bitmap_font.text_width_px(self.label, label_size)
+        label_gap = 10 * self._geometry_scale
         if label_above:
             label_x = anchor_x + (self.total_width() - label_w) / 2.0
-            label_y = anchor_y - bitmap_font.text_height_px(label_size) - 10
+            label_y = anchor_y - bitmap_font.text_height_px(label_size) - label_gap
         else:
             label_x = anchor_x
-            label_y = anchor_y - bitmap_font.text_height_px(label_size) - 10
+            label_y = anchor_y - bitmap_font.text_height_px(label_size) - label_gap
         add_text(self.label, label_x, label_y, label_size, (0.78, 0.82, 0.90, 1.0))
 
         data = np.array(verts, dtype=np.float32)
