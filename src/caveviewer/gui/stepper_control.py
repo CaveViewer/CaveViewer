@@ -73,6 +73,10 @@ class StepperControl:
         self._vao = ctx.vertex_array(
             self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
         )
+        # Bitmap text expands into thousands of vertices, so keep it resident
+        # until a displayed value or layout input actually changes.
+        self._render_cache_key: tuple | None = None
+        self._render_cache_verts = 0
 
     # -- value adjustment -------------------------------------------------------
 
@@ -136,6 +140,45 @@ class StepperControl:
 
     def render(self, window_size: tuple[int, int], anchor_x: float, anchor_y: float,
                label_above: bool = True) -> None:
+        cache_key = (
+            tuple(window_size),
+            float(anchor_x),
+            float(anchor_y),
+            bool(label_above),
+            self.label,
+            self.value,
+            self.min_value,
+            self.max_value,
+        )
+        if cache_key != self._render_cache_key:
+            self._rebuild_render_cache(
+                cache_key,
+                window_size,
+                anchor_x,
+                anchor_y,
+                label_above,
+            )
+
+        if self._render_cache_verts == 0:
+            return
+
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._vao.render(moderngl.TRIANGLES, vertices=self._render_cache_verts)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
+
+    def _rebuild_render_cache(
+        self,
+        cache_key: tuple,
+        window_size: tuple[int, int],
+        anchor_x: float,
+        anchor_y: float,
+        label_above: bool,
+    ) -> None:
+        """Rebuild GPU geometry after displayed state or layout changes."""
         verts = []
 
         def add_quad_px(x0, y0, x1, y1, rgba):
@@ -201,7 +244,8 @@ class StepperControl:
         vw_px = vbx1 - vbx0
         vh_px = vby1 - vby0
         vcx, vcy = (vx0 + vx1) / 2.0, (vy0 + vy1) / 2.0
-        add_text(value_text, vcx - vw_px / 2.0 - vbx0, vcy - vh_px / 2.0 - vby0, value_size, (0.78, 0.88, 1.0, 1.0))
+        add_text(value_text, vcx - vw_px / 2.0 - vbx0, vcy - vh_px / 2.0 - vby0,
+                 value_size, (0.78, 0.88, 1.0, 1.0))
 
         label_size = bitmap_font.pixel_size_at_text_scale(1.7, self.FIXED_TEXT_SCALE)
         label_w = bitmap_font.text_width_px(self.label, label_size)
@@ -223,11 +267,5 @@ class StepperControl:
             )
 
         self._vbo.write(data.tobytes())
-
-        self.ctx.disable(moderngl.CULL_FACE)
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.CULL_FACE)
+        self._render_cache_verts = len(verts)
+        self._render_cache_key = cache_key

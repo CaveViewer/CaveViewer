@@ -105,6 +105,10 @@ class RenderModeButtons:
         self._vao = ctx.vertex_array(
             self.program, [(self._vbo, "2f 4f", "in_pos", "in_color")]
         )
+        # Bitmap text expands into thousands of vertices, so keep it resident
+        # until a displayed state or layout input actually changes.
+        self._render_cache_key: tuple | None = None
+        self._render_cache_verts = 0
 
     # -- layout ---------------------------------------------------------------
 
@@ -273,6 +277,50 @@ class RenderModeButtons:
     def render(self, window_size: tuple[int, int], top_y: float, help_active: bool = False,
                color_active: bool = False, recording_armed: bool = False,
                right_inset: float | None = None) -> None:
+        cache_key = (
+            tuple(window_size),
+            float(top_y),
+            bool(help_active),
+            bool(color_active),
+            bool(recording_armed),
+            None if right_inset is None else float(right_inset),
+            self.texture_enabled,
+            self.wireframe_enabled,
+            self.smooth_shading_enabled,
+        )
+        if cache_key != self._render_cache_key:
+            self._rebuild_render_cache(
+                cache_key,
+                window_size,
+                top_y,
+                help_active,
+                color_active,
+                recording_armed,
+                right_inset,
+            )
+
+        if self._render_cache_verts == 0:
+            return
+
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._vao.render(moderngl.TRIANGLES, vertices=self._render_cache_verts)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
+
+    def _rebuild_render_cache(
+        self,
+        cache_key: tuple,
+        window_size: tuple[int, int],
+        top_y: float,
+        help_active: bool,
+        color_active: bool,
+        recording_armed: bool,
+        right_inset: float | None,
+    ) -> None:
+        """Rebuild GPU geometry after displayed state or layout changes."""
         verts = []
 
         def add_quad_px(x0, y0, x1, y1, rgba):
@@ -387,11 +435,5 @@ class RenderModeButtons:
             )
 
         self._vbo.write(data.tobytes())
-
-        self.ctx.disable(moderngl.CULL_FACE)
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.CULL_FACE)
+        self._render_cache_verts = len(verts)
+        self._render_cache_key = cache_key
