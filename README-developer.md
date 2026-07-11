@@ -155,11 +155,15 @@ creating artifacts. It uses `.venv-dev` when available, then falls back to
 another prepared interpreter. The interpreter must have `requirements.txt` and
 `requirements-dev.txt` installed.
 
-GitHub platform jobs pass `--skip-tests` because their required
-`essential-tests` job has already tested the same commit with coverage. Do not
-use `--skip-tests` for an ordinary local release unless an equivalent external
-gate has completed successfully. Tests and development dependencies are not
-included in release archives.
+GitHub platform jobs pass `--skip-tests` because the application source has
+already passed an essential test gate with coverage. Individually dispatched
+platform workflows provide that gate themselves; `All Platform Release`
+provides it once before calling every platform workflow. Later stages in that
+chain may include the version and manifest commits produced by earlier stages,
+but those commits do not alter the tested application behavior. Do not use
+`--skip-tests` for an ordinary local release unless an equivalent external gate
+has completed successfully. Tests and development dependencies are not included
+in release archives.
 
 ## Sample Map Source Overrides
 

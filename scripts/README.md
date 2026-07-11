@@ -81,10 +81,10 @@ release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=packa
 
 Release workflows live under `.github/workflows/` for macOS 15, Windows, Linux
 ARM64, and Linux x86_64. Each platform workflow can be dispatched directly or
-called by another workflow. It runs the shared essential test suite before
-invoking `release.sh` for its platform. Because the platform job declares
-`needs: essential-tests`, it passes `--skip-tests` and does not run the suite a
-second time.
+called by another workflow. A directly dispatched platform workflow runs the
+shared essential test suite before invoking `release.sh`. The internal
+`skip_essential_tests` reusable-workflow input is not exposed by manual
+dispatch and is reserved for a caller that provides the equivalent test gate.
 
 macOS has separate ARM64 and x86_64 workflows, matching the dispatcher target
 names. ARM64 runs on `macos-15`; Intel runs on `macos-15-intel`. Artifacts are
@@ -98,10 +98,13 @@ The `All Platform Release` workflow runs every platform workflow in this order:
 4. macOS ARM64
 5. macOS x86_64
 
-The jobs are connected with `needs`, so a platform starts only after its
-predecessor succeeds. Every platform build checks out the latest head of the
-selected branch. This preserves the version and manifest commit pushed by each
-published platform for the next platform in the chain.
+The all-platform workflow runs the shared essential test suite once, then calls
+each platform workflow with its duplicate test gate disabled. The jobs are
+connected with `needs`, so Windows starts only after the shared test gate
+succeeds and every later platform starts only after its predecessor succeeds.
+Every platform build checks out the latest head of the selected branch. This
+preserves the version and manifest commit pushed by each published platform for
+the next platform in the chain.
 
 When dispatching a workflow:
 

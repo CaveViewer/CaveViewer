@@ -32,14 +32,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  essential-tests:
+    uses: ./.github/workflows/tests.yml
+
   windows:
     name: Windows
+    needs: essential-tests
     uses: ./.github/workflows/windows-release.yml
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: ${{ inputs.publish }}
+      skip_essential_tests: true
     secrets: inherit
 
   linux-arm64:
@@ -51,6 +56,7 @@ jobs:
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: ${{ inputs.publish }}
+      skip_essential_tests: true
     secrets: inherit
 
   linux-x86_64:
@@ -62,6 +68,7 @@ jobs:
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: ${{ inputs.publish }}
+      skip_essential_tests: true
     secrets: inherit
 
   macos-arm64:
@@ -73,6 +80,7 @@ jobs:
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: ${{ inputs.publish }}
+      skip_essential_tests: true
     secrets: inherit
 
   macos-x86_64:
@@ -84,4 +92,5 @@ jobs:
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: ${{ inputs.publish }}
+      skip_essential_tests: true
     secrets: inherit
