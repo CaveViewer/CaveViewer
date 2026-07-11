@@ -63,6 +63,7 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
     "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
     "CAVEVIEWER_TEXT_AA_MODE",
+    "CAVEVIEWER_TK_SCALE",
     "CAVEVIEWER_UI_FONT",
     "CAVEVIEWER_UI_TEXT_SCALE",
     "CAVEVIEWER_UPDATE_BRANCH",
@@ -98,6 +99,10 @@ def _default_chunk_build_workers() -> str:
     return "1"
 
 
+def _default_text_aa_mode() -> str:
+    return "light" if sys.platform == "darwin" else "normal"
+
+
 _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
     "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS": "2",
     "CAVEVIEWER_CHUNK_BUILD_WORKERS": _default_chunk_build_workers,
@@ -108,8 +113,8 @@ _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
     "CAVEVIEWER_IO_WORKERS": _default_io_workers,
     "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "8",
     "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS": "1" if os.name == "nt" else "0",
-    "CAVEVIEWER_TEXT_AA_MODE": "normal",
-    "CAVEVIEWER_UI_TEXT_SCALE": "1.18",
+    "CAVEVIEWER_TEXT_AA_MODE": _default_text_aa_mode,
+    "CAVEVIEWER_UI_TEXT_SCALE": "1.28",
     "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME": "1",
     "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS": "3.0",
 }

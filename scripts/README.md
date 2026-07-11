@@ -3,6 +3,8 @@
 This directory contains build, packaging, and release scripts.
 
 For script CLI conventions and naming rules, see `STANDARDS.md`.
+For the canonical release sequence, channel behavior, resume procedure, and
+post-release checklist, see `../docs/development/releases.md`.
 
 ## Main Entry Point
 
@@ -36,7 +38,7 @@ test environment stops the release. The interpreter is selected in this order:
 
 `--skip-tests` bypasses this local gate. It is intended for orchestrators such
 as the GitHub release workflows that require an equivalent test job for the
-same commit; normal direct releases should not use it.
+same application source; normal direct releases should not use it.
 
 Examples:
 
@@ -64,7 +66,7 @@ macOS.
 Options:
 
 - `--rebuild`
-- `--skip-tests`: bypass the local gate only when the same commit already passed an external test gate
+- `--skip-tests`: bypass the local gate only when the same application source already passed an external test gate
 - `--pre-release`: publish GitHub prerelease assets and update `prerelease.json` instead of `stable.json`
 
 Examples:
@@ -109,6 +111,8 @@ the next platform in the chain.
 When dispatching a workflow:
 
 - choose the source branch explicitly;
+- enter a bare version such as `1.0.64`, without a leading `v`, because workflow
+  artifact paths use the input verbatim;
 - leave `publish` disabled to build and retain a test artifact only;
 - enable both `publish` and `pre_release` to publish a GitHub prerelease and
   update that platform/architecture's `prerelease.json` rather than

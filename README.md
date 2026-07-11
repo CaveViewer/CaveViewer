@@ -12,7 +12,7 @@ No matter which format you open, the experience is the same. CaveViewer automati
 
 CaveViewer is currently available for the following platforms:
 
-- macOS (Apple Silicon)
+- macOS (Apple Silicon and Intel)
 - Linux (Fedora and Ubuntu)
 - Windows (10 and 11)
 
@@ -20,17 +20,24 @@ Support for additional operating systems and distributions may be added in the f
 
 ### macOS
 
-Download the latest DMG from https://github.com/KernalPanic/CaveViewer/releases, open it, and drag CaveViewer into Applications.
+Download the latest DMG from https://github.com/KernalPanic/CaveViewer/releases.
+Use `CaveViewer-<version>-macos-arm64.dmg` on Apple Silicon or
+`CaveViewer-<version>-macos-x86_64.dmg` on an Intel Mac. Open it and drag
+CaveViewer into Applications.
 
 If this is your first time installing the app, you have to go to Settings -> Privacy & Security and then allow the system to open CaveViewer. These steps are necessary because the app is not published through the App Store.
 
-If there is an update, the app will let you download and install it.
-
-NOTE: Intel Macs are not supported yet.
+The splash screen checks the architecture-specific stable update manifest. A
+newer signed release can be downloaded and verified in-app, after which
+CaveViewer opens the DMG for the normal manual installation.
 
 ### Windows
 
 Download the latest zip from https://github.com/KernalPanic/CaveViewer/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install.
+
+Windows updates currently use the Releases page. The updater requires signed
+manifests, and Windows publishing does not yet create the companion signature
+that Linux and macOS releases provide.
 
 ### Linux
 
@@ -132,7 +139,7 @@ Why this matters: chunk size is one of the most important map settings because i
 |---|---|---:|---|---|
 | System RAM target (%) | — | 8 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
 | GPU memory target (%) | — | 70 | 1 to 80 | Target share of detected GPU memory used for loaded chunks. |
-| GPU memory override (GB) | — | empty | greater than 0 and up to 1024 | Manual GPU memory size when auto-detection is unavailable or inaccurate. |
+| GPU memory override (GB) | — | empty | 0.5 to 50 | Manual GPU memory size when auto-detection is unavailable or inaccurate. |
 | Chunk-loading workers | — | 2 | integer, at least 1 | Number of background chunk-loading worker threads. |
 | Loading CPUs to keep free | — | 3 | integer, 2 to 32 | Reserve CPU cores instead of using them for streaming workers. |
 | Chunk uploads per frame | — | 1 | integer, 1 to 16 | Hard cap for how many ready chunks are uploaded each frame on the render thread. |

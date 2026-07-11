@@ -69,6 +69,19 @@ When moving modules, update CI include/source paths without lowering these
 thresholds. New concurrency, cleanup, cache-format, and security-sensitive code
 should receive direct tests even when the aggregate floor already passes.
 
+## Release gates
+
+An individually dispatched platform release workflow calls the Essential Tests
+workflow before its package job. `All Platform Release` calls Essential Tests
+once, then invokes every platform workflow with its duplicate internal gate
+disabled. A failed or canceled shared gate prevents Windows from starting, and
+the platform `needs` chain prevents every later build.
+
+Release publishers commit manifests back to the selected branch. Those pushes
+can start the normal branch CI configured for `main` and `release/**`; such runs
+are separate from the single gate within the all-platform release. See
+[releases.md](releases.md) for the complete sequence.
+
 ## Before handoff
 
 1. Run the most focused relevant tests.
