@@ -9,7 +9,7 @@ set -euo pipefail
 
 # Shared Linux publisher.
 # Builds or reuses Linux AppImage artifacts, publishes/uploads a GitHub release,
-# and writes a signed architecture-specific updater manifest for the selected
+# and writes a signed architecture-specific update manifest for the selected
 # channel: updates/linux/<arch>/<stable|prerelease>.json.
 #
 # Usage:

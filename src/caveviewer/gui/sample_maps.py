@@ -264,9 +264,8 @@ def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo,
     failed/partial download should never leave a half-extracted map
     sitting around looking like it succeeded.
 
-    Mirrors caveviewer.gui.updater's own extraction logic: the release zip is
-    assumed to contain a single top-level folder (matching how the
-    sample zips were packaged) -- if so, that folder's CONTENTS become
+    The release zip is assumed to contain a single top-level folder (matching
+    how the sample zips were packaged) -- if so, that folder's CONTENTS become
     the map folder's contents, rather than nesting one level deeper than
     expected.
     """

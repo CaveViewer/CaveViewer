@@ -15,6 +15,9 @@
 
 - Keep policy separate from side effects. Pure parsing, validation, budgeting,
   and spatial-selection functions are easier to test and reuse.
+- Model multi-stage UI and concurrent workflows as explicit state machines.
+  Keep allowed transitions outside widgets and expose immutable snapshots when
+  another thread or presentation layer needs to observe the state.
 - Give modules one clear responsibility. Split a module when it combines
   independent policies or lifecycle owners, not merely because it crossed an
   arbitrary line count.

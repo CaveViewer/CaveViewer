@@ -49,6 +49,28 @@ def _install_splash_module(monkeypatch, callback):
     monkeypatch.setitem(sys.modules, "caveviewer.gui.splash_screen", splash)
 
 
+def _install_update_manager_module(monkeypatch):
+    update_manager_module = ModuleType("caveviewer.gui.update_manager")
+    instances = []
+
+    class FakeUpdateManager:
+        def __init__(self, current_version):
+            self.current_version = current_version
+            self.shutdown_calls = 0
+            instances.append(self)
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    update_manager_module.UpdateManager = FakeUpdateManager
+    monkeypatch.setitem(
+        sys.modules,
+        "caveviewer.gui.update_manager",
+        update_manager_module,
+    )
+    return instances
+
+
 @pytest.mark.parametrize("layout", ["standard", "legacy", "direct"])
 def test_map_session_opens_each_supported_prebuilt_cache_layout(
     tmp_path, monkeypatch, layout
@@ -240,20 +262,31 @@ def test_main_configures_windows_dpi_best_effort(monkeypatch, dpi_fails):
     assert calls == [True]
 
 
-def test_main_force_update_flag_exits_when_update_handoff_starts(monkeypatch):
+def test_main_force_update_flag_configures_process_owned_manager(monkeypatch):
     recorder, _configured = _prepare_main(monkeypatch)
     splash_calls = []
+    managers = _install_update_manager_module(monkeypatch)
     monkeypatch.setattr(app.sys, "argv", ["caveviewer", "--force-update"])
     _install_splash_module(
         monkeypatch,
-        lambda **kwargs: splash_calls.append(kwargs) or app._UPDATE_STARTED_SENTINEL,
+        lambda **kwargs: splash_calls.append(kwargs) or None,
     )
 
     app.main()
 
-    assert splash_calls == [{"program_name": app.APP_NAME, "version": "0.0.0"}]
+    assert len(managers) == 1
+    manager = managers[0]
+    assert manager.current_version == "0.0.0"
+    assert manager.shutdown_calls == 1
+    assert splash_calls == [
+        {
+            "program_name": app.APP_NAME,
+            "version": "0.0.0",
+            "update_manager": manager,
+        }
+    ]
     assert "--force-update" not in app.sys.argv
-    assert "Update is being installed" in recorder.info_messages[-1]
+    assert recorder.info_messages[-1] == "No folder selected. Exiting."
 
 
 def test_main_force_update_environment_exits_when_splash_is_closed(monkeypatch):
@@ -276,19 +309,27 @@ def test_main_reopens_splash_after_a_map_session(monkeypatch):
     _recorder, _configured = _prepare_main(monkeypatch)
     selections = iter(("/maps/first", ""))
     versions = []
+    seen_managers = []
     opened = []
+    managers = _install_update_manager_module(monkeypatch)
     monkeypatch.setattr(app.sys, "argv", ["caveviewer", " "])
     monkeypatch.setattr(app, "_run_map_session", opened.append)
     _install_splash_module(
         monkeypatch,
-        lambda **kwargs: versions.append(kwargs["version"])
-        or next(selections),
+        lambda **kwargs: (
+            versions.append(kwargs["version"]),
+            seen_managers.append(kwargs["update_manager"]),
+            next(selections),
+        )[-1],
     )
 
     app.main()
 
     assert opened == ["/maps/first"]
     assert versions == [app.__version__, app.__version__]
+    assert managers == [seen_managers[0]]
+    assert seen_managers == [managers[0], managers[0]]
+    assert managers[0].shutdown_calls == 1
 
 
 def test_run_returns_normally_when_main_succeeds(monkeypatch):

@@ -45,6 +45,7 @@ jobs:
           --cov=caveviewer.gui.advanced_settings
           --cov=caveviewer.gui.sample_maps
           --cov=caveviewer.gui.update_checker
+          --cov=caveviewer.gui.update_manager
           --cov-branch
           --cov-fail-under=60
           --cov-report=term-missing

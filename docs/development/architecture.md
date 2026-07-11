@@ -55,6 +55,30 @@ Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL
 objects.
 
+The GUI process owns one `caveviewer.gui.update_manager.UpdateManager`, created
+by `caveviewer.app` before the splash/viewer session loop and shut down when
+that loop exits. Update state is explicit and validated:
+
+```text
+IDLE -> CHECKING -> {UP_TO_DATE, AVAILABLE, IDLE on check error}
+AVAILABLE -> DOWNLOADING -> VERIFYING -> READY
+                |              |
+                +--------------+-> FAILED -> DOWNLOADING (retry)
+any non-SHUTDOWN state -> SHUTDOWN
+```
+
+Network, verification, and staging-file work runs in manager-owned workers.
+The splash polls immutable snapshots and performs widget updates on the Tk
+thread. The viewer and `core.streaming_world` have no update dependency, so
+opening a map neither cancels a download nor introduces update UI into the
+viewer. Only process shutdown cancels an unfinished download and waits for its
+temporary files to be removed.
+
+Verified packages are persisted to the user's Downloads folder. Platform
+adapters only reveal them for manual handling: Finder mounts macOS DMGs
+read-only and reveals the `.app`, Explorer selects the Windows payload, and
+Linux opens its containing folder. No adapter executes or installs an update.
+
 ## Updates and release assets
 
 `updates/` is a published data surface used by installed applications through

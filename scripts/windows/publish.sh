@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Windows publisher.
 # Builds or reuses the Windows zip, publishes/uploads a GitHub release, and
-# writes and signs an updater manifest for the selected channel.
+# writes and signs an update manifest for the selected channel.
 #
 # Usage:
 #   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
