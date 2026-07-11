@@ -23,7 +23,8 @@ Usage:
 Required arguments:
   --target             Target list: all, macos-arm64, macos-x86_64, windows, linux-arm64, linux-x86_64
   --action             One of: build, package, release
-  --version            Release version, for example 1.0.60
+  --version            Dotted numeric release version with an optional leading
+                       v, for example 1.0.64; do not use 1.0.64-rc1
   --notes              Release notes, quoted if they contain spaces
 
 Actions:

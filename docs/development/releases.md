@@ -31,9 +31,16 @@ do not upload that tarball as a release asset.
 
 ## Channels and update paths
 
-GitHub workflow inputs must use a bare version such as `1.0.64`, not
-`v1.0.64`. Artifact upload paths use that input verbatim. Local release scripts
-normalize an optional leading `v`, and GitHub uses the tag `v<version>`.
+Release versions must contain only dot-separated decimal integers, such as
+`1.0.64`. Do not use prerelease or build suffixes such as `1.0.64-rc1` or
+`1.0.64+build1`: the update checker treats nonnumeric components as an
+unparseable version and will not offer that release as a newer update.
+Prerelease status is represented by the `pre_release` workflow input, the
+GitHub release flag, and the `prerelease.json` channel—not by a version suffix.
+
+GitHub workflow inputs must use the bare numeric version, not `v1.0.64`.
+Artifact upload paths use that input verbatim. Local release scripts normalize
+an optional leading `v`, and GitHub uses the tag `v<version>`.
 
 - A stable publish updates `stable.json`. A newly created GitHub release is a
   normal release.

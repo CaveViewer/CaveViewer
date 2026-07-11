@@ -70,7 +70,13 @@ def _set_manifest(monkeypatch, data):
 
 @pytest.mark.parametrize(
     ("text", "expected"),
-    [("1.2.3", (1, 2, 3)), ("v2.10", (2, 10)), ("bad", (0,)), ("1.beta", (0,))],
+    [
+        ("1.2.3", (1, 2, 3)),
+        ("v2.10", (2, 10)),
+        ("bad", (0,)),
+        ("1.beta", (0,)),
+        ("1.0.64-rc1", (0,)),
+    ],
 )
 def test_parse_version(text, expected):
     assert update_checker._parse_version(text) == expected

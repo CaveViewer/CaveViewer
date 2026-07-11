@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, e.g. 1.0.63"
+        description: "Dotted numeric version, e.g. 1.0.64; no v or -rc1 suffix"
         required: true
         type: string
       release_notes:

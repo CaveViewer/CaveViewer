@@ -201,6 +201,7 @@ def test_release_dispatcher_exposes_architecture_specific_macos_targets():
     assert "macos-x86_64" in completed.stdout
     assert "macos-15" not in completed.stdout
     assert "--macos-arch" not in completed.stdout
+    assert "do not use 1.0.64-rc1" in completed.stdout
 
     for target in ("macos-arm64", "macos-x86_64"):
         target_help = subprocess.run(
