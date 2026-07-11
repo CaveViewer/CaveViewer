@@ -21,7 +21,7 @@ Usage:
   release.sh --target=<target> --help
 
 Required arguments:
-  --target             Target list: all, macos-15, windows, linux-arm64, linux-x86_64
+  --target             Target list: all, macos-arm64, macos-x86_64, windows, linux-arm64, linux-x86_64
   --action             One of: build, package, release
   --version            Release version, for example 1.0.60
   --notes              Release notes, quoted if they contain spaces
@@ -33,7 +33,6 @@ Actions:
 
 Options:
   --rebuild            Rebuild Linux Docker image when building/packaging Linux targets
-  --macos-arch         macOS architecture: arm64 or x86_64 (default: current process)
   --skip-tests         Skip the local test gate (only after an external gate passed)
   --pre-release        Mark the GitHub release as a prerelease; only valid with --action=release
 
@@ -42,7 +41,7 @@ Examples:
   release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
   release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=release
   release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=release --pre-release
-  release.sh --target=macos-15,linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
+  release.sh --target=macos-arm64,linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
   release.sh --target=all --version=1.0.60 --notes "Alpha." --action=release
 EOF
 }
@@ -55,10 +54,11 @@ Usage:
   release.sh --target=all --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--pre-release]
 
 If all appears in a comma-separated target list, it takes precedence.
+The all target selects the host's native macOS architecture.
 EOF
       ;;
-    macos-15)
-      echo "Usage: release.sh --target=macos-15 --macos-arch=<arm64|x86_64> --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--pre-release]"
+    macos-arm64|macos-x86_64)
+      echo "Usage: release.sh --target=$1 --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--pre-release]"
       ;;
     windows)
       echo "Usage: release.sh --target=windows --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--pre-release]"
@@ -71,7 +71,7 @@ EOF
       ;;
     *)
       echo "Error: unknown target '$1'"
-      echo "Expected one of: all, macos-15, windows, linux-arm64, linux-x86_64"
+      echo "Expected one of: all, macos-arm64, macos-x86_64, windows, linux-arm64, linux-x86_64"
       exit 1
       ;;
   esac
@@ -79,7 +79,7 @@ EOF
 
 is_known_target() {
   case "$1" in
-    all|macos-15|windows|linux-arm64|linux-x86_64)
+    all|macos-arm64|macos-x86_64|windows|linux-arm64|linux-x86_64)
       return 0
       ;;
     *)
@@ -163,18 +163,36 @@ trim_leading_whitespace() {
   printf '%s' "$value"
 }
 
+select_macos_target() {
+  local requested_arch="$1"
+  if $selected_macos && [ "$selected_macos_arch_value" != "$requested_arch" ]; then
+    echo "Error: macos-arm64 and macos-x86_64 cannot be selected together."
+    echo "Run each macOS architecture on its matching host process."
+    exit 1
+  fi
+  selected_macos=true
+  selected_macos_arch_value="$requested_arch"
+}
+
 add_target_selection() {
   local selected="$1"
+  if $selected_all && [ "$selected" != "all" ]; then
+    return
+  fi
   case "$selected" in
     all)
       selected_all=true
       selected_macos=true
+      selected_macos_arch_value="$(cv_detect_macos_arch)"
       selected_windows=true
       selected_linux_arm64=true
       selected_linux_x86=true
       ;;
-    macos-15)
-      selected_macos=true
+    macos-arm64)
+      select_macos_target arm64
+      ;;
+    macos-x86_64)
+      select_macos_target x86_64
       ;;
     windows)
       selected_windows=true
@@ -189,7 +207,7 @@ add_target_selection() {
       ;;
     *)
       echo "Error: unknown --target entry '$selected'"
-      echo "Expected one of: all, macos-15, windows, linux-arm64, linux-x86_64"
+      echo "Expected one of: all, macos-arm64, macos-x86_64, windows, linux-arm64, linux-x86_64"
       exit 1
       ;;
   esac
@@ -200,9 +218,16 @@ parse_target_selection() {
   local old_ifs="$IFS"
   selected_all=false
   selected_macos=false
+  selected_macos_arch_value=""
   selected_windows=false
   selected_linux_arm64=false
   selected_linux_x86=false
+
+  local compact_target_arg="${target_arg// /}"
+  if [[ ",$compact_target_arg," == *,all,* ]]; then
+    add_target_selection all
+    return
+  fi
 
   IFS=','
   for item in $target_arg; do
@@ -214,6 +239,7 @@ parse_target_selection() {
 
   if $selected_all; then
     selected_macos=true
+    selected_macos_arch_value="$(cv_detect_macos_arch)"
     selected_windows=true
     selected_linux_arm64=true
     selected_linux_x86=true
@@ -224,7 +250,7 @@ canonical_single_target() {
   if $selected_all; then
     echo "all"
   elif $selected_macos && ! $selected_windows && ! $selected_linux_arm64 && ! $selected_linux_x86; then
-    echo "macos-15"
+    echo "macos-$selected_macos_arch_value"
   elif $selected_windows && ! $selected_macos && ! $selected_linux_arm64 && ! $selected_linux_x86; then
     echo "windows"
   elif $selected_linux_arm64 && ! $selected_macos && ! $selected_windows && ! $selected_linux_x86; then
@@ -238,7 +264,7 @@ canonical_single_target() {
 
 selected_target_summary() {
   local targets=()
-  $selected_macos && targets+=("macos-15")
+  $selected_macos && targets+=("macos-$selected_macos_arch_value")
   $selected_linux_arm64 && targets+=("linux-arm64")
   $selected_linux_x86 && targets+=("linux-x86_64")
   $selected_windows && targets+=("windows")
@@ -259,14 +285,18 @@ has_linux_target() {
 
 require_macos_host() {
   if [ "$(uname -s)" != "Darwin" ]; then
-    echo "Error: target macos-15 requires a macOS host."
+    echo "Error: target macos-$(selected_macos_arch) requires a macOS host."
     exit 1
   fi
   cv_require_macos_host_arch "$(selected_macos_arch)"
 }
 
 selected_macos_arch() {
-  cv_resolve_macos_arch "${macos_arch:-}"
+  if ! $selected_macos || [ -z "$selected_macos_arch_value" ]; then
+    echo "Error: no macOS target is selected." >&2
+    return 1
+  fi
+  echo "$selected_macos_arch_value"
 }
 
 selected_linux_arch() {
@@ -339,7 +369,7 @@ run_selected_builds() {
       require_macos_host
       "$script_dir/macos/build.sh"
     else
-      echo "[macos-15] Skipped: requires macOS host."
+      echo "[macos-$(selected_macos_arch)] Skipped: requires macOS host."
     fi
   fi
 
@@ -384,13 +414,13 @@ run_selected_packages() {
       cv_require_macos_host_arch "$mac_arch"
       macos_dmg_path="$repo_root/dist/macos/packages/CaveViewer-${normalized_version}-macos-${mac_arch}.dmg"
       if $reuse_existing_artifacts && ! $rebuild && [ -f "$macos_dmg_path" ]; then
-        echo "[macos-15] Reusing existing package: $macos_dmg_path"
+        echo "[macos-$mac_arch] Reusing existing package: $macos_dmg_path"
       else
-        echo "[macos-15/$mac_arch] Building package..."
+        echo "[macos-$mac_arch] Building package..."
         "$script_dir/macos/package.sh" --arch "$mac_arch"
       fi
     else
-      echo "[macos-15] Skipped: requires macOS host."
+      echo "[macos-$(selected_macos_arch)] Skipped: requires macOS host."
     fi
   fi
 
@@ -463,10 +493,10 @@ run_selected_releases() {
       local publish_macos_arch
       publish_macos_arch="$(selected_macos_arch)"
       cv_require_macos_host_arch "$publish_macos_arch"
-      echo "[macos-15/$publish_macos_arch] Publishing release assets..."
+      echo "[macos-$publish_macos_arch] Publishing release assets..."
       "$script_dir/macos/publish.sh" --arch "$publish_macos_arch" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
     else
-      echo "[macos-15] Skipped publish: requires macOS host."
+      echo "[macos-$(selected_macos_arch)] Skipped publish: requires macOS host."
     fi
   fi
 
@@ -498,7 +528,6 @@ target=""
 action=""
 version=""
 notes=""
-macos_arch=""
 show_help=false
 pre_release=false
 skip_tests=false
@@ -571,18 +600,10 @@ while [ "$#" -gt 0 ]; do
       notes="$(trim_leading_whitespace "$1")"
       shift
       ;;
-    --macos-arch=*)
-      macos_arch="${arg#--macos-arch=}"
-      shift
-      ;;
-    --macos-arch)
-      shift
-      if [ "$#" -eq 0 ]; then
-        echo "Error: --macos-arch requires a value."
-        exit 1
-      fi
-      macos_arch="$(trim_leading_whitespace "$1")"
-      shift
+    --macos-arch|--macos-arch=*|--mac-arch|--mac-arch=*)
+      echo "Error: unknown option '$arg'"
+      echo "Use --target=macos-arm64 or --target=macos-x86_64."
+      exit 1
       ;;
     --targets|--targets=*)
       echo "Error: unknown option '$arg'"
@@ -656,14 +677,6 @@ fi
 
 parse_target_selection "$target"
 
-if [ -n "$macos_arch" ]; then
-  if ! $selected_macos; then
-    echo "Error: --macos-arch is only valid when a macOS target is selected."
-    exit 1
-  fi
-  macos_arch="$(cv_resolve_macos_arch "$macos_arch")"
-fi
-
 if $rebuild && ! has_linux_target; then
   echo "Error: --rebuild is only valid when a Linux target is selected."
   exit 1
@@ -735,15 +748,15 @@ case "$dispatch_target:$action" in
   all:release)
     run_selected_releases
     ;;
-  macos-15:build)
+  macos-arm64:build|macos-x86_64:build)
     require_macos_host
     exec "$script_dir/macos/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
-  macos-15:package)
+  macos-arm64:package|macos-x86_64:package)
     require_macos_host
     exec "$script_dir/macos/package.sh" --arch "$(selected_macos_arch)" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
-  macos-15:release)
+  macos-arm64:release|macos-x86_64:release)
     require_macos_host
     exec "$script_dir/macos/publish.sh" --arch "$(selected_macos_arch)" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;

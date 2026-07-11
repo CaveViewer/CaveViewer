@@ -85,8 +85,7 @@ jobs:
           MACOS_ARCH: ${{ inputs.architecture }}
         run: |
           release_args=(
-            --target=macos-15
-            --macos-arch="$MACOS_ARCH"
+            --target="macos-$MACOS_ARCH"
             --version="$RELEASE_VERSION"
             --notes="$RELEASE_NOTES"
             --skip-tests

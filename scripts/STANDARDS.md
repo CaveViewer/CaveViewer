@@ -15,6 +15,7 @@ This file documents the conventions for shell scripts under `scripts/`.
 ## Naming
 
 - Use `x86_64` in user-facing text, artifact names, and examples.
+- Use `macos-arm64` and `macos-x86_64` as the public macOS release target names.
 - Use `linux-x86_64` as the public release target name.
 - `linux-x86`, `linux-amd64`, `amd64`, and `x86` may exist only as quiet compatibility aliases or internal Docker/platform names.
 

@@ -17,7 +17,8 @@ release.sh --target=<target> --help
 Targets:
 
 - `all`
-- `macos-15`
+- `macos-arm64`
+- `macos-x86_64`
 - `windows`
 - `linux-arm64`
 - `linux-x86_64`
@@ -51,17 +52,18 @@ release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=relea
 ## Target Selection
 
 `--target` accepts a single target or a comma-separated list. If `all` appears
-anywhere in the list, it takes precedence and all platforms are selected.
+anywhere in the list, it takes precedence. It selects Windows, both Linux
+architectures, and the current process architecture for macOS.
 Multi-target package and release orchestration is handled by `release.sh`
 directly; platform scripts remain the per-target implementation details.
-The `macos-15` target names the release baseline used by CI. Local builds require
-a macOS host. Use `--macos-arch=arm64` or `--macos-arch=x86_64`; the default is
-the current process architecture.
+The macOS architecture is part of the target name, matching the Linux target
+pattern. Local macOS builds require a process whose architecture matches the
+selected target. The `all` target selects the current process architecture for
+macOS.
 
 Options:
 
 - `--rebuild`
-- `--macos-arch=<arm64|x86_64>`
 - `--skip-tests`: bypass the local gate only when the same commit already passed an external test gate
 - `--pre-release`: publish GitHub prerelease assets and update `prerelease.json` instead of `stable.json`
 
@@ -70,8 +72,8 @@ Examples:
 ```bash
 release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
 release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
-release.sh --target=macos-15,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
-release.sh --target=macos-15 --macos-arch=arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=macos-arm64,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+release.sh --target=macos-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
