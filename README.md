@@ -35,20 +35,16 @@ Download the latest zip from https://github.com/KernalPanic/CaveViewer/releases 
 
 The best-practice distribution format for Linux is the self-contained AppImage — a single executable file that bundles Python, all dependencies, and the app itself. No system-wide installation or package manager involvement required.
 
-Download the AppImage matching your CPU from https://github.com/KernalPanic/CaveViewer/releases:
+Download the Linux x86_64 AppImage from https://github.com/KernalPanic/CaveViewer/releases:
 
 - `CaveViewer-<version>-x86_64.AppImage` (amd64 / x86_64)
-- `CaveViewer-<version>-aarch64.AppImage` (arm64)
 
 Then change the permissions to make the file executable and run.
 
 ```bash
 chmod +x CaveViewer-*.AppImage
 
-# Run the one that matches your architecture
 ./CaveViewer-*-x86_64.AppImage   # amd64 / x86_64
-# or
-./CaveViewer-*-aarch64.AppImage  # arm64
 ```
 
 On GNOME, Linux builds use the native Wayland GLFW backend by default and fall

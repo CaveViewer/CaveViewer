@@ -7,13 +7,11 @@ configuration and local packaging variables remain in
 
 ## Release matrix
 
-CaveViewer publishes five user-installable artifacts from five architecture-
-specific GitHub workflows:
+CaveViewer publishes four user-installable artifacts from four GitHub workflows:
 
 | Target | Workflow | Runner | User artifact |
 |---|---|---|---|
 | `windows` | `Windows Release` | `windows-latest` | `CaveViewer-<version>-windows.zip` |
-| `linux-arm64` | `Linux ARM64 Release` | `ubuntu-24.04-arm` | `CaveViewer-<version>-aarch64.AppImage` |
 | `linux-x86_64` | `Linux x86_64 Release` | `ubuntu-latest` | `CaveViewer-<version>-x86_64.AppImage` |
 | `macos-arm64` | `macOS ARM64 Release` | `macos-15` | `CaveViewer-<version>-macos-arm64.dmg` |
 | `macos-x86_64` | `macOS x86_64 Release` | `macos-15-intel` | `CaveViewer-<version>-macos-x86_64.dmg` |
@@ -55,7 +53,6 @@ Published manifest paths are:
 
 ```text
 updates/windows/<stable|prerelease>.json
-updates/linux/arm64/<stable|prerelease>.json
 updates/linux/x86_64/<stable|prerelease>.json
 updates/macos/arm64/<stable|prerelease>.json
 updates/macos/x86_64/<stable|prerelease>.json
@@ -96,12 +93,11 @@ for a complete release.
 6. Turn `pre_release` on only when the tag must be a GitHub prerelease and the
    `prerelease.json` channel must be updated.
 
-The workflow runs the shared Essential Tests gate once, then fans out five
+The workflow runs the shared Essential Tests gate once, then fans out four
 package jobs from the same immutable source revision:
 
 ```text
                     ┌─ Windows ────────┐
-                    ├─ Linux ARM64 ────┤
 Essential Tests ────├─ Linux x86_64 ───┼─ Finalize Release
                     ├─ macOS ARM64 ────┤
                     └─ macOS x86_64 ───┘
@@ -151,7 +147,7 @@ resolves to it.
 
 ## Individual and resumed releases
 
-The five platform workflows remain manually dispatchable. A direct workflow
+The four platform workflows remain manually dispatchable. A direct workflow
 runs its package job and, when `publish` is enabled, calls the same single-writer
 finalizer for that platform. Use the same source branch, version, release notes,
 `publish`, and `pre_release` values when resuming an intentionally partial
@@ -177,8 +173,8 @@ and publish operations:
   --action=package
 ```
 
-Targets are `windows`, `linux-arm64`, `linux-x86_64`, `macos-arm64`,
-`macos-x86_64`, and `all`. A comma-separated target list is also accepted.
+Targets are `windows`, `linux-x86_64`, `macos-arm64`, `macos-x86_64`, and
+`all`. A comma-separated target list is also accepted.
 Unlike the GitHub workflows, the local dispatcher accepts an optional leading
 `v` in the version.
 
@@ -186,7 +182,7 @@ Both macOS architectures cannot be selected together locally because each must
 run on a matching native macOS process. `--target=all` therefore selects only
 one macOS process architecture and skips macOS work entirely on a non-macOS
 host. The GitHub all-platform workflow uses two different macOS runners and
-produces all five artifacts.
+produces all four artifacts.
 
 Before changing the application version, the dispatcher runs the complete
 pytest suite. Use `--skip-tests` only when an equivalent external gate has
@@ -197,7 +193,7 @@ Publishing also requires an authenticated GitHub CLI and
 ## Post-release checklist
 
 - Confirm the workflow used the intended branch, version, notes, and channel.
-- Confirm all five user artifacts are present on the same GitHub tag.
+- Confirm all four user artifacts are present on the same GitHub tag.
 - Confirm `src/caveviewer/version.py` contains the released version.
 - Confirm every platform/channel manifest contains the expected version, URL,
   byte size, and SHA-256.

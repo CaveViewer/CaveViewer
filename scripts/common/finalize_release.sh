@@ -18,7 +18,7 @@ Usage:
   finalize_release.sh --help
 
 Targets:
-  all, windows, linux-arm64, linux-x86_64, macos-arm64, macos-x86_64
+  all, windows, linux-x86_64, macos-arm64, macos-x86_64
 
 This is an internal CI helper. Use scripts/release.sh for local releases.
 EOF
@@ -139,7 +139,6 @@ manifest_channel="stable"
 $pre_release && manifest_channel="prerelease"
 
 selected_windows=false
-selected_linux_arm64=false
 selected_linux_x86_64=false
 selected_macos_arm64=false
 selected_macos_x86_64=false
@@ -148,13 +147,11 @@ select_platform() {
   case "$1" in
     all)
       selected_windows=true
-      selected_linux_arm64=true
       selected_linux_x86_64=true
       selected_macos_arm64=true
       selected_macos_x86_64=true
       ;;
     windows) selected_windows=true ;;
-    linux-arm64) selected_linux_arm64=true ;;
     linux-x86_64) selected_linux_x86_64=true ;;
     macos-arm64) selected_macos_arm64=true ;;
     macos-x86_64) selected_macos_x86_64=true ;;
@@ -186,7 +183,6 @@ find_artifact() {
 
 release_assets=()
 windows_zip_path=""
-linux_arm64_path=""
 linux_x86_64_path=""
 macos_arm64_path=""
 macos_x86_64_path=""
@@ -198,10 +194,6 @@ if $selected_windows; then
   windows_meta_path="$(find_artifact "CaveViewer-${normalized_version}.json")"
   windows_update_meta_path="$(find_artifact "CaveViewer-${normalized_version}.update.json")"
   release_assets+=("$windows_zip_path" "$windows_meta_path" "$windows_update_meta_path")
-fi
-if $selected_linux_arm64; then
-  linux_arm64_path="$(find_artifact "CaveViewer-${normalized_version}-aarch64.AppImage")"
-  release_assets+=("$linux_arm64_path")
 fi
 if $selected_linux_x86_64; then
   linux_x86_64_path="$(find_artifact "CaveViewer-${normalized_version}-x86_64.AppImage")"
@@ -308,17 +300,6 @@ if $selected_windows; then
     --notes "$release_notes" \
     --channel "$manifest_channel"
   sign_manifest "$repo_root/updates/windows/$manifest_channel.json"
-fi
-
-if $selected_linux_arm64; then
-  CAVEVIEWER_LINUX_UPDATE_ARCH=arm64 \
-  "$repo_root/scripts/linux/common/update_manifest.sh" \
-    --version "$normalized_version" \
-    --download-url "$release_base_url/$(basename "$linux_arm64_path")" \
-    --artifact-file "$linux_arm64_path" \
-    --notes "$release_notes" \
-    --channel "$manifest_channel"
-  sign_manifest "$repo_root/updates/linux/arm64/$manifest_channel.json"
 fi
 
 if $selected_linux_x86_64; then

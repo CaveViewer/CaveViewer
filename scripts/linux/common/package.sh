@@ -17,7 +17,6 @@ Usage:
   package.sh --help
 
 Internal Docker-only script. Use one of:
-  release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=package
   release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=package
 EOF
 }
@@ -81,10 +80,6 @@ find_appimagetool() {
     command -v appimagetool-x86_64.AppImage
     return 0
   fi
-  if command -v appimagetool-aarch64.AppImage >/dev/null 2>&1; then
-    command -v appimagetool-aarch64.AppImage
-    return 0
-  fi
   return 1
 }
 
@@ -96,9 +91,6 @@ appimagetool_matches_arch() {
   case "$expected_arch" in
     x86_64)
       [[ "$file_info" == *"x86-64"* || "$file_info" == *"x86_64"* ]]
-      ;;
-    aarch64)
-      [[ "$file_info" == *"aarch64"* || "$file_info" == *"ARM aarch64"* ]]
       ;;
     *)
       return 1
@@ -159,14 +151,10 @@ case "$ARCH" in
     appimage_arch="x86_64"
     linux_dist_arch="x86_64"
     ;;
-  aarch64|arm64)
-    appimage_arch="aarch64"
-    linux_dist_arch="arm64"
-    ;;
   *) appimage_arch="$ARCH" ;;
 esac
 if [ -z "${linux_dist_arch:-}" ]; then
-  echo "Error: unsupported Linux architecture $ARCH"
+  echo "Error: unsupported Linux architecture $ARCH; CaveViewer distributes Linux x86_64 packages only."
   exit 1
 fi
 
@@ -177,11 +165,7 @@ dist_packages_dir="$repo_root/dist/linux/$linux_dist_arch/packages"
 
 if [ ! -d "$app_dir" ]; then
   echo "Error: app directory not found at $app_dir"
-  release_target="linux-x86_64"
-  if [ "$linux_dist_arch" = "arm64" ]; then
-    release_target="linux-arm64"
-  fi
-  echo "Run release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=build first."
+  echo "Run release.sh --target=linux-x86_64 --version=<version> --notes \"Release notes\" --action=build first."
   exit 1
 fi
 
@@ -230,7 +214,6 @@ icon_root="$appdir/${APPLICATION_ID}.png"
 linux_arch_tag=""
 case "$(uname -m)" in
   x86_64) linux_arch_tag="amd64" ;;
-  aarch64|arm64) linux_arch_tag="arm64" ;;
 esac
 linux_venv_default="$repo_root/.venv-linux-build"
 if [ -n "$linux_arch_tag" ]; then

@@ -54,7 +54,6 @@ def _write_release_artifacts(artifacts_dir: Path, version: str) -> None:
         f"CaveViewer-{version}-windows.zip",
         f"CaveViewer-{version}.json",
         f"CaveViewer-{version}.update.json",
-        f"CaveViewer-{version}-aarch64.AppImage",
         f"CaveViewer-{version}-x86_64.AppImage",
         f"CaveViewer-{version}-macos-arm64.dmg",
         f"CaveViewer-{version}-macos-arm64.json",
@@ -215,7 +214,6 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     )
     expected_manifests = {
         "updates/windows/stable.json",
-        "updates/linux/arm64/stable.json",
         "updates/linux/x86_64/stable.json",
         "updates/macos/arm64/stable.json",
         "updates/macos/x86_64/stable.json",

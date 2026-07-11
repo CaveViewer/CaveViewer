@@ -16,7 +16,6 @@ Usage:
   build.sh --help
 
 Internal Docker-only script. Use one of:
-  release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=build
   release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=build
 EOF
 }
@@ -51,13 +50,9 @@ case "$(uname -m)" in
     linux_arch_tag="amd64"
     linux_dist_arch="x86_64"
     ;;
-  aarch64|arm64)
-    linux_arch_tag="arm64"
-    linux_dist_arch="arm64"
-    ;;
 esac
 if [ -z "$linux_dist_arch" ]; then
-  echo "Error: unsupported Linux architecture $(uname -m)"
+  echo "Error: unsupported Linux architecture $(uname -m); CaveViewer distributes Linux x86_64 packages only."
   exit 1
 fi
 linux_venv_default="$repo_root/.venv-linux-build"
@@ -185,8 +180,7 @@ setup_portable_python() {
   local arch
   case "$(uname -m)" in
     x86_64)  arch="x86_64-unknown-linux-gnu" ;;
-    aarch64) arch="aarch64-unknown-linux-gnu" ;;
-    *) echo "Error: unsupported architecture $(uname -m)"; exit 1 ;;
+    *) echo "Error: unsupported architecture $(uname -m); CaveViewer distributes Linux x86_64 packages only."; exit 1 ;;
   esac
 
   local cache_dir="$repo_root/.cache/standalone-python"
@@ -337,8 +331,4 @@ fi
 
 echo "Build complete: $app_dir"
 echo "Note: CaveViewer/ is an intermediate build artifact."
-release_target="linux-x86_64"
-if [ "$linux_dist_arch" = "arm64" ]; then
-  release_target="linux-arm64"
-fi
-echo "Run release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=package to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."
+echo "Run release.sh --target=linux-x86_64 --version=<version> --notes \"Release notes\" --action=package to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."

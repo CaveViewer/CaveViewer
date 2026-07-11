@@ -22,7 +22,6 @@ Targets:
 - `macos-arm64`
 - `macos-x86_64`
 - `windows`
-- `linux-arm64`
 - `linux-x86_64`
 
 Actions:
@@ -50,19 +49,18 @@ same application source; normal direct releases should not use it.
 Examples:
 
 ```bash
-release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=build
-release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
-release.sh --target=linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
-release.sh --target=linux-arm64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
-release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
+release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
+release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+release.sh --target=linux-x86_64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=release
 ```
 
 ## Target Selection
 
 `--target` accepts a single target or a comma-separated list. If `all` appears
-anywhere in the list, it takes precedence. It selects Windows, both Linux
-architectures, and the current process architecture for macOS.
+anywhere in the list, it takes precedence. It selects Windows, Linux x86_64,
+and the current process architecture for macOS.
 Multi-target package and release orchestration is handled by `release.sh`
 directly; platform scripts remain the per-target implementation details.
 The macOS architecture is part of the target name, matching the Linux target
@@ -79,19 +77,18 @@ Options:
 Examples:
 
 ```bash
-release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
 release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
-release.sh --target=macos-arm64,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+release.sh --target=macos-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=release
 release.sh --target=macos-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
 ## GitHub Actions
 
-Release workflows live under `.github/workflows/` for macOS 15, Windows, Linux
-ARM64, and Linux x86_64. Each platform workflow can be dispatched directly or
-called by another workflow. A directly dispatched platform workflow runs the
-shared essential test suite before invoking `release.sh`. The internal
+Release workflows live under `.github/workflows/` for macOS 15, Windows, and
+Linux x86_64. Each platform workflow can be dispatched directly or called by
+another workflow. A directly dispatched platform workflow runs the shared
+essential test suite before invoking `release.sh`. The internal
 `skip_essential_tests` reusable-workflow input is not exposed by manual
 dispatch and is reserved for a caller that provides the equivalent test gate.
 
@@ -100,8 +97,8 @@ names. ARM64 runs on `macos-15`; Intel runs on `macos-15-intel`. Artifacts are
 named `CaveViewer-<version>-macos-<architecture>.dmg`.
 
 The `All Platform Release` workflow runs the shared essential test suite once,
-then starts the Windows, Linux ARM64, Linux x86_64, macOS ARM64, and macOS
-x86_64 build/package jobs in parallel. Each job checks out the same source
+then starts the Windows, Linux x86_64, macOS ARM64, and macOS x86_64
+build/package jobs in parallel. Each job checks out the same source
 commit, produces its platform package without publishing, and uploads its
 binary plus any package metadata as a workflow artifact. Linux jobs run
 `release.sh --action=build` before `--action=package` because the package phase
@@ -135,7 +132,6 @@ When dispatching a workflow:
 - `scripts/common/finalize_release.sh`: internal single-writer CI finalizer
 - `scripts/macos`: macOS 15 build/package/publish scripts
 - `scripts/linux/common`: shared Linux build/package/publish internals
-- `scripts/linux/arm64`: Linux ARM64 entry points
 - `scripts/linux/x86_64`: Linux x86_64 entry points
 - `scripts/windows`: Windows build/package/publish scripts
 - `scripts/dev`: developer bootstrap scripts

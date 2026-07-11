@@ -390,7 +390,7 @@ For a packaged app launched from Terminal, use environment variables instead:
 CAVEVIEWER_FORCE_UPDATE=1 \
 CAVEVIEWER_UPDATE_BRANCH=release/<version> \
 CAVEVIEWER_UPDATE_CHANNEL=prerelease \
-./CaveViewer-<version>-aarch64.AppImage
+./CaveViewer-<version>-x86_64.AppImage
 ```
 
 If the update checker logs `Update manifest fetch failed with HTTP 404`, the
@@ -409,8 +409,6 @@ manifest; the signature URL defaults to `<manifest-url>.sig` unless
 Linux manifests are architecture-specific:
 
 ```text
-updates/linux/arm64/stable.json
-updates/linux/arm64/prerelease.json
 updates/linux/x86_64/stable.json
 updates/linux/x86_64/prerelease.json
 ```
