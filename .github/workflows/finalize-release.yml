@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Release version without a leading v"
+        description: "Dotted numeric release version without v or suffixes"
         required: true
         type: string
       release_notes:

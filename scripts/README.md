@@ -31,6 +31,13 @@ Actions:
 - `package`: create a distributable artifact
 - `release`: publish/upload artifacts and write update manifests
 
+Release versions must contain only dot-separated decimal integers, such as
+`1.0.64`. Do not use suffixes such as `1.0.64-rc1`; the update checker cannot
+compare them and will not offer the release as a newer update. Select
+`--pre-release` to publish on the prerelease channel instead. The local
+dispatcher accepts an optional leading `v`, but GitHub workflow inputs require
+the bare numeric version.
+
 Before any action changes the version or invokes a builder, `release.sh` runs
 the complete pytest suite with `-p no:cacheprovider -q`. A failing or missing
 test environment stops the release. The interpreter is selected in this order:
@@ -109,8 +116,9 @@ dispatched platform workflows use the same finalizer for their one target.
 When dispatching a workflow:
 
 - choose the source branch explicitly;
-- enter a bare version such as `1.0.64`, without a leading `v`, because workflow
-  artifact paths use the input verbatim;
+- enter a bare, dotted-numeric version such as `1.0.64`, without a leading `v`
+  or a suffix such as `-rc1`, because workflow artifact paths use the input
+  verbatim and the update checker only compares numeric components;
 - leave `publish` disabled to build and retain a test artifact only;
 - enable both `publish` and `pre_release` to publish a GitHub prerelease and
   update that platform/architecture's `prerelease.json` rather than
