@@ -82,16 +82,15 @@ for a complete release.
 6. Turn `pre_release` on only when the tag must be a GitHub prerelease and the
    `prerelease.json` channel must be updated.
 
-The workflow runs the shared Essential Tests gate once, then runs these jobs in
-order:
+The workflow runs the shared Essential Tests gate once, then fans out five
+package jobs from the same immutable source revision:
 
 ```text
-Essential Tests
-  → Windows
-  → Linux ARM64
-  → Linux x86_64
-  → macOS ARM64
-  → macOS x86_64
+                    ┌─ Windows ────────┐
+                    ├─ Linux ARM64 ────┤
+Essential Tests ────├─ Linux x86_64 ───┼─ Finalize Release
+                    ├─ macOS ARM64 ────┤
+                    └─ macOS x86_64 ───┘
 ```
 
 Each called platform workflow skips its duplicate internal gate. A platform
@@ -100,20 +99,29 @@ Normal pushes to `main` or `release/**` also trigger `.github/workflows/tests.ym
 those branch-CI runs are separate from the single gate inside All Platform
 Release.
 
-Every publish stage uploads its assets, writes its channel manifest, commits
-`src/caveviewer/version.py` plus the platform update files, and pushes the
-selected branch. Each later stage checks out the latest branch head so those
-commits accumulate instead of conflicting. Do not run another publishing
-workflow against the same branch while this chain is active.
+Platform jobs have read-only repository permissions and always run package-only
+operations. They upload their binaries and package metadata as workflow
+artifacts; they do not create GitHub releases, receive the signing key, write
+manifests, or push commits. If every requested package succeeds and `publish`
+is enabled, the finalizer downloads all artifacts, creates or updates the
+GitHub release once, writes and signs every requested manifest, updates
+`src/caveviewer/version.py`, and pushes one metadata commit.
+
+Every package checks out the workflow's starting commit rather than a moving
+branch head. Before publishing, the finalizer verifies that the selected branch
+still points to that commit. A concurrent source push therefore fails the
+release safely instead of mixing artifacts and metadata from different source
+revisions. Finalizers from complete and individual platform workflows share a
+branch-level concurrency lock.
 
 The repository secret `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the
-Ed25519 private key used for update manifests. Release workflows fail before
-packaging when `publish` is enabled and the secret is unavailable.
+Ed25519 private key used for update manifests. Only the finalizer receives this
+secret. Package-only runs do not require it.
 
 ## Existing tags and prerelease promotion
 
-Platform publishers create the tag/release only when it does not already
-exist. When it does exist, they upload with `--clobber`; they do not change the
+The release finalizer creates the tag/release only when it does not already
+exist. When it does exist, it uploads with `--clobber`; it does not change the
 release notes or prerelease/latest status.
 
 This matters when the same version is first published as a prerelease and later
@@ -125,21 +133,18 @@ resolves to it.
 
 ## Individual and resumed releases
 
-The five platform workflows remain manually dispatchable. Use an individual
-workflow when validating one package or resuming after a partial all-platform
-run. Use the same source branch, version, release notes, `publish`, and
-`pre_release` values as the original run.
+The five platform workflows remain manually dispatchable. A direct workflow
+runs its package job and, when `publish` is enabled, calls the same single-writer
+finalizer for that platform. Use the same source branch, version, release notes,
+`publish`, and `pre_release` values when resuming an intentionally partial
+release.
 
-If earlier platforms already published successfully, resume with the first
-unfinished platform rather than restarting All Platform Release. Re-running an
-already-published platform rebuilds and replaces its assets and creates another
-manifest commit.
-
-If a job fails after uploading an asset but before pushing its manifest commit,
-rerunning that same platform is safe: the publisher replaces the same-named
-asset and then attempts the metadata commit again. Inspect the release and
-branch before rerunning so an unrelated workflow is not publishing
-concurrently.
+An all-platform build failure does not publish any platform or manifest because
+the finalizer requires all five package jobs to succeed. Inspect the retained
+workflow artifacts, correct the failure, and rerun All Platform Release. A
+failed finalizer can be rerun safely while the selected branch still points to
+the original source commit: existing release assets are replaced by name and
+the metadata commit is attempted again.
 
 ## Local dispatcher
 
@@ -180,8 +185,8 @@ Publishing also requires an authenticated GitHub CLI and
   byte size, and SHA-256.
 - Verify every platform's `.json.sig` files with the bundled public key.
 - Confirm macOS legacy aliases still match the ARM64 manifests and signatures.
-- Confirm the selected branch contains every release metadata commit and has no
-  unexpected generated files.
+- Confirm the selected branch contains the single release metadata commit and
+  has no unexpected generated files.
 - Confirm the Essential Tests gate passed and inspect any separate push-triggered
   CI runs.
 - For stable releases, verify the GitHub release is not marked prerelease and

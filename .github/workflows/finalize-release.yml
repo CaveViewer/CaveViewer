@@ -1,0 +1,111 @@
+# .github/workflows/finalize-release.yml
+name: Finalize Release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version without a leading v"
+        required: true
+        type: string
+      release_notes:
+        description: "Release notes"
+        required: true
+        type: string
+      pre_release:
+        description: "Publish as a GitHub prerelease and update prerelease.json"
+        required: false
+        type: boolean
+        default: false
+      platforms:
+        description: "Comma-separated release targets or all"
+        required: true
+        type: string
+      source_sha:
+        description: "Immutable source revision used by every package job"
+        required: true
+        type: string
+      target_branch:
+        description: "Branch that receives the single release metadata commit"
+        required: true
+        type: string
+    secrets:
+      CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
+        description: "Private key used to sign published update manifests"
+        required: true
+
+permissions:
+  contents: write
+
+# Builds use target-specific concurrency groups. Only this shared-state writer
+# is serialized across release entry points for the selected source branch.
+concurrency:
+  group: caveviewer-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the immutable release source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_sha }}
+
+      - name: Set up signing Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install manifest signing dependency
+        run: python -m pip install --disable-pip-version-check "cryptography>=43.0.0"
+
+      - name: Download platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: CaveViewer-${{ inputs.version }}-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure release signing key
+        env:
+          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
+            echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required."
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
+          chmod 600 "$key_path"
+          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
+
+      - name: Publish assets and signed update metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          RELEASE_PLATFORMS: ${{ inputs.platforms }}
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TARGET_BRANCH: ${{ inputs.target_branch }}
+          PRE_RELEASE: ${{ inputs.pre_release }}
+        run: |
+          finalize_args=(
+            --platforms="$RELEASE_PLATFORMS"
+            --version="$RELEASE_VERSION"
+            --notes="$RELEASE_NOTES"
+            --artifacts-dir="$GITHUB_WORKSPACE/release-artifacts"
+            --target-branch="$RELEASE_TARGET_BRANCH"
+            --expected-source-sha="$RELEASE_SOURCE_SHA"
+          )
+          if [ "$PRE_RELEASE" = "true" ]; then
+            finalize_args+=(--pre-release)
+          fi
+          ./scripts/common/finalize_release.sh "${finalize_args[@]}"
