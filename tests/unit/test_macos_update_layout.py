@@ -1,5 +1,6 @@
 """Contracts for architecture-specific macOS update manifests and scripts."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -24,12 +25,21 @@ def test_arm64_manifests_match_signed_legacy_compatibility_aliases():
         )
 
 
-def test_x86_64_directory_does_not_offer_an_arm64_manifest():
+def test_x86_64_manifests_are_signed_and_architecture_specific():
     intel_dir = MACOS_UPDATES / "x86_64"
+    manifests = sorted(intel_dir.glob("*.json"))
 
     assert (intel_dir / "README.md").is_file()
-    assert not list(intel_dir.glob("*.json"))
-    assert not list(intel_dir.glob("*.json.sig"))
+    assert manifests
+    for manifest in manifests:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        signature = manifest.with_name(f"{manifest.name}.sig")
+
+        assert payload["platform"] == "macos"
+        assert payload["architecture"] == "x86_64"
+        assert payload["download_url"].endswith("-macos-x86_64.dmg")
+        assert signature.is_file()
+        verify_update_manifest_signature(manifest.read_bytes(), signature.read_bytes())
 
 
 def test_macos_script_architecture_helper_normalizes_supported_names():
