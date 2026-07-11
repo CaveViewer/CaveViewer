@@ -38,6 +38,7 @@ COVERAGE_FILE=/tmp/caveviewer.coverage \
   --cov=caveviewer.gui.advanced_settings \
   --cov=caveviewer.gui.sample_maps \
   --cov=caveviewer.gui.update_checker \
+  --cov=caveviewer.gui.update_manager \
   --cov-branch
 ```
 
@@ -65,6 +66,10 @@ The current CI workflow enforces:
 - 85% for `src/caveviewer/gui/sample_maps.py`.
 - 90% for `src/caveviewer/core/chunker.py`.
 - 50% for `src/caveviewer/gui/update_checker.py`.
+
+The update manager's transition, retry, cancellation, cleanup, and
+platform-reveal contracts have direct unit coverage. Keep those tests
+event-driven and bounded rather than depending on thread timing.
 
 When moving modules, update CI include/source paths without lowering these
 thresholds. New concurrency, cleanup, cache-format, and security-sensitive code

@@ -38,7 +38,7 @@ class SplashPlatformAdapter(Protocol):
     def mouse_look_button_name(self) -> str:
         """Return 'right' (macOS) or 'left' (Windows/Linux)"""
     
-    # ... other methods for updates, installation, UI fonts, etc.
+    # ... other methods for update metadata, package reveal, UI fonts, etc.
 ```
 
 **When to modify**: Add new methods when introducing platform-specific behavior elsewhere in the codebase.
@@ -239,13 +239,20 @@ class MockAdapter:
 1. Add method to protocol that returns the variable part (e.g., `bookmark_save_modifier()`)
 2. In UI code, query adapter and build the full string dynamically
 
-### Installation & Distribution Channels
+### Update Packages & Distribution Channels
 **When**: Different distribution formats (DMG for macOS, ZIP for Windows, AppImage for Linux)
 
 **How**:
 - `install_channel()` returns the channel identifier
 - `persist_downloaded_payload()` implements platform-specific storage
-- Update system knows which channel the current build came from
+- `download_reveal_action_label()` provides the splash action text
+- `reveal_downloaded_payload()` exposes the verified package without running it
+- The update system knows which channel the current build came from
+
+Revealing is deliberately manual and non-executing. macOS mounts the DMG
+read-only and reveals its `.app` in Finder, Windows selects the package in
+Explorer, and Linux opens the containing folder. Adapters must never launch an
+installer or execute a downloaded package.
 
 ### UI Framework & Fonts
 **When**: Native UI elements (menus, fonts, dialogs) behave differently per-platform
@@ -266,5 +273,6 @@ class MockAdapter:
 
 - **`src/caveviewer/gui/controls_overlay.py`**: Uses `bookmark_save_modifier()` and `mouse_look_button_name()` to display platform-specific controls
 - **`src/caveviewer/gui/viewer_window.py`**: Uses adapters to bind keyboard/mouse events to platform-specific modifiers
-- **`src/caveviewer/gui/splash_screen.py`**: Primary consumer of installer and update-related adapter methods
+- **`src/caveviewer/gui/update_manager.py`**: Owns update state, persistence, and package reveal
+- **`src/caveviewer/gui/splash_screen.py`**: Presents update state and platform action labels
 - **`docs/development/releases.md`**: Defines platform release artifacts, update manifest paths, and signing behavior

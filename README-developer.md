@@ -296,11 +296,11 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | Variable | Default | Description |
 |---|---|---|
 | `CAVEVIEWER_GITHUB_REPO` | `KernalPanic/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork or testing a package from Terminal. |
-| `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for updater testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
+| `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for update testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_CHANNEL` | `stable` | Update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
-| `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to always show the "Download Update" prompt regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
+| `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to enter the update-available state regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
 | `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | Low-level macOS packaging override. The top-level release dispatcher uses `--target=macos-arm64` or `--target=macos-x86_64`; normal app update checks detect the running process architecture automatically. |
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | _(auto)_ | Linux publish helper only. Set to `arm64` or `x86_64` to choose which AppImage is written to the Linux update manifest. |
 
@@ -314,6 +314,33 @@ The release finalizer creates every requested companion `.sig` file before
 committing the manifests together. See
 [`docs/development/releases.md`](docs/development/releases.md) for the full
 release contract.
+
+`caveviewer.app` owns one `UpdateManager` for the full GUI process. Its explicit
+state machine is:
+
+```text
+IDLE -> CHECKING -> {UP_TO_DATE, AVAILABLE, IDLE on check error}
+AVAILABLE -> DOWNLOADING -> VERIFYING -> READY
+                |              |
+                +--------------+-> FAILED -> DOWNLOADING (retry)
+any non-SHUTDOWN state -> SHUTDOWN
+```
+
+The splash polls immutable manager snapshots and maps the visible states to
+`Update <version> is available.`, `Downloading... <percentage>%`,
+`Verifying...`, `Downloaded successfully`, and `Download failed - Retry`.
+Neither the viewer nor streaming code depends on the update manager. Opening a
+map closes only that splash instance, so an active download continues and a
+later splash presents its current state. Closing the whole app moves the
+manager to `SHUTDOWN`, cancels any active transfer, waits for its worker, and
+removes the temporary staging directory.
+
+A verified package is moved to `~/Downloads` and is never executed or
+installed. A visible splash makes one automatic reveal attempt and retains a
+manual platform action: macOS mounts a DMG read-only and shows its `.app` in
+Finder, Windows selects the package in Explorer, and Linux opens the containing
+folder. Completion while a map is open remains silent until the splash is
+shown again.
 
 Default update checks read committed, architecture-specific main-branch
 manifests, not GitHub's latest-release or prerelease metadata. macOS uses

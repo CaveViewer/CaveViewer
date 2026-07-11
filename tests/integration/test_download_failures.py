@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import urllib.error
 import zipfile
 
@@ -168,6 +169,56 @@ def test_hash_mismatch_removes_downloaded_file(tmp_path, monkeypatch):
             7,
             str(destination),
             expected_sha256="0" * 64,
+        )
+
+    assert not destination.exists()
+
+
+@pytest.mark.integration
+def test_update_download_reports_verification_phase(tmp_path, monkeypatch):
+    payload = b"verified payload"
+    destination = tmp_path / "downloads" / "update.zip"
+    phases = []
+    progress = []
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: BytesResponse(payload),
+    )
+
+    update_checker.download_update(
+        "https://invalid.example/update.zip",
+        len(payload),
+        str(destination),
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+        progress_cb=lambda downloaded, total: progress.append((downloaded, total)),
+        phase_cb=phases.append,
+    )
+
+    assert progress == [(len(payload), len(payload))]
+    assert phases == ["verifying"]
+    assert destination.read_bytes() == payload
+
+
+@pytest.mark.integration
+def test_cancellation_at_verification_phase_removes_download(tmp_path, monkeypatch):
+    payload = b"cancel before verification"
+    destination = tmp_path / "downloads" / "update.zip"
+    cancel_requested = [False]
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: BytesResponse(payload),
+    )
+
+    with pytest.raises(update_checker.DownloadCancelled):
+        update_checker.download_update(
+            "https://invalid.example/update.zip",
+            len(payload),
+            str(destination),
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+            cancel_cb=lambda: cancel_requested[0],
+            phase_cb=lambda _phase: cancel_requested.__setitem__(0, True),
         )
 
     assert not destination.exists()

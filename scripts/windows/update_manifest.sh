@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Windows updater manifest writer.
+# Windows update manifest writer.
 # Writes updates/windows/<channel>.json with version, download URL, package
-# size, SHA-256, and release notes for the in-app updater.
+# size, SHA-256, and release notes for the in-app update client.
 #
 # Usage:
 #   update_manifest.sh --version=<version> --download-url=<windows_zip_url> --artifact-file=<windows_zip_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]

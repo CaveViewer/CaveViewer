@@ -1,17 +1,10 @@
 """
 caveviewer.gui.update_checker
 
-Checks a hosted update manifest (JSON) for a newer version of
-CaveViewer than the one currently running, and (if the person
-confirms) downloads the manifest's channel-specific asset to a temp
-folder (for example: a macOS DMG for release builds).
-
-Does NOT do the actual file replacement -- that's deliberately handled
-by a separate process (caveviewer.gui.updater), launched only after this
-process has finished downloading and is about to exit. See
-caveviewer.gui.updater's module docstring for why a separate process is the
-standard, safe way to do this (the running app can't reliably overwrite
-its own currently-imported files).
+Checks a hosted update manifest (JSON) for a newer CaveViewer version and
+downloads the signed manifest's platform-specific package when requested.
+Downloaded packages are verified but never executed or installed by this
+module; the application exposes them for ordinary manual installation.
 
 Network failures (no internet, host unreachable, invalid manifest URL)
 are all treated as "couldn't check right now" rather than crashes -- a
@@ -29,7 +22,7 @@ import sys
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from caveviewer.core.logging_utils import get_logger
 from caveviewer.gui.platform import get_platform_adapter
@@ -407,9 +400,15 @@ def _verify_manifest_signature_required(manifest_bytes: bytes) -> bool:
     return True
 
 
-def download_update(download_url: str, expected_size_bytes, dest_path: str,
-                     expected_sha256: Optional[str] = None,
-                     progress_cb=None, cancel_cb=None) -> None:
+def download_update(
+    download_url: str,
+    expected_size_bytes: int | None,
+    dest_path: str,
+    expected_sha256: Optional[str] = None,
+    progress_cb: Callable[[int, int | None], None] | None = None,
+    cancel_cb: Callable[[], bool] | None = None,
+    phase_cb: Callable[[str], None] | None = None,
+) -> None:
     """
     Downloads the release payload to dest_path. Raises on any failure
     (network error, size mismatch) -- the caller is expected to catch
@@ -419,6 +418,9 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
 
     progress_cb(downloaded_bytes, total_bytes), if given, is called
     periodically during the download for a progress indicator.
+
+    phase_cb("verifying"), if given, is called after the network transfer and
+    before size/hash verification.
 
     cancel_cb(), if given, is checked between network reads. When it returns
     true, DownloadCancelled is raised and any partial destination is removed.
@@ -475,7 +477,7 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
                     f.write(chunk)
                     downloaded += len(chunk)
                     if progress_cb:
-                        progress_cb(downloaded, total or downloaded)
+                        progress_cb(downloaded, total)
                     raise_if_cancelled()
             raise_if_cancelled()
     except DownloadCancelled:
@@ -495,41 +497,55 @@ def download_update(download_url: str, expected_size_bytes, dest_path: str,
         _LOG.warning("Update payload download failed while writing %s: %s", dest_path, e)
         raise
 
-    actual_size = os.path.getsize(dest_path)
-    _LOG.info("Downloaded update payload: bytes=%d, path=%s", actual_size, dest_path)
-    if expected_size_bytes is not None and actual_size != expected_size_bytes:
-        _LOG.warning(
-            "Update payload security check failed: size mismatch actual=%d expected=%d",
-            actual_size,
-            expected_size_bytes,
-        )
-        os.remove(dest_path)
-        raise IOError(
-            f"Downloaded file size ({actual_size} bytes) doesn't match the "
-            f"expected size ({expected_size_bytes} bytes) -- the download may "
-            f"have been interrupted or corrupted. Please try again."
-        )
+    try:
+        if phase_cb:
+            phase_cb("verifying")
+        raise_if_cancelled()
 
-    if expected_sha256:
-        import hashlib
-
-        _LOG.info("Verifying update payload SHA-256.")
-        sha256 = hashlib.sha256()
-        with open(dest_path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                sha256.update(chunk)
-        actual_sha = sha256.hexdigest().lower()
-        if actual_sha != expected_sha256.strip().lower():
+        actual_size = os.path.getsize(dest_path)
+        _LOG.info("Downloaded update payload: bytes=%d, path=%s", actual_size, dest_path)
+        if expected_size_bytes is not None and actual_size != expected_size_bytes:
             _LOG.warning(
-                "Update payload security check failed: SHA-256 mismatch actual=%s expected=%s",
-                actual_sha,
-                expected_sha256.strip().lower(),
+                "Update payload security check failed: size mismatch actual=%d expected=%d",
+                actual_size,
+                expected_size_bytes,
             )
             os.remove(dest_path)
             raise IOError(
-                "Downloaded file hash doesn't match the expected SHA-256. "
-                "The download may be corrupted or tampered."
+                f"Downloaded file size ({actual_size} bytes) doesn't match the "
+                f"expected size ({expected_size_bytes} bytes) -- the download may "
+                f"have been interrupted or corrupted. Please try again."
             )
-        _LOG.info("Update payload security check passed: SHA-256 verified.")
-    else:
-        _LOG.warning("Update payload security check skipped: no expected SHA-256 provided.")
+
+        if expected_sha256:
+            import hashlib
+
+            _LOG.info("Verifying update payload SHA-256.")
+            sha256 = hashlib.sha256()
+            with open(dest_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    raise_if_cancelled()
+                    sha256.update(chunk)
+            raise_if_cancelled()
+            actual_sha = sha256.hexdigest().lower()
+            if actual_sha != expected_sha256.strip().lower():
+                _LOG.warning(
+                    "Update payload security check failed: SHA-256 mismatch actual=%s expected=%s",
+                    actual_sha,
+                    expected_sha256.strip().lower(),
+                )
+                os.remove(dest_path)
+                raise IOError(
+                    "Downloaded file hash doesn't match the expected SHA-256. "
+                    "The download may be corrupted or tampered."
+                )
+            _LOG.info("Update payload security check passed: SHA-256 verified.")
+        else:
+            _LOG.warning("Update payload security check skipped: no expected SHA-256 provided.")
+    except DownloadCancelled:
+        # Verification may hold the payload open when cancellation is first
+        # observed. This handler runs after that file handle is closed, which
+        # also makes cleanup reliable on Windows.
+        remove_partial_download()
+        _LOG.info("Verification cancelled; removed update payload: %s", dest_path)
+        raise

@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Protocol
 
 
-@dataclass
-class ManualInstallResult:
-    mounted_payload_path: str | None
-    mounted_app_path: str | None
-
-
 class SplashPlatformAdapter(Protocol):
-    """Platform-specific hooks used by caveviewer.gui.splash_screen."""
+    """Platform-specific hooks used by the splash and update manager."""
 
     def ui_font_family(self) -> str:
         ...
@@ -25,7 +18,10 @@ class SplashPlatformAdapter(Protocol):
     def persist_downloaded_payload(self, temp_payload_path: str, download_url: str | None) -> str:
         ...
 
-    def prepare_manual_install(self, payload_path: str) -> ManualInstallResult:
+    def download_reveal_action_label(self) -> str:
+        ...
+
+    def reveal_downloaded_payload(self, payload_path: str) -> None:
         ...
 
     def default_update_repo(self) -> str:
@@ -64,12 +60,6 @@ class SplashPlatformAdapter(Protocol):
         ...
 
     def detect_package_kind(self, download_url: str, channel: str) -> str:
-        ...
-
-    def updater_supported_modes(self) -> set[str]:
-        ...
-
-    def launch_payload_for_mode(self, mode: str, payload_path: str, log_func) -> None:
         ...
 
     def font_candidates(self) -> list[str]:

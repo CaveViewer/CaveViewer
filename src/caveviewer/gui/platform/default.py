@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 
-from .base import ManualInstallResult, SplashPlatformAdapter
+from .base import SplashPlatformAdapter
 
 
 class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
@@ -42,10 +42,13 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
         shutil.move(temp_payload_path, final_path)
         return final_path
 
-    def prepare_manual_install(self, payload_path: str) -> ManualInstallResult:
+    def download_reveal_action_label(self) -> str:
+        return "Open Download Folder"
+
+    def reveal_downloaded_payload(self, payload_path: str) -> None:
         raise RuntimeError(
-            "Automatic installer handoff is not implemented for this platform yet. "
-            "Open the downloaded payload manually."
+            f"Revealing downloaded packages is unsupported on this platform: "
+            f"{payload_path}"
         )
 
     def default_update_repo(self) -> str:
@@ -98,14 +101,6 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
         if url.endswith(".zip"):
             return "zip"
         return "unknown"
-
-    def updater_supported_modes(self) -> set[str]:
-        return set()
-
-    def launch_payload_for_mode(self, mode: str, payload_path: str, log_func) -> None:
-        raise RuntimeError(
-            f"Unsupported update mode '{mode}' for this platform."
-        )
 
     def bookmark_save_modifier(self) -> str:
         """Return the modifier key name for saving bookmarks (default: 'control' for non-macOS)."""

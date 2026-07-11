@@ -40,7 +40,6 @@ try:
 except Exception:
     pass  # non-fatal: falls back to Python's bundled CA bundle
 
-_UPDATE_STARTED_SENTINEL = "__caveviewer_update_started__"
 _LOG = get_logger("CaveViewer")
 
 _KNOWN_CAVEVIEWER_ENV_VARS = (
@@ -697,20 +696,29 @@ def main():
     # GUI mode: show the splash screen, run the viewer, then show the
     # splash screen again so the user can open another map or exit.
     _splash_version = "0.0.0" if _force_update else __version__
-    while True:
-        from caveviewer.gui.splash_screen import show_splash_screen
-        folder = show_splash_screen(program_name=APP_NAME, version=_splash_version)
+    from caveviewer.gui.splash_screen import show_splash_screen
+    from caveviewer.gui.update_manager import UpdateManager
 
-        if folder == _UPDATE_STARTED_SENTINEL:
-            _LOG.info("Update is being installed; exiting the current instance.")
-            return
+    update_manager = UpdateManager(current_version=_splash_version)
+    try:
+        while True:
+            folder = show_splash_screen(
+                program_name=APP_NAME,
+                version=_splash_version,
+                update_manager=update_manager,
+            )
 
-        if not folder:
-            _LOG.info("No folder selected. Exiting.")
-            return
+            if not folder:
+                _LOG.info("No folder selected. Exiting.")
+                return
 
-        _run_map_session(folder)
-        # Viewer closed -- loop back and show the splash screen again
+            _run_map_session(folder)
+            # Viewer closed -- loop back to a new splash backed by the same
+            # process-owned update state and any in-progress download.
+    finally:
+        # Splash and viewer closure do not own the worker. Only final process
+        # shutdown cancels a partial package and waits for its temp cleanup.
+        update_manager.shutdown()
 
 
 def run() -> None:

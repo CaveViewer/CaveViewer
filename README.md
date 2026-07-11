@@ -27,17 +27,9 @@ CaveViewer into Applications.
 
 If this is your first time installing the app, you have to go to Settings -> Privacy & Security and then allow the system to open CaveViewer. These steps are necessary because the app is not published through the App Store.
 
-The splash screen checks the architecture-specific stable update manifest. A
-newer signed release can be downloaded and verified in-app, after which
-CaveViewer opens the DMG for the normal manual installation.
-
 ### Windows
 
 Download the latest zip from https://github.com/KernalPanic/CaveViewer/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install.
-
-The splash screen checks the signed Windows stable manifest. A newer release
-can be downloaded and verified in-app, after which CaveViewer opens the ZIP in
-Explorer for the normal manual setup.
 
 ### Linux
 
@@ -58,6 +50,20 @@ chmod +x CaveViewer-*.AppImage
 # or
 ./CaveViewer-*-aarch64.AppImage  # arm64
 ```
+
+### In-app update downloads
+
+The splash screen checks the signed update manifest for the current platform
+and architecture. If you start a download, it continues in the background
+while you open maps, download sample maps, or change settings. Update status is
+shown only on the splash screen, so it does not interrupt map viewing.
+
+After verification, CaveViewer keeps the package in `~/Downloads` and reveals
+it for manual installation: macOS mounts the DMG read-only and shows the app in
+Finder, Windows selects the package in Explorer, and Linux opens the download
+folder. CaveViewer never executes the package or installs the update. Closing
+the whole application cancels an unfinished download and removes its temporary
+files; a verified package remains in `~/Downloads`.
 
 ### Virtual Machines or GPU Driver Problems
 

@@ -3,12 +3,11 @@ from __future__ import annotations
 import os
 import subprocess
 
-from .base import ManualInstallResult
 from .default import DefaultSplashPlatformAdapter
 
 
 class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
-    """Windows platform adapter for update metadata and manual installer handoff."""
+    """Windows update metadata and manual package-reveal integration."""
 
     def default_update_repo(self) -> str:
         return super().default_update_repo()
@@ -63,24 +62,13 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             return "Update manifest is missing a Windows download URL."
         return super().missing_download_url_message(channel)
 
-    def updater_supported_modes(self) -> set[str]:
-        return {"windows_app"}
+    def download_reveal_action_label(self) -> str:
+        return "Show in Explorer"
 
-    def prepare_manual_install(self, payload_path: str) -> ManualInstallResult:
-        self._open_payload(payload_path)
-        return ManualInstallResult(mounted_payload_path=None, mounted_app_path=None)
-
-    def launch_payload_for_mode(self, mode: str, payload_path: str, log_func) -> None:
-        if mode != "windows_app":
-            return super().launch_payload_for_mode(mode, payload_path, log_func)
-        self._open_payload(payload_path)
-        log_func(f"Opened payload for manual install: {payload_path}")
-
-    def _open_payload(self, payload_path: str) -> None:
-        if hasattr(os, "startfile"):
-            os.startfile(payload_path)  # type: ignore[attr-defined]
-            return
-        subprocess.Popen(["explorer", payload_path])
+    def reveal_downloaded_payload(self, payload_path: str) -> None:
+        # /select reveals the package without opening or executing it.
+        normalized_path = os.path.normpath(os.path.abspath(payload_path))
+        subprocess.Popen(["explorer", f"/select,{normalized_path}"])
 
     def font_candidates(self) -> list[str]:
         """Return Windows-specific font file paths in priority order."""

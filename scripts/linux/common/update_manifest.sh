@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Linux updater manifest writer.
+# Linux update manifest writer.
 # Writes updates/linux/<arch>/<channel>.json with version, download URL,
-# package size, SHA-256, and release notes for the in-app updater.
+# package size, SHA-256, and release notes for the in-app update client.
 #
 # Usage:
 #   update_manifest.sh --version=<version> --download-url=<appimage_url> --artifact-file=<appimage_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]

@@ -24,18 +24,19 @@ program yet and benefits from the context; the OPEN button mid-session
 quick plain dialog is the better fit and a full splash screen would just
 be unnecessary ceremony.
 
-This window also hosts inline update UX (check, availability, download
-progress, and install handoff) so update actions remain in one surface
-without extra modal pop-ups.
+This window presents the process-owned update manager's state. Downloads may
+continue after this Tk window closes; verified packages are revealed for
+manual handling only when a splash is visible.
 """
 
 from __future__ import annotations
 
+import enum
 import os
 import subprocess
 import sys
-import tempfile
-import threading
+from dataclasses import dataclass
+
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.logging_utils import get_logger
 from caveviewer.gui.advanced_settings import (
@@ -56,6 +57,11 @@ from caveviewer.gui.map_selection import (
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.preferences import migrate_preference_file
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.update_manager import (
+    UpdateManager,
+    UpdateSnapshot,
+    UpdateState,
+)
 from caveviewer.resources import image_path
 
 
@@ -205,12 +211,79 @@ def _set_tk_window_icon(window) -> None:
         _LOG.warning(f"could not set application window icon ({e}); continuing without it.")
 
 
-def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION) -> str | None:
+class _UpdateAction(enum.Enum):
+    DOWNLOAD = "download"
+    RETRY = "retry"
+    REVEAL = "reveal"
+
+
+@dataclass(frozen=True)
+class _UpdatePresentation:
+    status_text: str = ""
+    action_text: str = ""
+    action: _UpdateAction | None = None
+    status_action: _UpdateAction | None = None
+    progress_visible: bool = False
+    progress_fraction: float = 0.0
+    error: bool = False
+
+
+def _display_version(version: str | None) -> str:
+    text = (version or "").strip()
+    return text[1:] if text.lower().startswith("v") else text
+
+
+def _update_presentation(
+    snapshot: UpdateSnapshot,
+    reveal_action_label: str,
+) -> _UpdatePresentation:
+    """Map manager states to the exact compact labels rendered by the splash."""
+    if snapshot.state == UpdateState.AVAILABLE:
+        version = _display_version(snapshot.available_version)
+        return _UpdatePresentation(
+            status_text=f"Update {version} is available.",
+            action_text="Download",
+            action=_UpdateAction.DOWNLOAD,
+        )
+    if snapshot.state == UpdateState.DOWNLOADING:
+        return _UpdatePresentation(
+            status_text=f"Downloading... {snapshot.progress_percent}%",
+            progress_visible=True,
+            progress_fraction=snapshot.progress_percent / 100.0,
+        )
+    if snapshot.state == UpdateState.VERIFYING:
+        return _UpdatePresentation(
+            status_text="Verifying...",
+            progress_visible=True,
+            progress_fraction=1.0,
+        )
+    if snapshot.state == UpdateState.READY:
+        return _UpdatePresentation(
+            status_text="Downloaded successfully",
+            action_text=reveal_action_label,
+            action=_UpdateAction.REVEAL,
+        )
+    if snapshot.state == UpdateState.FAILED:
+        return _UpdatePresentation(
+            status_text="Download failed - Retry",
+            status_action=_UpdateAction.RETRY,
+            error=True,
+        )
+    return _UpdatePresentation()
+
+
+def show_splash_screen(
+    program_name: str = APP_NAME,
+    version: str = APP_VERSION,
+    *,
+    update_manager: UpdateManager,
+) -> str | None:
     """
     Shows the launch splash screen and blocks until the person either
     picks a folder (Browse -> select a folder -> OK) or closes the
-    window. Returns the selected folder path, or None if the window was
-    closed without picking one.
+    window. Returns the selected folder path, or None if the window was closed
+    without picking one. Update work belongs to app.py and may outlive this
+    particular splash instance.
     """
     import tkinter as tk
     from tkinter import filedialog
@@ -294,18 +367,11 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     )
     version_label.pack(pady=(0, 8))
 
-    update_state = {
-        "result": None,
-        "downloaded_payload": None,
-        "mounted_payload": None,
-        "mounted_app": None,
-        "busy": False,
-        "check_user_initiated": False,
-    }
+    splash_state = {"closing": False}
+    last_update_presentation: list[_UpdatePresentation | None] = [None]
 
-    # Update status label — always packed so its height is always included in
-    # the window size.  State changes are text/color/cursor swaps only; no
-    # widgets are ever added or removed, so the window never needs to resize.
+    # Status and action labels stay packed even when empty. State changes never
+    # resize the splash, and keyboard focus is enabled only for active actions.
     update_label = tk.Label(
         root,
         text="",
@@ -313,8 +379,20 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         fg=_INSTRUCTION_COLOR,
         bg=_BG_COLOR,
         cursor="arrow",
+        takefocus=False,
     )
-    update_label.pack(pady=(0, 4))
+    update_label.pack(pady=(0, 2))
+
+    update_action_label = tk.Label(
+        root,
+        text="",
+        font=_SMALL_FONT,
+        fg=_BUTTON_BG,
+        bg=_BG_COLOR,
+        cursor="arrow",
+        takefocus=False,
+    )
+    update_action_label.pack(pady=(0, 4))
 
     # Progress bar — always packed, always 4 px tall.  Initially its background
     # matches the window so it is invisible; becomes visible during a download.
@@ -330,10 +408,6 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     )
     update_progress_canvas.pack(pady=(0, 4))
 
-    def _set_update_label(text, fg=_INSTRUCTION_COLOR, clickable=False):
-        update_label.config(text=text, fg=fg,
-                            cursor="hand2" if clickable else "arrow")
-
     def _set_progress_bar_visible(visible: bool):
         update_progress_canvas.config(
             bg=DARK_THEME.entry_background if visible else _BG_COLOR
@@ -345,134 +419,60 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         clamped = max(0.0, min(1.0, float(frac)))
         update_progress_canvas.coords(_update_progress_bar, 0, 0, int(300 * clamped), 4)
 
-    def _close_and_install():
+    def _invoke_update_action(action: _UpdateAction) -> None:
+        if action in {_UpdateAction.DOWNLOAD, _UpdateAction.RETRY}:
+            update_manager.start_download()
+        elif action == _UpdateAction.REVEAL:
+            update_manager.reveal_download()
+
+    def _bind_label_action(label, action: _UpdateAction | None) -> None:
+        for sequence in ("<Button-1>", "<Return>", "<space>"):
+            label.unbind(sequence)
+        enabled = action is not None
+        label.config(cursor="hand2" if enabled else "arrow", takefocus=enabled)
+        if not enabled:
+            return
+
+        def invoke(_event=None):
+            _invoke_update_action(action)
+            return "break"
+
+        label.bind("<Button-1>", invoke)
+        label.bind("<Return>", invoke)
+        label.bind("<space>", invoke)
+
+    def _apply_update_presentation(presentation: _UpdatePresentation) -> None:
+        update_label.config(
+            text=presentation.status_text,
+            fg="#ff9b90" if presentation.error else _INSTRUCTION_COLOR,
+        )
+        update_action_label.config(text=presentation.action_text)
+        _bind_label_action(update_label, presentation.status_action)
+        _bind_label_action(update_action_label, presentation.action)
+        _set_progress_bar_visible(presentation.progress_visible)
+        _set_progress(presentation.progress_fraction)
+
+    def _refresh_update_presentation() -> None:
+        if splash_state["closing"]:
+            return
+        snapshot = update_manager.snapshot()
+        presentation = _update_presentation(
+            snapshot,
+            update_manager.reveal_action_label,
+        )
+        if presentation != last_update_presentation[0]:
+            _apply_update_presentation(presentation)
+            last_update_presentation[0] = presentation
+        if snapshot.state == UpdateState.READY:
+            # Only a visible splash performs the one automatic file-manager
+            # reveal; downloads completing inside the viewer stay unobtrusive.
+            update_manager.reveal_download(automatic=True)
+        root.after(100, _refresh_update_presentation)
+
+    def _leave_splash() -> None:
+        splash_state["closing"] = True
         root.withdraw()
         root.quit()
-
-    def _on_download_complete(payload_path: str):
-        update_state["downloaded_payload"] = payload_path
-        update_state["busy"] = False
-        _set_progress_bar_visible(False)
-        try:
-            manual_install = _PLATFORM_ADAPTER.prepare_manual_install(payload_path)
-            update_state["mounted_payload"] = manual_install.mounted_payload_path
-            update_state["mounted_app"] = manual_install.mounted_app_path
-            _set_update_label("Update ready  \u2014  click to quit & install",
-                              fg=_BUTTON_BG, clickable=True)
-            update_label.bind("<Button-1>", lambda _e: _close_and_install())
-        except Exception:
-            _set_update_label("Downloaded  \u2014  close app to install manually",
-                              fg=_SUBTITLE_COLOR)
-
-    def _download_error_looks_security_related(err: str) -> bool:
-        text = (err or "").lower()
-        return any(
-            marker in text
-            for marker in (
-                "hash",
-                "sha-256",
-                "sha256",
-                "tampered",
-                "size",
-                "corrupt",
-                "security",
-            )
-        )
-
-    def _on_download_error(err: str):
-        update_state["busy"] = False
-        _set_progress_bar_visible(False)
-        if _download_error_looks_security_related(err):
-            _LOG.warning("Update download stopped by security check: %s", err)
-            _set_update_label("Download verification failed", fg="#ff9b90")
-            return
-        _set_update_label("\u2193  Download failed \u2014 click to retry",
-                          fg="#ff9b90", clickable=True)
-
-    def _start_download(_event=None):
-        result = update_state.get("result")
-        if not result or update_state.get("busy"):
-            return
-        update_state["busy"] = True
-        _set_update_label("Downloading\u2026", fg=_INSTRUCTION_COLOR)
-        _set_progress_bar_visible(True)
-        _set_progress(0.0)
-
-        def worker():
-            from caveviewer.gui.update_checker import download_update
-
-            download_dir = tempfile.mkdtemp(prefix="caveviewer_update_")
-            payload_path = os.path.join(download_dir, "update_payload.bin")
-
-            def on_progress(downloaded, total):
-                frac = min(1.0, downloaded / total) if total else 0.0
-                pct = int(frac * 100)
-
-                def ui_update():
-                    _set_update_label(f"Downloading\u2026 {pct}%",
-                                      fg=_INSTRUCTION_COLOR)
-                    _set_progress(frac)
-
-                root.after(0, ui_update)
-
-            try:
-                download_update(
-                    result.download_url,
-                    result.download_size_bytes,
-                    payload_path,
-                    expected_sha256=result.download_sha256,
-                    progress_cb=on_progress,
-                )
-                final_payload_path = _PLATFORM_ADAPTER.persist_downloaded_payload(
-                    payload_path, result.download_url
-                )
-                _LOG.info("Update payload saved for installation: %s", final_payload_path)
-                root.after(0, lambda: _on_download_complete(final_payload_path))
-            except Exception as e:
-                err = str(e)
-                _LOG.warning(
-                    "Update download workflow failed: %s: %s",
-                    type(e).__name__,
-                    err,
-                )
-                root.after(0, lambda err=err: _on_download_error(err))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_check_result(result):
-        update_state["busy"] = False
-        if result.error:
-            if update_state.get("check_user_initiated"):
-                _set_update_label("Your app is up to date.")
-            return
-
-        if not result.update_available:
-            if update_state.get("check_user_initiated"):
-                _set_update_label("Your app is up to date.")
-            return
-
-        update_state["result"] = result
-        _set_update_label("\u2193  Download Update", fg="#8ab4ff", clickable=True)
-        update_label.bind("<Button-1>", _start_download)
-
-    def _start_check_updates(*, user_initiated: bool = False):
-        if update_state["busy"]:
-            return
-        update_state["busy"] = True
-        update_state["check_user_initiated"] = bool(user_initiated)
-        if user_initiated:
-            _set_update_label("Checking for updates\u2026")
-
-        def worker():
-            from caveviewer.gui.update_checker import check_for_update
-
-            result = check_for_update(
-                current_version=version,
-                install_channel=_PLATFORM_ADAPTER.install_channel(),
-            )
-            root.after(0, lambda: _on_check_result(result))
-
-        threading.Thread(target=worker, daemon=True).start()
 
     # -- browse button + instructions ---------------------------------------------
     def _show_invalid_map_dialog(message: str) -> None:
@@ -590,12 +590,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
 
             selected_folder[0] = folder
             _save_last_browse_dir(folder)
-            root.withdraw()
-            root.quit()
+            _leave_splash()
 
     def on_close(_event=None):
-        root.withdraw()
-        root.quit()
+        _leave_splash()
 
     browse_button = tk.Label(
         root,
@@ -641,8 +639,7 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
         )
         if result:
             selected_folder[0] = result
-            root.withdraw()
-            root.quit()
+            _leave_splash()
 
     secondary_link_row = tk.Frame(root, bg=_BG_COLOR)
     secondary_link_row.pack(pady=(_SECONDARY_LINK_ROW_TOP_GAP, _SECONDARY_LINK_ROW_BOTTOM_GAP))
@@ -708,8 +705,10 @@ def show_splash_screen(program_name: str = APP_NAME, version: str = APP_VERSION)
     # that just closed -- on macOS the focus doesn't transfer automatically.
     root.attributes("-topmost", True)
     root.after(200, lambda: root.attributes("-topmost", False))
-    # Auto-check once at startup. Silent when offline or already up-to-date.
-    root.after(350, lambda: _start_check_updates(user_initiated=False))
+    # The app-owned manager survives this Tk window and any intervening viewer.
+    # Polling immutable snapshots keeps every widget mutation on the Tk thread.
+    root.after(50, _refresh_update_presentation)
+    root.after(350, update_manager.check_for_updates)
     root.bind("<Return>", lambda _event: on_browse())
     root.bind("<Escape>", on_close)
     root.protocol("WM_DELETE_WINDOW", on_close)

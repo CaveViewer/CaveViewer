@@ -3,7 +3,7 @@ set -euo pipefail
 
 # macOS publisher.
 # Builds or reuses the macOS DMG, publishes/uploads a GitHub release, and
-# writes a signed updater manifest for the selected channel.
+# writes a signed update manifest for the selected channel.
 #
 # Usage:
 #   publish.sh --arch=<arm64|x86_64> --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]

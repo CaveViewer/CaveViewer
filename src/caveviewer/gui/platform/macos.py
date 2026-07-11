@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import os
 import platform
+import plistlib
 import shutil
 import subprocess
-import tempfile
 
 from caveviewer.core.logging_utils import get_logger
-from .base import ManualInstallResult
 from .default import DefaultSplashPlatformAdapter
 
 # Keep a strong reference to the Tk root used for the About handler so that
@@ -23,6 +22,11 @@ _LOG = get_logger("CaveViewer")
 
 
 class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
+    def __init__(self):
+        # Reuse an existing mount for repeated "Show in Finder" actions rather
+        # than attaching the same DMG once per click.
+        self._mounted_payloads: dict[str, tuple[str, str]] = {}
+
     def ui_font_family(self) -> str:
         return "Helvetica Neue"
 
@@ -52,14 +56,46 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         shutil.move(temp_payload_path, final_path)
         return final_path
 
-    def prepare_manual_install(self, payload_path: str) -> ManualInstallResult:
-        mountpoint = tempfile.mkdtemp(prefix="caveviewer_manual_update_mount_")
-        subprocess.run(
-            ["hdiutil", "attach", payload_path, "-nobrowse", "-readonly", "-mountpoint", mountpoint],
+    def download_reveal_action_label(self) -> str:
+        return "Show in Finder"
+
+    def reveal_downloaded_payload(self, payload_path: str) -> None:
+        payload_path = os.path.abspath(payload_path)
+        if not payload_path.lower().endswith(".dmg"):
+            subprocess.Popen(["open", "-R", payload_path])
+            return
+
+        cached = self._mounted_payloads.get(payload_path)
+        if cached is not None:
+            mountpoint, reveal_path = cached
+            if os.path.exists(mountpoint) and os.path.exists(reveal_path):
+                self._reveal_in_finder(mountpoint, reveal_path)
+                return
+            self._mounted_payloads.pop(payload_path, None)
+
+        completed = subprocess.run(
+            [
+                "hdiutil",
+                "attach",
+                payload_path,
+                "-nobrowse",
+                "-readonly",
+                "-plist",
+            ],
             check=True,
             capture_output=True,
-            text=True,
         )
+        attach_result = plistlib.loads(completed.stdout)
+        mountpoint = next(
+            (
+                entity.get("mount-point")
+                for entity in attach_result.get("system-entities", ())
+                if entity.get("mount-point")
+            ),
+            None,
+        )
+        if not mountpoint:
+            raise RuntimeError(f"Mounted DMG did not report a mount point: {payload_path}")
 
         app_path = None
         for root_dir, dir_names, _ in os.walk(mountpoint):
@@ -70,16 +106,16 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             if app_path:
                 break
 
-        if app_path and os.path.exists(app_path):
-            subprocess.Popen(["open", "-R", app_path])
+        reveal_path = app_path or mountpoint
+        self._mounted_payloads[payload_path] = (mountpoint, reveal_path)
+        self._reveal_in_finder(mountpoint, reveal_path)
+
+    @staticmethod
+    def _reveal_in_finder(mountpoint: str, reveal_path: str) -> None:
+        if reveal_path != mountpoint:
+            subprocess.Popen(["open", "-R", reveal_path])
         else:
             subprocess.Popen(["open", mountpoint])
-
-        return ManualInstallResult(mounted_payload_path=mountpoint, mounted_app_path=app_path)
-
-    def bookmark_save_modifier(self) -> str:
-        """On macOS, use Command key for bookmark saving."""
-        return "command"
 
     def install_about_handler(self, root, program_name: str, version: str) -> None:
         global _about_root_ref
@@ -188,18 +224,6 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         if channel == "macos_app":
             return "Update manifest is missing required field: download_url_macosx_dmg."
         return super().missing_download_url_message(channel)
-
-    def updater_supported_modes(self) -> set[str]:
-        return {"macos_app"}
-
-    def launch_payload_for_mode(self, mode: str, payload_path: str, log_func) -> None:
-        if mode != "macos_app":
-            return super().launch_payload_for_mode(mode, payload_path, log_func)
-        try:
-            subprocess.Popen(["open", payload_path])
-            log_func(f"Opened in Finder for manual install: {payload_path}")
-        except Exception as e:
-            raise RuntimeError(f"Could not open path in Finder ({payload_path}): {e}")
 
     def bookmark_save_modifier(self) -> str:
         """On macOS, use Command key for bookmark saving."""

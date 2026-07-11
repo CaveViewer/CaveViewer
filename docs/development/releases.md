@@ -202,5 +202,7 @@ Publishing also requires an authenticated GitHub CLI and
   CI runs.
 - For stable releases, verify the GitHub release is not marked prerelease and
   that the “latest release” link resolves to the new tag.
-- Smoke-test install, launch, map import, and update handoff on each available
-  platform/architecture; report any platform that was not tested directly.
+- Smoke-test install, launch, map import, background update download, and manual
+  package reveal on each available platform/architecture. Confirm CaveViewer
+  neither executes nor installs the package, and report any platform that was
+  not tested directly.

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # x86_64 Linux publish wrapper.
-# Selects the x86_64 updater manifest target and delegates to the common publisher.
+# Selects the x86_64 update manifest target and delegates to the common publisher.
 # Prefer the top-level release.sh dispatcher for normal release work.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

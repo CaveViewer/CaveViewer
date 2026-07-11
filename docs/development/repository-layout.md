@@ -13,6 +13,7 @@ src/caveviewer/app.py                         startup and import workflow
 src/caveviewer/version.py                     release identity
 src/caveviewer/core/                          parsing, cache, and streaming policy
 src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
+src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
 src/caveviewer/resources/                     shaders, images, and public key
 tests/                                        unit and integration tests
 docs/                                         site and development documentation
