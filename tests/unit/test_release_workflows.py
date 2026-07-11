@@ -45,12 +45,46 @@ def test_all_release_workflows_expose_publish_and_prerelease_inputs():
 
     for workflow_name in workflow_names:
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+        assert "workflow_call:" in workflow, workflow_name
         assert "publish:" in workflow, workflow_name
         assert "pre_release:" in workflow, workflow_name
+        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:" in workflow, workflow_name
         assert "uses: ./.github/workflows/tests.yml" in workflow, workflow_name
         assert "needs: essential-tests" in workflow, workflow_name
+        assert "ref: ${{ github.ref }}" in workflow, workflow_name
         assert "--skip-tests" in workflow, workflow_name
         assert "Install release test dependencies" not in workflow, workflow_name
+
+
+def test_all_platform_release_workflow_calls_platforms_sequentially():
+    workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
+        encoding="utf-8"
+    )
+    job_contracts = (
+        ("windows", "windows-release.yml", None),
+        ("linux-arm64", "linux-arm64-release.yml", "windows"),
+        ("linux-x86_64", "linux-x86_64-release.yml", "linux-arm64"),
+        ("macos-arm64", "macos-arm64-release.yml", "linux-x86_64"),
+        ("macos-x86_64", "macos-x86_64-release.yml", "macos-arm64"),
+    )
+
+    assert "name: All Platform Release" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "contents: write" in workflow
+    assert "group: caveviewer-all-platform-release-${{ github.ref }}" in workflow
+    assert workflow.count("secrets: inherit") == len(job_contracts)
+
+    job_positions = []
+    for job_name, called_workflow, predecessor in job_contracts:
+        job_positions.append(workflow.index(f"  {job_name}:\n"))
+        assert f"uses: ./.github/workflows/{called_workflow}" in workflow
+        if predecessor is not None:
+            assert f"needs: {predecessor}" in workflow
+
+    assert job_positions == sorted(job_positions)
+    for input_name in ("version", "release_notes", "pre_release", "publish"):
+        forwarded_input = f"{input_name}: ${{{{ inputs.{input_name} }}}}"
+        assert workflow.count(forwarded_input) == len(job_contracts)
 
 
 def test_release_dispatcher_exposes_architecture_specific_macos_targets():

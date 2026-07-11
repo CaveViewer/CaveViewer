@@ -21,6 +21,31 @@ on:
         required: false
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version, e.g. 1.0.34"
+        required: true
+        type: string
+      release_notes:
+        description: "Release notes"
+        required: false
+        type: string
+        default: "Windows release"
+      pre_release:
+        description: "Publish as a GitHub prerelease and update prerelease.json"
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: "Publish the Windows ZIP to the GitHub release"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
+        description: "Private key used to sign published update manifests"
+        required: false
 
 permissions:
   contents: write
@@ -42,6 +67,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5

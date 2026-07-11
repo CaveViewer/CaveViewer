@@ -1,0 +1,87 @@
+# .github/workflows/all-platform-release.yml
+name: All Platform Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. 1.0.63"
+        required: true
+        type: string
+      release_notes:
+        description: "Release notes used for every platform"
+        required: false
+        type: string
+        default: "CaveViewer release"
+      pre_release:
+        description: "Publish as a GitHub prerelease and update prerelease.json"
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: "Publish every platform artifact to the GitHub release"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: caveviewer-all-platform-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows
+    uses: ./.github/workflows/windows-release.yml
+    with:
+      version: ${{ inputs.version }}
+      release_notes: ${{ inputs.release_notes }}
+      pre_release: ${{ inputs.pre_release }}
+      publish: ${{ inputs.publish }}
+    secrets: inherit
+
+  linux-arm64:
+    name: Linux ARM64
+    needs: windows
+    uses: ./.github/workflows/linux-arm64-release.yml
+    with:
+      version: ${{ inputs.version }}
+      release_notes: ${{ inputs.release_notes }}
+      pre_release: ${{ inputs.pre_release }}
+      publish: ${{ inputs.publish }}
+    secrets: inherit
+
+  linux-x86_64:
+    name: Linux x86_64
+    needs: linux-arm64
+    uses: ./.github/workflows/linux-x86_64-release.yml
+    with:
+      version: ${{ inputs.version }}
+      release_notes: ${{ inputs.release_notes }}
+      pre_release: ${{ inputs.pre_release }}
+      publish: ${{ inputs.publish }}
+    secrets: inherit
+
+  macos-arm64:
+    name: macOS ARM64
+    needs: linux-x86_64
+    uses: ./.github/workflows/macos-arm64-release.yml
+    with:
+      version: ${{ inputs.version }}
+      release_notes: ${{ inputs.release_notes }}
+      pre_release: ${{ inputs.pre_release }}
+      publish: ${{ inputs.publish }}
+    secrets: inherit
+
+  macos-x86_64:
+    name: macOS x86_64
+    needs: macos-arm64
+    uses: ./.github/workflows/macos-x86_64-release.yml
+    with:
+      version: ${{ inputs.version }}
+      release_notes: ${{ inputs.release_notes }}
+      pre_release: ${{ inputs.pre_release }}
+      publish: ${{ inputs.publish }}
+    secrets: inherit
