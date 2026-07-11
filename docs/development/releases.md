@@ -54,7 +54,7 @@ updates/macos/arm64/<stable|prerelease>.json
 updates/macos/x86_64/<stable|prerelease>.json
 ```
 
-Linux and macOS publish a matching `.json.sig` beside each manifest. macOS
+Every platform publishes a matching `.json.sig` beside each manifest. macOS
 ARM64 publishing also copies the signed files to the legacy aliases at
 `updates/macos/<stable|prerelease>.json[.sig]`. Those aliases must remain
 byte-for-byte identical to the ARM64 files.
@@ -63,16 +63,6 @@ The application checks architecture-specific manifests from the selected
 branch and channel; it does not derive updates from GitHub's “latest release”
 metadata. It verifies a newer manifest's Ed25519 signature before offering its
 artifact, then verifies the artifact size and SHA-256 while downloading.
-
-### Current Windows signing limitation
-
-The update checker requires a companion signature on every platform. Linux and
-macOS publish scripts create one, but `scripts/windows/publish.sh` currently
-commits only the Windows JSON manifest. Consequently, a Windows installation
-cannot accept a newer in-app update manifest until Windows signing parity is
-implemented. Windows users must download updates from the GitHub Releases page.
-The Windows workflow still requires the signing-key secret, but that does not
-create a Windows signature in the current implementation.
 
 ## Recommended GitHub release
 
@@ -186,10 +176,8 @@ Publishing also requires an authenticated GitHub CLI and
 - Confirm `src/caveviewer/version.py` contains the released version.
 - Confirm every platform/channel manifest contains the expected version, URL,
   byte size, and SHA-256.
-- Verify Linux and macOS `.json.sig` files with the bundled public key.
+- Verify every platform's `.json.sig` files with the bundled public key.
 - Confirm macOS legacy aliases still match the ARM64 manifests and signatures.
-- Account for the current Windows signature limitation rather than claiming
-  that Windows in-app updates are available.
 - Confirm the selected branch contains every release metadata commit and has no
   unexpected generated files.
 - Confirm the Essential Tests gate passed and inspect any separate push-triggered

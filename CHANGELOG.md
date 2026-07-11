@@ -22,6 +22,8 @@ All notable changes to this project are documented in this file.
 - Runtime defaults and environment-based performance tuning expanded (GPU/memory/worker settings).
 
 ### Fixed
+- Windows stable and prerelease publishing now signs updater manifests and
+  commits the required `.json.sig` files.
 - macOS About menu crash and related callback stability issues.
 - Linux compatibility issues (including Ubuntu/Fedora adjustments and font path handling).
 - Windows loading/setup and progress behavior issues.
