@@ -94,6 +94,7 @@ What it does:
 
 - Creates a development virtual environment at `.venv-dev` (or `CAVEVIEWER_DEV_VENV` if set)
 - Installs dependencies from `requirements.txt`
+- Installs CaveViewer in editable mode from `src/`
 - Generates `run_caveviewer.sh`
 
 Run the app:
@@ -107,7 +108,7 @@ Alternatively:
 ```bash
 # If you activated the virtual environment, run the 'source' line below
 source .venv-dev/bin/activate
-.venv-dev/bin/python ./caveviewer.py
+.venv-dev/bin/python -m caveviewer
 ```
 
 ## Windows: Run From Source
@@ -118,7 +119,8 @@ Option A (recommended for technical users): manual venv flow.
 py -3 -m venv .venv-dev
 .\.venv-dev\Scripts\python -m pip install --upgrade pip
 .\.venv-dev\Scripts\python -m pip install -r requirements.txt
-.\.venv-dev\Scripts\python caveviewer.py
+.\.venv-dev\Scripts\python -m pip install --no-deps -e .
+.\.venv-dev\Scripts\python -m caveviewer
 ```
 
 Option B (guided setup script in this repo):
@@ -177,7 +179,7 @@ Windows PowerShell example:
 ```powershell
 $env:CAVEVIEWER_SAMPLE_MAPS_REPO = "MyOrg/MyMaps"
 $env:CAVEVIEWER_SAMPLE_DATA_TAG = "public-samples"
-.\.venv-dev\Scripts\python caveviewer.py
+.\.venv-dev\Scripts\python -m caveviewer
 ```
 
 Advanced direct API override:
@@ -281,7 +283,8 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | _(auto)_ | Linux publish helper only. Set to `arm64` or `x86_64` to choose which AppImage is written to the Linux update manifest. |
 
 Update manifests are signed with the release Ed25519 private key. The bundled
-public key lives at `security/release_signing_public_key.pem`. Startup update
+public key lives at
+`src/caveviewer/resources/release_signing_public_key.pem`. Startup update
 checks read the branch/channel manifest first; if it advertises a newer version,
 the app verifies the manifest signature before offering the download. Missing or
 invalid signatures are logged as errors and do not change the splash interface.
@@ -427,12 +430,14 @@ empty field. Cancel, Escape, and window close remain available and discard
 unapplied edits. Advisory worker-thread warnings do not lock the form.
 
 The Advanced Settings implementation is split by responsibility:
-`gui/advanced_settings.py` owns the typed `SettingSpec` schema, validation,
-persistence, and environment mapping; `gui/advanced_settings_form.py` owns
-focus/change/blur/apply state transitions; `gui/advanced_settings_dialog.py`
-only renders that state into Tk widgets; and `core/worker_config.py` resolves
-the effective streaming/import worker counts while honoring reserved logical
-CPUs. Only immutable, validated `AdvancedSettings` snapshots may cross into
+`src/caveviewer/gui/advanced_settings.py` owns the typed `SettingSpec` schema,
+validation, persistence, and environment mapping;
+`src/caveviewer/gui/advanced_settings_form.py` owns focus/change/blur/apply
+state transitions; `src/caveviewer/gui/advanced_settings_dialog.py` only
+renders that state into Tk widgets; and
+`src/caveviewer/core/worker_config.py` resolves the effective streaming/import
+worker counts while honoring reserved logical CPUs. Only immutable, validated
+`AdvancedSettings` snapshots may cross into
 persistence or the runtime environment. Invalid saved or environment values
 fall back independently to that field's valid default, so one stale value does
 not discard the rest of the configuration. Settings are saved through an
@@ -440,17 +445,20 @@ atomic temporary-file replacement; a write failure remains visible in the
 dialog and does not close it or alter the previous settings file.
 
 The splash screen, Advanced Settings, and Sample Maps dialogs share their Tk
-color and control tokens through `gui/tk_theme.py`. Map-folder validation lives
-in `gui/map_selection.py`, allowing both map-selection dialogs to reuse it
-without importing private splash-screen implementation details.
+color and control tokens through `src/caveviewer/gui/tk_theme.py`. Map-folder
+validation lives in `src/caveviewer/gui/map_selection.py`, allowing both
+map-selection dialogs to reuse it without importing private splash-screen
+implementation details.
 
 Runtime chunk streaming is also split by policy boundary:
-`core/hardware_memory.py` detects system/GPU memory and parses target fractions;
-`core/streaming_budget.py` contains pure chunk-size estimation and residency-cap
-calculation; `core/streaming_scheduler.py` owns the bounded ready backlog,
-spatial selection, and eviction policy; and `core/streaming_world.py` coordinates
-worker lifecycle and render-thread callbacks. The longitudinal cross-section
-map retains its independent single-worker profile pipeline and cache.
+`src/caveviewer/core/hardware_memory.py` detects system/GPU memory and parses
+target fractions; `src/caveviewer/core/streaming_budget.py` contains pure
+chunk-size estimation and residency-cap calculation;
+`src/caveviewer/core/streaming_scheduler.py` owns the bounded ready backlog,
+spatial selection, and eviction policy; and
+`src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
+render-thread callbacks. The longitudinal cross-section map retains its
+independent single-worker profile pipeline and cache.
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|

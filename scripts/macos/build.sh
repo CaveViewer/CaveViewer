@@ -34,10 +34,10 @@ if [ "$#" -gt 0 ]; then
 fi
 
 venv_dir="${CAVEVIEWER_MACOS_BUILD_VENV:-$repo_root/.venv-macos-build}"
-spec_file="$repo_root/CaveViewer.spec"
+spec_file="$repo_root/packaging/pyinstaller/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/macos/app"
 work_dir="$repo_root/build/pyinstaller"
-logo_png="$repo_root/gui/assets/app_icon_macos.png"
+logo_png="$repo_root/src/caveviewer/resources/images/app_icon_macos.png"
 icon_work_dir="$work_dir/iconset"
 iconset_dir="$icon_work_dir/CaveViewer.iconset"
 icon_icns="$icon_work_dir/CaveViewer.icns"

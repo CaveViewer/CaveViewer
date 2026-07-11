@@ -42,16 +42,12 @@ done
 # Location helpers (script can be run from anywhere)
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Detect project root: prefer the directory containing caveviewer.py.
-project_root=""
-if [ -f "$script_dir/caveviewer.py" ]; then
-  project_root="$script_dir"
-elif [ -f "$script_dir/../caveviewer.py" ]; then
-  project_root="$(cd "$script_dir/.." && pwd)"
-elif [ -f "$script_dir/../../caveviewer.py" ]; then
-  project_root="$(cd "$script_dir/../.." && pwd)"
-else
-  echo "Error: could not find caveviewer.py relative to install.sh."
+# The script has a fixed home under scripts/dev; validate the package root so
+# a copied/partial script cannot install from the wrong directory.
+project_root="$(cd "$script_dir/../.." && pwd)"
+if [ ! -f "$project_root/pyproject.toml" ] \
+  || [ ! -f "$project_root/src/caveviewer/__main__.py" ]; then
+  echo "Error: could not find the CaveViewer package relative to install.sh."
   echo "Run install.sh from the project root: ./scripts/dev/install.sh"
   exit 1
 fi
@@ -93,6 +89,7 @@ echo "Using development virtual environment: $venv_dir"
 echo "Installing Python packages from requirements.txt"
 "$venv_python" -m pip install --upgrade pip
 "$venv_python" -m pip install -r "$project_root/requirements.txt"
+"$venv_python" -m pip install --no-deps -e "$project_root"
 
 # Create a small launcher that always uses this project's virtualenv.
 launcher_path="$project_root/run_caveviewer.sh"
@@ -135,7 +132,7 @@ if [ -z "${CAVEVIEWER_VSYNC+x}" ] && is_virtual_machine; then
 fi
 
 cd "$repo_root"
-exec "$venv_dir/bin/python" "$repo_root/caveviewer.py" "$@"
+exec "$venv_dir/bin/python" -m caveviewer "$@"
 EOF
 chmod +x "$launcher_path"
 

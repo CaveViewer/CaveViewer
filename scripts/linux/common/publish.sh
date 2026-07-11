@@ -130,7 +130,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/github.sh"
-version_file="$repo_root/caveviewer_version.py"
+version_file="$repo_root/src/caveviewer/version.py"
 
 collect_linux_artifacts() {
   map_appimage_paths=()
@@ -292,7 +292,7 @@ echo "Manifest written locally: updates/linux/$linux_manifest_arch_dir/$manifest
 echo "Manifest signature written locally: updates/linux/$linux_manifest_arch_dir/$manifest_channel.json.sig"
 echo "Committing version bump and updated Linux $linux_manifest_arch_dir $manifest_channel manifest..."
 git -C "$repo_root" add \
-  caveviewer_version.py \
+  src/caveviewer/version.py \
   "updates/linux/$linux_manifest_arch_dir/$manifest_channel.json" \
   "updates/linux/$linux_manifest_arch_dir/$manifest_channel.json.sig"
 git -C "$repo_root" commit -m "Release $tag Linux $linux_manifest_arch_dir $manifest_channel"

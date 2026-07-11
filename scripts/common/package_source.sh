@@ -78,16 +78,18 @@ cd "$repo_root"
 
 # Copy only files/directories that exist
 for item in \
-  caveviewer.py \
-  caveviewer_version.py \
+  pyproject.toml \
   requirements.txt \
+  requirements-dev.txt \
   README.md \
+  README-developer.md \
   LICENSE \
   THIRD_PARTY_NOTICES.md \
   CHANGELOG.md \
-  core \
-  gui \
-  shaders \
+  CONTRIBUTING.md \
+  AGENTS.md \
+  src \
+  packaging \
   scripts \
   updates \
   docs; do

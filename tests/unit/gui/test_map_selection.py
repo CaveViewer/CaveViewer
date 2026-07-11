@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gui import map_selection
+from caveviewer.gui import map_selection
 
 
 def test_missing_map_folder_is_rejected(tmp_path):

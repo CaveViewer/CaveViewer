@@ -116,7 +116,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/github.sh"
-version_file="$repo_root/caveviewer_version.py"
+version_file="$repo_root/src/caveviewer/version.py"
 macos_packages_dir="$repo_root/dist/macos/packages"
 macos_metadata_dir="$repo_root/dist/macos/metadata"
 manifest_channel="stable"
@@ -238,7 +238,7 @@ echo "Signing macOS $manifest_channel update manifest: $update_manifest_path"
   --signature "$update_manifest_signature_path"
 
 echo "Committing version bump and updated $manifest_channel manifest..."
-git -C "$repo_root" add caveviewer_version.py "updates/macos/$manifest_channel.json" "updates/macos/$manifest_channel.json.sig"
+git -C "$repo_root" add src/caveviewer/version.py "updates/macos/$manifest_channel.json" "updates/macos/$manifest_channel.json.sig"
 git -C "$repo_root" commit -m "Release $tag macOS $manifest_channel"
 git -C "$repo_root" push
 

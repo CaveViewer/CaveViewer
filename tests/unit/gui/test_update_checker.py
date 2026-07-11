@@ -5,8 +5,8 @@ import urllib.error
 
 import pytest
 
-from gui import update_checker
-from gui.update_signature import SignatureVerificationError
+from caveviewer.gui import update_checker
+from caveviewer.gui.update_signature import SignatureVerificationError
 
 
 class FakePlatformAdapter:

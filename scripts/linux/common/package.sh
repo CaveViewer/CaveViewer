@@ -9,7 +9,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
-icon_src="$repo_root/gui/assets/app_icon_macos.png"
+icon_src="$repo_root/src/caveviewer/resources/images/app_icon_macos.png"
 
 print_usage() {
   cat <<'EOF'
@@ -46,11 +46,11 @@ if [ "$#" -gt 0 ]; then
 fi
 
 # Extract version info from Python file.
-APP_NAME=$(grep "^APP_NAME = " "$repo_root/caveviewer_version.py" | grep -oP '"\K[^"]+')
-APP_VERSION=$(grep "^APP_VERSION = " "$repo_root/caveviewer_version.py" | grep -oP '"\K[^"]+')
+APP_NAME=$(grep "^APP_NAME = " "$repo_root/src/caveviewer/version.py" | grep -oP '"\K[^"]+')
+APP_VERSION=$(grep "^APP_VERSION = " "$repo_root/src/caveviewer/version.py" | grep -oP '"\K[^"]+')
 
 if [[ -z "$APP_NAME" || -z "$APP_VERSION" ]]; then
-  echo "Error: Could not extract APP_NAME or APP_VERSION from caveviewer_version.py"
+  echo "Error: Could not extract APP_NAME or APP_VERSION from src/caveviewer/version.py"
   exit 1
 fi
 

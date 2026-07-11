@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gui import advanced_settings as settings
+from caveviewer.gui import advanced_settings as settings
 
 
 @pytest.mark.parametrize(
@@ -530,7 +530,7 @@ def test_apply_maps_every_setting_to_its_declared_environment_variable(
 
 
 def test_advanced_settings_dialog_uses_extracted_settings_logic():
-    from gui import advanced_settings_dialog, advanced_settings_form, splash_screen
+    from caveviewer.gui import advanced_settings_dialog, advanced_settings_form, splash_screen
 
     assert advanced_settings_dialog._NUMERIC_ENTRY_WIDTH == 12
     assert advanced_settings_dialog.ADVANCED_SETTING_FIELDS is settings.ADVANCED_SETTING_FIELDS
@@ -552,8 +552,8 @@ def test_advanced_settings_dialog_uses_extracted_settings_logic():
 def test_dialog_stays_open_and_reports_atomic_save_failure(
     valid_advanced_settings, monkeypatch
 ):
-    from gui import advanced_settings_dialog
-    from gui.advanced_settings_form import MessageKind
+    from caveviewer.gui import advanced_settings_dialog
+    from caveviewer.gui.advanced_settings_form import MessageKind
 
     snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
     original_settings = settings.load_advanced_settings()

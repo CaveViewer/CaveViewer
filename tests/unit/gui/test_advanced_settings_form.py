@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gui.advanced_settings_form import (
+from caveviewer.gui.advanced_settings_form import (
     AdvancedSettingsFormController,
     MessageKind,
 )

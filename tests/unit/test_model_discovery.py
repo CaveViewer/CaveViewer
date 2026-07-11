@@ -5,8 +5,8 @@ import os
 import numpy as np
 import pytest
 
-from caveviewer import find_input_files, find_model_file
-from core.glb_parser import parse_glb
+from caveviewer.app import find_input_files, find_model_file
+from caveviewer.core.glb_parser import parse_glb
 
 
 def test_find_model_rejects_missing_directory(tmp_path):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.streaming_budget import (
+from caveviewer.core.streaming_budget import (
     calculate_residency_budget,
     estimate_chunk_bytes,
 )

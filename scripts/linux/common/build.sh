@@ -66,7 +66,7 @@ if [ -n "$linux_arch_tag" ]; then
 fi
 # Keep Linux build dependencies isolated from the main developer venv.
 venv_dir="${CAVEVIEWER_LINUX_BUILD_VENV:-$linux_venv_default}"
-spec_file="$repo_root/CaveViewer.spec"
+spec_file="$repo_root/packaging/pyinstaller/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/linux/$linux_dist_arch/app"
 work_dir="$repo_root/build/pyinstaller/linux/$linux_dist_arch"
 
@@ -300,6 +300,7 @@ echo "Verifying Pillow installation..."
 }
 
 "$python_exe" -m pip install --upgrade "pyinstaller==6.21.0"
+"$python_exe" -m pip install --no-deps -e "$repo_root"
 
 cd "$repo_root"
 mkdir -p "$dist_app_dir" "$work_dir"
@@ -308,6 +309,7 @@ mkdir -p "$dist_app_dir" "$work_dir"
 # Don't use the macOS spec file; generate a Linux-specific onedir build
 CAVEVIEWER_APP_ICON="" \
 "$python_exe" -m PyInstaller --clean --noconfirm \
+  --paths "$repo_root/src" \
   --distpath "$dist_app_dir" \
   --workpath "$work_dir" \
   --specpath "$work_dir" \
@@ -316,12 +318,12 @@ CAVEVIEWER_APP_ICON="" \
   --hidden-import=PIL._tkinter_finder \
   --hidden-import=tkinter \
   --hidden-import=moderngl_window.context.pyglet \
-  --add-data "$repo_root/shaders:shaders" \
-  --add-data "$repo_root/gui/assets:gui/assets" \
-  --add-data "$repo_root/security:security" \
+  --add-data "$repo_root/src/caveviewer/resources/shaders:caveviewer/resources/shaders" \
+  --add-data "$repo_root/src/caveviewer/resources/images:caveviewer/resources/images" \
+  --add-data "$repo_root/src/caveviewer/resources/release_signing_public_key.pem:caveviewer/resources" \
   --add-data "$repo_root/LICENSE:." \
   --add-data "$repo_root/THIRD_PARTY_NOTICES.md:." \
-  "$repo_root/caveviewer.py"
+  "$repo_root/src/caveviewer/__main__.py"
 
 app_dir="$dist_app_dir/CaveViewer"
 if [ ! -d "$app_dir" ]; then

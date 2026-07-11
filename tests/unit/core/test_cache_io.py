@@ -6,7 +6,7 @@ import struct
 import numpy as np
 import pytest
 
-from core import chunker
+from caveviewer.core import chunker
 
 
 CELL = (1, -2, 3)

@@ -33,7 +33,12 @@ dirty source tree:
 ```bash
 COVERAGE_FILE=/tmp/caveviewer.coverage \
   .venv-dev/bin/python -m pytest -p no:cacheprovider \
-  --cov=caveviewer --cov=core --cov=gui --cov-branch
+  --cov=caveviewer.app \
+  --cov=caveviewer.core.chunker \
+  --cov=caveviewer.gui.advanced_settings \
+  --cov=caveviewer.gui.sample_maps \
+  --cov=caveviewer.gui.update_checker \
+  --cov-branch
 ```
 
 ## Test principles
@@ -56,11 +61,11 @@ Coverage thresholds are safety floors, not targets for writing low-value tests.
 The current CI workflow enforces:
 
 - 60% across its essential measured modules.
-- 85% for `gui/sample_maps.py`.
-- 60% for `core/chunker.py`.
-- 50% for `gui/update_checker.py`.
+- 85% for `src/caveviewer/gui/sample_maps.py`.
+- 60% for `src/caveviewer/core/chunker.py`.
+- 50% for `src/caveviewer/gui/update_checker.py`.
 
-When moving packages, update CI include/source paths without lowering these
+When moving modules, update CI include/source paths without lowering these
 thresholds. New concurrency, cleanup, cache-format, and security-sensitive code
 should receive direct tests even when the aggregate floor already passes.
 

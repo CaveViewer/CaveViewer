@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.streaming_scheduler import (
+from caveviewer.core.streaming_scheduler import (
     cell_in_cube_radius,
     cells_outside_cube_radius,
     select_evictions,

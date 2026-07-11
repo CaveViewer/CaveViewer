@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import caveviewer
-from core import chunker, obj_parser
+from caveviewer import app as caveviewer
+from caveviewer.core import chunker, obj_parser
 
 
 def _mesh_with_cells(cell_count: int = 2) -> obj_parser.RawMesh:

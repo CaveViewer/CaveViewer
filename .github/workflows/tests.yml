@@ -33,16 +33,18 @@ jobs:
             requirements-dev.txt
 
       - name: Install runtime and test dependencies
-        run: python -m pip install --upgrade pip -r requirements.txt -r requirements-dev.txt
+        run: |
+          python -m pip install --upgrade pip -r requirements.txt -r requirements-dev.txt
+          python -m pip install --no-deps -e .
 
       - name: Run essential tests with branch coverage
         run: >-
           python -m pytest
-          --cov=caveviewer
-          --cov=core.chunker
-          --cov=gui.advanced_settings
-          --cov=gui.sample_maps
-          --cov=gui.update_checker
+          --cov=caveviewer.app
+          --cov=caveviewer.core.chunker
+          --cov=caveviewer.gui.advanced_settings
+          --cov=caveviewer.gui.sample_maps
+          --cov=caveviewer.gui.update_checker
           --cov-branch
           --cov-fail-under=60
           --cov-report=term-missing
@@ -51,19 +53,19 @@ jobs:
       - name: Enforce sample-map coverage floor
         run: >-
           python -m coverage report
-          --include=gui/sample_maps.py
+          --include=src/caveviewer/gui/sample_maps.py
           --fail-under=85
 
       - name: Enforce chunker coverage floor
         run: >-
           python -m coverage report
-          --include=core/chunker.py
+          --include=src/caveviewer/core/chunker.py
           --fail-under=60
 
       - name: Enforce update-checker coverage floor
         run: >-
           python -m coverage report
-          --include=gui/update_checker.py
+          --include=src/caveviewer/gui/update_checker.py
           --fail-under=50
 
       - name: Upload coverage report

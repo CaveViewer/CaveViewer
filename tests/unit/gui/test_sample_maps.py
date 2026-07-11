@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from gui import sample_maps
+from caveviewer.gui import sample_maps
 
 
 class JsonResponse:

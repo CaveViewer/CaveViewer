@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core import hardware_memory
+from caveviewer.core import hardware_memory
 
 
 GIB = 1024 ** 3

@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from gui import sample_maps, update_checker
+from caveviewer.gui import sample_maps, update_checker
 
 
 class BytesResponse:

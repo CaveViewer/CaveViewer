@@ -16,6 +16,7 @@ htmlcov/
 .tmp/
 build/
 dist/*
+*.egg-info/
 .Trash*
 update_log.txt
 .cache/

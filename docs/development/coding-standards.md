@@ -7,9 +7,8 @@
 - Prefer the standard library and existing dependencies. A new runtime
   dependency requires a concrete benefit and updates to development and all
   platform packaging inputs.
-- Use absolute project imports. During the package migration, update imports
-  mechanically and avoid compatibility aliases unless an external API requires
-  them.
+- Use absolute `caveviewer.*` imports. Avoid compatibility aliases unless an
+  external API requires them.
 
 ## Design
 
@@ -19,8 +18,8 @@
   independent policies or lifecycle owners, not merely because it crossed an
   arbitrary line count.
 - Prefer explicit dataclasses or small typed values at component boundaries.
-- Preserve dependency direction: `gui` may depend on `core`; `core` may not
-  depend on `gui`.
+- Preserve dependency direction: `caveviewer.gui` may depend on
+  `caveviewer.core`; core may not depend on GUI.
 
 ## Naming and typing
 
@@ -39,16 +38,25 @@
 - Catch broad exceptions only at process, worker, cleanup, or best-effort
   boundaries where continuing is intentional. Log the failure or document why
   it is safe to suppress.
-- Use `core.logging_utils` rather than `print` for runtime diagnostics. Never
+- Use `caveviewer.core.logging_utils` rather than `print` for runtime diagnostics. Never
   log secrets or dump the complete environment.
 
 ## Filesystem and data safety
 
+- Any user action involving disk reads or writes may fail.
+- Fail gracefully by capturing exceptions and adding errors in the log file
+- Do not show exceptions to users in the UI.
+- Do not run out of space when creating new data (e.g., map import).
 - Write replaceable state to a temporary sibling and publish it atomically.
 - On cancellation and failure, remove partial output while preserving the last
   valid cache or user file.
 - Validate binary lengths, versions, and manifest types before trusting data.
 - Do not silently change cache or update formats; version and document them.
+
+## Memory management
+- Always clean up unused resources
+- Do not assume unlimited memory: users may run the app on older hardware
+- Prioritize CPU and GPU performance when possible
 
 ## Concurrency and UI
 

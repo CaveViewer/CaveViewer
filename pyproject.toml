@@ -1,6 +1,48 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CaveViewer"
+dynamic = ["version"]
+description = "A desktop viewer for large cave-survey 3D scans"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+dependencies = [
+    "moderngl==5.12.0",
+    "numpy==2.5.0",
+    "Pillow==12.2.0",
+    "moderngl-window==3.1.1",
+    "freetype-py==2.5.1",
+    "pyglm>=2.7.1",
+    "truststore>=0.10.0",
+    "cryptography>=43.0.0",
+    "imageio-ffmpeg>=0.5.1",
+    "pygltflib==1.16.5",
+]
+
+[project.scripts]
+caveviewer = "caveviewer.__main__:run"
+
+[tool.setuptools.dynamic]
+version = {attr = "caveviewer.version.APP_VERSION"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"caveviewer.resources" = [
+    "images/*.png",
+    "shaders/*.frag",
+    "shaders/*.vert",
+    "*.pem",
+]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = [
     "-ra",
     "--strict-config",
@@ -17,7 +59,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["caveviewer", "core", "gui"]
+source = ["caveviewer"]
 omit = [
     "tests/*",
     ".venv*/*",

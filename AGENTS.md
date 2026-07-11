@@ -7,9 +7,8 @@ inside a subdirectory supplements these rules for that area.
 
 - `docs/development/architecture.md` defines component boundaries and
   dependency direction.
-- `docs/development/repository-layout.md` distinguishes the current layout from
-  the approved target layout. Do not move files merely to make the current tree
-  resemble the target; structural migrations must be explicit, mechanical
+- `docs/development/repository-layout.md` defines the current package layout and
+  stable external paths. Structural migrations must be explicit, mechanical
   changes.
 - `docs/development/coding-standards.md` and
   `docs/development/testing.md` define implementation and verification rules.
@@ -30,12 +29,12 @@ inside a subdirectory supplements these rules for that area.
 
 ## Architecture constraints
 
-- `core` contains parsing, cache, streaming, and other non-UI policies. It must
-  not import `gui`.
-- `gui` owns Tk and OpenGL presentation and may depend on `core`. OpenGL and Tk
+- `caveviewer.core` contains parsing, cache, streaming, and other non-UI
+  policies. It must not import `caveviewer.gui`.
+- `caveviewer.gui` owns Tk and OpenGL presentation and may depend on core. OpenGL and Tk
   operations stay on their owning main thread; background workers may prepare
   CPU data only.
-- Platform-specific behavior belongs behind `gui/platform` adapters rather
+- Platform-specific behavior belongs behind `caveviewer.gui.platform` adapters rather
   than scattered `sys.platform` branches.
 - Failed imports must not publish partial caches. Preserve staging-directory
   cleanup and atomic publication semantics.
@@ -69,7 +68,7 @@ Check syntax without writing bytecode into the repository:
 
 ```bash
 PYTHONPYCACHEPREFIX=/tmp/caveviewer-pycache \
-  .venv-dev/bin/python -m compileall -q core gui caveviewer.py
+  .venv-dev/bin/python -m compileall -q src/caveviewer
 ```
 
 ## Definition of done

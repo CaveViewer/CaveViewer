@@ -23,7 +23,8 @@ the most convenient rule.
 ## Repository files
 
 - `/AGENTS.md`: canonical repository-wide agent entry point.
-- `/core/AGENTS.md`, `/gui/AGENTS.md`, `/tests/AGENTS.md`: scoped constraints.
+- `/src/caveviewer/core/AGENTS.md`, `/src/caveviewer/gui/AGENTS.md`, and
+  `/tests/AGENTS.md`: scoped constraints.
 - `/.github/copilot-instructions.md`: GitHub Copilot repository adapter.
 - `/.aiignore`: reduces accidental JetBrains AI Assistant access to generated
   output and likely secret files. It is defense in depth, not a security

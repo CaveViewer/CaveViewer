@@ -17,7 +17,7 @@
          against this project's requirements file, streaming output into
          the on-screen log box.
       3. Create Desktop Shortcut -- writes a .lnk on the Desktop that runs
-         `python caveviewer.py` with the working directory set correctly,
+         `python -m caveviewer` with the working directory set correctly,
          so double-clicking it from the Desktop launches CaveViewer.
 
     Once all three steps succeed, the window shows a success message
@@ -116,8 +116,7 @@ if (Test-Path (Join-Path $ScriptDir "requirements.txt")) {
 }
 
 $RequirementsFile = Join-Path $ProjectRoot "requirements.txt"
-$MainScript = Join-Path $ProjectRoot "caveviewer.py"
-$VersionFile = Join-Path $ProjectRoot "caveviewer_version.py"
+$VersionFile = Join-Path $ProjectRoot "src/caveviewer/version.py"
 $AppVersion = "dev"
 if (Test-Path $VersionFile) {
     try {
@@ -473,7 +472,7 @@ function Start-CaveViewerApp {
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $pythonGuiPath
-    $psi.Arguments = "`"$MainScript`""
+    $psi.Arguments = "-m caveviewer"
     $psi.WorkingDirectory = $ProjectRoot
     $psi.UseShellExecute = $false
     if ($IoWorkers -gt 0) {
@@ -598,7 +597,7 @@ function Install-Requirements {
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "python"
-    $psi.Arguments = "-m pip install -r `"$RequirementsFile`""
+    $psi.Arguments = "-m pip install -r `"$RequirementsFile`" -e `"$ProjectRoot`""
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.UseShellExecute = $false
@@ -701,11 +700,11 @@ function New-DesktopShortcut {
             # runtime-only environment variable without modifying system/user
             # env settings or showing a console window.
             $shortcut.TargetPath = "powershell.exe"
-            $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"`$env:CAVEVIEWER_IO_WORKERS='$IoWorkers'; Start-Process -WindowStyle Hidden -FilePath '$pythonGuiPath' -ArgumentList '`"$MainScript`"' -WorkingDirectory '$ProjectRoot'`""
+            $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"`$env:CAVEVIEWER_IO_WORKERS='$IoWorkers'; Start-Process -WindowStyle Hidden -FilePath '$pythonGuiPath' -ArgumentList '-m','caveviewer' -WorkingDirectory '$ProjectRoot'`""
             Write-Log "Shortcut configured with CAVEVIEWER_IO_WORKERS=$IoWorkers."
         } else {
             $shortcut.TargetPath = $pythonGuiPath
-            $shortcut.Arguments = "`"$MainScript`""
+            $shortcut.Arguments = "-m caveviewer"
         }
 
         $shortcut.WorkingDirectory = $ProjectRoot

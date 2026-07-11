@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gui import sample_maps_dialog
+from caveviewer.gui import sample_maps_dialog
 
 
 class FakeOwner:

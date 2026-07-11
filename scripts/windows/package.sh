@@ -58,7 +58,7 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-version_file="$repo_root/caveviewer_version.py"
+version_file="$repo_root/src/caveviewer/version.py"
 packages_dir="$repo_root/dist/windows/packages"
 metadata_dir="$repo_root/dist/windows/metadata"
 app_root="$repo_root/dist/windows/app"
@@ -106,16 +106,14 @@ repo_root = pathlib.Path(sys.argv[1])
 staging_root = pathlib.Path(sys.argv[2])
 
 pathspecs = [
-		"caveviewer.py",
-		"caveviewer_version.py",
+		"pyproject.toml",
 		"requirements.txt",
 		"README.md",
+		"README-developer.md",
 		"LICENSE",
 		"THIRD_PARTY_NOTICES.md",
-		"CaveViewer.spec",
-		"core",
-		"gui",
-		"shaders",
+		"src",
+		"packaging",
 		"updates",
 		"scripts/windows",
 ]
@@ -147,10 +145,10 @@ for relative_path in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
 # source bundle does not silently omit a helper module or fall back to older
 # tracked artwork.
 required_runtime_paths = [
-		"gui/preferences.py",
-		"gui/assets/app_icon_macos.png",
-		"gui/assets/app_icon_windows.png",
-		"gui/assets/app_mark_transparent.png",
+		"src/caveviewer/gui/preferences.py",
+		"src/caveviewer/resources/images/app_icon_macos.png",
+		"src/caveviewer/resources/images/app_icon_windows.png",
+		"src/caveviewer/resources/images/app_mark_transparent.png",
 		"scripts/windows/icon/caveviewer.ico",
 ]
 for relative_path in required_runtime_paths:
@@ -199,15 +197,16 @@ important_files = [
 	"README.md",
 	"LICENSE",
 	"THIRD_PARTY_NOTICES.md",
-	"caveviewer.py",
-	"caveviewer_version.py",
+	"pyproject.toml",
+	"src/caveviewer/__main__.py",
+	"src/caveviewer/version.py",
 	"requirements.txt",
 	"scripts/windows/launch.bat",
 	"scripts/windows/setup.ps1",
 	"scripts/windows/icon/caveviewer.ico",
-	"gui/assets/app_icon_macos.png",
-	"gui/assets/app_icon_windows.png",
-	"gui/assets/app_mark_transparent.png",
+	"src/caveviewer/resources/images/app_icon_macos.png",
+	"src/caveviewer/resources/images/app_icon_windows.png",
+	"src/caveviewer/resources/images/app_mark_transparent.png",
 	"updates/windows/stable.json",
 ]
 

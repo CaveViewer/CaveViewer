@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.worker_config import resolve_worker_count
+from caveviewer.core.worker_config import resolve_worker_count
 
 
 @pytest.mark.parametrize(
@@ -46,7 +46,7 @@ def test_runtime_values_are_bounded_even_outside_advanced_settings():
 
 
 def test_unknown_cpu_count_keeps_bounded_requested_worker_count(monkeypatch):
-    monkeypatch.setattr("core.worker_config.os.cpu_count", lambda: None)
+    monkeypatch.setattr("caveviewer.core.worker_config.os.cpu_count", lambda: None)
 
     assert resolve_worker_count(
         "7",

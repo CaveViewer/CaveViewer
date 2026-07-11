@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import numpy as np
 
-from gui.cross_section_map import CrossSectionMap
+from caveviewer.gui.cross_section_map import CrossSectionMap
 
 
 def test_prime_uploads_initial_profile_before_chunk_streaming():

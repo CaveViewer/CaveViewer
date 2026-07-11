@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from core import streaming_scheduler, streaming_world
+from caveviewer.core import streaming_scheduler, streaming_world
 
 
 def _chunk(cell):

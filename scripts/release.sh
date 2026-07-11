@@ -10,7 +10,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 source "$script_dir/common/version.sh"
 source "$script_dir/common/artifacts.sh"
-version_file="$repo_root/caveviewer_version.py"
+version_file="$repo_root/src/caveviewer/version.py"
 
 print_help() {
   cat <<'EOF'

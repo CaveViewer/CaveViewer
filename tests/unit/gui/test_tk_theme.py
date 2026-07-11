@@ -4,8 +4,8 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from gui import advanced_settings_dialog, sample_maps_dialog, splash_screen
-from gui.tk_theme import DARK_THEME
+from caveviewer.gui import advanced_settings_dialog, sample_maps_dialog, splash_screen
+from caveviewer.gui.tk_theme import DARK_THEME
 
 
 def test_dialogs_share_the_same_theme_tokens():

@@ -112,7 +112,7 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/github.sh"
 
-version_file="$repo_root/caveviewer_version.py"
+version_file="$repo_root/src/caveviewer/version.py"
 windows_packages_dir="$repo_root/dist/windows/packages"
 windows_metadata_dir="$repo_root/dist/windows/metadata"
 manifest_channel="stable"
@@ -211,7 +211,7 @@ echo "Windows zip asset URL: $zip_asset_url"
   --channel "$manifest_channel"
 
 echo "Committing version bump and updated $manifest_channel manifest..."
-git -C "$repo_root" add caveviewer_version.py "updates/windows/$manifest_channel.json"
+git -C "$repo_root" add src/caveviewer/version.py "updates/windows/$manifest_channel.json"
 git -C "$repo_root" commit -m "Release $tag Windows $manifest_channel"
 git -C "$repo_root" push
 
