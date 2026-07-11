@@ -1,10 +1,10 @@
 {
-  "latest_version": "1.0.62",
-  "download_url": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.62/CaveViewer-1.0.62-x86_64.AppImage",
-  "download_size_bytes": 78141944,
-  "download_url_linux_appimage": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.62/CaveViewer-1.0.62-x86_64.AppImage",
-  "download_size_bytes_linux_appimage": 78141944,
-  "release_notes": "Linux x86_64 release",
-  "sha256": "26e22ec2c450e168cef007a380b2b0c5d15458913986f489959360ca8d50eb3f",
-  "sha256_linux_appimage": "26e22ec2c450e168cef007a380b2b0c5d15458913986f489959360ca8d50eb3f"
+  "latest_version": "1.0.63",
+  "download_url": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.63/CaveViewer-1.0.63-x86_64.AppImage",
+  "download_size_bytes": 78100984,
+  "download_url_linux_appimage": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.63/CaveViewer-1.0.63-x86_64.AppImage",
+  "download_size_bytes_linux_appimage": 78100984,
+  "release_notes": "Major rendering performance improvements, including cached control-panel geometry and smoother frame rates.",
+  "sha256": "2e529df9d9e98f7bb317bc3f83d1e164572ce9d9a94430b4c86407ff229ef4d7",
+  "sha256_linux_appimage": "2e529df9d9e98f7bb317bc3f83d1e164572ce9d9a94430b4c86407ff229ef4d7"
 }
