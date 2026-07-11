@@ -1,0 +1,101 @@
+# .github/workflows/macos-x86_64-release.yml
+name: macOS x86_64 Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. 1.0.63"
+        required: true
+      release_notes:
+        description: "Release notes"
+        required: false
+        default: "macOS x86_64 release"
+      pre_release:
+        description: "Publish as a GitHub prerelease and update prerelease.json"
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: "Publish the macOS x86_64 DMG to the GitHub release"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: caveviewer-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  essential-tests:
+    uses: ./.github/workflows/tests.yml
+
+  build-macos-x86_64:
+    needs: essential-tests
+    runs-on: macos-15-intel
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure release signing key
+        if: ${{ inputs.publish }}
+        env:
+          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
+            echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required when publish is true."
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
+          chmod 600 "$key_path"
+          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
+
+      - name: Build macOS x86_64 DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+          PRE_RELEASE: ${{ inputs.pre_release }}
+        run: |
+          release_args=(
+            --target=macos-x86_64
+            --version="$RELEASE_VERSION"
+            --notes="$RELEASE_NOTES"
+            --skip-tests
+          )
+
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            release_args+=(--action=release)
+            if [ "$PRE_RELEASE" = "true" ]; then
+              release_args+=(--pre-release)
+            fi
+          else
+            release_args+=(--action=package)
+          fi
+
+          ./scripts/release.sh "${release_args[@]}"
+
+      - name: Upload macOS x86_64 DMG for testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: CaveViewer-${{ inputs.version }}-macos-x86_64
+          path: dist/macos/packages/CaveViewer-${{ inputs.version }}-macos-x86_64.dmg
+          if-no-files-found: error

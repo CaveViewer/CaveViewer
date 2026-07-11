@@ -85,9 +85,9 @@ test suite before invoking `release.sh` for its platform. Because the platform
 job declares `needs: essential-tests`, it passes `--skip-tests` and does not run
 the suite a second time.
 
-The macOS workflow exposes an architecture choice. ARM64 runs on `macos-15`;
-Intel runs on `macos-15-intel`. Artifacts are named
-`CaveViewer-<version>-macos-<architecture>.dmg`.
+macOS has separate ARM64 and x86_64 workflows, matching the dispatcher target
+names. ARM64 runs on `macos-15`; Intel runs on `macos-15-intel`. Artifacts are
+named `CaveViewer-<version>-macos-<architecture>.dmg`.
 
 When dispatching a workflow:
 

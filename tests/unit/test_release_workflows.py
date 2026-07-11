@@ -10,30 +10,36 @@ WORKFLOWS_DIR = REPOSITORY_ROOT / ".github" / "workflows"
 RELEASE_SCRIPT = REPOSITORY_ROOT / "scripts" / "release.sh"
 
 
-def test_macos_release_workflow_uses_existing_release_contract():
-    workflow = (WORKFLOWS_DIR / "macos-release.yml").read_text(encoding="utf-8")
+def test_macos_release_workflows_use_architecture_specific_contracts():
+    workflow_contracts = (
+        ("macos-arm64-release.yml", "macos-arm64", "macos-15"),
+        ("macos-x86_64-release.yml", "macos-x86_64", "macos-15-intel"),
+    )
 
-    assert "workflow_dispatch:" in workflow
-    assert "architecture:" in workflow
-    assert "macos-15-intel" in workflow
-    assert "'macos-15'" in workflow
-    assert "uses: ./.github/workflows/tests.yml" in workflow
-    assert "needs: essential-tests" in workflow
-    assert '--target="macos-$MACOS_ARCH"' in workflow
-    assert "--macos-arch" not in workflow
-    assert "release_args+=(--pre-release)" in workflow
-    assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
-    assert (
-        "dist/macos/packages/CaveViewer-${{ inputs.version }}-macos-"
-        "${{ inputs.architecture }}.dmg"
-    ) in workflow
+    assert not (WORKFLOWS_DIR / "macos-release.yml").exists()
+    for workflow_name, target, runner in workflow_contracts:
+        workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+
+        assert "workflow_dispatch:" in workflow
+        assert "architecture:" not in workflow
+        assert f"runs-on: {runner}" in workflow
+        assert "uses: ./.github/workflows/tests.yml" in workflow
+        assert "needs: essential-tests" in workflow
+        assert f"--target={target}" in workflow
+        assert "--macos-arch" not in workflow
+        assert "release_args+=(--pre-release)" in workflow
+        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+        assert (
+            f"dist/macos/packages/CaveViewer-${{{{ inputs.version }}}}-{target}.dmg"
+        ) in workflow
 
 
 def test_all_release_workflows_expose_publish_and_prerelease_inputs():
     workflow_names = (
         "linux-arm64-release.yml",
         "linux-x86_64-release.yml",
-        "macos-release.yml",
+        "macos-arm64-release.yml",
+        "macos-x86_64-release.yml",
         "windows-release.yml",
     )
 

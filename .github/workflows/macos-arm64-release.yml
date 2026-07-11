@@ -1,5 +1,5 @@
-# .github/workflows/macos-release.yml
-name: macOS Release
+# .github/workflows/macos-arm64-release.yml
+name: macOS ARM64 Release
 
 on:
   workflow_dispatch:
@@ -10,22 +10,14 @@ on:
       release_notes:
         description: "Release notes"
         required: false
-        default: "macOS release"
-      architecture:
-        description: "macOS process architecture"
-        required: true
-        type: choice
-        options:
-          - arm64
-          - x86_64
-        default: arm64
+        default: "macOS ARM64 release"
       pre_release:
         description: "Publish as a GitHub prerelease and update prerelease.json"
         required: false
         type: boolean
         default: false
       publish:
-        description: "Publish the macOS DMG to the GitHub release"
+        description: "Publish the macOS ARM64 DMG to the GitHub release"
         required: false
         type: boolean
         default: false
@@ -41,9 +33,9 @@ jobs:
   essential-tests:
     uses: ./.github/workflows/tests.yml
 
-  build-macos:
+  build-macos-arm64:
     needs: essential-tests
-    runs-on: ${{ inputs.architecture == 'x86_64' && 'macos-15-intel' || 'macos-15' }}
+    runs-on: macos-15
 
     steps:
       - name: Check out repository
@@ -75,17 +67,16 @@ jobs:
           chmod 600 "$key_path"
           echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
 
-      - name: Build macOS DMG
+      - name: Build macOS ARM64 DMG
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
           PUBLISH_RELEASE: ${{ inputs.publish }}
           PRE_RELEASE: ${{ inputs.pre_release }}
-          MACOS_ARCH: ${{ inputs.architecture }}
         run: |
           release_args=(
-            --target="macos-$MACOS_ARCH"
+            --target=macos-arm64
             --version="$RELEASE_VERSION"
             --notes="$RELEASE_NOTES"
             --skip-tests
@@ -102,9 +93,9 @@ jobs:
 
           ./scripts/release.sh "${release_args[@]}"
 
-      - name: Upload macOS DMG for testing
+      - name: Upload macOS ARM64 DMG for testing
         uses: actions/upload-artifact@v4
         with:
-          name: CaveViewer-${{ inputs.version }}-macos-${{ inputs.architecture }}
-          path: dist/macos/packages/CaveViewer-${{ inputs.version }}-macos-${{ inputs.architecture }}.dmg
+          name: CaveViewer-${{ inputs.version }}-macos-arm64
+          path: dist/macos/packages/CaveViewer-${{ inputs.version }}-macos-arm64.dmg
           if-no-files-found: error
