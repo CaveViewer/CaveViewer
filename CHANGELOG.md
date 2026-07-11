@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file.
 - Windows setup automation improvements and packaging/release support updates.
 
 ### Changed
+- Removed the longitudinal cross-section map and its auxiliary import cache to reduce map-open and import latency.
 - Advanced Settings now shows numeric defaults initially and muted in-field range placeholders when values are cleared.
 - Splash/startup UI layout and sizing refined across macOS, Windows, and Linux, including DPI scaling updates.
 - Startup and viewer visual consistency improved, including progress bar behavior and control panel styling.

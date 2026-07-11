@@ -1,3 +1,5 @@
+"""Check chunk-memory estimates and RAM/GPU residency budget calculations."""
+
 from __future__ import annotations
 
 import pytest

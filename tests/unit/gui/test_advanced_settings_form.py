@@ -1,3 +1,5 @@
+"""Exercise form focus, validation, locking, normalization, and apply behavior."""
+
 from __future__ import annotations
 
 from caveviewer.gui.advanced_settings_form import (

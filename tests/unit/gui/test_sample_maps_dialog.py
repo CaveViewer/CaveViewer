@@ -1,3 +1,5 @@
+"""Exercise sample-map dialog focus, action-state, and cancellation workflows."""
+
 from __future__ import annotations
 
 from caveviewer.gui import sample_maps_dialog

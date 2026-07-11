@@ -9,6 +9,7 @@
   platform packaging inputs.
 - Use absolute `caveviewer.*` imports. Avoid compatibility aliases unless an
   external API requires them.
+- Start every .py file with a well-written doc string
 
 ## Design
 
@@ -54,9 +55,10 @@
 - Do not silently change cache or update formats; version and document them.
 
 ## Memory management
-- Always clean up unused resources
-- Do not assume unlimited memory: users may run the app on older hardware
-- Prioritize CPU and GPU performance when possible
+
+- Always clean up unused resources.
+- Do not assume unlimited memory: users may run the app on older hardware.
+- Choose smooth rendering and faster frames/second rate over faster map imports.
 
 ## Concurrency and UI
 

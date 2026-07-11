@@ -12,11 +12,12 @@ set -euo pipefail
 #   package.sh --base-download-url="https://github.com/owner/CaveViewerPlus/releases/download/v1.2.3"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/architecture.sh"
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  package.sh [--base-download-url=<url>]
+  package.sh [--arch=<arm64|x86_64>] [--base-download-url=<url>]
   package.sh --help
 
 Builds the macOS app bundle and packages it as a DMG.
@@ -24,8 +25,22 @@ EOF
 }
 
 base_download_url=""
+macos_arch=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --arch=*)
+      macos_arch="${1#--arch=}"
+      shift
+      ;;
+    --arch)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --arch requires a value."
+        exit 1
+      fi
+      macos_arch="$1"
+      shift
+      ;;
     --base-download-url=*)
       base_download_url="${1#--base-download-url=}"
       shift
@@ -57,5 +72,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+macos_arch="$(cv_resolve_macos_arch "$macos_arch")"
+cv_require_macos_host_arch "$macos_arch"
+
 "$script_dir/build.sh"
-"$script_dir/package_macos_dmg.sh" --base-download-url "$base_download_url"
+"$script_dir/package_macos_dmg.sh" \
+  --arch "$macos_arch" \
+  --base-download-url "$base_download_url"

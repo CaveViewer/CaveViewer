@@ -34,7 +34,6 @@ from caveviewer.core.logging_utils import get_logger
 from caveviewer.core.streaming_world import StreamingWorld, StreamingConfig
 from caveviewer.core.texture_manager import TextureManager
 from caveviewer.gui.camera import FlyCamera
-from caveviewer.gui.cross_section_map import CrossSectionMap
 from caveviewer.gui.minimap import Minimap
 from caveviewer.gui.render_mode_buttons import RenderModeButtons
 from caveviewer.gui.controls_overlay import ControlsOverlay
@@ -398,8 +397,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
-        # Map-specific state (world, manifest, camera, cross-section map,
-        # minimap, texture manager, chunk GPU objects) lives in its own method, separate
+        # Map-specific state (world, manifest, camera, minimap, texture manager,
+        # chunk GPU objects) lives in its own method, separate
         # from the one-time-per-window setup above, so the exact same
         # logic can run again later when switching to a different map via
         # the OPEN button -- see load_new_map() / _teardown_current_map().
@@ -408,7 +407,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.manifest = None
         self.world = None
         self.camera = None
-        self.cross_section_map = None
         self.minimap = None
         self.texture_manager = None
         self._chunk_gpu_objects: dict[tuple, list] = {}
@@ -559,15 +557,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         # from the manifest's chunk bounding boxes -- no extra rendering
         # pass or GPU cost beyond this tiny 2D overlay.
         self.minimap = Minimap(self.ctx, self.manifest)
-        self.cross_section_map = CrossSectionMap(self.ctx, self.cache_dir, self.manifest)
-        # Build the first longitudinal view before the first world.update()
-        # queues any streaming work. This keeps profile availability
-        # independent of the configured number of chunk uploads per frame.
-        self.cross_section_map.prime(
-            self.camera.position,
-            self.camera.forward(),
-            self.wnd.size,
-        )
 
         # One-time texture diagnostic: print material/texture summary to
         # console so atlas feasibility can be judged without guessing.
@@ -1230,19 +1219,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         if hasattr(self, "texture_manager") and self.texture_manager is not None:
             self.texture_manager.shutdown()
 
-        for overlay in (self.cross_section_map, self.minimap):
-            if overlay is None:
-                continue
-            if hasattr(overlay, "release"):
-                try:
-                    overlay.release()
-                except Exception:
-                    pass
+        if self.minimap is not None:
+            try:
+                self.minimap.release()
+            except Exception:
+                pass
 
         self._has_map_loaded = False
         self.world = None
         self.camera = None
-        self.cross_section_map = None
         self.minimap = None
         self.texture_manager = None
 
@@ -1288,7 +1273,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             "controls_overlay",
             "color_picker",
             "import_progress_panel",
-            "cross_section_map",
             "minimap",
         )
         for name in components:
@@ -1881,17 +1865,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
-    def _render_navigation_maps(self, window_size: tuple[int, int]) -> None:
-        """
-        Draw the left-side navigation maps as one HUD group.
-
-        This method is intentionally called only from the normal HUD branch
-        in render(), never from the recording branch. That keeps the new
-        cross-section map hidden in recordings exactly like the minimap, and
-        makes both maps reappear together as soon as recording stops.
-        """
-        if self.cross_section_map is not None:
-            self.cross_section_map.render(window_size, self.camera.position, self.camera.forward())
+    def _render_minimap(self, window_size: tuple[int, int]) -> None:
+        """Draw the minimap in the normal HUD, keeping it out of recordings."""
         if self.minimap is not None:
             self.minimap.render(window_size, self.camera.position, self.camera.forward(),
                                 self._bookmarks)
@@ -2295,7 +2270,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.render_distance_stepper.render(self.wnd.size, render_distance_anchor_x, render_distance_anchor_y,
                                                 label_above=True)
 
-            self._render_navigation_maps(self.wnd.size)
+            self._render_minimap(self.wnd.size)
 
             self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
                               help_active=self.controls_overlay.is_manual_mode,

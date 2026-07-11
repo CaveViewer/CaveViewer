@@ -11,6 +11,14 @@ on:
         description: "Release notes"
         required: false
         default: "macOS release"
+      architecture:
+        description: "macOS process architecture"
+        required: true
+        type: choice
+        options:
+          - arm64
+          - x86_64
+        default: arm64
       pre_release:
         description: "Publish as a GitHub prerelease and update prerelease.json"
         required: false
@@ -35,7 +43,7 @@ jobs:
 
   build-macos:
     needs: essential-tests
-    runs-on: macos-15
+    runs-on: ${{ inputs.architecture == 'x86_64' && 'macos-15-intel' || 'macos-15' }}
 
     steps:
       - name: Check out repository
@@ -74,11 +82,14 @@ jobs:
           RELEASE_NOTES: ${{ inputs.release_notes }}
           PUBLISH_RELEASE: ${{ inputs.publish }}
           PRE_RELEASE: ${{ inputs.pre_release }}
+          MACOS_ARCH: ${{ inputs.architecture }}
         run: |
           release_args=(
             --target=macos-15
+            --macos-arch="$MACOS_ARCH"
             --version="$RELEASE_VERSION"
             --notes="$RELEASE_NOTES"
+            --skip-tests
           )
 
           if [ "$PUBLISH_RELEASE" = "true" ]; then
@@ -95,6 +106,6 @@ jobs:
       - name: Upload macOS DMG for testing
         uses: actions/upload-artifact@v4
         with:
-          name: CaveViewer-${{ inputs.version }}-macos
-          path: dist/macos/packages/CaveViewer-${{ inputs.version }}.dmg
+          name: CaveViewer-${{ inputs.version }}-macos-${{ inputs.architecture }}
+          path: dist/macos/packages/CaveViewer-${{ inputs.version }}-macos-${{ inputs.architecture }}.dmg
           if-no-files-found: error

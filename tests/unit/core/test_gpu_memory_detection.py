@@ -1,3 +1,5 @@
+"""Cover GPU-memory detection, adapter selection, and configuration fallbacks."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

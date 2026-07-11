@@ -1,6 +1,9 @@
+"""macOS UI integration and architecture-specific update behavior."""
+
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -147,6 +150,16 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def default_update_repo(self) -> str:
         return "KernalPanic/CaveViewer"
 
+    def default_update_manifest_url(self, repo: str, branch: str) -> str:
+        architecture = _macos_process_architecture()
+        if architecture is None:
+            # An explicit 404 is safer than offering an incompatible binary.
+            architecture = "unsupported"
+        return (
+            f"https://raw.githubusercontent.com/{repo}/{branch}/"
+            f"updates/macos/{architecture}/stable.json"
+        )
+
     def update_check_user_agent(self) -> str:
         return "CaveViewer-UpdateChecker"
 
@@ -213,3 +226,17 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             "/System/Library/Fonts/Supplemental/Arial.ttf",
             "/Library/Fonts/Arial.ttf",
         ]
+
+
+def _macos_process_architecture(machine: str | None = None) -> str | None:
+    """Return the canonical architecture of this macOS process.
+
+    Process architecture is intentional: a CaveViewer process running through
+    Rosetta should receive the x86_64 build, even on Apple Silicon hardware.
+    """
+    detected = (machine if machine is not None else platform.machine()).strip().lower()
+    if detected in {"arm64", "aarch64"}:
+        return "arm64"
+    if detected in {"x86_64", "amd64", "x64"}:
+        return "x86_64"
+    return None

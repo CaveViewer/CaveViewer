@@ -1,3 +1,5 @@
+"""Cover advanced-settings schema, validation, persistence, and environment use."""
+
 from __future__ import annotations
 
 import json

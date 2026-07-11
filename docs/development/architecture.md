@@ -25,8 +25,11 @@ private staging directory. Only a complete cache is published to `_cache`;
 failures must remove staging output and preserve any previously valid cache.
 
 The cache manifest records chunk metadata, spatial bounds, material references,
-and cross-section cache information. A cache-format change must either remain
+and the minimap occupancy footprint. A cache-format change must either remain
 backward compatible or increment its version and force a deliberate rebuild.
+The render-chunk binary format remains at version 1: unknown manifest fields and
+extra cache subdirectories written by older releases are ignored, so those
+caches remain readable while new imports write only the active cache artifacts.
 
 ## Runtime streaming
 
@@ -40,10 +43,6 @@ render-thread callbacks. Supporting modules own focused policy:
 Workers load and prepare CPU payloads. The viewer performs OpenGL uploads and
 unloads on the render thread. Internal residency state and external GPU state
 must remain transactionally consistent when callbacks fail.
-
-The longitudinal cross-section overlay has an independent worker, request
-coalescing, and profile cache. It reads the positions-only cross-section cache
-when available and falls back to full render chunks for older caches.
 
 ## UI and platform boundaries
 

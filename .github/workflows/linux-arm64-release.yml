@@ -78,6 +78,7 @@ jobs:
             --target=linux-arm64
             --version="$RELEASE_VERSION"
             --notes="$RELEASE_NOTES"
+            --skip-tests
           )
 
           if [ "$PUBLISH_RELEASE" = "true" ]; then

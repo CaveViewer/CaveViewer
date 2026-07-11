@@ -68,7 +68,8 @@ separate architectural change and requires its own tests and review.
 - Keep `docs/index.html` and `docs/images/` at the documentation root so the
   existing GitHub Pages publishing layout remains valid.
 - Keep `updates/<platform>/...` paths stable because installed clients resolve
-  those public URLs.
+  those public URLs. macOS uses `updates/macos/{arm64,x86_64}/`; retain the
+  top-level macOS manifests as legacy ARM64 compatibility aliases.
 - Keep `scripts/` organized by `dev`, `common`, and platform; it already has
   documented standards.
 - Keep root `README.md`, `CHANGELOG.md`, `LICENSE`, and third-party notices.

@@ -148,8 +148,18 @@ On Windows, use `.venv-dev\Scripts\python` in place of `.venv-dev/bin/python`.
 The suite isolates the home/preferences directory, blocks uncontrolled network
 connections, and uses temporary directories for all generated files. The same
 essential suite and branch-coverage gate run automatically for pull requests
-and before every GitHub release workflow. Tests and development dependencies
-are not included in release archives.
+and before every GitHub release workflow. Direct `scripts/release.sh` runs also
+execute the complete pytest suite before changing the application version or
+creating artifacts. It uses `.venv-dev` when available, then falls back to
+`python3`/`python`; set `CAVEVIEWER_TEST_PYTHON=/path/to/python` to select
+another prepared interpreter. The interpreter must have `requirements.txt` and
+`requirements-dev.txt` installed.
+
+GitHub platform jobs pass `--skip-tests` because their required
+`essential-tests` job has already tested the same commit with coverage. Do not
+use `--skip-tests` for an ordinary local release unless an equivalent external
+gate has completed successfully. Tests and development dependencies are not
+included in release archives.
 
 ## Sample Map Source Overrides
 
@@ -280,6 +290,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
 | `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to always show the "Download Update" prompt regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
+| `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | macOS release-script override. Use `arm64` or `x86_64`; normal app update checks detect the running process architecture automatically. |
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | _(auto)_ | Linux publish helper only. Set to `arm64` or `x86_64` to choose which AppImage is written to the Linux update manifest. |
 
 Update manifests are signed with the release Ed25519 private key. The bundled
@@ -289,9 +300,12 @@ checks read the branch/channel manifest first; if it advertises a newer version,
 the app verifies the manifest signature before offering the download. Missing or
 invalid signatures are logged as errors and do not change the splash interface.
 
-Default update checks read the committed main-branch
-`updates/<platform>/stable.json` manifests, not GitHub's latest-release or
-prerelease metadata. Stable publish runs update and sign `stable.json`.
+Default update checks read committed, architecture-specific main-branch
+manifests, not GitHub's latest-release or prerelease metadata. macOS uses
+`updates/macos/<arm64|x86_64>/stable.json`; Linux follows the same architecture
+split. macOS selects the running process architecture, so a Rosetta-launched
+x86_64 build continues on the Intel update channel. Stable publish runs update
+and sign `stable.json`.
 Prerelease publish runs mark the GitHub release as a prerelease and update the
 separate `prerelease.json` channel, leaving `stable.json` unchanged. For
 debugging, explicit environment variables can point a source run or packaged
@@ -299,7 +313,7 @@ app launched from Terminal at another branch or manifest URL.
 
 Prerelease branch testing can use the derived prerelease manifest URL after the
 selected branch contains the matching platform manifest and signature. For
-macOS, confirm the branch contains both files first:
+macOS, confirm the branch contains both files for the process architecture:
 
 ```bash
 git ls-tree -r release/<version> updates/macos
@@ -308,8 +322,8 @@ git ls-tree -r release/<version> updates/macos
 The output must include:
 
 ```text
-updates/macos/prerelease.json
-updates/macos/prerelease.json.sig
+updates/macos/<arm64|x86_64>/prerelease.json
+updates/macos/<arm64|x86_64>/prerelease.json.sig
 ```
 
 Then test from a source checkout with `--update-branch` and `--force-update`:
@@ -350,18 +364,41 @@ updates/linux/x86_64/stable.json
 updates/linux/x86_64/prerelease.json
 ```
 
+macOS manifests are also architecture-specific:
+
+```text
+updates/macos/arm64/stable.json
+updates/macos/arm64/prerelease.json
+updates/macos/x86_64/stable.json
+updates/macos/x86_64/prerelease.json
+```
+
+The `x86_64` files appear after the corresponding Intel channel is first
+published. Top-level `updates/macos/stable.json` and `prerelease.json` files are
+legacy ARM64 aliases. Keep each alias and signature byte-for-byte identical to
+its `arm64/` counterpart so older installations continue receiving updates.
+
+macOS DMG assets include their architecture to prevent uploads from replacing
+one another on a shared GitHub release:
+
+```text
+CaveViewer-<version>-macos-arm64.dmg
+CaveViewer-<version>-macos-x86_64.dmg
+```
+
 Sign a manifest:
 
 ```bash
 python3 scripts/sign_update_manifest.py \
-  updates/macos/stable.json \
+  updates/macos/arm64/stable.json \
   --private-key /path/to/release_signing_private_key.pem
 ```
 
-This writes `updates/macos/stable.json.sig`. Release publish scripts do not use
-a default private-key path; set `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` before
-running stable releases. When signing manually, either set that variable or
-pass `--private-key`.
+This writes `updates/macos/arm64/stable.json.sig`. An ARM64 publish copies the
+signed manifest and signature to the top-level legacy aliases. Release publish
+scripts do not use a default private-key path; set
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` before running stable releases. When
+signing manually, either set that variable or pass `--private-key`.
 
 ### UI & Rendering
 
@@ -457,8 +494,9 @@ chunk-size estimation and residency-cap calculation;
 `src/caveviewer/core/streaming_scheduler.py` owns the bounded ready backlog,
 spatial selection, and eviction policy; and
 `src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
-render-thread callbacks. The longitudinal cross-section map retains its
-independent single-worker profile pipeline and cache.
+render-thread callbacks. Map imports now write only the cache artifacts used by
+runtime streaming and the minimap. Existing caches containing retired auxiliary
+artifacts remain readable; those extra files are ignored.
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|

@@ -60,7 +60,7 @@ jobs:
         run: >-
           python -m coverage report
           --include=src/caveviewer/core/chunker.py
-          --fail-under=60
+          --fail-under=90
 
       - name: Enforce update-checker coverage floor
         run: >-

@@ -38,8 +38,8 @@ inside a subdirectory supplements these rules for that area.
   than scattered `sys.platform` branches.
 - Failed imports must not publish partial caches. Preserve staging-directory
   cleanup and atomic publication semantics.
-- Runtime chunk streaming and longitudinal cross-section generation are
-  independent pipelines. Changes to shared cache data must test both.
+- Changes to shared cache data must test both cache construction and runtime
+  chunk streaming.
 - Files in `updates/` and the location of `docs/index.html` are externally
   consumed paths. Leave them stable unless the migration explicitly updates
   their consumers.

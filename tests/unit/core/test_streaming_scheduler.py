@@ -1,3 +1,5 @@
+"""Check spatial chunk selection and distance-aware eviction policies."""
+
 from __future__ import annotations
 
 from caveviewer.core.streaming_scheduler import (

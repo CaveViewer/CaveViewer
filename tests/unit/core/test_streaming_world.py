@@ -1,3 +1,5 @@
+"""Exercise streaming queues, worker lifecycle, prioritization, and shutdown."""
+
 from __future__ import annotations
 
 import queue

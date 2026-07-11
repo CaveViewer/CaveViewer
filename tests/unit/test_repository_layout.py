@@ -1,3 +1,6 @@
+"""Enforce repository layout, packaging, resource, and test-documentation rules."""
+
+import ast
 from pathlib import Path
 
 from caveviewer.resources import image_path, release_public_key_path, shader_path
@@ -5,6 +8,17 @@ from caveviewer.resources import image_path, release_public_key_path, shader_pat
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPOSITORY_ROOT / "src" / "caveviewer"
+
+
+def test_python_test_modules_have_descriptive_module_docstrings():
+    undocumented = []
+
+    for path in sorted((REPOSITORY_ROOT / "tests").rglob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if not ast.get_docstring(module):
+            undocumented.append(str(path.relative_to(REPOSITORY_ROOT)))
+
+    assert not undocumented, f"test modules without docstrings: {undocumented}"
 
 
 def test_application_uses_src_package_layout():

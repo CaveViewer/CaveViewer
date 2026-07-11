@@ -1,3 +1,5 @@
+"""Cover sample-map catalogs, downloads, cancellation, extraction, and cleanup."""
+
 from __future__ import annotations
 
 import json

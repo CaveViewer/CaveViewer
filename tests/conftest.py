@@ -1,3 +1,5 @@
+"""Provide shared pytest isolation for preferences, environment, and networking."""
+
 from __future__ import annotations
 
 import os

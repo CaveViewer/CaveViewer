@@ -1,3 +1,5 @@
+"""Cover source-model discovery and minimal GLB parsing behavior."""
+
 from __future__ import annotations
 
 import os

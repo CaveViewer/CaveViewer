@@ -10,6 +10,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 source "$script_dir/common/version.sh"
 source "$script_dir/common/artifacts.sh"
+source "$script_dir/macos/architecture.sh"
 version_file="$repo_root/src/caveviewer/version.py"
 
 print_help() {
@@ -32,6 +33,8 @@ Actions:
 
 Options:
   --rebuild            Rebuild Linux Docker image when building/packaging Linux targets
+  --macos-arch         macOS architecture: arm64 or x86_64 (default: current process)
+  --skip-tests         Skip the local test gate (only after an external gate passed)
   --pre-release        Mark the GitHub release as a prerelease; only valid with --action=release
 
 Examples:
@@ -49,22 +52,22 @@ print_target_help() {
     all)
       cat <<'EOF'
 Usage:
-  release.sh --target=all --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--pre-release]
+  release.sh --target=all --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--pre-release]
 
 If all appears in a comma-separated target list, it takes precedence.
 EOF
       ;;
     macos-15)
-      echo "Usage: release.sh --target=macos-15 --version=<version> --notes=<notes> --action=<build|package|release> [--pre-release]"
+      echo "Usage: release.sh --target=macos-15 --macos-arch=<arm64|x86_64> --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--pre-release]"
       ;;
     windows)
-      echo "Usage: release.sh --target=windows --version=<version> --notes=<notes> --action=<build|package|release> [--pre-release]"
+      echo "Usage: release.sh --target=windows --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--pre-release]"
       ;;
     linux-arm64)
-      echo "Usage: release.sh --target=linux-arm64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--pre-release]"
+      echo "Usage: release.sh --target=linux-arm64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--pre-release]"
       ;;
     linux-x86_64)
-      echo "Usage: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--pre-release]"
+      echo "Usage: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--pre-release]"
       ;;
     *)
       echo "Error: unknown target '$1'"
@@ -94,6 +97,62 @@ is_known_action() {
       return 1
       ;;
   esac
+}
+
+resolve_release_test_python() {
+  local requested="${CAVEVIEWER_TEST_PYTHON:-}"
+  if [ -n "$requested" ]; then
+    if [ -x "$requested" ]; then
+      echo "$requested"
+      return
+    fi
+    if command -v "$requested" >/dev/null 2>&1; then
+      command -v "$requested"
+      return
+    fi
+    echo "Error: CAVEVIEWER_TEST_PYTHON is not executable or on PATH: $requested" >&2
+    return 1
+  fi
+
+  local candidate
+  for candidate in \
+    "$repo_root/.venv-dev/bin/python" \
+    "$repo_root/.venv-dev/Scripts/python.exe"; do
+    if [ -x "$candidate" ]; then
+      echo "$candidate"
+      return
+    fi
+  done
+
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return
+    fi
+  done
+
+  echo "Error: no Python interpreter is available for the release test gate." >&2
+  return 1
+}
+
+run_all_tests() {
+  local test_python
+  test_python="$(resolve_release_test_python)"
+  if ! "$test_python" -c "import pytest" >/dev/null 2>&1; then
+    echo "Error: pytest is unavailable in $test_python." >&2
+    echo "Install requirements.txt and requirements-dev.txt before releasing." >&2
+    return 1
+  fi
+
+  echo "====================================================="
+  echo "Running complete release test gate"
+  echo "Python: $test_python"
+  echo "====================================================="
+  (
+    cd "$repo_root"
+    PYTHONDONTWRITEBYTECODE=1 "$test_python" -m pytest -p no:cacheprovider -q
+  )
+  echo "Release test gate passed."
 }
 
 trim_leading_whitespace() {
@@ -203,6 +262,11 @@ require_macos_host() {
     echo "Error: target macos-15 requires a macOS host."
     exit 1
   fi
+  cv_require_macos_host_arch "$(selected_macos_arch)"
+}
+
+selected_macos_arch() {
+  cv_resolve_macos_arch "${macos_arch:-}"
 }
 
 selected_linux_arch() {
@@ -272,6 +336,7 @@ run_selected_builds() {
 
   if $selected_macos; then
     if [ "$host_os" = "Darwin" ]; then
+      require_macos_host
       "$script_dir/macos/build.sh"
     else
       echo "[macos-15] Skipped: requires macOS host."
@@ -314,12 +379,15 @@ run_selected_packages() {
 
   if $selected_macos; then
     if [ "$host_os" = "Darwin" ]; then
-      local macos_dmg_path="$repo_root/dist/macos/packages/CaveViewer-${normalized_version}.dmg"
+      local mac_arch macos_dmg_path
+      mac_arch="$(selected_macos_arch)"
+      cv_require_macos_host_arch "$mac_arch"
+      macos_dmg_path="$repo_root/dist/macos/packages/CaveViewer-${normalized_version}-macos-${mac_arch}.dmg"
       if $reuse_existing_artifacts && ! $rebuild && [ -f "$macos_dmg_path" ]; then
         echo "[macos-15] Reusing existing package: $macos_dmg_path"
       else
-        echo "[macos-15] Building package..."
-        "$script_dir/macos/package.sh"
+        echo "[macos-15/$mac_arch] Building package..."
+        "$script_dir/macos/package.sh" --arch "$mac_arch"
       fi
     else
       echo "[macos-15] Skipped: requires macOS host."
@@ -355,7 +423,11 @@ run_selected_packages() {
   echo "====================================================="
 
   if $selected_macos && [ "$host_os" = "Darwin" ]; then
-    print_artifact "macOS 15 DMG" "$repo_root/dist/macos/packages/CaveViewer-${normalized_version}.dmg"
+    local summary_macos_arch
+    summary_macos_arch="$(selected_macos_arch)"
+    print_artifact \
+      "macOS 15 $summary_macos_arch DMG" \
+      "$repo_root/dist/macos/packages/CaveViewer-${normalized_version}-macos-${summary_macos_arch}.dmg"
   fi
 
   if $selected_linux_arm64; then
@@ -388,8 +460,11 @@ run_selected_releases() {
 
   if $selected_macos; then
     if [ "$host_os" = "Darwin" ]; then
-      echo "[macos-15] Publishing release assets..."
-      "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
+      local publish_macos_arch
+      publish_macos_arch="$(selected_macos_arch)"
+      cv_require_macos_host_arch "$publish_macos_arch"
+      echo "[macos-15/$publish_macos_arch] Publishing release assets..."
+      "$script_dir/macos/publish.sh" --arch "$publish_macos_arch" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
     else
       echo "[macos-15] Skipped publish: requires macOS host."
     fi
@@ -423,8 +498,10 @@ target=""
 action=""
 version=""
 notes=""
+macos_arch=""
 show_help=false
 pre_release=false
+skip_tests=false
 rebuild=false
 reuse_existing_artifacts=false
 passthrough_args=()
@@ -494,6 +571,19 @@ while [ "$#" -gt 0 ]; do
       notes="$(trim_leading_whitespace "$1")"
       shift
       ;;
+    --macos-arch=*)
+      macos_arch="${arg#--macos-arch=}"
+      shift
+      ;;
+    --macos-arch)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --macos-arch requires a value."
+        exit 1
+      fi
+      macos_arch="$(trim_leading_whitespace "$1")"
+      shift
+      ;;
     --targets|--targets=*)
       echo "Error: unknown option '$arg'"
       exit 1
@@ -505,6 +595,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --pre-release)
       pre_release=true
+      shift
+      ;;
+    --skip-tests)
+      skip_tests=true
       shift
       ;;
     --)
@@ -562,6 +656,14 @@ fi
 
 parse_target_selection "$target"
 
+if [ -n "$macos_arch" ]; then
+  if ! $selected_macos; then
+    echo "Error: --macos-arch is only valid when a macOS target is selected."
+    exit 1
+  fi
+  macos_arch="$(cv_resolve_macos_arch "$macos_arch")"
+fi
+
 if $rebuild && ! has_linux_target; then
   echo "Error: --rebuild is only valid when a Linux target is selected."
   exit 1
@@ -608,6 +710,12 @@ if [ ! -f "$version_file" ]; then
   exit 1
 fi
 
+if $skip_tests; then
+  echo "Skipping release test gate because --skip-tests was provided."
+else
+  run_all_tests
+fi
+
 current_version="$(cv_read_app_version "$version_file")"
 if [ "$current_version" != "$normalized_version" ]; then
   cv_set_app_version "$version_file" "$normalized_version"
@@ -633,11 +741,11 @@ case "$dispatch_target:$action" in
     ;;
   macos-15:package)
     require_macos_host
-    exec "$script_dir/macos/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
+    exec "$script_dir/macos/package.sh" --arch "$(selected_macos_arch)" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   macos-15:release)
     require_macos_host
-    exec "$script_dir/macos/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
+    exec "$script_dir/macos/publish.sh" --arch "$(selected_macos_arch)" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   windows:build)
     exec "$script_dir/windows/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}

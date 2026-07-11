@@ -1,3 +1,5 @@
+"""Validate worker-count limits, defaults, and reserved-CPU policy."""
+
 from __future__ import annotations
 
 import pytest

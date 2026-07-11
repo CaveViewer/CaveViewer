@@ -62,7 +62,7 @@ The current CI workflow enforces:
 
 - 60% across its essential measured modules.
 - 85% for `src/caveviewer/gui/sample_maps.py`.
-- 60% for `src/caveviewer/core/chunker.py`.
+- 90% for `src/caveviewer/core/chunker.py`.
 - 50% for `src/caveviewer/gui/update_checker.py`.
 
 When moving modules, update CI include/source paths without lowering these

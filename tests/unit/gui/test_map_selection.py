@@ -1,3 +1,5 @@
+"""Validate map-folder discovery for source models and compiled caches."""
+
 from __future__ import annotations
 
 from caveviewer.gui import map_selection

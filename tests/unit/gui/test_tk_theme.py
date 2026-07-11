@@ -1,3 +1,5 @@
+"""Check shared Tk theme consistency and immutability."""
+
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError

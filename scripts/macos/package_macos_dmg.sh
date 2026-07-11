@@ -9,6 +9,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/artifacts.sh"
+source "$script_dir/architecture.sh"
 version_file="$repo_root/src/caveviewer/version.py"
 app_bundle="$repo_root/dist/macos/app/CaveViewer.app"
 readme_path="$repo_root/README.md"
@@ -17,11 +18,12 @@ third_party_notices_path="$repo_root/THIRD_PARTY_NOTICES.md"
 packages_dir="$repo_root/dist/macos/packages"
 metadata_dir="$repo_root/dist/macos/metadata"
 base_download_url=""
+macos_arch=""
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  package_macos_dmg.sh [--base-download-url=<url>]
+  package_macos_dmg.sh [--arch=<arm64|x86_64>] [--base-download-url=<url>]
   package_macos_dmg.sh --help
 
 Packages dist/macos/app/CaveViewer.app into a versioned DMG.
@@ -30,6 +32,19 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --arch=*)
+      macos_arch="${1#--arch=}"
+      shift
+      ;;
+    --arch)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --arch requires a value."
+        exit 1
+      fi
+      macos_arch="$1"
+      shift
+      ;;
     --base-download-url=*)
       base_download_url="${1#--base-download-url=}"
       shift
@@ -66,6 +81,9 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+macos_arch="$(cv_resolve_macos_arch "$macos_arch")"
+cv_require_macos_host_arch "$macos_arch"
+
 if [ ! -f "$version_file" ]; then
   echo "Error: version file not found: $version_file"
   exit 1
@@ -100,9 +118,9 @@ if [ -z "$version" ] || [ -z "$app_name" ]; then
   exit 1
 fi
 
-artifact_name="CaveViewer-${version}.dmg"
+artifact_name="CaveViewer-${version}-macos-${macos_arch}.dmg"
 artifact_path="$packages_dir/$artifact_name"
-meta_name="CaveViewer-${version}.json"
+meta_name="CaveViewer-${version}-macos-${macos_arch}.json"
 meta_path="$metadata_dir/$meta_name"
 
 mkdir -p "$packages_dir" "$metadata_dir"
@@ -141,6 +159,8 @@ cat > "$meta_path" <<EOF
 {
   "app_name": "$app_name",
   "version": "$version",
+  "platform": "macos",
+  "architecture": "$macos_arch",
   "artifact_file": "$artifact_name",
   "artifact_path": "dist/macos/packages/$artifact_name",
   "sha256": "$sha256",

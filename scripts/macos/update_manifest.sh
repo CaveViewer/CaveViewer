@@ -2,31 +2,39 @@
 set -euo pipefail
 
 # macOS updater manifest writer.
-# Writes updates/macos/<channel>.json with version, download URL, package size,
-# SHA-256, and release notes for the in-app updater.
+# Writes updates/macos/<arch>/<channel>.json with version, download URL,
+# package size, SHA-256, and release notes for the in-app updater.
 #
 # Usage:
-#   update_manifest.sh --version=<version> --download-url=<macos_dmg_url> --artifact-file=<macos_dmg_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh [--arch=<arm64|x86_64>] --version=<version> --download-url=<macos_dmg_url> --artifact-file=<macos_dmg_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:
-#   update_manifest.sh --version=1.0.1 \
-#     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1.dmg" \
-#     --artifact-file="dist/macos/packages/CaveViewer-1.0.1.dmg" \
+#   update_manifest.sh --arch=arm64 --version=1.0.1 \
+#     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-macos-arm64.dmg" \
+#     --artifact-file="dist/macos/packages/CaveViewer-1.0.1-macos-arm64.dmg" \
 #     --notes="Bug fixes and performance improvements"
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+  update_manifest.sh [--arch=<arm64|x86_64>] --version=<version> --download-url=<url> --artifact-file=<path> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 EOF
 }
 
 version=""
+macos_arch=""
 macos_dmg_url=""
 macos_dmg_file=""
 release_notes=""
 channel="stable"
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --arch=*) macos_arch="${1#--arch=}" ; shift ;;
+    --arch)
+      shift
+      if [ "$#" -eq 0 ]; then echo "Error: --arch requires a value."; exit 1; fi
+      macos_arch="$1"
+      shift
+      ;;
     --version=*) version="${1#--version=}" ; shift ;;
     --version)
       shift
@@ -88,6 +96,8 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/artifacts.sh"
+source "$script_dir/architecture.sh"
+macos_arch="$(cv_resolve_macos_arch "$macos_arch")"
 case "$channel" in
   stable|prerelease) ;;
   *)
@@ -95,7 +105,7 @@ case "$channel" in
     exit 1
     ;;
 esac
-manifest_path="$repo_root/updates/macos/$channel.json"
+manifest_path="$repo_root/updates/macos/$macos_arch/$channel.json"
 
 macos_dmg_size_bytes="null"
 macos_dmg_sha256_value=""
@@ -113,6 +123,8 @@ mkdir -p "$(dirname "$manifest_path")"
 cat > "$manifest_path" <<EOF
 {
   "latest_version": "$version",
+  "platform": "macos",
+  "architecture": "$macos_arch",
   "download_url": "$macos_dmg_url",
   "download_size_bytes": $macos_dmg_size_bytes,
   "download_url_macosx_dmg": "$macos_dmg_url",

@@ -1,3 +1,5 @@
+"""Verify import capacity checks and cleanup of partially built map caches."""
+
 from __future__ import annotations
 
 import errno
@@ -106,16 +108,13 @@ def test_disk_full_mid_build_removes_every_partial_cache_file(
     original_write = chunker._write_chunk_file
     writes = 0
 
-    def write_until_disk_full(chunks_dir, cross_section_dir, cell_str, mesh, groups):
+    def write_until_disk_full(chunks_dir, cell_str, mesh, groups):
         nonlocal writes
         writes += 1
         if writes == 1:
-            return original_write(
-                chunks_dir, cross_section_dir, cell_str, mesh, groups
-            )
+            return original_write(chunks_dir, cell_str, mesh, groups)
 
         (Path(chunks_dir) / f"{cell_str}.bin").write_bytes(b"partial")
-        (Path(cross_section_dir) / f"{cell_str}.bin").write_bytes(b"partial")
         raise OSError(errno.ENOSPC, "disk full")
 
     monkeypatch.setattr(chunker, "_write_chunk_file", write_until_disk_full)
@@ -142,9 +141,10 @@ def test_successful_build_publishes_complete_cache_without_staging_files(
     assert cache_dir == str(cache_path)
     assert (cache_path / chunker.MANIFEST_NAME).is_file()
     assert len(list((cache_path / chunker.CHUNKS_DIRNAME).glob("*.bin"))) == 2
-    assert len(
-        list((cache_path / chunker.CROSS_SECTION_DIRNAME).glob("*.bin"))
-    ) == 2
+    assert {path.name for path in cache_path.iterdir()} == {
+        chunker.CHUNKS_DIRNAME,
+        chunker.MANIFEST_NAME,
+    }
     assert not list(tmp_path.glob(f".{chunker.CACHE_DIRNAME}.tmp-*"))
 
 

@@ -28,6 +28,15 @@ Actions:
 - `package`: create a distributable artifact
 - `release`: publish/upload artifacts and write update manifests
 
+Before any action changes the version or invokes a builder, `release.sh` runs
+the complete pytest suite with `-p no:cacheprovider -q`. A failing or missing
+test environment stops the release. The interpreter is selected in this order:
+`CAVEVIEWER_TEST_PYTHON`, `.venv-dev`, `python3`, then `python`.
+
+`--skip-tests` bypasses this local gate. It is intended for orchestrators such
+as the GitHub release workflows that require an equivalent test job for the
+same commit; normal direct releases should not use it.
+
 Examples:
 
 ```bash
@@ -46,11 +55,14 @@ anywhere in the list, it takes precedence and all platforms are selected.
 Multi-target package and release orchestration is handled by `release.sh`
 directly; platform scripts remain the per-target implementation details.
 The `macos-15` target names the release baseline used by CI. Local builds require
-a macOS host.
+a macOS host. Use `--macos-arch=arm64` or `--macos-arch=x86_64`; the default is
+the current process architecture.
 
 Options:
 
 - `--rebuild`
+- `--macos-arch=<arm64|x86_64>`
+- `--skip-tests`: bypass the local gate only when the same commit already passed an external test gate
 - `--pre-release`: publish GitHub prerelease assets and update `prerelease.json` instead of `stable.json`
 
 Examples:
@@ -59,6 +71,7 @@ Examples:
 release.sh --target=linux-arm64,linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
 release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=macos-15,linux-arm64 --version=1.2.45 --notes "Release 1.2.45" --action=release
+release.sh --target=macos-15 --macos-arch=arm64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=package
 ```
 
@@ -66,14 +79,21 @@ release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=packa
 
 Manual release workflows live under `.github/workflows/` for macOS 15,
 Windows, Linux ARM64, and Linux x86_64. Each workflow runs the shared essential
-test suite before invoking `release.sh` for its platform.
+test suite before invoking `release.sh` for its platform. Because the platform
+job declares `needs: essential-tests`, it passes `--skip-tests` and does not run
+the suite a second time.
+
+The macOS workflow exposes an architecture choice. ARM64 runs on `macos-15`;
+Intel runs on `macos-15-intel`. Artifacts are named
+`CaveViewer-<version>-macos-<architecture>.dmg`.
 
 When dispatching a workflow:
 
 - choose the source branch explicitly;
 - leave `publish` disabled to build and retain a test artifact only;
 - enable both `publish` and `pre_release` to publish a GitHub prerelease and
-  update that platform's `prerelease.json` rather than `stable.json`;
+  update that platform/architecture's `prerelease.json` rather than
+  `stable.json`;
 - run platform publish workflows sequentially because each successful publish
   commits its version and manifest update back to the selected branch.
 

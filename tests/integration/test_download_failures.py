@@ -1,3 +1,5 @@
+"""Exercise cleanup behavior for interrupted update and sample-map downloads."""
+
 from __future__ import annotations
 
 import urllib.error
