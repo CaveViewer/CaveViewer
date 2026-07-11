@@ -47,91 +47,84 @@ on:
         required: false
         type: boolean
         default: false
+      source_sha:
+        description: "Immutable source revision supplied by an orchestrating workflow"
+        required: false
+        type: string
+        default: ""
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
         description: "Private key used to sign published update manifests"
         required: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: caveviewer-release-${{ github.ref }}
+  group: caveviewer-build-windows-${{ github.ref }}-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
   essential-tests:
     if: ${{ inputs.skip_essential_tests != true }}
     uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
 
   build-windows:
     needs: essential-tests
     if: ${{ !cancelled() && (inputs.skip_essential_tests == true || needs.essential-tests.result == 'success') }}
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
+          ref: ${{ inputs.source_sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Configure git identity
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Configure release signing key
-        if: ${{ inputs.publish }}
-        shell: bash
-        env:
-          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
-            echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required when publish is true."
-            exit 1
-          fi
-          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
-          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
-          chmod 600 "$key_path" || true
-          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
-
       - name: Build Windows ZIP
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
-          PUBLISH_RELEASE: ${{ inputs.publish }}
-          PRE_RELEASE: ${{ inputs.pre_release }}
         run: |
-          release_args=(
-            --target=windows
-            --version="$RELEASE_VERSION"
-            --notes="$RELEASE_NOTES"
+          ./scripts/release.sh \
+            --target=windows \
+            --version="$RELEASE_VERSION" \
+            --notes="$RELEASE_NOTES" \
+            --action=package \
             --skip-tests
-          )
-
-          if [ "$PUBLISH_RELEASE" = "true" ]; then
-            release_args+=(--action=release)
-            if [ "$PRE_RELEASE" = "true" ]; then
-              release_args+=(--pre-release)
-            fi
-          else
-            release_args+=(--action=package)
-          fi
-
-          ./scripts/release.sh "${release_args[@]}"
 
       - name: Upload Windows ZIP for testing
         uses: actions/upload-artifact@v4
         with:
           name: CaveViewer-${{ inputs.version }}-windows
-          path: dist/windows/packages/CaveViewer-${{ inputs.version }}-windows.zip
+          path: |
+            dist/windows/packages/CaveViewer-${{ inputs.version }}-windows.zip
+            dist/windows/metadata/CaveViewer-${{ inputs.version }}.json
+            dist/windows/metadata/CaveViewer-${{ inputs.version }}.update.json
           if-no-files-found: error
+
+  publish-windows:
+    needs: build-windows
+    if: ${{ inputs.publish && needs.build-windows.result == 'success' }}
+    uses: ./.github/workflows/finalize-release.yml
+    permissions:
+      contents: write
+    with:
+      version: ${{ inputs.version }}
+      release_notes: ${{ inputs.release_notes }}
+      pre_release: ${{ inputs.pre_release }}
+      platforms: windows
+      source_sha: ${{ inputs.source_sha || github.sha }}
+      target_branch: ${{ github.ref_name }}
+    secrets:
+      CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}

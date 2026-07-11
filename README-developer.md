@@ -153,7 +153,7 @@ The suite isolates the home/preferences directory, blocks uncontrolled network
 connections, and uses temporary directories for all generated files. The same
 essential suite and branch-coverage gate run automatically for pull requests
 and before GitHub release builds. `All Platform Release` runs it once for the
-whole platform chain; a directly dispatched platform workflow runs its own
+whole parallel package fan-out; a directly dispatched platform workflow runs its own
 gate. Direct `scripts/release.sh` runs also execute the complete pytest suite
 before changing the application version or creating artifacts. It uses
 `.venv-dev` when available, then falls back to
@@ -165,11 +165,12 @@ GitHub platform jobs pass `--skip-tests` because the application source has
 already passed an essential test gate with coverage. Individually dispatched
 platform workflows provide that gate themselves; `All Platform Release`
 provides it once before calling every platform workflow. The gate precedes the
-controlled version bump; later stages check out the same application source
-plus the version and manifest commits produced by earlier stages. Do not use
+controlled build-time version change. Every platform checks out the same source
+commit and packages independently; after all packages succeed, one finalizer
+updates the version and signed manifests in a single branch commit. Do not use
 `--skip-tests` for an ordinary local release unless an equivalent external gate
-has completed successfully. Tests and development dependencies are not
-included in release archives.
+has completed successfully. Tests and development dependencies are not included
+in release archives.
 
 ## Sample Map Source Overrides
 
@@ -309,8 +310,8 @@ private key. The bundled public key lives at
 checks read the branch/channel manifest first; if it advertises a newer version,
 the app verifies the manifest signature before offering the download. Missing or
 invalid signatures are logged as errors and do not change the splash interface.
-Every platform publisher creates the companion `.sig` file before committing
-its manifest. See
+The release finalizer creates every requested companion `.sig` file before
+committing the manifests together. See
 [`docs/development/releases.md`](docs/development/releases.md) for the full
 release contract.
 

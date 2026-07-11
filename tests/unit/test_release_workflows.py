@@ -27,23 +27,29 @@ def test_macos_release_workflows_use_architecture_specific_contracts():
         assert "needs: essential-tests" in workflow
         assert f"--target={target}" in workflow
         assert "--macos-arch" not in workflow
-        assert "release_args+=(--pre-release)" in workflow
+        assert "--action=package" in workflow
+        assert "uses: ./.github/workflows/finalize-release.yml" in workflow
+        assert f"platforms: {target}" in workflow
+        assert "source_sha: ${{ inputs.source_sha || github.sha }}" in workflow
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
         assert (
             f"dist/macos/packages/CaveViewer-${{{{ inputs.version }}}}-{target}.dmg"
         ) in workflow
+        assert (
+            f"dist/macos/metadata/CaveViewer-${{{{ inputs.version }}}}-{target}.json"
+        ) in workflow
 
 
-def test_all_release_workflows_expose_publish_and_prerelease_inputs():
-    workflow_names = (
-        "linux-arm64-release.yml",
-        "linux-x86_64-release.yml",
-        "macos-arm64-release.yml",
-        "macos-x86_64-release.yml",
-        "windows-release.yml",
+def test_platform_release_workflows_package_immutable_source_before_finalizing():
+    workflow_contracts = (
+        ("linux-arm64-release.yml", "linux-arm64"),
+        ("linux-x86_64-release.yml", "linux-x86_64"),
+        ("macos-arm64-release.yml", "macos-arm64"),
+        ("macos-x86_64-release.yml", "macos-x86_64"),
+        ("windows-release.yml", "windows"),
     )
 
-    for workflow_name in workflow_names:
+    for workflow_name, target in workflow_contracts:
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
         assert "workflow_call:" in workflow, workflow_name
         assert "publish:" in workflow, workflow_name
@@ -58,21 +64,29 @@ def test_all_release_workflows_expose_publish_and_prerelease_inputs():
         assert "!cancelled()" in workflow, workflow_name
         dispatch_contract = workflow.split("  workflow_call:", 1)[0]
         assert "skip_essential_tests" not in dispatch_contract, workflow_name
-        assert "ref: ${{ github.ref }}" in workflow, workflow_name
+        assert "source_sha" not in dispatch_contract, workflow_name
+        assert "ref: ${{ inputs.source_sha || github.sha }}" in workflow, workflow_name
+        assert "permissions:\n      contents: read" in workflow, workflow_name
+        assert f"group: caveviewer-build-{target}-" in workflow, workflow_name
+        assert "--action=package" in workflow, workflow_name
+        assert "--action=release" not in workflow, workflow_name
         assert "--skip-tests" in workflow, workflow_name
         assert "Install release test dependencies" not in workflow, workflow_name
+        assert "uses: ./.github/workflows/finalize-release.yml" in workflow
+        assert f"platforms: {target}" in workflow
+        assert "if: ${{ inputs.publish" in workflow
 
 
-def test_all_platform_release_workflow_calls_platforms_sequentially():
+def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():
     workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
         encoding="utf-8"
     )
     job_contracts = (
-        ("windows", "windows-release.yml", "essential-tests"),
-        ("linux-arm64", "linux-arm64-release.yml", "windows"),
-        ("linux-x86_64", "linux-x86_64-release.yml", "linux-arm64"),
-        ("macos-arm64", "macos-arm64-release.yml", "linux-x86_64"),
-        ("macos-x86_64", "macos-x86_64-release.yml", "macos-arm64"),
+        ("windows", "windows-release.yml"),
+        ("linux-arm64", "linux-arm64-release.yml"),
+        ("linux-x86_64", "linux-x86_64-release.yml"),
+        ("macos-arm64", "macos-arm64-release.yml"),
+        ("macos-x86_64", "macos-x86_64-release.yml"),
     )
 
     assert "name: All Platform Release" in workflow
@@ -81,19 +95,78 @@ def test_all_platform_release_workflow_calls_platforms_sequentially():
     assert "group: caveviewer-all-platform-release-${{ github.ref }}" in workflow
     assert workflow.count("uses: ./.github/workflows/tests.yml") == 1
     assert workflow.count("skip_essential_tests: true") == len(job_contracts)
-    assert workflow.count("secrets: inherit") == len(job_contracts)
+    assert workflow.count("publish: false") == len(job_contracts)
+    assert "secrets: inherit" not in workflow
 
     job_positions = []
-    for job_name, called_workflow, predecessor in job_contracts:
-        job_positions.append(workflow.index(f"  {job_name}:\n"))
-        assert f"uses: ./.github/workflows/{called_workflow}" in workflow
-        if predecessor is not None:
-            assert f"needs: {predecessor}" in workflow
+    for index, (job_name, called_workflow) in enumerate(job_contracts):
+        block_start = workflow.index(f"  {job_name}:\n")
+        block_end = (
+            workflow.index(f"  {job_contracts[index + 1][0]}:\n")
+            if index + 1 < len(job_contracts)
+            else workflow.index("  finalize-release:\n")
+        )
+        job_block = workflow[block_start:block_end]
+        job_positions.append(block_start)
+        assert f"uses: ./.github/workflows/{called_workflow}" in job_block
+        assert "needs: essential-tests" in job_block
+        assert "publish: false" in job_block
+        assert "source_sha: ${{ github.sha }}" in job_block
 
     assert job_positions == sorted(job_positions)
-    for input_name in ("version", "release_notes", "pre_release", "publish"):
+    for input_name in ("version", "release_notes", "pre_release"):
         forwarded_input = f"{input_name}: ${{{{ inputs.{input_name} }}}}"
-        assert workflow.count(forwarded_input) == len(job_contracts)
+        assert workflow.count(forwarded_input) == len(job_contracts) + 1
+
+    finalizer = workflow[workflow.index("  finalize-release:\n") :]
+    assert "uses: ./.github/workflows/finalize-release.yml" in finalizer
+    assert "platforms: all" in finalizer
+    assert "source_sha: ${{ github.sha }}" in finalizer
+    assert "target_branch: ${{ github.ref_name }}" in finalizer
+    assert "inputs.publish && !cancelled()" in finalizer
+    for job_name, _called_workflow in job_contracts:
+        assert f"      - {job_name}\n" in finalizer
+
+
+def test_release_finalizer_is_the_single_shared_state_writer():
+    workflow = (WORKFLOWS_DIR / "finalize-release.yml").read_text(encoding="utf-8")
+    finalizer = (
+        REPOSITORY_ROOT / "scripts" / "common" / "finalize_release.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "contents: write" in workflow
+    assert "group: caveviewer-publish-${{ github.ref }}" in workflow
+    assert "actions/download-artifact@v4" in workflow
+    assert "merge-multiple: true" in workflow
+    assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+    assert "./scripts/common/finalize_release.sh" in workflow
+
+    assert finalizer.count("gh release create") == 1
+    assert finalizer.count('git -C "$repo_root" push') == 1
+    assert "origin/$target_branch moved" in finalizer
+    assert 'git -C "$repo_root" commit -m "Release $tag $manifest_channel"' in finalizer
+    for manifest_path in (
+        "updates/windows/$manifest_channel.json",
+        "updates/linux/arm64/$manifest_channel.json",
+        "updates/linux/x86_64/$manifest_channel.json",
+        "updates/macos/arm64/$manifest_channel.json",
+        "updates/macos/x86_64/$manifest_channel.json",
+    ):
+        assert manifest_path in finalizer
+
+
+def test_release_finalizer_help_and_shell_syntax():
+    finalizer = REPOSITORY_ROOT / "scripts" / "common" / "finalize_release.sh"
+
+    syntax = subprocess.run(["bash", "-n", str(finalizer)], capture_output=True, text=True)
+    assert syntax.returncode == 0, syntax.stderr
+
+    help_result = subprocess.run(
+        [str(finalizer), "--help"], capture_output=True, text=True
+    )
+    assert help_result.returncode == 0
+    assert "--expected-source-sha=<sha>" in help_result.stdout
+    assert "Single-writer" not in help_result.stdout
 
 
 def test_release_dispatcher_exposes_architecture_specific_macos_targets():

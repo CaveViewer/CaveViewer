@@ -73,7 +73,9 @@ Build, package, publish, and manifest-generation workflows live under
 `scripts/`. The PyInstaller contract lives at
 `packaging/pyinstaller/CaveViewer.spec`; all build consumers use the installed
 package and the same package-resource paths. The five platform workflows may be
-run independently. `All Platform Release` runs one shared test gate and calls
-them sequentially so each platform's metadata commit is present before the next
-platform checks out the branch. The operational contract and verification
-checklist live in [releases.md](releases.md).
+run independently. `All Platform Release` runs one shared test gate, packages
+all five targets in parallel from one immutable source revision, and hands the
+artifacts to a single finalizer. In GitHub Actions, only that finalizer creates
+the release, signs manifests, and pushes release metadata, preserving one owner
+for shared mutable state. The operational contract and verification checklist
+live in [releases.md](releases.md).

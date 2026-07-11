@@ -47,83 +47,60 @@ on:
         required: false
         type: boolean
         default: false
+      source_sha:
+        description: "Immutable source revision supplied by an orchestrating workflow"
+        required: false
+        type: string
+        default: ""
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
         description: "Private key used to sign published update manifests"
         required: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: caveviewer-release-${{ github.ref }}
+  group: caveviewer-build-linux-arm64-${{ github.ref }}-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
   essential-tests:
     if: ${{ inputs.skip_essential_tests != true }}
     uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
 
   build-linux-arm64:
     needs: essential-tests
     if: ${{ !cancelled() && (inputs.skip_essential_tests == true || needs.essential-tests.result == 'success') }}
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
-
-      - name: Configure git identity
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          ref: ${{ inputs.source_sha || github.sha }}
 
       - name: Verify Docker build environment
         run: |
           docker version
           docker buildx version
 
-      - name: Configure release signing key
-        if: ${{ inputs.publish }}
-        env:
-          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
-            echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required when publish is true."
-            exit 1
-          fi
-          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$RUNNER_TEMP/release_signing_private_key.pem"
-          chmod 600 "$RUNNER_TEMP/release_signing_private_key.pem"
-
       - name: Build Linux ARM64 AppImage via Docker
         env:
-          GH_TOKEN: ${{ github.token }}
-          CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ runner.temp }}/release_signing_private_key.pem
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
-          PUBLISH_RELEASE: ${{ inputs.publish }}
-          PRE_RELEASE: ${{ inputs.pre_release }}
         run: |
-          release_args=(
-            --target=linux-arm64
-            --version="$RELEASE_VERSION"
-            --notes="$RELEASE_NOTES"
+          ./scripts/release.sh \
+            --target=linux-arm64 \
+            --version="$RELEASE_VERSION" \
+            --notes="$RELEASE_NOTES" \
+            --action=package \
             --skip-tests
-          )
-
-          if [ "$PUBLISH_RELEASE" = "true" ]; then
-            release_args+=(--action=release)
-            if [ "$PRE_RELEASE" = "true" ]; then
-              release_args+=(--pre-release)
-            fi
-          else
-            release_args+=(--action=package)
-          fi
-
-          ./scripts/release.sh "${release_args[@]}"
 
       - name: Upload Linux ARM64 AppImage for testing
         uses: actions/upload-artifact@v4
@@ -131,3 +108,19 @@ jobs:
           name: CaveViewer-${{ inputs.version }}-linux-arm64
           path: dist/linux/arm64/packages/CaveViewer-${{ inputs.version }}-aarch64.AppImage
           if-no-files-found: error
+
+  publish-linux-arm64:
+    needs: build-linux-arm64
+    if: ${{ inputs.publish && needs.build-linux-arm64.result == 'success' }}
+    uses: ./.github/workflows/finalize-release.yml
+    permissions:
+      contents: write
+    with:
+      version: ${{ inputs.version }}
+      release_notes: ${{ inputs.release_notes }}
+      pre_release: ${{ inputs.pre_release }}
+      platforms: linux-arm64
+      source_sha: ${{ inputs.source_sha || github.sha }}
+      target_branch: ${{ github.ref_name }}
+    secrets:
+      CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}

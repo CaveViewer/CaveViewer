@@ -92,21 +92,17 @@ macOS has separate ARM64 and x86_64 workflows, matching the dispatcher target
 names. ARM64 runs on `macos-15`; Intel runs on `macos-15-intel`. Artifacts are
 named `CaveViewer-<version>-macos-<architecture>.dmg`.
 
-The `All Platform Release` workflow runs every platform workflow in this order:
+The `All Platform Release` workflow runs the shared essential test suite once,
+then starts the Windows, Linux ARM64, Linux x86_64, macOS ARM64, and macOS
+x86_64 package jobs in parallel. Each job checks out the same source commit,
+runs `release.sh --action=package`, and uploads its binary plus any package
+metadata as a workflow artifact.
 
-1. Windows
-2. Linux ARM64
-3. Linux x86_64
-4. macOS ARM64
-5. macOS x86_64
-
-The all-platform workflow runs the shared essential test suite once, then calls
-each platform workflow with its duplicate test gate disabled. The jobs are
-connected with `needs`, so Windows starts only after the shared test gate
-succeeds and every later platform starts only after its predecessor succeeds.
-Every platform build checks out the latest head of the selected branch. This
-preserves the version and manifest commit pushed by each published platform for
-the next platform in the chain.
+When publishing is enabled, one finalizer waits for every package, downloads
+the artifacts, uploads them to one GitHub release, writes and signs all update
+manifests, updates the application version, and pushes one commit. The package
+jobs are read-only and do not receive the release signing key. Individually
+dispatched platform workflows use the same finalizer for their one target.
 
 When dispatching a workflow:
 
@@ -117,14 +113,16 @@ When dispatching a workflow:
 - enable both `publish` and `pre_release` to publish a GitHub prerelease and
   update that platform/architecture's `prerelease.json` rather than
   `stable.json`;
-- use `All Platform Release` to publish all platforms sequentially;
-- do not dispatch a separate platform publish workflow against the same branch
-  while the all-platform workflow is running, because every successful publish
-  commits its version and manifest update back to that branch.
+- use `All Platform Release` to package all platforms concurrently and publish
+  them through one finalizer;
+- avoid source pushes to the selected branch while packages are building. The
+  finalizer rejects a moved branch rather than publishing metadata for a source
+  revision different from the packaged artifacts.
 
 ## Directory Layout
 
 - `scripts/common`: shared helpers
+- `scripts/common/finalize_release.sh`: internal single-writer CI finalizer
 - `scripts/macos`: macOS 15 build/package/publish scripts
 - `scripts/linux/common`: shared Linux build/package/publish internals
 - `scripts/linux/arm64`: Linux ARM64 entry points
