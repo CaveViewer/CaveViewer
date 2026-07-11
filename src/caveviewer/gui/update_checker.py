@@ -316,7 +316,7 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
     )
 
     if not is_newer:
-        _LOG.error(
+        _LOG.info(
             "No update available: current_version=%s, latest_version=%s, manifest_url=%s",
             current_version,
             latest_tag,
