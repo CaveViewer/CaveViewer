@@ -80,6 +80,21 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "if: ${{ inputs.publish" in workflow
 
 
+def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
+    for workflow_name in (
+        "linux-arm64-release.yml",
+        "linux-x86_64-release.yml",
+    ):
+        workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+
+        assert workflow.count("--action=build") == 1, workflow_name
+        assert workflow.count("--action=package") == 1, workflow_name
+        assert workflow.count("--skip-tests") == 2, workflow_name
+        assert workflow.index("--action=build") < workflow.index(
+            "--action=package"
+        ), workflow_name
+
+
 def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():
     workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
         encoding="utf-8"

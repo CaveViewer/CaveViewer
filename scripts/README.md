@@ -94,9 +94,11 @@ named `CaveViewer-<version>-macos-<architecture>.dmg`.
 
 The `All Platform Release` workflow runs the shared essential test suite once,
 then starts the Windows, Linux ARM64, Linux x86_64, macOS ARM64, and macOS
-x86_64 package jobs in parallel. Each job checks out the same source commit,
-runs `release.sh --action=package`, and uploads its binary plus any package
-metadata as a workflow artifact.
+x86_64 build/package jobs in parallel. Each job checks out the same source
+commit, produces its platform package without publishing, and uploads its
+binary plus any package metadata as a workflow artifact. Linux jobs run
+`release.sh --action=build` before `--action=package` because the package phase
+consumes the intermediate app bundle.
 
 When publishing is enabled, one finalizer waits for every package, downloads
 the artifacts, uploads them to one GitHub release, writes and signs all update
