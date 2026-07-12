@@ -230,6 +230,18 @@ def test_right_column_panel_scales_up_on_large_viewer_surfaces():
     assert 0 <= large_rect[1] < large_rect[3] <= 1152
 
 
+def test_initial_chunk_readiness_respects_budget_limited_wanted_count():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(config=SimpleNamespace(max_loaded_chunks=100))
+
+    assert window._initial_chunk_load_is_ready(
+        {"loaded": 3, "total_available": 1655, "wanted": 3}
+    ) is True
+    assert window._initial_chunk_load_is_ready(
+        {"loaded": 2, "total_available": 1655, "wanted": 3}
+    ) is False
+
+
 class _FakeGpuResource:
     def release(self):
         pass

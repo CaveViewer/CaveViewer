@@ -1793,7 +1793,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         loaded = max(0, int(stats.get("loaded", 0)))
         total_available = max(1, int(stats.get("total_available", 1)))
         max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
-        needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded)
+        wanted = max(1, int(stats.get("wanted", self._INITIAL_LOAD_MIN_CHUNKS)))
+        # The active streaming budget can intentionally reduce the current
+        # wanted set below the normal startup threshold (for example, a 1 GB
+        # GPU looking at chunks with several 4096² textures).  Treat that
+        # smaller wanted set as sufficient; otherwise the loading overlay waits
+        # forever for chunks the scheduler correctly refused to request.
+        needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded, wanted)
         return loaded >= needed
 
     def _initial_chunk_load_progress(self, stats: dict) -> float:
