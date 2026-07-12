@@ -99,6 +99,10 @@ of that already-relative geometry is suppressed during window creation.
 The AppImage launcher is the packaging exception: on Wayland sessions with
 `DISPLAY` available, it defaults `CAVEVIEWER_WINDOW_SYSTEM=x11` so GNOME/XWayland
 provides standard titlebar and resize decorations for the bundled GLFW runtime.
+OpenGL HUD text is rasterized at framebuffer scale for crispness, while the
+always-visible right-side viewer controls use a separate responsive HUD scale
+based on the current viewer surface size. That keeps maximized and AppImage
+windows legible without requiring user-provided environment variables.
 
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL

@@ -457,14 +457,9 @@ signing manually, either set that variable or pass `--private-key`.
 The OpenGL viewer renders its overlay text directly with FreeType in screen
 pixels. It automatically rasterizes glyphs at the active framebuffer pixel
 ratio so high-DPI and fractional-scale desktops do not stretch low-resolution
-font bitmaps. It does not automatically use GNOME, KDE, X11, or Wayland desktop
-scaling to make the UI physically larger; set `CAVEVIEWER_UI_TEXT_SCALE` when
-you want larger or smaller overlay controls. The built-in default is `1.28`;
-for example, applying an additional 150% scale gives `1.28 * 1.5 = 1.92`:
-
-```bash
-CAVEVIEWER_UI_TEXT_SCALE=1.92 ./run_caveviewer.sh
-```
+font bitmaps. The always-visible viewer HUD also grows automatically on larger
+viewer surfaces so AppImage/XWayland and maximized GNOME windows keep legible
+controls without asking users to set environment variables.
 
 Viewer window geometry is separate from overlay text scaling. On Linux it is
 derived from 80% of GLFW's primary-monitor work area in backend-native screen
@@ -475,26 +470,17 @@ to an already monitor-relative window would scale the geometry twice.
 The accepted range is `0.5` through `3.0`. The controls/help overlay derives
 its row height from the resulting FreeType line metrics, so increasing the text
 scale also reserves enough vertical space for each line and its keycap. Text
-inside the fixed-size right-side control panel (steppers and action buttons)
-stays at its panel-specific designed size because that compact control geometry
-does not follow the global overlay text scale.
+inside the right-side control panel uses its own responsive HUD scale so button
+geometry and labels grow together.
 
-To keep a development-machine override, export it in the shell profile or add
-the following before the final `exec` in `run_caveviewer.sh`:
-
-```bash
-export CAVEVIEWER_UI_TEXT_SCALE="${CAVEVIEWER_UI_TEXT_SCALE:-1.92}"
-```
-
-`scripts/dev/install.sh` regenerates `run_caveviewer.sh`, so edits made only to
-the generated launcher are replaced the next time the installer runs. For a
-repeatable project-specific default, add the same export to the launcher
-template in `scripts/dev/install.sh`; keep the `${...:-...}` form so callers can
-still override it for an individual run.
+For development-only visual tuning, `CAVEVIEWER_UI_TEXT_SCALE` adjusts
+adaptable full-screen overlay text and `CAVEVIEWER_VIEWER_UI_SCALE` overrides
+the automatic right-side HUD scale. These are not required for normal users.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Scale multiplier for adaptable in-app overlay text (loading screens, controls/help overlay, and HUD readouts). Text inside fixed-size control geometry is intentionally excluded. `1.0` is the base size. |
+| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Development override for adaptable in-app overlay text such as loading screens, controls/help overlay, and status readouts. Right-side viewer controls use `CAVEVIEWER_VIEWER_UI_SCALE` instead so labels and button geometry stay matched. |
+| `CAVEVIEWER_VIEWER_UI_SCALE` | `auto` | Development override for the always-visible viewer HUD scale. By default CaveViewer keeps the compact baseline at 1536x864 and grows the right-side controls on larger viewer surfaces. |
 | `CAVEVIEWER_TK_SCALE` | _(display DPI)_ | Windows/Linux override for Tk dialog scaling, clamped to `0.75` through `4.0`. The Linux AppImage launcher normally derives this value from the desktop Xft DPI setting. |
 | `CAVEVIEWER_APPRUN_INSTALL_ONLY` | `0` | Linux AppImage launcher smoke mode. Set to `1` to install/update the desktop file, AppStream metadata, and hicolor icons in the user's XDG data home, print the installed paths, and exit without launching the GUI. |
 | `CAVEVIEWER_APPRUN_UNINSTALL` | `0` | Linux AppImage launcher uninstall mode. Set to `1` to remove CaveViewer's per-user desktop file, AppStream metadata, and hicolor icons, then exit without launching the GUI. It does not remove maps, settings, caches, or downloaded update packages. |

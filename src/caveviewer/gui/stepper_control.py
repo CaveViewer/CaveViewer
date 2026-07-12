@@ -91,6 +91,19 @@ class StepperControl:
         self._render_cache_key: tuple | None = None
         self._render_cache_verts = 0
 
+    def set_scale(self, *, text_scale: float, geometry_scale: float) -> None:
+        """Update cached text/geometry scale without recreating GL resources."""
+        next_text_scale = max(0.35, float(text_scale))
+        next_geometry_scale = max(0.35, float(geometry_scale))
+        if (
+            next_text_scale == self._text_scale
+            and next_geometry_scale == self._geometry_scale
+        ):
+            return
+        self._text_scale = next_text_scale
+        self._geometry_scale = next_geometry_scale
+        self._render_cache_key = None
+
     def _scaled_text_size(self, base_pixel_size: float) -> float:
         return bitmap_font.pixel_size_at_text_scale(
             base_pixel_size,

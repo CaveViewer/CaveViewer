@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from caveviewer import app
 from caveviewer.core import cache_paths
 from caveviewer.gui import viewer_window
@@ -79,6 +81,23 @@ def test_window_pixel_ratio_falls_back_for_missing_backend_data():
     assert viewer_window._window_pixel_ratio(SimpleNamespace(size=(1000, 700))) == 1.0
 
 
+def test_viewer_ui_scale_grows_on_large_viewer_surfaces():
+    assert viewer_window._viewer_ui_scale_for_window_size((1536, 864), {}) == 1.0
+    assert viewer_window._viewer_ui_scale_for_window_size((2048, 1152), {}) == pytest.approx(
+        4 / 3
+    )
+    assert viewer_window._viewer_ui_scale_for_window_size((3840, 2160), {}) == 1.45
+
+
+def test_viewer_ui_scale_env_override_is_developer_only_escape_hatch():
+    assert viewer_window._viewer_ui_scale_for_window_size(
+        (1536, 864), {"CAVEVIEWER_VIEWER_UI_SCALE": "1.25"}
+    ) == 1.25
+    assert viewer_window._viewer_ui_scale_for_window_size(
+        (1536, 864), {"CAVEVIEWER_VIEWER_UI_SCALE": "bad"}
+    ) == 1.0
+
+
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     calls = []
     monkeypatch.setattr(viewer_window.sys, "platform", "linux")
@@ -104,23 +123,55 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     assert calls[0][1]["force_resizable_window"] is True
 
 
-def test_right_column_panel_uses_compact_default_footprint():
+class _ScaledStepperProbe:
+    BUTTON_SIZE = viewer_window.StepperControl.BUTTON_SIZE
+    VALUE_BOX_WIDTH = viewer_window.StepperControl.VALUE_BOX_WIDTH
+    GAP = viewer_window.StepperControl.GAP
+
+    def __init__(self):
+        self._geometry_scale = viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE
+        self._text_scale = viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_TEXT_SCALE
+
+    def set_scale(self, *, text_scale: float, geometry_scale: float) -> None:
+        self._text_scale = text_scale
+        self._geometry_scale = geometry_scale
+
+    def total_width(self):
+        return (
+            self.BUTTON_SIZE * self._geometry_scale * 2
+            + self.VALUE_BOX_WIDTH * self._geometry_scale
+            + self.GAP * self._geometry_scale * 2
+        )
+
+    def total_height(self):
+        return self.BUTTON_SIZE * self._geometry_scale
+
+
+def _right_column_probe_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._layout_cache_size = None
     window._layout_cache_result = None
-
-    def stepper_probe():
-        stepper = object.__new__(viewer_window.StepperControl)
-        stepper._geometry_scale = viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE
-        return stepper
-
-    window.light_stepper = stepper_probe()
-    window.ambient_stepper = stepper_probe()
-    window.render_distance_stepper = stepper_probe()
+    window._viewer_ui_scale = 1.0
+    window._right_column_panel_scale = viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE
+    window._right_column_panel_text_scale = (
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_TEXT_SCALE
+    )
+    window.light_stepper = _ScaledStepperProbe()
+    window.ambient_stepper = _ScaledStepperProbe()
+    window.render_distance_stepper = _ScaledStepperProbe()
     window.render_mode_buttons = object.__new__(viewer_window.RenderModeButtons)
     window.render_mode_buttons._geometry_scale = (
         viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE
     )
+    window.render_mode_buttons._text_scale = (
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_TEXT_SCALE
+    )
+    window.render_mode_buttons._render_cache_key = None
+    return window
+
+
+def test_right_column_panel_uses_compact_default_footprint():
+    window = _right_column_probe_window()
 
     window_size = (1536, 864)
     column = window._right_column_layout(window_size)
@@ -130,6 +181,25 @@ def test_right_column_panel_uses_compact_default_footprint():
     assert 0 <= y0 < y1 <= window_size[1]
     assert x1 - x0 <= 125
     assert y1 - y0 <= 450
+
+
+def test_right_column_panel_scales_up_on_large_viewer_surfaces():
+    baseline = _right_column_probe_window()
+    large = _right_column_probe_window()
+
+    base_column = baseline._right_column_layout((1536, 864))
+    base_rect = baseline._right_column_panel_rect((1536, 864), base_column)
+    large_column = large._right_column_layout((2048, 1152))
+    large_rect = large._right_column_panel_rect((2048, 1152), large_column)
+
+    assert large._right_column_ui_scale() == pytest.approx(4 / 3)
+    assert large.light_stepper._geometry_scale == pytest.approx(
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE * 4 / 3
+    )
+    assert large_rect[2] - large_rect[0] > base_rect[2] - base_rect[0]
+    assert large_rect[3] - large_rect[1] > base_rect[3] - base_rect[1]
+    assert 0 <= large_rect[0] < large_rect[2] <= 2048
+    assert 0 <= large_rect[1] < large_rect[3] <= 1152
 
 
 def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(

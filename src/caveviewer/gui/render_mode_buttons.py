@@ -119,6 +119,19 @@ class RenderModeButtons:
         self._text_scale = max(0.35, float(text_scale))
         self._geometry_scale = max(0.35, float(geometry_scale))
 
+    def set_scale(self, *, text_scale: float, geometry_scale: float) -> None:
+        """Update cached text/geometry scale without recreating GL resources."""
+        next_text_scale = max(0.35, float(text_scale))
+        next_geometry_scale = max(0.35, float(geometry_scale))
+        if (
+            next_text_scale == self._text_scale
+            and next_geometry_scale == self._geometry_scale
+        ):
+            return
+        self._text_scale = next_text_scale
+        self._geometry_scale = next_geometry_scale
+        self._render_cache_key = None
+
     # -- layout ---------------------------------------------------------------
 
     @classmethod

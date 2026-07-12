@@ -23,3 +23,5 @@ def test_tk_scale_is_a_known_runtime_setting():
     assert "CAVEVIEWER_TK_SCALE" in app._KNOWN_CAVEVIEWER_ENV_VARS
     assert "CAVEVIEWER_MAP_CACHE_DIR" in app._KNOWN_CAVEVIEWER_ENV_VARS
     assert "CAVEVIEWER_WINDOW_SYSTEM" in app._KNOWN_CAVEVIEWER_ENV_VARS
+    assert "CAVEVIEWER_VIEWER_UI_SCALE" in app._KNOWN_CAVEVIEWER_ENV_VARS
+    assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"
