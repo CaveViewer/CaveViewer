@@ -140,6 +140,36 @@ def test_stepper_value_text_is_smaller_than_button_symbols(monkeypatch):
     assert StepperControl.SYMBOL_TEXT_SIZE in base_sizes
 
 
+def test_stepper_label_text_scale_is_independent_from_value_text(monkeypatch):
+    calls = []
+
+    def record_scaled_size(size, scale):
+        calls.append((size, scale))
+        return size
+
+    monkeypatch.setattr(bitmap_font, "pixel_size_at_text_scale", record_scaled_size)
+    control = StepperControl(
+        _TrackingContext(),
+        "BRIGHTNESS",
+        initial_value=5,
+        min_value=0,
+        max_value=10,
+        text_scale=0.84,
+        label_text_scale=0.98,
+    )
+
+    control.render((1920, 1080), 1700, 300)
+
+    assert (
+        StepperControl.LABEL_TEXT_SIZE,
+        StepperControl.FIXED_TEXT_SCALE * 0.98,
+    ) in calls
+    assert (
+        StepperControl.VALUE_TEXT_SIZE,
+        StepperControl.FIXED_TEXT_SCALE * 0.84,
+    ) in calls
+
+
 def test_stepper_rebuilds_when_raster_scale_changes():
     try:
         bitmap_font.set_raster_scale(1.0)

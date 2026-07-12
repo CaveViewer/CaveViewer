@@ -128,12 +128,25 @@ class _ScaledStepperProbe:
     VALUE_BOX_WIDTH = viewer_window.StepperControl.VALUE_BOX_WIDTH
     GAP = viewer_window.StepperControl.GAP
 
-    def __init__(self):
+    def __init__(self, label: str = "BRIGHTNESS"):
+        self.label = label
         self._geometry_scale = viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE
         self._text_scale = viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_TEXT_SCALE
+        self._label_text_scale = (
+            viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE
+        )
 
-    def set_scale(self, *, text_scale: float, geometry_scale: float) -> None:
+    def set_scale(
+        self,
+        *,
+        text_scale: float,
+        geometry_scale: float,
+        label_text_scale: float | None = None,
+    ) -> None:
         self._text_scale = text_scale
+        self._label_text_scale = (
+            text_scale if label_text_scale is None else label_text_scale
+        )
         self._geometry_scale = geometry_scale
 
     def total_width(self):
@@ -156,15 +169,18 @@ def _right_column_probe_window():
     window._right_column_panel_text_scale = (
         viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_TEXT_SCALE
     )
-    window.light_stepper = _ScaledStepperProbe()
-    window.ambient_stepper = _ScaledStepperProbe()
-    window.render_distance_stepper = _ScaledStepperProbe()
+    window._right_column_panel_label_text_scale = (
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE
+    )
+    window.light_stepper = _ScaledStepperProbe("BRIGHTNESS")
+    window.ambient_stepper = _ScaledStepperProbe("GLOBAL LIGHT")
+    window.render_distance_stepper = _ScaledStepperProbe("DISTANCE")
     window.render_mode_buttons = object.__new__(viewer_window.RenderModeButtons)
     window.render_mode_buttons._geometry_scale = (
         viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE
     )
     window.render_mode_buttons._text_scale = (
-        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_TEXT_SCALE
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE
     )
     window.render_mode_buttons._render_cache_key = None
     return window
@@ -179,8 +195,8 @@ def test_right_column_panel_uses_compact_default_footprint():
 
     assert 0 <= x0 < x1 <= window_size[0]
     assert 0 <= y0 < y1 <= window_size[1]
-    assert x1 - x0 <= 125
-    assert y1 - y0 <= 450
+    assert x1 - x0 <= 135
+    assert y1 - y0 <= 455
 
 
 def test_right_column_panel_scales_up_on_large_viewer_surfaces():
@@ -196,6 +212,17 @@ def test_right_column_panel_scales_up_on_large_viewer_surfaces():
     assert large.light_stepper._geometry_scale == pytest.approx(
         viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE * 4 / 3
     )
+    assert large.light_stepper._text_scale == pytest.approx(
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_TEXT_SCALE
+    )
+    assert large.light_stepper._label_text_scale == pytest.approx(
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE
+    )
+    assert large.light_stepper._label_text_scale > large.light_stepper._text_scale
+    assert large.render_mode_buttons._text_scale == pytest.approx(
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE
+    )
+    assert large.render_mode_buttons._text_scale < large.light_stepper._text_scale
     assert large_rect[2] - large_rect[0] > base_rect[2] - base_rect[0]
     assert large_rect[3] - large_rect[1] > base_rect[3] - base_rect[1]
     assert 0 <= large_rect[0] < large_rect[2] <= 2048

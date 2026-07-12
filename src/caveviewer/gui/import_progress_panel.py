@@ -125,6 +125,7 @@ _LOGO_PATH = str(image_path("app_mark_transparent.png"))
 
 class ImportProgressPanel:
     LOGO_SIZE = 172.0
+    STAGE_TEXT_SIZE = 2.65
 
     _BACKDROP_RGBA = (0.0039, 0.0078, 0.0118, 0.88)  # near-black blue
     _STAGE_TEXT_RGBA = (0.8000, 0.8039, 0.8392, 1.0)
@@ -225,7 +226,7 @@ class ImportProgressPanel:
         logo_cx = w / 2.0
         logo_cy = panel_y0 + panel_h * 0.50
         stage_label = self._stage_label(stage)
-        stage_size = 2.15
+        stage_size = self.STAGE_TEXT_SIZE
         stage_w = bitmap_font.text_width_px(stage_label, stage_size)
         stage_x = (w - stage_w) / 2.0
         stage_y = logo_cy + (self.LOGO_SIZE / 2.0) + 30.0

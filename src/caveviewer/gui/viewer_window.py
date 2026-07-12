@@ -294,6 +294,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     RIGHT_COLUMN_PANEL_LABEL_SIZE = 1.7
     RIGHT_COLUMN_PANEL_SCALE = 0.76
     RIGHT_COLUMN_PANEL_TEXT_SCALE = 0.84
+    RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE = 0.98
+    RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE = 0.70
+    RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE = 1.0
     RIGHT_COLUMN_PANEL_MAX_UI_SCALE = _VIEWER_UI_SCALE_MAX
     RIGHT_COLUMN_PANEL_FILL_RGBA = (0.09, 0.12, 0.16, 0.84)
     RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
@@ -332,7 +335,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.RIGHT_COLUMN_PANEL_SCALE * self._viewer_ui_scale
         )
         self._right_column_panel_text_scale = (
-            self.RIGHT_COLUMN_PANEL_TEXT_SCALE * self._viewer_ui_scale
+            self.RIGHT_COLUMN_PANEL_TEXT_SCALE
+            * min(self._viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        self._right_column_panel_label_text_scale = (
+            self.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE
+            * min(self._viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        self._right_column_panel_button_text_scale = (
+            self.RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE
+            * min(self._viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
         )
 
         have_ready_cache = CaveViewerWindow.cave_cache_dir is not None
@@ -438,6 +450,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             max_value=10,
             text_scale=self._right_column_text_scale(),
             geometry_scale=self._right_column_geometry_scale(),
+            label_text_scale=self._right_column_label_text_scale(),
         )
 
         # Render distance control: a -/value/+ stepper, left side of the
@@ -457,6 +470,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             max_value=10,
             text_scale=self._right_column_text_scale(),
             geometry_scale=self._right_column_geometry_scale(),
+            label_text_scale=self._right_column_label_text_scale(),
         )
 
         # "Global illumination" control: not actual simulated light
@@ -478,6 +492,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             max_value=10,
             text_scale=self._right_column_text_scale(),
             geometry_scale=self._right_column_geometry_scale(),
+            label_text_scale=self._right_column_label_text_scale(),
         )
 
         # Mesh/Texture toggle buttons, stacked just below the brightness
@@ -490,7 +505,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             texture_enabled=True,
             wireframe_enabled=False,
             smooth_shading_enabled=True,
-            text_scale=self._right_column_text_scale(),
+            text_scale=self._right_column_button_text_scale(),
             geometry_scale=self._right_column_geometry_scale(),
         )
         # Loading-policy lock for right-side button effects. While a map
@@ -1871,21 +1886,54 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
         )
 
+    def _right_column_label_text_scale(self) -> float:
+        return float(
+            getattr(
+                self,
+                "_right_column_panel_label_text_scale",
+                self.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE,
+            )
+        )
+
+    def _right_column_button_text_scale(self) -> float:
+        return float(
+            getattr(
+                self,
+                "_right_column_panel_button_text_scale",
+                self.RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE,
+            )
+        )
+
     def _update_right_column_hud_scale(self, window_size: tuple[int, int]) -> None:
         """Keep the always-visible HUD legible as the viewer is resized."""
         viewer_ui_scale = _viewer_ui_scale_for_window_size(window_size)
         geometry_scale = self.RIGHT_COLUMN_PANEL_SCALE * viewer_ui_scale
-        text_scale = self.RIGHT_COLUMN_PANEL_TEXT_SCALE * viewer_ui_scale
+        text_scale = (
+            self.RIGHT_COLUMN_PANEL_TEXT_SCALE
+            * min(viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        label_text_scale = (
+            self.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE
+            * min(viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        button_text_scale = (
+            self.RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE
+            * min(viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
         if (
             viewer_ui_scale == self._right_column_ui_scale()
             and geometry_scale == self._right_column_geometry_scale()
             and text_scale == self._right_column_text_scale()
+            and label_text_scale == self._right_column_label_text_scale()
+            and button_text_scale == self._right_column_button_text_scale()
         ):
             return
 
         self._viewer_ui_scale = viewer_ui_scale
         self._right_column_panel_scale = geometry_scale
         self._right_column_panel_text_scale = text_scale
+        self._right_column_panel_label_text_scale = label_text_scale
+        self._right_column_panel_button_text_scale = button_text_scale
         self._layout_cache_size = None
         self._layout_cache_result = None
 
@@ -1893,11 +1941,18 @@ class CaveViewerWindow(mglw.WindowConfig):
             getattr(self, "light_stepper", None),
             getattr(self, "ambient_stepper", None),
             getattr(self, "render_distance_stepper", None),
-            getattr(self, "render_mode_buttons", None),
         ):
             setter = getattr(control, "set_scale", None)
             if callable(setter):
-                setter(text_scale=text_scale, geometry_scale=geometry_scale)
+                setter(
+                    text_scale=text_scale,
+                    geometry_scale=geometry_scale,
+                    label_text_scale=label_text_scale,
+                )
+
+        setter = getattr(getattr(self, "render_mode_buttons", None), "set_scale", None)
+        if callable(setter):
+            setter(text_scale=button_text_scale, geometry_scale=geometry_scale)
 
     def _right_column_layout(self, window_size: tuple[int, int]) -> dict:
         """
@@ -1919,17 +1974,16 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         w, h = window_size
 
-        # label reserve: matches StepperControl.render's own
-        # label_size=1.5 text height + 8px gap, computed here once so
+        # Label reserve matches StepperControl.render's own label metrics so
         # this stays correct if that label styling ever changes (rather
         # than a second hard-coded guess at the same number).
         from caveviewer.gui import bitmap_font
         panel_scale = self._right_column_geometry_scale()
-        panel_text_scale = self._right_column_text_scale()
+        panel_label_text_scale = self._right_column_label_text_scale()
         viewer_ui_scale = self._right_column_ui_scale()
         fixed_label_size = bitmap_font.pixel_size_at_text_scale(
-            1.5,
-            self.UI_TEXT_SCALE * panel_text_scale,
+            StepperControl.LABEL_TEXT_SIZE,
+            StepperControl.FIXED_TEXT_SCALE * panel_label_text_scale,
         )
         label_reserve = bitmap_font.text_height_px(fixed_label_size) + 8 * panel_scale
 
@@ -1979,9 +2033,17 @@ class CaveViewerWindow(mglw.WindowConfig):
         w, h = window_size
         fixed_label_size = bitmap_font.pixel_size_at_text_scale(
             self.RIGHT_COLUMN_PANEL_LABEL_SIZE,
-            self.UI_TEXT_SCALE * self._right_column_text_scale(),
+            StepperControl.FIXED_TEXT_SCALE * self._right_column_label_text_scale(),
         )
         label_height = bitmap_font.text_height_px(fixed_label_size)
+        label_widths = [
+            bitmap_font.text_width_px(self.light_stepper.label, fixed_label_size),
+            bitmap_font.text_width_px(self.ambient_stepper.label, fixed_label_size),
+            bitmap_font.text_width_px(
+                self.render_distance_stepper.label,
+                fixed_label_size,
+            ),
+        ]
         buttons_top_y = column["buttons_top_y"]
 
         brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
@@ -1993,6 +2055,19 @@ class CaveViewerWindow(mglw.WindowConfig):
             brightness_anchor_x + self.light_stepper.total_width(),
             ambient_anchor_x + self.ambient_stepper.total_width(),
             render_distance_anchor_x + self.render_distance_stepper.total_width(),
+        ]
+        stepper_widths = [
+            self.light_stepper.total_width(),
+            self.ambient_stepper.total_width(),
+            self.render_distance_stepper.total_width(),
+        ]
+        label_lefts = [
+            anchor_x + (stepper_width - label_width) / 2.0
+            for anchor_x, stepper_width, label_width in zip(
+                stepper_lefts,
+                stepper_widths,
+                label_widths,
+            )
         ]
         panel_scale = self._right_column_geometry_scale()
         viewer_ui_scale = self._right_column_ui_scale()
@@ -2010,7 +2085,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             6, window_size, buttons_top_y, column["content_right_inset"]
         )
 
-        x0 = min(min(stepper_lefts), button_x0) - (
+        x0 = min(min(stepper_lefts), min(label_lefts), button_x0) - (
             self.RIGHT_COLUMN_PANEL_SIDE_PAD * viewer_ui_scale
         )
         x1 = w - (self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN * viewer_ui_scale)

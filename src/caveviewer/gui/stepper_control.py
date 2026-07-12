@@ -71,6 +71,7 @@ class StepperControl:
         max_value: int,
         text_scale: float = 1.0,
         geometry_scale: float = 1.0,
+        label_text_scale: float | None = None,
     ):
         self.ctx = ctx
         self.label = label
@@ -78,6 +79,10 @@ class StepperControl:
         self.min_value = min_value
         self.max_value = max_value
         self._text_scale = max(0.35, float(text_scale))
+        self._label_text_scale = max(
+            0.35,
+            float(text_scale if label_text_scale is None else label_text_scale),
+        )
         self._geometry_scale = max(0.35, float(geometry_scale))
 
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
@@ -91,23 +96,36 @@ class StepperControl:
         self._render_cache_key: tuple | None = None
         self._render_cache_verts = 0
 
-    def set_scale(self, *, text_scale: float, geometry_scale: float) -> None:
+    def set_scale(
+        self,
+        *,
+        text_scale: float,
+        geometry_scale: float,
+        label_text_scale: float | None = None,
+    ) -> None:
         """Update cached text/geometry scale without recreating GL resources."""
         next_text_scale = max(0.35, float(text_scale))
+        next_label_text_scale = max(
+            0.35,
+            float(text_scale if label_text_scale is None else label_text_scale),
+        )
         next_geometry_scale = max(0.35, float(geometry_scale))
         if (
             next_text_scale == self._text_scale
+            and next_label_text_scale == self._label_text_scale
             and next_geometry_scale == self._geometry_scale
         ):
             return
         self._text_scale = next_text_scale
+        self._label_text_scale = next_label_text_scale
         self._geometry_scale = next_geometry_scale
         self._render_cache_key = None
 
-    def _scaled_text_size(self, base_pixel_size: float) -> float:
+    def _scaled_text_size(self, base_pixel_size: float, *, label: bool = False) -> float:
+        text_scale = self._label_text_scale if label else self._text_scale
         return bitmap_font.pixel_size_at_text_scale(
             base_pixel_size,
-            self.FIXED_TEXT_SCALE * self._text_scale,
+            self.FIXED_TEXT_SCALE * text_scale,
         )
 
     def _button_size(self) -> float:
@@ -192,6 +210,7 @@ class StepperControl:
             self.min_value,
             self.max_value,
             self._text_scale,
+            self._label_text_scale,
             self._geometry_scale,
             bitmap_font.raster_scale(),
         )
@@ -292,7 +311,7 @@ class StepperControl:
         add_text(value_text, vcx - vw_px / 2.0 - vbx0, vcy - vh_px / 2.0 - vby0,
                  value_size, (0.78, 0.88, 1.0, 1.0))
 
-        label_size = self._scaled_text_size(self.LABEL_TEXT_SIZE)
+        label_size = self._scaled_text_size(self.LABEL_TEXT_SIZE, label=True)
         label_w = bitmap_font.text_width_px(self.label, label_size)
         label_gap = 10 * self._geometry_scale
         if label_above:

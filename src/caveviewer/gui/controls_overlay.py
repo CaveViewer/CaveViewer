@@ -61,6 +61,30 @@ _SPLASH_INSTRUCTION_RGBA = (0.6039, 0.6039, 0.6510, 1.0) # #9a9aa6
 _SPLASH_PROGRESS_TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)  # #1c1c24
 _SPLASH_PROGRESS_FILL_RGBA = (0.8980, 0.6314, 0.1216, 1.0)    # #e5a11f
 
+_FULLSCREEN_BASE_WINDOW_SIZE = (1536, 864)
+_FULLSCREEN_LAYOUT_SCALE_MAX = 1.32
+_FULLSCREEN_SUBTITLE_TEXT_SIZE = 2.55
+
+
+def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
+    """Return bounded scaling for fullscreen loading/help overlay text.
+
+    The startup/help screen occupies the whole viewer, so it should grow on
+    large XWayland/AppImage surfaces instead of staying at the compact
+    1536x864 baseline.  Cap the multiplier so very large monitors do not turn
+    the reference table into billboard-sized text.
+    """
+    try:
+        width, height = window_size
+        width = max(1, int(width))
+        height = max(1, int(height))
+    except Exception:
+        width, height = _FULLSCREEN_BASE_WINDOW_SIZE
+
+    base_width, base_height = _FULLSCREEN_BASE_WINDOW_SIZE
+    size_scale = min(width / base_width, height / base_height)
+    return max(1.0, min(_FULLSCREEN_LAYOUT_SCALE_MAX, size_scale))
+
 
 def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
     """Generate platform-specific control sections for display."""
@@ -457,6 +481,7 @@ class ControlsOverlay:
 
     def _build_fullscreen(self, add_quad_px, add_text, window_size):
         w, h = window_size
+        layout_scale = _fullscreen_layout_scale(window_size)
 
         # Dim the 3D view heavily while the controls reference is shown.
         add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, 0.96))
@@ -471,17 +496,17 @@ class ControlsOverlay:
             title = ""
             subtitle = "Press Space to begin" if self._ready_to_begin else "Loading map..."
 
-        title_size = 4.3
+        title_size = 4.3 * layout_scale
         title_y = h * 0.12
         if title:
             title_w = bitmap_font.text_width_px(title, title_size)
             title_x = (w - title_w) / 2.0
             add_text(title, title_x, title_y, title_size, _SPLASH_TITLE_RGBA)
-            subtitle_y = title_y + bitmap_font.text_height_px(title_size) + 18
+            subtitle_y = title_y + bitmap_font.text_height_px(title_size) + 18 * layout_scale
         else:
             subtitle_y = title_y
 
-        sub_size = 2.2
+        sub_size = _FULLSCREEN_SUBTITLE_TEXT_SIZE * layout_scale
         sub_y = subtitle_y
         if not self._manual_mode and subtitle == "Press Space to begin":
             bar_bottom_y = self._draw_begin_prompt(add_quad_px, add_text, w, sub_y, sub_size)
@@ -491,20 +516,20 @@ class ControlsOverlay:
             add_text(subtitle, sub_x, sub_y, sub_size, _SPLASH_SUBTITLE_RGBA)
             bar_bottom_y = sub_y + bitmap_font.text_height_px(sub_size)
         if not self._manual_mode:
-            bar_w = 300.0
-            bar_h = 4.0
+            bar_w = 300.0 * layout_scale
+            bar_h = 4.0 * layout_scale
             bar_x0 = (w - bar_w) / 2.0
             bar_x1 = bar_x0 + bar_w
-            bar_y0 = bar_bottom_y + 22.0
+            bar_y0 = bar_bottom_y + 22.0 * layout_scale
             bar_y1 = bar_y0 + bar_h
 
             add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, _SPLASH_PROGRESS_TRACK_RGBA)
             fill_x1 = bar_x0 + self._progress_fraction * bar_w
             if fill_x1 > bar_x0:
                 add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
-            table_start_offset = 126.0
+            table_start_offset = 126.0 * layout_scale
         else:
-            table_start_offset = 126.0
+            table_start_offset = 126.0 * layout_scale
 
         table_top_y = bar_bottom_y + table_start_offset
         self._draw_grouped_controls(
@@ -513,16 +538,18 @@ class ControlsOverlay:
             window_size=window_size,
             top_y=table_top_y,
             available_height=max(80.0, h - table_top_y - 20.0),
+            layout_scale=layout_scale,
         )
 
         return None
 
     def _draw_begin_prompt(self, add_quad_px, add_text, window_width, y, text_size):
         key_label = "Space"
-        key_size = 1.95
-        key_pad_x = 10.0
-        key_pad_y = 5.0
-        gap = 10.0
+        prompt_scale = max(1.0, text_size / _FULLSCREEN_SUBTITLE_TEXT_SIZE)
+        key_size = 1.95 * prompt_scale
+        key_pad_x = 10.0 * prompt_scale
+        key_pad_y = 5.0 * prompt_scale
+        gap = 10.0 * prompt_scale
 
         left_text = "Press"
         right_text = "to begin"
@@ -546,26 +573,34 @@ class ControlsOverlay:
 
         return y + prompt_h
 
-    def _draw_grouped_controls(self, add_quad_px, add_text, window_size, top_y, available_height):
+    def _draw_grouped_controls(
+        self,
+        add_quad_px,
+        add_text,
+        window_size,
+        top_y,
+        available_height,
+        layout_scale=1.0,
+    ):
         w, h = window_size
 
-        heading_size = 1.68
-        key_size = 1.76
-        desc_size = 1.80
-        row_height = 31.0
-        heading_gap = 13.0
-        section_gap = 58.0
-        key_pad_x = 8.0
-        key_pad_y = 4.0
-        key_desc_gap = 20.0
+        heading_size = 1.68 * layout_scale
+        key_size = 1.76 * layout_scale
+        desc_size = 1.80 * layout_scale
+        row_height = 31.0 * layout_scale
+        heading_gap = 13.0 * layout_scale
+        section_gap = 58.0 * layout_scale
+        key_pad_x = 8.0 * layout_scale
+        key_pad_y = 4.0 * layout_scale
+        key_desc_gap = 20.0 * layout_scale
 
         if self._manual_mode and sys.platform != "darwin":
-            heading_size = 1.55
-            key_size = 1.62
-            desc_size = 1.66
-            row_height = 28.0
-            heading_gap = 11.0
-            section_gap = 48.0
+            heading_size = 1.55 * layout_scale
+            key_size = 1.62 * layout_scale
+            desc_size = 1.66 * layout_scale
+            row_height = 28.0 * layout_scale
+            heading_gap = 11.0 * layout_scale
+            section_gap = 48.0 * layout_scale
 
         # CAVEVIEWER_UI_TEXT_SCALE changes the actual FreeType line metrics,
         # while the values above describe the layout at its normal size.  Do
