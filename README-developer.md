@@ -304,7 +304,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
 | `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to enter the update-available state regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
 | `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | Low-level macOS packaging override. The top-level release dispatcher uses `--target=macos-arm64` or `--target=macos-x86_64`; normal app update checks detect the running process architecture automatically. |
-| `CAVEVIEWER_LINUX_UPDATE_ARCH` | _(auto)_ | Linux publish helper only. Set to `arm64` or `x86_64` to choose which AppImage is written to the Linux update manifest. |
+| `CAVEVIEWER_LINUX_UPDATE_ARCH` | `x86_64` | Linux publish helper only. Linux distribution is x86_64-only; set to `x86_64` when invoking lower-level publish helpers directly. |
 
 The update checker requires manifests to be signed with the release Ed25519
 private key. The bundled public key lives at
@@ -349,12 +349,13 @@ Cancellation is distinct from portal failure; unavailable or old portals fall
 back to the owned Tk chooser. Portal-selected source folders need only be
 readable because generated cache assets are written to CaveViewer's cache root.
 
-Default update checks read committed, architecture-specific main-branch
-manifests, not GitHub's latest-release or prerelease metadata. macOS uses
-`updates/macos/<arm64|x86_64>/stable.json`; Linux follows the same architecture
-split. macOS selects the running process architecture, so a Rosetta-launched
-x86_64 build continues on the Intel update channel. Stable publish runs update
-and sign `stable.json`.
+Default update checks read committed main-branch manifests, not GitHub's
+latest-release or prerelease metadata. macOS uses
+`updates/macos/<arm64|x86_64>/stable.json` and selects the running process
+architecture, so a Rosetta-launched x86_64 build continues on the Intel update
+channel. Linux distribution is x86_64-only and reads
+`updates/linux/x86_64/stable.json`; Linux ARM64 builds do not receive automatic
+updates. Stable publish runs update and sign `stable.json`.
 Prerelease publish runs update the separate `prerelease.json` channel, leaving
 `stable.json` unchanged, and mark a newly created GitHub release as a
 prerelease. Uploading to an existing tag does not change that tag's
@@ -406,7 +407,7 @@ or set `CAVEVIEWER_UPDATE_MANIFEST_URL` to a staging/custom-hosted copy of the
 manifest; the signature URL defaults to `<manifest-url>.sig` unless
 `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` is set explicitly.
 
-Linux manifests are architecture-specific:
+Linux manifests are x86_64-only:
 
 ```text
 updates/linux/x86_64/stable.json
@@ -495,6 +496,9 @@ still override it for an individual run.
 |---|---|---|
 | `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Scale multiplier for adaptable in-app overlay text (loading screens, controls/help overlay, and HUD readouts). Text inside fixed-size control geometry is intentionally excluded. `1.0` is the base size. |
 | `CAVEVIEWER_TK_SCALE` | _(display DPI)_ | Windows/Linux override for Tk dialog scaling, clamped to `0.75` through `4.0`. The Linux AppImage launcher normally derives this value from the desktop Xft DPI setting. |
+| `CAVEVIEWER_APPRUN_INSTALL_ONLY` | `0` | Linux AppImage launcher smoke mode. Set to `1` to install/update the desktop file, AppStream metadata, and hicolor icons in the user's XDG data home, print the installed paths, and exit without launching the GUI. |
+| `CAVEVIEWER_APPRUN_UNINSTALL` | `0` | Linux AppImage launcher uninstall mode. Set to `1` to remove CaveViewer's per-user desktop file, AppStream metadata, and hicolor icons, then exit without launching the GUI. It does not remove maps, settings, caches, or downloaded update packages. |
+| `CAVEVIEWER_NO_DESKTOP_INTEGRATION` | `0` | Linux AppImage launcher opt-out. Set to `1` to skip the best-effort per-user desktop integration step. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
 | `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS/Linux), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing; `lcd` = LCD sub-pixel rendering. |
 | `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |

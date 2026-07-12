@@ -42,6 +42,7 @@ from caveviewer.gui.color_picker import ColorPicker
 from caveviewer.gui.import_progress_panel import ImportProgressPanel
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform import tk_root_options
 from caveviewer.gui.platform.windowing import run_window_config
 from caveviewer.resources import image_path, resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
@@ -58,7 +59,7 @@ def _desktop_relative_window_size() -> tuple[int, int]:
     try:
         import tkinter as tk
 
-        root = tk.Tk(baseName=APP_NAME, className=APP_NAME)
+        root = tk.Tk(**tk_root_options())
         root.withdraw()
         desktop_width = int(root.winfo_screenwidth())
         desktop_height = int(root.winfo_screenheight())
@@ -95,6 +96,43 @@ def _window_pixel_ratio(window) -> float:
         return max(1.0, min(4.0, max(buffer_width / width, buffer_height / height)))
     except Exception:
         return 1.0
+
+
+def _map_import_inhibit_reason(map_name: str) -> str:
+    """Return the desktop-visible reason used while importing a map."""
+    display_name = str(map_name or "").strip() or "map"
+    return f"Importing {display_name}"
+
+
+def _acquire_map_import_inhibitor(map_name: str):
+    """Best-effort desktop idle/suspend inhibitor for long map imports."""
+    try:
+        from caveviewer.gui.platform import get_desktop_services
+
+        return get_desktop_services().inhibit_idle_suspend(
+            _map_import_inhibit_reason(map_name)
+        )
+    except Exception as exc:
+        # Desktop integration must not block opening maps. Linux portals
+        # provide the real inhibitor; unsupported sessions continue normally.
+        _LOG.warning(
+            "Desktop idle/suspend inhibit unavailable during map import: %s",
+            exc,
+        )
+        return None
+
+
+def _release_desktop_inhibitor(inhibitor) -> None:
+    """Release a desktop inhibitor without affecting import completion."""
+    if inhibitor is None:
+        return
+    try:
+        inhibitor.close()
+    except Exception as exc:
+        _LOG.warning(
+            "Desktop idle/suspend inhibit release failed after map import: %s",
+            exc,
+        )
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -211,15 +249,15 @@ class CaveViewerWindow(mglw.WindowConfig):
     # Shared backplate behind the always-visible right-side HUD controls.
     # This keeps section labels readable over bright cave surfaces without
     # adding a separate background to every individual widget.
-    RIGHT_COLUMN_PANEL_SIDE_PAD = 14
-    RIGHT_COLUMN_PANEL_TOP_PAD = 12
-    RIGHT_COLUMN_PANEL_BOTTOM_PAD = 14
-    RIGHT_COLUMN_PANEL_RIGHT_MARGIN = 20
-    RIGHT_COLUMN_PANEL_BOTTOM_MARGIN = 20
-    RIGHT_COLUMN_PANEL_LABEL_GAP = 10
+    RIGHT_COLUMN_PANEL_SIDE_PAD = 10
+    RIGHT_COLUMN_PANEL_TOP_PAD = 8
+    RIGHT_COLUMN_PANEL_BOTTOM_PAD = 10
+    RIGHT_COLUMN_PANEL_RIGHT_MARGIN = 16
+    RIGHT_COLUMN_PANEL_BOTTOM_MARGIN = 16
+    RIGHT_COLUMN_PANEL_LABEL_GAP = 8
     RIGHT_COLUMN_PANEL_LABEL_SIZE = 1.7
-    RIGHT_COLUMN_PANEL_SCALE = 0.86
-    RIGHT_COLUMN_PANEL_TEXT_SCALE = 0.92
+    RIGHT_COLUMN_PANEL_SCALE = 0.76
+    RIGHT_COLUMN_PANEL_TEXT_SCALE = 0.84
     RIGHT_COLUMN_PANEL_FILL_RGBA = (0.09, 0.12, 0.16, 0.84)
     RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
     RIGHT_COLUMN_PANEL_BORDER_PX = 1.5
@@ -1477,11 +1515,15 @@ class CaveViewerWindow(mglw.WindowConfig):
                     )
                 else:
                     on_progress("starting import", 0.0)
-                    cache_dir = import_and_cache_any(
-                        model_descriptor, textures_dir,
-                        force_rebuild=False,
-                        extra_progress_cb=on_progress,
-                    )
+                    inhibitor = _acquire_map_import_inhibitor(map_name)
+                    try:
+                        cache_dir = import_and_cache_any(
+                            model_descriptor, textures_dir,
+                            force_rebuild=False,
+                            extra_progress_cb=on_progress,
+                        )
+                    finally:
+                        _release_desktop_inhibitor(inhibitor)
                     # Every new cache publishes its referenced textures in the
                     # same atomic staging transaction as its chunks.
                     resolved_textures_dir = cache_dir
@@ -1681,8 +1723,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     # height of everything below the WINDOW bottom margin, not just its
     # own height.
     RIGHT_COLUMN_BOTTOM_MARGIN = 18
-    RIGHT_COLUMN_GAP = 14  # vertical gap between each of the 4 blocks (brightness, render distance, global light, buttons)
-    RIGHT_COLUMN_BUTTON_GROUP_GAP = 30  # extra gap between View dist and Mesh/Texture/Shade group
+    RIGHT_COLUMN_GAP = 10  # vertical gap between the right-side HUD blocks
+    RIGHT_COLUMN_BUTTON_GROUP_GAP = 20  # extra gap before the Mesh/Texture/Shade group
 
     # Keyboard look fallback (especially useful on macOS hardware where
     # right-button drag can be awkward/unavailable). Interpreted as

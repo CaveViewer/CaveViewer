@@ -55,7 +55,7 @@ from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
 from caveviewer.gui.platform import get_splash_platform_adapter
-from caveviewer.gui.platform import DesktopServices, get_desktop_services
+from caveviewer.gui.platform import DesktopServices, get_desktop_services, tk_root_options
 from caveviewer.gui.preferences import migrate_state_file, write_text_atomic
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.update_manager import (
@@ -298,7 +298,7 @@ def show_splash_screen(
     _apply_advanced_settings_to_env(_load_advanced_settings())
 
     configure_process_dpi_awareness()
-    root = tk.Tk(baseName=APP_NAME, className=APP_NAME)
+    root = tk.Tk(**tk_root_options())
     apply_tk_scaling(root)
     _configure_runtime_tk_fonts(root)
     splash_scale = tk_display_scale(root)
@@ -639,12 +639,11 @@ def show_splash_screen(
 
     # Example maps link - opens the sample maps dialog
     def _on_example_maps_click():
+        from caveviewer.gui.sample_maps import default_sample_maps_install_dir
         from caveviewer.gui.sample_maps_dialog import show_sample_maps_dialog
-        import os
-        install_dir = os.path.expanduser("~")
         result = show_sample_maps_dialog(
             root,
-            install_dir,
+            default_sample_maps_install_dir(),
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
         )

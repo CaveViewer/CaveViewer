@@ -18,23 +18,31 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         return "sans-serif"
 
     def default_update_manifest_url(self, repo: str, branch: str) -> str:
-        return f"https://raw.githubusercontent.com/{repo}/{branch}/updates/linux/{self._update_arch_slug()}/stable.json"
+        update_arch = self._update_arch_slug()
+        if update_arch is None:
+            return ""
+        return f"https://raw.githubusercontent.com/{repo}/{branch}/updates/linux/{update_arch}/stable.json"
 
-    def _update_arch_slug(self) -> str:
+    def _update_arch_slug(self) -> str | None:
         machine = platform.machine().strip().lower()
-        if machine in {"aarch64", "arm64"}:
-            return "arm64"
         if machine in {"x86_64", "amd64"}:
             return "x86_64"
-        return "x86_64"
+        return None
 
     def install_channel(self) -> str:
         return "linux_app"
 
     def supports_install_channel(self, channel: str) -> bool:
-        return channel == "linux_app"
+        return channel == "linux_app" and self._update_arch_slug() == "x86_64"
 
     def unsupported_install_channel_message(self, channel: str) -> str:
+        if channel == "linux_app" and self._update_arch_slug() is None:
+            machine = platform.machine().strip() or "unknown"
+            return (
+                "Linux automatic updates are available only for x86_64 builds. "
+                f"This machine reports architecture '{machine}', so automatic "
+                "updates are disabled."
+            )
         return (
             f"Unsupported install channel '{channel}' on Linux. "
             "Expected channel: linux_app."

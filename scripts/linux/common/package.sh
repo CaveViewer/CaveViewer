@@ -261,6 +261,8 @@ cat > "$appdir/AppRun" <<'APP_RUN_EOF'
 set -euo pipefail
 
 debug="${CAVEVIEWER_LAUNCH_DEBUG:-0}"
+install_only="${CAVEVIEWER_APPRUN_INSTALL_ONLY:-0}"
+uninstall_only="${CAVEVIEWER_APPRUN_UNINSTALL:-0}"
 launcher_version="2026-07-04-debug-stream-v2"
 log_file="${CAVEVIEWER_LAUNCH_LOG:-${TMPDIR:-/tmp}/caveviewer-launch.log}"
 
@@ -291,25 +293,71 @@ if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] uname=$(uname -a)"
 fi
 
+if [ "$install_only" = "1" ] && [ "$uninstall_only" = "1" ]; then
+  echo "Error: CAVEVIEWER_APPRUN_INSTALL_ONLY=1 and CAVEVIEWER_APPRUN_UNINSTALL=1 are mutually exclusive."
+  exit 2
+fi
+
+desktop_data_home() {
+  if [ -n "${XDG_DATA_HOME:-}" ]; then
+    printf '%s\n' "$XDG_DATA_HOME"
+  elif [ -n "${HOME:-}" ]; then
+    printf '%s\n' "$HOME/.local/share"
+  else
+    return 2
+  fi
+}
+
+refresh_desktop_caches() {
+  applications_dir="$1"
+  icons_hicolor_dir="$2"
+  if command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -d "$icons_hicolor_dir" ]; then
+    gtk-update-icon-cache -q -t "$icons_hicolor_dir" >/dev/null 2>&1 || true
+  fi
+  if command -v update-desktop-database >/dev/null 2>&1 && [ -d "$applications_dir" ]; then
+    update-desktop-database -q "$applications_dir" >/dev/null 2>&1 || true
+  fi
+}
+
 install_desktop_integration() {
   if [ "${CAVEVIEWER_NO_DESKTOP_INTEGRATION:-0}" = "1" ]; then
+    if [ "$debug" = "1" ] || [ "$install_only" = "1" ]; then
+      echo "[CaveViewer AppRun] Desktop integration disabled by CAVEVIEWER_NO_DESKTOP_INTEGRATION=1"
+    fi
     return
   fi
-  if [ -z "${APPIMAGE:-}" ] || [ -z "${HOME:-}" ]; then
+  if [ -z "${APPIMAGE:-}" ]; then
+    if [ "$install_only" = "1" ]; then
+      echo "Error: CAVEVIEWER_APPRUN_INSTALL_ONLY=1 requires APPIMAGE."
+      return 2
+    fi
+    return
+  fi
+  if ! data_home="$(desktop_data_home)"; then
+    if [ "$install_only" = "1" ]; then
+      echo "Error: CAVEVIEWER_APPRUN_INSTALL_ONLY=1 requires HOME or XDG_DATA_HOME."
+      return 2
+    fi
     return
   fi
 
-  data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
   applications_dir="$data_home/applications"
+  metainfo_dir="$data_home/metainfo"
   icons_hicolor_dir="$data_home/icons/hicolor"
   application_id="io.github.kernalpanic.caveviewer"
   desktop_path="$applications_dir/${application_id}.desktop"
   desktop_source="$appdir/usr/share/applications/${application_id}.desktop"
+  metainfo_path="$metainfo_dir/${application_id}.metainfo.xml"
+  metainfo_source="$appdir/usr/share/metainfo/${application_id}.metainfo.xml"
 
-  mkdir -p "$applications_dir"
+  mkdir -p "$applications_dir" "$metainfo_dir"
   if [ -d "$appdir/usr/share/icons/hicolor" ]; then
     mkdir -p "$icons_hicolor_dir"
     cp -R "$appdir/usr/share/icons/hicolor/." "$icons_hicolor_dir/"
+  fi
+  if [ -f "$metainfo_source" ]; then
+    cp "$metainfo_source" "$metainfo_path"
+    chmod 0644 "$metainfo_path" 2>/dev/null || true
   fi
 
   # Render the packaged canonical desktop file with the current AppImage path.
@@ -318,7 +366,7 @@ install_desktop_integration() {
   escaped_appimage="${escaped_appimage//\"/\\\"}"
   escaped_appimage="${escaped_appimage//&/\\&}"
   escaped_appimage="${escaped_appimage//|/\\|}"
-  sed "s|^Exec=.*$|Exec=\"$escaped_appimage\"|" "$desktop_source" > "$desktop_path"
+  sed "s|^Exec=.*$|Exec=\"$escaped_appimage\" %f|" "$desktop_source" > "$desktop_path"
   chmod 0644 "$desktop_path" 2>/dev/null || true
   find "$icons_hicolor_dir" -path "*/apps/${application_id}.png" -exec chmod 0644 {} \; 2>/dev/null || true
 
@@ -330,20 +378,60 @@ install_desktop_integration() {
       grep -q '^Icon=caveviewer$' "$legacy_desktop_path"; then
     rm -f "$legacy_desktop_path"
   fi
-  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -q -t "$icons_hicolor_dir" >/dev/null 2>&1 || true
-  fi
-  if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database -q "$applications_dir" >/dev/null 2>&1 || true
-  fi
+  refresh_desktop_caches "$applications_dir" "$icons_hicolor_dir"
 
-  if [ "$debug" = "1" ]; then
+  if [ "$debug" = "1" ] || [ "$install_only" = "1" ]; then
     echo "[CaveViewer AppRun] Desktop file: $desktop_path"
+    echo "[CaveViewer AppRun] AppStream metadata: $metainfo_path"
     echo "[CaveViewer AppRun] Desktop icons: $icons_hicolor_dir/*/apps/${application_id}.png"
   fi
 }
 
+uninstall_desktop_integration() {
+  if ! data_home="$(desktop_data_home)"; then
+    echo "Error: CAVEVIEWER_APPRUN_UNINSTALL=1 requires HOME or XDG_DATA_HOME."
+    return 2
+  fi
+
+  applications_dir="$data_home/applications"
+  metainfo_dir="$data_home/metainfo"
+  icons_hicolor_dir="$data_home/icons/hicolor"
+  application_id="io.github.kernalpanic.caveviewer"
+  desktop_path="$applications_dir/${application_id}.desktop"
+  metainfo_path="$metainfo_dir/${application_id}.metainfo.xml"
+
+  rm -f "$desktop_path"
+  rm -f "$metainfo_path"
+  if [ -d "$icons_hicolor_dir" ]; then
+    find "$icons_hicolor_dir" -path "*/apps/${application_id}.png" -type f -exec rm -f {} \; 2>/dev/null || true
+  fi
+
+  # Remove only the legacy desktop entry generated by old CaveViewer releases.
+  legacy_desktop_path="$applications_dir/caveviewer.desktop"
+  if [ -f "$legacy_desktop_path" ] && \
+      grep -q '^Name=CaveViewer$' "$legacy_desktop_path" && \
+      grep -q '^Icon=caveviewer$' "$legacy_desktop_path"; then
+    rm -f "$legacy_desktop_path"
+  fi
+
+  refresh_desktop_caches "$applications_dir" "$icons_hicolor_dir"
+
+  echo "[CaveViewer AppRun] Removed desktop file: $desktop_path"
+  echo "[CaveViewer AppRun] Removed AppStream metadata: $metainfo_path"
+  echo "[CaveViewer AppRun] Removed desktop icons: $icons_hicolor_dir/*/apps/${application_id}.png"
+}
+
+if [ "$uninstall_only" = "1" ]; then
+  uninstall_desktop_integration
+  echo "[CaveViewer AppRun] Desktop integration uninstall complete."
+  exit 0
+fi
+
 install_desktop_integration
+if [ "$install_only" = "1" ]; then
+  echo "[CaveViewer AppRun] Desktop integration smoke mode complete."
+  exit 0
+fi
 
 # On RPM-based distros (Fedora, RHEL, etc.) the unversioned libGL.so /
 # libEGL.so symlinks are often only available in -devel packages. Create

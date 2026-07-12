@@ -17,6 +17,10 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.kernalpanic.caveviewer.desktop</launchable>
+  <provides>
+    <mediatype>model/gltf-binary</mediatype>
+    <mediatype>model/obj</mediatype>
+  </provides>
   <developer id="io.github.kernalpanic">
     <name>CaveViewer contributors</name>
   </developer>

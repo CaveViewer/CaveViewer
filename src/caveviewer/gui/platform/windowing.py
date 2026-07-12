@@ -11,6 +11,7 @@ from types import ModuleType
 from typing import Any, Callable, Mapping
 
 from caveviewer.core.logging_utils import get_logger
+from caveviewer.gui.platform.app_identity import LINUX_WINDOW_INSTANCE_NAME
 from caveviewer.version import APPLICATION_ID
 
 
@@ -122,13 +123,20 @@ def run_window_config(
             previous_window_backend = os.environ.get("MODERNGL_WINDOW")
             os.environ["MODERNGL_WINDOW"] = "glfw"
             try:
-                if window_size_fraction is None:
-                    runner(config_class, args=["--window", "glfw"])
-                else:
-                    _run_with_fixed_glfw_window_scale(
-                        glfw_module,
-                        lambda: runner(config_class, args=["--window", "glfw"]),
-                    )
+                def run_glfw_window() -> None:
+                    if window_size_fraction is None:
+                        runner(config_class, args=["--window", "glfw"])
+                    else:
+                        _run_with_fixed_glfw_window_scale(
+                            glfw_module,
+                            lambda: runner(config_class, args=["--window", "glfw"]),
+                        )
+
+                _run_with_platform_moderngl_context(
+                    config_class,
+                    window_system=window_system,
+                    runner=run_glfw_window,
+                )
             finally:
                 if previous_window_backend is None:
                     os.environ.pop("MODERNGL_WINDOW", None)
@@ -312,6 +320,51 @@ def _run_with_fixed_glfw_window_scale(
         glfw_module.window_hint = original_window_hint
 
 
+def _run_with_platform_moderngl_context(
+    config_class: type, *, window_system: WindowSystem, runner: Callable[[], None]
+) -> None:
+    """Give ModernGL the context detector matching the selected GLFW platform."""
+    if (
+        window_system is not WindowSystem.WAYLAND
+        or not hasattr(config_class, "init_mgl_context")
+    ):
+        runner()
+        return
+
+    had_local_initializer = "init_mgl_context" in vars(config_class)
+    original_initializer = vars(config_class).get("init_mgl_context")
+
+    @classmethod
+    def init_mgl_context(cls):
+        import moderngl
+
+        return moderngl.create_context(
+            require=_moderngl_require_code(getattr(cls, "gl_version", (3, 3))),
+            share=True,
+            backend="egl",
+        )
+
+    # ModernGL-window's default Linux context detector is X11/GLX.  A GLFW
+    # Wayland window exposes an EGL current context, so provide the detector
+    # explicitly for this attempt and restore the config class afterward.
+    config_class.init_mgl_context = init_mgl_context
+    try:
+        runner()
+    finally:
+        if had_local_initializer:
+            config_class.init_mgl_context = original_initializer
+        else:
+            delattr(config_class, "init_mgl_context")
+
+
+def _moderngl_require_code(gl_version: tuple[int, int]) -> int:
+    try:
+        major, minor = gl_version
+        return int(major) * 100 + int(minor) * 10
+    except Exception:
+        return 330
+
+
 def _load_glfw_variant(window_system: WindowSystem) -> ModuleType:
     """Load the wheel's matching native library, reloading only for fallback."""
     os.environ["PYGLFW_LIBRARY_VARIANT"] = window_system.value
@@ -361,7 +414,7 @@ def _prepare_glfw(glfw_module: Any, window_system: WindowSystem) -> None:
     if callable(hint_string):
         hint_string(glfw_module.WAYLAND_APP_ID, APPLICATION_ID)
         hint_string(glfw_module.X11_CLASS_NAME, APPLICATION_ID)
-        hint_string(glfw_module.X11_INSTANCE_NAME, "caveviewer")
+        hint_string(glfw_module.X11_INSTANCE_NAME, LINUX_WINDOW_INSTANCE_NAME)
 
     actual_platform = getattr(glfw_module, "get_platform", lambda: target_platform)()
     if actual_platform != target_platform:
@@ -381,6 +434,12 @@ def _is_backend_initialization_failure(error: Exception) -> bool:
     if isinstance(error, WindowBackendError):
         return True
     message = str(error).lower()
+    if (
+        "cannot detect opengl context" in message
+        or "glxgetcurrentcontext" in message
+        or "eglgetcurrentcontext" in message
+    ):
+        return True
     return isinstance(error, ValueError) and (
         "failed to initialize glfw" in message or "failed to create window" in message
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -43,7 +44,6 @@ def resolve_application_paths(
     """Resolve application paths for the supplied environment and platform."""
     environment = os.environ if environ is None else environ
     platform_name = sys.platform if platform_name is None else platform_name
-    home_path = Path(home) if home is not None else Path(os.path.expanduser("~"))
 
     override = environment.get(STORAGE_HOME_ENV_VAR, "").strip()
     if override:
@@ -56,6 +56,8 @@ def resolve_application_paths(
             runtime_dir=override_path / "runtime",
         )
 
+    home_path = _required_home_path(home)
+
     if platform_name.startswith("linux"):
         config_home = _xdg_path(environment, "XDG_CONFIG_HOME", home_path / ".config")
         data_home = _xdg_path(
@@ -65,8 +67,8 @@ def resolve_application_paths(
         state_home = _xdg_path(
             environment, "XDG_STATE_HOME", home_path / ".local" / "state"
         )
-        runtime_fallback = Path(tempfile.gettempdir()) / f"caveviewer-{os.getuid()}"
-        runtime_home = _xdg_path(
+        runtime_fallback = _runtime_fallback_root()
+        runtime_home = _xdg_runtime_path(
             environment, "XDG_RUNTIME_DIR", runtime_fallback
         )
         return ApplicationPaths(
@@ -100,8 +102,62 @@ def _xdg_path(
     return Path(raw_value)
 
 
+def _xdg_runtime_path(
+    environment: Mapping[str, str], variable: str, fallback: Path
+) -> Path:
+    raw_value = environment.get(variable, "").strip()
+    if not raw_value or not os.path.isabs(raw_value):
+        return fallback
+    candidate = Path(raw_value)
+    if _is_valid_xdg_runtime_dir(candidate):
+        return candidate
+    return fallback
+
+
+def _is_valid_xdg_runtime_dir(path: Path) -> bool:
+    try:
+        info = path.stat()
+    except OSError:
+        return False
+    if not stat.S_ISDIR(info.st_mode):
+        return False
+    uid = _current_user_id()
+    if uid is not None and getattr(info, "st_uid", uid) != uid:
+        return False
+    # XDG_RUNTIME_DIR is private per user.  The base directory must be 0700
+    # rather than a loose shared directory.
+    return stat.S_IMODE(info.st_mode) == 0o700
+
+
+def _runtime_fallback_root() -> Path:
+    suffix = _current_user_id()
+    if suffix is None:
+        suffix = os.getpid()
+    return Path(tempfile.gettempdir()) / f"caveviewer-{suffix}"
+
+
 def _required_absolute_path(variable: str, raw_value: str) -> Path:
     expanded = os.path.expanduser(raw_value)
     if not os.path.isabs(expanded):
         raise StoragePathError(f"{variable} must be an absolute path: {raw_value!r}")
     return Path(expanded)
+
+
+def _required_home_path(home: str | os.PathLike[str] | None) -> Path:
+    raw_value = os.fspath(home) if home is not None else os.path.expanduser("~")
+    expanded = os.path.expanduser(raw_value)
+    if not os.path.isabs(expanded):
+        raise StoragePathError(
+            f"home directory must resolve to an absolute path: {raw_value!r}"
+        )
+    return Path(expanded)
+
+
+def _current_user_id() -> int | None:
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return None
+    try:
+        return int(getuid())
+    except OSError:
+        return None

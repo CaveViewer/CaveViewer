@@ -196,6 +196,13 @@ def find_input_files(folder: str) -> tuple[str, str]:
         _LOG.info(f"Note: multiple .obj files found, using the first one: {obj_candidates[0]}")
     obj_path = obj_candidates[0]
 
+    return obj_path, _find_material_file_for_obj(obj_path)
+
+
+def _find_material_file_for_obj(obj_path: str) -> str:
+    """Return the material file referenced by or adjacent to one OBJ file."""
+    folder = os.path.dirname(os.path.abspath(obj_path))
+
     # peek at just the mtllib line rather than a full parse, to find the mtl
     # filename quickly even on a multi-GB obj
     mtl_name = None
@@ -208,14 +215,14 @@ def find_input_files(folder: str) -> tuple[str, str]:
     if mtl_name:
         mtl_path = os.path.join(folder, mtl_name)
         if os.path.exists(mtl_path):
-            return obj_path, mtl_path
+            return mtl_path
 
     mtl_candidates = glob.glob(os.path.join(folder, "*.mtl"))
     if not mtl_candidates:
         raise FileNotFoundError(
             f"Found {os.path.basename(obj_path)} but no matching .mtl file in:\n  {folder}"
         )
-    return obj_path, mtl_candidates[0]
+    return mtl_candidates[0]
 
 
 # Supported model file extensions, checked in this priority order when a
@@ -239,11 +246,12 @@ _SUPPORTED_EXTENSIONS = [".obj", ".glb"]
 def find_model_file(folder: str) -> dict:
     """
     Format-agnostic version of find_input_files -- detects which of the
-    supported model formats (.obj, .glb) a folder contains, and
-    returns a small descriptor dict import_and_cache_any() can dispatch
-    on, rather than forcing every format through OBJ's specific
-    (obj_path, mtl_path) two-tuple shape (which doesn't make sense for
-    GLB -- typically one single self-contained file with no companion at all).
+    supported model formats (.obj, .glb) a folder contains, or accepts one
+    directly-selected .obj/.glb file from the desktop shell. It returns a small
+    descriptor dict import_and_cache_any() can dispatch on, rather than forcing
+    every format through OBJ's specific (obj_path, mtl_path) two-tuple shape
+    (which doesn't make sense for GLB -- typically one single self-contained
+    file with no companion at all).
 
     Returns one of:
       {"format": "obj", "obj_path": ..., "mtl_path": ...}
@@ -253,6 +261,23 @@ def find_model_file(folder: str) -> dict:
     with the same kind of clear, actionable message find_input_files
     already gives for the OBJ-specific case.
     """
+    selected_path = os.path.abspath(folder)
+    if os.path.isfile(selected_path):
+        ext = os.path.splitext(selected_path)[1].lower()
+        if ext == ".obj":
+            return {
+                "format": "obj",
+                "obj_path": selected_path,
+                "mtl_path": _find_material_file_for_obj(selected_path),
+            }
+        if ext == ".glb":
+            return {"format": "glb", "glb_path": selected_path}
+        raise FileNotFoundError(
+            f"No supported model file found at:\n  {selected_path}\n\n"
+            f"CaveViewer supports .obj (with a matching .mtl) and .glb files."
+        )
+
+    folder = selected_path
     for ext in _SUPPORTED_EXTENSIONS:
         candidates = glob.glob(os.path.join(folder, f"*{ext}"))
         if not candidates:
@@ -536,10 +561,10 @@ def pick_folder_dialog(*, desktop_services=None) -> str | None:
     """Open the platform directory chooser used by the in-viewer Open action."""
     import tkinter as tk
     from caveviewer.gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
-    from caveviewer.gui.platform import get_desktop_services
+    from caveviewer.gui.platform import get_desktop_services, tk_root_options
 
     configure_process_dpi_awareness()
-    root = tk.Tk(baseName=APP_NAME, className=APP_NAME)
+    root = tk.Tk(**tk_root_options())
     try:
         apply_tk_scaling(root)
         root.withdraw()
@@ -582,12 +607,17 @@ def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> No
 
 def _run_map_session(folder: str) -> None:
     """Load and view one cave map. Returns when the viewer window closes."""
-    folder = os.path.abspath(folder)
-    _LOG.info(f"Selected folder: {folder}")
+    selected_path = os.path.abspath(folder)
+    selected_is_file = os.path.isfile(selected_path)
+    folder = os.path.dirname(selected_path) if selected_is_file else selected_path
+    _LOG.info(f"Selected map path: {selected_path}")
 
     try:
-        model_descriptor = find_model_file(folder)
+        model_descriptor = find_model_file(selected_path)
     except FileNotFoundError as e:
+        if selected_is_file:
+            _LOG.error(f"Error: {e}")
+            sys.exit(1)
         from caveviewer.core import chunker as _ck
         # Case 1: folder contains a _cache/ subfolder (standard layout)
         _prebuilt_cache = os.path.join(folder, _ck.CACHE_DIRNAME)
@@ -753,9 +783,10 @@ def run() -> None:
         # Try to show error dialog if GUI is available
         try:
             import tkinter as tk
+            from caveviewer.gui.platform import tk_root_options
             from caveviewer.gui.notifications import show_error
 
-            root = tk.Tk(baseName=APP_NAME, className=APP_NAME)
+            root = tk.Tk(**tk_root_options())
             root.withdraw()
             show_error(user_error, parent=root)
         except Exception:

@@ -45,6 +45,27 @@ def test_ui_history_uses_xdg_state_home(tmp_path, monkeypatch):
     assert path == state_home / "caveviewer" / "last_browse_path"
 
 
+def test_current_legacy_state_is_copied_to_xdg_state_without_deletion(
+    tmp_path, monkeypatch
+):
+    home = Path.home()
+    old_path = home / ".caveviewer" / "last_browse_path"
+    old_path.parent.mkdir()
+    old_path.write_text("/maps/legacy", encoding="utf-8")
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    migrated = Path(
+        preferences.migrate_state_file(
+            "last_browse_path", ".caveviewer_last_browse_path"
+        )
+    )
+
+    assert migrated == state_home / "caveviewer" / "last_browse_path"
+    assert migrated.read_text(encoding="utf-8") == "/maps/legacy"
+    assert old_path.read_text(encoding="utf-8") == "/maps/legacy"
+
+
 def test_failed_migration_leaves_no_partial_target(tmp_path, monkeypatch):
     legacy = Path.home() / ".caveviewer_old_state"
     legacy.write_text("legacy", encoding="utf-8")

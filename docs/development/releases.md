@@ -73,9 +73,21 @@ artifact, then verifies the artifact size and SHA-256 while downloading.
 Linux packages install the stable application ID
 `io.github.kernalpanic.caveviewer`. The desktop filename, AppStream ID,
 hicolor icon basename, Wayland app ID, and X11 `StartupWMClass` must remain
-identical. Packaging renders `packaging/linux/*.desktop.in` rather than
-maintaining a second inline desktop entry. Release version updates prepend the
-matching AppStream release entry through `scripts/common/version.sh`.
+identical, and the desktop file keeps `StartupNotify=true` for compositor
+launch feedback. The desktop file advertises `model/gltf-binary` and
+`model/obj` with an `Exec ... %f` field so GNOME file managers can offer
+CaveViewer for direct `.glb` and `.obj` launches; AppStream metadata must
+provide the same media types. Packaging renders `packaging/linux/*.desktop.in`
+rather than maintaining a second inline desktop entry. Release version updates
+prepend the matching AppStream release entry through
+`scripts/common/version.sh`. The AppImage runtime integration copies the
+desktop file, hicolor icons, and metainfo file into the user's XDG data home
+without changing the user's default MIME associations. Set
+`CAVEVIEWER_APPRUN_INSTALL_ONLY=1` when launching an AppImage from a terminal to
+smoke-test only this desktop integration path without starting the GUI. Set
+`CAVEVIEWER_APPRUN_UNINSTALL=1` to remove the per-user desktop file, AppStream
+metadata, and hicolor icons without removing maps, settings, caches, or
+downloaded update packages.
 
 ## Recommended GitHub release
 
@@ -211,6 +223,12 @@ Publishing also requires an authenticated GitHub CLI and
   not tested directly.
 - Validate the rendered Linux desktop file with `desktop-file-validate` and the
   metainfo file with `appstreamcli validate --no-net --pedantic`.
+- Smoke-test AppImage desktop integration with
+  `CAVEVIEWER_APPRUN_INSTALL_ONLY=1 ./CaveViewer-<version>-x86_64.AppImage` and
+  confirm the printed desktop, metainfo, and hicolor icon paths.
+- Smoke-test AppImage desktop integration removal with
+  `CAVEVIEWER_APPRUN_UNINSTALL=1 ./CaveViewer-<version>-x86_64.AppImage` and
+  confirm the printed paths were removed.
 - Smoke-test the Linux AppImage on GNOME Wayland and Xorg. Confirm the logged
   GLFW platform, launcher/icon grouping, portal selection/reveal, fractional
   scaling, fullscreen transitions, and normal input controls.

@@ -18,15 +18,18 @@ from typing import Callable
 
 from caveviewer.core.logging_utils import get_logger
 from caveviewer.gui import update_checker
-from caveviewer.gui.platform import get_platform_adapter
+from caveviewer.gui.platform import get_desktop_services, get_platform_adapter
 from caveviewer.gui.platform.base import SplashPlatformAdapter
+from caveviewer.gui.platform.desktop_services import DesktopInhibitor, DesktopServices
 from caveviewer.gui.update_checker import (
     DownloadCancelled,
     UpdateCheckResult,
 )
+from caveviewer.version import APP_NAME
 
 
 _LOG = get_logger("UpdateManager")
+_UPDATE_DOWNLOAD_NOTIFICATION_ID = "caveviewer.update-download"
 
 
 class UpdateState(enum.Enum):
@@ -102,10 +105,12 @@ class UpdateManager:
         platform_adapter: SplashPlatformAdapter | None = None,
         check_for_update: Callable[..., UpdateCheckResult] | None = None,
         download_update: Callable[..., None] | None = None,
+        desktop_services: DesktopServices | None = None,
         temp_root: str | None = None,
     ):
         self._current_version = current_version
         self._platform_adapter = platform_adapter or get_platform_adapter()
+        self._desktop_services = desktop_services or get_desktop_services()
         self._check_for_update = check_for_update or update_checker.check_for_update
         self._download_update = download_update or update_checker.download_update
         self._temp_root = temp_root
@@ -271,6 +276,53 @@ class UpdateManager:
                 return False
             return True
 
+    def _notify_download(
+        self,
+        title: str,
+        body: str = "",
+        *,
+        priority: str = "normal",
+    ) -> None:
+        """Best-effort desktop notification for update download progress."""
+        try:
+            self._desktop_services.notify(
+                _UPDATE_DOWNLOAD_NOTIFICATION_ID,
+                title,
+                body,
+                priority=priority,
+            )
+        except Exception as exc:
+            _LOG.debug("Desktop update notification unavailable: %s", exc)
+
+    def _withdraw_download_notification(self) -> None:
+        """Remove stale update notifications without affecting update state."""
+        try:
+            self._desktop_services.withdraw_notification(
+                _UPDATE_DOWNLOAD_NOTIFICATION_ID
+            )
+        except Exception as exc:
+            _LOG.debug("Could not withdraw desktop update notification: %s", exc)
+
+    def _inhibit_update_download(self) -> DesktopInhibitor | None:
+        """Best-effort idle/suspend inhibitor while an update payload downloads."""
+        try:
+            return self._desktop_services.inhibit_idle_suspend(
+                f"{APP_NAME} is downloading an update"
+            )
+        except Exception as exc:
+            _LOG.debug("Desktop idle/suspend inhibit unavailable for update: %s", exc)
+            return None
+
+    @staticmethod
+    def _close_desktop_inhibitor(inhibitor: DesktopInhibitor | None) -> None:
+        """Release a best-effort desktop inhibitor."""
+        if inhibitor is None:
+            return
+        try:
+            inhibitor.close()
+        except Exception as exc:
+            _LOG.debug("Could not release desktop update inhibitor: %s", exc)
+
     def _run_download(
         self,
         result: UpdateCheckResult,
@@ -281,6 +333,7 @@ class UpdateManager:
         next_state = UpdateState.FAILED
         final_payload_path: str | None = None
         error: str | None = None
+        inhibitor: DesktopInhibitor | None = None
 
         def on_progress(downloaded_bytes: int, total_bytes: int | None) -> None:
             with self._lock:
@@ -298,6 +351,15 @@ class UpdateManager:
                     self._transition_locked(UpdateState.VERIFYING)
 
         try:
+            if result.latest_version:
+                download_body = f"Downloading version {result.latest_version}."
+            else:
+                download_body = "Downloading the available update."
+            self._notify_download(
+                f"{APP_NAME} update download started",
+                download_body,
+            )
+            inhibitor = self._inhibit_update_download()
             download_dir = tempfile.mkdtemp(
                 prefix="caveviewer_update_",
                 dir=self._temp_root,
@@ -321,18 +383,29 @@ class UpdateManager:
                 )
             )
             next_state = UpdateState.READY
+            self._notify_download(
+                f"{APP_NAME} update is ready",
+                "The update package finished downloading.",
+            )
         except DownloadCancelled:
             next_state = UpdateState.AVAILABLE
+            self._withdraw_download_notification()
             _LOG.info("Update download cancelled.")
         except Exception as exc:
             error = str(exc)
             next_state = UpdateState.FAILED
+            self._notify_download(
+                f"{APP_NAME} update download failed",
+                "The update package could not be downloaded.",
+                priority="high",
+            )
             _LOG.warning(
                 "Update download workflow failed: %s: %s",
                 type(exc).__name__,
                 exc,
             )
         finally:
+            self._close_desktop_inhibitor(inhibitor)
             if download_dir:
                 try:
                     shutil.rmtree(download_dir)

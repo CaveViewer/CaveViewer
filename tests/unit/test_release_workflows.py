@@ -95,6 +95,27 @@ def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
         ), workflow_name
 
 
+def test_linux_release_workflow_smoke_tests_appimage_desktop_integration():
+    workflow = (WORKFLOWS_DIR / "linux-x86_64-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Install Linux desktop metadata validators" in workflow
+    assert "appstream desktop-file-utils" in workflow
+    assert "Smoke-test AppImage desktop integration" in workflow
+    assert "APPIMAGE_EXTRACT_AND_RUN: \"1\"" in workflow
+    assert "CAVEVIEWER_APPRUN_INSTALL_ONLY=1 \"$appimage\"" in workflow
+    assert "CAVEVIEWER_APPRUN_UNINSTALL=1 \"$appimage\"" in workflow
+    assert "desktop-file-validate \"$installed_desktop\"" in workflow
+    assert "appstreamcli validate --no-net --pedantic \"$installed_metainfo\"" in workflow
+    assert 'grep -F "Exec=\\"$appimage\\" %f" "$installed_desktop"' in workflow
+    assert "AppRun must not assign CaveViewer as a MIME default." in workflow
+    assert "AppRun uninstall left CaveViewer hicolor icons behind." in workflow
+    assert workflow.index("Smoke-test AppImage desktop integration") < workflow.index(
+        "Upload Linux x86_64 AppImage for testing"
+    )
+
+
 def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():
     workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
         encoding="utf-8"

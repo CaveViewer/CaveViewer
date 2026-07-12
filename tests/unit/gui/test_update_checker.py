@@ -214,7 +214,13 @@ def test_update_check_rejects_unsupported_channel(
     configured_update_checker, monkeypatch
 ):
     configured_update_checker.supported = False
-    _set_manifest(monkeypatch, {"latest_version": "2.0.0"})
+    monkeypatch.setattr(
+        update_checker,
+        "_fetch_url_bytes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unsupported platforms must not fetch manifests")
+        ),
+    )
     result = update_checker.check_for_update("1.0.0")
     assert not result.update_available
     assert "Unsupported install channel" in (result.error or "")

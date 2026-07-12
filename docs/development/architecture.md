@@ -69,14 +69,24 @@ model modules. `caveviewer.gui.platform` contains OS-specific focus, update,
 and system integration behavior. Unsupported platforms use the default
 adapter.
 
-Directory selection and file reveal use the separate `DesktopServices`
-capability. Linux asks XDG Desktop Portal first and falls back to Tk or
-`xdg-open` only when the portal is unavailable. Portal requests use explicit
-states:
+Directory selection, file reveal, notifications, and idle/suspend inhibition
+use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal
+first and falls back to Tk or `xdg-open` only when the portal is unavailable.
+Long sample-map downloads request desktop notification and inhibit support
+through this same capability. Background update downloads request notification
+and inhibit support while the package is being downloaded and verified.
+Uncached map imports request idle/suspend inhibition while parsing and
+building the cache. These requests remain best-effort so desktop integration
+cannot break the underlying work. Portal
+requests use explicit states:
 
 ```text
 IDLE -> REQUESTING -> WAITING -> {COMPLETED, CANCELLED, FAILED}
 ```
+
+Startup map sessions accept either a folder containing a supported map or one
+direct `.glb`/`.obj` file. This keeps Linux `Exec ... %f` desktop launches and
+the in-app folder chooser on the same import/cache path.
 
 Linux viewer windows use GLFW 3.4. `CAVEVIEWER_WINDOW_SYSTEM=auto` prefers
 Wayland when a compositor is present and retries X11 only for a recognized
@@ -138,9 +148,10 @@ contracts. The public verification key under `src/caveviewer/resources/` is
 bundled with the application; private signing material must never enter the
 repository.
 
-Windows uses `updates/windows/<channel>.json`. Linux and macOS use
-architecture-specific `<arm64|x86_64>/<channel>.json` paths. Every manifest has
-a companion `.sig` file; top-level macOS manifests and signatures remain legacy
+Windows uses `updates/windows/<channel>.json`. Linux distribution is x86_64-only
+and uses `updates/linux/x86_64/<channel>.json`. macOS uses architecture-specific
+`updates/macos/<arm64|x86_64>/<channel>.json` paths. Every manifest has a
+companion `.sig` file; top-level macOS manifests and signatures remain legacy
 ARM64 aliases. The update client requires a valid signature before offering a
 newer manifest.
 

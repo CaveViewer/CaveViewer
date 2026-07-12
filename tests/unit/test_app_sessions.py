@@ -11,6 +11,7 @@ import pytest
 
 from caveviewer import app
 from caveviewer.core import chunker
+from caveviewer.gui.platform.app_identity import tk_root_options
 
 
 class _LogRecorder:
@@ -169,6 +170,37 @@ def test_map_session_opens_uncached_glb_with_pending_import(tmp_path, monkeypatc
     app._run_map_session(str(tmp_path))
 
     assert opened == [((descriptor,), {"textures_dir": str(tmp_path)})]
+
+
+def test_map_session_opens_uncached_direct_glb_file_with_parent_texture_dir(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "map.glb"
+    source.write_bytes(b"glTF")
+    descriptor = {"format": "glb", "glb_path": str(source)}
+    opened = []
+    monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
+    _install_viewer_module(
+        monkeypatch,
+        run_pending=lambda *args, **kwargs: opened.append((args, kwargs)),
+    )
+
+    app._run_map_session(str(source))
+
+    assert opened == [((descriptor,), {"textures_dir": str(tmp_path)})]
+
+
+def test_map_session_rejects_direct_unsupported_file(tmp_path, monkeypatch):
+    payload = tmp_path / "notes.txt"
+    payload.write_text("not a cave map", encoding="utf-8")
+    recorder = _LogRecorder()
+    monkeypatch.setattr(app, "_LOG", recorder)
+
+    with pytest.raises(SystemExit) as raised:
+        app._run_map_session(str(payload))
+
+    assert raised.value.code == 1
+    assert "No supported model file" in recorder.error_messages[-1]
 
 
 @pytest.mark.parametrize("cache_is_valid", [True, False])
@@ -379,7 +411,7 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
     assert configured == [True]
     assert "startup exploded" in recorder.error_messages[-1]
     assert "Traceback:" in recorder.error_messages[-1]
-    assert root_options == [{"baseName": app.APP_NAME, "className": app.APP_NAME}]
+    assert root_options == [tk_root_options()]
     if dialog_fails:
         assert dialog_calls == []
     else:

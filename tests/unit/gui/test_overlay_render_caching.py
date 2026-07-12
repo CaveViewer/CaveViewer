@@ -117,6 +117,29 @@ def test_stepper_geometry_scale_reduces_fixed_control_size():
     assert control.total_height() == pytest.approx(32 * 0.86)
 
 
+def test_stepper_value_text_is_smaller_than_button_symbols(monkeypatch):
+    base_sizes = []
+
+    def record_base_size(size, _scale):
+        base_sizes.append(size)
+        return size
+
+    monkeypatch.setattr(bitmap_font, "pixel_size_at_text_scale", record_base_size)
+    control = StepperControl(
+        _TrackingContext(),
+        "BRIGHTNESS",
+        initial_value=5,
+        min_value=0,
+        max_value=10,
+    )
+
+    control.render((1920, 1080), 1700, 300)
+
+    assert StepperControl.VALUE_TEXT_SIZE < StepperControl.SYMBOL_TEXT_SIZE
+    assert StepperControl.VALUE_TEXT_SIZE in base_sizes
+    assert StepperControl.SYMBOL_TEXT_SIZE in base_sizes
+
+
 def test_stepper_rebuilds_when_raster_scale_changes():
     try:
         bitmap_font.set_raster_scale(1.0)
@@ -209,10 +232,15 @@ def test_render_mode_button_geometry_scale_reduces_fixed_button_size():
         right_inset=20,
     )
 
-    assert x1 - x0 == pytest.approx(120 * 0.86)
-    assert y1 - y0 == pytest.approx(34 * 0.86)
+    assert x1 - x0 == pytest.approx(RenderModeButtons.BUTTON_WIDTH * 0.86)
+    assert y1 - y0 == pytest.approx(RenderModeButtons.BUTTON_HEIGHT * 0.86)
     assert buttons.total_stack_height(scale=0.86) == pytest.approx(
-        (3 * 34 + 2 * 10 + 34 + 4 * 34 + 3 * 10) * 0.86
+        (
+            7 * RenderModeButtons.BUTTON_HEIGHT
+            + 5 * RenderModeButtons.BUTTON_GAP
+            + RenderModeButtons.GROUP_GAP
+        )
+        * 0.86
     )
 
 

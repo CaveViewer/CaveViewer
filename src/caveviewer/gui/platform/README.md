@@ -7,8 +7,9 @@ This directory implements a **platform adapter pattern** that allows the CaveVie
 ```
 platform/
 ├── __init__.py              # Public API exports
+├── app_identity.py          # Native window identity and Tk root options
 ├── base.py                  # SplashPlatformAdapter protocol definition
-├── desktop_services.py      # File selection/reveal capability contract
+├── desktop_services.py      # Desktop file, URI, notification, and inhibit services
 ├── portal.py                # Linux XDG Desktop Portal transport and states
 ├── windowing.py             # Linux GLFW Wayland/X11 selection and fallback
 ├── factory.py               # Platform detection and adapter instantiation
@@ -29,14 +30,31 @@ The module uses Python's **Protocol** pattern to define a contract (`SplashPlatf
 
 `SplashPlatformAdapter` continues to own update-channel, control, font, and
 package behavior. `DesktopServices` is intentionally separate: splash, viewer,
-settings, and sample-map code all request directory selection through one
-capability instead of importing Tk or D-Bus directly. Linux implements that
-capability portal-first and retains a conservative fallback.
+settings, sample-map, and background-task code request host-desktop behavior
+through one capability instead of importing Tk, shell commands, or D-Bus
+directly. Linux implements file/directory selection, file/URI opening, file
+reveal, notifications, and idle/suspend inhibition portal-first, with
+conservative fallbacks for non-portal sessions. Long sample-map downloads use
+notification and inhibit requests through `DesktopServices`; background update
+downloads use notification and inhibit requests while the package is downloaded
+and verified; uncached map imports use inhibit requests while parsing and
+building the cache. These requests are best-effort and must not affect the
+underlying operation.
 
 `windowing.py` owns Linux display-protocol selection. Automatic mode attempts
 Wayland before X11 when both session endpoints exist and retries only an
 initialization/window-creation failure. Renderer and application exceptions
 must propagate without opening a second backend.
+
+`app_identity.py` owns native-window identity. Tk roots use the stable Linux
+desktop application ID as their class name, matching the desktop file,
+AppStream metadata, icons, and GLFW Wayland/X11 hints so GNOME can group and
+activate CaveViewer windows consistently.
+
+The Linux desktop file keeps `Exec ... %f` and MIME registrations for
+`model/gltf-binary` and `model/obj`, so file managers can offer CaveViewer for
+direct `.glb` and `.obj` launches. The application startup path must continue
+accepting both folders and those direct files.
 
 ## Key Components
 

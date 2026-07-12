@@ -83,7 +83,7 @@ class RenderModeButtons:
     BUTTON_HEIGHT = 34
     BUTTON_GAP = 10
     MARGIN_RIGHT = 18
-    GROUP_GAP = 34
+    GROUP_GAP = 22
     FIXED_TEXT_SCALE = 1.28
 
     def __init__(

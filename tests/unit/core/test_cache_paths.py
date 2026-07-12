@@ -37,6 +37,12 @@ def test_candidates_preserve_adjacent_and_legacy_before_managed(tmp_path):
     assert locator.build_cache_dir(source) == candidates[2]
 
 
+def test_default_managed_root_uses_application_cache_dir(tmp_path):
+    locator = MapCacheLocator(paths=_paths(tmp_path), environ={}, platform_name="linux")
+
+    assert locator.managed_root == tmp_path / "cache" / "maps"
+
+
 def test_managed_keys_are_stable_and_distinguish_same_named_sources(tmp_path):
     locator = MapCacheLocator(paths=_paths(tmp_path), environ={}, platform_name="linux")
     first = tmp_path / "one" / "map.obj"

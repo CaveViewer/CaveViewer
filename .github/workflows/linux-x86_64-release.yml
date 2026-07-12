@@ -92,6 +92,11 @@ jobs:
           docker version
           docker buildx version
 
+      - name: Install Linux desktop metadata validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
       - name: Build and package Linux x86_64 AppImage via Docker
         env:
           RELEASE_VERSION: ${{ inputs.version }}
@@ -112,6 +117,48 @@ jobs:
             --notes="$RELEASE_NOTES" \
             --action=package \
             --skip-tests
+
+      - name: Smoke-test AppImage desktop integration
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          app_id="io.github.kernalpanic.caveviewer"
+          appimage="$(pwd)/dist/linux/x86_64/packages/CaveViewer-${RELEASE_VERSION}-x86_64.AppImage"
+          test -x "$appimage"
+
+          smoke_root="$(mktemp -d)"
+          trap 'rm -rf "$smoke_root"' EXIT
+          export HOME="$smoke_root/home"
+          export XDG_DATA_HOME="$smoke_root/xdg-data"
+          export XDG_RUNTIME_DIR="$smoke_root/runtime"
+          mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+
+          CAVEVIEWER_APPRUN_INSTALL_ONLY=1 "$appimage"
+
+          installed_desktop="$XDG_DATA_HOME/applications/${app_id}.desktop"
+          installed_metainfo="$XDG_DATA_HOME/metainfo/${app_id}.metainfo.xml"
+          test -f "$installed_desktop"
+          test -f "$installed_metainfo"
+          test -n "$(find "$XDG_DATA_HOME/icons/hicolor" -path "*/apps/${app_id}.png" -type f -print -quit)"
+          grep -F "Exec=\"$appimage\" %f" "$installed_desktop"
+          if [ -f "$XDG_DATA_HOME/applications/mimeapps.list" ] && \
+              grep -F "${app_id}.desktop" "$XDG_DATA_HOME/applications/mimeapps.list"; then
+            echo "AppRun must not assign CaveViewer as a MIME default."
+            exit 1
+          fi
+
+          desktop-file-validate "$installed_desktop"
+          appstreamcli validate --no-net --pedantic "$installed_metainfo"
+
+          CAVEVIEWER_APPRUN_UNINSTALL=1 "$appimage"
+          test ! -e "$installed_desktop"
+          test ! -e "$installed_metainfo"
+          if find "$XDG_DATA_HOME/icons/hicolor" -path "*/apps/${app_id}.png" -type f -print -quit | grep -q .; then
+            echo "AppRun uninstall left CaveViewer hicolor icons behind."
+            exit 1
+          fi
 
       - name: Upload Linux x86_64 AppImage for testing
         uses: actions/upload-artifact@v4

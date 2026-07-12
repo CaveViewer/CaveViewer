@@ -32,10 +32,27 @@ jobs:
             requirements.txt
             requirements-dev.txt
 
+      - name: Install Linux desktop metadata validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
       - name: Install runtime and test dependencies
         run: |
           python -m pip install --upgrade pip -r requirements.txt -r requirements-dev.txt
           python -m pip install --no-deps -e .
+
+      - name: Validate Linux desktop metadata
+        run: |
+          rendered_desktop_dir="$(mktemp -d)"
+          trap 'rm -rf "$rendered_desktop_dir"' EXIT
+          rendered_desktop="$rendered_desktop_dir/io.github.kernalpanic.caveviewer.desktop"
+          sed 's|@EXEC@|AppRun|' \
+            packaging/linux/io.github.kernalpanic.caveviewer.desktop.in \
+            > "$rendered_desktop"
+          desktop-file-validate "$rendered_desktop"
+          appstreamcli validate --no-net --pedantic \
+            packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml
 
       - name: Run essential tests with branch coverage
         run: >-

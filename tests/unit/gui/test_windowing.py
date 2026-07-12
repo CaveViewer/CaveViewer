@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
+from types import SimpleNamespace
 
 import pytest
 
+from caveviewer.gui.platform.app_identity import LINUX_WINDOW_INSTANCE_NAME
 from caveviewer.gui.platform.windowing import (
     WINDOW_SYSTEM_ENV_VAR,
     WindowBackendError,
@@ -161,6 +164,11 @@ def test_glfw_hints_identity_before_window_creation(monkeypatch):
         glfw.X11_CLASS_NAME,
         APPLICATION_ID,
     ) in calls_before_runner
+    assert (
+        "window_hint_string",
+        glfw.X11_INSTANCE_NAME,
+        LINUX_WINDOW_INSTANCE_NAME,
+    ) in calls_before_runner
 
 
 def test_relative_size_uses_glfw_workarea_without_duplicate_dpi_scaling():
@@ -304,6 +312,74 @@ def test_auto_mode_retries_only_known_window_creation_failure():
     )
 
     assert len(attempts) == 2
+
+
+def test_wayland_uses_egl_to_detect_current_glfw_context(monkeypatch):
+    glfw = FakeGlfw()
+    created_context = object()
+    context_calls = []
+
+    class Config:
+        gl_version = (3, 3)
+
+        @classmethod
+        def init_mgl_context(cls):
+            return None
+
+    def create_context(**options):
+        context_calls.append(options)
+        return created_context
+
+    monkeypatch.setitem(
+        sys.modules,
+        "moderngl",
+        SimpleNamespace(create_context=create_context),
+    )
+
+    observed = []
+
+    def runner(config, args):
+        observed.append((config.init_mgl_context(), args))
+
+    run_window_config(
+        Config,
+        runner=runner,
+        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
+        platform_name="linux",
+        glfw_loader=lambda _system: glfw,
+    )
+
+    assert observed == [(created_context, ["--window", "glfw"])]
+    assert context_calls == [
+        {"require": 330, "share": True, "backend": "egl"}
+    ]
+    assert Config.init_mgl_context() is None
+
+
+def test_auto_mode_retries_x11_after_wayland_context_detection_failure():
+    wayland = FakeGlfw()
+    x11 = FakeGlfw()
+    loaded = []
+    runs = []
+
+    def runner(_config, args):
+        runs.append(args)
+        if len(runs) == 1:
+            raise Exception(
+                "(share) eglGetCurrentContext: cannot detect OpenGL context"
+            )
+
+    run_window_config(
+        object,
+        runner=runner,
+        environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
+        platform_name="linux",
+        glfw_loader=lambda system: loaded.append(system)
+        or (wayland if system is WindowSystem.WAYLAND else x11),
+    )
+
+    assert loaded == [WindowSystem.WAYLAND, WindowSystem.X11]
+    assert runs == [["--window", "glfw"], ["--window", "glfw"]]
 
 
 def test_render_configuration_failure_does_not_trigger_backend_fallback():
