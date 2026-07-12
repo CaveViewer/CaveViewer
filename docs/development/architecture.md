@@ -89,16 +89,15 @@ direct `.glb`/`.obj` file. This keeps Linux `Exec ... %f` desktop launches and
 the in-app folder chooser on the same import/cache path.
 
 Linux viewer windows use GLFW 3.4. `CAVEVIEWER_WINDOW_SYSTEM=auto` prefers
-Wayland when a compositor is present and retries X11 only for a recognized
-GLFW initialization/window-creation failure. Explicit `wayland` and `x11`
-modes never silently switch protocols. The Wayland application ID and X11
-window class both use `io.github.kernalpanic.caveviewer`. Initial window
-geometry is 80% of GLFW's primary-monitor work area in screen coordinates.
-Framebuffer DPI scaling remains enabled, while duplicate X11 monitor scaling
-of that already-relative geometry is suppressed during window creation.
-The AppImage launcher is the packaging exception: on Wayland sessions with
-`DISPLAY` available, it defaults `CAVEVIEWER_WINDOW_SYSTEM=x11` so GNOME/XWayland
-provides standard titlebar and resize decorations for the bundled GLFW runtime.
+X11/XWayland when `DISPLAY` is available, then retries Wayland only for a
+recognized GLFW initialization/window-creation failure. This keeps source,
+debugger, and AppImage launches on the same GNOME window-management path with
+normal titlebar and resize decorations. Explicit `wayland` and `x11` modes
+never silently switch protocols. The Wayland application ID and X11 window class
+both use `io.github.kernalpanic.caveviewer`. Initial window geometry is 80% of
+GLFW's primary-monitor work area in screen coordinates. Framebuffer DPI scaling
+remains enabled, while duplicate X11 monitor scaling of that already-relative
+geometry is suppressed during window creation.
 OpenGL HUD text is rasterized at framebuffer scale for crispness, while the
 always-visible right-side viewer controls use a separate responsive HUD scale
 based on the current viewer surface size. That keeps maximized and AppImage

@@ -59,10 +59,13 @@ def resolve_window_backend_plan(
         return WindowBackendPlan(mode=mode, attempts=(mode,))
 
     attempts: list[WindowSystem] = []
+    if environment.get("DISPLAY"):
+        # Prefer X11/XWayland when it is available. On GNOME this gives GLFW
+        # normal compositor decorations and resize handles, and keeping this in
+        # the shared policy makes source/debug launches match AppImage behavior.
+        attempts.append(WindowSystem.X11)
     if environment.get("WAYLAND_DISPLAY") or environment.get("XDG_SESSION_TYPE") == "wayland":
         attempts.append(WindowSystem.WAYLAND)
-    if environment.get("DISPLAY"):
-        attempts.append(WindowSystem.X11)
     if not attempts:
         # Let GLFW produce its actionable platform error when session
         # variables are missing instead of silently choosing another toolkit.

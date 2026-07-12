@@ -186,7 +186,7 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
     assert unrelated_icon.read_bytes() == b"keep"
 
 
-def test_generated_apprun_defaults_appimage_wayland_launch_to_x11(tmp_path):
+def test_generated_apprun_does_not_override_window_system_policy(tmp_path):
     appdir = tmp_path / "AppDir"
     executable = appdir / "usr" / "lib" / "caveviewer" / "CaveViewer"
     executable.parent.mkdir(parents=True)
@@ -231,12 +231,9 @@ def test_generated_apprun_defaults_appimage_wayland_launch_to_x11(tmp_path):
         env=env,
     )
 
-    assert "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=x11" in result.stdout
-    assert (
-        "[CaveViewer AppRun] window_system_note=defaulted-to-x11-for-appimage-decorations"
-        in result.stdout
-    )
-    assert "fake-window-system=x11" in result.stdout
+    assert "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=" in result.stdout
+    assert "window_system_note=" not in result.stdout
+    assert "fake-window-system=" in result.stdout
 
     env["CAVEVIEWER_WINDOW_SYSTEM"] = "wayland"
     explicit_result = subprocess.run(
@@ -248,7 +245,7 @@ def test_generated_apprun_defaults_appimage_wayland_launch_to_x11(tmp_path):
     )
 
     assert "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=wayland" in explicit_result.stdout
-    assert "[CaveViewer AppRun] window_system_note=unchanged" in explicit_result.stdout
+    assert "window_system_note=" not in explicit_result.stdout
     assert "fake-window-system=wayland" in explicit_result.stdout
 
 

@@ -94,7 +94,7 @@ class FakeGlfw:
         return self.video_mode
 
 
-def test_auto_plan_prefers_wayland_then_x11_when_both_are_available():
+def test_auto_plan_prefers_x11_then_wayland_when_both_are_available():
     plan = resolve_window_backend_plan(
         environ={
             "XDG_SESSION_TYPE": "wayland",
@@ -105,7 +105,7 @@ def test_auto_plan_prefers_wayland_then_x11_when_both_are_available():
     )
 
     assert plan.mode is WindowSystem.AUTO
-    assert plan.attempts == (WindowSystem.WAYLAND, WindowSystem.X11)
+    assert plan.attempts == (WindowSystem.X11, WindowSystem.WAYLAND)
 
 
 @pytest.mark.parametrize("mode", ["wayland", "x11"])
@@ -310,9 +310,9 @@ def test_relative_size_uses_safe_fallback_when_workarea_is_unavailable():
     assert observed == [(1280, 720)]
 
 
-def test_auto_mode_retries_x11_after_wayland_initialization_failure():
-    wayland = FakeGlfw(init_result=False)
-    x11 = FakeGlfw()
+def test_auto_mode_retries_wayland_after_x11_initialization_failure():
+    x11 = FakeGlfw(init_result=False)
+    wayland = FakeGlfw()
     loaded = []
     runs = []
 
@@ -328,8 +328,8 @@ def test_auto_mode_retries_x11_after_wayland_initialization_failure():
         glfw_loader=load,
     )
 
-    assert loaded == [WindowSystem.WAYLAND, WindowSystem.X11]
-    assert ("terminate",) in wayland.calls
+    assert loaded == [WindowSystem.X11, WindowSystem.WAYLAND]
+    assert ("terminate",) in x11.calls
     assert runs == [["--window", "glfw"]]
 
 
@@ -399,7 +399,7 @@ def test_wayland_uses_egl_to_detect_current_glfw_context(monkeypatch):
     assert Config.init_mgl_context() is None
 
 
-def test_auto_mode_retries_x11_after_wayland_context_detection_failure():
+def test_auto_mode_retries_wayland_after_x11_context_detection_failure():
     wayland = FakeGlfw()
     x11 = FakeGlfw()
     loaded = []
@@ -421,7 +421,7 @@ def test_auto_mode_retries_x11_after_wayland_context_detection_failure():
         or (wayland if system is WindowSystem.WAYLAND else x11),
     )
 
-    assert loaded == [WindowSystem.WAYLAND, WindowSystem.X11]
+    assert loaded == [WindowSystem.X11, WindowSystem.WAYLAND]
     assert runs == [["--window", "glfw"], ["--window", "glfw"]]
 
 
@@ -439,7 +439,7 @@ def test_render_configuration_failure_does_not_trigger_backend_fallback():
             glfw_loader=lambda system: loaded.append(system) or FakeGlfw(),
         )
 
-    assert loaded == [WindowSystem.WAYLAND]
+    assert loaded == [WindowSystem.X11]
 
 
 def test_explicit_wayland_failure_does_not_fall_back():

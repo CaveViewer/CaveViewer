@@ -509,18 +509,6 @@ else
   export TK_LIBRARY="${TK_LIBRARY:-/usr/share/tcltk/tk8.6}"
 fi
 
-apprun_window_system_note="unchanged"
-if [ -z "${CAVEVIEWER_WINDOW_SYSTEM:-}" ] && \
-   { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; } && \
-   [ -n "${DISPLAY:-}" ]; then
-  # Native Wayland is still available through CAVEVIEWER_WINDOW_SYSTEM=wayland,
-  # but the AppImage defaults to XWayland on GNOME so GLFW gets compositor
-  # decorations and the normal titlebar/resize handles. Source launches keep
-  # their Wayland-first policy in caveviewer.gui.platform.windowing.
-  export CAVEVIEWER_WINDOW_SYSTEM="x11"
-  apprun_window_system_note="defaulted-to-x11-for-appimage-decorations"
-fi
-
 executable="$appdir/usr/lib/caveviewer/CaveViewer"
 if [ ! -x "$executable" ]; then
   echo "Error: CaveViewer executable not found or not executable:"
@@ -539,7 +527,6 @@ fi
   echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TK_SCALE=${CAVEVIEWER_TK_SCALE:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=${CAVEVIEWER_WINDOW_SYSTEM:-}"
-  echo "[CaveViewer AppRun] window_system_note=$apprun_window_system_note"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
@@ -554,7 +541,6 @@ if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TK_SCALE=${CAVEVIEWER_TK_SCALE:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=${CAVEVIEWER_WINDOW_SYSTEM:-}"
-  echo "[CaveViewer AppRun] window_system_note=$apprun_window_system_note"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"

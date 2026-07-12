@@ -42,9 +42,10 @@ building the cache. These requests are best-effort and must not affect the
 underlying operation.
 
 `windowing.py` owns Linux display-protocol selection. Automatic mode attempts
-Wayland before X11 when both session endpoints exist and retries only an
-initialization/window-creation failure. Renderer and application exceptions
-must propagate without opening a second backend.
+X11/XWayland before Wayland when both session endpoints exist so source,
+debugger, and AppImage launches use the same GNOME window-management path. It
+retries only an initialization/window-creation failure. Renderer and application
+exceptions must propagate without opening a second backend.
 
 `app_identity.py` owns native-window identity. Tk roots use the stable Linux
 desktop application ID as their class name, matching the desktop file,
