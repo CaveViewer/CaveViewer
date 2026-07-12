@@ -303,6 +303,58 @@ def test_ready_callback_observes_cell_as_uncommitted_until_it_succeeds():
     assert cell not in world._pending
 
 
+def test_scheduled_unloads_run_before_new_uploads():
+    old_cell = (9, 0, 0)
+    new_cell = (1, 0, 0)
+    world = _world_with_ready_chunks(new_cell)
+    world.loaded_cells = {old_cell}
+    world._cells_to_unload_next_drain = {old_cell}
+    events = []
+
+    def upload(data):
+        events.append(("upload", data.cell, old_cell in world.loaded_cells))
+
+    world.drain_ready_chunks(
+        upload,
+        lambda cell: events.append(("unload", cell)),
+        max_per_frame=1,
+        time_budget_ms=100.0,
+    )
+
+    assert events == [("unload", old_cell), ("upload", new_cell, False)]
+
+
+def test_texture_budget_limits_unique_textures_not_shared_texture_chunks():
+    world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
+    world._gpu_residency_budget_bytes = 220
+    world._estimated_chunk_gpu_bytes = 10
+    world._texture_gpu_bytes = {"a": 100, "b": 100}
+    world._cell_texture_keys = {
+        (1, 0, 0): frozenset({"a"}),
+        (2, 0, 0): frozenset({"a"}),
+        (3, 0, 0): frozenset({"b"}),
+    }
+    wanted = {(1, 0, 0), (2, 0, 0), (3, 0, 0)}
+
+    selected, constrained = world._limit_wanted_cells_by_gpu_budget(
+        wanted, (0, 0, 0)
+    )
+
+    assert constrained is True
+    assert selected == {(1, 0, 0), (2, 0, 0)}
+
+
+def test_texture_gpu_estimate_includes_mipmap_and_driver_alignment(tmp_path):
+    from PIL import Image
+
+    texture_path = tmp_path / "rock.png"
+    Image.new("RGB", (16, 8)).save(texture_path)
+
+    assert streaming_world.StreamingWorld._estimate_texture_gpu_bytes(
+        "rock.png", str(tmp_path)
+    ) == int(16 * 8 * 4 * (4.0 / 3.0))
+
+
 def test_stale_ready_chunk_is_discarded_without_gpu_upload():
     stale_cell = (1, 0, 0)
     world = _world_with_ready_chunks(stale_cell)

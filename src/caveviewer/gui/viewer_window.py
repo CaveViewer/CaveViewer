@@ -682,6 +682,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             config,
             on_decode_textures=predecode_textures_for_chunk,
             gpu_vendor=str(self.ctx.info.get("GL_VENDOR", "")),
+            textures_dir=self.textures_dir,
         )
 
         # pick a sane starting position: center of the first available chunk,
