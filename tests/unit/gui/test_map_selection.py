@@ -37,6 +37,7 @@ def test_obj_without_material_or_cache_is_rejected(tmp_path, monkeypatch):
 
     assert not valid
     assert "no matching .mtl file" in message
+    assert "cache" not in message.lower()
 
 
 def test_precompiled_cache_folder_is_accepted(tmp_path, monkeypatch):

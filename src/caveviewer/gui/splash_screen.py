@@ -531,8 +531,8 @@ def show_splash_screen(
 
     instruction_label = tk.Label(
         root,
-        text="Choose the folder that contains your cave map files,\n"
-             "or an existing CaveViewer cache folder.",
+        text="Choose the folder that contains your cave map files:\n"
+             ".glb, or .obj with its matching .mtl and textures.",
         font=_INSTRUCTION_FONT,
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",

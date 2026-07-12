@@ -43,14 +43,14 @@ def validate_selected_map_folder(folder: str) -> tuple[bool, str]:
             return True, ""
         return False, (
             "Found an .obj file, but no matching .mtl file in that folder.\n\n"
-            "Select a folder with a .glb file, or with both .obj and .mtl files, "
-            "or a folder that already contains a CaveViewer pre-compiled cache."
+            "Select the folder that contains your cave map files: .glb, or "
+            ".obj with its matching .mtl and textures."
         )
 
     if has_precompiled_cache(folder):
         return True, ""
     return False, (
         "No supported map files were found in that folder.\n\n"
-        "Select a folder with a .glb file, or with both .obj and .mtl files, "
-        "or a folder that already contains a CaveViewer pre-compiled cache."
+        "Select the folder that contains your cave map files: .glb, or "
+        ".obj with its matching .mtl and textures."
     )
