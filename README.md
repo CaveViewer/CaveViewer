@@ -150,7 +150,7 @@ Why this matters: chunk size is one of the most important map settings because i
 |---|---|---:|---|---|
 | System RAM target (%) | — | 8 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
 | GPU memory target (%) | — | 70 | 1 to 80 | Target share of detected GPU memory used for loaded chunks. |
-| GPU memory override (GB) | — | empty | 0.5 to 50 | Manual GPU memory size when auto-detection is unavailable or inaccurate. |
+| GPU memory override (GB) | — | empty | 0.5 to 50 | Optional manual GPU memory ceiling. If auto-detection finds a smaller active GPU, CaveViewer uses the smaller detected value. |
 | Chunk-loading workers | — | 2 | integer, at least 1 | Maximum background chunk-loading workers. CaveViewer starts one and grows one at a time only while system RAM use is below 80%. |
 | Loading CPUs to keep free | — | 3 | integer, 2 to 32 | Reserve CPU cores instead of using them for streaming workers. |
 | Chunk uploads per frame | — | 1 | integer, 1 to 16 | Hard cap for how many ready chunks are uploaded each frame on the render thread. |
@@ -158,7 +158,9 @@ Why this matters: chunk size is one of the most important map settings because i
 
 GPU memory is detected automatically through Linux DRM sysfs for AMD GPUs and
 through `nvidia-smi` for NVIDIA GPUs. Use the GPU memory override only when
-automatic detection is unavailable or does not match the active adapter.
+automatic detection is unavailable or does not match the active adapter. If
+GPU memory cannot be detected and no override is set, CaveViewer applies a
+conservative 1 GB fallback instead of disabling the GPU residency cap.
 
 ### Map Parsing
 

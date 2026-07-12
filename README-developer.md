@@ -557,7 +557,7 @@ atomically published under `$XDG_CACHE_HOME/caveviewer/maps`; old adjacent
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
 | `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
-| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Override the GPU memory size used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; use this when detection is unavailable or inaccurate. |
+| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Optional GPU memory ceiling used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; if detection finds a smaller active GPU, the detected value wins. If detection is unavailable and no override is set, CaveViewer uses a conservative 1 GB fallback. |
 | `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory the chunk streaming system targets. |
 | `CAVEVIEWER_IO_WORKERS` | `2` | Integer 1-32 | Requested maximum number of background threads for loading chunk files from disk. Streaming starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_IO_RESERVED_CPUS`. |
 | `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer 2-32 | Logical CPUs kept out of the loading worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |

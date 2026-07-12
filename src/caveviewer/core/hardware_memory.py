@@ -15,6 +15,7 @@ from caveviewer.core.logging_utils import get_logger
 
 AMD_PCI_VENDOR_ID = 0x1002
 LINUX_DRM_ROOT = "/sys/class/drm"
+UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = 1 * 1024 ** 3
 
 _LOG = get_logger("HardwareMemory")
 
@@ -245,22 +246,24 @@ def detect_total_gpu_memory_bytes(
     amd_detector: Callable[[], int | None] | None = None,
     logger=None,
 ) -> int | None:
-    """Best-effort dedicated GPU memory detection with an env override."""
+    """Best-effort active-GPU memory budget with a conservative fallback.
+
+    ``CAVEVIEWER_GPU_MEMORY_GB`` is treated as a user-requested ceiling, not a
+    value that blindly overrides hardware discovery.  If platform detection can
+    identify a smaller active adapter, the detected value wins so an optimistic
+    manual setting cannot push the streamer into predictable driver OOMs.
+    """
     log = logger or _LOG
     nvidia_detector = nvidia_detector or detect_nvidia_gpu_memory_bytes
     amd_detector = amd_detector or detect_linux_amd_gpu_memory_bytes
 
+    override_bytes = None
     override_gb = os.environ.get("CAVEVIEWER_GPU_MEMORY_GB", "").strip()
     if override_gb:
         try:
             value = float(override_gb)
             if value > 0.0:
-                memory_bytes = int(value * (1024 ** 3))
-                log.info(
-                    "Using configured GPU memory override: %.1f GB.",
-                    memory_bytes / (1024 ** 3),
-                )
-                return memory_bytes
+                override_bytes = int(value * (1024 ** 3))
         except ValueError:
             pass
 
@@ -272,24 +275,57 @@ def detect_total_gpu_memory_bytes(
         or normalized_vendor.startswith("ati ")
     )
 
+    detected_bytes = None
+    detected_source = None
     if vendor_is_nvidia or not normalized_vendor:
         memory_bytes = nvidia_detector()
         if memory_bytes is not None:
-            log.info(
-                "Detected NVIDIA GPU memory via nvidia-smi: %.1f GB.",
-                memory_bytes / (1024 ** 3),
-            )
-            return memory_bytes
+            detected_bytes = memory_bytes
+            detected_source = "NVIDIA GPU memory via nvidia-smi"
 
-    if sys.platform.startswith("linux") and (
+    if detected_bytes is None and sys.platform.startswith("linux") and (
         vendor_is_amd or not normalized_vendor
     ):
         memory_bytes = amd_detector()
         if memory_bytes is not None:
-            log.info(
-                "Detected AMD GPU memory via Linux DRM sysfs: %.1f GB.",
-                memory_bytes / (1024 ** 3),
-            )
-            return memory_bytes
+            detected_bytes = memory_bytes
+            detected_source = "AMD GPU memory via Linux DRM sysfs"
 
-    return None
+    if detected_bytes is not None:
+        if override_bytes is None:
+            log.info(
+                "Detected %s: %.1f GB.",
+                detected_source,
+                detected_bytes / (1024 ** 3),
+            )
+            return detected_bytes
+
+        effective_bytes = min(override_bytes, detected_bytes)
+        if override_bytes > detected_bytes:
+            log.warning(
+                "Configured GPU memory override %.1f GB exceeds detected active GPU memory %.1f GB; using detected value.",
+                override_bytes / (1024 ** 3),
+                detected_bytes / (1024 ** 3),
+            )
+        else:
+            log.info(
+                "Using configured GPU memory override %.1f GB below detected %s %.1f GB.",
+                override_bytes / (1024 ** 3),
+                detected_source,
+                detected_bytes / (1024 ** 3),
+            )
+        return effective_bytes
+
+    if override_bytes is not None:
+        log.warning(
+            "Using unverified configured GPU memory override: %.1f GB. "
+            "Automatic active-GPU memory detection was unavailable.",
+            override_bytes / (1024 ** 3),
+        )
+        return override_bytes
+
+    log.warning(
+        "GPU memory detection unavailable; using conservative fallback: %.1f GB.",
+        UNKNOWN_GPU_MEMORY_FALLBACK_BYTES / (1024 ** 3),
+    )
+    return UNKNOWN_GPU_MEMORY_FALLBACK_BYTES

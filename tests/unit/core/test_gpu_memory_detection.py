@@ -54,18 +54,43 @@ def test_linux_amd_detection_ignores_connectors_and_invalid_values(tmp_path):
     assert hardware_memory.detect_linux_amd_gpu_memory_bytes(tmp_path) is None
 
 
-def test_gpu_memory_override_takes_precedence(monkeypatch):
+def test_gpu_memory_override_can_lower_detected_budget(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_GPU_MEMORY_GB", "3.5")
-
-    def unexpected_detection(*_args, **_kwargs):
-        pytest.fail("automatic GPU detection should not run with an override")
-
-    monkeypatch.setattr(hardware_memory.subprocess, "run", unexpected_detection)
     monkeypatch.setattr(
-        hardware_memory, "detect_linux_amd_gpu_memory_bytes", unexpected_detection
+        hardware_memory.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="8192\n"),
     )
 
     assert hardware_memory.detect_total_gpu_memory_bytes() == int(3.5 * GIB)
+
+
+def test_gpu_memory_override_cannot_exceed_detected_active_gpu(monkeypatch):
+    monkeypatch.setenv("CAVEVIEWER_GPU_MEMORY_GB", "16")
+    monkeypatch.setattr(
+        hardware_memory.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="4096\n"),
+    )
+
+    assert hardware_memory.detect_total_gpu_memory_bytes() == 4 * GIB
+
+
+def test_unverified_gpu_memory_override_is_used_when_detection_fails(monkeypatch):
+    monkeypatch.setenv("CAVEVIEWER_GPU_MEMORY_GB", "2")
+    monkeypatch.setattr(
+        hardware_memory.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+    monkeypatch.setattr(hardware_memory.sys, "platform", "linux")
+    monkeypatch.setattr(
+        hardware_memory,
+        "detect_linux_amd_gpu_memory_bytes",
+        lambda: None,
+    )
+
+    assert hardware_memory.detect_total_gpu_memory_bytes() == 2 * GIB
 
 
 def test_nvidia_detection_still_precedes_amd(monkeypatch):
@@ -115,7 +140,29 @@ def test_known_non_amd_vendor_does_not_use_amd_adapter(monkeypatch):
         hardware_memory, "detect_linux_amd_gpu_memory_bytes", unexpected_detection
     )
 
-    assert hardware_memory.detect_total_gpu_memory_bytes("Intel") is None
+    assert (
+        hardware_memory.detect_total_gpu_memory_bytes("Intel")
+        == hardware_memory.UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
+    )
+
+
+def test_unknown_gpu_uses_conservative_fallback(monkeypatch):
+    monkeypatch.setattr(
+        hardware_memory.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+    monkeypatch.setattr(hardware_memory.sys, "platform", "linux")
+    monkeypatch.setattr(
+        hardware_memory,
+        "detect_linux_amd_gpu_memory_bytes",
+        lambda: None,
+    )
+
+    assert (
+        hardware_memory.detect_total_gpu_memory_bytes()
+        == hardware_memory.UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
+    )
 
 
 def test_linux_amd_detection_is_used_when_nvidia_is_unavailable(monkeypatch):
