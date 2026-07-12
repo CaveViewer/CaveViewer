@@ -59,8 +59,10 @@ screen coordinates.
 
 The splash screen checks the signed update manifest for the current platform
 and architecture. If you start a download, it continues in the background
-while you open maps, download sample maps, or change settings. Update status is
-shown only on the splash screen, so it does not interrupt map viewing.
+while you open maps, download sample maps, or change settings. When the splash
+screen is visible it owns update progress and completion feedback; if a
+download completes in the background, CaveViewer may use a desktop
+notification instead of interrupting map viewing.
 
 After verification, CaveViewer keeps the package in `~/Downloads` and reveals
 it for manual installation: macOS mounts the DMG read-only and shows the app in
@@ -124,7 +126,7 @@ height by default so they play back smoothly on normal video players.
 
 ## Importing and Streaming Preferences
 
-The Advanced Settings panel in the startup window acts as the advanced installer/preferences surface for import and streaming behavior. Open it from the splash screen with Advanced Settings....
+The Preferences panel in the startup window acts as the advanced installer/preferences surface for import and streaming behavior. Open it from the splash screen with Preferences.
 
 These values are validated in the UI, applied to environment variables for the current launch, and saved to a local settings file so they are reused next time.
 
@@ -198,7 +200,7 @@ In practice:
 
 Large photogrammetry maps can exceed the practical memory available on a 16 GB computer, especially while CaveViewer is importing a new map or decoding textures. Start with conservative settings, then increase them only after the map opens reliably.
 
-In Advanced Settings, try this first:
+In Preferences, try this first:
 
 | Setting | Safer value |
 |---|---:|

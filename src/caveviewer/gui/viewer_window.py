@@ -1483,29 +1483,33 @@ class CaveViewerWindow(mglw.WindowConfig):
         # tkinter and the parser/chunker modules, which the rest of this
         # file doesn't otherwise need -- same reasoning the application
         # startup module uses for its own local imports of these.
-        from caveviewer.app import pick_folder_dialog, find_model_file, import_and_cache_any
+        from caveviewer.app import pick_model_file_dialog, find_model_file
         from caveviewer.core import chunker as chunker_module
 
-        folder = pick_folder_dialog()
-        if not folder:
-            _LOG.info("Open cancelled -- no folder selected.")
+        selected_path = pick_model_file_dialog()
+        if not selected_path:
+            _LOG.info("Open cancelled -- no file selected.")
             return
 
-        folder = os.path.abspath(folder)
-        _LOG.info(f"Opening new map from: {folder}")
+        selected_path = os.path.abspath(selected_path)
+        selected_is_file = os.path.isfile(selected_path)
+        textures_dir = os.path.dirname(selected_path) if selected_is_file else selected_path
+        _LOG.info(f"Opening new map from: {selected_path}")
 
         try:
-            model_descriptor = find_model_file(folder)
+            model_descriptor = find_model_file(selected_path)
         except FileNotFoundError as e:
+            if selected_is_file:
+                _LOG.warning(f"Could not open this file: {e}")
+                return
             # Match caveviewer.app's startup behavior: allow selecting a
             # cache directory itself directly, but do not auto-discover old
             # adjacent _cache/.caveviewer_cache folders.
-            prebuilt_cache = folder
-            textures_dir = folder
+            prebuilt_cache = selected_path
             if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
                 _LOG.warning(f"Could not open this folder: {e}")
                 return
-            _LOG.info(f"Found cache manifest in selected directory: {folder}")
+            _LOG.info(f"Found cache manifest in selected directory: {selected_path}")
 
             try:
                 new_manifest = chunker_module.load_manifest(prebuilt_cache)
@@ -1513,7 +1517,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 _LOG.error(f"Failed to load the selected prebuilt map: {manifest_err}")
                 return
 
-            map_name = os.path.basename(new_manifest.get("source_obj") or folder)
+            map_name = os.path.basename(new_manifest.get("source_obj") or selected_path)
             _LOG.info(f"Switching to prebuilt map: {map_name}")
             _LOG.info(f"Using cache directory: {prebuilt_cache}")
             self.load_new_map(prebuilt_cache, textures_dir, new_manifest)
@@ -1522,7 +1526,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
         map_name = os.path.basename(source_path)
-        self._start_import_async(model_descriptor, folder, map_name, is_startup=False)
+        self._start_import_async(model_descriptor, textures_dir, map_name, is_startup=False)
 
     def _start_import_async(
         self,
@@ -3016,6 +3020,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         keys = self.wnd.keys
         if action == keys.ACTION_PRESS:
+            if self._handle_window_shortcut(key, modifiers):
+                return
             if self.controls_overlay.is_waiting_for_begin:
                 space_key = self._resolve_key_optional(keys, "SPACE", "SPACEBAR")
                 if (
@@ -3036,6 +3042,29 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._keys_down.discard(key)
 
     key_event = on_key_event
+
+    def _handle_window_shortcut(self, key, modifiers: KeyModifiers) -> bool:
+        """Handle desktop-standard window and open shortcuts."""
+        shortcut_down = (
+            self._command_is_down(modifiers)
+            if sys.platform == "darwin"
+            else self._control_is_down(modifiers)
+        )
+        if not shortcut_down:
+            return False
+
+        close_key = self._resolve_key_optional(self.wnd.keys, "W")
+        if close_key is not None and key == close_key:
+            self.on_close()
+            return True
+
+        open_key = self._resolve_key_optional(self.wnd.keys, "O")
+        if open_key is not None and key == open_key:
+            if self._has_map_loaded and not self._import_active:
+                self._handle_open_button_click()
+            return True
+
+        return False
 
     def _handle_recording_hotkey(self, key, modifiers: KeyModifiers) -> bool:
         """Use Shift+R to cancel countdown or stop active recording."""

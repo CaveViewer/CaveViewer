@@ -31,6 +31,7 @@ _BG_COLOR = DARK_THEME.background
 _TITLE_COLOR = DARK_THEME.title
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
+_PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
@@ -38,19 +39,17 @@ _BUTTON_FG = DARK_THEME.primary_button_text
 _BORDER_COLOR = DARK_THEME.border
 
 _LINUX_LAYOUT = sys.platform.startswith("linux")
-_TWO_COLUMN_LAYOUT = True
-_WRAP_LENGTH = 620 if sys.platform == "win32" else 340
-_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
+_WRAP_LENGTH = 520 if sys.platform == "win32" else 430
+_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 28
 _NUMERIC_ENTRY_WIDTH = 12
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _ERROR_COLOR = DARK_THEME.error_text
 _WARNING_COLOR = _TITLE_COLOR
 _BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
-_SECTION_GAP = 44 if sys.platform == "win32" else 18
 _MIN_WIDTH = (
-    1320
+    860
     if sys.platform == "win32"
-    else 1040
+    else 720
     if sys.platform.startswith("linux")
     else 0
 )
@@ -139,23 +138,21 @@ class AdvancedSettingsDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.withdraw()
-        self.dialog.title("Advanced Settings")
+        self.dialog.title("Preferences")
         self.dialog.configure(bg=_BG_COLOR)
-        self.dialog.resizable(False, False)
+        self.dialog.resizable(True, True)
         self.dialog.transient(parent)
 
         if _LINUX_LAYOUT:
             self.section_font = (ui_font_family, 10)
             self.body_font = (ui_font_family, 10)
             self.small_font = (ui_font_family, 9)
-            self.field_gap = 14
             self.entry_pad_y = 6
             self.section_pad_y = 15
         else:
             self.section_font = (ui_font_family, 12)
             self.body_font = (ui_font_family, 12)
             self.small_font = (ui_font_family, 10)
-            self.field_gap = 9
             self.entry_pad_y = 4
             self.section_pad_y = 12
 
@@ -171,6 +168,8 @@ class AdvancedSettingsDialog:
         self.rendered_invalid_key: str | None = None
         self.apply_button = None
         self.section_row = None
+        self.content_canvas = None
+        self.content_window = None
         self.button_row = None
         self.error_label = None
 
@@ -299,22 +298,26 @@ class AdvancedSettingsDialog:
         section = tk.Frame(
             parent,
             bg=_BG_COLOR,
-            padx=14,
-            pady=self.section_pad_y,
-            highlightthickness=1,
-            highlightbackground=_BORDER_COLOR,
-            highlightcolor=_BORDER_COLOR,
         )
-        section.pack(
-            fill="both", expand=(section_key == "streaming"), pady=(0, 12)
-        )
+        section.pack(fill="x", pady=(0, 18))
         tk.Label(
             section,
             text=title,
             font=self.section_font,
             fg=_TITLE_COLOR,
             bg=_BG_COLOR,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, 8))
+
+        group = tk.Frame(
+            section,
+            bg=_PANEL_COLOR,
+            padx=0,
+            pady=0,
+            highlightthickness=1,
+            highlightbackground=_BORDER_COLOR,
+            highlightcolor=_BORDER_COLOR,
+        )
+        group.pack(fill="x")
 
         fields = [
             field
@@ -322,18 +325,23 @@ class AdvancedSettingsDialog:
             if field.section == section_key
         ]
         for field in fields:
-            self._render_field(section, field)
+            self._render_field(group, field)
 
     def _render_field(self, section, field: SettingSpec) -> None:
         key = field.key
-        row = tk.Frame(section, bg=_BG_COLOR)
-        row.pack(fill="x", pady=(0, self.field_gap))
+        row = tk.Frame(section, bg=_PANEL_COLOR, padx=14, pady=10)
+        row.pack(fill="x")
+        row.grid_columnconfigure(0, weight=1)
+        row.grid_columnconfigure(1, weight=0)
+
+        text_column = tk.Frame(row, bg=_PANEL_COLOR)
+        text_column.grid(row=0, column=0, sticky="ew", padx=(0, 18))
         tk.Label(
-            row,
+            text_column,
             text=field.label,
             font=self.body_font,
             fg=_SUBTITLE_COLOR,
-            bg=_BG_COLOR,
+            bg=_PANEL_COLOR,
             anchor="w",
         ).pack(anchor="w")
 
@@ -365,17 +373,9 @@ class AdvancedSettingsDialog:
             )
         self.field_display_vars[key] = entry_var
 
-        entry_parent = row
-        entry_pack_options = {
-            "anchor": "w",
-            "pady": (self.entry_pad_y, self.entry_pad_y),
-        }
-        if value_type in {ValueType.PATH, ValueType.PATH_CREATE}:
-            entry_parent = tk.Frame(row, bg=_BG_COLOR)
-            entry_parent.pack(
-                fill="x", pady=(self.entry_pad_y, self.entry_pad_y)
-            )
-            entry_pack_options = {"side": "left", "fill": "x", "expand": True}
+        entry_parent = tk.Frame(row, bg=_PANEL_COLOR)
+        entry_parent.grid(row=0, column=1, sticky="e")
+        entry_pack_options = {"side": "left"}
 
         entry = tk.Entry(
             entry_parent,
@@ -463,18 +463,18 @@ class AdvancedSettingsDialog:
 
         single_line_hint = key == "recording_dir"
         hint_label = tk.Label(
-            row,
+            text_column,
             text=field.hint,
             font=self.small_font,
             fg=_INSTRUCTION_COLOR,
-            bg=_BG_COLOR,
+            bg=_PANEL_COLOR,
             justify="left",
             anchor="w",
             wraplength=0 if single_line_hint else _WRAP_LENGTH,
         )
-        hint_label.pack(anchor="w", fill="x")
+        hint_label.pack(anchor="w", fill="x", pady=(2, 0))
         if _LINUX_LAYOUT and not single_line_hint:
-            row.bind(
+            text_column.bind(
                 "<Configure>",
                 lambda event, label=hint_label: self._resize_hint(event, label),
                 add="+",
@@ -504,32 +504,50 @@ class AdvancedSettingsDialog:
             self.dialog, bg=_BG_COLOR, padx=_BODY_PAD_X, pady=18
         )
         body.pack(fill="both", expand=True)
-        self.section_row = tk.Frame(body, bg=_BG_COLOR)
-        self.section_row.pack(fill="both", expand=True, pady=(0, 10))
 
-        for column_index, sections in enumerate(ADVANCED_SETTING_COLUMNS):
+        content_shell = tk.Frame(body, bg=_BG_COLOR)
+        content_shell.pack(fill="both", expand=True, pady=(0, 10))
+        self.content_canvas = tk.Canvas(
+            content_shell,
+            bg=_BG_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            yscrollincrement=24,
+        )
+        scrollbar = tk.Scrollbar(
+            content_shell,
+            orient="vertical",
+            command=self.content_canvas.yview,
+            relief="flat",
+        )
+        self.content_canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self.content_canvas.pack(side="left", fill="both", expand=True)
+
+        self.section_row = tk.Frame(self.content_canvas, bg=_BG_COLOR)
+        self.content_window = self.content_canvas.create_window(
+            (0, 0),
+            window=self.section_row,
+            anchor="nw",
+        )
+
+        def _sync_scroll_region(_event=None) -> None:
+            self.content_canvas.configure(
+                scrollregion=self.content_canvas.bbox("all")
+            )
+
+        def _sync_content_width(event) -> None:
+            self.content_canvas.itemconfigure(
+                self.content_window,
+                width=event.width,
+            )
+
+        self.section_row.bind("<Configure>", _sync_scroll_region)
+        self.content_canvas.bind("<Configure>", _sync_content_width)
+
+        for sections in ADVANCED_SETTING_COLUMNS:
             column = tk.Frame(self.section_row, bg=_BG_COLOR)
-            if _TWO_COLUMN_LAYOUT:
-                half_gap = _SECTION_GAP // 2
-                pad_left = half_gap if column_index > 0 else 0
-                pad_right = (
-                    half_gap
-                    if column_index < len(ADVANCED_SETTING_COLUMNS) - 1
-                    else 0
-                )
-                self.section_row.grid_columnconfigure(
-                    column_index,
-                    weight=1,
-                    uniform="advanced_settings_column",
-                )
-                column.grid(
-                    row=0,
-                    column=column_index,
-                    sticky="nsew",
-                    padx=(pad_left, pad_right),
-                )
-            else:
-                column.pack(fill="x")
+            column.pack(fill="x")
             for section_key, section_title in sections:
                 self._render_section(column, section_title, section_key)
 
@@ -619,6 +637,7 @@ class AdvancedSettingsDialog:
 
         self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
         self.dialog.bind("<Escape>", lambda _event: self.cancel())
+        self.dialog.bind("<Control-w>", lambda _event: self.cancel())
         self.dialog.bind("<Return>", lambda _event: self.apply())
 
     def _set_feedback(self, message: str, message_kind: MessageKind) -> None:

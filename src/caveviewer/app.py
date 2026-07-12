@@ -5,13 +5,13 @@ caveviewer.app
 CaveViewer entry point.
 
 Workflow:
-  1. User picks a folder containing the Agisoft export (.obj + .mtl + .jpg
-     texture tiles).
-  2. We find the .obj/.mtl, and check whether a valid chunk cache already
+  1. User picks a direct .glb/.obj file, a folder containing an export, or an
+     existing CaveViewer cache folder.
+  2. We find the source model, and check whether a valid chunk cache already
      exists (built on a previous run). If valid, skip straight to step 4.
-  3. If no valid cache: parse the OBJ (streaming, handles 2GB+ files) and
-     build the spatial chunk cache on disk -- this is the one-time cost
-     that makes all future loads of this same map instant. Shows progress.
+  3. If no valid cache: parse the model and build the spatial chunk cache on
+     disk -- this is the one-time cost that makes all future loads of this
+     same map instant. Shows progress.
   4. Launch the OpenGL viewer window, which streams chunks in/out based on
      where the user flies, so frame rate stays smooth regardless of total
      map size.
@@ -555,20 +555,44 @@ def _embedded_texture_filename(image_bytes: bytes, material_name: str) -> str:
     return f"{material_name}{ext}"
 
 
-def pick_folder_dialog(*, desktop_services=None) -> str | None:
-    """Open the platform directory chooser used by the in-viewer Open action."""
+def _hidden_tk_root():
+    """Create the hidden Tk owner used for native chooser dialogs."""
     import tkinter as tk
     from caveviewer.gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
-    from caveviewer.gui.platform import get_desktop_services, tk_root_options
+    from caveviewer.gui.platform import tk_root_options
 
     configure_process_dpi_awareness()
     root = tk.Tk(**tk_root_options())
+    apply_tk_scaling(root)
+    root.withdraw()
+    return root
+
+
+def pick_folder_dialog(*, desktop_services=None) -> str | None:
+    """Open the platform directory chooser used by folder/cache workflows."""
+    from caveviewer.gui.platform import get_desktop_services
+
+    root = _hidden_tk_root()
     try:
-        apply_tk_scaling(root)
-        root.withdraw()
         services = desktop_services or get_desktop_services()
         selection = services.choose_directory(
-            title="Select folder containing your cave map (.obj, .mtl, .jpg)",
+            title="Select a Cave Map Folder",
+            parent=root,
+        )
+        return selection.path if selection else None
+    finally:
+        root.destroy()
+
+
+def pick_model_file_dialog(*, desktop_services=None) -> str | None:
+    """Open the platform file chooser for directly selected OBJ/GLB maps."""
+    from caveviewer.gui.platform import get_desktop_services
+
+    root = _hidden_tk_root()
+    try:
+        services = desktop_services or get_desktop_services()
+        selection = services.choose_file(
+            title="Open Cave Map File",
             parent=root,
         )
         return selection.path if selection else None

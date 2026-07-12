@@ -587,7 +587,7 @@ def save_advanced_settings(
                 pass
         _LOG.warning("Could not save advanced settings to %s: %s", path, exc)
         raise AdvancedSettingsSaveError(
-            f"Could not save Advanced Settings to {path}."
+            f"Could not save preferences to {path}."
         ) from exc
 
 

@@ -114,13 +114,13 @@ def test_save_directory_chooser_is_owned_focused_and_not_left_topmost():
     result = sample_maps_dialog._ask_directory_in_front(
         desktop_services,
         owner,
-        title="Save Test Cave to...",
+        title="Save Test Cave to…",
         initial_dir="/maps",
     )
 
     assert result.path == "/chosen/folder"
     assert desktop_services.options == {
-        "title": "Save Test Cave to...",
+        "title": "Save Test Cave to…",
         "initial_dir": "/maps",
         "parent": owner,
     }
@@ -151,7 +151,7 @@ def test_save_directory_chooser_restores_topmost_state_after_failure():
         sample_maps_dialog._ask_directory_in_front(
             FailingDesktopServices(),
             owner,
-            title="Save Test Cave to...",
+            title="Save Test Cave to…",
             initial_dir="/maps",
         )
     except RuntimeError as error:
@@ -238,7 +238,7 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
             "notify",
             notification_id,
             "CaveViewer is downloading a sample map",
-            "Downloading Devils Eye...",
+            "Downloading Devils Eye…",
             "normal",
         ),
         ("inhibit", "Downloading Devils Eye", parent),
@@ -250,6 +250,37 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
             "Devils Eye finished downloading.",
             "normal",
         ),
+    ]
+
+
+def test_sample_download_can_use_foreground_dialog_without_desktop_notifications(
+    monkeypatch, tmp_path
+):
+    sample = _sample()
+    parent = object()
+    services = FakeActivityDesktopServices()
+
+    def fake_download(*_args, **_options):
+        return "/downloaded/devils-eye"
+
+    monkeypatch.setattr(
+        sample_maps_dialog,
+        "_download_and_extract_to_selected_directory",
+        fake_download,
+    )
+
+    result = sample_maps_dialog._download_sample_with_desktop_activity(
+        services,
+        parent,
+        DirectorySelection.from_path(str(tmp_path)),
+        sample,
+        notify_desktop=False,
+    )
+
+    assert result == "/downloaded/devils-eye"
+    assert services.calls == [
+        ("inhibit", "Downloading Devils Eye", parent),
+        ("close_inhibitor",),
     ]
 
 

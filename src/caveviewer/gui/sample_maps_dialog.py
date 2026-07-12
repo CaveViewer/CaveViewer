@@ -23,7 +23,6 @@ import time
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
-from caveviewer.gui.notifications import show_error, show_info, show_warning
 from caveviewer.gui.platform import (
     DesktopServices,
     DirectorySelection,
@@ -31,6 +30,7 @@ from caveviewer.gui.platform import (
     get_splash_platform_adapter,
 )
 from caveviewer.gui.preferences import migrate_state_file, write_text_atomic
+from caveviewer.gui.tk_feedback import FeedbackKind, show_feedback
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.version import APP_NAME
 
@@ -191,18 +191,20 @@ def _download_sample_with_desktop_activity(
     *,
     progress_cb=None,
     cancel_cb=None,
+    notify_desktop: bool = True,
 ) -> str:
     """Download a sample map while using native desktop activity affordances."""
     from caveviewer.gui.sample_maps import DownloadCancelled
 
     display_name = getattr(sample, "display_name", "sample map")
     notification_id = _sample_download_notification_id(sample)
-    _safe_desktop_notify(
-        desktop_services,
-        notification_id,
-        f"{APP_NAME} is downloading a sample map",
-        f"Downloading {display_name}...",
-    )
+    if notify_desktop:
+        _safe_desktop_notify(
+            desktop_services,
+            notification_id,
+            f"{APP_NAME} is downloading a sample map",
+            f"Downloading {display_name}…",
+        )
     inhibitor = _safe_desktop_inhibit(
         desktop_services,
         f"Downloading {display_name}",
@@ -219,8 +221,9 @@ def _download_sample_with_desktop_activity(
     except Exception as exc:
         _close_desktop_inhibitor(inhibitor)
         if isinstance(exc, DownloadCancelled):
-            _safe_desktop_withdraw(desktop_services, notification_id)
-        else:
+            if notify_desktop:
+                _safe_desktop_withdraw(desktop_services, notification_id)
+        elif notify_desktop:
             _safe_desktop_notify(
                 desktop_services,
                 notification_id,
@@ -231,12 +234,13 @@ def _download_sample_with_desktop_activity(
         raise
 
     _close_desktop_inhibitor(inhibitor)
-    _safe_desktop_notify(
-        desktop_services,
-        notification_id,
-        f"{APP_NAME} sample map is ready",
-        f"{display_name} finished downloading.",
-    )
+    if notify_desktop:
+        _safe_desktop_notify(
+            desktop_services,
+            notification_id,
+            f"{APP_NAME} sample map is ready",
+            f"{display_name} finished downloading.",
+        )
     return result_path
 
 
@@ -288,6 +292,8 @@ def show_sample_maps_dialog(
             pass
 
     dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
+    dialog.bind("<Escape>", lambda _event: _close_dialog())
+    dialog.bind("<Control-w>", lambda _event: _close_dialog())
 
     # Size everything in scaled pixels so the dialog is physically comparable
     # to the DPI-scaled splash window rather than looking small on high-DPI
@@ -334,7 +340,7 @@ def show_sample_maps_dialog(
     header.pack(pady=(18, 4))
 
     sub = tk.Label(
-        dialog, text="No map of your own? Try one of these.",
+        dialog, text="No map of your own? Try one of these",
         font=(_UI_FONT_FAMILY, 9), fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
     )
     sub.pack(pady=(0, 14))
@@ -342,7 +348,7 @@ def show_sample_maps_dialog(
     # Pack the loading indicator with expand so it sits centered in the
     # already full-size window instead of clinging to the top.
     status_label = tk.Label(
-        dialog, text="Loading available maps...", font=(_UI_FONT_FAMILY, 10),
+        dialog, text="Loading available maps…", font=(_UI_FONT_FAMILY, 10),
         fg=_SUBTITLE_COLOR, bg=_BG_COLOR,
     )
     status_label.pack(expand=True)
@@ -463,8 +469,18 @@ def show_sample_maps_dialog(
     def _dialog_exists() -> bool:
         return not dialog_closed[0] and _widget_exists(dialog)
 
+    def _show_inline_feedback(message: str, *, kind: FeedbackKind = "info") -> None:
+        show_feedback(
+            dialog,
+            message,
+            kind=kind,
+            duration_ms=9000 if kind == "error" else 7000,
+            font=(_UI_FONT_FAMILY, 10),
+            max_wraplength=420,
+        )
+
     # Resolve the last-used save directory once, up front. Doing this here
-    # (rather than inside the "Save to..." click handler) keeps the click
+    # (rather than inside the "Save to…" click handler) keeps the click
     # path free of any filesystem stat -- a stale saved path on a slow or
     # disconnected volume could otherwise block and delay the folder
     # chooser from appearing after the button is pressed.
@@ -475,11 +491,11 @@ def show_sample_maps_dialog(
     def _download_flow(sample):
         nonlocal sample_maps_root_dir
         if sample.download_url is None:
-            show_info(
+            _show_inline_feedback(
                 f"{sample.display_name} isn't available for download right now "
                 f"(its file wasn't found on the server, or the server couldn't be "
                 f"reached). Try again later, or pick a different sample map.",
-                parent=dialog,
+                kind="info",
             )
             return
 
@@ -489,7 +505,7 @@ def show_sample_maps_dialog(
         save_dir = _ask_directory_in_front(
             desktop_services,
             dialog,
-            title=f"Save {sample.display_name} to...",
+            title=f"Save {sample.display_name} to…",
             initial_dir=initial_save_dir[0],
         )
         if not save_dir:
@@ -549,6 +565,7 @@ def show_sample_maps_dialog(
                 sample,
                 progress_cb=on_progress,
                 cancel_cb=cancel_event.is_set,
+                notify_desktop=False,
             )
         except Exception as e:
             if not _dialog_exists():
@@ -561,16 +578,16 @@ def show_sample_maps_dialog(
                 if _widget_exists(action_btn):
                     _set_action_button(
                         action_btn,
-                        "Save to...",
+                        "Save to…",
                         lambda s=sample: _download_flow(s),
                     )
             except tk.TclError:
                 return
             if isinstance(e, DownloadCancelled):
                 return
-            show_error(
-                f"Couldn't download {sample.display_name}:\n\n{e}",
-                parent=dialog,
+            _show_inline_feedback(
+                f"Couldn't download {sample.display_name}: {e}",
+                kind="error",
             )
             return
 
@@ -601,10 +618,10 @@ def show_sample_maps_dialog(
             _close_dialog()
             return
 
-        show_warning(
-            f"{sample.display_name} can't be opened:\n\n{error_message}\n\n"
+        _show_inline_feedback(
+            f"{sample.display_name} can't be opened: {error_message} "
             "Its files may have been moved or deleted. Download it again.",
-            parent=dialog,
+            kind="warning",
         )
         downloaded_paths.pop(sample.display_name, None)
         detail_label = detail_labels.get(sample.display_name)
@@ -612,7 +629,7 @@ def show_sample_maps_dialog(
             detail_label.config(text=_not_downloaded_detail_text(sample))
         action_btn = action_buttons.get(sample.display_name)
         if action_btn is not None:
-            _set_action_button(action_btn, "Save to...", lambda s=sample: _download_flow(s))
+            _set_action_button(action_btn, "Save to…", lambda s=sample: _download_flow(s))
 
     def _open_installed_sample(result_path):
         selected_folder[0] = result_path
@@ -691,17 +708,17 @@ def show_sample_maps_dialog(
                 _open_installed_sample(sample_path)
                 return
 
-            show_warning(
-                f"{sample.display_name} can't be opened:\n\n{error_message}\n\n"
+            _show_inline_feedback(
+                f"{sample.display_name} can't be opened: {error_message} "
                 "Its files may have been moved or deleted. Download it again.",
-                parent=dialog,
+                kind="warning",
             )
             detail_label = detail_labels.get(sample.display_name)
             if detail_label is not None:
                 detail_label.config(text=_not_downloaded_detail_text(sample))
             action_btn = action_buttons.get(sample.display_name)
             if action_btn is not None:
-                _set_action_button(action_btn, "Save to...", lambda s=sample: _download_flow(s))
+                _set_action_button(action_btn, "Save to…", lambda s=sample: _download_flow(s))
             return
 
         _download_flow(sample)
@@ -757,7 +774,7 @@ def show_sample_maps_dialog(
         detail_label.pack(anchor="w", pady=(2, 0))
         detail_labels[sample.display_name] = detail_label
 
-        btn_text = "Open" if already_have else "Save to..."
+        btn_text = "Open" if already_have else "Save to…"
         btn_enabled = already_have or sample.download_url is not None
 
         action_btn = _make_action_button(

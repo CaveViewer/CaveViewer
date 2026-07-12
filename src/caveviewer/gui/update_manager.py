@@ -123,6 +123,7 @@ class UpdateManager:
         self._payload_path: str | None = None
         self._error: str | None = None
         self._automatic_reveal_done = False
+        self._foreground_update_surface_active = False
 
         self._cancel_event: threading.Event | None = None
         self._worker: threading.Thread | None = None
@@ -163,6 +164,17 @@ class UpdateManager:
     @property
     def reveal_action_label(self) -> str:
         return self._platform_adapter.download_reveal_action_label()
+
+    def set_foreground_update_surface_active(self, active: bool) -> None:
+        """Tell the manager whether an in-app update surface is visible.
+
+        When a visible splash is already presenting update progress and
+        actions, desktop notifications would duplicate the same feedback.
+        Background downloads still notify normally after the foreground
+        surface is closed.
+        """
+        with self._lock:
+            self._foreground_update_surface_active = bool(active)
 
     def check_for_updates(self) -> bool:
         """Start the process's asynchronous check when the manager is idle."""
@@ -284,6 +296,9 @@ class UpdateManager:
         priority: str = "normal",
     ) -> None:
         """Best-effort desktop notification for update download progress."""
+        with self._lock:
+            if self._foreground_update_surface_active:
+                return
         try:
             self._desktop_services.notify(
                 _UPDATE_DOWNLOAD_NOTIFICATION_ID,
