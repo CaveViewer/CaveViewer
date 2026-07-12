@@ -1,3 +1,5 @@
+"""Cover updater signature verification fallback behavior."""
+
 from __future__ import annotations
 
 import builtins
