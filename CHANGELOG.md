@@ -23,6 +23,9 @@ All notable changes to this project are documented in this file.
 - Runtime defaults and environment-based performance tuning expanded (GPU/memory/worker settings).
 
 ### Fixed
+- Large textured maps now keep geometry visible under GPU pressure by
+  downscaling oversized textures instead of dropping nearby chunks from the
+  streaming set.
 - Windows stable and prerelease publishing now signs updater manifests and
   commits the required `.json.sig` files.
 - macOS About menu crash and related callback stability issues.

@@ -62,6 +62,14 @@ includes real decode cost. Pool growth stops when system RAM utilization
 reaches 80% or availability cannot be measured and may resume if pressure
 later falls.
 
+Geometry visibility is not limited by full-resolution texture residency.
+`StreamingWorld` selects chunks using spatial distance and chunk residency
+budgets; oversized texture sets are handled in `TextureManager` by deriving a
+decode-time maximum texture dimension from detected GPU memory, target
+percentage, and unique texture count. This keeps the visible cave geometry from
+collapsing to only the few chunks whose original texture tiles fit in VRAM,
+while still preventing obviously oversized texture uploads.
+
 ## UI and platform boundaries
 
 Tk dialogs should keep validation and workflow state in testable controller or
