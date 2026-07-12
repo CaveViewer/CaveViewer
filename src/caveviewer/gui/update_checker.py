@@ -228,6 +228,12 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
             update_available=False, current_version=current_version,
             error="Couldn't reach the update manifest URL -- check your internet connection."
         )
+    except OSError as e:
+        _LOG.error("Update manifest SSL/network setup failed: %s", e)
+        return UpdateCheckResult(
+            update_available=False, current_version=current_version,
+            error="Couldn't reach the update manifest URL -- check your internet connection."
+        )
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         _LOG.error("Update manifest parsing failed: %s", e)
         return UpdateCheckResult(
@@ -381,6 +387,13 @@ def _verify_manifest_signature_required(manifest_bytes: bytes) -> bool:
     except urllib.error.URLError as e:
         _LOG.error(
             "Update manifest signature fetch failed from %s: %s.",
+            _MANIFEST_SIGNATURE_URL,
+            e,
+        )
+        return False
+    except OSError as e:
+        _LOG.error(
+            "Update manifest signature SSL/network setup failed from %s: %s.",
             _MANIFEST_SIGNATURE_URL,
             e,
         )
