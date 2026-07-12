@@ -2,10 +2,9 @@
 caveviewer.gui.splash_screen
 
 The very first thing shown when CaveViewer launches: a small landing
-window with the program name/version, the skull logo, and an Open Map
-button to pick a cave map file -- replacing the old behavior of jumping
-straight into a bare native folder-picker dialog with zero context about
-what the program even is.
+window with the program name/version, the skull logo, and an Open Map Folder
+button -- replacing the old behavior of jumping straight into a bare native
+folder-picker dialog with zero context about what the program even is.
 
 Built with Tkinter (ships with standard Python on Windows/Mac, same
 reasoning as the existing native folder-picker dialog already used
@@ -489,33 +488,10 @@ def show_splash_screen(
             font=_BODY_FONT,
         )
 
-    def _select_map_path(path: str) -> None:
-        selected_folder[0] = path
-        _save_last_browse_dir(path)
-        _leave_splash()
-
-    def on_open_file():
-        last_dir = _load_last_browse_dir()
-        selection = desktop_services.choose_file(
-            title="Open Cave Map File",
-            initial_dir=last_dir,
-            parent=root,
-        )
-        if not selection:
-            return
-        try:
-            from caveviewer.app import find_model_file
-
-            find_model_file(selection.path)
-        except FileNotFoundError as exc:
-            _show_invalid_map_feedback(str(exc))
-            return
-        _select_map_path(selection.path)
-
-    def on_open_folder():
+    def on_open_map_folder():
         last_dir = _load_last_browse_dir()
         selection = desktop_services.choose_directory(
-            title="Select a Cave Map Folder",
+            title="Open Map Folder",
             initial_dir=last_dir,
             parent=root,
         )
@@ -525,14 +501,16 @@ def show_splash_screen(
                 _show_invalid_map_feedback(error_message)
                 return
 
-            _select_map_path(selection.path)
+            selected_folder[0] = selection.path
+            _save_last_browse_dir(selection.path)
+            _leave_splash()
 
     def on_close(_event=None):
         _leave_splash()
 
     browse_button = tk.Label(
         root,
-        text="Open Map…",
+        text="Open Map Folder…",
         font=_BUTTON_FONT,
         bg=_BUTTON_BG,
         fg=_BUTTON_FG,
@@ -544,17 +522,17 @@ def show_splash_screen(
         highlightbackground=_BUTTON_BORDER_COLOR,
         highlightcolor=_BUTTON_BORDER_COLOR,
     )
-    browse_button.bind("<Button-1>", lambda _event: on_open_file())
-    browse_button.bind("<Return>", lambda _event: on_open_file())
-    browse_button.bind("<space>", lambda _event: on_open_file())
+    browse_button.bind("<Button-1>", lambda _event: on_open_map_folder())
+    browse_button.bind("<Return>", lambda _event: on_open_map_folder())
+    browse_button.bind("<space>", lambda _event: on_open_map_folder())
     browse_button.bind("<Enter>", lambda _event: browse_button.config(bg=_BUTTON_HOVER_BG))
     browse_button.bind("<Leave>", lambda _event: browse_button.config(bg=_BUTTON_BG))
     browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
 
     instruction_label = tk.Label(
         root,
-        text="Choose a .glb file or an .obj file with its matching .mtl.\n"
-             "Use Open folder for exported folders or existing CaveViewer caches.",
+        text="Choose the folder that contains your cave map files,\n"
+             "or an existing CaveViewer cache folder.",
         font=_INSTRUCTION_FONT,
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",
@@ -567,9 +545,6 @@ def show_splash_screen(
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
         )
-
-    def _on_open_folder_click():
-        on_open_folder()
 
     # Example maps link - opens the sample maps dialog
     def _on_example_maps_click():
@@ -587,29 +562,6 @@ def show_splash_screen(
 
     secondary_link_row = tk.Frame(root, bg=_BG_COLOR)
     secondary_link_row.pack(pady=(_SECONDARY_LINK_ROW_TOP_GAP, _SECONDARY_LINK_ROW_BOTTOM_GAP))
-
-    folder_link = tk.Label(
-        secondary_link_row,
-        text="Open folder…",
-        font=_SMALL_FONT,
-        fg=_BUTTON_BG,
-        bg=_BG_COLOR,
-        cursor="hand2",
-        takefocus=True,
-    )
-    folder_link.bind("<Button-1>", lambda _event: _on_open_folder_click())
-    folder_link.bind("<Return>", lambda _event: _on_open_folder_click())
-    folder_link.bind("<space>", lambda _event: _on_open_folder_click())
-    folder_link.pack(side="left")
-
-    folder_separator = tk.Label(
-        secondary_link_row,
-        text="   |   ",
-        font=_SMALL_FONT,
-        fg="#3f4a5c",
-        bg=_BG_COLOR,
-    )
-    folder_separator.pack(side="left")
 
     advanced_link = tk.Label(
         secondary_link_row,
@@ -682,7 +634,7 @@ def show_splash_screen(
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     root.after(50, _refresh_update_presentation)
     root.after(350, update_manager.check_for_updates)
-    root.bind("<Return>", lambda _event: on_open_file())
+    root.bind("<Return>", lambda _event: on_open_map_folder())
     root.bind("<Escape>", on_close)
     root.bind("<Control-w>", on_close)
     root.protocol("WM_DELETE_WINDOW", on_close)

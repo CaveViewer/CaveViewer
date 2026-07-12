@@ -5,8 +5,8 @@ caveviewer.app
 CaveViewer entry point.
 
 Workflow:
-  1. User picks a direct .glb/.obj file, a folder containing an export, or an
-     existing CaveViewer cache folder.
+  1. User picks a map folder, or launches a direct .glb/.obj file from the
+     desktop shell or CLI.
   2. We find the source model, and check whether a valid chunk cache already
      exists (built on a previous run). If valid, skip straight to step 4.
   3. If no valid cache: parse the model and build the spatial chunk cache on
@@ -576,23 +576,7 @@ def pick_folder_dialog(*, desktop_services=None) -> str | None:
     try:
         services = desktop_services or get_desktop_services()
         selection = services.choose_directory(
-            title="Select a Cave Map Folder",
-            parent=root,
-        )
-        return selection.path if selection else None
-    finally:
-        root.destroy()
-
-
-def pick_model_file_dialog(*, desktop_services=None) -> str | None:
-    """Open the platform file chooser for directly selected OBJ/GLB maps."""
-    from caveviewer.gui.platform import get_desktop_services
-
-    root = _hidden_tk_root()
-    try:
-        services = desktop_services or get_desktop_services()
-        selection = services.choose_file(
-            title="Open Cave Map File",
+            title="Open Map Folder",
             parent=root,
         )
         return selection.path if selection else None

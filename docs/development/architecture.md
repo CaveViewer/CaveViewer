@@ -98,7 +98,8 @@ IDLE -> REQUESTING -> WAITING -> {COMPLETED, CANCELLED, FAILED}
 
 Startup map sessions accept either a folder containing a supported map or one
 direct `.glb`/`.obj` file. This keeps Linux `Exec ... %f` desktop launches and
-the in-app file and folder choosers on the same import/cache path.
+the in-app folder chooser on the same import/cache path as desktop-shell direct
+file launches.
 
 Linux viewer windows use GLFW 3.4. `CAVEVIEWER_WINDOW_SYSTEM=auto` prefers
 X11/XWayland when `DISPLAY` is available, then retries Wayland only for a

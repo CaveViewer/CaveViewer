@@ -1483,33 +1483,29 @@ class CaveViewerWindow(mglw.WindowConfig):
         # tkinter and the parser/chunker modules, which the rest of this
         # file doesn't otherwise need -- same reasoning the application
         # startup module uses for its own local imports of these.
-        from caveviewer.app import pick_model_file_dialog, find_model_file
+        from caveviewer.app import pick_folder_dialog, find_model_file
         from caveviewer.core import chunker as chunker_module
 
-        selected_path = pick_model_file_dialog()
-        if not selected_path:
-            _LOG.info("Open cancelled -- no file selected.")
+        folder = pick_folder_dialog()
+        if not folder:
+            _LOG.info("Open cancelled -- no folder selected.")
             return
 
-        selected_path = os.path.abspath(selected_path)
-        selected_is_file = os.path.isfile(selected_path)
-        textures_dir = os.path.dirname(selected_path) if selected_is_file else selected_path
-        _LOG.info(f"Opening new map from: {selected_path}")
+        folder = os.path.abspath(folder)
+        _LOG.info(f"Opening new map from: {folder}")
 
         try:
-            model_descriptor = find_model_file(selected_path)
+            model_descriptor = find_model_file(folder)
         except FileNotFoundError as e:
-            if selected_is_file:
-                _LOG.warning(f"Could not open this file: {e}")
-                return
             # Match caveviewer.app's startup behavior: allow selecting a
             # cache directory itself directly, but do not auto-discover old
             # adjacent _cache/.caveviewer_cache folders.
-            prebuilt_cache = selected_path
+            prebuilt_cache = folder
+            textures_dir = folder
             if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
                 _LOG.warning(f"Could not open this folder: {e}")
                 return
-            _LOG.info(f"Found cache manifest in selected directory: {selected_path}")
+            _LOG.info(f"Found cache manifest in selected directory: {folder}")
 
             try:
                 new_manifest = chunker_module.load_manifest(prebuilt_cache)
@@ -1517,7 +1513,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 _LOG.error(f"Failed to load the selected prebuilt map: {manifest_err}")
                 return
 
-            map_name = os.path.basename(new_manifest.get("source_obj") or selected_path)
+            map_name = os.path.basename(new_manifest.get("source_obj") or folder)
             _LOG.info(f"Switching to prebuilt map: {map_name}")
             _LOG.info(f"Using cache directory: {prebuilt_cache}")
             self.load_new_map(prebuilt_cache, textures_dir, new_manifest)
@@ -1526,7 +1522,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
         map_name = os.path.basename(source_path)
-        self._start_import_async(model_descriptor, textures_dir, map_name, is_startup=False)
+        self._start_import_async(model_descriptor, folder, map_name, is_startup=False)
 
     def _start_import_async(
         self,

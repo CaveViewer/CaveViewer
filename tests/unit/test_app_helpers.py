@@ -173,48 +173,7 @@ def test_pick_folder_dialog_applies_scaling_and_cleans_up(
     assert ("scale", root) in calls
     assert (
         "choose_directory",
-        {"title": "Select a Cave Map Folder", "parent": root},
-    ) in calls
-    assert calls[-1] == "destroy"
-
-
-@pytest.mark.parametrize(("selection", "expected"), [("/maps/cave.glb", "/maps/cave.glb"), ("", None)])
-def test_pick_model_file_dialog_applies_scaling_and_cleans_up(
-    monkeypatch, selection, expected
-):
-    calls = []
-
-    class FakeRoot:
-        def withdraw(self):
-            calls.append("withdraw")
-
-        def destroy(self):
-            calls.append("destroy")
-
-    root = FakeRoot()
-    tkinter = ModuleType("tkinter")
-    tkinter.Tk = lambda **kwargs: calls.append(("Tk", kwargs)) or root
-    dpi_utils = ModuleType("caveviewer.gui.dpi_utils")
-    dpi_utils.configure_process_dpi_awareness = lambda: calls.append("dpi")
-    dpi_utils.apply_tk_scaling = lambda selected_root: calls.append(
-        ("scale", selected_root)
-    )
-    monkeypatch.setitem(sys.modules, "tkinter", tkinter)
-    monkeypatch.setitem(sys.modules, "caveviewer.gui.dpi_utils", dpi_utils)
-
-    class FakeDesktopServices:
-        def choose_file(self, **options):
-            calls.append(("choose_file", options))
-            if not selection:
-                return None
-            return SimpleNamespace(path=selection)
-
-    assert app.pick_model_file_dialog(desktop_services=FakeDesktopServices()) == expected
-    assert calls[0] == "dpi"
-    assert ("scale", root) in calls
-    assert (
-        "choose_file",
-        {"title": "Open Cave Map File", "parent": root},
+        {"title": "Open Map Folder", "parent": root},
     ) in calls
     assert calls[-1] == "destroy"
 
