@@ -79,6 +79,7 @@ def run_window_config(
     glfw_loader: Callable[[WindowSystem], Any] | None = None,
     window_size_fraction: float | None = None,
     fallback_window_size: tuple[int, int] | None = None,
+    force_resizable_window: bool = False,
 ) -> None:
     """Run ModernGL-window with Linux Wayland-first GLFW selection."""
     if (
@@ -130,6 +131,7 @@ def run_window_config(
                         _run_with_fixed_glfw_window_scale(
                             glfw_module,
                             lambda: runner(config_class, args=["--window", "glfw"]),
+                            force_resizable_window=force_resizable_window,
                         )
 
                 _run_with_platform_moderngl_context(
@@ -292,7 +294,10 @@ def _video_mode_size(video_mode: Any) -> tuple[int | None, int | None]:
 
 
 def _run_with_fixed_glfw_window_scale(
-    glfw_module: Any, runner: Callable[[], None]
+    glfw_module: Any,
+    runner: Callable[[], None],
+    *,
+    force_resizable_window: bool = False,
 ) -> None:
     """Prevent ModernGL-window from scaling a relative size a second time.
 
@@ -300,17 +305,36 @@ def _run_with_fixed_glfw_window_scale(
     for fixed pixel sizes on X11, but a size already derived from the monitor's
     work area must stay in GLFW screen coordinates. Framebuffer scaling remains
     enabled, so Wayland and other high-DPI framebuffers retain full resolution.
+
+    When requested, also force the viewer to stay decorated and manually
+    resizable. Those hints are user-visible window-management behavior, not
+    rendering policy.
     """
     original_window_hint = getattr(glfw_module, "window_hint", None)
     scale_hint = getattr(glfw_module, "SCALE_TO_MONITOR", None)
     false_value = getattr(glfw_module, "FALSE", 0)
-    if not callable(original_window_hint) or scale_hint is None:
+    true_value = getattr(glfw_module, "TRUE", 1)
+    resizable_hint = getattr(glfw_module, "RESIZABLE", None)
+    decorated_hint = getattr(glfw_module, "DECORATED", None)
+    has_hint_override = scale_hint is not None or (
+        force_resizable_window
+        and (resizable_hint is not None or decorated_hint is not None)
+    )
+    if not callable(original_window_hint) or not has_hint_override:
         runner()
         return
 
     def window_hint(hint, value):
-        if hint == scale_hint:
+        if scale_hint is not None and hint == scale_hint:
             value = false_value
+        elif force_resizable_window and (
+            hint == resizable_hint or hint == decorated_hint
+        ):
+            # CaveViewer must stay manually resizable even when launched through
+            # AppImage/Wayland stacks that leave sticky GLFW hints behind.
+            # Decorations are part of the same user-visible contract because
+            # GNOME exposes resize handles through the decorated surface.
+            value = true_value
         return original_window_hint(hint, value)
 
     glfw_module.window_hint = window_hint
@@ -395,6 +419,18 @@ def _prepare_glfw(glfw_module: Any, window_system: WindowSystem) -> None:
             f"the loaded GLFW library does not support {window_system.value}"
         )
     glfw_module.init_hint(glfw_module.PLATFORM, target_platform)
+    libdecor_hint = getattr(glfw_module, "WAYLAND_LIBDECOR", None)
+    prefer_libdecor = getattr(glfw_module, "WAYLAND_PREFER_LIBDECOR", None)
+    if (
+        window_system is WindowSystem.WAYLAND
+        and libdecor_hint is not None
+        and prefer_libdecor is not None
+    ):
+        # GNOME's Wayland session relies on client-side decorations for normal
+        # titlebar/border resize affordances. Prefer libdecor when GLFW exposes
+        # the init hint so AppImage launches do not regress into borderless,
+        # hard-to-resize surfaces.
+        glfw_module.init_hint(libdecor_hint, prefer_libdecor)
     if not glfw_module.init():
         error_detail = "GLFW initialization returned false"
         try:

@@ -3284,6 +3284,7 @@ def _launch_viewer_window() -> None:
         runner=mglw.run_window_config,
         window_size_fraction=_DESKTOP_WINDOW_SCALE,
         fallback_window_size=_DEFAULT_WINDOW_SIZE,
+        force_resizable_window=True,
     )
 
 

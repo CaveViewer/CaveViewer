@@ -101,6 +101,7 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     assert calls[0][0] == (viewer_window.CaveViewerWindow,)
     assert calls[0][1]["window_size_fraction"] == 0.8
     assert calls[0][1]["fallback_window_size"] == (1600, 1000)
+    assert calls[0][1]["force_resizable_window"] is True
 
 
 def test_right_column_panel_uses_compact_default_footprint():

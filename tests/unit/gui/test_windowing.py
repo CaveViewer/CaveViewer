@@ -27,6 +27,10 @@ class FakeGlfw:
     X11_CLASS_NAME = 5
     X11_INSTANCE_NAME = 6
     SCALE_TO_MONITOR = 7
+    RESIZABLE = 8
+    DECORATED = 9
+    WAYLAND_LIBDECOR = 10
+    WAYLAND_PREFER_LIBDECOR = 11
     TRUE = 1
     FALSE = 0
 
@@ -51,7 +55,8 @@ class FakeGlfw:
 
     def init_hint(self, hint, value):
         self.calls.append(("init_hint", hint, value))
-        self.selected_platform = value
+        if hint == self.PLATFORM:
+            self.selected_platform = value
 
     def init(self):
         self.calls.append(("init",))
@@ -169,6 +174,11 @@ def test_glfw_hints_identity_before_window_creation(monkeypatch):
         glfw.X11_INSTANCE_NAME,
         LINUX_WINDOW_INSTANCE_NAME,
     ) in calls_before_runner
+    assert (
+        "init_hint",
+        glfw.WAYLAND_LIBDECOR,
+        glfw.WAYLAND_PREFER_LIBDECOR,
+    ) in calls_before_runner
 
 
 def test_relative_size_uses_glfw_workarea_without_duplicate_dpi_scaling():
@@ -202,6 +212,39 @@ def test_relative_size_uses_glfw_workarea_without_duplicate_dpi_scaling():
     # The override is scoped to window creation and does not mutate pyGLFW.
     glfw.window_hint(glfw.SCALE_TO_MONITOR, glfw.TRUE)
     assert glfw.calls[-1] == ("window_hint", glfw.SCALE_TO_MONITOR, glfw.TRUE)
+
+
+def test_viewer_launch_can_force_glfw_window_resizable_and_decorated():
+    glfw = FakeGlfw()
+
+    class Config:
+        window_size = (1600, 1000)
+
+    observed = []
+
+    def runner(config, args):
+        # Reproduce a backend/runtime path that would otherwise leave the
+        # viewer fixed-size or without compositor resize handles.
+        glfw.window_hint(glfw.RESIZABLE, glfw.FALSE)
+        glfw.window_hint(glfw.DECORATED, glfw.FALSE)
+        glfw.window_hint(glfw.SCALE_TO_MONITOR, glfw.TRUE)
+        observed.append((config.window_size, args))
+
+    run_window_config(
+        Config,
+        runner=runner,
+        environ={WINDOW_SYSTEM_ENV_VAR: "x11"},
+        platform_name="linux",
+        glfw_loader=lambda _system: glfw,
+        window_size_fraction=0.8,
+        fallback_window_size=(1600, 1000),
+        force_resizable_window=True,
+    )
+
+    assert observed == [((1536, 832), ["--window", "glfw"])]
+    assert ("window_hint", glfw.RESIZABLE, glfw.TRUE) in glfw.calls
+    assert ("window_hint", glfw.DECORATED, glfw.TRUE) in glfw.calls
+    assert ("window_hint", glfw.SCALE_TO_MONITOR, glfw.FALSE) in glfw.calls
 
 
 def test_wayland_relative_size_converts_physical_workarea_to_logical_coordinates():
