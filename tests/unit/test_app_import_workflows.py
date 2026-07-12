@@ -40,7 +40,7 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
     material_file.write_text("materials", encoding="utf-8")
     (tmp_path / "copy.jpg").write_bytes(b"copy")
     (tmp_path / "existing.jpg").write_bytes(b"source-existing")
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
+    cache_dir = tmp_path / "managed-cache"
     cache_dir.mkdir()
     progress = []
     build_options = {}
@@ -109,7 +109,7 @@ def test_obj_import_handles_large_or_unreadable_source_size(
     source.write_bytes(b"mesh")
     material_file = tmp_path / "map.mtl"
     material_file.write_text("material", encoding="utf-8")
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
+    cache_dir = tmp_path / "managed-cache"
     cache_dir.mkdir()
     mesh = _mesh()
 
@@ -180,7 +180,7 @@ def test_glb_import_stages_embedded_texture_without_writing_source_directory(
     source = tmp_path / "map.glb"
     source.write_bytes(b"glTF")
     textures_dir = tmp_path / "textures"
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
+    cache_dir = tmp_path / "managed-cache"
     cache_dir.mkdir()
     mesh = _mesh("embedded", "plain")
     progress = []

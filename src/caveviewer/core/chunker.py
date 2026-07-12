@@ -8,7 +8,7 @@ whole cave, we split the mesh into cells (default 8m cubes -- tune via
 CHUNK_SIZE for your cave's scale) and load only the cells near the camera
 at runtime (see caveviewer.core.streaming_world).
 
-Cache layout on disk, under <obj_folder>/_cache/:
+Cache layout on disk, under the selected managed cache directory:
     manifest.json          - chunk grid metadata, bounds, cell size,
                               chunk_id -> required texture list, etc.
     chunks/<cx>_<cy>_<cz>.bin
@@ -48,8 +48,6 @@ from caveviewer.core.worker_config import (
 )
 from caveviewer.core.obj_parser import RawMesh, MaterialRange
 from caveviewer.core.cache_paths import (
-    CACHE_DIRNAME,
-    LEGACY_CACHE_DIRNAME,
     map_cache_build_dir,
     map_cache_candidates,
 )
@@ -220,15 +218,13 @@ def build_cache(
     """
     Partition `mesh` into spatial chunks and atomically publish the cache.
 
-    ``cache_dir`` defaults to the historical adjacent location for direct
-    callers. Application workflows pass the location selected by
-    ``cache_paths``. Assets are staged inside the same private directory, so
-    the manifest can never become visible before all referenced textures.
+    ``cache_dir`` defaults to the managed location selected by
+    ``cache_paths``. Assets are staged inside the same private directory, so the
+    manifest can never become visible before all referenced textures.
 
     progress_cb(stage: str, fraction: float)
     """
-    obj_dir = os.path.dirname(os.path.abspath(obj_path))
-    cache_dir = os.path.abspath(cache_dir or os.path.join(obj_dir, CACHE_DIRNAME))
+    cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
     cache_parent = os.path.dirname(cache_dir)
     assets = tuple(assets)
     ensure_sufficient_disk_space(
@@ -890,8 +886,6 @@ def get_cache_dir(obj_path: str) -> str:
     for candidate in candidates:
         if os.path.exists(os.path.join(candidate, MANIFEST_NAME)):
             return candidate
-    # Preserve the historical direct-caller fallback. Application imports use
-    # map_cache_build_dir() explicitly when selecting a new managed cache.
     return candidates[0]
 
 

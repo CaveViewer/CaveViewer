@@ -214,12 +214,12 @@ Close other memory-heavy applications before importing. Browsers, photo tools, v
 
 ### Recommended Map Parsing Approach
 
-On Linux, new imports use a self-contained cache under
-`~/.cache/caveviewer/maps/<map-name>-<path-hash>` by default. Existing `_cache`
-and `.caveviewer_cache` folders beside a map are still reused, so no existing
-map needs migration. Set `CAVEVIEWER_MAP_CACHE_DIR` to an absolute path when
-large caches belong on another filesystem. The log reports the exact cache
-directory selected for each import.
+On Linux, imports use a self-contained cache under
+`~/.cache/caveviewer/maps/<map-name>-<path-hash>` by default. CaveViewer no
+longer auto-discovers old `_cache` or `.caveviewer_cache` folders beside a map.
+Set `CAVEVIEWER_MAP_CACHE_DIR` to an absolute path when large caches belong on
+another filesystem. The log reports the exact cache directory selected for each
+import.
 
 1. Understand your map first.
 Decide how far ahead you need to see while moving. Long, open passages often benefit from larger chunk sizes. Maps with many twists and short sightlines may not need very large chunks, especially on strong hardware.

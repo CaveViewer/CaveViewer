@@ -1,4 +1,4 @@
-"""Exercise managed cache selection and compatibility candidate ordering."""
+"""Exercise managed cache selection."""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ from pathlib import Path
 import pytest
 
 from caveviewer.core.cache_paths import (
-    CACHE_DIRNAME,
-    LEGACY_CACHE_DIRNAME,
     MapCacheLocator,
     map_texture_dir,
 )
@@ -25,16 +23,15 @@ def _paths(root: Path) -> ApplicationPaths:
     )
 
 
-def test_candidates_preserve_adjacent_and_legacy_before_managed(tmp_path):
+def test_candidates_use_only_managed_cache_dir(tmp_path):
     source = tmp_path / "maps" / "survey.obj"
     locator = MapCacheLocator(paths=_paths(tmp_path), environ={}, platform_name="linux")
 
     candidates = locator.candidates(source)
 
-    assert candidates[0] == source.parent / CACHE_DIRNAME
-    assert candidates[1] == source.parent / LEGACY_CACHE_DIRNAME
-    assert candidates[2].parent == tmp_path / "cache" / "maps"
-    assert locator.build_cache_dir(source) == candidates[2]
+    assert candidates == (locator.managed_cache_dir(source),)
+    assert candidates[0].parent == tmp_path / "cache" / "maps"
+    assert locator.build_cache_dir(source) == candidates[0]
 
 
 def test_default_managed_root_uses_application_cache_dir(tmp_path):
@@ -52,14 +49,14 @@ def test_managed_keys_are_stable_and_distinguish_same_named_sources(tmp_path):
     assert locator.managed_cache_dir(first) != locator.managed_cache_dir(second)
 
 
-def test_force_rebuild_can_replace_an_existing_adjacent_cache(tmp_path):
+def test_old_adjacent_cache_does_not_change_managed_cache_target(tmp_path):
     source = tmp_path / "map.obj"
-    adjacent = tmp_path / CACHE_DIRNAME
-    adjacent.mkdir()
-    (adjacent / "manifest.json").write_text("{}", encoding="utf-8")
+    old_adjacent = tmp_path / "_cache"
+    old_adjacent.mkdir()
+    (old_adjacent / "manifest.json").write_text("{}", encoding="utf-8")
     locator = MapCacheLocator(paths=_paths(tmp_path), environ={}, platform_name="linux")
 
-    assert locator.build_cache_dir(source, prefer_existing=True) == adjacent
+    assert locator.build_cache_dir(source) == locator.managed_cache_dir(source)
 
 
 def test_explicit_managed_root_must_be_absolute(tmp_path):
@@ -77,24 +74,24 @@ def test_managed_cache_uses_self_contained_textures(tmp_path, monkeypatch):
     managed_root = tmp_path / "managed"
     monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(managed_root))
     managed_cache = managed_root / "map-key"
-    adjacent_cache = tmp_path / CACHE_DIRNAME
+    external_cache = tmp_path / "external-cache"
 
     assert map_texture_dir("map.obj", str(managed_cache), "/source/textures") == str(
         managed_cache
     )
-    assert map_texture_dir("map.obj", str(adjacent_cache), "/source/textures") == (
-        "/source/textures"
+    assert map_texture_dir("map.obj", str(external_cache), "/source/textures") == (
+        str(external_cache)
     )
 
 
-def test_self_contained_adjacent_cache_uses_published_assets(tmp_path):
-    adjacent_cache = tmp_path / CACHE_DIRNAME
-    adjacent_cache.mkdir()
-    (adjacent_cache / "embedded.png").write_bytes(b"png")
-    (adjacent_cache / "manifest.json").write_text(
+def test_selected_external_cache_uses_its_own_assets(tmp_path):
+    external_cache = tmp_path / "external-cache"
+    external_cache.mkdir()
+    (external_cache / "embedded.png").write_bytes(b"png")
+    (external_cache / "manifest.json").write_text(
         '{"mtl_materials": {"rock": "embedded.png"}}', encoding="utf-8"
     )
 
     assert map_texture_dir(
-        str(tmp_path / "map.glb"), str(adjacent_cache), str(tmp_path)
-    ) == str(adjacent_cache)
+        str(tmp_path / "map.glb"), str(external_cache), str(tmp_path)
+    ) == str(external_cache)

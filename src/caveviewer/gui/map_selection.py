@@ -12,15 +12,7 @@ def has_precompiled_cache(folder: str) -> bool:
     except Exception:
         return False
 
-    candidates = [
-        os.path.join(folder, chunker.CACHE_DIRNAME),
-        os.path.join(folder, chunker.LEGACY_CACHE_DIRNAME),
-        folder,
-    ]
-    return any(
-        os.path.exists(os.path.join(candidate, chunker.MANIFEST_NAME))
-        for candidate in candidates
-    )
+    return os.path.exists(os.path.join(folder, chunker.MANIFEST_NAME))
 
 
 def validate_selected_map_folder(folder: str) -> tuple[bool, str]:

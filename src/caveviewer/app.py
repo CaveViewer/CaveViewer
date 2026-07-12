@@ -329,9 +329,7 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     # Reject imports that are unlikely to fit before parsing a potentially
     # multi-gigabyte source. build_cache() repeats this check as a safety net
     # for direct callers and for free-space changes during parsing.
-    target_cache_dir = map_cache_build_dir(
-        obj_path, prefer_existing=force_rebuild
-    )
+    target_cache_dir = map_cache_build_dir(obj_path)
     chunker.ensure_sufficient_disk_space(obj_path, target_cache_dir)
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
@@ -433,9 +431,7 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
         _LOG.info(f"Found cache in: {cache_dir}")
         return cache_dir
 
-    target_cache_dir = map_cache_build_dir(
-        source_path, prefer_existing=force_rebuild
-    )
+    target_cache_dir = map_cache_build_dir(source_path)
     chunker.ensure_sufficient_disk_space(source_path, target_cache_dir)
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
@@ -621,22 +617,14 @@ def _run_map_session(folder: str) -> None:
             _LOG.error(f"Error: {e}")
             sys.exit(1)
         from caveviewer.core import chunker as _ck
-        # Case 1: folder contains a _cache/ subfolder (standard layout)
-        _prebuilt_cache = os.path.join(folder, _ck.CACHE_DIRNAME)
-        _legacy_prebuilt_cache = os.path.join(folder, _ck.LEGACY_CACHE_DIRNAME)
         _textures_dir = folder
-        # Case 2: folder itself is the cache directory (e.g. renamed or moved)
-        if not os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
-            if os.path.exists(os.path.join(_legacy_prebuilt_cache, _ck.MANIFEST_NAME)):
-                _LOG.info(f"Found legacy cache in: {_legacy_prebuilt_cache}")
-                _prebuilt_cache = _legacy_prebuilt_cache
-            elif os.path.exists(os.path.join(folder, _ck.MANIFEST_NAME)):
-                _LOG.info(f"Found cache manifest in selected directory: {folder}")
-                _prebuilt_cache = folder
-                _textures_dir = folder
+        _prebuilt_cache = folder
         if os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
+            _LOG.info(f"Found cache manifest in selected directory: {folder}")
             _LOG.info("Pre-compiled map detected -- launching viewer directly.")
-            _LOG.info("(Delete the _cache folder to force a rebuild.)")
+            _LOG.info(
+                "(Delete the reported managed cache directory to force a rebuild.)"
+            )
             _LOG.info(f"Using cache directory: {_prebuilt_cache}")
             _log_cache_chunk_size(_prebuilt_cache, context="Pre-compiled map cache")
             _print_viewer_controls()

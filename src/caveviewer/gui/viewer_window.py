@@ -1495,22 +1495,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             model_descriptor = find_model_file(folder)
         except FileNotFoundError as e:
             # Match caveviewer.app's startup behavior: allow selecting a
-            # folder that already contains a built _cache,
-            # or selecting the cache directory itself directly.
-            prebuilt_cache = os.path.join(folder, chunker_module.CACHE_DIRNAME)
-            legacy_prebuilt_cache = os.path.join(folder, chunker_module.LEGACY_CACHE_DIRNAME)
+            # cache directory itself directly, but do not auto-discover old
+            # adjacent _cache/.caveviewer_cache folders.
+            prebuilt_cache = folder
             textures_dir = folder
-            if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
-                if os.path.exists(os.path.join(legacy_prebuilt_cache, chunker_module.MANIFEST_NAME)):
-                    _LOG.info(f"Found legacy cache in: {legacy_prebuilt_cache}")
-                    prebuilt_cache = legacy_prebuilt_cache
-                elif os.path.exists(os.path.join(folder, chunker_module.MANIFEST_NAME)):
-                    _LOG.info(f"Found cache manifest in selected directory: {folder}")
-                    prebuilt_cache = folder
-                    textures_dir = folder
             if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
                 _LOG.warning(f"Could not open this folder: {e}")
                 return
+            _LOG.info(f"Found cache manifest in selected directory: {folder}")
 
             try:
                 new_manifest = chunker_module.load_manifest(prebuilt_cache)
@@ -3482,7 +3474,7 @@ def run_viewer(cache_dir: str, textures_dir: str):
 def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     """
     Launches the viewer window for a map that needs FIRST-TIME import
-    (no _cache yet) -- used by caveviewer.app's main() instead
+    (no managed cache yet) -- used by caveviewer.app's main() instead
     of run_viewer() specifically so the import can run AFTER the window
     is open, showing real progress in the same in-window panel the OPEN
     button already uses, rather than the old behavior of running the

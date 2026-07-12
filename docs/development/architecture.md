@@ -22,12 +22,12 @@ behavior is selected through `caveviewer.gui.platform` adapters.
 The application entry point discovers a supported model and dispatches it to
 the OBJ or GLB parser. Parsers produce CPU-side mesh and material data.
 `src/caveviewer/core/chunker.py` partitions that data and builds a cache in a
-private staging directory. On Linux, new caches are selected through
-`core.cache_paths` under the XDG cache root; existing adjacent `_cache` and
-`.caveviewer_cache` directories remain higher-priority compatibility inputs.
-Chunks, the manifest, and referenced texture assets are published in one
-atomic directory transaction. Failures must remove staging output and preserve
-any previously valid cache.
+private staging directory. Cache locations are selected through
+`core.cache_paths` under the managed cache root; old adjacent `_cache` and
+`.caveviewer_cache` directories are not auto-discovered. Chunks, the manifest,
+and referenced texture assets are published in one atomic directory
+transaction. Failures must remove staging output and preserve any previously
+valid managed cache.
 
 Chunk-file construction treats its configured worker count as a maximum. It
 starts with one task, samples current system RAM after completed work, and
@@ -38,9 +38,9 @@ already-admitted concurrency, with one worker always able to make progress.
 The cache manifest records chunk metadata, spatial bounds, material references,
 and the minimap occupancy footprint. A cache-format change must either remain
 backward compatible or increment its version and force a deliberate rebuild.
-The render-chunk binary format remains at version 1: unknown manifest fields and
-extra cache subdirectories written by older releases are ignored, so those
-caches remain readable while new imports write only the active cache artifacts.
+The render-chunk binary format remains at version 1: unknown manifest fields
+and extra subdirectories inside a selected managed cache are ignored, while
+imports write only the active cache artifacts.
 
 ## Runtime streaming
 

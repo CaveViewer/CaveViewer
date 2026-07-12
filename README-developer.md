@@ -288,7 +288,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_LINUX_BUILD_VENV` | _(none)_ | Path to the venv used by the Linux build scripts. |
 | `CAVEVIEWER_PROJECT_ROOT` | _(set by `scripts/dev/env_setup.sh`)_ | Source checkout root used only by development shell helpers; it is not a user-storage location. |
 | `CAVEVIEWER_HOME` | _(none)_ | Absolute portable-storage root. CaveViewer derives `config`, `data`, `cache`, `state`, and `runtime` children beneath it. |
-| `CAVEVIEWER_MAP_CACHE_DIR` | `$XDG_CACHE_HOME/caveviewer/maps` on Linux | Absolute root for newly generated map caches. Existing adjacent `_cache` and `.caveviewer_cache` directories are still reused. |
+| `CAVEVIEWER_MAP_CACHE_DIR` | `$XDG_CACHE_HOME/caveviewer/maps` on Linux | Absolute root for generated map caches. CaveViewer no longer auto-discovers adjacent `_cache` or `.caveviewer_cache` directories. |
 | `CAVEVIEWER_APP_ICON` | _(bundled icon)_ | Path to a custom application icon file. |
 | `CAVEVIEWER_FORCE_STARTUP_FOCUS` | `0` | Set to `1` to force the main window to the front on startup. Disabled by default on frozen macOS builds to avoid window-placement jumps. |
 | `CAVEVIEWER_LOG_LEVEL` | `INFO` | Logging verbosity. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
@@ -550,10 +550,9 @@ chunk-size estimation and residency-cap calculation;
 spatial selection, and eviction policy; and
 `src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
 render-thread callbacks. Map imports now write only the cache artifacts used by
-runtime streaming and the minimap. On Linux, new caches and their texture assets
-are atomically published under `$XDG_CACHE_HOME/caveviewer/maps`; existing
-adjacent caches containing retired auxiliary artifacts remain readable and
-those extra files are ignored.
+runtime streaming and the minimap. On Linux, caches and their texture assets are
+atomically published under `$XDG_CACHE_HOME/caveviewer/maps`; old adjacent
+`_cache` and `.caveviewer_cache` directories are not auto-discovered.
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
@@ -582,7 +581,7 @@ Unless overridden, Linux stores files in these locations:
 |---|---|
 | Advanced settings | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback) |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) |
-| New map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) |
+| Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) |
 
 Old `~/.caveviewer/` and `~/.caveviewer_*` files are copied once and left in
 place. A managed cache is self-contained: texture files are staged beside its
