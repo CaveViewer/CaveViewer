@@ -229,6 +229,8 @@ Publishing also requires an authenticated GitHub CLI and
 - Smoke-test AppImage desktop integration removal with
   `CAVEVIEWER_APPRUN_UNINSTALL=1 ./CaveViewer-<version>-x86_64.AppImage` and
   confirm the printed paths were removed.
-- Smoke-test the Linux AppImage on GNOME Wayland and Xorg. Confirm the logged
-  GLFW platform, launcher/icon grouping, portal selection/reveal, fractional
-  scaling, fullscreen transitions, and normal input controls.
+- Smoke-test the Linux AppImage on GNOME Wayland and Xorg. On GNOME Wayland,
+  confirm AppRun defaults `CAVEVIEWER_WINDOW_SYSTEM=x11` when `DISPLAY` is
+  available so the viewer has normal titlebar and resize decorations. Also
+  confirm launcher/icon grouping, portal selection/reveal, fractional scaling,
+  fullscreen transitions, and normal input controls.

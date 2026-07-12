@@ -186,6 +186,72 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
     assert unrelated_icon.read_bytes() == b"keep"
 
 
+def test_generated_apprun_defaults_appimage_wayland_launch_to_x11(tmp_path):
+    appdir = tmp_path / "AppDir"
+    executable = appdir / "usr" / "lib" / "caveviewer" / "CaveViewer"
+    executable.parent.mkdir(parents=True)
+    executable.write_text(
+        "#!/usr/bin/env sh\n"
+        'echo "fake-window-system=${CAVEVIEWER_WINDOW_SYSTEM:-}"\n',
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+
+    apprun = appdir / "AppRun"
+    apprun.write_text(_generated_apprun_script(), encoding="utf-8")
+    apprun.chmod(0o755)
+
+    runtime_dir = tmp_path / "runtime"
+    home = tmp_path / "home"
+    runtime_dir.mkdir(mode=0o700)
+    home.mkdir(exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APPDIR": str(appdir),
+            "HOME": str(home),
+            "XDG_RUNTIME_DIR": str(runtime_dir),
+            "XDG_SESSION_TYPE": "wayland",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "DISPLAY": ":0",
+            "CAVEVIEWER_LAUNCH_DEBUG": "1",
+            "CAVEVIEWER_NO_DESKTOP_INTEGRATION": "1",
+            "CAVEVIEWER_TK_SCALE": "1.0",
+        }
+    )
+    env.pop("APPIMAGE", None)
+    env.pop("CAVEVIEWER_WINDOW_SYSTEM", None)
+
+    result = subprocess.run(
+        [str(apprun)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=x11" in result.stdout
+    assert (
+        "[CaveViewer AppRun] window_system_note=defaulted-to-x11-for-appimage-decorations"
+        in result.stdout
+    )
+    assert "fake-window-system=x11" in result.stdout
+
+    env["CAVEVIEWER_WINDOW_SYSTEM"] = "wayland"
+    explicit_result = subprocess.run(
+        [str(apprun)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=wayland" in explicit_result.stdout
+    assert "[CaveViewer AppRun] window_system_note=unchanged" in explicit_result.stdout
+    assert "fake-window-system=wayland" in explicit_result.stdout
+
+
 def test_ci_runs_freedesktop_metadata_validators():
     workflow = (
         REPOSITORY_ROOT / ".github" / "workflows" / "tests.yml"

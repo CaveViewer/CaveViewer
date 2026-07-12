@@ -96,6 +96,9 @@ window class both use `io.github.kernalpanic.caveviewer`. Initial window
 geometry is 80% of GLFW's primary-monitor work area in screen coordinates.
 Framebuffer DPI scaling remains enabled, while duplicate X11 monitor scaling
 of that already-relative geometry is suppressed during window creation.
+The AppImage launcher is the packaging exception: on Wayland sessions with
+`DISPLAY` available, it defaults `CAVEVIEWER_WINDOW_SYSTEM=x11` so GNOME/XWayland
+provides standard titlebar and resize decorations for the bundled GLFW runtime.
 
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL
