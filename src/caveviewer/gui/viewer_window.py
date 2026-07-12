@@ -703,29 +703,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         # console so atlas feasibility can be judged without guessing.
         self._print_texture_diagnostics(manifest, textures_dir)
 
-        # Build world-space AABB lookup for every cell in the manifest so
-        # the frustum culler can skip chunks outside the view each frame.
-        # Build with a single bulk numpy pass: creating 34 000+ individual
-        # np.array() calls in a dict comprehension causes severe GC
-        # pressure on memory-limited machines (observed 30 s+ freeze on
-        # Parallels with a 17 000-chunk map at 72 % RAM).
-        _chunks = manifest["chunks"]
-        _LOG.info(f"Building chunk AABB table for {len(_chunks)} chunks …")
-        _cells = list(_chunks.keys())
-        _mins_raw = [_chunks[c]["bounds_min"] for c in _cells]
-        _maxs_raw = [_chunks[c]["bounds_max"] for c in _cells]
-        _mins_arr = np.array(_mins_raw, dtype=np.float32)   # (N, 3)
-        _maxs_arr = np.array(_maxs_raw, dtype=np.float32)   # (N, 3)
-        self._chunk_aabbs = {
-            tuple(int(v) for v in cell_str.split("_")): (
-                _mins_arr[i], _maxs_arr[i]
-            )
-            for i, cell_str in enumerate(_cells)
-        }
-        self._navigation_guard_cells = set(self._chunk_aabbs.keys())
+        # Keep frustum-culling bounds only for currently loaded chunks.  Large
+        # maps can have tens or hundreds of thousands of manifest cells; copying
+        # every AABB into Python containers at map-open time defeats streaming's
+        # memory cap before the first frame is drawn.
+        self._chunk_aabbs = {}
+        self._navigation_guard_cells = self.world.available_cells
         self._navigation_guard_chunk_size = chunk_size
-        del _cells, _mins_raw, _maxs_raw, _mins_arr, _maxs_arr, _chunks
-        _LOG.info("Chunk AABB table ready.")
         if self._navigation_guard_enabled:
             _LOG.info(
                 "Navigation guard enabled: "
@@ -1354,7 +1338,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_gpu_objects.clear()
         self._chunk_normal_cache.clear()
         self._chunk_aabbs.clear()
-        self._navigation_guard_cells.clear()
+        self._navigation_guard_cells = set()
         self._navigation_guard_chunk_size = None
 
         if hasattr(self, "texture_manager") and self.texture_manager is not None:
@@ -1689,6 +1673,10 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         self._chunk_gpu_objects[chunk_data.cell] = vao_list
         self._chunk_normal_cache[chunk_data.cell] = normal_cache_entry
+        self._chunk_aabbs[chunk_data.cell] = (
+            chunk_data.bounds_min.astype(np.float32, copy=False),
+            chunk_data.bounds_max.astype(np.float32, copy=False),
+        )
 
     def _on_chunk_unload(self, cell):
         vao_list = self._chunk_gpu_objects.pop(cell, [])
@@ -1697,6 +1685,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             vbo.release()
             self.texture_manager.release(mat_name)
         self._chunk_normal_cache.pop(cell, None)
+        self._chunk_aabbs.pop(cell, None)
 
     def _apply_shading_toggle(self) -> None:
         """

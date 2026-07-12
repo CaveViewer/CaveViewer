@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from caveviewer import app
@@ -227,6 +228,60 @@ def test_right_column_panel_scales_up_on_large_viewer_surfaces():
     assert large_rect[3] - large_rect[1] > base_rect[3] - base_rect[1]
     assert 0 <= large_rect[0] < large_rect[2] <= 2048
     assert 0 <= large_rect[1] < large_rect[3] <= 1152
+
+
+class _FakeGpuResource:
+    def release(self):
+        pass
+
+
+class _FakeViewerContext:
+    def buffer(self, _data):
+        return _FakeGpuResource()
+
+    def vertex_array(self, *_args):
+        return _FakeGpuResource()
+
+
+class _FakeTextureManager:
+    def acquire(self, _material_name):
+        return _FakeGpuResource()
+
+    def release(self, _material_name):
+        pass
+
+
+def test_chunk_aabbs_are_tracked_only_for_loaded_chunks():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.ctx = _FakeViewerContext()
+    window.program = object()
+    window.texture_manager = _FakeTextureManager()
+    window.render_mode_buttons = SimpleNamespace(smooth_shading_enabled=True)
+    window._chunk_gpu_objects = {}
+    window._chunk_normal_cache = {}
+    window._chunk_aabbs = {}
+    cell = (1, 2, 3)
+    chunk_data = SimpleNamespace(
+        cell=cell,
+        bounds_min=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        bounds_max=np.array([4.0, 5.0, 6.0], dtype=np.float64),
+        upload_groups=[
+            SimpleNamespace(
+                material_name="mat",
+                smooth_vertex_bytes=b"\x00" * 96,
+                flat_vertex_bytes=b"\x00" * 96,
+            )
+        ],
+    )
+
+    window._on_chunk_ready(chunk_data)
+
+    assert set(window._chunk_aabbs) == {cell}
+    assert window._chunk_aabbs[cell][0].dtype == np.float32
+
+    window._on_chunk_unload(cell)
+
+    assert window._chunk_aabbs == {}
 
 
 def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(
