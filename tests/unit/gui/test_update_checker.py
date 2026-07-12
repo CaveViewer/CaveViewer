@@ -354,7 +354,19 @@ def test_signature_check_handles_http_errors(monkeypatch, code):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
     )
     assert not update_checker._verify_manifest_signature_required(b"manifest")
-git
+
+
+def test_signature_check_handles_network_error(monkeypatch):
+    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
+    monkeypatch.setattr(
+        update_checker,
+        "_fetch_url_bytes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            urllib.error.URLError("offline")
+        ),
+    )
+    assert not update_checker._verify_manifest_signature_required(b"manifest")
+
 
 def test_signature_check_handles_ssl_context_error(monkeypatch):
     monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
