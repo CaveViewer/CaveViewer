@@ -6,10 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from cryptography.hazmat.primitives import serialization
-
 from caveviewer.core.logging_utils import get_logger
 from caveviewer.resources import release_public_key_path
 
@@ -31,11 +27,12 @@ def verify_update_manifest_signature(manifest_bytes: bytes, signature_bytes: byt
         len(manifest_bytes),
         len(signature_bytes),
     )
-    public_key = _load_release_public_key()
+    invalid_signature_type, public_key_type, serialization_module = _load_cryptography_backend()
+    public_key = _load_release_public_key(public_key_type, serialization_module)
     signature = _decode_signature(signature_bytes)
     try:
         public_key.verify(signature, manifest_bytes)
-    except InvalidSignature as exc:
+    except invalid_signature_type as exc:
         _LOG.warning("Update manifest signature verification failed: invalid signature.")
         raise SignatureVerificationError("Update manifest signature is invalid.") from exc
     _LOG.info("Update manifest signature verification passed.")
@@ -57,7 +54,32 @@ def _decode_signature(signature_bytes: bytes) -> bytes:
     return decoded
 
 
-def _load_release_public_key():
+def _load_cryptography_backend():
+    """
+    Import cryptography only when an update signature must be checked.
+
+    Some older packaged macOS runtimes can fail to load cryptography's native
+    OpenSSL binding at import time. Keeping this dependency lazy prevents a
+    broken updater backend from blocking the offline-first viewer from opening.
+    """
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except Exception as exc:
+        _LOG.warning("Update signature backend is unavailable: %s", exc)
+        raise SignatureVerificationError(
+            f"Update signature verification is unavailable: {exc}"
+        ) from exc
+    return InvalidSignature, Ed25519PublicKey, serialization
+
+
+def _load_release_public_key(public_key_type=None, serialization_module=None):
+    if public_key_type is None or serialization_module is None:
+        _invalid_signature_type, public_key_type, serialization_module = (
+            _load_cryptography_backend()
+        )
+
     key_path = _resolve_release_public_key_path()
     if key_path is None:
         searched = ", ".join(str(path) for path in _candidate_public_key_paths())
@@ -69,14 +91,14 @@ def _load_release_public_key():
     try:
         _LOG.info("Loading release signing public key: %s", key_path)
         key_bytes = key_path.read_bytes()
-        public_key = serialization.load_pem_public_key(key_bytes)
+        public_key = serialization_module.load_pem_public_key(key_bytes)
     except Exception as exc:
         _LOG.warning("Could not load release signing public key at %s: %s", key_path, exc)
         raise SignatureVerificationError(
             f"Could not load release signing public key at {key_path}: {exc}"
         ) from exc
 
-    if not isinstance(public_key, Ed25519PublicKey):
+    if not isinstance(public_key, public_key_type):
         _LOG.warning("Release signing public key is not Ed25519: %s", key_path)
         raise SignatureVerificationError(
             f"Release signing public key at {key_path} is not an Ed25519 public key."

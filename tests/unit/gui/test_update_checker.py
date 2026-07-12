@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
 import urllib.error
 
 import pytest
@@ -125,6 +126,17 @@ def test_update_check_handles_network_error(configured_update_checker, monkeypat
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             urllib.error.URLError("offline")
         ),
+    )
+    result = update_checker.check_for_update("1.0.0")
+    assert not result.update_available
+    assert "Couldn't reach" in (result.error or "")
+
+
+def test_update_check_handles_ssl_context_error(configured_update_checker, monkeypatch):
+    monkeypatch.setattr(
+        update_checker,
+        "make_ssl_context",
+        lambda: (_ for _ in ()).throw(ssl.SSLError("group0 not found")),
     )
     result = update_checker.check_for_update("1.0.0")
     assert not result.update_available
@@ -265,6 +277,16 @@ def test_signature_check_handles_http_errors(monkeypatch, code):
         update_checker,
         "_fetch_url_bytes",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+    assert not update_checker._verify_manifest_signature_required(b"manifest")
+
+
+def test_signature_check_handles_ssl_context_error(monkeypatch):
+    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
+    monkeypatch.setattr(
+        update_checker,
+        "make_ssl_context",
+        lambda: (_ for _ in ()).throw(ssl.SSLError("group0 not found")),
     )
     assert not update_checker._verify_manifest_signature_required(b"manifest")
 
