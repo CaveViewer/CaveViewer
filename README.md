@@ -35,10 +35,9 @@ Download the latest zip from https://github.com/KernalPanic/CaveViewer/releases 
 
 The best-practice distribution format for Linux is the self-contained AppImage — a single executable file that bundles Python, all dependencies, and the app itself. No system-wide installation or package manager involvement required.
 
-Download the AppImage matching your CPU from https://github.com/KernalPanic/CaveViewer/releases:
+Download the AppImage from https://github.com/KernalPanic/CaveViewer/releases:
 
-- `CaveViewer-<version>-x86_64.AppImage` (amd64 / x86_64)
-- `CaveViewer-<version>-aarch64.AppImage` (arm64)
+- `CaveViewer-<version>-x86_64.AppImage`
 
 Then change the permissions to make the file executable and run.
 
@@ -46,9 +45,7 @@ Then change the permissions to make the file executable and run.
 chmod +x CaveViewer-*.AppImage
 
 # Run the one that matches your architecture
-./CaveViewer-*-x86_64.AppImage   # amd64 / x86_64
-# or
-./CaveViewer-*-aarch64.AppImage  # arm64
+./CaveViewer-*-x86_64.AppImage  
 ```
 
 ### In-app update downloads
@@ -66,6 +63,10 @@ the whole application cancels an unfinished download and removes its temporary
 files; a verified package remains in `~/Downloads`.
 
 ### Virtual Machines or GPU Driver Problems
+
+We do not recommend running CaveViewer on virtual machines for performance reasons.
+Even on VMs with plenty resources, there are locks due to virtual sync. If you insist,
+follow the instructions below.
 
 If CaveViewer crashes, freezes, or leaves a stuck process when running inside a
 virtual machine such as Parallels, start it with virtual sync disabled:
@@ -85,6 +86,9 @@ LIBGL_ALWAYS_SOFTWARE=1 CAVEVIEWER_VSYNC=0 ./CaveViewer-*.AppImage
 instead of the GPU driver. This can be slower, but it can avoid crashes or
 kernel-level hangs caused by virtual GPU drivers or unstable graphics drivers.
 
+Unfortunately, performance degradation is significant in the latest builds with 
+optimized rendering. That is another reason not to use a VM.
+
 ## Getting Started with Sample Maps
 
 If you want to try CaveViewer without your own scan, use the built-in sample maps.
@@ -95,7 +99,8 @@ If you want to try CaveViewer without your own scan, use the built-in sample map
 4. If it is not already downloaded, choose a folder to save it and wait for the download to finish.
 5. When the button changes to `Open`, click it to load the sample map.
 
-Sample maps are a good way to confirm that CaveViewer is working before you import your own data. You can also reopen them later from the same sample maps dialog.
+Sample maps are a good way to confirm that CaveViewer is working before you import your own data. 
+You can also reopen them later from the same sample maps dialog.
 
 ## Recording a Flight
 
@@ -154,6 +159,10 @@ Why this matters: chunk size is one of the most important map settings because i
 GPU memory is detected automatically through Linux DRM sysfs for AMD GPUs and
 through `nvidia-smi` for NVIDIA GPUs. Use the GPU memory override only when
 automatic detection is unavailable or does not match the active adapter.
+
+Builds starting with 1.0.65 have automatic performance monitoring and will refuse to spin additional chunk-loading 
+workers if the system is running out of memory. The functionality is experimental, and we still recommend to start
+with a conservative chunk-loading worker number.
 
 ### Map Parsing
 
