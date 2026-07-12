@@ -149,7 +149,8 @@ class StreamingWorld:
     def __init__(self, cache_dir: str, config: StreamingConfig,
                  on_decode_textures: Optional[Callable[[ChunkData], None]] = None,
                  gpu_vendor: str | None = None,
-                 textures_dir: str | None = None):
+                 textures_dir: str | None = None,
+                 total_gpu_memory_bytes: int | None = None):
         """
         on_decode_textures, if given, is called from a background worker
         thread right after a chunk's geometry finishes loading, with the
@@ -164,6 +165,10 @@ class StreamingWorld:
         gpu_vendor is the active OpenGL context's GL_VENDOR string when the
         caller has one. It prevents a secondary adapter from supplying the
         memory budget on hybrid-GPU systems.
+
+        total_gpu_memory_bytes may be supplied by a caller that already ran
+        active-GPU detection for related setup, such as texture resolution
+        selection.  When omitted, this class detects it itself.
         """
         self.cache_dir = cache_dir
         self.config = config
@@ -184,12 +189,14 @@ class StreamingWorld:
         self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes(sampled_chunk_keys)
         gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
         self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
-        self._total_gpu_memory_bytes = _detect_total_gpu_memory_bytes(gpu_vendor)
+        self._total_gpu_memory_bytes = (
+            total_gpu_memory_bytes
+            if total_gpu_memory_bytes is not None
+            else _detect_total_gpu_memory_bytes(gpu_vendor)
+        )
         self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes(sampled_chunk_keys)
         self._gpu_residency_budget_bytes: int | None = None
-        self._cell_texture_keys: dict[tuple[int, int, int], frozenset[object]] = {}
         self._texture_gpu_bytes: dict[object, int] = {}
-        self._texture_budget_constrained_logged = False
         self._configure_texture_gpu_estimates(manifest, textures_dir)
         self._configure_chunk_budget_from_memory_targets()
 
@@ -243,7 +250,7 @@ class StreamingWorld:
     def _configure_texture_gpu_estimates(
         self, manifest: dict, textures_dir: str | None
     ) -> None:
-        """Build per-cell texture cost data for GPU-budget-aware streaming."""
+        """Estimate full-resolution texture cost for diagnostics and cap sizing."""
         if self._total_gpu_memory_bytes is None:
             return
 
@@ -251,32 +258,21 @@ class StreamingWorld:
             self._total_gpu_memory_bytes * self._gpu_target_fraction
         )
         material_textures = manifest.get("mtl_materials", {})
-        chunks = manifest.get("chunks", {})
         texture_root = textures_dir or self.cache_dir
 
-        for cell_str, info in chunks.items():
-            try:
-                cell = tuple(int(x) for x in cell_str.split("_"))
-            except ValueError:
+        for file_or_bytes in material_textures.values():
+            texture_key = self._texture_cache_key(file_or_bytes)
+            if texture_key is None or texture_key in self._texture_gpu_bytes:
                 continue
-            texture_keys: set[object] = set()
-            for material_name in info.get("materials", ()):
-                file_or_bytes = material_textures.get(material_name)
-                texture_key = self._texture_cache_key(file_or_bytes)
-                if texture_key is None:
-                    continue
-                texture_keys.add(texture_key)
-                if texture_key not in self._texture_gpu_bytes:
-                    self._texture_gpu_bytes[texture_key] = self._estimate_texture_gpu_bytes(
-                        file_or_bytes, texture_root
-                    )
-            self._cell_texture_keys[cell] = frozenset(texture_keys)
+            self._texture_gpu_bytes[texture_key] = self._estimate_texture_gpu_bytes(
+                file_or_bytes, texture_root
+            )
 
         estimated_texture_bytes = sum(self._texture_gpu_bytes.values())
         if estimated_texture_bytes > 0:
             _LOG.info(
-                "Texture GPU estimate: %.1f MB across %d unique texture(s); "
-                "combined geometry+texture residency target is %.1f MB.",
+                "Texture GPU estimate before any decode-time downscaling: %.1f MB "
+                "across %d unique texture(s); texture upload target is %.1f MB.",
                 estimated_texture_bytes / (1024 ** 2),
                 len(self._texture_gpu_bytes),
                 self._gpu_residency_budget_bytes / (1024 ** 2),
@@ -562,9 +558,6 @@ class StreamingWorld:
             load_r,
             self.config.max_loaded_chunks,
         )
-        wanted, texture_budget_constrained = self._limit_wanted_cells_by_gpu_budget(
-            wanted, cam_cell
-        )
         with self._lock:
             self._last_wanted_cells = wanted
             to_request = wanted - self.loaded_cells - self._pending
@@ -598,68 +591,8 @@ class StreamingWorld:
         cells_to_unload = cells_outside_cube_radius(
             self.loaded_cells, cam_cell, unload_r
         )
-        if texture_budget_constrained:
-            # When texture residency, rather than distance, is the active
-            # limiter, free loaded cells that lost the budget competition even
-            # if they are still inside the hysteresis radius.  Otherwise their
-            # textures remain resident and block closer chunks from loading.
-            cells_to_unload |= self.loaded_cells - wanted
         self._cells_to_unload_next_drain = cells_to_unload
         self._last_cam_cell_for_priority = cam_cell
-
-    def _limit_wanted_cells_by_gpu_budget(
-        self,
-        wanted: set[tuple[int, int, int]],
-        center: tuple[int, int, int],
-    ) -> tuple[set[tuple[int, int, int]], bool]:
-        """Limit wanted chunks by combined geometry and unique texture cost."""
-        budget_bytes = getattr(self, "_gpu_residency_budget_bytes", None)
-        texture_gpu_bytes = getattr(self, "_texture_gpu_bytes", {})
-        cell_texture_keys = getattr(self, "_cell_texture_keys", {})
-        if budget_bytes is None or not texture_gpu_bytes or not cell_texture_keys:
-            return wanted, False
-
-        ordered = sorted(wanted, key=lambda cell: self._cell_distance_sq(cell, center))
-        selected: set[tuple[int, int, int]] = set()
-        resident_texture_keys: set[object] = set()
-        selected_bytes = 0
-        constrained = False
-
-        for cell in ordered:
-            cell_textures = cell_texture_keys.get(cell, frozenset())
-            incremental_bytes = getattr(self, "_estimated_chunk_gpu_bytes", 0)
-            incremental_bytes += sum(
-                texture_gpu_bytes.get(texture_key, 0)
-                for texture_key in cell_textures
-                if texture_key not in resident_texture_keys
-            )
-            if selected and selected_bytes + incremental_bytes > budget_bytes:
-                constrained = True
-                continue
-
-            selected.add(cell)
-            selected_bytes += incremental_bytes
-            resident_texture_keys.update(cell_textures)
-            if selected_bytes > budget_bytes:
-                # One visible chunk is better than none, even if a single chunk
-                # with many huge materials exceeds the nominal budget.  Stop
-                # admitting more chunks so the overage stays bounded.
-                constrained = True
-                break
-
-        if len(selected) < len(wanted):
-            constrained = True
-        if constrained and not getattr(self, "_texture_budget_constrained_logged", False):
-            _LOG.info(
-                "Texture GPU budget limited current view to %d of %d requested chunk(s) "
-                "(estimated resident set %.1f / %.1f MB).",
-                len(selected),
-                len(wanted),
-                selected_bytes / (1024 ** 2),
-                budget_bytes / (1024 ** 2),
-            )
-            self._texture_budget_constrained_logged = True
-        return selected, constrained
 
     def _cell_distance_sq(self, cell: tuple[int, int, int], center: tuple[int, int, int]) -> int:
         return cell_distance_sq(cell, center)

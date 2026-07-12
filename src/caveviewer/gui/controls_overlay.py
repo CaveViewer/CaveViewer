@@ -324,6 +324,8 @@ class ControlsOverlay:
         loaded = streaming_stats.get("loaded", 0)
         pending = streaming_stats.get("pending", 0)
         ready  = streaming_stats.get("ready",   0)
+        wanted = max(1, int(streaming_stats.get("wanted", self.MIN_CHUNKS_TO_DISMISS)))
+        chunks_needed = min(self.MIN_CHUNKS_TO_DISMISS, wanted)
         # Include ready (decoded-but-not-yet-uploaded) in the denominator so
         # the ring reflects all in-flight work.  Without this, when pending
         # briefly hits 0 while ready > 0, total becomes 0 and the ring
@@ -343,7 +345,7 @@ class ControlsOverlay:
             # when pending work is reprioritized across frames.
             self._progress_fraction = max(self._progress_fraction, frac)
 
-        if self._awaiting_begin and loaded >= self.MIN_CHUNKS_TO_DISMISS and pending == 0:
+        if self._awaiting_begin and loaded >= chunks_needed and pending == 0:
             self._ready_to_begin = True
 
         if self._manual_mode or self._awaiting_begin:
@@ -354,7 +356,7 @@ class ControlsOverlay:
         min_display = self.MIN_DISPLAY_SECONDS_FULLSCREEN if self._fullscreen else self.MIN_DISPLAY_SECONDS_PANEL
 
         if self._fullscreen:
-            enough_loaded = loaded >= self.MIN_CHUNKS_TO_DISMISS and pending == 0
+            enough_loaded = loaded >= chunks_needed and pending == 0
         else:
             # For the teleport panel, also wait for the GPU upload queue to
             # drain (ready == 0) before starting the linger countdown.

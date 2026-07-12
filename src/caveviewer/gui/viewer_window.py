@@ -30,7 +30,7 @@ import moderngl
 import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
-from caveviewer.core import chunker
+from caveviewer.core import chunker, hardware_memory
 from caveviewer.core.logging_utils import get_logger
 from caveviewer.core.streaming_world import StreamingWorld, StreamingConfig
 from caveviewer.core.texture_manager import TextureManager
@@ -646,7 +646,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.textures_dir = textures_dir
         self.manifest = manifest
 
-        self.texture_manager = TextureManager(self.ctx, self.textures_dir, self.manifest["mtl_materials"])
+        gpu_vendor = str(self.ctx.info.get("GL_VENDOR", ""))
+        gpu_memory_bytes = hardware_memory.detect_total_gpu_memory_bytes(
+            gpu_vendor, logger=_LOG
+        )
+        gpu_target_fraction = hardware_memory.parse_gpu_target_fraction(
+            os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
+        )
+        max_texture_dimension = TextureManager.recommend_max_texture_dimension(
+            self.manifest["mtl_materials"],
+            gpu_memory_bytes,
+            gpu_target_fraction,
+        )
+        self.texture_manager = TextureManager(
+            self.ctx,
+            self.textures_dir,
+            self.manifest["mtl_materials"],
+            max_texture_dimension=max_texture_dimension,
+        )
         self.texture_manager.validate_textures()
 
         def predecode_textures_for_chunk(chunk_data):
@@ -681,8 +698,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.cache_dir,
             config,
             on_decode_textures=predecode_textures_for_chunk,
-            gpu_vendor=str(self.ctx.info.get("GL_VENDOR", "")),
+            gpu_vendor=gpu_vendor,
             textures_dir=self.textures_dir,
+            total_gpu_memory_bytes=gpu_memory_bytes,
         )
 
         # pick a sane starting position: center of the first available chunk,

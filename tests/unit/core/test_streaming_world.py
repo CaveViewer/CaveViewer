@@ -324,24 +324,30 @@ def test_scheduled_unloads_run_before_new_uploads():
     assert events == [("unload", old_cell), ("upload", new_cell, False)]
 
 
-def test_texture_budget_limits_unique_textures_not_shared_texture_chunks():
+def test_texture_budget_does_not_limit_geometry_wanted_set():
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
-    world._gpu_residency_budget_bytes = 220
-    world._estimated_chunk_gpu_bytes = 10
-    world._texture_gpu_bytes = {"a": 100, "b": 100}
-    world._cell_texture_keys = {
-        (1, 0, 0): frozenset({"a"}),
-        (2, 0, 0): frozenset({"a"}),
-        (3, 0, 0): frozenset({"b"}),
-    }
-    wanted = {(1, 0, 0), (2, 0, 0), (3, 0, 0)}
-
-    selected, constrained = world._limit_wanted_cells_by_gpu_budget(
-        wanted, (0, 0, 0)
+    world._paused_event = threading.Event()
+    world.available_cells = {(1, 0, 0), (2, 0, 0), (3, 0, 0)}
+    world.config = streaming_world.StreamingConfig(
+        chunk_size=1.0,
+        load_radius_cells=3,
+        max_loaded_chunks=16,
     )
+    world._last_camera_cell = None
+    world._last_load_radius = None
+    world.loaded_cells = set()
+    world._pending = set()
+    world._lock = threading.Lock()
+    world._work_queue = queue.Queue()
+    world._ready_backlog = streaming_scheduler.BoundedReadyBacklog(capacity=16)
+    world._last_wanted_cells = set()
+    world._last_cam_cell_for_priority = None
+    world._cells_to_unload_next_drain = set()
 
-    assert constrained is True
-    assert selected == {(1, 0, 0), (2, 0, 0)}
+    world.update(np.array([0.0, 0.0, 0.0], dtype=np.float32))
+
+    assert world._last_wanted_cells == world.available_cells
+    assert world._work_queue.qsize() == 3
 
 
 def test_texture_gpu_estimate_includes_mipmap_and_driver_alignment(tmp_path):

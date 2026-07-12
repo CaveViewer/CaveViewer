@@ -18,3 +18,16 @@ def test_fullscreen_layout_scale_is_capped_for_very_large_viewer_surfaces():
     assert controls_overlay._fullscreen_layout_scale((3840, 2160)) == pytest.approx(
         controls_overlay._FULLSCREEN_LAYOUT_SCALE_MAX
     )
+
+
+def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._active = True
+    overlay._awaiting_begin = True
+    overlay._ready_to_begin = False
+    overlay._manual_mode = False
+    overlay._progress_fraction = 0.0
+
+    overlay.update({"loaded": 3, "pending": 0, "ready": 0, "wanted": 3})
+
+    assert overlay.is_ready_to_begin is True

@@ -161,6 +161,11 @@ through `nvidia-smi` for NVIDIA GPUs. Use the GPU memory override only when
 automatic detection is unavailable or does not match the active adapter. If
 GPU memory cannot be detected and no override is set, CaveViewer applies a
 conservative 1 GB fallback instead of disabling the GPU residency cap.
+CaveViewer keeps geometry visibility separate from texture residency: if a map
+has too many very large texture tiles for the GPU budget, oversized textures are
+downscaled during decode instead of dropping nearby chunks from the visible
+world. For debugging or benchmarking, `CAVEVIEWER_MAX_TEXTURE_SIZE` can set an
+explicit maximum texture dimension in pixels.
 
 ### Map Parsing
 
@@ -208,7 +213,7 @@ In Advanced Settings, try this first:
 
 If the error happens while importing a map, lower Cache-building workers first. Cache-building workers can temporarily hold more geometry and texture data in memory, so one worker is the safest option on a constrained machine.
 
-If the error happens while moving around an already-imported map, lower System RAM target (%) and GPU memory target (%). These settings reduce how many chunks CaveViewer tries to keep resident around the camera.
+If the error happens while moving around an already-imported map, lower System RAM target (%) and GPU memory target (%). CaveViewer may also downscale oversized textures automatically when the texture set is too large for the GPU budget.
 
 If the map still cannot import, rebuild the cache with a larger Import chunk size such as 16 m, 24 m, or 32 m. Larger chunks reduce total chunk count and bookkeeping overhead, but do not push this too high on a 16 GB machine because each chunk becomes heavier to load.
 
