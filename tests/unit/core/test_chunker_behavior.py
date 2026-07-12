@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from caveviewer.core import chunker, obj_parser
+from caveviewer.core import chunker, hardware_memory, obj_parser
 
 
 def _attributed_mesh() -> obj_parser.RawMesh:
@@ -49,6 +49,30 @@ def _attributed_mesh() -> obj_parser.RawMesh:
         face_uv_idx=faces.copy(),
         face_nrm_idx=faces.copy(),
         material_ranges=[obj_parser.MaterialRange("rock", 0, 2)],
+    )
+
+
+def _mesh_with_cells(cell_count: int) -> obj_parser.RawMesh:
+    """Build one triangle per spatial cell for worker-pool lifecycle tests."""
+    positions = []
+    for cell_index in range(cell_count):
+        x = float(cell_index * 10)
+        positions.extend(
+            ((x, 0.0, 0.0), (x + 1.0, 0.0, 0.0), (x, 1.0, 0.0))
+        )
+    positions = np.asarray(positions, dtype=np.float32)
+    faces = np.arange(cell_count * 3, dtype=np.int32).reshape(cell_count, 3)
+    return obj_parser.RawMesh(
+        positions=positions,
+        uvs=np.zeros((cell_count * 3, 2), dtype=np.float32),
+        normals=np.tile(
+            np.array([[0.0, 0.0, 1.0]], dtype=np.float32),
+            (cell_count * 3, 1),
+        ),
+        face_pos_idx=faces,
+        face_uv_idx=faces.copy(),
+        face_nrm_idx=faces.copy(),
+        material_ranges=[obj_parser.MaterialRange("rock", 0, cell_count)],
     )
 
 
@@ -108,8 +132,8 @@ def test_build_cache_reports_progress_and_atomically_replaces_existing_cache(
 ):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small source map")
-    old_cache = tmp_path / chunker.CACHE_DIRNAME
-    old_cache.mkdir()
+    old_cache = tmp_path / "managed" / "map-key"
+    old_cache.mkdir(parents=True)
     (old_cache / "old-marker").write_text("old", encoding="utf-8")
     events: list[tuple[str, float]] = []
 
@@ -117,6 +141,7 @@ def test_build_cache_reports_progress_and_atomically_replaces_existing_cache(
         str(source),
         _attributed_mesh(),
         {},
+        cache_dir=str(old_cache),
         progress_cb=lambda stage, fraction: events.append((stage, fraction)),
     )
 
@@ -132,7 +157,7 @@ def test_build_cache_reports_progress_and_atomically_replaces_existing_cache(
         "writing chunk files",
         "writing manifest",
     } <= stages
-    assert not list(tmp_path.glob(f".{chunker.CACHE_DIRNAME}.tmp-*.previous"))
+    assert not list(old_cache.parent.glob(".map-key.tmp-*.previous"))
 
 
 def test_publish_failure_restores_previous_cache(tmp_path, monkeypatch):
@@ -253,12 +278,12 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
         return real_cancel(future)
 
     def fail_one_write(_chunks_dir, cell_str, _mesh, _groups):
-        if cell_str == "0_0_0":
+        if cell_str == "1_0_0":
             assert slow_write_started.wait(timeout=2.0)
             raise OSError("chunk write failed")
-
-        slow_write_started.set()
-        assert release_slow_write.wait(timeout=2.0)
+        if cell_str == "2_0_0":
+            slow_write_started.set()
+            assert release_slow_write.wait(timeout=2.0)
         bounds = np.zeros(3, dtype=np.float32)
         return bounds, bounds.copy(), ["rock"]
 
@@ -266,14 +291,55 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
         chunker.concurrent.futures.Future, "cancel", release_worker_then_cancel
     )
     monkeypatch.setattr(chunker, "resolve_worker_count", lambda *_args, **_kwargs: 2)
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(100, 100),
+    )
     monkeypatch.setattr(chunker, "_write_chunk_file", fail_one_write)
 
     with pytest.raises(OSError, match="chunk write failed"):
         chunker._build_cache_in_directory(
-            str(source), _attributed_mesh(), {}, str(cache_dir)
+            str(source), _mesh_with_cells(4), {}, str(cache_dir)
         )
 
     assert cancel_calls == 1
+
+
+def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "map.obj"
+    source.write_text("map", encoding="utf-8")
+    cache_dir = tmp_path / "staging-cache"
+    worker_threads = []
+    written_cells = []
+    probe_write_counts = []
+
+    def write_cell(_chunks_dir, cell_str, _mesh, _groups):
+        worker_threads.append(threading.get_ident())
+        written_cells.append(cell_str)
+        bounds = np.zeros(3, dtype=np.float32)
+        return bounds, bounds.copy(), ["rock"]
+
+    def probe_ram():
+        probe_write_counts.append(len(written_cells))
+        return hardware_memory.RamSnapshot(100, 20)
+
+    monkeypatch.setattr(chunker, "resolve_worker_count", lambda *_args, **_kwargs: 8)
+    monkeypatch.setattr(
+        chunker.hardware_memory, "detect_ram_snapshot", probe_ram
+    )
+    monkeypatch.setattr(chunker, "_write_chunk_file", write_cell)
+
+    chunker._build_cache_in_directory(
+        str(source), _mesh_with_cells(6), {}, str(cache_dir)
+    )
+
+    assert len(written_cells) == 6
+    assert len(set(worker_threads)) == 1
+    assert probe_write_counts
+    assert min(probe_write_counts) >= 1
 
 
 def test_chunk_writer_preserves_attributes_and_bounds(tmp_path):
@@ -394,12 +460,15 @@ def test_chunk_cache_metadata_requires_current_version_chunks_and_directory(tmp_
     assert chunker._has_current_chunk_cache(str(tmp_path), _current_manifest())
 
 
-def test_cache_validity_rejects_stale_corrupt_and_incomplete_caches(tmp_path):
+def test_cache_validity_rejects_stale_corrupt_and_incomplete_caches(
+    tmp_path, monkeypatch
+):
     source = tmp_path / "map.obj"
     source.write_text("map", encoding="utf-8")
+    monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(tmp_path / "managed"))
     assert not chunker.cache_is_valid(str(source))
 
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
+    cache_dir = Path(chunker.get_cache_dir(str(source)))
     manifest_path = _write_manifest(cache_dir, _current_manifest())
     os.utime(manifest_path, (100, 100))
     os.utime(source, (200, 200))
@@ -413,29 +482,40 @@ def test_cache_validity_rejects_stale_corrupt_and_incomplete_caches(tmp_path):
     assert not chunker.cache_is_valid(str(source))
 
 
-def test_cache_validity_accepts_current_legacy_cache(tmp_path):
+def test_cache_validity_ignores_old_adjacent_cache_directories(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     source.write_text("map", encoding="utf-8")
-    legacy = tmp_path / chunker.LEGACY_CACHE_DIRNAME
-    manifest_path = _write_manifest(legacy, _current_manifest())
-    (legacy / chunker.CHUNKS_DIRNAME).mkdir()
+    managed_root = tmp_path / "managed"
+    monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(managed_root))
+    old_adjacent = tmp_path / "_cache"
+    old_legacy = tmp_path / ".caveviewer_cache"
+    manifest_path = _write_manifest(old_adjacent, _current_manifest())
+    (old_adjacent / chunker.CHUNKS_DIRNAME).mkdir()
+    legacy_manifest_path = _write_manifest(old_legacy, _current_manifest())
+    (old_legacy / chunker.CHUNKS_DIRNAME).mkdir()
     os.utime(source, (100, 100))
     os.utime(manifest_path, (200, 200))
+    os.utime(legacy_manifest_path, (200, 200))
 
-    assert chunker.cache_is_valid(str(source))
+    assert not chunker.cache_is_valid(str(source))
+    assert Path(chunker.get_cache_dir(str(source))).parent == managed_root
 
 
-def test_get_cache_dir_prefers_current_then_legacy_manifest(tmp_path):
+def test_get_cache_dir_uses_managed_manifest_only(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     source.touch()
-    preferred = tmp_path / chunker.CACHE_DIRNAME
-    legacy = tmp_path / chunker.LEGACY_CACHE_DIRNAME
+    managed_root = tmp_path / "managed"
+    monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(managed_root))
+    managed = Path(chunker.get_cache_dir(str(source)))
+    old_adjacent = tmp_path / "_cache"
+    old_legacy = tmp_path / ".caveviewer_cache"
 
-    assert chunker.get_cache_dir(str(source)) == str(preferred)
-    _write_manifest(legacy, {})
-    assert chunker.get_cache_dir(str(source)) == str(legacy)
-    _write_manifest(preferred, {})
-    assert chunker.get_cache_dir(str(source)) == str(preferred)
+    assert managed.parent == managed_root
+    _write_manifest(old_adjacent, {})
+    _write_manifest(old_legacy, {})
+    assert chunker.get_cache_dir(str(source)) == str(managed)
+    _write_manifest(managed, {})
+    assert chunker.get_cache_dir(str(source)) == str(managed)
 
 
 def test_landing_position_uses_nearest_level_in_exact_column():

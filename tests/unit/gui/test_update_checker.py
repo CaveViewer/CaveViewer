@@ -97,6 +97,75 @@ def test_manifest_value_helpers_use_first_valid_alias():
     assert update_checker._first_optional_int(data, ("bad_size", "size")) == 42
 
 
+def test_windows_ssl_context_loads_usable_system_certificates(monkeypatch):
+    """A bad certificate or unavailable store must not discard usable roots."""
+    loaded_certificates = []
+    queried_stores = []
+
+    class FakeContext:
+        def load_verify_locations(self, *, cadata):
+            loaded_certificates.append(cadata)
+            if cadata == b"bad certificate":
+                raise ssl.SSLError("invalid certificate")
+
+    context = FakeContext()
+
+    def enum_certificates(store_name):
+        queried_stores.append(store_name)
+        if store_name == "ROOT":
+            raise OSError("store unavailable")
+        return [
+            (b"usable certificate", "x509_asn", None),
+            (b"ignored encoding", "pkcs_7_asn", None),
+            (b"bad certificate", "x509_asn", None),
+        ]
+
+    monkeypatch.setattr(update_checker.sys, "platform", "win32")
+    monkeypatch.setattr(update_checker.ssl, "create_default_context", lambda: context)
+    monkeypatch.setattr(
+        update_checker.ssl, "enum_certificates", enum_certificates, raising=False
+    )
+
+    assert update_checker.make_ssl_context() is context
+    assert queried_stores == ["CA", "ROOT"]
+    assert loaded_certificates == [b"usable certificate", b"bad certificate"]
+
+
+def test_fetch_url_bytes_uses_headers_timeout_and_ssl_context(monkeypatch):
+    """The transport wrapper must preserve request policy for every manifest fetch."""
+    opened = {}
+    ssl_context = object()
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b"manifest"
+
+    def urlopen(request, *, timeout, context):
+        opened.update(request=request, timeout=timeout, context=context)
+        return FakeResponse()
+
+    monkeypatch.setattr(update_checker, "make_ssl_context", lambda: ssl_context)
+    monkeypatch.setattr(update_checker.urllib.request, "urlopen", urlopen)
+
+    payload = update_checker._fetch_url_bytes(
+        "https://example.invalid/stable.json",
+        headers={"Accept": "application/json"},
+        timeout=17,
+    )
+
+    assert payload == b"manifest"
+    assert opened["request"].full_url == "https://example.invalid/stable.json"
+    assert opened["request"].get_header("Accept") == "application/json"
+    assert opened["timeout"] == 17
+    assert opened["context"] is ssl_context
+
+
 def test_update_check_reports_unconfigured_manifest(monkeypatch):
     monkeypatch.setattr(update_checker, "_MANIFEST_URL", "")
     result = update_checker.check_for_update("1.0.0")
@@ -156,7 +225,13 @@ def test_update_check_rejects_unsupported_channel(
     configured_update_checker, monkeypatch
 ):
     configured_update_checker.supported = False
-    _set_manifest(monkeypatch, {"latest_version": "2.0.0"})
+    monkeypatch.setattr(
+        update_checker,
+        "_fetch_url_bytes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unsupported platforms must not fetch manifests")
+        ),
+    )
     result = update_checker.check_for_update("1.0.0")
     assert not result.update_available
     assert "Unsupported install channel" in (result.error or "")
@@ -277,6 +352,18 @@ def test_signature_check_handles_http_errors(monkeypatch, code):
         update_checker,
         "_fetch_url_bytes",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+    assert not update_checker._verify_manifest_signature_required(b"manifest")
+
+
+def test_signature_check_handles_network_error(monkeypatch):
+    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
+    monkeypatch.setattr(
+        update_checker,
+        "_fetch_url_bytes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            urllib.error.URLError("offline")
+        ),
     )
     assert not update_checker._verify_manifest_signature_required(b"manifest")
 

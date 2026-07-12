@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import math
+from collections.abc import Iterable
 
 import moderngl
 import numpy as np
@@ -61,6 +62,7 @@ class Minimap:
     ARROW_LENGTH = 9       # tip-to-tail-center distance, in panel pixels
     ARROW_HALF_WIDTH = 5   # half the width across the back of the arrowhead
     CELL_PIXEL_SIZE = 3.0  # how big each occupied chunk-cell renders as, in panel pixels
+    _MAX_STATIC_OCCUPANCY_PIXELS = PANEL_SIZE * PANEL_SIZE
 
     def __init__(self, ctx: moderngl.Context, manifest: dict):
         """
@@ -73,13 +75,24 @@ class Minimap:
         self.ctx = ctx
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
 
+        self._footprint_cells_flat = None
+        self.occupied_xz = set()
+        self._footprint_cell_count = 0
         self._compute_footprint(manifest)
 
         # Static geometry (background + footprint + border) and dynamic
         # geometry (camera + bookmark markers) are kept in separate buffers.
         # That avoids re-uploading thousands of static footprint vertices
         # every frame just because the camera arrow moved.
-        self._max_static_verts = max(256, (len(self.occupied_xz) + 8) * 6)
+        # The minimap is only 200x200 pixels.  Reserving one quad per map
+        # footprint cell can allocate hundreds of MB on very large caves even
+        # though most cells collapse onto the same visible pixels.  Reserve for
+        # the maximum drawable panel resolution instead; _build_static_geom()
+        # performs the same pixel de-duplication before upload.
+        visible_footprint_cells = min(
+            self._footprint_cell_count, self._MAX_STATIC_OCCUPANCY_PIXELS
+        )
+        self._max_static_verts = max(256, (visible_footprint_cells + 8) * 6)
         self._static_vbo = ctx.buffer(reserve=self._max_static_verts * 6 * 4)  # 2f pos + 4f color
         self._static_vao = ctx.vertex_array(
             self.program, [(self._static_vbo, "2f 4f", "in_pos", "in_color")]
@@ -116,12 +129,14 @@ class Minimap:
         back to collapsing the 3D chunk cell list for older caches.
         """
         if "footprint_cells" in manifest and "footprint_cell_size" in manifest:
-            # Fine-grained path: flat [cx0,cz0, cx1,cz1, ...] int list.
+            # Fine-grained path: flat [cx0,cz0, cx1,cz1, ...] int list. Keep
+            # the manifest's list by reference instead of copying it into a
+            # second full-size set; the overlay later de-duplicates only at the
+            # final 200x200 panel-pixel resolution.
             chunk_size = float(manifest["footprint_cell_size"])
             flat = manifest["footprint_cells"]
-            occupied_xz = set()
-            for i in range(0, len(flat) - 1, 2):
-                occupied_xz.add((int(flat[i]), int(flat[i + 1])))
+            self._footprint_cells_flat = flat
+            footprint_cells = self._iter_flat_footprint_cells(flat)
         else:
             # Legacy path: derive footprint from 3D chunk cells.
             chunk_size = manifest["chunk_size"]
@@ -129,23 +144,39 @@ class Minimap:
             for cell_str in manifest["chunks"]:
                 cx, cy, cz = (int(v) for v in cell_str.split("_"))
                 occupied_xz.add((cx, cz))
+            self.occupied_xz = occupied_xz
+            footprint_cells = iter(occupied_xz)
 
         min_x = min_z = float("inf")
         max_x = max_z = float("-inf")
-        for cx, cz in occupied_xz:
+        count = 0
+        for cx, cz in footprint_cells:
+            count += 1
             if cx < min_x: min_x = cx
             if cx > max_x: max_x = cx
             if cz < min_z: min_z = cz
             if cz > max_z: max_z = cz
+        if count == 0:
+            min_x = max_x = min_z = max_z = 0
 
         self.chunk_size = chunk_size
-        self.occupied_xz = occupied_xz
+        self._footprint_cell_count = count
         self.min_cell_x = min_x
         self.max_cell_x = max_x
         self.min_cell_z = min_z
         self.max_cell_z = max_z
         self._span_x = max(max_x - min_x, 1)
         self._span_z = max(max_z - min_z, 1)
+
+    @staticmethod
+    def _iter_flat_footprint_cells(flat) -> Iterable[tuple[int, int]]:
+        for i in range(0, len(flat) - 1, 2):
+            yield int(flat[i]), int(flat[i + 1])
+
+    def _iter_footprint_cells(self) -> Iterable[tuple[int, int]]:
+        if self._footprint_cells_flat is not None:
+            return self._iter_flat_footprint_cells(self._footprint_cells_flat)
+        return iter(self.occupied_xz)
 
     # -- coordinate mapping ---------------------------------------------------
 
@@ -304,10 +335,14 @@ class Minimap:
 
     def _build_static_geom(self, window_size: tuple[int, int]) -> tuple[bytes, int]:
         """
-        Builds the background + all footprint cell squares + border as
-        pre-serialised float32 bytes and a vertex count. Called once per
-        unique window size; the result is cached in render() so this
-        loop over every occupied cell only runs on startup and on resize.
+        Builds the background + visible footprint + border as pre-serialised
+        float32 bytes and a vertex count. Called once per unique window size;
+        the result is cached in render() so this loop over every occupied cell
+        only runs on startup and on resize.
+
+        The cave footprint can contain far more occupied cells than the minimap
+        has pixels.  Emit at most one quad per rounded panel pixel so huge maps
+        cannot turn the 2D overlay into an unbounded CPU/GPU allocation.
         """
         verts: list = []
 
@@ -325,11 +360,8 @@ class Minimap:
         add_quad(x0, y0, x1, y1, (0.06, 0.07, 0.10, 0.88))
 
         cell_px_size = self.CELL_PIXEL_SIZE
-        for (cx, cz) in self.occupied_xz:
-            world_x = (cx + 0.5) * self.chunk_size
-            world_z = (cz + 0.5) * self.chunk_size
-            px, py = self._world_to_panel_px(world_x, world_z, window_size)
-            half = cell_px_size / 2.0
+        half = cell_px_size / 2.0
+        for px, py in self._visible_footprint_pixels(window_size):
             add_quad(px - half, py - half, px + half, py + half, (0.45, 0.52, 0.64, 0.85))
 
         border = 1.5
@@ -340,6 +372,21 @@ class Minimap:
         add_quad(x1 - border, y0, x1, y1, border_color)
 
         return np.array(verts, dtype=np.float32).tobytes(), len(verts)
+
+    def _visible_footprint_pixels(
+        self, window_size: tuple[int, int]
+    ) -> Iterable[tuple[int, int]]:
+        """Return occupied minimap pixels, de-duplicated at panel resolution."""
+        x0, y0, x1, y1 = self._panel_rect_px(window_size)
+        pixels: set[tuple[int, int]] = set()
+        for cx, cz in self._iter_footprint_cells():
+            world_x = (cx + 0.5) * self.chunk_size
+            world_z = (cz + 0.5) * self.chunk_size
+            px, py = self._world_to_panel_px(world_x, world_z, window_size)
+            pixel = (int(round(px)), int(round(py)))
+            if x0 <= pixel[0] <= x1 and y0 <= pixel[1] <= y1:
+                pixels.add(pixel)
+        return pixels
 
     def render(self, window_size: tuple[int, int], camera_position: np.ndarray,
                camera_forward: np.ndarray,

@@ -16,7 +16,6 @@ Usage:
   build.sh --help
 
 Internal Docker-only script. Use one of:
-  release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=build
   release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=build
 EOF
 }
@@ -51,13 +50,9 @@ case "$(uname -m)" in
     linux_arch_tag="amd64"
     linux_dist_arch="x86_64"
     ;;
-  aarch64|arm64)
-    linux_arch_tag="arm64"
-    linux_dist_arch="arm64"
-    ;;
 esac
 if [ -z "$linux_dist_arch" ]; then
-  echo "Error: unsupported Linux architecture $(uname -m)"
+  echo "Error: unsupported Linux architecture $(uname -m); CaveViewer distributes Linux x86_64 packages only."
   exit 1
 fi
 linux_venv_default="$repo_root/.venv-linux-build"
@@ -71,7 +66,9 @@ dist_app_dir="$repo_root/dist/linux/$linux_dist_arch/app"
 work_dir="$repo_root/build/pyinstaller/linux/$linux_dist_arch"
 
 # python-build-standalone: Python binaries compiled against glibc 2.17 so the
-# bundled libpython3.12.so won't require GLIBC_2.38 on older distros.
+# bundled libpython3.12.so won't require the build host's newer glibc. The
+# Linux GLFW wheel currently sets the packaged viewer's effective floor to
+# glibc 2.28, which covers the modern GNOME distributions targeted here.
 # Keep this on the Python series we support, but discover the exact patch
 # release from GitHub so a stale filename does not break CI release builds.
 # Override for reproducible/debug builds with:
@@ -183,8 +180,7 @@ setup_portable_python() {
   local arch
   case "$(uname -m)" in
     x86_64)  arch="x86_64-unknown-linux-gnu" ;;
-    aarch64) arch="aarch64-unknown-linux-gnu" ;;
-    *) echo "Error: unsupported architecture $(uname -m)"; exit 1 ;;
+    *) echo "Error: unsupported architecture $(uname -m); CaveViewer distributes Linux x86_64 packages only."; exit 1 ;;
   esac
 
   local cache_dir="$repo_root/.cache/standalone-python"
@@ -317,7 +313,9 @@ CAVEVIEWER_APP_ICON="" \
   --name CaveViewer \
   --hidden-import=PIL._tkinter_finder \
   --hidden-import=tkinter \
-  --hidden-import=moderngl_window.context.pyglet \
+  --hidden-import=dbus_fast.aio \
+  --hidden-import=moderngl_window.context.glfw \
+  --collect-all=glfw \
   --add-data "$repo_root/src/caveviewer/resources/shaders:caveviewer/resources/shaders" \
   --add-data "$repo_root/src/caveviewer/resources/images:caveviewer/resources/images" \
   --add-data "$repo_root/src/caveviewer/resources/release_signing_public_key.pem:caveviewer/resources" \
@@ -333,8 +331,4 @@ fi
 
 echo "Build complete: $app_dir"
 echo "Note: CaveViewer/ is an intermediate build artifact."
-release_target="linux-x86_64"
-if [ "$linux_dist_arch" = "arm64" ]; then
-  release_target="linux-arm64"
-fi
-echo "Run release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=package to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."
+echo "Run release.sh --target=linux-x86_64 --version=<version> --notes \"Release notes\" --action=package to generate the distributable AppImage in dist/linux/$linux_dist_arch/packages/."

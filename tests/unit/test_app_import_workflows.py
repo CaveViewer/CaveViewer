@@ -8,6 +8,7 @@ import pytest
 
 from caveviewer import app
 from caveviewer.core import chunker, glb_parser, obj_parser
+from caveviewer.storage_paths import resolve_application_paths
 
 
 def _mesh(*material_names):
@@ -30,7 +31,7 @@ def test_obj_import_reuses_a_valid_cache(monkeypatch):
     assert app.import_and_cache("map.obj", "map.mtl") == "/cache/reused"
 
 
-def test_obj_import_builds_cache_reports_progress_and_copies_only_needed_textures(
+def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textures(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "map.obj"
@@ -39,10 +40,10 @@ def test_obj_import_builds_cache_reports_progress_and_copies_only_needed_texture
     material_file.write_text("materials", encoding="utf-8")
     (tmp_path / "copy.jpg").write_bytes(b"copy")
     (tmp_path / "existing.jpg").write_bytes(b"source-existing")
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
+    cache_dir = tmp_path / "managed-cache"
     cache_dir.mkdir()
-    (cache_dir / "existing.jpg").write_bytes(b"keep")
     progress = []
+    build_options = {}
     mesh = _mesh("copy", "missing", "existing", "plain")
     materials = {
         "copy": SimpleNamespace(diffuse_texture="copy.jpg"),
@@ -52,7 +53,7 @@ def test_obj_import_builds_cache_reports_progress_and_copies_only_needed_texture
     }
 
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda _path: None)
+    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda *_args: None)
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
 
     def parse_obj(_path, progress_cb):
@@ -60,9 +61,12 @@ def test_obj_import_builds_cache_reports_progress_and_copies_only_needed_texture
         progress_cb("parse-high", 2.0)
         return mesh
 
-    def build_cache(_path, received_mesh, received_materials, progress_cb):
+    def build_cache(
+        _path, received_mesh, received_materials, progress_cb, **options
+    ):
         assert received_mesh is mesh
         assert received_materials is materials
+        build_options.update(options)
         progress_cb("cache-low", -1.0)
         progress_cb("cache-high", 2.0)
         return str(cache_dir)
@@ -81,9 +85,14 @@ def test_obj_import_builds_cache_reports_progress_and_copies_only_needed_texture
     )
 
     assert result == str(cache_dir)
-    assert (cache_dir / "copy.jpg").read_bytes() == b"copy"
-    assert (cache_dir / "existing.jpg").read_bytes() == b"keep"
-    assert not (cache_dir / "missing.jpg").exists()
+    assets = build_options["assets"]
+    assert [(asset.relative_path, asset.source_path) for asset in assets] == [
+        ("copy.jpg", str(tmp_path / "copy.jpg")),
+        ("existing.jpg", str(tmp_path / "existing.jpg")),
+    ]
+    assert build_options["cache_dir"].startswith(
+        str(resolve_application_paths().cache_dir / "maps")
+    )
     assert progress == [
         ("parse-low", 0.0),
         ("parse-high", 1.0),
@@ -100,12 +109,12 @@ def test_obj_import_handles_large_or_unreadable_source_size(
     source.write_bytes(b"mesh")
     material_file = tmp_path / "map.mtl"
     material_file.write_text("material", encoding="utf-8")
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
+    cache_dir = tmp_path / "managed-cache"
     cache_dir.mkdir()
     mesh = _mesh()
 
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda _path: None)
+    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda *_args: None)
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(obj_parser, "parse_obj", lambda *_args, **_kwargs: mesh)
     monkeypatch.setattr(obj_parser, "parse_mtl", lambda _path: {})
@@ -165,19 +174,20 @@ def test_glb_import_reuses_a_valid_cache(monkeypatch):
     )
 
 
-def test_glb_import_extracts_materials_builds_cache_and_copies_texture(
+def test_glb_import_stages_embedded_texture_without_writing_source_directory(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "map.glb"
     source.write_bytes(b"glTF")
     textures_dir = tmp_path / "textures"
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
+    cache_dir = tmp_path / "managed-cache"
     cache_dir.mkdir()
     mesh = _mesh("embedded", "plain")
     progress = []
+    build_options = {}
 
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda _path: None)
+    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda *_args: None)
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(app.os.path, "getsize", lambda _path: 11 * 1024**3)
 
@@ -185,10 +195,11 @@ def test_glb_import_extracts_materials_builds_cache_and_copies_texture(
         progress_cb("parse", 0.5)
         return mesh, {"embedded": b"\x89PNG\r\n\x1a\npixels"}
 
-    def build_cache(_path, received_mesh, materials, progress_cb):
+    def build_cache(_path, received_mesh, materials, progress_cb, **options):
         assert received_mesh is mesh
         assert materials["embedded"].diffuse_texture == "embedded.png"
         assert materials["plain"].diffuse_texture is None
+        build_options.update(options)
         progress_cb("cache", 0.5)
         return str(cache_dir)
 
@@ -203,14 +214,17 @@ def test_glb_import_extracts_materials_builds_cache_and_copies_texture(
     )
 
     assert result == str(cache_dir)
-    assert (textures_dir / "embedded.png").is_file()
-    assert (cache_dir / "embedded.png").is_file()
+    assert not textures_dir.exists()
+    assert [asset.relative_path for asset in build_options["assets"]] == [
+        "embedded.png"
+    ]
+    assert build_options["assets"][0].data == b"\x89PNG\r\n\x1a\npixels"
     assert progress == [("parse", 0.25), ("cache", 0.75)]
 
 
 def test_glb_import_rejects_unknown_model_format_after_capacity_check(monkeypatch):
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda _path: None)
+    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda *_args: None)
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(app.os.path, "getsize", lambda _path: 0)
 

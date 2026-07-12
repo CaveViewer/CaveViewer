@@ -10,6 +10,7 @@ change call sites:
 - text_bounds_px(text, pixel_size, letter_spacing=0.0)
 - iter_text_pixels(text, origin_x, origin_y, pixel_size, letter_spacing=0.0)
 - pixel_size_at_text_scale(pixel_size, target_scale)
+- set_raster_scale(scale) / raster_scale()
 
 iter_text_pixels yields tuples:
 (px_x0, px_y0, px_x1, px_y1, alpha)
@@ -29,6 +30,7 @@ from caveviewer.gui.platform.factory import get_platform_adapter
 
 _BASE_GRID_HEIGHT = 8.5
 _TEXT_SCALE = 1.0
+_RASTER_SCALE = 1.0
 
 
 def set_text_scale(scale: float) -> None:
@@ -40,6 +42,22 @@ def set_text_scale(scale: float) -> None:
     _TEXT_SCALE = clamped
     _load_face.cache_clear()
     _glyph_for.cache_clear()
+
+
+def set_raster_scale(scale: float) -> None:
+    """Set framebuffer raster scale while preserving logical UI layout size."""
+    global _RASTER_SCALE
+    clamped = max(1.0, min(4.0, float(scale)))
+    if abs(clamped - _RASTER_SCALE) < 1e-6:
+        return
+    _RASTER_SCALE = clamped
+    _load_face.cache_clear()
+    _glyph_for.cache_clear()
+
+
+def raster_scale() -> float:
+    """Return the active framebuffer raster scale used by generated glyphs."""
+    return _RASTER_SCALE
 
 
 def pixel_size_at_text_scale(pixel_size: float, target_scale: float) -> float:
@@ -54,17 +72,17 @@ def pixel_size_at_text_scale(pixel_size: float, target_scale: float) -> float:
 @dataclass(frozen=True)
 class _Glyph:
     index: int
-    left: int
-    top: int
-    width: int
-    rows: int
+    left: float
+    top: float
+    width: float
+    rows: float
     advance: float
-    pixels: tuple[tuple[int, int, float], ...]
+    pixels: tuple[tuple[float, float, float], ...]
 
 
 def _font_pixel_height(pixel_size: float) -> int:
     # Preserve legacy sizing intent: previous bitmap font height was ~7*pixel_size.
-    return max(8, int(round(pixel_size * _BASE_GRID_HEIGHT * _TEXT_SCALE)))
+    return max(8, int(round(pixel_size * _BASE_GRID_HEIGHT * _TEXT_SCALE * _RASTER_SCALE)))
 
 
 def _font_candidates() -> list[str]:
@@ -99,15 +117,14 @@ def _get_aa_target() -> int:
     - 'light': Light auto-hinting (smooth curves, matches macOS CoreText style)
     - 'normal': Standard grid-fitted anti-aliasing
 
-    macOS defaults to 'light' because Apple's CoreText uses smooth light
-    anti-aliasing with no pixel-level grid-fitting; FreeType's light mode
-    with force_autohint matches that approach and looks noticeably sharper
-    on Retina displays than the hinting-heavy normal mode.
+    macOS and Linux default to 'light' because it keeps CaveViewer's
+    FreeType-rendered overlay text smooth on high-DPI and fractional-scale
+    desktops without requiring users to set environment variables.
     """
     import sys
     env = os.getenv("CAVEVIEWER_TEXT_AA_MODE", "").lower()
     if not env:
-        mode = "light" if sys.platform == "darwin" else "normal"
+        mode = "light" if sys.platform == "darwin" or sys.platform.startswith("linux") else "normal"
     else:
         mode = env
     if mode == "lcd":
@@ -127,9 +144,9 @@ def _load_face(font_px: int) -> freetype.Face:
 
 def _line_metrics(face: freetype.Face) -> tuple[float, float, float]:
     # 26.6 fixed-point -> pixels
-    asc = float(face.size.ascender) / 64.0
-    desc = float(face.size.descender) / 64.0
-    height = float(face.size.height) / 64.0
+    asc = float(face.size.ascender) / 64.0 / _RASTER_SCALE
+    desc = float(face.size.descender) / 64.0 / _RASTER_SCALE
+    height = float(face.size.height) / 64.0 / _RASTER_SCALE
     if height <= 0.0:
         height = asc - desc
     return asc, desc, height
@@ -141,7 +158,7 @@ def _glyph_for(font_px: int, ch: str) -> _Glyph:
     idx = face.get_char_index(ch)
     if idx == 0:
         # Missing glyph: advance by roughly one-third of em to keep layout stable.
-        fallback_advance = max(1.0, font_px * 0.35)
+        fallback_advance = max(1.0, font_px * 0.35 / _RASTER_SCALE)
         return _Glyph(index=0, left=0, top=0, width=0, rows=0, advance=fallback_advance, pixels=tuple())
 
     aa_target = _get_aa_target()
@@ -151,11 +168,11 @@ def _glyph_for(font_px: int, ch: str) -> _Glyph:
 
     width = int(bmp.width)
     rows = int(bmp.rows)
-    left = int(slot.bitmap_left)
-    top = int(slot.bitmap_top)
-    advance = float(slot.advance.x) / 64.0
+    left = float(slot.bitmap_left) / _RASTER_SCALE
+    top = float(slot.bitmap_top) / _RASTER_SCALE
+    advance = float(slot.advance.x) / 64.0 / _RASTER_SCALE
 
-    pts: list[tuple[int, int, float]] = []
+    pts: list[tuple[float, float, float]] = []
     if width > 0 and rows > 0:
         buf = bmp.buffer
         pitch = abs(int(bmp.pitch))
@@ -164,17 +181,17 @@ def _glyph_for(font_px: int, ch: str) -> _Glyph:
             for x in range(width):
                 a = buf[row_off + x]
                 if a:
-                    pts.append((x, y, float(a) / 255.0))
+                    pts.append((x / _RASTER_SCALE, y / _RASTER_SCALE, float(a) / 255.0))
 
     if advance <= 0.0:
-        advance = float(max(width, 1))
+        advance = float(max(width, 1)) / _RASTER_SCALE
 
     return _Glyph(
         index=idx,
         left=left,
         top=top,
-        width=width,
-        rows=rows,
+        width=width / _RASTER_SCALE,
+        rows=rows / _RASTER_SCALE,
         advance=advance,
         pixels=tuple(pts),
     )
@@ -186,7 +203,7 @@ def _kerning_px(face: freetype.Face, left_idx: int, right_idx: int) -> float:
     if not face.has_kerning:
         return 0.0
     k = face.get_kerning(left_idx, right_idx, freetype.FT_KERNING_DEFAULT)
-    return float(k.x) / 64.0
+    return float(k.x) / 64.0 / _RASTER_SCALE
 
 
 def text_width_px(text: str, pixel_size: float, letter_spacing: float = 0.0) -> float:
@@ -228,6 +245,7 @@ def text_bounds_px(text: str, pixel_size: float, letter_spacing: float = 0.0) ->
     asc, _desc, _line_h = _line_metrics(face)
     baseline_y = asc
     spacing_px = letter_spacing * pixel_size
+    pixel_unit = 1.0 / _RASTER_SCALE
 
     min_x = float("inf")
     min_y = float("inf")
@@ -250,10 +268,10 @@ def text_bounds_px(text: str, pixel_size: float, letter_spacing: float = 0.0) ->
                 min_x = fx
             if fy < min_y:
                 min_y = fy
-            if fx + 1.0 > max_x:
-                max_x = fx + 1.0
-            if fy + 1.0 > max_y:
-                max_y = fy + 1.0
+            if fx + pixel_unit > max_x:
+                max_x = fx + pixel_unit
+            if fy + pixel_unit > max_y:
+                max_y = fy + pixel_unit
 
         cursor_x += glyph.advance
         if i < len(text) - 1:
@@ -281,6 +299,7 @@ def iter_text_pixels(text: str, origin_x: float, origin_y: float, pixel_size: fl
     asc, _desc, _line_h = _line_metrics(face)
     baseline_y = origin_y + asc
     spacing_px = letter_spacing * pixel_size
+    pixel_unit = 1.0 / _RASTER_SCALE
 
     cursor_x = origin_x
     prev_idx = 0
@@ -294,7 +313,7 @@ def iter_text_pixels(text: str, origin_x: float, origin_y: float, pixel_size: fl
         for x, y, a in glyph.pixels:
             px_x0 = gx0 + x
             px_y0 = gy0 + y
-            yield (px_x0, px_y0, px_x0 + 1.0, px_y0 + 1.0, a)
+            yield (px_x0, px_y0, px_x0 + pixel_unit, px_y0 + pixel_unit, a)
 
         cursor_x += glyph.advance
         if i < len(text) - 1:

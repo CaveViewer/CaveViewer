@@ -17,7 +17,6 @@ Usage:
   package.sh --help
 
 Internal Docker-only script. Use one of:
-  release.sh --target=linux-arm64 --version=<version> --notes "Release notes" --action=package
   release.sh --target=linux-x86_64 --version=<version> --notes "Release notes" --action=package
 EOF
 }
@@ -48,11 +47,15 @@ fi
 # Extract version info from Python file.
 APP_NAME=$(grep "^APP_NAME = " "$repo_root/src/caveviewer/version.py" | grep -oP '"\K[^"]+')
 APP_VERSION=$(grep "^APP_VERSION = " "$repo_root/src/caveviewer/version.py" | grep -oP '"\K[^"]+')
+APPLICATION_ID=$(grep "^APPLICATION_ID = " "$repo_root/src/caveviewer/version.py" | grep -oP '"\K[^"]+')
 
-if [[ -z "$APP_NAME" || -z "$APP_VERSION" ]]; then
-  echo "Error: Could not extract APP_NAME or APP_VERSION from src/caveviewer/version.py"
+if [[ -z "$APP_NAME" || -z "$APP_VERSION" || -z "$APPLICATION_ID" ]]; then
+  echo "Error: Could not extract APP_NAME, APP_VERSION, or APPLICATION_ID from src/caveviewer/version.py"
   exit 1
 fi
+
+desktop_template="$repo_root/packaging/linux/${APPLICATION_ID}.desktop.in"
+metainfo_src="$repo_root/packaging/linux/${APPLICATION_ID}.metainfo.xml"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Error: this script must be run on Linux."
@@ -63,6 +66,10 @@ if [ ! -f "$icon_src" ]; then
   echo "Error: app icon not found at $icon_src"
   exit 1
 fi
+if [ ! -f "$desktop_template" ] || [ ! -f "$metainfo_src" ]; then
+  echo "Error: canonical Linux desktop metadata is missing for $APPLICATION_ID"
+  exit 1
+fi
 
 find_appimagetool() {
   if command -v appimagetool >/dev/null 2>&1; then
@@ -71,10 +78,6 @@ find_appimagetool() {
   fi
   if command -v appimagetool-x86_64.AppImage >/dev/null 2>&1; then
     command -v appimagetool-x86_64.AppImage
-    return 0
-  fi
-  if command -v appimagetool-aarch64.AppImage >/dev/null 2>&1; then
-    command -v appimagetool-aarch64.AppImage
     return 0
   fi
   return 1
@@ -88,9 +91,6 @@ appimagetool_matches_arch() {
   case "$expected_arch" in
     x86_64)
       [[ "$file_info" == *"x86-64"* || "$file_info" == *"x86_64"* ]]
-      ;;
-    aarch64)
-      [[ "$file_info" == *"aarch64"* || "$file_info" == *"ARM aarch64"* ]]
       ;;
     *)
       return 1
@@ -151,14 +151,10 @@ case "$ARCH" in
     appimage_arch="x86_64"
     linux_dist_arch="x86_64"
     ;;
-  aarch64|arm64)
-    appimage_arch="aarch64"
-    linux_dist_arch="arm64"
-    ;;
   *) appimage_arch="$ARCH" ;;
 esac
 if [ -z "${linux_dist_arch:-}" ]; then
-  echo "Error: unsupported Linux architecture $ARCH"
+  echo "Error: unsupported Linux architecture $ARCH; CaveViewer distributes Linux x86_64 packages only."
   exit 1
 fi
 
@@ -169,11 +165,7 @@ dist_packages_dir="$repo_root/dist/linux/$linux_dist_arch/packages"
 
 if [ ! -d "$app_dir" ]; then
   echo "Error: app directory not found at $app_dir"
-  release_target="linux-x86_64"
-  if [ "$linux_dist_arch" = "arm64" ]; then
-    release_target="linux-arm64"
-  fi
-  echo "Run release.sh --target=$release_target --version=<version> --notes \"Release notes\" --action=build first."
+  echo "Run release.sh --target=linux-x86_64 --version=<version> --notes \"Release notes\" --action=build first."
   exit 1
 fi
 
@@ -191,6 +183,7 @@ rm -f "$output_appimage"
 mkdir -p \
   "$appdir/usr/lib/caveviewer" \
   "$appdir/usr/share/applications" \
+  "$appdir/usr/share/metainfo" \
   "$appdir/usr/share/icons/hicolor"
 
 cp -a "$app_dir/." "$appdir/usr/lib/caveviewer/"
@@ -217,11 +210,10 @@ if [ ! -f "$bundled_ui_font" ]; then
 fi
 
 icon_hicolor_dir="$appdir/usr/share/icons/hicolor"
-icon_root="$appdir/caveviewer.png"
+icon_root="$appdir/${APPLICATION_ID}.png"
 linux_arch_tag=""
 case "$(uname -m)" in
   x86_64) linux_arch_tag="amd64" ;;
-  aarch64|arm64) linux_arch_tag="arm64" ;;
 esac
 linux_venv_default="$repo_root/.venv-linux-build"
 if [ -n "$linux_arch_tag" ]; then
@@ -245,37 +237,32 @@ for size in sizes:
     resized.thumbnail((size, size), Image.LANCZOS)
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     canvas.alpha_composite(resized, ((size - resized.width) // 2, (size - resized.height) // 2))
-    dest = icon_dir / f"{size}x{size}" / "apps" / "caveviewer.png"
+    dest = icon_dir / f"{size}x{size}" / "apps" / (root_dest.stem + ".png")
     dest.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(dest)
 
-root_256 = icon_dir / "256x256" / "apps" / "caveviewer.png"
+root_256 = icon_dir / "256x256" / "apps" / (root_dest.stem + ".png")
 root_dest.write_bytes(root_256.read_bytes())
 ' "$icon_src" "$icon_hicolor_dir" "$icon_root"
 else
   mkdir -p "$icon_hicolor_dir/256x256/apps"
-  cp "$icon_src" "$icon_hicolor_dir/256x256/apps/caveviewer.png"
+  cp "$icon_src" "$icon_hicolor_dir/256x256/apps/${APPLICATION_ID}.png"
   cp "$icon_src" "$icon_root"
 fi
 
-cat > "$appdir/caveviewer.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=CaveViewer
-Comment=Explore large 3-D cave maps
-Exec=AppRun
-Icon=caveviewer
-Terminal=false
-Categories=Graphics;Science;Viewer;
-StartupWMClass=CaveViewer
-EOF
-cp "$appdir/caveviewer.desktop" "$appdir/usr/share/applications/caveviewer.desktop"
+desktop_root="$appdir/${APPLICATION_ID}.desktop"
+sed 's|@EXEC@|AppRun|' "$desktop_template" > "$desktop_root"
+cp "$desktop_root" "$appdir/usr/share/applications/${APPLICATION_ID}.desktop"
+cp "$metainfo_src" "$appdir/usr/share/metainfo/${APPLICATION_ID}.metainfo.xml"
+ln -s "${APPLICATION_ID}.png" "$appdir/.DirIcon"
 
 cat > "$appdir/AppRun" <<'APP_RUN_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 debug="${CAVEVIEWER_LAUNCH_DEBUG:-0}"
+install_only="${CAVEVIEWER_APPRUN_INSTALL_ONLY:-0}"
+uninstall_only="${CAVEVIEWER_APPRUN_UNINSTALL:-0}"
 launcher_version="2026-07-04-debug-stream-v2"
 log_file="${CAVEVIEWER_LAUNCH_LOG:-${TMPDIR:-/tmp}/caveviewer-launch.log}"
 
@@ -306,52 +293,145 @@ if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] uname=$(uname -a)"
 fi
 
+if [ "$install_only" = "1" ] && [ "$uninstall_only" = "1" ]; then
+  echo "Error: CAVEVIEWER_APPRUN_INSTALL_ONLY=1 and CAVEVIEWER_APPRUN_UNINSTALL=1 are mutually exclusive."
+  exit 2
+fi
+
+desktop_data_home() {
+  if [ -n "${XDG_DATA_HOME:-}" ]; then
+    printf '%s\n' "$XDG_DATA_HOME"
+  elif [ -n "${HOME:-}" ]; then
+    printf '%s\n' "$HOME/.local/share"
+  else
+    return 2
+  fi
+}
+
+refresh_desktop_caches() {
+  applications_dir="$1"
+  icons_hicolor_dir="$2"
+  if command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -d "$icons_hicolor_dir" ]; then
+    gtk-update-icon-cache -q -t "$icons_hicolor_dir" >/dev/null 2>&1 || true
+  fi
+  if command -v update-desktop-database >/dev/null 2>&1 && [ -d "$applications_dir" ]; then
+    update-desktop-database -q "$applications_dir" >/dev/null 2>&1 || true
+  fi
+}
+
 install_desktop_integration() {
   if [ "${CAVEVIEWER_NO_DESKTOP_INTEGRATION:-0}" = "1" ]; then
+    if [ "$debug" = "1" ] || [ "$install_only" = "1" ]; then
+      echo "[CaveViewer AppRun] Desktop integration disabled by CAVEVIEWER_NO_DESKTOP_INTEGRATION=1"
+    fi
     return
   fi
-  if [ -z "${APPIMAGE:-}" ] || [ -z "${HOME:-}" ]; then
+  if [ -z "${APPIMAGE:-}" ]; then
+    if [ "$install_only" = "1" ]; then
+      echo "Error: CAVEVIEWER_APPRUN_INSTALL_ONLY=1 requires APPIMAGE."
+      return 2
+    fi
+    return
+  fi
+  if ! data_home="$(desktop_data_home)"; then
+    if [ "$install_only" = "1" ]; then
+      echo "Error: CAVEVIEWER_APPRUN_INSTALL_ONLY=1 requires HOME or XDG_DATA_HOME."
+      return 2
+    fi
     return
   fi
 
-  data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
   applications_dir="$data_home/applications"
+  metainfo_dir="$data_home/metainfo"
   icons_hicolor_dir="$data_home/icons/hicolor"
-  desktop_path="$applications_dir/caveviewer.desktop"
+  application_id="io.github.kernalpanic.caveviewer"
+  desktop_path="$applications_dir/${application_id}.desktop"
+  desktop_source="$appdir/usr/share/applications/${application_id}.desktop"
+  metainfo_path="$metainfo_dir/${application_id}.metainfo.xml"
+  metainfo_source="$appdir/usr/share/metainfo/${application_id}.metainfo.xml"
 
-  mkdir -p "$applications_dir"
+  mkdir -p "$applications_dir" "$metainfo_dir"
   if [ -d "$appdir/usr/share/icons/hicolor" ]; then
     mkdir -p "$icons_hicolor_dir"
     cp -R "$appdir/usr/share/icons/hicolor/." "$icons_hicolor_dir/"
   fi
+  if [ -f "$metainfo_source" ]; then
+    cp "$metainfo_source" "$metainfo_path"
+    chmod 0644 "$metainfo_path" 2>/dev/null || true
+  fi
 
-  cat > "$desktop_path" <<DESKTOP_EOF
-[Desktop Entry]
-Type=Application
-Name=CaveViewer
-Comment=Explore large 3-D cave maps
-Exec="$APPIMAGE"
-Icon=caveviewer
-Terminal=false
-Categories=Graphics;Science;Viewer;
-StartupWMClass=CaveViewer
-DESKTOP_EOF
+  # Render the packaged canonical desktop file with the current AppImage path.
+  # Escape the characters that are significant inside a quoted Exec value.
+  escaped_appimage="${APPIMAGE//\\/\\\\}"
+  escaped_appimage="${escaped_appimage//\"/\\\"}"
+  escaped_appimage="${escaped_appimage//&/\\&}"
+  escaped_appimage="${escaped_appimage//|/\\|}"
+  sed "s|^Exec=.*$|Exec=\"$escaped_appimage\" %f|" "$desktop_source" > "$desktop_path"
   chmod 0644 "$desktop_path" 2>/dev/null || true
-  find "$icons_hicolor_dir" -path "*/apps/caveviewer.png" -exec chmod 0644 {} \; 2>/dev/null || true
-  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -q -t "$icons_hicolor_dir" >/dev/null 2>&1 || true
-  fi
-  if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database -q "$applications_dir" >/dev/null 2>&1 || true
-  fi
+  find "$icons_hicolor_dir" -path "*/apps/${application_id}.png" -exec chmod 0644 {} \; 2>/dev/null || true
 
-  if [ "$debug" = "1" ]; then
+  # Remove only the desktop entry generated by CaveViewer releases before the
+  # stable application ID was introduced. This prevents duplicate GNOME apps.
+  legacy_desktop_path="$applications_dir/caveviewer.desktop"
+  if [ -f "$legacy_desktop_path" ] && \
+      grep -q '^Name=CaveViewer$' "$legacy_desktop_path" && \
+      grep -q '^Icon=caveviewer$' "$legacy_desktop_path"; then
+    rm -f "$legacy_desktop_path"
+  fi
+  refresh_desktop_caches "$applications_dir" "$icons_hicolor_dir"
+
+  if [ "$debug" = "1" ] || [ "$install_only" = "1" ]; then
     echo "[CaveViewer AppRun] Desktop file: $desktop_path"
-    echo "[CaveViewer AppRun] Desktop icons: $icons_hicolor_dir/*/apps/caveviewer.png"
+    echo "[CaveViewer AppRun] AppStream metadata: $metainfo_path"
+    echo "[CaveViewer AppRun] Desktop icons: $icons_hicolor_dir/*/apps/${application_id}.png"
   fi
 }
 
+uninstall_desktop_integration() {
+  if ! data_home="$(desktop_data_home)"; then
+    echo "Error: CAVEVIEWER_APPRUN_UNINSTALL=1 requires HOME or XDG_DATA_HOME."
+    return 2
+  fi
+
+  applications_dir="$data_home/applications"
+  metainfo_dir="$data_home/metainfo"
+  icons_hicolor_dir="$data_home/icons/hicolor"
+  application_id="io.github.kernalpanic.caveviewer"
+  desktop_path="$applications_dir/${application_id}.desktop"
+  metainfo_path="$metainfo_dir/${application_id}.metainfo.xml"
+
+  rm -f "$desktop_path"
+  rm -f "$metainfo_path"
+  if [ -d "$icons_hicolor_dir" ]; then
+    find "$icons_hicolor_dir" -path "*/apps/${application_id}.png" -type f -exec rm -f {} \; 2>/dev/null || true
+  fi
+
+  # Remove only the legacy desktop entry generated by old CaveViewer releases.
+  legacy_desktop_path="$applications_dir/caveviewer.desktop"
+  if [ -f "$legacy_desktop_path" ] && \
+      grep -q '^Name=CaveViewer$' "$legacy_desktop_path" && \
+      grep -q '^Icon=caveviewer$' "$legacy_desktop_path"; then
+    rm -f "$legacy_desktop_path"
+  fi
+
+  refresh_desktop_caches "$applications_dir" "$icons_hicolor_dir"
+
+  echo "[CaveViewer AppRun] Removed desktop file: $desktop_path"
+  echo "[CaveViewer AppRun] Removed AppStream metadata: $metainfo_path"
+  echo "[CaveViewer AppRun] Removed desktop icons: $icons_hicolor_dir/*/apps/${application_id}.png"
+}
+
+if [ "$uninstall_only" = "1" ]; then
+  uninstall_desktop_integration
+  echo "[CaveViewer AppRun] Desktop integration uninstall complete."
+  exit 0
+fi
+
 install_desktop_integration
+if [ "$install_only" = "1" ]; then
+  echo "[CaveViewer AppRun] Desktop integration smoke mode complete."
+  exit 0
+fi
 
 # On RPM-based distros (Fedora, RHEL, etc.) the unversioned libGL.so /
 # libEGL.so symlinks are often only available in -devel packages. Create
@@ -446,6 +526,7 @@ fi
   echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TK_SCALE=${CAVEVIEWER_TK_SCALE:-}"
+  echo "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=${CAVEVIEWER_WINDOW_SYSTEM:-}"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"
@@ -459,6 +540,7 @@ if [ "$debug" = "1" ]; then
   echo "[CaveViewer AppRun] CAVEVIEWER_UI_FONT=${CAVEVIEWER_UI_FONT:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TEXT_AA_MODE=${CAVEVIEWER_TEXT_AA_MODE:-}"
   echo "[CaveViewer AppRun] CAVEVIEWER_TK_SCALE=${CAVEVIEWER_TK_SCALE:-}"
+  echo "[CaveViewer AppRun] CAVEVIEWER_WINDOW_SYSTEM=${CAVEVIEWER_WINDOW_SYSTEM:-}"
   echo "[CaveViewer AppRun] FONTCONFIG_FILE=${FONTCONFIG_FILE:-}"
   echo "[CaveViewer AppRun] TCL_LIBRARY=$TCL_LIBRARY"
   echo "[CaveViewer AppRun] TK_LIBRARY=$TK_LIBRARY"

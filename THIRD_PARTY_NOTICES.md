@@ -11,13 +11,20 @@ resolved from package metadata when the environment is installed.
 
 | Package | Requirement |
 |---|---|
+| dbus-fast (Linux) | `dbus-fast==5.0.22` |
 | freetype-py | `freetype-py==2.5.1` |
+| glfw / bundled GLFW libraries (Linux) | `glfw==2.10.0` |
 | moderngl | `moderngl==5.12.0` |
 | moderngl-window | `moderngl-window==3.1.1` |
 | numpy | `numpy==2.5.0` |
 | Pillow | `Pillow==12.2.0` |
 | pyglm | `pyglm>=2.7.1` |
 | truststore | `truststore>=0.10.0` |
+
+`dbus-fast` is distributed under the MIT License. The `glfw` Python binding is
+distributed under the MIT License and its bundled native GLFW libraries use
+the zlib/libpng license. Release notices must retain the licenses shipped by
+those packages.
 
 ## Bundled Linux AppImage Font
 

@@ -33,6 +33,7 @@ a fast flythrough that streams in many never-before-seen textures at once.
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 from dataclasses import dataclass
@@ -58,6 +59,12 @@ Image.MAX_IMAGE_PIXELS = 1_000_000_000
 
 _LOG = get_logger("TextureManager")
 
+TEXTURE_MAX_SIZE_ENV_VAR = "CAVEVIEWER_MAX_TEXTURE_SIZE"
+_TEXTURE_BUDGET_SHARE = 0.80
+_TEXTURE_BYTES_PER_PIXEL_WITH_MIPS = 4.0 * (4.0 / 3.0)
+_AUTO_TEXTURE_DIMENSION_STEPS = (8192, 4096, 2048, 1024, 512)
+_MIN_TEXTURE_DIMENSION_LIMIT = 512
+
 
 @dataclass
 class DecodedImage:
@@ -74,8 +81,35 @@ class LoadedTexture:
     ref_count: int = 0
 
 
+def _texture_cache_key(file_or_bytes) -> object | None:
+    if not file_or_bytes:
+        return None
+    if isinstance(file_or_bytes, bytes):
+        return ("embedded", len(file_or_bytes), hash(file_or_bytes))
+    return ("file", str(file_or_bytes))
+
+
+def _parse_texture_dimension_limit(raw_value: str | None) -> int | None:
+    if raw_value is None:
+        return None
+    text = raw_value.strip()
+    if not text:
+        return None
+    try:
+        value = int(float(text))
+    except ValueError:
+        return None
+    return max(_MIN_TEXTURE_DIMENSION_LIMIT, min(16384, value))
+
+
 class TextureManager:
-    def __init__(self, gl_context, textures_dir: str, material_to_file: dict):
+    def __init__(
+        self,
+        gl_context,
+        textures_dir: str,
+        material_to_file: dict,
+        max_texture_dimension: int | None = None,
+    ):
         """
         gl_context: a moderngl.Context (or any object exposing .texture(size, components, data))
         textures_dir: folder containing texture files referenced by filename
@@ -97,6 +131,10 @@ class TextureManager:
         self.ctx = gl_context
         self.textures_dir = textures_dir
         self.material_to_file = material_to_file
+        self.max_texture_dimension = _parse_texture_dimension_limit(
+            str(max_texture_dimension) if max_texture_dimension else None
+        )
+        self._texture_downscale_logged = False
         self._loaded: dict[str, LoadedTexture] = {}  # keyed by material name
         # multiple materials can point at the same physical jpg (rare, but
         # cheap to dedupe so we don't decode the same file twice) -- or,
@@ -109,6 +147,58 @@ class TextureManager:
         # worker threads may populate it concurrently.
         self._decode_cache: dict[object, DecodedImage] = {}
         self._decode_cache_lock = threading.Lock()
+        if self.max_texture_dimension is not None:
+            _LOG.info(
+                "Texture max dimension cap active: %d px. Oversized textures "
+                "will be downscaled before GPU upload.",
+                self.max_texture_dimension,
+            )
+
+    @staticmethod
+    def recommend_max_texture_dimension(
+        material_to_file: dict,
+        gpu_memory_bytes: int | None,
+        gpu_target_fraction: float,
+    ) -> int | None:
+        """Choose a decode-time texture cap for the whole map.
+
+        The streaming scheduler must keep geometry visible even when a map has
+        more texture data than the GPU can hold at full resolution.  This cap is
+        the texture-side safety valve: many huge texture tiles become lower-res
+        GPU textures instead of forcing the streamer to reject geometry chunks.
+        """
+        explicit_limit = _parse_texture_dimension_limit(
+            os.environ.get(TEXTURE_MAX_SIZE_ENV_VAR)
+        )
+        if explicit_limit is not None:
+            return explicit_limit
+
+        if gpu_memory_bytes is None or gpu_memory_bytes <= 0:
+            return None
+
+        unique_texture_keys = {
+            key
+            for key in (_texture_cache_key(value) for value in material_to_file.values())
+            if key is not None
+        }
+        if not unique_texture_keys:
+            return None
+
+        target_fraction = max(0.01, min(0.80, float(gpu_target_fraction)))
+        texture_budget_bytes = gpu_memory_bytes * target_fraction * _TEXTURE_BUDGET_SHARE
+        bytes_per_texture = texture_budget_bytes / max(1, len(unique_texture_keys))
+        max_pixels = bytes_per_texture / _TEXTURE_BYTES_PER_PIXEL_WITH_MIPS
+        if max_pixels <= 0:
+            return _MIN_TEXTURE_DIMENSION_LIMIT
+
+        raw_dimension = int(math.sqrt(max_pixels))
+        for step in _AUTO_TEXTURE_DIMENSION_STEPS:
+            # Treat values close to a common texture size as that size.  This
+            # avoids useless 4096 -> 3990 resizes when the budget is only a few
+            # percent below the original estimate.
+            if raw_dimension >= int(step * 0.875):
+                return step
+        return _MIN_TEXTURE_DIMENSION_LIMIT
 
     def _placeholder_texture(self):
         """1x1 magenta texture used when a material's image file is missing,
@@ -117,6 +207,27 @@ class TextureManager:
         data = np.array([[255, 0, 255, 255]], dtype=np.uint8).tobytes()
         tex = self.ctx.texture((1, 1), 4, data)
         return tex
+
+    def _apply_texture_dimension_limit(self, image: Image.Image, source_label: str) -> Image.Image:
+        limit = self.max_texture_dimension
+        if limit is None or max(image.size) <= limit:
+            return image
+
+        original_size = image.size
+        resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+        image.thumbnail((limit, limit), resampling)
+        if not self._texture_downscale_logged:
+            _LOG.info(
+                "Downscaling oversized textures to fit GPU budget; first resize "
+                "%r: %dx%d -> %dx%d.",
+                source_label,
+                original_size[0],
+                original_size[1],
+                image.size[0],
+                image.size[1],
+            )
+            self._texture_downscale_logged = True
+        return image
 
     # -- background-thread-safe decode step ----------------------------------
 
@@ -168,6 +279,7 @@ class TextureManager:
         try:
             import io
             img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+            img = self._apply_texture_dimension_limit(img, "<embedded texture>")
             # same vertical flip as the disk-file path, for the same
             # reason: OBJ/OpenGL UV origin is bottom-left, most image
             # libraries decode top-left first.
@@ -185,6 +297,7 @@ class TextureManager:
 
         try:
             img = Image.open(path).convert("RGB")
+            img = self._apply_texture_dimension_limit(img, filename)
             # flip vertically: OBJ/OpenGL UV origin is bottom-left, most
             # image libraries decode top-left first -- skipping this
             # produces an upside-down or mirrored-look texture that's

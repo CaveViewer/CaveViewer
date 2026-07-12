@@ -27,7 +27,11 @@ from typing import Callable, Optional
 import numpy as np
 
 from caveviewer.core import chunker, hardware_memory
-from caveviewer.core.worker_config import resolve_worker_count
+from caveviewer.core.worker_config import (
+    MAX_WORKER_RAM_UTILIZATION,
+    can_start_additional_worker,
+    resolve_worker_count,
+)
 from caveviewer.core.chunker import ChunkData
 from caveviewer.core.logging_utils import get_logger
 from caveviewer.core.streaming_budget import (
@@ -57,6 +61,10 @@ _LINUX_DRM_ROOT = hardware_memory.LINUX_DRM_ROOT
 
 def _detect_total_ram_bytes() -> int:
     return hardware_memory.detect_total_ram_bytes()
+
+
+def _detect_ram_snapshot() -> hardware_memory.RamSnapshot | None:
+    return hardware_memory.detect_ram_snapshot()
 
 
 def _parse_target_fraction(raw_value: str | None, conservative_default: float) -> float:
@@ -140,7 +148,9 @@ class StreamingWorld:
 
     def __init__(self, cache_dir: str, config: StreamingConfig,
                  on_decode_textures: Optional[Callable[[ChunkData], None]] = None,
-                 gpu_vendor: str | None = None):
+                 gpu_vendor: str | None = None,
+                 textures_dir: str | None = None,
+                 total_gpu_memory_bytes: int | None = None):
         """
         on_decode_textures, if given, is called from a background worker
         thread right after a chunk's geometry finishes loading, with the
@@ -155,6 +165,10 @@ class StreamingWorld:
         gpu_vendor is the active OpenGL context's GL_VENDOR string when the
         caller has one. It prevents a secondary adapter from supplying the
         memory budget on hybrid-GPU systems.
+
+        total_gpu_memory_bytes may be supplied by a caller that already ran
+        active-GPU detection for related setup, such as texture resolution
+        selection.  When omitted, this class detects it itself.
         """
         self.cache_dir = cache_dir
         self.config = config
@@ -175,8 +189,15 @@ class StreamingWorld:
         self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes(sampled_chunk_keys)
         gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
         self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
-        self._total_gpu_memory_bytes = _detect_total_gpu_memory_bytes(gpu_vendor)
+        self._total_gpu_memory_bytes = (
+            total_gpu_memory_bytes
+            if total_gpu_memory_bytes is not None
+            else _detect_total_gpu_memory_bytes(gpu_vendor)
+        )
         self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes(sampled_chunk_keys)
+        self._gpu_residency_budget_bytes: int | None = None
+        self._texture_gpu_bytes: dict[object, int] = {}
+        self._configure_texture_gpu_estimates(manifest, textures_dir)
         self._configure_chunk_budget_from_memory_targets()
 
         self.loaded_cells: set[tuple[int, int, int]] = set()
@@ -196,12 +217,14 @@ class StreamingWorld:
         self._stop_event = threading.Event()
         self._paused_event = threading.Event()
         self._work_queue: "queue.Queue[tuple[int,int,int]]" = queue.Queue()
-        self._workers = [
-            threading.Thread(target=self._worker_loop, daemon=True)
-            for _ in range(self._worker_pool_size)
-        ]
-        for w in self._workers:
-            w.start()
+        self._worker_start_lock = threading.Lock()
+        self._worker_admission_blocked = False
+        self._workers: list[threading.Thread] = []
+        # The configured count is a maximum. Start one worker unconditionally;
+        # completed chunk work will make memory cost observable before each
+        # additional worker is admitted.
+        with self._worker_start_lock:
+            self._start_worker_locked()
 
         self._last_camera_cell: Optional[tuple[int, int, int]] = None
         self._last_load_radius: Optional[int] = None
@@ -223,6 +246,71 @@ class StreamingWorld:
             chunks_dirname=chunker.CHUNKS_DIRNAME,
             overhead_multiplier=2.5,
         )
+
+    def _configure_texture_gpu_estimates(
+        self, manifest: dict, textures_dir: str | None
+    ) -> None:
+        """Estimate full-resolution texture cost for diagnostics and cap sizing."""
+        if self._total_gpu_memory_bytes is None:
+            return
+
+        self._gpu_residency_budget_bytes = int(
+            self._total_gpu_memory_bytes * self._gpu_target_fraction
+        )
+        material_textures = manifest.get("mtl_materials", {})
+        texture_root = textures_dir or self.cache_dir
+
+        for file_or_bytes in material_textures.values():
+            texture_key = self._texture_cache_key(file_or_bytes)
+            if texture_key is None or texture_key in self._texture_gpu_bytes:
+                continue
+            self._texture_gpu_bytes[texture_key] = self._estimate_texture_gpu_bytes(
+                file_or_bytes, texture_root
+            )
+
+        estimated_texture_bytes = sum(self._texture_gpu_bytes.values())
+        if estimated_texture_bytes > 0:
+            _LOG.info(
+                "Texture GPU estimate before any decode-time downscaling: %.1f MB "
+                "across %d unique texture(s); texture upload target is %.1f MB.",
+                estimated_texture_bytes / (1024 ** 2),
+                len(self._texture_gpu_bytes),
+                self._gpu_residency_budget_bytes / (1024 ** 2),
+            )
+
+    @staticmethod
+    def _texture_cache_key(file_or_bytes) -> object | None:
+        if not file_or_bytes:
+            return None
+        if isinstance(file_or_bytes, bytes):
+            return ("embedded", len(file_or_bytes), hash(file_or_bytes))
+        return ("file", str(file_or_bytes))
+
+    @staticmethod
+    def _estimate_texture_gpu_bytes(file_or_bytes, textures_dir: str) -> int:
+        """Conservatively estimate GPU texture storage including mipmaps."""
+        if not file_or_bytes:
+            return 0
+        try:
+            from PIL import Image
+
+            if isinstance(file_or_bytes, bytes):
+                import io
+
+                image_context = Image.open(io.BytesIO(file_or_bytes))
+            else:
+                image_context = Image.open(os.path.join(textures_dir, str(file_or_bytes)))
+            with image_context as image:
+                width, height = image.size
+        except Exception as exc:
+            display_name = "<embedded texture>" if isinstance(file_or_bytes, bytes) else file_or_bytes
+            _LOG.warning("Could not estimate texture GPU size for %r: %s", display_name, exc)
+            return 0
+
+        # Drivers often store RGB textures with 4-byte alignment internally;
+        # mipmaps add another ~1/3.  Use the conservative value so low-memory
+        # GPUs do not accept a resident set that later fails in the driver.
+        return int(width * height * 4 * (4.0 / 3.0))
 
     def _configure_chunk_budget_from_memory_targets(self) -> None:
         """Derive max_loaded_chunks from system RAM and GPU memory targets.
@@ -270,11 +358,78 @@ class StreamingWorld:
                 "Set CAVEVIEWER_GPU_MEMORY_GB to provide an explicit value."
             )
 
+    def _start_worker_locked(self) -> None:
+        """Create one worker while the caller owns _worker_start_lock."""
+        worker_number = len(self._workers) + 1
+        worker = threading.Thread(
+            target=self._worker_loop,
+            name=f"CaveViewer-stream-{worker_number}",
+            daemon=True,
+        )
+        self._workers.append(worker)
+        try:
+            worker.start()
+        except BaseException:
+            self._workers.pop()
+            raise
+
+    def _maybe_start_additional_worker(self) -> bool:
+        """Grow streaming concurrency by one after measuring current RAM."""
+        worker_start_lock = getattr(self, "_worker_start_lock", None)
+        if worker_start_lock is None:
+            return False
+
+        with worker_start_lock:
+            if (
+                self._stop_event.is_set()
+                or self._paused_event.is_set()
+                or len(self._workers) >= self._worker_pool_size
+                or self._work_queue.empty()
+            ):
+                return False
+
+            snapshot = _detect_ram_snapshot()
+            if not can_start_additional_worker(snapshot):
+                if not self._worker_admission_blocked:
+                    if snapshot is None:
+                        _LOG.warning(
+                            "Could not measure available system RAM; keeping "
+                            "streaming at %d worker(s).",
+                            len(self._workers),
+                        )
+                    else:
+                        _LOG.warning(
+                            "System RAM utilization is %.1f%%; keeping streaming "
+                            "at %d worker(s) because the limit is %.0f%%.",
+                            snapshot.utilization_fraction * 100.0,
+                            len(self._workers),
+                            MAX_WORKER_RAM_UTILIZATION * 100.0,
+                        )
+                self._worker_admission_blocked = True
+                return False
+
+            self._start_worker_locked()
+            if self._worker_admission_blocked:
+                _LOG.info(
+                    "System RAM pressure eased; increasing streaming workers "
+                    "to %d of %d.",
+                    len(self._workers),
+                    self._worker_pool_size,
+                )
+            self._worker_admission_blocked = False
+            return True
+
     def shutdown(self):
         self._stop_event.set()
-        for _ in self._workers:
+        worker_start_lock = getattr(self, "_worker_start_lock", None)
+        if worker_start_lock is None:
+            workers = list(self._workers)
+        else:
+            with worker_start_lock:
+                workers = list(self._workers)
+        for _ in workers:
             self._work_queue.put(None)  # sentinel to unblock get()
-        for w in self._workers:
+        for w in workers:
             w.join(timeout=2.0)
         self._ready_backlog.clear()
         with self._lock:
@@ -352,6 +507,10 @@ class StreamingWorld:
             finally:
                 if not handed_off:
                     self._clear_pending_cell(cell)
+                else:
+                    # The ready payload is still resident, so this probe sees
+                    # the real geometry/texture memory cost before pool growth.
+                    self._maybe_start_additional_worker()
 
     def cell_for_position(self, position: np.ndarray) -> tuple[int, int, int]:
         return chunker.world_to_cell(position, self.config.chunk_size)
@@ -429,9 +588,10 @@ class StreamingWorld:
         # the instant it's outside the tight load ring -- avoids reload
         # thrashing if the camera oscillates near a boundary.
         unload_r = self.config.unload_radius_cells
-        self._cells_to_unload_next_drain = cells_outside_cube_radius(
+        cells_to_unload = cells_outside_cube_radius(
             self.loaded_cells, cam_cell, unload_r
         )
+        self._cells_to_unload_next_drain = cells_to_unload
         self._last_cam_cell_for_priority = cam_cell
 
     def _cell_distance_sq(self, cell: tuple[int, int, int], center: tuple[int, int, int]) -> int:
@@ -486,6 +646,14 @@ class StreamingWorld:
 
         start = time.perf_counter()
         n = 0
+        unload_now = getattr(self, "_cells_to_unload_next_drain", set())
+        if unload_now:
+            for cell in list(unload_now):
+                with self._lock:
+                    self.loaded_cells.discard(cell)
+                on_chunk_unload(cell)
+            self._cells_to_unload_next_drain = set()
+
         while n < max_per_frame:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             if elapsed_ms >= time_budget_ms:
@@ -509,14 +677,6 @@ class StreamingWorld:
                 self._pending.discard(data.cell)
                 self.loaded_cells.add(data.cell)
             n += 1
-
-        unload_now = getattr(self, "_cells_to_unload_next_drain", set())
-        if unload_now:
-            for cell in list(unload_now):
-                with self._lock:
-                    self.loaded_cells.discard(cell)
-                on_chunk_unload(cell)
-            self._cells_to_unload_next_drain = set()
 
         # Hard memory residency cap: if loaded chunk count exceeds budget,
         # evict farthest chunks first (prefer those outside the immediate

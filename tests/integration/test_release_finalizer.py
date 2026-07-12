@@ -39,6 +39,7 @@ def _copy_release_files(destination: Path) -> None:
         "scripts/macos/update_manifest.sh",
         "scripts/sign_update_manifest.py",
         "scripts/windows/update_manifest.sh",
+        "packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml",
         "src/caveviewer/version.py",
     )
     for relative_path in release_files:
@@ -53,7 +54,6 @@ def _write_release_artifacts(artifacts_dir: Path, version: str) -> None:
         f"CaveViewer-{version}-windows.zip",
         f"CaveViewer-{version}.json",
         f"CaveViewer-{version}.update.json",
-        f"CaveViewer-{version}-aarch64.AppImage",
         f"CaveViewer-{version}-x86_64.AppImage",
         f"CaveViewer-{version}-macos-arm64.dmg",
         f"CaveViewer-{version}-macos-arm64.json",
@@ -214,12 +214,20 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     )
     expected_manifests = {
         "updates/windows/stable.json",
-        "updates/linux/arm64/stable.json",
         "updates/linux/x86_64/stable.json",
         "updates/macos/arm64/stable.json",
         "updates/macos/x86_64/stable.json",
     }
     assert "src/caveviewer/version.py" in committed_paths
+    assert (
+        "packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml"
+        in committed_paths
+    )
+    metainfo = (
+        working_repository
+        / "packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml"
+    ).read_text(encoding="utf-8")
+    assert f'<release version="{version}"' in metainfo
     for manifest_path in expected_manifests:
         assert manifest_path in committed_paths
         assert f"{manifest_path}.sig" in committed_paths

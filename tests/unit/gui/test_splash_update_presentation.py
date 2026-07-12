@@ -103,3 +103,16 @@ def test_non_actionable_update_states_remain_quiet(state):
     )
 
     assert presentation == splash_screen._UpdatePresentation()
+
+
+def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):
+    state_home = tmp_path / "state"
+    map_root = tmp_path / "maps"
+    map_root.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    splash_screen._save_last_browse_dir(str(map_root))
+
+    state_file = state_home / "caveviewer" / "last_browse_path"
+    assert state_file.read_text(encoding="utf-8") == str(map_root)
+    assert splash_screen._load_last_browse_dir() == str(map_root)

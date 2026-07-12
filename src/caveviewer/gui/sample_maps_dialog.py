@@ -23,9 +23,16 @@ import time
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
-from caveviewer.gui.platform import get_splash_platform_adapter
-from caveviewer.gui.preferences import migrate_preference_file
+from caveviewer.gui.notifications import show_error, show_info, show_warning
+from caveviewer.gui.platform import (
+    DesktopServices,
+    DirectorySelection,
+    get_desktop_services,
+    get_splash_platform_adapter,
+)
+from caveviewer.gui.preferences import migrate_state_file, write_text_atomic
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.version import APP_NAME
 
 
 _BG_COLOR = DARK_THEME.background
@@ -38,12 +45,14 @@ _BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 _BUTTON_FG = DARK_THEME.primary_button_text
 _BORDER_COLOR = DARK_THEME.border
+_SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX = "caveviewer.sample-map-download"
 
 
-_LAST_SAMPLE_MAPS_DIR_FILE = migrate_preference_file(
-    "last_sample_maps_dir",
-    ".caveviewer_last_sample_maps_dir",
-)
+def _last_sample_maps_dir_file() -> str:
+    """Resolve state lazily so tests and portable runs remain isolated."""
+    return migrate_state_file(
+        "last_sample_maps_dir", ".caveviewer_last_sample_maps_dir"
+    )
 
 
 def _activate_download_cancel_button(action_button, set_action_button):
@@ -53,30 +62,42 @@ def _activate_download_cancel_button(action_button, set_action_button):
     return cancel_event
 
 
-def _ask_directory_in_front(filedialog, owner, *, title, initialdir):
+def _ask_directory_in_front(
+    desktop_services: DesktopServices, owner, *, title: str, initial_dir: str
+):
     """Open an owned native directory chooser above the application's windows."""
     previous_topmost = False
+    topmost_supported = False
     try:
         previous_topmost = owner.attributes("-topmost")
+        topmost_supported = True
     except Exception:
         pass
 
     try:
-        # Supplying parent establishes native window ownership. Temporarily
-        # promoting that owner also keeps its native child above CaveViewer's
-        # other windows on window managers that do not honor ownership alone.
-        owner.attributes("-topmost", True)
+        # Supplying parent establishes native window ownership where Tk can
+        # provide it.  On Linux portal/Wayland paths, however, the chooser may
+        # not become a real child of this Toplevel. Keeping this dialog topmost
+        # during the chooser call can then put Sample Maps above the chooser.
+        # Pulse topmost only to raise the owner, then clear it before the
+        # blocking native dialog request.
+        if topmost_supported:
+            owner.attributes("-topmost", True)
         owner.lift()
         owner.focus_force()
         owner.update_idletasks()
-        return filedialog.askdirectory(
+        if topmost_supported:
+            owner.attributes("-topmost", False)
+            owner.update_idletasks()
+        return desktop_services.choose_directory(
             title=title,
-            initialdir=initialdir,
+            initial_dir=initial_dir,
             parent=owner,
         )
     finally:
         try:
-            owner.attributes("-topmost", previous_topmost)
+            if topmost_supported:
+                owner.attributes("-topmost", previous_topmost)
             if owner.winfo_exists():
                 owner.lift()
                 owner.focus_force()
@@ -84,8 +105,147 @@ def _ask_directory_in_front(filedialog, owner, *, title, initialdir):
             pass
 
 
+def _download_and_extract_to_selected_directory(
+    save_dir: DirectorySelection, sample, *, progress_cb=None, cancel_cb=None
+) -> str:
+    """Download a sample map into the local path selected by DesktopServices."""
+    from caveviewer.gui.sample_maps import download_and_extract_sample_map
+
+    return download_and_extract_sample_map(
+        save_dir.path,
+        sample,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+    )
+
+
+def _sample_download_notification_id(sample) -> str:
+    """Return a stable per-sample desktop notification ID."""
+    raw_key = (
+        getattr(sample, "asset_name", "")
+        or getattr(sample, "display_name", "")
+        or "sample"
+    )
+    safe_key = "".join(
+        character.lower() if character.isalnum() else "-"
+        for character in str(raw_key)
+    ).strip("-")
+    return f"{_SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX}.{safe_key or 'sample'}"
+
+
+def _safe_desktop_notify(
+    desktop_services: DesktopServices,
+    notification_id: str,
+    title: str,
+    body: str,
+    *,
+    priority: str = "normal",
+) -> None:
+    """Send a best-effort desktop notification without affecting workflow."""
+    try:
+        desktop_services.notify(
+            notification_id, title, body, priority=priority
+        )
+    except Exception:
+        # Notification failures must never break a download. Linux portals
+        # already fall back internally, but tests and unusual desktop sessions
+        # may provide smaller DesktopServices implementations.
+        pass
+
+
+def _safe_desktop_withdraw(
+    desktop_services: DesktopServices, notification_id: str
+) -> None:
+    """Withdraw a best-effort desktop notification without affecting workflow."""
+    try:
+        desktop_services.withdraw_notification(notification_id)
+    except Exception:
+        pass
+
+
+def _safe_desktop_inhibit(
+    desktop_services: DesktopServices, reason: str, *, parent
+):
+    """Keep the desktop awake during long work when the host supports it."""
+    try:
+        return desktop_services.inhibit_idle_suspend(reason, parent=parent)
+    except Exception:
+        return None
+
+
+def _close_desktop_inhibitor(inhibitor) -> None:
+    """Release a desktop inhibitor returned by DesktopServices."""
+    if inhibitor is None:
+        return
+    try:
+        inhibitor.close()
+    except Exception:
+        pass
+
+
+def _download_sample_with_desktop_activity(
+    desktop_services: DesktopServices,
+    parent,
+    save_dir: DirectorySelection,
+    sample,
+    *,
+    progress_cb=None,
+    cancel_cb=None,
+) -> str:
+    """Download a sample map while using native desktop activity affordances."""
+    from caveviewer.gui.sample_maps import DownloadCancelled
+
+    display_name = getattr(sample, "display_name", "sample map")
+    notification_id = _sample_download_notification_id(sample)
+    _safe_desktop_notify(
+        desktop_services,
+        notification_id,
+        f"{APP_NAME} is downloading a sample map",
+        f"Downloading {display_name}...",
+    )
+    inhibitor = _safe_desktop_inhibit(
+        desktop_services,
+        f"Downloading {display_name}",
+        parent=parent,
+    )
+
+    try:
+        result_path = _download_and_extract_to_selected_directory(
+            save_dir,
+            sample,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+        )
+    except Exception as exc:
+        _close_desktop_inhibitor(inhibitor)
+        if isinstance(exc, DownloadCancelled):
+            _safe_desktop_withdraw(desktop_services, notification_id)
+        else:
+            _safe_desktop_notify(
+                desktop_services,
+                notification_id,
+                f"{APP_NAME} sample map download failed",
+                f"Couldn't download {display_name}.",
+                priority="high",
+            )
+        raise
+
+    _close_desktop_inhibitor(inhibitor)
+    _safe_desktop_notify(
+        desktop_services,
+        notification_id,
+        f"{APP_NAME} sample map is ready",
+        f"{display_name} finished downloading.",
+    )
+    return result_path
+
+
 def show_sample_maps_dialog(
-    parent, install_dir, *, ui_font_family: str | None = None
+    parent,
+    install_dir,
+    *,
+    ui_font_family: str | None = None,
+    desktop_services: DesktopServices | None = None,
 ):
     """
     Shows the sample maps list as a modal dialog over `parent` (the
@@ -100,16 +260,16 @@ def show_sample_maps_dialog(
     go load it" outcome.
     """
     import tkinter as tk
-    from tkinter import messagebox, filedialog
     from caveviewer.gui.sample_maps import (
         DownloadCancelled, KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog,
         is_sample_map_already_downloaded,
-        download_and_extract_sample_map, existing_sample_map_path, local_sample_map_path,
+        existing_sample_map_path, local_sample_map_path,
     )
 
     _UI_FONT_FAMILY = (
         ui_font_family or get_splash_platform_adapter().ui_font_family()
     )
+    desktop_services = desktop_services or get_desktop_services()
 
     selected_folder = [None]
     dialog_closed = [False]
@@ -315,8 +475,7 @@ def show_sample_maps_dialog(
     def _download_flow(sample):
         nonlocal sample_maps_root_dir
         if sample.download_url is None:
-            messagebox.showinfo(
-                "Sample Maps",
+            show_info(
                 f"{sample.display_name} isn't available for download right now "
                 f"(its file wasn't found on the server, or the server couldn't be "
                 f"reached). Try again later, or pick a different sample map.",
@@ -328,17 +487,17 @@ def show_sample_maps_dialog(
         # an owner, some window managers place it behind the Sample Maps
         # window, making Save To appear unresponsive.
         save_dir = _ask_directory_in_front(
-            filedialog,
+            desktop_services,
             dialog,
             title=f"Save {sample.display_name} to...",
-            initialdir=initial_save_dir[0],
+            initial_dir=initial_save_dir[0],
         )
         if not save_dir:
             return  # User cancelled the directory selection
 
-        _save_last_sample_maps_dir(save_dir)
-        sample_maps_root_dir = save_dir
-        initial_save_dir[0] = save_dir
+        _save_last_sample_maps_dir(save_dir.path)
+        sample_maps_root_dir = save_dir.path
+        initial_save_dir[0] = save_dir.path
         if not _dialog_exists():
             return
 
@@ -383,7 +542,9 @@ def show_sample_maps_dialog(
                     raise DownloadCancelled("Sample map download cancelled")
 
         try:
-            result_path = download_and_extract_sample_map(
+            result_path = _download_sample_with_desktop_activity(
+                desktop_services,
+                dialog,
                 save_dir,
                 sample,
                 progress_cb=on_progress,
@@ -407,8 +568,7 @@ def show_sample_maps_dialog(
                 return
             if isinstance(e, DownloadCancelled):
                 return
-            messagebox.showerror(
-                "Download Failed",
+            show_error(
                 f"Couldn't download {sample.display_name}:\n\n{e}",
                 parent=dialog,
             )
@@ -441,8 +601,7 @@ def show_sample_maps_dialog(
             _close_dialog()
             return
 
-        messagebox.showwarning(
-            "Sample Maps",
+        show_warning(
             f"{sample.display_name} can't be opened:\n\n{error_message}\n\n"
             "Its files may have been moved or deleted. Download it again.",
             parent=dialog,
@@ -532,8 +691,7 @@ def show_sample_maps_dialog(
                 _open_installed_sample(sample_path)
                 return
 
-            messagebox.showwarning(
-                "Sample Maps",
+            show_warning(
                 f"{sample.display_name} can't be opened:\n\n{error_message}\n\n"
                 "Its files may have been moved or deleted. Download it again.",
                 parent=dialog,
@@ -650,7 +808,7 @@ def _center_over_parent(window, parent, width, height):
 def _load_last_sample_maps_dir() -> str | None:
     """Load the last directory where the user saved sample maps."""
     try:
-        with open(_LAST_SAMPLE_MAPS_DIR_FILE, "r", encoding="utf-8") as f:
+        with open(_last_sample_maps_dir_file(), "r", encoding="utf-8") as f:
             path = f.read().strip()
         if path and os.path.isdir(path):
             return path
@@ -664,7 +822,6 @@ def _save_last_sample_maps_dir(path: str) -> None:
     try:
         if not path or not os.path.isdir(path):
             return
-        with open(_LAST_SAMPLE_MAPS_DIR_FILE, "w", encoding="utf-8") as f:
-            f.write(path)
+        write_text_atomic(_last_sample_maps_dir_file(), path)
     except Exception:
         pass

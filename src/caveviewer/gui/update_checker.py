@@ -183,6 +183,15 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
     caller can show a calm "couldn't check for updates right now"
     message rather than a stack trace.
     """
+    resolved_channel = (install_channel or _PLATFORM_ADAPTER.install_channel()).strip().lower()
+    if not _PLATFORM_ADAPTER.supports_install_channel(resolved_channel):
+        _LOG.error("Update check failed: unsupported install channel %r.", resolved_channel)
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            error=_PLATFORM_ADAPTER.unsupported_install_channel_message(resolved_channel),
+        )
+
     if not _MANIFEST_URL:
         _LOG.error("Update check skipped: update manifest URL is not configured.")
         return UpdateCheckResult(
@@ -241,16 +250,7 @@ def check_for_update(current_version: str, install_channel: Optional[str] = None
             error=f"Got an unexpected update manifest format: {e}"
         )
 
-    resolved_channel = (install_channel or _PLATFORM_ADAPTER.install_channel()).strip().lower()
     _LOG.info("Update manifest parsed: latest_version=%r, channel=%s", data.get("latest_version") or data.get("version"), resolved_channel)
-
-    if not _PLATFORM_ADAPTER.supports_install_channel(resolved_channel):
-        _LOG.error("Update check failed: unsupported install channel %r.", resolved_channel)
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            error=_PLATFORM_ADAPTER.unsupported_install_channel_message(resolved_channel),
-        )
 
     latest_tag = str(data.get("latest_version") or data.get("version") or "").strip()
     release_notes = str(data.get("release_notes") or data.get("notes") or "")

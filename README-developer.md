@@ -286,7 +286,9 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_DEV_VENV` | `.venv-dev` | Path to the development virtual environment used by `run_caveviewer.sh` and `scripts/dev/install.sh`. |
 | `CAVEVIEWER_MACOS_BUILD_VENV` | _(none)_ | Path to the venv used by the macOS build scripts. |
 | `CAVEVIEWER_LINUX_BUILD_VENV` | _(none)_ | Path to the venv used by the Linux build scripts. |
-| `CAVEVIEWER_HOME` | _(none)_ | Override the home directory CaveViewer uses for preferences and cache files. |
+| `CAVEVIEWER_PROJECT_ROOT` | _(set by `scripts/dev/env_setup.sh`)_ | Source checkout root used only by development shell helpers; it is not a user-storage location. |
+| `CAVEVIEWER_HOME` | _(none)_ | Absolute portable-storage root. CaveViewer derives `config`, `data`, `cache`, `state`, and `runtime` children beneath it. |
+| `CAVEVIEWER_MAP_CACHE_DIR` | `$XDG_CACHE_HOME/caveviewer/maps` on Linux | Absolute root for generated map caches. CaveViewer no longer auto-discovers adjacent `_cache` or `.caveviewer_cache` directories. |
 | `CAVEVIEWER_APP_ICON` | _(bundled icon)_ | Path to a custom application icon file. |
 | `CAVEVIEWER_FORCE_STARTUP_FOCUS` | `0` | Set to `1` to force the main window to the front on startup. Disabled by default on frozen macOS builds to avoid window-placement jumps. |
 | `CAVEVIEWER_LOG_LEVEL` | `INFO` | Logging verbosity. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
@@ -302,7 +304,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
 | `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to enter the update-available state regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
 | `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | Low-level macOS packaging override. The top-level release dispatcher uses `--target=macos-arm64` or `--target=macos-x86_64`; normal app update checks detect the running process architecture automatically. |
-| `CAVEVIEWER_LINUX_UPDATE_ARCH` | _(auto)_ | Linux publish helper only. Set to `arm64` or `x86_64` to choose which AppImage is written to the Linux update manifest. |
+| `CAVEVIEWER_LINUX_UPDATE_ARCH` | `x86_64` | Linux publish helper only. Linux distribution is x86_64-only; set to `x86_64` when invoking lower-level publish helpers directly. |
 
 The update checker requires manifests to be signed with the release Ed25519
 private key. The bundled public key lives at
@@ -338,16 +340,22 @@ removes the temporary staging directory.
 A verified package is moved to `~/Downloads` and is never executed or
 installed. A visible splash makes one automatic reveal attempt and retains a
 manual platform action: macOS mounts a DMG read-only and shows its `.app` in
-Finder, Windows selects the package in Explorer, and Linux opens the containing
-folder. Completion while a map is open remains silent until the splash is
-shown again.
+Finder, Windows selects the package in Explorer, and Linux asks the desktop
+portal to reveal it, with `xdg-open` as a fallback. Completion while a map is
+open remains silent until the splash is shown again.
 
-Default update checks read committed, architecture-specific main-branch
-manifests, not GitHub's latest-release or prerelease metadata. macOS uses
-`updates/macos/<arm64|x86_64>/stable.json`; Linux follows the same architecture
-split. macOS selects the running process architecture, so a Rosetta-launched
-x86_64 build continues on the Intel update channel. Stable publish runs update
-and sign `stable.json`.
+On Linux, every directory chooser also uses XDG Desktop Portal when available.
+Cancellation is distinct from portal failure; unavailable or old portals fall
+back to the owned Tk chooser. Portal-selected source folders need only be
+readable because generated cache assets are written to CaveViewer's cache root.
+
+Default update checks read committed main-branch manifests, not GitHub's
+latest-release or prerelease metadata. macOS uses
+`updates/macos/<arm64|x86_64>/stable.json` and selects the running process
+architecture, so a Rosetta-launched x86_64 build continues on the Intel update
+channel. Linux distribution is x86_64-only and reads
+`updates/linux/x86_64/stable.json`; Linux ARM64 builds do not receive automatic
+updates. Stable publish runs update and sign `stable.json`.
 Prerelease publish runs update the separate `prerelease.json` channel, leaving
 `stable.json` unchanged, and mark a newly created GitHub release as a
 prerelease. Uploading to an existing tag does not change that tag's
@@ -383,7 +391,7 @@ For a packaged app launched from Terminal, use environment variables instead:
 CAVEVIEWER_FORCE_UPDATE=1 \
 CAVEVIEWER_UPDATE_BRANCH=release/<version> \
 CAVEVIEWER_UPDATE_CHANNEL=prerelease \
-./CaveViewer-<version>-aarch64.AppImage
+./CaveViewer-<version>-x86_64.AppImage
 ```
 
 If the update checker logs `Update manifest fetch failed with HTTP 404`, the
@@ -399,11 +407,9 @@ or set `CAVEVIEWER_UPDATE_MANIFEST_URL` to a staging/custom-hosted copy of the
 manifest; the signature URL defaults to `<manifest-url>.sig` unless
 `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` is set explicitly.
 
-Linux manifests are architecture-specific:
+Linux manifests are x86_64-only:
 
 ```text
-updates/linux/arm64/stable.json
-updates/linux/arm64/prerelease.json
 updates/linux/x86_64/stable.json
 updates/linux/x86_64/prerelease.json
 ```
@@ -449,41 +455,40 @@ signing manually, either set that variable or pass `--private-key`.
 #### OpenGL UI scaling
 
 The OpenGL viewer renders its overlay text directly with FreeType in screen
-pixels. It does not automatically inherit GNOME, KDE, X11, or Wayland desktop
-scaling. On a high-DPI display, set `CAVEVIEWER_UI_TEXT_SCALE` when starting
-CaveViewer. The built-in default is `1.28`; for example, applying an additional
-150% scale gives `1.28 * 1.5 = 1.92`:
+pixels. It automatically rasterizes glyphs at the active framebuffer pixel
+ratio so high-DPI and fractional-scale desktops do not stretch low-resolution
+font bitmaps. The always-visible viewer HUD also grows automatically on larger
+viewer surfaces so AppImage/XWayland and maximized GNOME windows keep legible
+controls without asking users to set environment variables.
 
-```bash
-CAVEVIEWER_UI_TEXT_SCALE=1.92 ./run_caveviewer.sh
-```
+Viewer window geometry is separate from overlay text scaling. On Linux it is
+derived from 80% of GLFW's primary-monitor work area in backend-native screen
+coordinates. GLFW continues to scale the framebuffer for high-DPI rendering,
+but its X11 `SCALE_TO_MONITOR` size expansion is suppressed because applying it
+to an already monitor-relative window would scale the geometry twice.
 
 The accepted range is `0.5` through `3.0`. The controls/help overlay derives
 its row height from the resulting FreeType line metrics, so increasing the text
 scale also reserves enough vertical space for each line and its keycap. Text
-inside the fixed-size right-side control panel (steppers and action buttons)
-stays at its designed size because that panel's geometry does not scale.
+inside the right-side control panel uses its own responsive HUD scale so button
+geometry and labels grow together.
 
-To keep a development-machine override, export it in the shell profile or add
-the following before the final `exec` in `run_caveviewer.sh`:
-
-```bash
-export CAVEVIEWER_UI_TEXT_SCALE="${CAVEVIEWER_UI_TEXT_SCALE:-1.92}"
-```
-
-`scripts/dev/install.sh` regenerates `run_caveviewer.sh`, so edits made only to
-the generated launcher are replaced the next time the installer runs. For a
-repeatable project-specific default, add the same export to the launcher
-template in `scripts/dev/install.sh`; keep the `${...:-...}` form so callers can
-still override it for an individual run.
+For development-only visual tuning, `CAVEVIEWER_UI_TEXT_SCALE` adjusts
+adaptable full-screen overlay text and `CAVEVIEWER_VIEWER_UI_SCALE` overrides
+the automatic right-side HUD scale. These are not required for normal users.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Scale multiplier for adaptable in-app overlay text (loading screens, controls/help overlay, and HUD readouts). Text inside fixed-size control geometry is intentionally excluded. `1.0` is the base size. |
+| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Development override for adaptable in-app overlay text such as loading screens, controls/help overlay, and status readouts. Right-side viewer controls use `CAVEVIEWER_VIEWER_UI_SCALE` instead so labels and button geometry stay matched. |
+| `CAVEVIEWER_VIEWER_UI_SCALE` | `auto` | Development override for the always-visible viewer HUD scale. By default CaveViewer keeps the compact baseline at 1536x864 and grows the right-side controls on larger viewer surfaces. |
 | `CAVEVIEWER_TK_SCALE` | _(display DPI)_ | Windows/Linux override for Tk dialog scaling, clamped to `0.75` through `4.0`. The Linux AppImage launcher normally derives this value from the desktop Xft DPI setting. |
+| `CAVEVIEWER_APPRUN_INSTALL_ONLY` | `0` | Linux AppImage launcher smoke mode. Set to `1` to install/update the desktop file, AppStream metadata, and hicolor icons in the user's XDG data home, print the installed paths, and exit without launching the GUI. |
+| `CAVEVIEWER_APPRUN_UNINSTALL` | `0` | Linux AppImage launcher uninstall mode. Set to `1` to remove CaveViewer's per-user desktop file, AppStream metadata, and hicolor icons, then exit without launching the GUI. It does not remove maps, settings, caches, or downloaded update packages. |
+| `CAVEVIEWER_NO_DESKTOP_INTEGRATION` | `0` | Linux AppImage launcher opt-out. Set to `1` to skip the best-effort per-user desktop integration step. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
-| `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing (matches macOS CoreText style); `lcd` = LCD sub-pixel rendering. |
+| `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS/Linux), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing; `lcd` = LCD sub-pixel rendering. |
 | `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
+| `CAVEVIEWER_WINDOW_SYSTEM` | `auto` | Linux viewer backend: `auto` prefers X11/XWayland when `DISPLAY` is available so source and AppImage launches get the same GNOME titlebar and resize behavior, then retries Wayland on recognized initialization failures. `wayland` and `x11` require that protocol without fallback. |
 | `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a VM or GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |
 | `CAVEVIEWER_NAVIGATION_GUARD` | `1` | Set to `0` to disable the navigation boundary that keeps free-fly movement near occupied map chunks. |
 | `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | `2` | Number of chunk cells around occupied map chunks that remain navigable. Larger values allow more free space around the cave; smaller values keep users closer to rendered chunks. |
@@ -518,7 +523,11 @@ validation, persistence, and environment mapping;
 state transitions; `src/caveviewer/gui/advanced_settings_dialog.py` only
 renders that state into Tk widgets; and
 `src/caveviewer/core/worker_config.py` resolves the effective streaming/import
-worker counts while honoring reserved logical CPUs. Only immutable, validated
+worker counts while honoring reserved logical CPUs and owns the shared RAM
+admission cutoff. Both pools start with one worker and admit at most one more
+after completed work has been measured; they stay at their current concurrency
+when system RAM utilization reaches 80% or current availability cannot be
+measured. Only immutable, validated
 `AdvancedSettings` snapshots may cross into
 persistence or the runtime environment. Invalid saved or environment values
 fall back independently to that field's valid default, so one stale value does
@@ -533,22 +542,25 @@ map-selection dialogs to reuse it without importing private splash-screen
 implementation details.
 
 Runtime chunk streaming is also split by policy boundary:
-`src/caveviewer/core/hardware_memory.py` detects system/GPU memory and parses
-target fractions; `src/caveviewer/core/streaming_budget.py` contains pure
+`src/caveviewer/core/hardware_memory.py` detects total and currently available
+system RAM, detects GPU memory, and parses target fractions;
+`src/caveviewer/core/streaming_budget.py` contains pure
 chunk-size estimation and residency-cap calculation;
 `src/caveviewer/core/streaming_scheduler.py` owns the bounded ready backlog,
 spatial selection, and eviction policy; and
 `src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
 render-thread callbacks. Map imports now write only the cache artifacts used by
-runtime streaming and the minimap. Existing caches containing retired auxiliary
-artifacts remain readable; those extra files are ignored.
+runtime streaming and the minimap. On Linux, caches and their texture assets are
+atomically published under `$XDG_CACHE_HOME/caveviewer/maps`; old adjacent
+`_cache` and `.caveviewer_cache` directories are not auto-discovered.
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
 | `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
-| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Override the GPU memory size used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; use this when detection is unavailable or inaccurate. |
+| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Optional GPU memory ceiling used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; if detection finds a smaller active GPU, the detected value wins. If detection is unavailable and no override is set, CaveViewer uses a conservative 1 GB fallback. |
 | `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory the chunk streaming system targets. |
-| `CAVEVIEWER_IO_WORKERS` | `2` | Integer 1-32 | Requested maximum number of background threads for loading chunk files from disk. The runtime reduces this when necessary to honor `CAVEVIEWER_IO_RESERVED_CPUS`. Advanced Settings warns above 5 because high thread counts may reduce performance and cause out of memory errors on machines with less than 16 GB of RAM. |
+| `CAVEVIEWER_MAX_TEXTURE_SIZE` | _(auto)_ | 512-16384 px | Optional maximum decoded texture dimension. When unset, CaveViewer derives a cap from GPU memory, GPU target percentage, and unique texture count so geometry remains visible while oversized texture sets are downscaled instead of overfilling VRAM. |
+| `CAVEVIEWER_IO_WORKERS` | `2` | Integer 1-32 | Requested maximum number of background threads for loading chunk files from disk. Streaming starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_IO_RESERVED_CPUS`. |
 | `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer 2-32 | Logical CPUs kept out of the loading worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 | `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. |
 | `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5-50 ms | Soft per-frame time budget for GPU uploads. |
@@ -559,8 +571,23 @@ artifacts remain readable; those extra files are ignored.
 |---|---|---|---|
 | `CAVEVIEWER_CHUNK_SIZE_METERS` | `8` | 0.01-512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
 | `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0-50 ms | Time yielded between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
-| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 | Requested maximum threads used while writing chunk files during import. The runtime reduces this when necessary to honor `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. Advanced Settings warns above 5 because high thread counts may reduce performance and cause out of memory errors on machines with less than 16 GB of RAM. |
+| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 | Requested maximum threads used while writing chunk files during import. Cache construction starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. |
 | `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
+
+### Linux XDG locations
+
+Unless overridden, Linux stores files in these locations:
+
+| Kind | Default |
+|---|---|
+| Advanced settings | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback) |
+| Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) |
+| Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) |
+
+Old `~/.caveviewer/` and `~/.caveviewer_*` files are copied once and left in
+place. A managed cache is self-contained: texture files are staged beside its
+chunks before the manifest becomes visible. Disk-space checks therefore target
+the cache filesystem rather than assuming the map's filesystem is writable.
 
 ### Sample Maps
 

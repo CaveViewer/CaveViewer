@@ -55,7 +55,8 @@ from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
 from caveviewer.gui.platform import get_splash_platform_adapter
-from caveviewer.gui.preferences import migrate_preference_file
+from caveviewer.gui.platform import DesktopServices, get_desktop_services, tk_root_options
+from caveviewer.gui.preferences import migrate_state_file, write_text_atomic
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.update_manager import (
     UpdateManager,
@@ -81,7 +82,11 @@ elif sys.platform == "win32":
     _APP_ICON_PATH = _resolve_asset_path("app_icon_windows.png")
 else:
     _APP_ICON_PATH = _resolve_asset_path("app_icon_macos.png")
-_LAST_BROWSE_PATH_FILE = migrate_preference_file("last_browse_path", ".caveviewer_last_browse_path")
+
+
+def _last_browse_path_file() -> str:
+    """Resolve state lazily so environment overrides apply to this process."""
+    return migrate_state_file("last_browse_path", ".caveviewer_last_browse_path")
 
 # URL for example maps link -- empty/None means link is disabled
 _EXAMPLE_MAPS_URL = None
@@ -277,6 +282,7 @@ def show_splash_screen(
     version: str = APP_VERSION,
     *,
     update_manager: UpdateManager,
+    desktop_services: DesktopServices | None = None,
 ) -> str | None:
     """
     Shows the launch splash screen and blocks until the person either
@@ -286,13 +292,13 @@ def show_splash_screen(
     particular splash instance.
     """
     import tkinter as tk
-    from tkinter import filedialog
 
     selected_folder: list[str | None] = [None]
+    desktop_services = desktop_services or get_desktop_services()
     _apply_advanced_settings_to_env(_load_advanced_settings())
 
     configure_process_dpi_awareness()
-    root = tk.Tk(className=APP_NAME)
+    root = tk.Tk(**tk_root_options())
     apply_tk_scaling(root)
     _configure_runtime_tk_fonts(root)
     splash_scale = tk_display_scale(root)
@@ -477,7 +483,7 @@ def show_splash_screen(
     # -- browse button + instructions ---------------------------------------------
     def _show_invalid_map_dialog(message: str) -> None:
         dialog = tk.Toplevel(root)
-        dialog.title("Map Not Found")
+        dialog.title(APP_NAME)
         dialog.configure(bg=_BG_COLOR)
         dialog.resizable(False, False)
         dialog.transient(root)
@@ -574,22 +580,20 @@ def show_splash_screen(
         dialog.wait_window()
 
     def on_browse():
-        dialog_kwargs = {
-            "title": "Select a cave map folder",
-        }
         last_dir = _load_last_browse_dir()
-        if last_dir:
-            dialog_kwargs["initialdir"] = last_dir
-
-        folder = filedialog.askdirectory(**dialog_kwargs)
-        if folder:
-            is_valid, error_message = _validate_selected_map_folder(folder)
+        selection = desktop_services.choose_directory(
+            title="Select a cave map folder",
+            initial_dir=last_dir,
+            parent=root,
+        )
+        if selection:
+            is_valid, error_message = _validate_selected_map_folder(selection.path)
             if not is_valid:
                 _show_invalid_map_dialog(error_message)
                 return
 
-            selected_folder[0] = folder
-            _save_last_browse_dir(folder)
+            selected_folder[0] = selection.path
+            _save_last_browse_dir(selection.path)
             _leave_splash()
 
     def on_close(_event=None):
@@ -627,15 +631,21 @@ def show_splash_screen(
     instruction_label.pack(pady=(0, _INSTRUCTION_BOTTOM_GAP))
 
     def _on_advanced_settings_click():
-        _show_advanced_settings_dialog(root, ui_font_family=_UI_FONT_FAMILY)
+        _show_advanced_settings_dialog(
+            root,
+            ui_font_family=_UI_FONT_FAMILY,
+            desktop_services=desktop_services,
+        )
 
     # Example maps link - opens the sample maps dialog
     def _on_example_maps_click():
+        from caveviewer.gui.sample_maps import default_sample_maps_install_dir
         from caveviewer.gui.sample_maps_dialog import show_sample_maps_dialog
-        import os
-        install_dir = os.path.expanduser("~")
         result = show_sample_maps_dialog(
-            root, install_dir, ui_font_family=_UI_FONT_FAMILY
+            root,
+            default_sample_maps_install_dir(),
+            ui_font_family=_UI_FONT_FAMILY,
+            desktop_services=desktop_services,
         )
         if result:
             selected_folder[0] = result
@@ -730,7 +740,7 @@ def show_splash_screen(
 
 def _load_last_browse_dir() -> str | None:
     try:
-        with open(_LAST_BROWSE_PATH_FILE, "r", encoding="utf-8") as f:
+        with open(_last_browse_path_file(), "r", encoding="utf-8") as f:
             path = f.read().strip()
         if path and os.path.isdir(path):
             return path
@@ -743,7 +753,6 @@ def _save_last_browse_dir(path: str) -> None:
     try:
         if not path or not os.path.isdir(path):
             return
-        with open(_LAST_BROWSE_PATH_FILE, "w", encoding="utf-8") as f:
-            f.write(path)
+        write_text_atomic(_last_browse_path_file(), path)
     except Exception:
         pass

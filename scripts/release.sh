@@ -21,7 +21,7 @@ Usage:
   release.sh --target=<target> --help
 
 Required arguments:
-  --target             Target list: all, macos-arm64, macos-x86_64, windows, linux-arm64, linux-x86_64
+  --target             Target list: all, macos-arm64, macos-x86_64, windows, linux-x86_64
   --action             One of: build, package, release
   --version            Dotted numeric release version with an optional leading
                        v, for example 1.0.64; do not use 1.0.64-rc1
@@ -38,11 +38,11 @@ Options:
   --pre-release        Mark the GitHub release as a prerelease; only valid with --action=release
 
 Examples:
-  release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=build
-  release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
-  release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=release
-  release.sh --target=linux-arm64 --version=1.0.60 --notes "Alpha." --action=release --pre-release
-  release.sh --target=macos-arm64,linux-arm64 --version=1.0.60 --notes "Alpha." --action=package
+  release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=build
+  release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=package
+  release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=release
+  release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=release --pre-release
+  release.sh --target=macos-arm64,linux-x86_64 --version=1.0.60 --notes "Alpha." --action=package
   release.sh --target=all --version=1.0.60 --notes "Alpha." --action=release
 EOF
 }
@@ -64,15 +64,12 @@ EOF
     windows)
       echo "Usage: release.sh --target=windows --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--pre-release]"
       ;;
-    linux-arm64)
-      echo "Usage: release.sh --target=linux-arm64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--pre-release]"
-      ;;
     linux-x86_64)
       echo "Usage: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--pre-release]"
       ;;
     *)
       echo "Error: unknown target '$1'"
-      echo "Expected one of: all, macos-arm64, macos-x86_64, windows, linux-arm64, linux-x86_64"
+      echo "Expected one of: all, macos-arm64, macos-x86_64, windows, linux-x86_64"
       exit 1
       ;;
   esac
@@ -80,7 +77,7 @@ EOF
 
 is_known_target() {
   case "$1" in
-    all|macos-arm64|macos-x86_64|windows|linux-arm64|linux-x86_64)
+    all|macos-arm64|macos-x86_64|windows|linux-x86_64)
       return 0
       ;;
     *)
@@ -186,7 +183,6 @@ add_target_selection() {
       selected_macos=true
       selected_macos_arch_value="$(cv_detect_macos_arch)"
       selected_windows=true
-      selected_linux_arm64=true
       selected_linux_x86=true
       ;;
     macos-arm64)
@@ -198,9 +194,6 @@ add_target_selection() {
     windows)
       selected_windows=true
       ;;
-    linux-arm64)
-      selected_linux_arm64=true
-      ;;
     linux-x86_64)
       selected_linux_x86=true
       ;;
@@ -208,7 +201,7 @@ add_target_selection() {
       ;;
     *)
       echo "Error: unknown --target entry '$selected'"
-      echo "Expected one of: all, macos-arm64, macos-x86_64, windows, linux-arm64, linux-x86_64"
+      echo "Expected one of: all, macos-arm64, macos-x86_64, windows, linux-x86_64"
       exit 1
       ;;
   esac
@@ -221,7 +214,6 @@ parse_target_selection() {
   selected_macos=false
   selected_macos_arch_value=""
   selected_windows=false
-  selected_linux_arm64=false
   selected_linux_x86=false
 
   local compact_target_arg="${target_arg// /}"
@@ -242,7 +234,6 @@ parse_target_selection() {
     selected_macos=true
     selected_macos_arch_value="$(cv_detect_macos_arch)"
     selected_windows=true
-    selected_linux_arm64=true
     selected_linux_x86=true
   fi
 }
@@ -250,13 +241,11 @@ parse_target_selection() {
 canonical_single_target() {
   if $selected_all; then
     echo "all"
-  elif $selected_macos && ! $selected_windows && ! $selected_linux_arm64 && ! $selected_linux_x86; then
+  elif $selected_macos && ! $selected_windows && ! $selected_linux_x86; then
     echo "macos-$selected_macos_arch_value"
-  elif $selected_windows && ! $selected_macos && ! $selected_linux_arm64 && ! $selected_linux_x86; then
+  elif $selected_windows && ! $selected_macos && ! $selected_linux_x86; then
     echo "windows"
-  elif $selected_linux_arm64 && ! $selected_macos && ! $selected_windows && ! $selected_linux_x86; then
-    echo "linux-arm64"
-  elif $selected_linux_x86 && ! $selected_macos && ! $selected_windows && ! $selected_linux_arm64; then
+  elif $selected_linux_x86 && ! $selected_macos && ! $selected_windows; then
     echo "linux-x86_64"
   else
     echo "multi"
@@ -266,7 +255,6 @@ canonical_single_target() {
 selected_target_summary() {
   local targets=()
   $selected_macos && targets+=("macos-$selected_macos_arch_value")
-  $selected_linux_arm64 && targets+=("linux-arm64")
   $selected_linux_x86 && targets+=("linux-x86_64")
   $selected_windows && targets+=("windows")
 
@@ -281,7 +269,7 @@ selected_target_summary() {
 }
 
 has_linux_target() {
-  $selected_linux_arm64 || $selected_linux_x86
+  $selected_linux_x86
 }
 
 require_macos_host() {
@@ -301,11 +289,7 @@ selected_macos_arch() {
 }
 
 selected_linux_arch() {
-  if $selected_linux_arm64 && $selected_linux_x86; then
-    echo "both"
-  elif $selected_linux_arm64; then
-    echo "arm64"
-  elif $selected_linux_x86; then
+  if $selected_linux_x86; then
     echo "x86_64"
   else
     echo "none"
@@ -316,10 +300,6 @@ linux_artifact_exists_for_arch() {
   local arch="$1"
   local suffix="" arch_dir=""
   case "$arch" in
-    arm64)
-      suffix="aarch64"
-      arch_dir="arm64"
-      ;;
     x86_64|amd64)
       suffix="x86_64"
       arch_dir="x86_64"
@@ -332,10 +312,7 @@ linux_artifact_exists_for_arch() {
 linux_artifacts_ready() {
   local linux_arch="$1"
   case "$linux_arch" in
-    both)
-      linux_artifact_exists_for_arch arm64 && linux_artifact_exists_for_arch x86_64
-      ;;
-    arm64|x86_64)
+    x86_64)
       linux_artifact_exists_for_arch "$linux_arch"
       ;;
     *)
@@ -375,7 +352,6 @@ run_selected_builds() {
   fi
 
   $selected_windows && "$script_dir/windows/build.sh"
-  $selected_linux_arm64 && "$script_dir/linux/arm64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
   $selected_linux_x86 && "$script_dir/linux/x86_64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
 }
 
@@ -461,10 +437,6 @@ run_selected_packages() {
       "$repo_root/dist/macos/packages/CaveViewer-${normalized_version}-macos-${summary_macos_arch}.dmg"
   fi
 
-  if $selected_linux_arm64; then
-    print_artifact "Linux ARM64 AppImage" "$repo_root/dist/linux/arm64/packages/CaveViewer-${normalized_version}-aarch64.AppImage"
-  fi
-
   if $selected_linux_x86; then
     print_artifact "Linux x86_64 AppImage" "$repo_root/dist/linux/x86_64/packages/CaveViewer-${normalized_version}-x86_64.AppImage"
   fi
@@ -498,15 +470,6 @@ run_selected_releases() {
       "$script_dir/macos/publish.sh" --arch "$publish_macos_arch" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
     else
       echo "[macos-$(selected_macos_arch)] Skipped publish: requires macOS host."
-    fi
-  fi
-
-  if $selected_linux_arm64; then
-    if linux_artifact_exists_for_arch arm64; then
-      echo "[linux-arm64] Publishing release assets..."
-      "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" ${publish_args[@]+"${publish_args[@]}"}
-    else
-      echo "[linux-arm64] Publish skipped: artifact missing."
     fi
   fi
 
@@ -638,7 +601,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     *)
       echo "Error: positional arguments are not supported: '$arg'"
-      echo "Use explicit options, for example: release.sh --target=linux-arm64 --version=1.0.60 --notes \"Alpha.\" --action=build"
+      echo "Use explicit options, for example: release.sh --target=linux-x86_64 --version=1.0.60 --notes \"Alpha.\" --action=build"
       exit 1
       ;;
   esac
@@ -769,15 +732,6 @@ case "$dispatch_target:$action" in
     ;;
   windows:release)
     exec "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
-    ;;
-  linux-arm64:build)
-    exec "$script_dir/linux/arm64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
-    ;;
-  linux-arm64:package)
-    exec "$script_dir/linux/arm64/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
-    ;;
-  linux-arm64:release)
-    exec "$script_dir/linux/arm64/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-x86_64:build)
     exec "$script_dir/linux/x86_64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}

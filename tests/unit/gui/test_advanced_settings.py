@@ -338,11 +338,18 @@ def test_settings_save_and_load_round_trip(valid_advanced_settings, tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["io_workers"] == "7"
 
 
-def test_default_settings_path_stays_inside_isolated_home(valid_advanced_settings):
+def test_default_settings_path_uses_xdg_config_not_state(
+    valid_advanced_settings, tmp_path, monkeypatch
+):
+    config_home = tmp_path / "config"
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
     snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
     settings.save_advanced_settings(snapshot)
     path = Path(settings.advanced_settings_file())
-    assert path.parent == Path(os.path.expanduser("~")) / ".caveviewer"
+    assert path == config_home / "caveviewer" / "advanced_settings.json"
+    assert not (state_home / "caveviewer" / "advanced_settings.json").exists()
     assert path.is_file()
     assert settings.load_advanced_settings()["io_workers"] == valid_advanced_settings[
         "io_workers"

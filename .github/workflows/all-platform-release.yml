@@ -53,20 +53,6 @@ jobs:
       skip_essential_tests: true
       source_sha: ${{ github.sha }}
 
-  linux-arm64:
-    name: Linux ARM64
-    needs: essential-tests
-    uses: ./.github/workflows/linux-arm64-release.yml
-    permissions:
-      contents: write
-    with:
-      version: ${{ inputs.version }}
-      release_notes: ${{ inputs.release_notes }}
-      pre_release: ${{ inputs.pre_release }}
-      publish: false
-      skip_essential_tests: true
-      source_sha: ${{ github.sha }}
-
   linux-x86_64:
     name: Linux x86_64
     needs: essential-tests
@@ -113,14 +99,12 @@ jobs:
     name: Finalize Release
     needs:
       - windows
-      - linux-arm64
       - linux-x86_64
       - macos-arm64
       - macos-x86_64
     if: >-
       ${{ inputs.publish && !cancelled()
           && needs.windows.result == 'success'
-          && needs['linux-arm64'].result == 'success'
           && needs['linux-x86_64'].result == 'success'
           && needs['macos-arm64'].result == 'success'
           && needs['macos-x86_64'].result == 'success' }}

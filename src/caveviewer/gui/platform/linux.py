@@ -4,33 +4,45 @@ import os
 import platform
 import subprocess
 
+from .desktop_services import DesktopServices, get_desktop_services
 from .default import DefaultSplashPlatformAdapter
 
 
 class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     """Linux update metadata and manual package-reveal integration."""
 
+    def __init__(self, *, desktop_services: DesktopServices | None = None) -> None:
+        self._desktop_services = desktop_services or get_desktop_services()
+
     def ui_font_family(self) -> str:
         return "sans-serif"
 
     def default_update_manifest_url(self, repo: str, branch: str) -> str:
-        return f"https://raw.githubusercontent.com/{repo}/{branch}/updates/linux/{self._update_arch_slug()}/stable.json"
+        update_arch = self._update_arch_slug()
+        if update_arch is None:
+            return ""
+        return f"https://raw.githubusercontent.com/{repo}/{branch}/updates/linux/{update_arch}/stable.json"
 
-    def _update_arch_slug(self) -> str:
+    def _update_arch_slug(self) -> str | None:
         machine = platform.machine().strip().lower()
-        if machine in {"aarch64", "arm64"}:
-            return "arm64"
         if machine in {"x86_64", "amd64"}:
             return "x86_64"
-        return "x86_64"
+        return None
 
     def install_channel(self) -> str:
         return "linux_app"
 
     def supports_install_channel(self, channel: str) -> bool:
-        return channel == "linux_app"
+        return channel == "linux_app" and self._update_arch_slug() == "x86_64"
 
     def unsupported_install_channel_message(self, channel: str) -> str:
+        if channel == "linux_app" and self._update_arch_slug() is None:
+            machine = platform.machine().strip() or "unknown"
+            return (
+                "Linux automatic updates are available only for x86_64 builds. "
+                f"This machine reports architecture '{machine}', so automatic "
+                "updates are disabled."
+            )
         return (
             f"Unsupported install channel '{channel}' on Linux. "
             "Expected channel: linux_app."
@@ -88,11 +100,7 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         return "Open Download Folder"
 
     def reveal_downloaded_payload(self, payload_path: str) -> None:
-        self._open_payload_location(payload_path)
-
-    def _open_payload_location(self, payload_path: str) -> None:
-        containing_dir = os.path.dirname(os.path.abspath(payload_path)) or os.path.expanduser("~")
-        subprocess.Popen(["xdg-open", containing_dir])
+        self._desktop_services.reveal_path(payload_path)
 
     def font_candidates(self) -> list[str]:
         """Return Linux-specific font file paths in priority order."""

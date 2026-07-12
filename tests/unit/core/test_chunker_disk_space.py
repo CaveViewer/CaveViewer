@@ -47,11 +47,18 @@ def _set_available_space(monkeypatch, free_bytes: int) -> None:
     )
 
 
+def _use_managed_cache_root(tmp_path, monkeypatch) -> Path:
+    root = tmp_path / "managed"
+    monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(root))
+    return root
+
+
 def test_import_is_rejected_when_free_space_is_below_twice_map_size(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "map.obj"
     source.write_bytes(b"x" * 100)
+    managed_root = _use_managed_cache_root(tmp_path, monkeypatch)
     _set_available_space(monkeypatch, 199)
 
     with pytest.raises(chunker.InsufficientDiskSpaceError) as raised:
@@ -60,8 +67,7 @@ def test_import_is_rejected_when_free_space_is_below_twice_map_size(
     assert raised.value.errno == errno.ENOSPC
     assert raised.value.required_bytes == 200
     assert raised.value.available_bytes == 199
-    assert not (tmp_path / chunker.CACHE_DIRNAME).exists()
-    assert not list(tmp_path.glob(f".{chunker.CACHE_DIRNAME}.tmp-*"))
+    assert not managed_root.exists()
 
 
 def test_exactly_twice_map_size_passes_disk_space_check(tmp_path, monkeypatch):
@@ -72,11 +78,57 @@ def test_exactly_twice_map_size_passes_disk_space_check(tmp_path, monkeypatch):
     chunker.ensure_sufficient_disk_space(str(source))
 
 
+def test_space_check_uses_managed_cache_filesystem(tmp_path, monkeypatch):
+    source_dir = tmp_path / "source"
+    managed_parent = tmp_path / "managed"
+    source_dir.mkdir()
+    managed_parent.mkdir()
+    source = source_dir / "map.obj"
+    source.write_bytes(b"x" * 100)
+    observed = []
+    monkeypatch.setattr(
+        chunker.shutil,
+        "disk_usage",
+        lambda path: observed.append(path)
+        or SimpleNamespace(total=1_000, used=0, free=1_000),
+    )
+
+    chunker.ensure_sufficient_disk_space(
+        str(source), str(managed_parent / "map-key")
+    )
+
+    assert observed == [str(managed_parent)]
+
+
+def test_capacity_check_includes_staged_texture_bytes(tmp_path, monkeypatch):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"x" * 100)
+    texture = tmp_path / "rock.jpg"
+    texture.write_bytes(b"t" * 50)
+    _use_managed_cache_root(tmp_path, monkeypatch)
+    _set_available_space(monkeypatch, 249)
+
+    with pytest.raises(chunker.InsufficientDiskSpaceError) as raised:
+        chunker.build_cache(
+            str(source),
+            _mesh_with_cells(),
+            {},
+            assets=[
+                chunker.CacheAsset(
+                    relative_path="rock.jpg", source_path=str(texture)
+                )
+            ],
+        )
+
+    assert raised.value.required_bytes == 250
+
+
 def test_obj_import_checks_space_before_parsing(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     material_file = tmp_path / "map.mtl"
     source.write_bytes(b"x" * 100)
     material_file.write_text("newmtl rock", encoding="utf-8")
+    _use_managed_cache_root(tmp_path, monkeypatch)
     _set_available_space(monkeypatch, 199)
     monkeypatch.setattr(
         obj_parser,
@@ -91,6 +143,7 @@ def test_obj_import_checks_space_before_parsing(tmp_path, monkeypatch):
 def test_glb_import_checks_space_before_parsing(tmp_path, monkeypatch):
     source = tmp_path / "map.glb"
     source.write_bytes(b"x" * 100)
+    _use_managed_cache_root(tmp_path, monkeypatch)
     _set_available_space(monkeypatch, 199)
 
     with pytest.raises(chunker.InsufficientDiskSpaceError):
@@ -104,7 +157,9 @@ def test_disk_full_mid_build_removes_every_partial_cache_file(
 ):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small map")
+    managed_root = _use_managed_cache_root(tmp_path, monkeypatch)
     _set_available_space(monkeypatch, 10_000)
+    cache_path = Path(chunker.get_cache_dir(str(source)))
     original_write = chunker._write_chunk_file
     writes = 0
 
@@ -124,8 +179,8 @@ def test_disk_full_mid_build_removes_every_partial_cache_file(
 
     assert raised.value.errno == errno.ENOSPC
     assert writes == 2
-    assert not (tmp_path / chunker.CACHE_DIRNAME).exists()
-    assert not list(tmp_path.glob(f".{chunker.CACHE_DIRNAME}.tmp-*"))
+    assert not cache_path.exists()
+    assert not list(managed_root.glob("*.tmp-*"))
 
 
 def test_successful_build_publishes_complete_cache_without_staging_files(
@@ -133,11 +188,12 @@ def test_successful_build_publishes_complete_cache_without_staging_files(
 ):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small map")
+    managed_root = _use_managed_cache_root(tmp_path, monkeypatch)
     _set_available_space(monkeypatch, 10_000)
+    cache_path = Path(chunker.get_cache_dir(str(source)))
 
     cache_dir = chunker.build_cache(str(source), _mesh_with_cells(), {})
 
-    cache_path = tmp_path / chunker.CACHE_DIRNAME
     assert cache_dir == str(cache_path)
     assert (cache_path / chunker.MANIFEST_NAME).is_file()
     assert len(list((cache_path / chunker.CHUNKS_DIRNAME).glob("*.bin"))) == 2
@@ -145,15 +201,92 @@ def test_successful_build_publishes_complete_cache_without_staging_files(
         chunker.CHUNKS_DIRNAME,
         chunker.MANIFEST_NAME,
     }
-    assert not list(tmp_path.glob(f".{chunker.CACHE_DIRNAME}.tmp-*"))
+    assert not list(managed_root.glob("*.tmp-*"))
+
+
+def test_cache_assets_are_published_in_the_same_atomic_tree(tmp_path, monkeypatch):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small map")
+    texture = tmp_path / "textures" / "rock.jpg"
+    texture.parent.mkdir()
+    texture.write_bytes(b"rock texture")
+    managed_cache = tmp_path / "managed" / "map-key"
+    _set_available_space(monkeypatch, 10_000)
+
+    result = chunker.build_cache(
+        str(source),
+        _mesh_with_cells(),
+        {"rock": obj_parser.Material("rock", "tiles/rock.jpg")},
+        cache_dir=str(managed_cache),
+        assets=[
+            chunker.CacheAsset(
+                relative_path="tiles/rock.jpg", source_path=str(texture)
+            ),
+            chunker.CacheAsset(relative_path="embedded.png", data=b"png"),
+        ],
+    )
+
+    assert result == str(managed_cache)
+    assert (managed_cache / "tiles" / "rock.jpg").read_bytes() == b"rock texture"
+    assert (managed_cache / "embedded.png").read_bytes() == b"png"
+    assert (managed_cache / chunker.MANIFEST_NAME).is_file()
+    assert not list(managed_cache.parent.glob(".map-key.tmp-*"))
+
+
+def test_asset_failure_preserves_previous_cache_and_cleans_staging(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small map")
+    managed_cache = tmp_path / "managed" / "map-key"
+    managed_cache.mkdir(parents=True)
+    marker = managed_cache / "existing-cache"
+    marker.write_text("keep", encoding="utf-8")
+    _set_available_space(monkeypatch, 10_000)
+
+    with pytest.raises(FileNotFoundError):
+        chunker.build_cache(
+            str(source),
+            _mesh_with_cells(),
+            {},
+            cache_dir=str(managed_cache),
+            assets=[
+                chunker.CacheAsset(
+                    relative_path="missing.jpg",
+                    source_path=str(tmp_path / "missing.jpg"),
+                )
+            ],
+        )
+
+    assert marker.read_text(encoding="utf-8") == "keep"
+    assert not list(managed_cache.parent.glob(".map-key.tmp-*"))
+
+
+def test_cache_asset_rejects_parent_traversal(tmp_path, monkeypatch):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small map")
+    managed_cache = tmp_path / "managed" / "map-key"
+    _set_available_space(monkeypatch, 10_000)
+
+    with pytest.raises(ValueError, match="Unsafe cache asset path"):
+        chunker.build_cache(
+            str(source),
+            _mesh_with_cells(),
+            {},
+            cache_dir=str(managed_cache),
+            assets=[chunker.CacheAsset(relative_path="../escape", data=b"bad")],
+        )
+
+    assert not (tmp_path / "escape").exists()
+    assert not list(managed_cache.parent.glob(".map-key.tmp-*"))
 
 
 def test_disk_full_during_rebuild_preserves_previous_cache(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small map")
     _set_available_space(monkeypatch, 10_000)
-    cache_path = tmp_path / chunker.CACHE_DIRNAME
-    cache_path.mkdir()
+    cache_path = tmp_path / "managed" / "map-key"
+    cache_path.mkdir(parents=True)
     marker = cache_path / "existing-cache"
     marker.write_text("keep me", encoding="utf-8")
 
@@ -163,8 +296,13 @@ def test_disk_full_during_rebuild_preserves_previous_cache(tmp_path, monkeypatch
     monkeypatch.setattr(chunker, "_write_chunk_file", fail_first_write)
 
     with pytest.raises(OSError) as raised:
-        chunker.build_cache(str(source), _mesh_with_cells(), {})
+        chunker.build_cache(
+            str(source),
+            _mesh_with_cells(),
+            {},
+            cache_dir=str(cache_path),
+        )
 
     assert raised.value.errno == errno.ENOSPC
     assert marker.read_text(encoding="utf-8") == "keep me"
-    assert not list(tmp_path.glob(f".{chunker.CACHE_DIRNAME}.tmp-*"))
+    assert not list(cache_path.parent.glob(".map-key.tmp-*"))

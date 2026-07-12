@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
-# BUILD_PLATFORM controls the target architecture (linux/arm64 or linux/amd64).
+# BUILD_PLATFORM controls the target architecture (linux/amd64).
 # Passed as --build-arg BUILD_PLATFORM=... by build_linux_in_docker.sh.
-ARG BUILD_PLATFORM=linux/arm64
+ARG BUILD_PLATFORM=linux/amd64
 FROM --platform=${BUILD_PLATFORM} ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -39,7 +39,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN arch="$(uname -m)" && \
     case "$arch" in \
       x86_64) appimage_arch="x86_64" ;; \
-      aarch64|arm64) appimage_arch="aarch64" ;; \
       *) echo "Unsupported appimagetool architecture: $arch"; exit 1 ;; \
     esac && \
     curl -fsSL -o /usr/local/bin/appimagetool \

@@ -91,20 +91,18 @@ source "$repo_root/scripts/common/artifacts.sh"
 
 linux_update_arch="${CAVEVIEWER_LINUX_UPDATE_ARCH:-}"
 case "$linux_update_arch" in
-  arm64) manifest_arch_dir="arm64" ;;
   amd64|x86|x86_64) manifest_arch_dir="x86_64" ;;
   "")
     case "$(uname -m)" in
-      aarch64|arm64) manifest_arch_dir="arm64" ;;
       x86_64|amd64) manifest_arch_dir="x86_64" ;;
       *)
-        echo "Error: could not determine Linux update manifest architecture. Set CAVEVIEWER_LINUX_UPDATE_ARCH=arm64 or x86_64."
+        echo "Error: could not determine Linux update manifest architecture. Set CAVEVIEWER_LINUX_UPDATE_ARCH=x86_64."
         exit 1
         ;;
     esac
     ;;
   *)
-    echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected arm64 or x86_64)"
+    echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected x86_64)"
     exit 1
     ;;
 esac

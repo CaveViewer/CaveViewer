@@ -30,6 +30,43 @@ class FakePlatformAdapter:
         self.revealed_paths.append(payload_path)
 
 
+class FakeDesktopInhibitor:
+    def __init__(self, calls):
+        self._calls = calls
+
+    def close(self):
+        self._calls.append(("close_inhibitor",))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        self.close()
+
+
+class FakeDesktopServices:
+    def __init__(self, *, fail_notify=False, fail_inhibit=False):
+        self.calls = []
+        self.fail_notify = fail_notify
+        self.fail_inhibit = fail_inhibit
+
+    def notify(self, notification_id, title, body="", *, priority="normal"):
+        self.calls.append(("notify", notification_id, title, body, priority))
+        if self.fail_notify:
+            raise RuntimeError("notification service unavailable")
+
+    def withdraw_notification(self, notification_id):
+        self.calls.append(("withdraw", notification_id))
+        if self.fail_notify:
+            raise RuntimeError("notification service unavailable")
+
+    def inhibit_idle_suspend(self, reason, *, parent=None):
+        self.calls.append(("inhibit", reason, parent))
+        if self.fail_inhibit:
+            raise RuntimeError("inhibit service unavailable")
+        return FakeDesktopInhibitor(self.calls)
+
+
 def _available_result():
     return UpdateCheckResult(
         update_available=True,
@@ -42,13 +79,14 @@ def _available_result():
     )
 
 
-def _checked_manager(tmp_path, download_update):
+def _checked_manager(tmp_path, download_update, *, desktop_services=None):
     adapter = FakePlatformAdapter(tmp_path / "Downloads")
     manager = UpdateManager(
         "1.0.63",
         platform_adapter=adapter,
         check_for_update=lambda *_args, **_kwargs: _available_result(),
         download_update=download_update,
+        desktop_services=desktop_services or FakeDesktopServices(),
         temp_root=str(tmp_path),
     )
     assert manager.check_for_updates()
@@ -70,6 +108,7 @@ def test_check_transitions_through_checking_to_available(tmp_path):
         "1.0.63",
         platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
         check_for_update=check_for_update,
+        desktop_services=FakeDesktopServices(),
         temp_root=str(tmp_path),
     )
     try:
@@ -101,6 +140,7 @@ def test_up_to_date_result_is_checked_only_once_per_process(tmp_path):
         "1.0.63",
         platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
         check_for_update=check_for_update,
+        desktop_services=FakeDesktopServices(),
         temp_root=str(tmp_path),
     )
     try:
@@ -165,6 +205,74 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
         manager.shutdown()
 
 
+def test_download_uses_desktop_notification_and_inhibit(tmp_path):
+    desktop_services = FakeDesktopServices()
+
+    def download_update(
+        _url,
+        _expected_size,
+        destination,
+        *,
+        phase_cb,
+        **_kwargs,
+    ):
+        Path(destination).write_bytes(b"payload")
+        phase_cb("verifying")
+
+    manager, _adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        desktop_services=desktop_services,
+    )
+    try:
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+        assert manager.snapshot().state == UpdateState.READY
+    finally:
+        manager.shutdown()
+
+    assert desktop_services.calls == [
+        (
+            "notify",
+            "caveviewer.update-download",
+            "CaveViewer update download started",
+            "Downloading version 1.0.64.",
+            "normal",
+        ),
+        ("inhibit", "CaveViewer is downloading an update", None),
+        (
+            "notify",
+            "caveviewer.update-download",
+            "CaveViewer update is ready",
+            "The update package finished downloading.",
+            "normal",
+        ),
+        ("close_inhibitor",),
+    ]
+
+
+def test_desktop_notification_and_inhibit_failures_do_not_break_download(tmp_path):
+    desktop_services = FakeDesktopServices(fail_notify=True, fail_inhibit=True)
+
+    def download_update(_url, _expected_size, destination, **_kwargs):
+        Path(destination).write_bytes(b"payload")
+
+    manager, _adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        desktop_services=desktop_services,
+    )
+    try:
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+        snapshot = manager.snapshot()
+        assert snapshot.state == UpdateState.READY
+        assert snapshot.payload_path is not None
+        assert Path(snapshot.payload_path).read_bytes() == b"payload"
+    finally:
+        manager.shutdown()
+
+
 def test_failed_download_can_retry_without_retaining_partial_files(tmp_path):
     attempts = 0
 
@@ -220,7 +328,10 @@ def test_shutdown_waits_for_download_cancellation_and_partial_cleanup(tmp_path):
             raise DownloadCancelled("cancelled")
         raise AssertionError("shutdown should request cancellation")
 
-    manager, _adapter = _checked_manager(tmp_path, download_update)
+    desktop_services = FakeDesktopServices()
+    manager, _adapter = _checked_manager(
+        tmp_path, download_update, desktop_services=desktop_services
+    )
     assert manager.start_download()
     assert download_started.wait(1)
     cancel_event = manager._cancel_event
@@ -241,12 +352,15 @@ def test_shutdown_waits_for_download_cancellation_and_partial_cleanup(tmp_path):
     shutdown_thread.join()
 
     assert not list(tmp_path.glob("caveviewer_update_*"))
+    assert ("withdraw", "caveviewer.update-download") in desktop_services.calls
+    assert ("close_inhibitor",) in desktop_services.calls
 
 
 def test_non_actionable_states_reject_download_and_reveal(tmp_path):
     manager = UpdateManager(
         "1.0.63",
         platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
+        desktop_services=FakeDesktopServices(),
         temp_root=str(tmp_path),
     )
     try:

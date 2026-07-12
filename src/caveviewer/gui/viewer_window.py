@@ -14,6 +14,7 @@ simple lookup-and-release.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import math
 import os
@@ -29,7 +30,7 @@ import moderngl
 import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
-from caveviewer.core import chunker
+from caveviewer.core import chunker, hardware_memory
 from caveviewer.core.logging_utils import get_logger
 from caveviewer.core.streaming_world import StreamingWorld, StreamingConfig
 from caveviewer.core.texture_manager import TextureManager
@@ -42,33 +43,37 @@ from caveviewer.gui.color_picker import ColorPicker
 from caveviewer.gui.import_progress_panel import ImportProgressPanel
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform import tk_root_options
+from caveviewer.gui.platform.windowing import run_window_config
 from caveviewer.resources import image_path, resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
 
 _LOG = get_logger("CaveViewer")
 
 _DEFAULT_WINDOW_SIZE = (1600, 1000)
-_WINDOW_ASPECT_RATIO = _DEFAULT_WINDOW_SIZE[0] / _DEFAULT_WINDOW_SIZE[1]
+_DESKTOP_WINDOW_SCALE = 0.80
+_VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
+_VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
+_VIEWER_UI_SCALE_MAX = 1.45
 
 
 def _desktop_relative_window_size() -> tuple[int, int]:
-    """Return a large 16:10 window that fits comfortably on the desktop."""
+    """Return an 80%-of-screen fallback for non-GLFW desktop backends."""
     root = None
     try:
         import tkinter as tk
 
-        root = tk.Tk(className=APP_NAME)
+        root = tk.Tk(**tk_root_options())
         root.withdraw()
         desktop_width = int(root.winfo_screenwidth())
         desktop_height = int(root.winfo_screenheight())
         if desktop_width <= 0 or desktop_height <= 0:
             return _DEFAULT_WINDOW_SIZE
 
-        available_width = desktop_width * 0.90
-        available_height = desktop_height * 0.88
-        width = min(available_width, available_height * _WINDOW_ASPECT_RATIO)
-        height = width / _WINDOW_ASPECT_RATIO
-        window_size = max(1, int(round(width))), max(1, int(round(height)))
+        window_size = (
+            max(1, int(round(desktop_width * _DESKTOP_WINDOW_SCALE))),
+            max(1, int(round(desktop_height * _DESKTOP_WINDOW_SCALE))),
+        )
         _LOG.info(
             "Desktop size %dx%d; opening viewer at %dx%d.",
             desktop_width, desktop_height, *window_size,
@@ -83,6 +88,87 @@ def _desktop_relative_window_size() -> tuple[int, int]:
                 root.destroy()
             except Exception:
                 pass
+
+
+def _window_pixel_ratio(window) -> float:
+    """Return framebuffer pixels per logical window pixel for crisp UI text."""
+    try:
+        width, height = window.size
+        buffer_width, buffer_height = window.buffer_size
+        width = max(1, int(width))
+        height = max(1, int(height))
+        return max(1.0, min(4.0, max(buffer_width / width, buffer_height / height)))
+    except Exception:
+        return 1.0
+
+
+def _viewer_ui_scale_for_window_size(
+    window_size: tuple[int, int] | None,
+    environ: Mapping[str, str] | None = None,
+) -> float:
+    """Return an automatic HUD scale for the current viewer surface.
+
+    The control overlay is rendered inside OpenGL, so it does not inherit GNOME
+    titlebar or XWayland desktop scaling.  Keep the old compact size at the
+    1536x864 default viewer window, then grow the HUD on larger viewer surfaces.
+    The environment override is for development/testing; the normal user path
+    is automatic.
+    """
+    environment = os.environ if environ is None else environ
+    raw_override = str(environment.get(_VIEWER_UI_SCALE_ENV, "")).strip()
+    if raw_override:
+        try:
+            return max(0.75, min(2.0, float(raw_override)))
+        except ValueError:
+            pass
+
+    try:
+        width, height = window_size or _DEFAULT_WINDOW_SIZE
+        width = max(1, int(width))
+        height = max(1, int(height))
+    except Exception:
+        width, height = _DEFAULT_WINDOW_SIZE
+
+    base_width, base_height = _VIEWER_UI_BASE_WINDOW_SIZE
+    size_scale = min(width / base_width, height / base_height)
+    return max(1.0, min(_VIEWER_UI_SCALE_MAX, size_scale))
+
+
+def _map_import_inhibit_reason(map_name: str) -> str:
+    """Return the desktop-visible reason used while importing a map."""
+    display_name = str(map_name or "").strip() or "map"
+    return f"Importing {display_name}"
+
+
+def _acquire_map_import_inhibitor(map_name: str):
+    """Best-effort desktop idle/suspend inhibitor for long map imports."""
+    try:
+        from caveviewer.gui.platform import get_desktop_services
+
+        return get_desktop_services().inhibit_idle_suspend(
+            _map_import_inhibit_reason(map_name)
+        )
+    except Exception as exc:
+        # Desktop integration must not block opening maps. Linux portals
+        # provide the real inhibitor; unsupported sessions continue normally.
+        _LOG.warning(
+            "Desktop idle/suspend inhibit unavailable during map import: %s",
+            exc,
+        )
+        return None
+
+
+def _release_desktop_inhibitor(inhibitor) -> None:
+    """Release a desktop inhibitor without affecting import completion."""
+    if inhibitor is None:
+        return
+    try:
+        inhibitor.close()
+    except Exception as exc:
+        _LOG.warning(
+            "Desktop idle/suspend inhibit release failed after map import: %s",
+            exc,
+        )
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -158,10 +244,8 @@ void main() {
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = APP_NAME
-    # Start larger on desktop platforms so the HELP overlay and right-side
-    # controls have comfortable vertical room on first launch.
-    # Use a 16:10 baseline (more vertical space than 16:9) while keeping
-    # aspect_ratio unlocked so manual resizing remains fully flexible.
+    # The launch helpers replace this fallback with an 80%-of-desktop size.
+    # Keep aspect_ratio unlocked so manual resizing remains fully flexible.
     window_size = _DEFAULT_WINDOW_SIZE
     resizable = True
     # Allow disabling vsync via env var -- useful on VMs where the virtual
@@ -201,13 +285,19 @@ class CaveViewerWindow(mglw.WindowConfig):
     # Shared backplate behind the always-visible right-side HUD controls.
     # This keeps section labels readable over bright cave surfaces without
     # adding a separate background to every individual widget.
-    RIGHT_COLUMN_PANEL_SIDE_PAD = 14
-    RIGHT_COLUMN_PANEL_TOP_PAD = 12
-    RIGHT_COLUMN_PANEL_BOTTOM_PAD = 14
-    RIGHT_COLUMN_PANEL_RIGHT_MARGIN = 20
-    RIGHT_COLUMN_PANEL_BOTTOM_MARGIN = 20
-    RIGHT_COLUMN_PANEL_LABEL_GAP = 10
+    RIGHT_COLUMN_PANEL_SIDE_PAD = 10
+    RIGHT_COLUMN_PANEL_TOP_PAD = 8
+    RIGHT_COLUMN_PANEL_BOTTOM_PAD = 10
+    RIGHT_COLUMN_PANEL_RIGHT_MARGIN = 16
+    RIGHT_COLUMN_PANEL_BOTTOM_MARGIN = 16
+    RIGHT_COLUMN_PANEL_LABEL_GAP = 8
     RIGHT_COLUMN_PANEL_LABEL_SIZE = 1.7
+    RIGHT_COLUMN_PANEL_SCALE = 0.76
+    RIGHT_COLUMN_PANEL_TEXT_SCALE = 0.84
+    RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE = 0.98
+    RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE = 0.70
+    RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE = 1.0
+    RIGHT_COLUMN_PANEL_MAX_UI_SCALE = _VIEWER_UI_SCALE_MAX
     RIGHT_COLUMN_PANEL_FILL_RGBA = (0.09, 0.12, 0.16, 0.84)
     RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
     RIGHT_COLUMN_PANEL_BORDER_PX = 1.5
@@ -237,6 +327,25 @@ class CaveViewerWindow(mglw.WindowConfig):
                 bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
         else:
             bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
+        bitmap_font.set_raster_scale(_window_pixel_ratio(getattr(self, "wnd", None)))
+        self._viewer_ui_scale = _viewer_ui_scale_for_window_size(
+            getattr(getattr(self, "wnd", None), "size", _DEFAULT_WINDOW_SIZE)
+        )
+        self._right_column_panel_scale = (
+            self.RIGHT_COLUMN_PANEL_SCALE * self._viewer_ui_scale
+        )
+        self._right_column_panel_text_scale = (
+            self.RIGHT_COLUMN_PANEL_TEXT_SCALE
+            * min(self._viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        self._right_column_panel_label_text_scale = (
+            self.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE
+            * min(self._viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        self._right_column_panel_button_text_scale = (
+            self.RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE
+            * min(self._viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
 
         have_ready_cache = CaveViewerWindow.cave_cache_dir is not None
         have_pending_import = CaveViewerWindow.cave_pending_import is not None
@@ -333,7 +442,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         # not), so this sidesteps the whole class of problem by using
         # discrete +/-1 clicks instead of continuous drag-tracking.
         # Range/default unchanged from the old slider (0-10, default 3).
-        self.light_stepper = StepperControl(self.ctx, "BRIGHTNESS", initial_value=5, min_value=0, max_value=10)
+        self.light_stepper = StepperControl(
+            self.ctx,
+            "BRIGHTNESS",
+            initial_value=5,
+            min_value=0,
+            max_value=10,
+            text_scale=self._right_column_text_scale(),
+            geometry_scale=self._right_column_geometry_scale(),
+            label_text_scale=self._right_column_label_text_scale(),
+        )
 
         # Render distance control: a -/value/+ stepper, left side of the
         # screen, mirroring the brightness control's placement logic but
@@ -345,7 +463,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         # (see caveviewer.core.streaming_world) still applies underneath this as
         # a hard backstop regardless of what this is set to.
         self.render_distance_stepper = StepperControl(
-            self.ctx, "DISTANCE", initial_value=3, min_value=1, max_value=10
+            self.ctx,
+            "DISTANCE",
+            initial_value=3,
+            min_value=1,
+            max_value=10,
+            text_scale=self._right_column_text_scale(),
+            geometry_scale=self._right_column_geometry_scale(),
+            label_text_scale=self._right_column_label_text_scale(),
         )
 
         # "Global illumination" control: not actual simulated light
@@ -359,15 +484,30 @@ class CaveViewerWindow(mglw.WindowConfig):
         # original fixed ambient value this app always used (0.04, a
         # tiny fill so unlit areas aren't pure black), so leaving this at
         # its default changes nothing from before this feature existed.
-        self.ambient_stepper = StepperControl(self.ctx, "GLOBAL LIGHT", initial_value=5, min_value=0, max_value=10)
+        self.ambient_stepper = StepperControl(
+            self.ctx,
+            "GLOBAL LIGHT",
+            initial_value=5,
+            min_value=0,
+            max_value=10,
+            text_scale=self._right_column_text_scale(),
+            geometry_scale=self._right_column_geometry_scale(),
+            label_text_scale=self._right_column_label_text_scale(),
+        )
 
         # Mesh/Texture toggle buttons, stacked just below the brightness
         # slider. Mesh = wireframe overlay on/off; Texture = whether the
         # photo texture is sampled or the surface falls back to plain lit
         # gray. See caveviewer.gui.render_mode_buttons for the four resulting
         # combined display states.
-        self.render_mode_buttons = RenderModeButtons(self.ctx, texture_enabled=True, wireframe_enabled=False,
-                                                      smooth_shading_enabled=True)
+        self.render_mode_buttons = RenderModeButtons(
+            self.ctx,
+            texture_enabled=True,
+            wireframe_enabled=False,
+            smooth_shading_enabled=True,
+            text_scale=self._right_column_button_text_scale(),
+            geometry_scale=self._right_column_geometry_scale(),
+        )
         # Loading-policy lock for right-side button effects. While a map
         # is loading, all render-mode toggles are forced off; once
         # loading completes, defaults become Texture ON, Mesh OFF,
@@ -506,7 +646,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.textures_dir = textures_dir
         self.manifest = manifest
 
-        self.texture_manager = TextureManager(self.ctx, self.textures_dir, self.manifest["mtl_materials"])
+        gpu_vendor = str(self.ctx.info.get("GL_VENDOR", ""))
+        gpu_memory_bytes = hardware_memory.detect_total_gpu_memory_bytes(
+            gpu_vendor, logger=_LOG
+        )
+        gpu_target_fraction = hardware_memory.parse_gpu_target_fraction(
+            os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
+        )
+        max_texture_dimension = TextureManager.recommend_max_texture_dimension(
+            self.manifest["mtl_materials"],
+            gpu_memory_bytes,
+            gpu_target_fraction,
+        )
+        self.texture_manager = TextureManager(
+            self.ctx,
+            self.textures_dir,
+            self.manifest["mtl_materials"],
+            max_texture_dimension=max_texture_dimension,
+        )
         self.texture_manager.validate_textures()
 
         def predecode_textures_for_chunk(chunk_data):
@@ -522,7 +679,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         if chunk_size is None:
             raise ValueError(
                 "Map cache manifest is missing a valid chunk_size. "
-                "Rebuild the _cache folder with this version of CaveViewer."
+                "Rebuild this map's reported cache directory with this version "
+                "of CaveViewer."
             )
         configured_chunk_size = chunker.configured_chunk_size()
         _LOG.info(f"Opening map cache with manifest chunk size: {chunk_size:g}m.")
@@ -540,7 +698,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.cache_dir,
             config,
             on_decode_textures=predecode_textures_for_chunk,
-            gpu_vendor=str(self.ctx.info.get("GL_VENDOR", "")),
+            gpu_vendor=gpu_vendor,
+            textures_dir=self.textures_dir,
+            total_gpu_memory_bytes=gpu_memory_bytes,
         )
 
         # pick a sane starting position: center of the first available chunk,
@@ -562,29 +722,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         # console so atlas feasibility can be judged without guessing.
         self._print_texture_diagnostics(manifest, textures_dir)
 
-        # Build world-space AABB lookup for every cell in the manifest so
-        # the frustum culler can skip chunks outside the view each frame.
-        # Build with a single bulk numpy pass: creating 34 000+ individual
-        # np.array() calls in a dict comprehension causes severe GC
-        # pressure on memory-limited machines (observed 30 s+ freeze on
-        # Parallels with a 17 000-chunk map at 72 % RAM).
-        _chunks = manifest["chunks"]
-        _LOG.info(f"Building chunk AABB table for {len(_chunks)} chunks …")
-        _cells = list(_chunks.keys())
-        _mins_raw = [_chunks[c]["bounds_min"] for c in _cells]
-        _maxs_raw = [_chunks[c]["bounds_max"] for c in _cells]
-        _mins_arr = np.array(_mins_raw, dtype=np.float32)   # (N, 3)
-        _maxs_arr = np.array(_maxs_raw, dtype=np.float32)   # (N, 3)
-        self._chunk_aabbs = {
-            tuple(int(v) for v in cell_str.split("_")): (
-                _mins_arr[i], _maxs_arr[i]
-            )
-            for i, cell_str in enumerate(_cells)
-        }
-        self._navigation_guard_cells = set(self._chunk_aabbs.keys())
+        # Keep frustum-culling bounds only for currently loaded chunks.  Large
+        # maps can have tens or hundreds of thousands of manifest cells; copying
+        # every AABB into Python containers at map-open time defeats streaming's
+        # memory cap before the first frame is drawn.
+        self._chunk_aabbs = {}
+        self._navigation_guard_cells = self.world.available_cells
         self._navigation_guard_chunk_size = chunk_size
-        del _cells, _mins_raw, _maxs_raw, _mins_arr, _maxs_arr, _chunks
-        _LOG.info("Chunk AABB table ready.")
         if self._navigation_guard_enabled:
             _LOG.info(
                 "Navigation guard enabled: "
@@ -1213,7 +1357,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_gpu_objects.clear()
         self._chunk_normal_cache.clear()
         self._chunk_aabbs.clear()
-        self._navigation_guard_cells.clear()
+        self._navigation_guard_cells = set()
         self._navigation_guard_chunk_size = None
 
         if hasattr(self, "texture_manager") and self.texture_manager is not None:
@@ -1354,22 +1498,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             model_descriptor = find_model_file(folder)
         except FileNotFoundError as e:
             # Match caveviewer.app's startup behavior: allow selecting a
-            # folder that already contains a built _cache,
-            # or selecting the cache directory itself directly.
-            prebuilt_cache = os.path.join(folder, chunker_module.CACHE_DIRNAME)
-            legacy_prebuilt_cache = os.path.join(folder, chunker_module.LEGACY_CACHE_DIRNAME)
+            # cache directory itself directly, but do not auto-discover old
+            # adjacent _cache/.caveviewer_cache folders.
+            prebuilt_cache = folder
             textures_dir = folder
-            if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
-                if os.path.exists(os.path.join(legacy_prebuilt_cache, chunker_module.MANIFEST_NAME)):
-                    _LOG.info(f"Found legacy cache in: {legacy_prebuilt_cache}")
-                    prebuilt_cache = legacy_prebuilt_cache
-                elif os.path.exists(os.path.join(folder, chunker_module.MANIFEST_NAME)):
-                    _LOG.info(f"Found cache manifest in selected directory: {folder}")
-                    prebuilt_cache = folder
-                    textures_dir = folder
             if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
                 _LOG.warning(f"Could not open this folder: {e}")
                 return
+            _LOG.info(f"Found cache manifest in selected directory: {folder}")
 
             try:
                 new_manifest = chunker_module.load_manifest(prebuilt_cache)
@@ -1421,6 +1557,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         def worker():
             from caveviewer.app import import_and_cache_any
             from caveviewer.core import chunker as _ck
+            from caveviewer.core.cache_paths import map_texture_dir
 
             def on_progress(stage: str, fraction: float):
                 q.put(("progress", stage, fraction))
@@ -1429,15 +1566,25 @@ class CaveViewerWindow(mglw.WindowConfig):
                 if _ck.cache_is_valid(source_path):
                     on_progress("loading cached map", 1.0)
                     cache_dir = _ck.get_cache_dir(source_path)
+                    resolved_textures_dir = map_texture_dir(
+                        source_path, cache_dir, textures_dir
+                    )
                 else:
                     on_progress("starting import", 0.0)
-                    cache_dir = import_and_cache_any(
-                        model_descriptor, textures_dir,
-                        force_rebuild=False,
-                        extra_progress_cb=on_progress,
-                    )
+                    inhibitor = _acquire_map_import_inhibitor(map_name)
+                    try:
+                        cache_dir = import_and_cache_any(
+                            model_descriptor, textures_dir,
+                            force_rebuild=False,
+                            extra_progress_cb=on_progress,
+                        )
+                    finally:
+                        _release_desktop_inhibitor(inhibitor)
+                    # Every new cache publishes its referenced textures in the
+                    # same atomic staging transaction as its chunks.
+                    resolved_textures_dir = cache_dir
                 manifest = _ck.load_manifest(cache_dir)
-                q.put(("done", cache_dir, textures_dir, manifest))
+                q.put(("done", cache_dir, resolved_textures_dir, manifest))
             except Exception as exc:
                 q.put(("error", str(exc)))
 
@@ -1545,6 +1692,10 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         self._chunk_gpu_objects[chunk_data.cell] = vao_list
         self._chunk_normal_cache[chunk_data.cell] = normal_cache_entry
+        self._chunk_aabbs[chunk_data.cell] = (
+            chunk_data.bounds_min.astype(np.float32, copy=False),
+            chunk_data.bounds_max.astype(np.float32, copy=False),
+        )
 
     def _on_chunk_unload(self, cell):
         vao_list = self._chunk_gpu_objects.pop(cell, [])
@@ -1553,6 +1704,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             vbo.release()
             self.texture_manager.release(mat_name)
         self._chunk_normal_cache.pop(cell, None)
+        self._chunk_aabbs.pop(cell, None)
 
     def _apply_shading_toggle(self) -> None:
         """
@@ -1632,8 +1784,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     # height of everything below the WINDOW bottom margin, not just its
     # own height.
     RIGHT_COLUMN_BOTTOM_MARGIN = 18
-    RIGHT_COLUMN_GAP = 14  # vertical gap between each of the 4 blocks (brightness, render distance, global light, buttons)
-    RIGHT_COLUMN_BUTTON_GROUP_GAP = 30  # extra gap between View dist and Mesh/Texture/Shade group
+    RIGHT_COLUMN_GAP = 10  # vertical gap between the right-side HUD blocks
+    RIGHT_COLUMN_BUTTON_GROUP_GAP = 20  # extra gap before the Mesh/Texture/Shade group
 
     # Keyboard look fallback (especially useful on macOS hardware where
     # right-button drag can be awkward/unavailable). Interpreted as
@@ -1659,7 +1811,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         loaded = max(0, int(stats.get("loaded", 0)))
         total_available = max(1, int(stats.get("total_available", 1)))
         max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
-        needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded)
+        wanted = max(1, int(stats.get("wanted", self._INITIAL_LOAD_MIN_CHUNKS)))
+        # The active streaming budget can intentionally reduce the current
+        # wanted set below the normal startup threshold (for example, a 1 GB
+        # GPU looking at chunks with several 4096² textures).  Treat that
+        # smaller wanted set as sufficient; otherwise the loading overlay waits
+        # forever for chunks the scheduler correctly refused to request.
+        needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded, wanted)
         return loaded >= needed
 
     def _initial_chunk_load_progress(self, stats: dict) -> float:
@@ -1717,6 +1875,91 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return False
         return True
 
+    def _right_column_ui_scale(self) -> float:
+        return float(getattr(self, "_viewer_ui_scale", 1.0))
+
+    def _right_column_geometry_scale(self) -> float:
+        return float(
+            getattr(self, "_right_column_panel_scale", self.RIGHT_COLUMN_PANEL_SCALE)
+        )
+
+    def _right_column_text_scale(self) -> float:
+        return float(
+            getattr(
+                self,
+                "_right_column_panel_text_scale",
+                self.RIGHT_COLUMN_PANEL_TEXT_SCALE,
+            )
+        )
+
+    def _right_column_label_text_scale(self) -> float:
+        return float(
+            getattr(
+                self,
+                "_right_column_panel_label_text_scale",
+                self.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE,
+            )
+        )
+
+    def _right_column_button_text_scale(self) -> float:
+        return float(
+            getattr(
+                self,
+                "_right_column_panel_button_text_scale",
+                self.RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE,
+            )
+        )
+
+    def _update_right_column_hud_scale(self, window_size: tuple[int, int]) -> None:
+        """Keep the always-visible HUD legible as the viewer is resized."""
+        viewer_ui_scale = _viewer_ui_scale_for_window_size(window_size)
+        geometry_scale = self.RIGHT_COLUMN_PANEL_SCALE * viewer_ui_scale
+        text_scale = (
+            self.RIGHT_COLUMN_PANEL_TEXT_SCALE
+            * min(viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        label_text_scale = (
+            self.RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE
+            * min(viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        button_text_scale = (
+            self.RIGHT_COLUMN_PANEL_BUTTON_TEXT_SCALE
+            * min(viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
+        )
+        if (
+            viewer_ui_scale == self._right_column_ui_scale()
+            and geometry_scale == self._right_column_geometry_scale()
+            and text_scale == self._right_column_text_scale()
+            and label_text_scale == self._right_column_label_text_scale()
+            and button_text_scale == self._right_column_button_text_scale()
+        ):
+            return
+
+        self._viewer_ui_scale = viewer_ui_scale
+        self._right_column_panel_scale = geometry_scale
+        self._right_column_panel_text_scale = text_scale
+        self._right_column_panel_label_text_scale = label_text_scale
+        self._right_column_panel_button_text_scale = button_text_scale
+        self._layout_cache_size = None
+        self._layout_cache_result = None
+
+        for control in (
+            getattr(self, "light_stepper", None),
+            getattr(self, "ambient_stepper", None),
+            getattr(self, "render_distance_stepper", None),
+        ):
+            setter = getattr(control, "set_scale", None)
+            if callable(setter):
+                setter(
+                    text_scale=text_scale,
+                    geometry_scale=geometry_scale,
+                    label_text_scale=label_text_scale,
+                )
+
+        setter = getattr(getattr(self, "render_mode_buttons", None), "set_scale", None)
+        if callable(setter):
+            setter(text_scale=button_text_scale, geometry_scale=geometry_scale)
+
     def _right_column_layout(self, window_size: tuple[int, int]) -> dict:
         """
         Returns a dict with every position the right-side column needs:
@@ -1731,35 +1974,45 @@ class CaveViewerWindow(mglw.WindowConfig):
         Stack order, top to bottom: Brightness, Global Light, Render
         Distance, then the button block.
         """
+        self._update_right_column_hud_scale(window_size)
         if window_size == self._layout_cache_size:
             return self._layout_cache_result
 
         w, h = window_size
 
-        # label reserve: matches StepperControl.render's own
-        # label_size=1.5 text height + 8px gap, computed here once so
+        # Label reserve matches StepperControl.render's own label metrics so
         # this stays correct if that label styling ever changes (rather
         # than a second hard-coded guess at the same number).
         from caveviewer.gui import bitmap_font
-        fixed_label_size = bitmap_font.pixel_size_at_text_scale(1.5, self.UI_TEXT_SCALE)
-        label_reserve = bitmap_font.text_height_px(fixed_label_size) + 8
+        panel_scale = self._right_column_geometry_scale()
+        panel_label_text_scale = self._right_column_label_text_scale()
+        viewer_ui_scale = self._right_column_ui_scale()
+        fixed_label_size = bitmap_font.pixel_size_at_text_scale(
+            StepperControl.LABEL_TEXT_SIZE,
+            StepperControl.FIXED_TEXT_SCALE * panel_label_text_scale,
+        )
+        label_reserve = bitmap_font.text_height_px(fixed_label_size) + 8 * panel_scale
 
-        button_block_height = RenderModeButtons.total_stack_height()
-        content_right_inset = self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN + self.RIGHT_COLUMN_PANEL_SIDE_PAD
-        content_bottom_inset = self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN + self.RIGHT_COLUMN_PANEL_BOTTOM_PAD
+        button_block_height = RenderModeButtons.total_stack_height(scale=panel_scale)
+        content_right_inset = (
+            self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN + self.RIGHT_COLUMN_PANEL_SIDE_PAD
+        ) * viewer_ui_scale
+        content_bottom_inset = (
+            self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN + self.RIGHT_COLUMN_PANEL_BOTTOM_PAD
+        ) * viewer_ui_scale
 
         # Build the stack from the BOTTOM up: button block's bottom sits
         # RIGHT_COLUMN_BOTTOM_MARGIN above the window's bottom edge.
         buttons_bottom_y = h - content_bottom_inset
         buttons_top_y = buttons_bottom_y - button_block_height
 
-        render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_BUTTON_GROUP_GAP
+        render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_BUTTON_GROUP_GAP * panel_scale
         render_distance_anchor_y = render_distance_bottom_y - self.render_distance_stepper.total_height()
 
-        ambient_bottom_y = render_distance_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP
+        ambient_bottom_y = render_distance_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP * panel_scale
         ambient_anchor_y = ambient_bottom_y - self.ambient_stepper.total_height()
 
-        brightness_bottom_y = ambient_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP
+        brightness_bottom_y = ambient_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP * panel_scale
         brightness_anchor_y = brightness_bottom_y - self.light_stepper.total_height()
 
         right_x_brightness = w - content_right_inset - self.light_stepper.total_width()
@@ -1785,9 +2038,18 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         w, h = window_size
         fixed_label_size = bitmap_font.pixel_size_at_text_scale(
-            self.RIGHT_COLUMN_PANEL_LABEL_SIZE, self.UI_TEXT_SCALE
+            self.RIGHT_COLUMN_PANEL_LABEL_SIZE,
+            StepperControl.FIXED_TEXT_SCALE * self._right_column_label_text_scale(),
         )
         label_height = bitmap_font.text_height_px(fixed_label_size)
+        label_widths = [
+            bitmap_font.text_width_px(self.light_stepper.label, fixed_label_size),
+            bitmap_font.text_width_px(self.ambient_stepper.label, fixed_label_size),
+            bitmap_font.text_width_px(
+                self.render_distance_stepper.label,
+                fixed_label_size,
+            ),
+        ]
         buttons_top_y = column["buttons_top_y"]
 
         brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
@@ -1800,10 +2062,26 @@ class CaveViewerWindow(mglw.WindowConfig):
             ambient_anchor_x + self.ambient_stepper.total_width(),
             render_distance_anchor_x + self.render_distance_stepper.total_width(),
         ]
+        stepper_widths = [
+            self.light_stepper.total_width(),
+            self.ambient_stepper.total_width(),
+            self.render_distance_stepper.total_width(),
+        ]
+        label_lefts = [
+            anchor_x + (stepper_width - label_width) / 2.0
+            for anchor_x, stepper_width, label_width in zip(
+                stepper_lefts,
+                stepper_widths,
+                label_widths,
+            )
+        ]
+        panel_scale = self._right_column_geometry_scale()
+        viewer_ui_scale = self._right_column_ui_scale()
+        label_gap = self.RIGHT_COLUMN_PANEL_LABEL_GAP * panel_scale
         label_tops = [
-            brightness_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
-            ambient_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
-            render_distance_anchor_y - label_height - self.RIGHT_COLUMN_PANEL_LABEL_GAP,
+            brightness_anchor_y - label_height - label_gap,
+            ambient_anchor_y - label_height - label_gap,
+            render_distance_anchor_y - label_height - label_gap,
         ]
 
         button_x0, _button_y0, button_x1, _button_y1 = self.render_mode_buttons._button_rect_px(
@@ -1813,10 +2091,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             6, window_size, buttons_top_y, column["content_right_inset"]
         )
 
-        x0 = min(min(stepper_lefts), button_x0) - self.RIGHT_COLUMN_PANEL_SIDE_PAD
-        x1 = w - self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN
-        y0 = min(label_tops) - self.RIGHT_COLUMN_PANEL_TOP_PAD
-        y1 = h - self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN
+        x0 = min(min(stepper_lefts), min(label_lefts), button_x0) - (
+            self.RIGHT_COLUMN_PANEL_SIDE_PAD * viewer_ui_scale
+        )
+        x1 = w - (self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN * viewer_ui_scale)
+        y0 = min(label_tops) - (self.RIGHT_COLUMN_PANEL_TOP_PAD * viewer_ui_scale)
+        y1 = h - (self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN * viewer_ui_scale)
         return (x0, y0, x1, y1)
 
     def _render_right_column_panel(self, window_size: tuple[int, int], column: dict | None = None) -> None:
@@ -2013,6 +2293,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     def on_render(self, current_time: float, frame_time: float):
         if self._closing_requested:
             return
+        bitmap_font.set_raster_scale(_window_pixel_ratio(self.wnd))
 
         # Keep render-mode button effects synced to loading state even
         # on frames that early-return before normal HUD interaction.
@@ -3173,6 +3454,22 @@ class CaveViewerWindow(mglw.WindowConfig):
     close = on_close
 
 
+def _launch_viewer_window() -> None:
+    """Launch with dimensions expressed in the selected backend's coordinates."""
+    if sys.platform.startswith("linux"):
+        # Linux GLFW sizing happens after the Wayland/X11 backend is selected,
+        # using that backend's DPI-aware work-area coordinate system.
+        CaveViewerWindow.window_size = _DEFAULT_WINDOW_SIZE
+    else:
+        CaveViewerWindow.window_size = _desktop_relative_window_size()
+    run_window_config(
+        CaveViewerWindow,
+        runner=mglw.run_window_config,
+        window_size_fraction=_DESKTOP_WINDOW_SCALE,
+        fallback_window_size=_DEFAULT_WINDOW_SIZE,
+        force_resizable_window=True,
+    )
+
 
 def run_viewer(cache_dir: str, textures_dir: str):
     manifest = chunker.load_manifest(cache_dir)
@@ -3184,15 +3481,14 @@ def run_viewer(cache_dir: str, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
     CaveViewerWindow.cave_manifest = manifest
-    CaveViewerWindow.window_size = _desktop_relative_window_size()
 
-    mglw.run_window_config(CaveViewerWindow, args=[])
+    _launch_viewer_window()
 
 
 def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     """
     Launches the viewer window for a map that needs FIRST-TIME import
-    (no _cache yet) -- used by caveviewer.app's main() instead
+    (no managed cache yet) -- used by caveviewer.app's main() instead
     of run_viewer() specifically so the import can run AFTER the window
     is open, showing real progress in the same in-window panel the OPEN
     button already uses, rather than the old behavior of running the
@@ -3213,14 +3509,13 @@ def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = None
     CaveViewerWindow.cave_textures_dir = None
     CaveViewerWindow.cave_manifest = None
-    CaveViewerWindow.window_size = _desktop_relative_window_size()
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,
     }
 
     try:
-        mglw.run_window_config(CaveViewerWindow, args=[])
+        _launch_viewer_window()
     except RuntimeError as e:
         # Suppress the known "no initial map" runtime error that can occur
         # when the viewer is launched without a preloaded map and the GUI

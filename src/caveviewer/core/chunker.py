@@ -8,7 +8,7 @@ whole cave, we split the mesh into cells (default 8m cubes -- tune via
 CHUNK_SIZE for your cave's scale) and load only the cells near the camera
 at runtime (see caveviewer.core.streaming_world).
 
-Cache layout on disk, under <obj_folder>/_cache/:
+Cache layout on disk, under the selected managed cache directory:
     manifest.json          - chunk grid metadata, bounds, cell size,
                               chunk_id -> required texture list, etc.
     chunks/<cx>_<cy>_<cz>.bin
@@ -39,12 +39,19 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from caveviewer.core import hardware_memory
 from caveviewer.core.logging_utils import get_logger
-from caveviewer.core.worker_config import resolve_worker_count
+from caveviewer.core.worker_config import (
+    MAX_WORKER_RAM_UTILIZATION,
+    can_start_additional_worker,
+    resolve_worker_count,
+)
 from caveviewer.core.obj_parser import RawMesh, MaterialRange
+from caveviewer.core.cache_paths import (
+    map_cache_build_dir,
+    map_cache_candidates,
+)
 
-CACHE_DIRNAME = "_cache"
-LEGACY_CACHE_DIRNAME = ".caveviewer_cache"
 MANIFEST_NAME = "manifest.json"
 CHUNKS_DIRNAME = "chunks"
 IMPORT_DISK_SPACE_MULTIPLIER = 2
@@ -80,18 +87,46 @@ _VERSION = 1
 class InsufficientDiskSpaceError(OSError):
     """Raised before cache creation when the source disk lacks headroom."""
 
-    def __init__(self, source_path: str, required_bytes: int, available_bytes: int):
+    def __init__(
+        self,
+        source_path: str,
+        required_bytes: int,
+        available_bytes: int,
+        *,
+        source_size: int | None = None,
+        staged_asset_bytes: int = 0,
+    ):
         self.source_path = source_path
         self.required_bytes = required_bytes
         self.available_bytes = available_bytes
-        source_size = required_bytes // IMPORT_DISK_SPACE_MULTIPLIER
+        source_size = (
+            required_bytes // IMPORT_DISK_SPACE_MULTIPLIER
+            if source_size is None
+            else source_size
+        )
         message = (
             f"Not enough disk space to import {os.path.basename(source_path)!r}: "
             f"{available_bytes:,} bytes are available, but at least "
             f"{required_bytes:,} bytes are required (twice the "
-            f"{source_size:,}-byte map size). Free disk space and try again."
+            f"{source_size:,}-byte map size plus {staged_asset_bytes:,} bytes "
+            "of cache assets). Free disk space and try again."
         )
         super().__init__(errno.ENOSPC, message)
+
+
+@dataclass(frozen=True)
+class CacheAsset:
+    """One texture or other immutable asset published with a map cache."""
+
+    relative_path: str
+    source_path: str | None = None
+    data: bytes | None = None
+
+    def __post_init__(self) -> None:
+        if (self.source_path is None) == (self.data is None):
+            raise ValueError(
+                "CacheAsset requires exactly one source_path or data value"
+            )
 
 
 def configured_chunk_size() -> float:
@@ -135,39 +170,75 @@ def world_to_cell(point: np.ndarray, chunk_size: float) -> tuple[int, int, int]:
     return tuple(np.floor(point / chunk_size).astype(np.int64).tolist())
 
 
-def ensure_sufficient_disk_space(source_path: str) -> None:
+def ensure_sufficient_disk_space(
+    source_path: str,
+    cache_dir: str | None = None,
+    *,
+    staged_asset_bytes: int = 0,
+) -> None:
     """Require free space equal to at least twice the source map size.
 
     Cache construction expands indexed source geometry into render-ready
     chunks, so starting an import without this headroom is likely to fail
     after doing substantial work. The check targets the filesystem that will
-    hold the cache: the directory containing source_path.
+    hold the cache, which may be an XDG cache filesystem rather than the
+    source-map filesystem.
     """
     source_path = os.path.abspath(source_path)
     source_size = os.path.getsize(source_path)
-    required_bytes = source_size * IMPORT_DISK_SPACE_MULTIPLIER
-    available_bytes = shutil.disk_usage(os.path.dirname(source_path)).free
+    required_bytes = (
+        source_size * IMPORT_DISK_SPACE_MULTIPLIER + staged_asset_bytes
+    )
+    target_dir = (
+        os.path.dirname(os.path.abspath(cache_dir))
+        if cache_dir
+        else os.path.dirname(source_path)
+    )
+    available_bytes = shutil.disk_usage(_nearest_existing_directory(target_dir)).free
     if available_bytes < required_bytes:
         raise InsufficientDiskSpaceError(
-            source_path, required_bytes, available_bytes
+            source_path,
+            required_bytes,
+            available_bytes,
+            source_size=source_size,
+            staged_asset_bytes=staged_asset_bytes,
         )
 
 
-def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
-                 chunk_size: float = DEFAULT_CHUNK_SIZE,
-                 progress_cb=None) -> str:
+def build_cache(
+    obj_path: str,
+    mesh: RawMesh,
+    materials: dict,
+    chunk_size: float = DEFAULT_CHUNK_SIZE,
+    progress_cb=None,
+    *,
+    cache_dir: str | None = None,
+    assets: tuple[CacheAsset, ...] | list[CacheAsset] = (),
+) -> str:
     """
-    Partition `mesh` into spatial chunks and write the disk cache next to
-    `obj_path`. Returns the cache directory path.
+    Partition `mesh` into spatial chunks and atomically publish the cache.
+
+    ``cache_dir`` defaults to the managed location selected by
+    ``cache_paths``. Assets are staged inside the same private directory, so the
+    manifest can never become visible before all referenced textures.
 
     progress_cb(stage: str, fraction: float)
     """
-    obj_dir = os.path.dirname(os.path.abspath(obj_path))
-    ensure_sufficient_disk_space(obj_path)
+    cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
+    cache_parent = os.path.dirname(cache_dir)
+    assets = tuple(assets)
+    ensure_sufficient_disk_space(
+        obj_path,
+        cache_dir,
+        staged_asset_bytes=sum(_cache_asset_size(asset) for asset in assets),
+    )
+    os.makedirs(cache_parent, exist_ok=True)
 
-    cache_dir = os.path.join(obj_dir, CACHE_DIRNAME)
-    staging_dir = tempfile.mkdtemp(prefix=f".{CACHE_DIRNAME}.tmp-", dir=obj_dir)
+    staging_dir = tempfile.mkdtemp(
+        prefix=f".{os.path.basename(cache_dir)}.tmp-", dir=cache_parent
+    )
     try:
+        _stage_cache_assets(staging_dir, assets)
         _build_cache_in_directory(
             obj_path,
             mesh,
@@ -188,6 +259,52 @@ def build_cache(obj_path: str, mesh: RawMesh, materials: dict,
         progress_cb("done", 1.0)
 
     return cache_dir
+
+
+def _nearest_existing_directory(path: str) -> str:
+    """Find the filesystem that will contain a not-yet-created cache path."""
+    candidate = os.path.abspath(path)
+    while not os.path.isdir(candidate):
+        parent = os.path.dirname(candidate)
+        if parent == candidate:
+            break
+        candidate = parent
+    return candidate
+
+
+def _cache_asset_size(asset: CacheAsset) -> int:
+    if asset.source_path is not None:
+        return os.path.getsize(asset.source_path)
+    return len(asset.data or b"")
+
+
+def _stage_cache_assets(
+    staging_dir: str, assets: tuple[CacheAsset, ...] | list[CacheAsset]
+) -> None:
+    """Write validated relative assets inside an unpublished cache tree."""
+    written_paths: set[str] = set()
+    for asset in assets:
+        relative_path = os.path.normpath(asset.relative_path)
+        first_component = relative_path.split(os.sep, 1)[0]
+        if (
+            not relative_path
+            or os.path.isabs(relative_path)
+            or relative_path == os.pardir
+            or relative_path.startswith(os.pardir + os.sep)
+            or first_component in {CHUNKS_DIRNAME, MANIFEST_NAME}
+        ):
+            raise ValueError(f"Unsafe cache asset path: {asset.relative_path!r}")
+        if relative_path in written_paths:
+            raise ValueError(f"Duplicate cache asset path: {asset.relative_path!r}")
+        written_paths.add(relative_path)
+
+        destination = os.path.join(staging_dir, relative_path)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        if asset.source_path is not None:
+            shutil.copy2(asset.source_path, destination)
+        else:
+            with open(destination, "wb") as output:
+                output.write(asset.data or b"")
 
 
 def _publish_cache_directory(staging_dir: str, cache_dir: str) -> None:
@@ -350,16 +467,23 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
         cell_iterator = iter(cell_items)
         active_futures = set()
+        submitted_cells = 0
+        admitted_workers = min(1, total_cells)
+        admission_blocked = False
 
         def _submit_next_cell() -> bool:
+            nonlocal submitted_cells
             try:
                 cell_coord, groups = next(cell_iterator)
             except StopIteration:
                 return False
             active_futures.add(executor.submit(_write_one_cell, cell_coord, groups))
+            submitted_cells += 1
             return True
 
-        for _ in range(min(worker_count, total_cells)):
+        # Admit one real task first. Pool growth happens only after completed
+        # work has made its memory cost observable to the system RAM probe.
+        for _ in range(admitted_workers):
             _submit_next_cell()
 
         try:
@@ -388,8 +512,43 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
                             0.65 + 0.33 * (completed_cells / max(total_cells, 1)),
                         )
 
-                for _ in completed_results:
-                    _submit_next_cell()
+                if (
+                    submitted_cells < total_cells
+                    and admitted_workers < min(worker_count, total_cells)
+                ):
+                    snapshot = hardware_memory.detect_ram_snapshot()
+                    if can_start_additional_worker(snapshot):
+                        admitted_workers += 1
+                        if admission_blocked:
+                            _LOG.info(
+                                "System RAM pressure eased; increasing cache-build "
+                                "workers to %d of %d.",
+                                admitted_workers,
+                                worker_count,
+                            )
+                        admission_blocked = False
+                    else:
+                        if not admission_blocked:
+                            if snapshot is None:
+                                _LOG.warning(
+                                    "Could not measure available system RAM; keeping "
+                                    "cache construction at %d worker(s).",
+                                    admitted_workers,
+                                )
+                            else:
+                                _LOG.warning(
+                                    "System RAM utilization is %.1f%%; keeping cache "
+                                    "construction at %d worker(s) because the limit "
+                                    "is %.0f%%.",
+                                    snapshot.utilization_fraction * 100.0,
+                                    admitted_workers,
+                                    MAX_WORKER_RAM_UTILIZATION * 100.0,
+                                )
+                        admission_blocked = True
+
+                while len(active_futures) < admitted_workers:
+                    if not _submit_next_cell():
+                        break
         except BaseException:
             # Do not make a full-disk failure churn through every cell that
             # was queued before the first failed write surfaced.
@@ -696,12 +855,7 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
 def cache_is_valid(obj_path: str) -> bool:
     """Cache is valid if it exists and is newer than the source OBJ (cheap
     staleness check so re-running on the same map doesn't reparse 2GB)."""
-    obj_dir = os.path.dirname(os.path.abspath(obj_path))
-    candidates = [
-        os.path.join(obj_dir, CACHE_DIRNAME),
-        os.path.join(obj_dir, LEGACY_CACHE_DIRNAME),
-    ]
-    for cache_dir in candidates:
+    for cache_dir in map_cache_candidates(obj_path):
         manifest_path = os.path.join(cache_dir, MANIFEST_NAME)
         if not os.path.exists(manifest_path):
             continue
@@ -728,18 +882,11 @@ def _has_current_chunk_cache(cache_dir: str, manifest: dict) -> bool:
 
 
 def get_cache_dir(obj_path: str) -> str:
-    obj_dir = os.path.dirname(os.path.abspath(obj_path))
-    preferred = os.path.join(obj_dir, CACHE_DIRNAME)
-    preferred_manifest = os.path.join(preferred, MANIFEST_NAME)
-    if os.path.exists(preferred_manifest):
-        return preferred
-
-    legacy = os.path.join(obj_dir, LEGACY_CACHE_DIRNAME)
-    legacy_manifest = os.path.join(legacy, MANIFEST_NAME)
-    if os.path.exists(legacy_manifest):
-        return legacy
-
-    return preferred
+    candidates = map_cache_candidates(obj_path)
+    for candidate in candidates:
+        if os.path.exists(os.path.join(candidate, MANIFEST_NAME)):
+            return candidate
+    return candidates[0]
 
 
 def find_landing_position(manifest: dict, target_x: float, target_z: float,

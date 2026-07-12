@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import sys
 import tkinter as tk
-from tkinter import filedialog
 from typing import Callable
 
 from caveviewer.gui.advanced_settings import (
@@ -24,6 +23,7 @@ from caveviewer.gui.advanced_settings_form import (
     AdvancedSettingsFormState,
     MessageKind,
 )
+from caveviewer.gui.platform import DesktopServices, get_desktop_services
 from caveviewer.gui.tk_theme import DARK_THEME
 
 
@@ -123,9 +123,16 @@ class _LabelButton(tk.Label):
 class AdvancedSettingsDialog:
     """Render Advanced Settings state and forward Tk events to the controller."""
 
-    def __init__(self, parent, *, ui_font_family: str) -> None:
+    def __init__(
+        self,
+        parent,
+        *,
+        ui_font_family: str,
+        desktop_services: DesktopServices | None = None,
+    ) -> None:
         self.parent = parent
         self.ui_font_family = ui_font_family
+        self.desktop_services = desktop_services or get_desktop_services()
         self.settings = load_advanced_settings()
         apply_advanced_settings_to_env(self.settings)
         self.form = AdvancedSettingsFormController(self.settings)
@@ -486,11 +493,11 @@ class AdvancedSettingsDialog:
             initial_dir = os.path.dirname(initial_dir)
         if not os.path.isdir(initial_dir):
             initial_dir = os.path.expanduser("~")
-        folder = filedialog.askdirectory(
-            title=title, initialdir=initial_dir, parent=self.dialog
+        selection = self.desktop_services.choose_directory(
+            title=title, initial_dir=initial_dir, parent=self.dialog
         )
-        if folder:
-            var.set(folder)
+        if selection:
+            var.set(selection.path)
 
     def _build(self) -> None:
         body = tk.Frame(
@@ -806,6 +813,15 @@ class AdvancedSettingsDialog:
             self.apply_button.focus_set()
 
 
-def show_advanced_settings_dialog(parent, *, ui_font_family: str) -> None:
+def show_advanced_settings_dialog(
+    parent,
+    *,
+    ui_font_family: str,
+    desktop_services: DesktopServices | None = None,
+) -> None:
     """Create and display a non-blocking modal Advanced Settings dialog."""
-    AdvancedSettingsDialog(parent, ui_font_family=ui_font_family).show()
+    AdvancedSettingsDialog(
+        parent,
+        ui_font_family=ui_font_family,
+        desktop_services=desktop_services,
+    ).show()

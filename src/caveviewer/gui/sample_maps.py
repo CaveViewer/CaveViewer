@@ -33,7 +33,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 from caveviewer.core.logging_utils import get_logger
-from caveviewer.gui.update_checker import DownloadCancelled, download_update, make_ssl_context
+from caveviewer.gui.update_checker import (
+    DownloadCancelled,
+    download_update,
+    make_ssl_context,
+)
+from caveviewer.storage_paths import resolve_application_paths
 
 
 _LOG = get_logger("SampleMaps")
@@ -73,6 +78,31 @@ KNOWN_SAMPLE_MAPS = [
     SampleMapInfo(display_name="Devils Eye", asset_name="Devils.Eye.3D.Map.zip"),
     SampleMapInfo(display_name="Peacock Springs Cave System", asset_name="Peacock.Springs.Cave.System.3D.Map.zip"),
 ]
+
+
+def default_sample_maps_install_dir() -> str:
+    """Return the app-managed default root for first-time sample-map downloads."""
+    data_dir = resolve_application_paths().data_dir
+    sample_maps_dir = data_dir / SAMPLE_MAPS_DIRNAME
+    try:
+        sample_maps_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _LOG.warning(
+            "Could not create default sample map directory %s: %s",
+            sample_maps_dir,
+            exc,
+        )
+    if sample_maps_dir.is_dir():
+        return str(sample_maps_dir)
+
+    # If a conflicting file or permissions problem blocks the dedicated
+    # sample_maps/ folder, fall back to the XDG data root. The normal
+    # download helper will still create sample_maps/<map> under this root.
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return str(data_dir)
 
 
 def _known_maps_with_no_download_info():
@@ -189,6 +219,17 @@ def _log_sample_maps_config_once() -> None:
     )
 
 
+def _install_dir_path(install_dir) -> str:
+    """
+    Normalize a sample-map install root to a filesystem path string.
+
+    Linux portal choosers return DirectorySelection objects. UI code should pass
+    their `.path`, but accepting path-like selection objects here keeps the
+    non-UI download helper robust when portal and Tk fallback paths differ.
+    """
+    return os.fspath(getattr(install_dir, "path", install_dir))
+
+
 def local_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
     """
     Where a given sample map would live locally once downloaded --
@@ -207,7 +248,7 @@ def _sample_maps_container_dir(install_dir: str) -> str:
     already chooses a folder named sample_maps, treat that folder itself as the
     container instead of creating sample_maps/sample_maps/... .
     """
-    normalized = os.path.normpath(install_dir)
+    normalized = os.path.normpath(_install_dir_path(install_dir))
     if os.path.basename(normalized).lower() == SAMPLE_MAPS_DIRNAME.lower():
         return normalized
     return os.path.join(normalized, SAMPLE_MAPS_DIRNAME)
@@ -244,7 +285,7 @@ def _folder_has_contents(path: str) -> bool:
 
 def _legacy_nested_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
     """Path used by older builds when users selected an existing sample_maps folder."""
-    normalized = os.path.normpath(install_dir)
+    normalized = os.path.normpath(_install_dir_path(install_dir))
     if os.path.basename(normalized).lower() != SAMPLE_MAPS_DIRNAME.lower():
         return ""
     return os.path.join(normalized, SAMPLE_MAPS_DIRNAME, sample.display_name)
@@ -269,6 +310,7 @@ def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo,
     the map folder's contents, rather than nesting one level deeper than
     expected.
     """
+    install_dir = _install_dir_path(install_dir)
     if sample.download_url is None:
         raise ValueError(f"No download URL available for {sample.display_name!r} "
                           f"(asset {sample.asset_name!r} not found on the sample-data release).")

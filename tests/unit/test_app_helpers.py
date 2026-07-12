@@ -63,6 +63,7 @@ def test_environment_default_helpers_cover_static_callable_and_failure(monkeypat
     assert app._default_io_workers() == "2"
     assert app._default_chunk_build_workers() == "1"
     assert app._effective_env_default("CAVEVIEWER_UI_TEXT_SCALE") == "1.28"
+    assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"
     assert app._effective_env_default("NOT_CONFIGURED") is None
 
     def fail_default():
@@ -131,17 +132,9 @@ def test_consume_update_branch_arg_rejects_missing_values(argv):
         (b"unknown", ".img"),
     ],
 )
-def test_embedded_texture_writer_sniffs_format_and_preserves_bytes(
-    tmp_path, header, extension
-):
-    textures_dir = tmp_path / "nested" / "textures"
-
-    filename = app._write_embedded_texture_to_disk(
-        header, str(textures_dir), "limestone"
-    )
-
+def test_embedded_texture_filename_sniffs_image_format(header, extension):
+    filename = app._embedded_texture_filename(header, "limestone")
     assert filename == f"limestone{extension}"
-    assert (textures_dir / filename).read_bytes() == header
 
 
 @pytest.mark.parametrize(("selection", "expected"), [("/maps/cave", "/maps/cave"), ("", None)])

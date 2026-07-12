@@ -41,8 +41,9 @@ def test_macos_release_workflows_use_architecture_specific_contracts():
 
 
 def test_platform_release_workflows_package_immutable_source_before_finalizing():
+    assert not (WORKFLOWS_DIR / "linux-arm64-release.yml").exists()
+
     workflow_contracts = (
-        ("linux-arm64-release.yml", "linux-arm64"),
         ("linux-x86_64-release.yml", "linux-x86_64"),
         ("macos-arm64-release.yml", "macos-arm64"),
         ("macos-x86_64-release.yml", "macos-x86_64"),
@@ -82,7 +83,6 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
 
 def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
     for workflow_name in (
-        "linux-arm64-release.yml",
         "linux-x86_64-release.yml",
     ):
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
@@ -95,13 +95,33 @@ def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
         ), workflow_name
 
 
+def test_linux_release_workflow_smoke_tests_appimage_desktop_integration():
+    workflow = (WORKFLOWS_DIR / "linux-x86_64-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Install Linux desktop metadata validators" in workflow
+    assert "appstream desktop-file-utils" in workflow
+    assert "Smoke-test AppImage desktop integration" in workflow
+    assert "APPIMAGE_EXTRACT_AND_RUN: \"1\"" in workflow
+    assert "CAVEVIEWER_APPRUN_INSTALL_ONLY=1 \"$appimage\"" in workflow
+    assert "CAVEVIEWER_APPRUN_UNINSTALL=1 \"$appimage\"" in workflow
+    assert "desktop-file-validate \"$installed_desktop\"" in workflow
+    assert "appstreamcli validate --no-net --pedantic \"$installed_metainfo\"" in workflow
+    assert 'grep -F "Exec=\\"$appimage\\" %f" "$installed_desktop"' in workflow
+    assert "AppRun must not assign CaveViewer as a MIME default." in workflow
+    assert "AppRun uninstall left CaveViewer hicolor icons behind." in workflow
+    assert workflow.index("Smoke-test AppImage desktop integration") < workflow.index(
+        "Upload Linux x86_64 AppImage for testing"
+    )
+
+
 def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():
     workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
         encoding="utf-8"
     )
     job_contracts = (
         ("windows", "windows-release.yml"),
-        ("linux-arm64", "linux-arm64-release.yml"),
         ("linux-x86_64", "linux-x86_64-release.yml"),
         ("macos-arm64", "macos-arm64-release.yml"),
         ("macos-x86_64", "macos-x86_64-release.yml"),
@@ -166,7 +186,6 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert 'git -C "$repo_root" commit -m "Release $tag $manifest_channel"' in finalizer
     for manifest_path in (
         "updates/windows/$manifest_channel.json",
-        "updates/linux/arm64/$manifest_channel.json",
         "updates/linux/x86_64/$manifest_channel.json",
         "updates/macos/arm64/$manifest_channel.json",
         "updates/macos/x86_64/$manifest_channel.json",
@@ -212,6 +231,19 @@ def test_release_dispatcher_exposes_architecture_specific_macos_targets():
         )
         assert target_help.returncode == 0
         assert f"--target={target}" in target_help.stdout
+
+
+def test_release_dispatcher_rejects_linux_arm64_target():
+    completed = subprocess.run(
+        [str(RELEASE_SCRIPT), "--target=linux-arm64", "--help"],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "unknown target 'linux-arm64'" in completed.stdout
+    assert "linux-x86_64" in completed.stdout
 
 
 def test_release_dispatcher_rejects_legacy_macos_arch_options():
@@ -336,5 +368,9 @@ def test_essential_workflow_enforces_module_coverage_floors():
     ) in workflow
     assert (
         "--include=src/caveviewer/core/chunker.py\n"
+        "          --fail-under=90"
+    ) in workflow
+    assert (
+        "--include=src/caveviewer/gui/update_checker.py\n"
         "          --fail-under=90"
     ) in workflow

@@ -2,6 +2,9 @@
 
 from pathlib import Path
 import os
+import sys
+
+from PyInstaller.utils.hooks import collect_all
 
 
 spec_dir = Path(globals().get('SPECPATH', os.getcwd())).resolve()
@@ -19,10 +22,25 @@ exec((package_root / 'version.py').read_text(encoding='utf-8'), version_ns)
 app_name = version_ns.get('APP_NAME', 'CaveViewer')
 app_version = version_ns.get('APP_VERSION', '0.0.0')
 
+hidden_imports = ['PIL._tkinter_finder', 'tkinter']
+extra_binaries = []
+extra_datas = []
+if sys.platform.startswith('linux'):
+    glfw_datas, glfw_binaries, glfw_hidden_imports = collect_all('glfw')
+    extra_datas.extend(glfw_datas)
+    extra_binaries.extend(glfw_binaries)
+    hidden_imports.extend(glfw_hidden_imports)
+    hidden_imports.extend([
+        'dbus_fast.aio',
+        'moderngl_window.context.glfw',
+    ])
+else:
+    hidden_imports.append('moderngl_window.context.pyglet')
+
 a = Analysis(
     [str(package_root / '__main__.py')],
     pathex=[str(source_root)],
-    binaries=[],
+    binaries=extra_binaries,
     datas=[
         (str(resources_root / 'shaders'), 'caveviewer/resources/shaders'),
         (str(resources_root / 'images'), 'caveviewer/resources/images'),
@@ -32,8 +50,8 @@ a = Analysis(
         ),
         (str(project_root / 'LICENSE'), '.'),
         (str(project_root / 'THIRD_PARTY_NOTICES.md'), '.'),
-    ],
-    hiddenimports=['PIL._tkinter_finder', 'tkinter', 'moderngl_window.context.pyglet'],
+    ] + extra_datas,
+    hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

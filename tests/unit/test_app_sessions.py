@@ -11,6 +11,7 @@ import pytest
 
 from caveviewer import app
 from caveviewer.core import chunker
+from caveviewer.gui.platform.app_identity import tk_root_options
 
 
 class _LogRecorder:
@@ -71,18 +72,8 @@ def _install_update_manager_module(monkeypatch):
     return instances
 
 
-@pytest.mark.parametrize("layout", ["standard", "legacy", "direct"])
-def test_map_session_opens_each_supported_prebuilt_cache_layout(
-    tmp_path, monkeypatch, layout
-):
-    if layout == "standard":
-        cache_dir = tmp_path / chunker.CACHE_DIRNAME
-    elif layout == "legacy":
-        cache_dir = tmp_path / chunker.LEGACY_CACHE_DIRNAME
-    else:
-        cache_dir = tmp_path
-    cache_dir.mkdir(exist_ok=True)
-    (cache_dir / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
+def test_map_session_opens_selected_prebuilt_cache_folder(tmp_path, monkeypatch):
+    (tmp_path / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
     opened = []
     _install_viewer_module(
         monkeypatch,
@@ -93,7 +84,29 @@ def test_map_session_opens_each_supported_prebuilt_cache_layout(
 
     app._run_map_session(str(tmp_path))
 
-    assert opened == [((str(cache_dir),), {"textures_dir": str(tmp_path)})]
+    assert opened == [((str(tmp_path),), {"textures_dir": str(tmp_path)})]
+
+
+def test_map_session_ignores_old_adjacent_prebuilt_cache_layouts(
+    tmp_path, monkeypatch
+):
+    old_cache = tmp_path / "_cache"
+    old_cache.mkdir()
+    (old_cache / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
+    old_legacy = tmp_path / ".caveviewer_cache"
+    old_legacy.mkdir()
+    (old_legacy / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
+    opened = []
+    _install_viewer_module(
+        monkeypatch,
+        run_viewer=lambda *args, **kwargs: opened.append((args, kwargs)),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        app._run_map_session(str(tmp_path))
+
+    assert raised.value.code == 1
+    assert opened == []
 
 
 def test_map_session_reports_missing_model_and_cache(tmp_path, monkeypatch):
@@ -108,9 +121,7 @@ def test_map_session_reports_missing_model_and_cache(tmp_path, monkeypatch):
 
 
 def test_map_session_reports_prebuilt_viewer_failure(tmp_path, monkeypatch):
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
-    cache_dir.mkdir()
-    (cache_dir / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
+    (tmp_path / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
     recorder = _LogRecorder()
     printed = []
     monkeypatch.setattr(app, "_LOG", recorder)
@@ -134,7 +145,7 @@ def test_map_session_reports_prebuilt_viewer_failure(tmp_path, monkeypatch):
 def test_map_session_opens_obj_with_existing_cache(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     material = tmp_path / "map.mtl"
-    cache_dir = tmp_path / chunker.CACHE_DIRNAME
+    cache_dir = tmp_path / "managed-cache"
     descriptor = {
         "format": "obj",
         "obj_path": str(source),
@@ -153,7 +164,7 @@ def test_map_session_opens_obj_with_existing_cache(tmp_path, monkeypatch):
 
     app._run_map_session(str(tmp_path))
 
-    assert opened == [((str(cache_dir),), {"textures_dir": str(tmp_path)})]
+    assert opened == [((str(cache_dir),), {"textures_dir": str(cache_dir)})]
 
 
 def test_map_session_opens_uncached_glb_with_pending_import(tmp_path, monkeypatch):
@@ -169,6 +180,37 @@ def test_map_session_opens_uncached_glb_with_pending_import(tmp_path, monkeypatc
     app._run_map_session(str(tmp_path))
 
     assert opened == [((descriptor,), {"textures_dir": str(tmp_path)})]
+
+
+def test_map_session_opens_uncached_direct_glb_file_with_parent_texture_dir(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "map.glb"
+    source.write_bytes(b"glTF")
+    descriptor = {"format": "glb", "glb_path": str(source)}
+    opened = []
+    monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
+    _install_viewer_module(
+        monkeypatch,
+        run_pending=lambda *args, **kwargs: opened.append((args, kwargs)),
+    )
+
+    app._run_map_session(str(source))
+
+    assert opened == [((descriptor,), {"textures_dir": str(tmp_path)})]
+
+
+def test_map_session_rejects_direct_unsupported_file(tmp_path, monkeypatch):
+    payload = tmp_path / "notes.txt"
+    payload.write_text("not a cave map", encoding="utf-8")
+    recorder = _LogRecorder()
+    monkeypatch.setattr(app, "_LOG", recorder)
+
+    with pytest.raises(SystemExit) as raised:
+        app._run_map_session(str(payload))
+
+    assert raised.value.code == 1
+    assert "No supported model file" in recorder.error_messages[-1]
 
 
 @pytest.mark.parametrize("cache_is_valid", [True, False])
@@ -346,6 +388,7 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
     recorder = _LogRecorder()
     configured = []
     dialog_calls = []
+    root_options = []
     monkeypatch.setattr(app, "_LOG", recorder)
     monkeypatch.setattr(app, "configure_logging", lambda: configured.append(True))
 
@@ -359,14 +402,15 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
         def withdraw(self):
             dialog_calls.append("withdraw")
 
-    def create_root(**_kwargs):
+    def create_root(**kwargs):
+        root_options.append(kwargs)
         if dialog_fails:
             raise RuntimeError("no display")
         return FakeRoot()
 
     tkinter.Tk = create_root
     tkinter.messagebox = SimpleNamespace(
-        showerror=lambda *args: dialog_calls.append(args)
+        showerror=lambda *args, **kwargs: dialog_calls.append((args, kwargs))
     )
     monkeypatch.setitem(sys.modules, "tkinter", tkinter)
 
@@ -376,8 +420,14 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
     assert raised.value.code == 1
     assert configured == [True]
     assert "startup exploded" in recorder.error_messages[-1]
+    assert "Traceback:" in recorder.error_messages[-1]
+    assert root_options == [tk_root_options()]
     if dialog_fails:
         assert dialog_calls == []
     else:
         assert dialog_calls[0] == "withdraw"
-        assert dialog_calls[1][0] == "CaveViewer Error"
+        args, kwargs = dialog_calls[1]
+        assert args[0] == app.APP_NAME
+        assert "startup exploded" in args[1]
+        assert "Traceback:" not in args[1]
+        assert kwargs["parent"].__class__ is FakeRoot

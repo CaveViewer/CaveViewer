@@ -16,8 +16,12 @@ def test_reported_text_antialiasing_default_is_platform_specific(monkeypatch):
     assert app._effective_env_default("CAVEVIEWER_TEXT_AA_MODE") == "light"
 
     monkeypatch.setattr(app.sys, "platform", "linux")
-    assert app._effective_env_default("CAVEVIEWER_TEXT_AA_MODE") == "normal"
+    assert app._effective_env_default("CAVEVIEWER_TEXT_AA_MODE") == "light"
 
 
 def test_tk_scale_is_a_known_runtime_setting():
     assert "CAVEVIEWER_TK_SCALE" in app._KNOWN_CAVEVIEWER_ENV_VARS
+    assert "CAVEVIEWER_MAP_CACHE_DIR" in app._KNOWN_CAVEVIEWER_ENV_VARS
+    assert "CAVEVIEWER_WINDOW_SYSTEM" in app._KNOWN_CAVEVIEWER_ENV_VARS
+    assert "CAVEVIEWER_VIEWER_UI_SCALE" in app._KNOWN_CAVEVIEWER_ENV_VARS
+    assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"

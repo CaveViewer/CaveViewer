@@ -83,6 +83,38 @@ def test_find_model_returns_glb_descriptor_without_companion_files(tmp_path):
     assert find_model_file(str(tmp_path)) == {"format": "glb", "glb_path": str(glb)}
 
 
+def test_find_model_accepts_direct_glb_file(tmp_path):
+    glb = tmp_path / "cave.glb"
+    glb.write_bytes(b"glTF")
+
+    assert find_model_file(str(glb)) == {"format": "glb", "glb_path": str(glb)}
+
+
+def test_find_model_accepts_direct_obj_file_without_guessing_another_obj(tmp_path):
+    selected = tmp_path / "selected.obj"
+    other = tmp_path / "other.obj"
+    selected_mtl = tmp_path / "selected.mtl"
+    other_mtl = tmp_path / "other.mtl"
+    selected.write_text("mtllib selected.mtl\n", encoding="utf-8")
+    other.write_text("mtllib other.mtl\n", encoding="utf-8")
+    selected_mtl.write_text("newmtl selected\n", encoding="utf-8")
+    other_mtl.write_text("newmtl other\n", encoding="utf-8")
+
+    assert find_model_file(str(selected)) == {
+        "format": "obj",
+        "obj_path": str(selected),
+        "mtl_path": str(selected_mtl),
+    }
+
+
+def test_find_model_rejects_direct_unsupported_file(tmp_path):
+    text_file = tmp_path / "notes.txt"
+    text_file.write_text("not a map", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="No supported model file"):
+        find_model_file(str(text_file))
+
+
 def test_find_model_reports_multiple_glb_candidates(tmp_path, monkeypatch):
     first = tmp_path / "first.glb"
     second = tmp_path / "second.glb"

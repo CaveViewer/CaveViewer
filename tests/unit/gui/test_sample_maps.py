@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from caveviewer.gui import sample_maps
+from caveviewer.gui.platform import DirectorySelection
 
 
 class JsonResponse:
@@ -115,6 +116,29 @@ def test_sample_maps_container_avoids_duplicate_folder_name(tmp_path):
     )
 
 
+def test_sample_map_paths_accept_portal_directory_selection(tmp_path):
+    selection = DirectorySelection.from_path(str(tmp_path))
+    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+
+    assert sample_maps.local_sample_map_path(selection, sample) == str(
+        tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave"
+    )
+    assert not sample_maps.is_sample_map_already_downloaded(selection, sample)
+
+
+def test_default_sample_maps_install_dir_uses_xdg_data_home(tmp_path, monkeypatch):
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == data_home / "caveviewer" / sample_maps.SAMPLE_MAPS_DIRNAME
+    assert install_dir.is_dir()
+    assert sample_maps.local_sample_map_path(
+        str(install_dir), sample_maps.SampleMapInfo("Test Cave", "test.zip")
+    ) == str(install_dir / "Test Cave")
+
+
 def test_downloaded_state_and_existing_path_use_normal_location(tmp_path):
     sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
     expected = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave"
@@ -178,6 +202,28 @@ def test_successful_sample_download_extracts_expected_layout(
     assert (destination / "map.obj").read_text(encoding="utf-8") == "new mesh"
     assert not (destination / "obsolete.txt").exists()
     assert progress == [(1, 1)]
+
+
+def test_sample_download_accepts_portal_directory_selection(tmp_path, monkeypatch):
+    sample = sample_maps.SampleMapInfo(
+        "Test Cave", "test.zip", "https://example.invalid/test.zip", None
+    )
+
+    def create_zip(_url, _size, zip_path, progress_cb=None, cancel_cb=None):
+        assert cancel_cb is None or not cancel_cb()
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr("map.obj", "mesh")
+            archive.writestr("map.mtl", "newmtl rock")
+
+    monkeypatch.setattr(sample_maps, "download_update", create_zip)
+
+    result = sample_maps.download_and_extract_sample_map(
+        DirectorySelection.from_path(str(tmp_path)),
+        sample,
+    )
+
+    assert result == str(tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave")
+    assert Path(result, "map.obj").read_text(encoding="utf-8") == "mesh"
 
 
 def test_cancelled_sample_download_removes_temporary_files_and_preserves_install(

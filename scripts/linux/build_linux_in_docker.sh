@@ -13,11 +13,9 @@ set -euo pipefail
 # scripts/linux/common/*.sh are container-only internals.
 #
 # Usage:
-#   build_linux_in_docker.sh [--arch=<arm64|x86_64|both>] [--step=<build|package|all>] [--rebuild]
+#   build_linux_in_docker.sh [--arch=<x86_64>] [--step=<build|package|all>] [--rebuild]
 #
-# Default builds BOTH architectures. arm64 runs without emulation on Apple
-# Silicon; x86_64 runs under QEMU (slower). Each arch gets its own Docker
-# image tag so switching between them doesn't force a full image rebuild.
+# Default builds Linux x86_64, which is the only distributed Linux package.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
@@ -27,10 +25,10 @@ linux_build_venv_template="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux
 print_help() {
   cat <<'EOF'
 Usage:
-  build_linux_in_docker.sh [--arch=<arm64|x86_64|both>] [--step=<build|package|all>] [--rebuild]
+  build_linux_in_docker.sh [--arch=<x86_64>] [--step=<build|package|all>] [--rebuild]
 
 Options:
-  --arch=<arch>    Linux architecture to build. Default: both
+  --arch=<arch>    Linux architecture to build. Only x86_64 is supported. Default: x86_64
   --step=<step>    Build step to run. Default: all
   --rebuild        Rebuild the Docker image and clear the cached build venv
   -h, --help       Show this help
@@ -45,12 +43,11 @@ elif command -v sha256sum >/dev/null 2>&1; then
 fi
 
 rebuild=false
-archs=("arm64" "amd64")  # default: build both
+archs=("amd64")
 step="all"
 
 set_arch() {
   case "$1" in
-    both) archs=("arm64" "amd64") ;;
     amd64|x86_64) archs=("amd64") ;;
     *) archs=("$1") ;;
   esac
@@ -116,9 +113,9 @@ done
 
 for arch in "${archs[@]}"; do
   case "$arch" in
-    arm64|amd64) ;;
+    amd64) ;;
     *)
-      echo "Error: invalid Linux architecture '$arch' (expected arm64, x86_64, or both)"
+      echo "Error: invalid Linux architecture '$arch' (expected x86_64)"
       exit 1
       ;;
   esac

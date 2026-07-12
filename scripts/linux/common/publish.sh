@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 if [ "${BASH##*/}" != "bash" ]; then
   echo "Error: publish.sh must be run with bash, not sh."
-  echo "Use: arm64/publish.sh ... or x86_64/publish.sh ..."
+  echo "Use: x86_64/publish.sh ..."
   exit 1
 fi
 
@@ -36,7 +36,6 @@ Options:
   --pre-release             Mark the GitHub release as a prerelease and write prerelease.json
 
 Internal shared publisher. Prefer:
-  arm64/publish.sh --version=<version> --notes="Release notes"
   x86_64/publish.sh --version=<version> --notes="Release notes"
 EOF
 }
@@ -136,7 +135,7 @@ collect_linux_artifacts() {
   map_appimage_paths=()
   while IFS= read -r -d '' f; do
     map_appimage_paths+=("$f")
-  done < <(find "$repo_root/dist/linux" -path "*/packages/CaveViewer-${normalized_version}-*.AppImage" -print0 2>/dev/null | sort -z)
+  done < <(find "$repo_root/dist/linux" -path "*/packages/CaveViewer-${normalized_version}-x86_64.AppImage" -print0 2>/dev/null | sort -z)
 }
 
 cv_require_cmd gh
@@ -183,15 +182,14 @@ fi
 if $use_existing_artifacts; then
   echo "Using existing build/package artifacts (--use-existing-artifacts)."
 else
-  linux_build_arch="${CAVEVIEWER_LINUX_UPDATE_ARCH:-both}"
+  linux_build_arch="${CAVEVIEWER_LINUX_UPDATE_ARCH:-x86_64}"
   echo "Building Linux release artifacts in Docker for: $linux_build_arch"
   build_args=(--arch="$linux_build_arch" --step=all)
   $rebuild && build_args+=(--rebuild)
   "$repo_root/scripts/linux/build_linux_in_docker.sh" "${build_args[@]}"
 fi
 
-# Find all AppImages for this version regardless of architecture suffix.
-# When building both arm64 and x86_64, both are uploaded to the release.
+# Find Linux x86_64 AppImages for this version.
 collect_linux_artifacts
 
 if [ ${#map_appimage_paths[@]} -eq 0 ]; then
@@ -199,22 +197,17 @@ if [ ${#map_appimage_paths[@]} -eq 0 ]; then
   exit 1
 fi
 
-# Prefer x86_64 for the update manifest (largest installed base); fall back to first found.
-# Set CAVEVIEWER_LINUX_UPDATE_ARCH=arm64 or x86_64 to choose a specific architecture.
+# Set CAVEVIEWER_LINUX_UPDATE_ARCH=x86_64 to choose the Linux update architecture.
 manifest_appimage_path="${map_appimage_paths[0]}"
 linux_update_arch="${CAVEVIEWER_LINUX_UPDATE_ARCH:-}"
 if [ -n "$linux_update_arch" ]; then
   case "$linux_update_arch" in
-    arm64)
-      linux_update_suffix="aarch64"
-      linux_manifest_arch_dir="arm64"
-      ;;
     amd64|x86|x86_64)
       linux_update_suffix="x86_64"
       linux_manifest_arch_dir="x86_64"
       ;;
     *)
-      echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected arm64 or x86_64)"
+      echo "Error: invalid CAVEVIEWER_LINUX_UPDATE_ARCH '$linux_update_arch' (expected x86_64)"
       exit 1
       ;;
   esac
@@ -231,11 +224,7 @@ else
   for _p in "${map_appimage_paths[@]}"; do
     [[ "$_p" == *x86_64* ]] && manifest_appimage_path="$_p" && break
   done
-  if [[ "$manifest_appimage_path" == *aarch64* ]]; then
-    linux_manifest_arch_dir="arm64"
-  else
-    linux_manifest_arch_dir="x86_64"
-  fi
+  linux_manifest_arch_dir="x86_64"
 fi
 manifest_appimage_name="$(basename "$manifest_appimage_path")"
 manifest_channel="stable"
@@ -293,6 +282,7 @@ echo "Manifest signature written locally: updates/linux/$linux_manifest_arch_dir
 echo "Committing version bump and updated Linux $linux_manifest_arch_dir $manifest_channel manifest..."
 git -C "$repo_root" add \
   src/caveviewer/version.py \
+  packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml \
   "updates/linux/$linux_manifest_arch_dir/$manifest_channel.json" \
   "updates/linux/$linux_manifest_arch_dir/$manifest_channel.json.sig"
 git -C "$repo_root" commit -m "Release $tag Linux $linux_manifest_arch_dir $manifest_channel"
