@@ -244,7 +244,7 @@ def _update_presentation(
     if snapshot.state == UpdateState.AVAILABLE:
         version = _display_version(snapshot.available_version)
         return _UpdatePresentation(
-            status_text=f"Update {version} is available.",
+            status_text=f"Update {version} available",
             action_text="Download",
             action=_UpdateAction.DOWNLOAD,
         )
@@ -262,14 +262,15 @@ def _update_presentation(
         )
     if snapshot.state == UpdateState.READY:
         return _UpdatePresentation(
-            status_text="Downloaded successfully",
+            status_text="Update ready",
             action_text=reveal_action_label,
             action=_UpdateAction.REVEAL,
         )
     if snapshot.state == UpdateState.FAILED:
         return _UpdatePresentation(
-            status_text="Download failed — Retry",
-            status_action=_UpdateAction.RETRY,
+            status_text="Download failed",
+            action_text="Retry",
+            action=_UpdateAction.RETRY,
             error=True,
         )
     return _UpdatePresentation()

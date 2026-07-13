@@ -140,6 +140,16 @@ def test_sample_maps_dialog_keeps_curated_list_out_of_scroll_container():
     assert "yscrollcommand" not in source
 
 
+def test_sample_maps_dialog_is_modal_and_has_initial_focus_policy():
+    source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
+
+    assert "dialog.withdraw()" in source
+    assert "dialog.deiconify()" in source
+    assert "dialog.grab_set()" in source
+    assert "dialog.wait_visibility()" in source
+    assert "focus_set()" in source
+
+
 def test_download_start_reuses_action_area_as_cancel_button_without_prompt():
     action_button = object()
     configured_actions = []
@@ -292,8 +302,8 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
         (
             "notify",
             notification_id,
-            "CaveViewer is downloading a sample map",
-            "Downloading Devils Eye…",
+            "Sample Map Download Started",
+            "Downloading Devils Eye",
             "normal",
         ),
         ("inhibit", "Downloading Devils Eye", parent),
@@ -301,8 +311,8 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
         (
             "notify",
             notification_id,
-            "CaveViewer sample map is ready",
-            "Devils Eye finished downloading.",
+            "Sample Map Ready",
+            "Devils Eye finished downloading",
             "normal",
         ),
     ]
@@ -368,7 +378,7 @@ def test_sample_download_withdraws_notification_on_cancel(
     assert ("close_inhibitor",) in services.calls
     assert ("withdraw_notification", notification_id) in services.calls
     assert not any(
-        call[0] == "notify" and call[2] == "CaveViewer sample map is ready"
+        call[0] == "notify" and call[2] == "Sample Map Ready"
         for call in services.calls
     )
 
@@ -401,8 +411,8 @@ def test_sample_download_reports_failure_to_desktop(
     assert (
         "notify",
         notification_id,
-        "CaveViewer sample map download failed",
-        "Couldn't download Devils Eye.",
+        "Sample Map Download Failed",
+        "Couldn’t download Devils Eye",
         "high",
     ) in services.calls
 

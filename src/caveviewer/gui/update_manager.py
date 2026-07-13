@@ -367,11 +367,11 @@ class UpdateManager:
 
         try:
             if result.latest_version:
-                download_body = f"Downloading version {result.latest_version}."
+                download_body = f"Downloading version {result.latest_version}"
             else:
-                download_body = "Downloading the available update."
+                download_body = "Downloading the available update"
             self._notify_download(
-                f"{APP_NAME} update download started",
+                "Update Download Started",
                 download_body,
             )
             inhibitor = self._inhibit_update_download()
@@ -399,8 +399,8 @@ class UpdateManager:
             )
             next_state = UpdateState.READY
             self._notify_download(
-                f"{APP_NAME} update is ready",
-                "The update package finished downloading.",
+                "Update Ready",
+                "The update package finished downloading",
             )
         except DownloadCancelled:
             next_state = UpdateState.AVAILABLE
@@ -410,8 +410,8 @@ class UpdateManager:
             error = str(exc)
             next_state = UpdateState.FAILED
             self._notify_download(
-                f"{APP_NAME} update download failed",
-                "The update package could not be downloaded.",
+                "Update Download Failed",
+                "The update package could not be downloaded",
                 priority="high",
             )
             _LOG.warning(

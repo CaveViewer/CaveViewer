@@ -31,3 +31,10 @@ def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():
     overlay.update({"loaded": 3, "pending": 0, "ready": 0, "wanted": 3})
 
     assert overlay.is_ready_to_begin is True
+
+
+def test_recording_help_copy_is_format_neutral():
+    rows = dict(controls_overlay._get_platform_control_rows())
+
+    assert rows["REC button"] == "Start recording countdown"
+    assert "MP4" not in rows["REC button"]

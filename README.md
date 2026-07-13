@@ -105,8 +105,8 @@ Sample maps are a good way to confirm that CaveViewer is working before you impo
 
 ## Recording a Flight
 
-CaveViewer can record a clean MP4 of your flight through the cave. The app uses
-`ffmpeg` for MP4 encoding.
+CaveViewer can record a clean flight through the cave. Recordings are currently
+encoded as MP4 files with `ffmpeg`.
 
 Use the `REC` button to arm recording. The minimap, controls, and control panel
 disappear immediately, a 3-to-0 countdown appears in the amber loading ring,

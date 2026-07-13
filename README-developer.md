@@ -329,8 +329,8 @@ any non-SHUTDOWN state -> SHUTDOWN
 ```
 
 The splash polls immutable manager snapshots and maps the visible states to
-`Update <version> is available.`, `Downloading… <percentage>%`,
-`Verifying…`, `Downloaded successfully`, and `Download failed — Retry`.
+`Update <version> available`, `Downloading… <percentage>%`, `Verifying…`,
+`Update ready`, and `Download failed` with a separate `Retry` action.
 While a splash window is visible, it is the foreground update surface and
 suppresses duplicate desktop notifications for update progress or completion.
 If a download finishes after that surface closes, desktop notifications remain

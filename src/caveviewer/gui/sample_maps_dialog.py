@@ -32,7 +32,6 @@ from caveviewer.gui.platform import (
 from caveviewer.gui.preferences import migrate_state_file, write_text_atomic
 from caveviewer.gui.tk_feedback import FeedbackKind, show_feedback
 from caveviewer.gui.tk_theme import DARK_THEME
-from caveviewer.version import APP_NAME
 
 
 _BG_COLOR = DARK_THEME.background
@@ -202,8 +201,8 @@ def _download_sample_with_desktop_activity(
         _safe_desktop_notify(
             desktop_services,
             notification_id,
-            f"{APP_NAME} is downloading a sample map",
-            f"Downloading {display_name}…",
+            "Sample Map Download Started",
+            f"Downloading {display_name}",
         )
     inhibitor = _safe_desktop_inhibit(
         desktop_services,
@@ -227,8 +226,8 @@ def _download_sample_with_desktop_activity(
             _safe_desktop_notify(
                 desktop_services,
                 notification_id,
-                f"{APP_NAME} sample map download failed",
-                f"Couldn't download {display_name}.",
+                "Sample Map Download Failed",
+                f"Couldn’t download {display_name}",
                 priority="high",
             )
         raise
@@ -238,8 +237,8 @@ def _download_sample_with_desktop_activity(
         _safe_desktop_notify(
             desktop_services,
             notification_id,
-            f"{APP_NAME} sample map is ready",
-            f"{display_name} finished downloading.",
+            "Sample Map Ready",
+            f"{display_name} finished downloading",
         )
     return result_path
 
@@ -320,6 +319,7 @@ def show_sample_maps_dialog(
     dialog_closed = [False]
 
     dialog = tk.Toplevel(parent)
+    dialog.withdraw()
     dialog.title("Sample Maps")
     dialog.configure(bg=_BG_COLOR)
     dialog.resizable(False, False)
@@ -335,6 +335,19 @@ def show_sample_maps_dialog(
     dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
     dialog.bind("<Escape>", lambda _event: _close_dialog())
     dialog.bind("<Control-w>", lambda _event: _close_dialog())
+
+    def _present_dialog(initial_focus=None) -> None:
+        try:
+            dialog.update_idletasks()
+            dialog.deiconify()
+            dialog.lift(parent)
+            dialog.wait_visibility()
+            dialog.grab_set()
+            dialog.focus_force()
+            if initial_focus is not None and initial_focus.winfo_exists():
+                initial_focus.focus_set()
+        except tk.TclError:
+            pass
 
     # Size everything in scaled pixels so the dialog is physically comparable
     # to the DPI-scaled splash window rather than looking small on high-DPI
@@ -436,6 +449,7 @@ def show_sample_maps_dialog(
         fg=_SUBTITLE_COLOR, bg=_BG_COLOR,
     )
     status_label.pack(expand=True)
+    _present_dialog()
 
     list_frame = tk.Frame(content, bg=_BG_COLOR)
 
@@ -503,6 +517,7 @@ def show_sample_maps_dialog(
             cursor="hand2",
         )
         close_btn.pack(anchor="e", pady=(0, _px(2)))
+        close_btn.focus_set()
         dialog.wait_window()
         return None
 
@@ -910,6 +925,16 @@ def show_sample_maps_dialog(
     fitted_width = max(window_w, min(dialog.winfo_reqwidth(), max_width))
     fitted_height = min(dialog.winfo_reqheight(), max_height)
     dialog.geometry(f"{fitted_width}x{fitted_height}+{anchor_x}+{anchor_y}")
+    for action_btn in action_buttons.values():
+        try:
+            enabled = getattr(action_btn, "_cv_enabled", None)
+            if enabled is None:
+                enabled = str(action_btn.cget("state")) != "disabled"
+            if enabled:
+                action_btn.focus_set()
+                break
+        except tk.TclError:
+            pass
 
     dialog.wait_window()
 
