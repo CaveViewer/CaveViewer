@@ -8,7 +8,6 @@ import tkinter as tk
 from typing import Callable
 
 from caveviewer.gui.advanced_settings import (
-    ADVANCED_SETTING_COLUMNS,
     ADVANCED_SETTING_FIELDS,
     AdvancedSettingsSaveError,
     SettingSpec,
@@ -23,6 +22,15 @@ from caveviewer.gui.advanced_settings_form import (
     AdvancedSettingsFormState,
     MessageKind,
 )
+from caveviewer.gui.dialog_style import (
+    DIALOG_BODY_PAD_X,
+    DIALOG_BODY_PAD_Y,
+    DIALOG_PANEL_BORDER,
+    create_dialog_action_button,
+    create_dialog_notice,
+    set_dialog_action_button,
+    set_dialog_notice,
+)
 from caveviewer.gui.platform import DesktopServices, get_desktop_services
 from caveviewer.gui.tk_theme import DARK_THEME
 
@@ -31,93 +39,40 @@ _BG_COLOR = DARK_THEME.background
 _TITLE_COLOR = DARK_THEME.title
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
+_PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
-_BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
-_BUTTON_FG = DARK_THEME.primary_button_text
-_BORDER_COLOR = DARK_THEME.border
 
 _LINUX_LAYOUT = sys.platform.startswith("linux")
-_TWO_COLUMN_LAYOUT = True
-_WRAP_LENGTH = 620 if sys.platform == "win32" else 340
-_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 22
-_NUMERIC_ENTRY_WIDTH = 12
+# Keep Preferences close to GNOME-style boxed-list proportions: a wider
+# secondary window with enough room for labels, hints, and path controls.
+_WRAP_LENGTH = 520 if sys.platform == "win32" else 460
+_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 36
+_NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
-_ERROR_COLOR = DARK_THEME.error_text
-_WARNING_COLOR = _TITLE_COLOR
-_BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
-_SECTION_GAP = 44 if sys.platform == "win32" else 18
+_BODY_PAD_X = 32 if _LINUX_LAYOUT else DIALOG_BODY_PAD_X
 _MIN_WIDTH = (
-    1320
+    860
     if sys.platform == "win32"
-    else 1040
-    if sys.platform.startswith("linux")
-    else 0
+    else 860
+    if _LINUX_LAYOUT
+    else 760
 )
-
-
-class _LabelButton(tk.Label):
-    """Keyboard-accessible label button with an explicit enabled state."""
-
-    def __init__(
-        self,
-        parent,
-        *,
-        text: str,
-        command: Callable[[], None],
-        font,
-        bg: str,
-        fg: str,
-        hover_bg: str,
-        padx: int,
-        pady: int,
-        border_color: str,
-    ) -> None:
-        super().__init__(
-            parent,
-            text=text,
-            font=font,
-            bg=bg,
-            fg=fg,
-            padx=padx,
-            pady=pady,
-            cursor="hand2",
-            takefocus=True,
-            highlightthickness=1,
-            highlightbackground=border_color,
-            highlightcolor=border_color,
-        )
-        self._command = command
-        self._normal_bg = bg
-        self._normal_fg = fg
-        self._hover_bg = hover_bg
-        self._enabled = True
-        self.bind("<Button-1>", self._invoke)
-        self.bind("<Return>", self._invoke)
-        self.bind("<space>", self._invoke)
-        self.bind("<Enter>", self._show_hover)
-        self.bind("<Leave>", self._clear_hover)
-
-    def _invoke(self, _event=None):
-        if self._enabled:
-            self._command()
-        return "break"
-
-    def _show_hover(self, _event=None) -> None:
-        if self._enabled:
-            self.config(bg=self._hover_bg)
-
-    def _clear_hover(self, _event=None) -> None:
-        self.config(bg=self._normal_bg)
-
-    def set_enabled(self, enabled: bool) -> None:
-        self._enabled = bool(enabled)
-        self.config(
-            bg=self._normal_bg,
-            fg=self._normal_fg if self._enabled else _PLACEHOLDER_COLOR,
-            cursor="hand2" if self._enabled else "",
-            takefocus=self._enabled,
-        )
+_ROW_PAD_X = 18
+_ROW_PAD_Y = 12
+_CONTROL_ROW_TOP_PAD_Y = 14
+_CONTROL_GAP_X = 10
+_TAB_PAD_X = 14
+_TAB_PAD_Y = 7
+_TAB_GAP_X = 10
+_TAB_BOTTOM_PAD_Y = 18
+_BUTTON_ROW_TOP_PAD_Y = 18
+_NOTICE_WRAP_LENGTH = 720
+_PREFERENCE_PAGES = (
+    ("streaming", "Streaming"),
+    ("parsing", "Import"),
+    ("storage", "Storage"),
+)
 
 
 class AdvancedSettingsDialog:
@@ -139,38 +94,41 @@ class AdvancedSettingsDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.withdraw()
-        self.dialog.title("Advanced Settings")
+        self.dialog.title("Preferences")
         self.dialog.configure(bg=_BG_COLOR)
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
 
         if _LINUX_LAYOUT:
-            self.section_font = (ui_font_family, 10)
+            self.section_font = (ui_font_family, 10, "bold")
             self.body_font = (ui_font_family, 10)
             self.small_font = (ui_font_family, 9)
-            self.field_gap = 14
-            self.entry_pad_y = 6
-            self.section_pad_y = 15
+            self.entry_pad_y = 4
         else:
-            self.section_font = (ui_font_family, 12)
+            self.section_font = (ui_font_family, 12, "bold")
             self.body_font = (ui_font_family, 12)
             self.small_font = (ui_font_family, 10)
-            self.field_gap = 9
             self.entry_pad_y = 4
-            self.section_pad_y = 12
 
         self.field_vars: dict[str, tk.StringVar] = {}
         self.field_entries: dict[str, tk.Entry] = {}
         self.field_display_vars: dict[str, tk.StringVar] = {}
         self.field_entry_states: dict[str, str] = {}
-        self.field_browse_buttons: dict[str, _LabelButton] = {}
+        self.field_browse_buttons: dict[str, tk.Widget] = {}
         self.numeric_entry_states: dict[str, tuple] = {}
         self.numeric_placeholder_keys: set[str] = set()
         self.form_ready = False
         self.rendering_state = False
         self.rendered_invalid_key: str | None = None
         self.apply_button = None
-        self.section_row = None
+        self.tab_bar = None
+        self.page_stack = None
+        self.pages: dict[str, tk.Frame] = {}
+        self.page_buttons: dict[str, tk.Label] = {}
+        self.field_page_keys: dict[str, str] = {}
+        self.active_page_key: str | None = None
+        self.feedback_frame = None
+        self.rendered_state: AdvancedSettingsFormState | None = None
         self.button_row = None
         self.error_label = None
 
@@ -194,7 +152,7 @@ class AdvancedSettingsDialog:
         return True
 
     @staticmethod
-    def _compact_directory_path(path: str, max_chars: int = 42) -> str:
+    def _compact_directory_path(path: str, max_chars: int = 80) -> str:
         expanded = os.path.abspath(os.path.expanduser(path.strip() or "~"))
         home = os.path.abspath(os.path.expanduser("~"))
         if expanded == home:
@@ -269,71 +227,81 @@ class AdvancedSettingsDialog:
                 lambda field_key=key: self._show_numeric_placeholder(field_key)
             )
 
-    def _new_label_button(
+    def _new_dialog_button(
         self,
         parent,
         text: str,
         command: Callable[[], None],
         *,
-        bg: str = DARK_THEME.secondary_button,
-        fg: str = _SUBTITLE_COLOR,
-        hover_bg: str = DARK_THEME.secondary_button_hover,
+        kind: str = "secondary",
         padx: int = 10,
         pady: int = 5,
-        border_color: str = DARK_THEME.secondary_button_border,
-    ) -> _LabelButton:
-        return _LabelButton(
+        width: int | None = None,
+        default: str | None = None,
+    ):
+        return create_dialog_action_button(
             parent,
-            text=text,
-            command=command,
+            text,
+            command,
             font=self.small_font,
-            bg=bg,
-            fg=fg,
-            hover_bg=hover_bg,
+            kind=kind,
             padx=padx,
             pady=pady,
-            border_color=border_color,
+            width=width,
+            default=default,
         )
 
-    def _render_section(self, parent, title: str, section_key: str) -> None:
+    def _render_section(self, parent, section_key: str) -> None:
         section = tk.Frame(
             parent,
             bg=_BG_COLOR,
-            padx=14,
-            pady=self.section_pad_y,
-            highlightthickness=1,
-            highlightbackground=_BORDER_COLOR,
-            highlightcolor=_BORDER_COLOR,
         )
-        section.pack(
-            fill="both", expand=(section_key == "streaming"), pady=(0, 12)
-        )
-        tk.Label(
+        section.pack(fill="x")
+
+        group = tk.Frame(
             section,
-            text=title,
-            font=self.section_font,
-            fg=_TITLE_COLOR,
-            bg=_BG_COLOR,
-        ).pack(anchor="w", pady=(0, 10))
+            bg=_PANEL_COLOR,
+            padx=0,
+            pady=0,
+            highlightthickness=1,
+            highlightbackground=DIALOG_PANEL_BORDER,
+            highlightcolor=DIALOG_PANEL_BORDER,
+        )
+        group.pack(fill="x")
 
         fields = [
             field
             for field in ADVANCED_SETTING_FIELDS
             if field.section == section_key
         ]
-        for field in fields:
-            self._render_field(section, field)
+        for index, field in enumerate(fields):
+            self._render_field(group, field, last=index == len(fields) - 1)
 
-    def _render_field(self, section, field: SettingSpec) -> None:
+    def _render_field(self, section, field: SettingSpec, *, last: bool) -> None:
         key = field.key
-        row = tk.Frame(section, bg=_BG_COLOR)
-        row.pack(fill="x", pady=(0, self.field_gap))
+        self.field_page_keys[key] = field.section
+        compact_path = key == "recording_dir"
+        row = tk.Frame(
+            section,
+            bg=_PANEL_COLOR,
+            padx=_ROW_PAD_X,
+            pady=_ROW_PAD_Y,
+        )
+        row.pack(fill="x")
+        row.grid_columnconfigure(0, weight=1)
+
+        text_column = tk.Frame(row, bg=_PANEL_COLOR)
+        text_column.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+        )
         tk.Label(
-            row,
+            text_column,
             text=field.label,
             font=self.body_font,
             fg=_SUBTITLE_COLOR,
-            bg=_BG_COLOR,
+            bg=_PANEL_COLOR,
             anchor="w",
         ).pack(anchor="w")
 
@@ -345,7 +313,6 @@ class AdvancedSettingsDialog:
             if value_type in {ValueType.INT, ValueType.FLOAT}
             else _TEXT_ENTRY_WIDTH
         )
-        compact_path = key == "recording_dir"
         entry_var = var
         placeholder_text = advanced_setting_placeholder_text(field)
         if placeholder_text:
@@ -365,17 +332,16 @@ class AdvancedSettingsDialog:
             )
         self.field_display_vars[key] = entry_var
 
-        entry_parent = row
-        entry_pack_options = {
-            "anchor": "w",
-            "pady": (self.entry_pad_y, self.entry_pad_y),
-        }
-        if value_type in {ValueType.PATH, ValueType.PATH_CREATE}:
-            entry_parent = tk.Frame(row, bg=_BG_COLOR)
-            entry_parent.pack(
-                fill="x", pady=(self.entry_pad_y, self.entry_pad_y)
-            )
-            entry_pack_options = {"side": "left", "fill": "x", "expand": True}
+        entry_parent = tk.Frame(row, bg=_PANEL_COLOR)
+        entry_parent.grid(
+            row=1,
+            column=0,
+            sticky="ew" if compact_path else "w",
+            pady=(_CONTROL_ROW_TOP_PAD_Y, 0),
+        )
+        entry_parent.grid_columnconfigure(0, weight=1)
+        if compact_path:
+            entry_parent.grid_columnconfigure(1, weight=0)
 
         entry = tk.Entry(
             entry_parent,
@@ -447,38 +413,53 @@ class AdvancedSettingsDialog:
             lambda _event, field_key=key: self._on_field_blurred(field_key),
             add="+",
         )
-        entry.pack(**entry_pack_options)
+        if compact_path:
+            entry.grid(row=0, column=0, sticky="ew")
+        else:
+            entry.pack(side="left")
 
         if value_type in {ValueType.PATH, ValueType.PATH_CREATE}:
-            browse_button = self._new_label_button(
+            browse_button = self._new_dialog_button(
                 entry_parent,
                 "Browse",
                 lambda field_key=key, title=field.label: self._choose_directory(
                     field_key, title
                 ),
-                padx=8,
+                padx=10,
             )
-            browse_button.pack(side="left", padx=(8, 0))
+            if compact_path:
+                browse_button.grid(
+                    row=0,
+                    column=1,
+                    sticky="e",
+                    padx=(_CONTROL_GAP_X, 0),
+                )
+            else:
+                browse_button.pack(side="left", padx=(_CONTROL_GAP_X, 0))
             self.field_browse_buttons[key] = browse_button
 
         single_line_hint = key == "recording_dir"
         hint_label = tk.Label(
-            row,
+            text_column,
             text=field.hint,
             font=self.small_font,
             fg=_INSTRUCTION_COLOR,
-            bg=_BG_COLOR,
+            bg=_PANEL_COLOR,
             justify="left",
             anchor="w",
             wraplength=0 if single_line_hint else _WRAP_LENGTH,
         )
-        hint_label.pack(anchor="w", fill="x")
+        hint_label.pack(anchor="w", fill="x", pady=(3, 0))
         if _LINUX_LAYOUT and not single_line_hint:
-            row.bind(
+            text_column.bind(
                 "<Configure>",
                 lambda event, label=hint_label: self._resize_hint(event, label),
                 add="+",
             )
+
+        if not last:
+            separator = tk.Frame(section, bg=DARK_THEME.entry_border, height=1)
+            separator.pack(fill="x")
 
     @staticmethod
     def _resize_hint(event, label) -> None:
@@ -499,118 +480,128 @@ class AdvancedSettingsDialog:
         if selection:
             var.set(selection.path)
 
+    def _new_page_tab(self, parent, page_key: str, label: str) -> tk.Label:
+        tab = tk.Label(
+            parent,
+            text=label,
+            font=self.small_font,
+            bg=_BG_COLOR,
+            fg=_INSTRUCTION_COLOR,
+            padx=_TAB_PAD_X,
+            pady=_TAB_PAD_Y,
+            cursor="hand2",
+            takefocus=True,
+            highlightthickness=1,
+            highlightbackground=_BG_COLOR,
+            highlightcolor=DARK_THEME.entry_focus_border,
+        )
+
+        def _invoke(_event=None, key=page_key):
+            self._show_page(key)
+            return "break"
+
+        tab.bind("<Button-1>", _invoke)
+        tab.bind("<Return>", _invoke)
+        tab.bind("<space>", _invoke)
+        return tab
+
+    def _sync_feedback_to_current_state(self) -> None:
+        if self.error_label is None or self.rendered_state is None:
+            return
+        self._set_feedback(
+            self.rendered_state.message,
+            self.rendered_state.message_kind,
+        )
+
+    def _show_page(self, page_key: str) -> None:
+        page = self.pages.get(page_key)
+        if page is None:
+            return
+        self.active_page_key = page_key
+        for key, candidate_page in self.pages.items():
+            if key == page_key:
+                candidate_page.grid(row=0, column=0, sticky="nsew")
+            else:
+                candidate_page.grid_remove()
+        for key, tab in self.page_buttons.items():
+            active = key == page_key
+            tab.config(
+                bg=_PANEL_COLOR if active else _BG_COLOR,
+                fg=_TITLE_COLOR if active else _INSTRUCTION_COLOR,
+                highlightbackground=(
+                    DARK_THEME.entry_border if active else _BG_COLOR
+                ),
+                highlightcolor=(
+                    DARK_THEME.entry_focus_border
+                    if active
+                    else _BG_COLOR
+                ),
+            )
+        self._sync_feedback_to_current_state()
+
     def _build(self) -> None:
         body = tk.Frame(
-            self.dialog, bg=_BG_COLOR, padx=_BODY_PAD_X, pady=18
+            self.dialog,
+            bg=_BG_COLOR,
+            padx=_BODY_PAD_X,
+            pady=DIALOG_BODY_PAD_Y,
         )
         body.pack(fill="both", expand=True)
-        self.section_row = tk.Frame(body, bg=_BG_COLOR)
-        self.section_row.pack(fill="both", expand=True, pady=(0, 10))
 
-        for column_index, sections in enumerate(ADVANCED_SETTING_COLUMNS):
-            column = tk.Frame(self.section_row, bg=_BG_COLOR)
-            if _TWO_COLUMN_LAYOUT:
-                half_gap = _SECTION_GAP // 2
-                pad_left = half_gap if column_index > 0 else 0
-                pad_right = (
-                    half_gap
-                    if column_index < len(ADVANCED_SETTING_COLUMNS) - 1
-                    else 0
-                )
-                self.section_row.grid_columnconfigure(
-                    column_index,
-                    weight=1,
-                    uniform="advanced_settings_column",
-                )
-                column.grid(
-                    row=0,
-                    column=column_index,
-                    sticky="nsew",
-                    padx=(pad_left, pad_right),
-                )
-            else:
-                column.pack(fill="x")
-            for section_key, section_title in sections:
-                self._render_section(column, section_title, section_key)
+        self.tab_bar = tk.Frame(body, bg=_BG_COLOR)
+        self.tab_bar.pack(fill="x", pady=(0, _TAB_BOTTOM_PAD_Y))
+        for page_key, tab_label in _PREFERENCE_PAGES:
+            tab = self._new_page_tab(self.tab_bar, page_key, tab_label)
+            tab.pack(side="left", padx=(0, _TAB_GAP_X))
+            self.page_buttons[page_key] = tab
+
+        self.page_stack = tk.Frame(body, bg=_BG_COLOR)
+        self.page_stack.pack(fill="x")
+        self.page_stack.grid_rowconfigure(0, weight=1)
+        self.page_stack.grid_columnconfigure(0, weight=1)
+        for page_key, _tab_label in _PREFERENCE_PAGES:
+            page = tk.Frame(self.page_stack, bg=_BG_COLOR)
+            page.grid(row=0, column=0, sticky="nsew")
+            self.pages[page_key] = page
+            self._render_section(page, page_key)
+        self.dialog.update_idletasks()
+        max_page_width = max(
+            (page.winfo_reqwidth() for page in self.pages.values()),
+            default=1,
+        )
+        max_page_height = max(
+            (page.winfo_reqheight() for page in self.pages.values()),
+            default=1,
+        )
+        self.page_stack.configure(width=max_page_width, height=max_page_height)
+        self.page_stack.grid_propagate(False)
+        self._show_page(_PREFERENCE_PAGES[0][0])
+
+        self.feedback_frame, self.error_label = create_dialog_notice(
+            body,
+            font=self.small_font,
+            wraplength=_NOTICE_WRAP_LENGTH,
+        )
 
         self.button_row = tk.Frame(body, bg=_BG_COLOR)
-        error_parent = self.button_row if _LINUX_LAYOUT else body
-        self.error_label = tk.Label(
-            error_parent,
-            text="",
-            font=self.small_font,
-            fg=_ERROR_COLOR,
-            bg=_BG_COLOR,
-            justify="left",
-            anchor="w",
-            wraplength=620 if _LINUX_LAYOUT else _WRAP_LENGTH,
-        )
-        if _LINUX_LAYOUT:
-            self.button_row.pack(fill="x")
-            self.error_label.pack(
-                side="left", fill="x", expand=True, padx=(0, 12)
-            )
-        else:
-            self.error_label.pack(anchor="w", pady=(4, 10))
-            self.button_row.pack(fill="x")
+        self.button_row.pack(fill="x", pady=(_BUTTON_ROW_TOP_PAD_Y, 0))
 
-        if sys.platform == "darwin":
-            cancel_button = self._new_label_button(
-                self.button_row,
-                "Cancel",
-                self.cancel,
-                padx=12,
-                pady=6,
-            )
-            self.apply_button = self._new_label_button(
-                self.button_row,
-                "Apply",
-                self.apply,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                hover_bg=_BUTTON_HOVER_BG,
-                padx=16,
-                pady=6,
-                border_color=_BUTTON_BORDER_COLOR,
-            )
-        else:
-            cancel_button = tk.Button(
-                self.button_row,
-                text="Cancel",
-                command=self.cancel,
-                font=self.small_font,
-                bg=DARK_THEME.secondary_button,
-                fg=_SUBTITLE_COLOR,
-                activebackground=DARK_THEME.secondary_button_hover,
-                activeforeground=_SUBTITLE_COLOR,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=DARK_THEME.secondary_button_border,
-                highlightcolor=DARK_THEME.secondary_button_border,
-                padx=12,
-                pady=6,
-                cursor="hand2",
-            )
-            self.apply_button = tk.Button(
-                self.button_row,
-                text="Apply",
-                command=self.apply,
-                font=self.small_font,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                activebackground=_BUTTON_HOVER_BG,
-                activeforeground=_BUTTON_FG,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=_BUTTON_BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR,
-                padx=16,
-                pady=6,
-                cursor="hand2",
-                default="active",
-            )
+        cancel_button = self._new_dialog_button(
+            self.button_row,
+            "Cancel",
+            self.cancel,
+            padx=12,
+            pady=6,
+        )
+        self.apply_button = self._new_dialog_button(
+            self.button_row,
+            "Apply",
+            self.apply,
+            kind="primary",
+            padx=16,
+            pady=6,
+            default="active",
+        )
 
         self.apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
@@ -619,23 +610,35 @@ class AdvancedSettingsDialog:
 
         self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
         self.dialog.bind("<Escape>", lambda _event: self.cancel())
+        self.dialog.bind("<Control-w>", lambda _event: self.cancel())
         self.dialog.bind("<Return>", lambda _event: self.apply())
 
     def _set_feedback(self, message: str, message_kind: MessageKind) -> None:
-        self.error_label.config(
-            text=message,
-            fg=(
-                _WARNING_COLOR
-                if message_kind is MessageKind.WARNING
-                else _ERROR_COLOR
-            ),
-        )
+        if not message:
+            self.error_label.config(text="")
+            if self.feedback_frame is not None:
+                self.feedback_frame.pack_forget()
+            return
+
+        kind = "warning" if message_kind is MessageKind.WARNING else "error"
+        if self.feedback_frame is not None:
+            set_dialog_notice(
+                self.feedback_frame,
+                self.error_label,
+                message,
+                kind=kind,
+            )
+            if not self.feedback_frame.winfo_manager():
+                self.feedback_frame.pack(
+                    fill="x",
+                    pady=(8, 0),
+                    before=self.button_row,
+                )
+        else:
+            self.error_label.config(text=message)
 
     def _set_apply_enabled(self, enabled: bool) -> None:
-        if isinstance(self.apply_button, _LabelButton):
-            self.apply_button.set_enabled(enabled)
-        else:
-            self.apply_button.config(state="normal" if enabled else "disabled")
+        set_dialog_action_button(self.apply_button, enabled=enabled)
 
     def _set_field_lock(self, invalid_key: str | None) -> None:
         for key, entry in self.field_entries.items():
@@ -654,11 +657,18 @@ class AdvancedSettingsDialog:
                 ),
             )
         for key, browse_button in self.field_browse_buttons.items():
-            browse_button.set_enabled(invalid_key is None or key == invalid_key)
+            set_dialog_action_button(
+                browse_button,
+                enabled=invalid_key is None or key == invalid_key,
+            )
 
     def _focus_invalid_field(
         self, key: str, *, select_value: bool = False
     ) -> None:
+        page_key = self.field_page_keys.get(key)
+        if page_key is not None:
+            self._show_page(page_key)
+
         def focus() -> None:
             entry = self.field_entries.get(key)
             if entry is None or not entry.winfo_exists():
@@ -680,12 +690,13 @@ class AdvancedSettingsDialog:
         preferred_key: str | None = None,
         focus_invalid: bool = False,
     ) -> None:
+        self.rendered_state = state
         previous_invalid_key = self.rendered_invalid_key
         self.rendered_invalid_key = state.invalid_key
         locked_key = state.invalid_key if state.form_locked else None
         self._set_field_lock(locked_key)
         self._set_apply_enabled(state.apply_enabled)
-        self._set_feedback(state.message, state.message_kind)
+        self._sync_feedback_to_current_state()
 
         if state.invalid_key is not None and (
             focus_invalid or state.invalid_key != previous_invalid_key
@@ -754,10 +765,8 @@ class AdvancedSettingsDialog:
         self.dialog.destroy()
 
     def _natural_height(self) -> int:
-        height = 36
-        height += self.section_row.winfo_reqheight() + 10
-        height += self.button_row.winfo_reqheight()
-        return height
+        self.dialog.update_idletasks()
+        return self.dialog.winfo_reqheight()
 
     def _apply_geometry(self) -> None:
         geometry_applied = False

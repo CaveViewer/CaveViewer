@@ -12,7 +12,7 @@
       be explored on systems with a wide range of memory and graphics hardware.
     </p>
     <p>
-      Navigate the survey in 3D, inspect a minimap and longitudinal profile,
+      Navigate the survey in 3D, inspect a minimap,
       save viewpoints, adjust rendering, and record the viewer when needed.
     </p>
   </description>
@@ -31,6 +31,18 @@
     <screenshot type="default">
       <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-hero.jpg</image>
       <caption>Exploring a streamed 3D cave survey</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-splash.png</image>
+      <caption>Opening a cave map folder</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-importing.png</image>
+      <caption>Importing a large cave survey</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-sample-maps.png</image>
+      <caption>Choosing a sample map</caption>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1" />

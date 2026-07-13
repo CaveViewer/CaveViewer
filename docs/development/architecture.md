@@ -81,8 +81,12 @@ Directory selection, file reveal, notifications, and idle/suspend inhibition
 use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal
 first and falls back to Tk or `xdg-open` only when the portal is unavailable.
 Long sample-map downloads request desktop notification and inhibit support
-through this same capability. Background update downloads request notification
-and inhibit support while the package is being downloaded and verified.
+through this same capability, but the visible Sample Maps dialog suppresses
+duplicate desktop notifications because it already presents progress and
+completion actions. Background update downloads request notification and
+inhibit support while the package is being downloaded and verified; a visible
+splash suppresses duplicate desktop notifications because it already presents
+the update state and actions.
 Uncached map imports request idle/suspend inhibition while parsing and
 building the cache. These requests remain best-effort so desktop integration
 cannot break the underlying work. Portal
@@ -94,7 +98,8 @@ IDLE -> REQUESTING -> WAITING -> {COMPLETED, CANCELLED, FAILED}
 
 Startup map sessions accept either a folder containing a supported map or one
 direct `.glb`/`.obj` file. This keeps Linux `Exec ... %f` desktop launches and
-the in-app folder chooser on the same import/cache path.
+the in-app folder chooser on the same import/cache path as desktop-shell direct
+file launches.
 
 Linux viewer windows use GLFW 3.4. `CAVEVIEWER_WINDOW_SYSTEM=auto` prefers
 X11/XWayland when `DISPLAY` is available, then retries Wayland only for a

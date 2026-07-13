@@ -450,20 +450,20 @@ class ImportProgressPanel:
     def _stage_label(self, stage: str) -> str:
         normalized = " ".join((stage or "").strip().lower().split())
         labels = {
-            "starting import": "Starting import...",
-            "scanning file": "Scanning map...",
-            "computing face centroids": "Analyzing geometry...",
-            "grouping faces by cell": "Building spatial index...",
-            "grouping chunk faces": "Building map chunks...",
-            "writing chunk files": "Writing map cache...",
-            "writing manifest": "Finalizing map cache...",
-            "loading cached map": "Loading cached map...",
-            "loading chunks": "Opening cave...",
-            "opening cave": "Opening cave...",
-            "done": "Finishing...",
+            "starting import": "Starting import…",
+            "scanning file": "Scanning map…",
+            "computing face centroids": "Analyzing geometry…",
+            "grouping faces by cell": "Building spatial index…",
+            "grouping chunk faces": "Building map chunks…",
+            "writing chunk files": "Writing map cache…",
+            "writing manifest": "Finalizing map cache…",
+            "loading cached map": "Loading cached map…",
+            "loading chunks": "Opening cave…",
+            "opening cave": "Opening cave…",
+            "done": "Finishing…",
         }
         if normalized in labels:
             return labels[normalized]
         if normalized:
-            return normalized[:1].upper() + normalized[1:] + "..."
-        return "Working..."
+            return normalized[:1].upper() + normalized[1:] + "…"
+        return "Working…"

@@ -24,7 +24,7 @@ the right side of the screen:
               map without closing the program. Always stateless/one-shot
               -- there's no "is open mode active" toggle state, a click
               just triggers viewer_window.py's map-switch flow once.
-  - "Rec"     starts the clean MP4 recording countdown. Recording state
+  - "Rec"     starts the recording countdown. Recording state
               lives in viewer_window.py because it owns the framebuffer
               and ffmpeg process lifecycle.
 

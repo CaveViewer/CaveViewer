@@ -1483,7 +1483,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # tkinter and the parser/chunker modules, which the rest of this
         # file doesn't otherwise need -- same reasoning the application
         # startup module uses for its own local imports of these.
-        from caveviewer.app import pick_folder_dialog, find_model_file, import_and_cache_any
+        from caveviewer.app import pick_folder_dialog, find_model_file
         from caveviewer.core import chunker as chunker_module
 
         folder = pick_folder_dialog()
@@ -3016,6 +3016,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         keys = self.wnd.keys
         if action == keys.ACTION_PRESS:
+            if self._handle_window_shortcut(key, modifiers):
+                return
             if self.controls_overlay.is_waiting_for_begin:
                 space_key = self._resolve_key_optional(keys, "SPACE", "SPACEBAR")
                 if (
@@ -3036,6 +3038,29 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._keys_down.discard(key)
 
     key_event = on_key_event
+
+    def _handle_window_shortcut(self, key, modifiers: KeyModifiers) -> bool:
+        """Handle desktop-standard window and open shortcuts."""
+        shortcut_down = (
+            self._command_is_down(modifiers)
+            if sys.platform == "darwin"
+            else self._control_is_down(modifiers)
+        )
+        if not shortcut_down:
+            return False
+
+        close_key = self._resolve_key_optional(self.wnd.keys, "W")
+        if close_key is not None and key == close_key:
+            self.on_close()
+            return True
+
+        open_key = self._resolve_key_optional(self.wnd.keys, "O")
+        if open_key is not None and key == open_key:
+            if self._has_map_loaded and not self._import_active:
+                self._handle_open_button_click()
+            return True
+
+        return False
 
     def _handle_recording_hotkey(self, key, modifiers: KeyModifiers) -> bool:
         """Use Shift+R to cancel countdown or stop active recording."""

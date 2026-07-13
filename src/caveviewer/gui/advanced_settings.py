@@ -20,11 +20,6 @@ from caveviewer.gui.preferences import migrate_preference_file
 
 _LOG = get_logger("AdvancedSettings")
 
-HIGH_WORKER_THREAD_WARNING = (
-    "Warning: More than 5 worker threads may negatively affect performance and "
-    "lead to out of memory errors on machines with less than 16 GB of RAM."
-)
-
 
 class ValueType(str, Enum):
     INT = "int"
@@ -49,7 +44,6 @@ class SettingSpec:
     minimum: float | int | None = None
     maximum: float | int | None = None
     units: str = ""
-    warning_above: int | None = None
 
     def built_in_default(self) -> str:
         value = self.default() if callable(self.default) else self.default
@@ -173,13 +167,12 @@ ADVANCED_SETTING_FIELDS = (
         section="streaming",
         key="io_workers",
         env_var="CAVEVIEWER_IO_WORKERS",
-        label="Chunk-loading workers",
-        hint="Maximum threads used while viewing a cave.",
+        label="Loading worker limit",
+        hint="Worker count may be lower when CPU or RAM is constrained.",
         value_type=ValueType.INT,
         default="2",
         minimum=1,
         maximum=32,
-        warning_above=5,
     ),
     SettingSpec(
         section="streaming",
@@ -243,13 +236,12 @@ ADVANCED_SETTING_FIELDS = (
         section="parsing",
         key="chunk_build_workers",
         env_var="CAVEVIEWER_CHUNK_BUILD_WORKERS",
-        label="Cache-building workers",
-        hint="Maximum threads used to build a new cache.",
+        label="Cache-building worker limit",
+        hint="Worker count may be lower when CPU or RAM is constrained.",
         value_type=ValueType.INT,
         default="1",
         minimum=1,
         maximum=32,
-        warning_above=5,
     ),
     SettingSpec(
         section="parsing",
@@ -263,19 +255,14 @@ ADVANCED_SETTING_FIELDS = (
         maximum=32,
     ),
     SettingSpec(
-        section="downloads",
+        section="storage",
         key="recording_dir",
         env_var="CAVEVIEWER_RECORDING_DIR",
-        label="Movie recording directory",
-        hint="Folder where MP4 flight recordings are saved.",
+        label="Recordings folder",
+        hint="Where saved recordings are stored.",
         value_type=ValueType.PATH_CREATE,
         default=_recording_directory_default,
     ),
-)
-
-ADVANCED_SETTING_COLUMNS = (
-    (("streaming", "Streaming Performance"),),
-    (("parsing", "Map Parsing"), ("downloads", "Recordings")),
 )
 
 def advanced_settings_file() -> str:
@@ -334,20 +321,6 @@ def advanced_setting_range_text(
 
 def advanced_setting_placeholder_text(field: SettingSpec) -> str | None:
     return advanced_setting_range_text(field, include_units=False)
-
-
-def advanced_settings_warning(values: Mapping[str, str]) -> str | None:
-    normalized = normalize_advanced_settings(values)
-    for field in ADVANCED_SETTING_FIELDS:
-        if field.warning_above is None:
-            continue
-        try:
-            value = int(normalized[field.key])
-        except ValueError:
-            continue
-        if value > field.warning_above:
-            return HIGH_WORKER_THREAD_WARNING
-    return None
 
 
 def _directory_target_is_writable(path: str) -> bool:
@@ -587,7 +560,7 @@ def save_advanced_settings(
                 pass
         _LOG.warning("Could not save advanced settings to %s: %s", path, exc)
         raise AdvancedSettingsSaveError(
-            f"Could not save Advanced Settings to {path}."
+            f"Could not save preferences to {path}."
         ) from exc
 
 

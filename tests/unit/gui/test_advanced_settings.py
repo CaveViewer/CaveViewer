@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import os
 from dataclasses import FrozenInstanceError
@@ -158,38 +159,22 @@ def test_setting_spec_is_immutable():
 
 
 @pytest.mark.parametrize("key", ["io_workers", "chunk_build_workers"])
-def test_worker_thread_count_above_five_returns_warning(
+def test_high_worker_counts_are_valid_advisory_caps_without_warning(
     valid_advanced_settings, key
 ):
-    valid_advanced_settings[key] = "6"
+    valid_advanced_settings[key] = "32"
 
-    warning = settings.advanced_settings_warning(valid_advanced_settings)
     result = settings.validate_advanced_settings(
         valid_advanced_settings
     )
 
-    assert warning == settings.HIGH_WORKER_THREAD_WARNING
-    assert "negatively affect performance" in warning
-    assert "out of memory errors" in warning
-    assert "less than 16 GB of RAM" in warning
     assert result.is_valid, result.message
     assert result.error_key is None
-
-
-@pytest.mark.parametrize("value", ["1", "5"])
-def test_worker_thread_count_at_or_below_five_has_no_warning(
-    valid_advanced_settings, value
-):
-    valid_advanced_settings["io_workers"] = value
-    valid_advanced_settings["chunk_build_workers"] = value
-
-    assert settings.advanced_settings_warning(valid_advanced_settings) is None
 
 
 def test_invalid_worker_thread_value_defers_to_validation(valid_advanced_settings):
     valid_advanced_settings["io_workers"] = "many"
 
-    assert settings.advanced_settings_warning(valid_advanced_settings) is None
     result = settings.validate_advanced_settings(
         valid_advanced_settings
     )
@@ -541,7 +526,7 @@ def test_apply_maps_every_setting_to_its_declared_environment_variable(
 def test_advanced_settings_dialog_uses_extracted_settings_logic():
     from caveviewer.gui import advanced_settings_dialog, advanced_settings_form, splash_screen
 
-    assert advanced_settings_dialog._NUMERIC_ENTRY_WIDTH == 12
+    assert advanced_settings_dialog._NUMERIC_ENTRY_WIDTH == 8
     assert advanced_settings_dialog.ADVANCED_SETTING_FIELDS is settings.ADVANCED_SETTING_FIELDS
     assert (
         advanced_settings_dialog.advanced_setting_placeholder_text
@@ -556,6 +541,115 @@ def test_advanced_settings_dialog_uses_extracted_settings_logic():
         splash_screen._show_advanced_settings_dialog
         is advanced_settings_dialog.show_advanced_settings_dialog
     )
+
+
+def test_advanced_settings_dialog_uses_compact_tabbed_pages():
+    from caveviewer.gui import advanced_settings_dialog
+
+    source = inspect.getsource(advanced_settings_dialog.AdvancedSettingsDialog._build)
+    module_source = inspect.getsource(advanced_settings_dialog)
+    settings_source = inspect.getsource(settings)
+    show_page_source = inspect.getsource(
+        advanced_settings_dialog.AdvancedSettingsDialog._show_page
+    )
+    render_field_source = inspect.getsource(
+        advanced_settings_dialog.AdvancedSettingsDialog._render_field
+    )
+    page_keys = [page[0] for page in advanced_settings_dialog._PREFERENCE_PAGES]
+    page_labels = [page[1] for page in advanced_settings_dialog._PREFERENCE_PAGES]
+    field_sections = {
+        field.section for field in advanced_settings_dialog.ADVANCED_SETTING_FIELDS
+    }
+    fields_by_key = {
+        field.key: field for field in advanced_settings_dialog.ADVANCED_SETTING_FIELDS
+    }
+
+    assert page_keys == ["streaming", "parsing", "storage"]
+    assert page_labels == ["Streaming", "Import", "Storage"]
+    assert all(len(page) == 2 for page in advanced_settings_dialog._PREFERENCE_PAGES)
+    assert set(page_keys) == field_sections
+    assert fields_by_key["io_workers"].label == "Loading worker limit"
+    assert (
+        fields_by_key["chunk_build_workers"].label
+        == "Cache-building worker limit"
+    )
+    assert (
+        fields_by_key["io_workers"].hint
+        == "Worker count may be lower when CPU or RAM is constrained."
+    )
+    assert (
+        fields_by_key["chunk_build_workers"].hint
+        == fields_by_key["io_workers"].hint
+    )
+    if (
+        advanced_settings_dialog._LINUX_LAYOUT
+        or advanced_settings_dialog.sys.platform == "win32"
+    ):
+        assert advanced_settings_dialog._MIN_WIDTH >= 860
+    else:
+        assert advanced_settings_dialog._MIN_WIDTH >= 760
+    assert advanced_settings_dialog._ROW_PAD_X == 18
+    assert advanced_settings_dialog._ROW_PAD_Y == 12
+    assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 14
+    assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 18
+    assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 18
+    assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 720
+    assert fields_by_key["recording_dir"].label == "Recordings folder"
+    assert fields_by_key["recording_dir"].hint == "Where saved recordings are stored."
+    assert "compact_path = key == \"recording_dir\"" in render_field_source
+    assert "row=1" in render_field_source
+    assert "pady=(_CONTROL_ROW_TOP_PAD_Y, 0)" in render_field_source
+    assert "entry.grid(row=0, column=0, sticky=\"ew\")" in render_field_source
+    assert "padx=(_CONTROL_GAP_X, 0)" in render_field_source
+    assert "entry_parent.grid(row=0, column=1" not in render_field_source
+    assert "row.grid_columnconfigure(1" not in render_field_source
+    assert "_compact_directory_path(path: str, max_chars: int = 80)" in module_source
+    assert "Streaming Performance" not in module_source
+    assert "Map Parsing" not in module_source
+    assert "Maximum threads used while viewing a cave" not in settings_source
+    assert "Maximum threads used to build a new cache" not in settings_source
+    assert "MP4 flight recordings" not in settings_source
+    assert "Movie recording directory" not in settings_source
+    assert "_COMPACT_WORKER_WARNING" not in module_source
+    assert "_warning_keys_for_values" not in module_source
+    assert "Scrollbar(" not in source
+    assert "yscrollcommand" not in source
+    assert "content_canvas" not in source
+    assert "grid_remove()" in show_page_source
+    assert "_apply_geometry" not in show_page_source
+    assert "grid_propagate(False)" in source
+    assert "create_dialog_notice(" in source
+    assert "create_dialog_action_button(" in module_source
+    assert "set_dialog_action_button(" in module_source
+    assert "class _LabelButton" not in module_source
+
+
+def test_advanced_settings_invalid_field_switches_to_containing_page():
+    from caveviewer.gui import advanced_settings_dialog
+
+    shown_pages = []
+    focused = []
+
+    dialog = advanced_settings_dialog.AdvancedSettingsDialog.__new__(
+        advanced_settings_dialog.AdvancedSettingsDialog
+    )
+    dialog.field_page_keys = {"chunk_size_meters": "parsing"}
+    dialog.field_entries = {
+        "chunk_size_meters": SimpleNamespace(
+            winfo_exists=lambda: True,
+            focus_set=lambda: focused.append("chunk_size_meters"),
+            selection_range=lambda *_args: None,
+        )
+    }
+    dialog.field_entry_states = {"chunk_size_meters": "normal"}
+    dialog.numeric_placeholder_keys = set()
+    dialog._show_page = lambda page_key: shown_pages.append(page_key)
+    dialog.dialog = SimpleNamespace(after_idle=lambda callback: callback())
+
+    dialog._focus_invalid_field("chunk_size_meters")
+
+    assert shown_pages == ["parsing"]
+    assert focused == ["chunk_size_meters"]
 
 
 def test_dialog_stays_open_and_reports_atomic_save_failure(

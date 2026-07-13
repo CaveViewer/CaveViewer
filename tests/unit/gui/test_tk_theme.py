@@ -6,7 +6,12 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from caveviewer.gui import advanced_settings_dialog, sample_maps_dialog, splash_screen
+from caveviewer.gui import (
+    advanced_settings_dialog,
+    dialog_style,
+    sample_maps_dialog,
+    splash_screen,
+)
 from caveviewer.gui.tk_theme import DARK_THEME
 
 
@@ -20,6 +25,7 @@ def test_dialogs_share_the_same_theme_tokens():
         assert dialog_module._TITLE_COLOR == DARK_THEME.title
         assert dialog_module._BUTTON_BG == DARK_THEME.primary_button
         assert dialog_module._BUTTON_BORDER_COLOR == DARK_THEME.primary_button_border
+    assert dialog_style.DIALOG_PANEL_BORDER == DARK_THEME.entry_border
 
 
 def test_theme_tokens_are_immutable():

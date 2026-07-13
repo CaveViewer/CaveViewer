@@ -235,18 +235,54 @@ def test_download_uses_desktop_notification_and_inhibit(tmp_path):
         (
             "notify",
             "caveviewer.update-download",
-            "CaveViewer update download started",
-            "Downloading version 1.0.64.",
+            "Update Download Started",
+            "Downloading version 1.0.64",
             "normal",
         ),
         ("inhibit", "CaveViewer is downloading an update", None),
         (
             "notify",
             "caveviewer.update-download",
-            "CaveViewer update is ready",
-            "The update package finished downloading.",
+            "Update Ready",
+            "The update package finished downloading",
             "normal",
         ),
+        ("close_inhibitor",),
+    ]
+
+
+def test_foreground_update_surface_suppresses_duplicate_desktop_notifications(
+    tmp_path,
+):
+    desktop_services = FakeDesktopServices()
+
+    def download_update(
+        _url,
+        _expected_size,
+        destination,
+        *,
+        phase_cb,
+        **_kwargs,
+    ):
+        Path(destination).write_bytes(b"payload")
+        phase_cb("verifying")
+
+    manager, _adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        desktop_services=desktop_services,
+    )
+    try:
+        manager.set_foreground_update_surface_active(True)
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+        assert manager.snapshot().state == UpdateState.READY
+    finally:
+        manager.set_foreground_update_surface_active(False)
+        manager.shutdown()
+
+    assert desktop_services.calls == [
+        ("inhibit", "CaveViewer is downloading an update", None),
         ("close_inhibitor",),
     ]
 

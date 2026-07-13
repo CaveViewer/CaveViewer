@@ -99,6 +99,54 @@ def test_viewer_ui_scale_env_override_is_developer_only_escape_hatch():
     ) == 1.0
 
 
+def test_window_shortcut_closes_viewer_on_control_w(monkeypatch):
+    monkeypatch.setattr(viewer_window.sys, "platform", "linux")
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    closed = []
+    window.on_close = lambda: closed.append("closed")
+
+    assert window._handle_window_shortcut(87, SimpleNamespace(ctrl=True)) is True
+    assert closed == ["closed"]
+
+
+def test_window_shortcut_opens_map_only_when_loaded(monkeypatch):
+    monkeypatch.setattr(viewer_window.sys, "platform", "linux")
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    calls = []
+    window._handle_open_button_click = lambda: calls.append("open")
+
+    window._has_map_loaded = False
+    window._import_active = False
+    assert window._handle_window_shortcut(79, SimpleNamespace(ctrl=True)) is True
+    assert calls == []
+
+    window._has_map_loaded = True
+    window._import_active = False
+    assert window._handle_window_shortcut(79, SimpleNamespace(ctrl=True)) is True
+    assert calls == ["open"]
+
+
+def test_window_shortcut_uses_command_modifier_on_macos(monkeypatch):
+    monkeypatch.setattr(viewer_window.sys, "platform", "darwin")
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    window._raw_command_modifier_down = lambda: False
+    closed = []
+    window.on_close = lambda: closed.append("closed")
+
+    assert window._handle_window_shortcut(87, SimpleNamespace(command=True)) is True
+    assert window._handle_window_shortcut(87, SimpleNamespace()) is False
+    assert closed == ["closed"]
+
+
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     calls = []
     monkeypatch.setattr(viewer_window.sys, "platform", "linux")

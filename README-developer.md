@@ -329,8 +329,12 @@ any non-SHUTDOWN state -> SHUTDOWN
 ```
 
 The splash polls immutable manager snapshots and maps the visible states to
-`Update <version> is available.`, `Downloading... <percentage>%`,
-`Verifying...`, `Downloaded successfully`, and `Download failed - Retry`.
+`Update <version> available`, `Downloading… <percentage>%`, `Verifying…`,
+`Update ready`, and `Download failed` with a separate `Retry` action.
+While a splash window is visible, it is the foreground update surface and
+suppresses duplicate desktop notifications for update progress or completion.
+If a download finishes after that surface closes, desktop notifications remain
+available for background completion or failure.
 Neither the viewer nor streaming code depends on the update manager. Opening a
 map closes only that splash instance, so an active download continues and a
 later splash presents its current state. Closing the whole app moves the
@@ -493,15 +497,15 @@ the automatic right-side HUD scale. These are not required for normal users.
 | `CAVEVIEWER_NAVIGATION_GUARD` | `1` | Set to `0` to disable the navigation boundary that keeps free-fly movement near occupied map chunks. |
 | `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | `2` | Number of chunk cells around occupied map chunks that remain navigable. Larger values allow more free space around the cave; smaller values keep users closer to rendered chunks. |
 | `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
-| `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Directory where clean MP4 flight recordings are saved. The Advanced Settings panel saves this value. |
+| `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Folder where saved recordings are stored. The Preferences panel saves this value. |
 | `CAVEVIEWER_RECORDING_FPS` | `30` | Target MP4 recording frame rate. Range: 1–60. Frames are streamed to `ffmpeg`; they are not buffered in memory. |
 | `CAVEVIEWER_RECORDING_MAX_HEIGHT` | `1080` | Maximum output video height. The framebuffer is downscaled before encoding to keep MP4 playback smooth. |
 | `CAVEVIEWER_RECORDING_CRF` | `23` | H.264 quality value passed to `ffmpeg`. Lower is larger/higher quality; higher is smaller/lower quality. Range: 0–51. |
 
 ### Streaming Performance
 
-Advanced Settings opens numeric fields with their effective defaults. Numeric
-inputs use a compact, consistent 12-character width. If a numeric value is
+Preferences opens numeric fields with their effective defaults. Numeric
+inputs use a compact, consistent width. If a numeric value is
 cleared, only its accepted range immediately appears inside the input as
 muted, unit-free `minimum-maximum` placeholder text without comparison
 operators; the placeholder itself is never applied or saved as a value.
@@ -514,9 +518,10 @@ required field may remain temporarily empty while the user replaces its value;
 Apply is disabled immediately while any required value is blank, while the
 required message and read-only form lock appear only after focus leaves that
 empty field. Cancel, Escape, and window close remain available and discard
-unapplied edits. Advisory worker-thread warnings do not lock the form.
+unapplied edits. Valid worker counts are treated as advisory caps and do not
+show a bottom warning.
 
-The Advanced Settings implementation is split by responsibility:
+The Preferences implementation is split by responsibility:
 `src/caveviewer/gui/advanced_settings.py` owns the typed `SettingSpec` schema,
 validation, persistence, and environment mapping;
 `src/caveviewer/gui/advanced_settings_form.py` owns focus/change/blur/apply
@@ -535,7 +540,7 @@ not discard the rest of the configuration. Settings are saved through an
 atomic temporary-file replacement; a write failure remains visible in the
 dialog and does not close it or alter the previous settings file.
 
-The splash screen, Advanced Settings, and Sample Maps dialogs share their Tk
+The splash screen, Preferences, and Sample Maps dialogs share their Tk
 color and control tokens through `src/caveviewer/gui/tk_theme.py`. Map-folder
 validation lives in `src/caveviewer/gui/map_selection.py`, allowing both
 map-selection dialogs to reuse it without importing private splash-screen

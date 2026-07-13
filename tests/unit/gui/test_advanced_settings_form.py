@@ -86,15 +86,15 @@ def test_nonempty_out_of_range_value_is_rejected_immediately(
     assert state.form_locked
 
 
-def test_valid_worker_warning_does_not_lock_form(valid_advanced_settings):
+def test_high_worker_count_is_valid_without_bottom_warning(valid_advanced_settings):
     controller = AdvancedSettingsFormController(valid_advanced_settings)
     controller.focus("io_workers")
 
     state = controller.change("io_workers", "6")
 
     assert state.invalid_key is None
-    assert state.message_kind is MessageKind.WARNING
-    assert "negatively affect performance" in state.message
+    assert state.message == ""
+    assert state.message_kind is MessageKind.NONE
     assert state.apply_enabled
     assert not state.form_locked
 
@@ -107,7 +107,7 @@ def test_focus_loss_normalizes_valid_value(valid_advanced_settings):
     state = controller.blur("io_workers")
 
     assert state.values["io_workers"] == "6"
-    assert state.message_kind is MessageKind.WARNING
+    assert state.message_kind is MessageKind.NONE
 
 
 def test_optional_blank_value_keeps_apply_enabled(valid_advanced_settings):

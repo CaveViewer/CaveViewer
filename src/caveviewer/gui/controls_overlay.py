@@ -122,16 +122,20 @@ def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
     else:  # control
         navigation.append(("Ctrl + 1..9", "Save camera bookmark slot"))
 
+    window_shortcut = "Cmd" if sys.platform == "darwin" else "Ctrl"
+
     navigation.extend([
         ("1..9", "Recall camera bookmark slot"),
         ("Del + 1..9", "Delete bookmark slot"),
         ("Minimap click", "Jump to that spot"),
+        (f"{window_shortcut} + O", "Switch to a different map"),
         ("Open button", "Switch to a different map"),
+        (f"{window_shortcut} + W", "Close window"),
         ("Esc", "Quit"),
     ])
 
     recording = [
-        ("REC button", "Start clean MP4 recording countdown"),
+        ("REC button", "Start recording countdown"),
         ("Shift + R", "Stop or cancel recording"),
     ]
 
@@ -496,7 +500,7 @@ class ControlsOverlay:
             subtitle = "Click anywhere on the screen to close"
         else:
             title = ""
-            subtitle = "Press Space to begin" if self._ready_to_begin else "Loading map..."
+            subtitle = "Press Space to begin" if self._ready_to_begin else "Loading map…"
 
         title_size = 4.3 * layout_scale
         title_y = h * 0.12
