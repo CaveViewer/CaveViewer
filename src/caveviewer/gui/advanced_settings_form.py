@@ -10,7 +10,6 @@ from caveviewer.gui.advanced_settings import (
     ADVANCED_SETTING_FIELDS,
     AdvancedSettings,
     SettingSpec,
-    advanced_settings_warning,
     normalize_advanced_settings,
     validate_advanced_setting,
     validate_advanced_settings,
@@ -113,13 +112,12 @@ class AdvancedSettingsFormController:
         )
 
     def _advisory_state(self) -> AdvancedSettingsFormState:
-        warning = advanced_settings_warning(self._values)
         return AdvancedSettingsFormState(
             values=dict(self._values),
             focused_key=self._focused_key,
             invalid_key=None,
-            message=warning or "",
-            message_kind=(MessageKind.WARNING if warning else MessageKind.NONE),
+            message="",
+            message_kind=MessageKind.NONE,
             apply_enabled=not self._has_missing_required_value(),
             form_locked=False,
         )

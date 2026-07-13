@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -83,6 +84,60 @@ def _sample():
         display_name="Devils Eye",
         asset_name="Devils.Eye.3D.Map.zip",
     )
+
+
+def test_sample_map_row_copy_uses_folder_and_download_actions():
+    downloadable = SimpleNamespace(
+        display_name="Devils Eye",
+        download_url="https://example.test/devils-eye.zip",
+        size_bytes=52 * 1024 * 1024,
+    )
+    unavailable = SimpleNamespace(
+        display_name="Devils Eye",
+        download_url=None,
+        size_bytes=None,
+    )
+
+    assert sample_maps_dialog._sample_detail_text(
+        downloadable, downloaded=False
+    ) == "52 MB"
+    assert sample_maps_dialog._sample_action_text(
+        downloadable, downloaded=False
+    ) == "Download…"
+    assert sample_maps_dialog._sample_action_enabled(
+        downloadable, downloaded=False
+    )
+
+    assert sample_maps_dialog._sample_detail_text(
+        downloadable, downloaded=True
+    ) == "Ready to open"
+    assert sample_maps_dialog._sample_action_text(
+        downloadable, downloaded=True
+    ) == "Open Map"
+
+    assert sample_maps_dialog._sample_detail_text(
+        unavailable, downloaded=False
+    ) == "Download unavailable"
+    assert sample_maps_dialog._sample_action_text(
+        unavailable, downloaded=False
+    ) == "Unavailable"
+    assert not sample_maps_dialog._sample_action_enabled(
+        unavailable, downloaded=False
+    )
+
+
+def test_sample_catalog_notice_keeps_download_failure_non_blocking():
+    notice = sample_maps_dialog._sample_catalog_notice_text("offline")
+
+    assert "already downloaded" in notice
+    assert "new downloads need the internet" in notice
+
+
+def test_sample_maps_dialog_keeps_curated_list_out_of_scroll_container():
+    source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
+
+    assert "Scrollbar(" not in source
+    assert "yscrollcommand" not in source
 
 
 def test_download_start_reuses_action_area_as_cancel_button_without_prompt():

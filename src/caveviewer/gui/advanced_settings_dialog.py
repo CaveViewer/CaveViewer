@@ -8,7 +8,6 @@ import tkinter as tk
 from typing import Callable
 
 from caveviewer.gui.advanced_settings import (
-    ADVANCED_SETTING_COLUMNS,
     ADVANCED_SETTING_FIELDS,
     AdvancedSettingsSaveError,
     SettingSpec,
@@ -39,9 +38,9 @@ _BUTTON_FG = DARK_THEME.primary_button_text
 _BORDER_COLOR = DARK_THEME.border
 
 _LINUX_LAYOUT = sys.platform.startswith("linux")
-_WRAP_LENGTH = 520 if sys.platform == "win32" else 430
-_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 28
-_NUMERIC_ENTRY_WIDTH = 12
+_WRAP_LENGTH = 460 if sys.platform == "win32" else 380
+_TEXT_ENTRY_WIDTH = 38 if sys.platform == "win32" else 30
+_NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _ERROR_COLOR = DARK_THEME.error_text
 _WARNING_COLOR = _TITLE_COLOR
@@ -52,6 +51,11 @@ _MIN_WIDTH = (
     else 720
     if sys.platform.startswith("linux")
     else 0
+)
+_PREFERENCE_PAGES = (
+    ("streaming", "Streaming"),
+    ("parsing", "Import"),
+    ("downloads", "Recordings"),
 )
 
 
@@ -140,21 +144,19 @@ class AdvancedSettingsDialog:
         self.dialog.withdraw()
         self.dialog.title("Preferences")
         self.dialog.configure(bg=_BG_COLOR)
-        self.dialog.resizable(True, True)
+        self.dialog.resizable(False, False)
         self.dialog.transient(parent)
 
         if _LINUX_LAYOUT:
-            self.section_font = (ui_font_family, 10)
+            self.section_font = (ui_font_family, 10, "bold")
             self.body_font = (ui_font_family, 10)
             self.small_font = (ui_font_family, 9)
-            self.entry_pad_y = 6
-            self.section_pad_y = 15
+            self.entry_pad_y = 4
         else:
-            self.section_font = (ui_font_family, 12)
+            self.section_font = (ui_font_family, 12, "bold")
             self.body_font = (ui_font_family, 12)
             self.small_font = (ui_font_family, 10)
             self.entry_pad_y = 4
-            self.section_pad_y = 12
 
         self.field_vars: dict[str, tk.StringVar] = {}
         self.field_entries: dict[str, tk.Entry] = {}
@@ -167,9 +169,14 @@ class AdvancedSettingsDialog:
         self.rendering_state = False
         self.rendered_invalid_key: str | None = None
         self.apply_button = None
-        self.section_row = None
-        self.content_canvas = None
-        self.content_window = None
+        self.tab_bar = None
+        self.page_stack = None
+        self.pages: dict[str, tk.Frame] = {}
+        self.page_buttons: dict[str, tk.Label] = {}
+        self.field_page_keys: dict[str, str] = {}
+        self.active_page_key: str | None = None
+        self.feedback_frame = None
+        self.rendered_state: AdvancedSettingsFormState | None = None
         self.button_row = None
         self.error_label = None
 
@@ -294,19 +301,12 @@ class AdvancedSettingsDialog:
             border_color=border_color,
         )
 
-    def _render_section(self, parent, title: str, section_key: str) -> None:
+    def _render_section(self, parent, section_key: str) -> None:
         section = tk.Frame(
             parent,
             bg=_BG_COLOR,
         )
-        section.pack(fill="x", pady=(0, 18))
-        tk.Label(
-            section,
-            text=title,
-            font=self.section_font,
-            fg=_TITLE_COLOR,
-            bg=_BG_COLOR,
-        ).pack(anchor="w", pady=(0, 8))
+        section.pack(fill="x")
 
         group = tk.Frame(
             section,
@@ -314,8 +314,8 @@ class AdvancedSettingsDialog:
             padx=0,
             pady=0,
             highlightthickness=1,
-            highlightbackground=_BORDER_COLOR,
-            highlightcolor=_BORDER_COLOR,
+            highlightbackground=DARK_THEME.entry_border,
+            highlightcolor=DARK_THEME.entry_border,
         )
         group.pack(fill="x")
 
@@ -324,18 +324,19 @@ class AdvancedSettingsDialog:
             for field in ADVANCED_SETTING_FIELDS
             if field.section == section_key
         ]
-        for field in fields:
-            self._render_field(group, field)
+        for index, field in enumerate(fields):
+            self._render_field(group, field, last=index == len(fields) - 1)
 
-    def _render_field(self, section, field: SettingSpec) -> None:
+    def _render_field(self, section, field: SettingSpec, *, last: bool) -> None:
         key = field.key
-        row = tk.Frame(section, bg=_PANEL_COLOR, padx=14, pady=10)
+        self.field_page_keys[key] = field.section
+        row = tk.Frame(section, bg=_PANEL_COLOR, padx=14, pady=7)
         row.pack(fill="x")
         row.grid_columnconfigure(0, weight=1)
         row.grid_columnconfigure(1, weight=0)
 
         text_column = tk.Frame(row, bg=_PANEL_COLOR)
-        text_column.grid(row=0, column=0, sticky="ew", padx=(0, 18))
+        text_column.grid(row=0, column=0, sticky="ew", padx=(0, 16))
         tk.Label(
             text_column,
             text=field.label,
@@ -480,6 +481,10 @@ class AdvancedSettingsDialog:
                 add="+",
             )
 
+        if not last:
+            separator = tk.Frame(section, bg=DARK_THEME.entry_border, height=1)
+            separator.pack(fill="x")
+
     @staticmethod
     def _resize_hint(event, label) -> None:
         wraplength = max(200, event.width - 4)
@@ -499,78 +504,127 @@ class AdvancedSettingsDialog:
         if selection:
             var.set(selection.path)
 
+    def _new_page_tab(self, parent, page_key: str, label: str) -> tk.Label:
+        tab = tk.Label(
+            parent,
+            text=label,
+            font=self.small_font,
+            bg=_BG_COLOR,
+            fg=_INSTRUCTION_COLOR,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            takefocus=True,
+            highlightthickness=1,
+            highlightbackground=_BG_COLOR,
+            highlightcolor=DARK_THEME.entry_focus_border,
+        )
+
+        def _invoke(_event=None, key=page_key):
+            self._show_page(key)
+            return "break"
+
+        tab.bind("<Button-1>", _invoke)
+        tab.bind("<Return>", _invoke)
+        tab.bind("<space>", _invoke)
+        return tab
+
+    def _sync_feedback_to_current_state(self) -> None:
+        if self.error_label is None or self.rendered_state is None:
+            return
+        self._set_feedback(
+            self.rendered_state.message,
+            self.rendered_state.message_kind,
+        )
+
+    def _show_page(self, page_key: str) -> None:
+        page = self.pages.get(page_key)
+        if page is None:
+            return
+        self.active_page_key = page_key
+        for key, candidate_page in self.pages.items():
+            if key == page_key:
+                candidate_page.grid(row=0, column=0, sticky="nsew")
+            else:
+                candidate_page.grid_remove()
+        for key, tab in self.page_buttons.items():
+            active = key == page_key
+            tab.config(
+                bg=_PANEL_COLOR if active else _BG_COLOR,
+                fg=_TITLE_COLOR if active else _INSTRUCTION_COLOR,
+                highlightbackground=(
+                    DARK_THEME.entry_border if active else _BG_COLOR
+                ),
+                highlightcolor=(
+                    DARK_THEME.entry_focus_border
+                    if active
+                    else _BG_COLOR
+                ),
+            )
+        self._sync_feedback_to_current_state()
+
     def _build(self) -> None:
         body = tk.Frame(
             self.dialog, bg=_BG_COLOR, padx=_BODY_PAD_X, pady=18
         )
         body.pack(fill="both", expand=True)
 
-        content_shell = tk.Frame(body, bg=_BG_COLOR)
-        content_shell.pack(fill="both", expand=True, pady=(0, 10))
-        self.content_canvas = tk.Canvas(
-            content_shell,
-            bg=_BG_COLOR,
-            borderwidth=0,
-            highlightthickness=0,
-            yscrollincrement=24,
+        self.tab_bar = tk.Frame(body, bg=_BG_COLOR)
+        self.tab_bar.pack(fill="x", pady=(0, 14))
+        for page_key, tab_label in _PREFERENCE_PAGES:
+            tab = self._new_page_tab(self.tab_bar, page_key, tab_label)
+            tab.pack(side="left", padx=(0, 8))
+            self.page_buttons[page_key] = tab
+
+        self.page_stack = tk.Frame(body, bg=_BG_COLOR)
+        self.page_stack.pack(fill="x")
+        self.page_stack.grid_rowconfigure(0, weight=1)
+        self.page_stack.grid_columnconfigure(0, weight=1)
+        for page_key, _tab_label in _PREFERENCE_PAGES:
+            page = tk.Frame(self.page_stack, bg=_BG_COLOR)
+            page.grid(row=0, column=0, sticky="nsew")
+            self.pages[page_key] = page
+            self._render_section(page, page_key)
+        self.dialog.update_idletasks()
+        max_page_width = max(
+            (page.winfo_reqwidth() for page in self.pages.values()),
+            default=1,
         )
-        scrollbar = tk.Scrollbar(
-            content_shell,
-            orient="vertical",
-            command=self.content_canvas.yview,
-            relief="flat",
+        max_page_height = max(
+            (page.winfo_reqheight() for page in self.pages.values()),
+            default=1,
         )
-        self.content_canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        self.content_canvas.pack(side="left", fill="both", expand=True)
+        self.page_stack.configure(width=max_page_width, height=max_page_height)
+        self.page_stack.grid_propagate(False)
+        self._show_page(_PREFERENCE_PAGES[0][0])
 
-        self.section_row = tk.Frame(self.content_canvas, bg=_BG_COLOR)
-        self.content_window = self.content_canvas.create_window(
-            (0, 0),
-            window=self.section_row,
-            anchor="nw",
+        self.feedback_frame = tk.Frame(
+            body,
+            bg="#211b10",
+            highlightthickness=1,
+            highlightbackground=_BUTTON_BORDER_COLOR,
+            highlightcolor=_BUTTON_BORDER_COLOR,
         )
-
-        def _sync_scroll_region(_event=None) -> None:
-            self.content_canvas.configure(
-                scrollregion=self.content_canvas.bbox("all")
-            )
-
-        def _sync_content_width(event) -> None:
-            self.content_canvas.itemconfigure(
-                self.content_window,
-                width=event.width,
-            )
-
-        self.section_row.bind("<Configure>", _sync_scroll_region)
-        self.content_canvas.bind("<Configure>", _sync_content_width)
-
-        for sections in ADVANCED_SETTING_COLUMNS:
-            column = tk.Frame(self.section_row, bg=_BG_COLOR)
-            column.pack(fill="x")
-            for section_key, section_title in sections:
-                self._render_section(column, section_title, section_key)
-
-        self.button_row = tk.Frame(body, bg=_BG_COLOR)
-        error_parent = self.button_row if _LINUX_LAYOUT else body
+        self.feedback_frame.grid_columnconfigure(1, weight=1)
+        feedback_accent = tk.Frame(self.feedback_frame, bg=_BUTTON_BG, width=4)
+        feedback_accent.grid(row=0, column=0, sticky="ns")
+        self.feedback_frame._cv_accent = feedback_accent
         self.error_label = tk.Label(
-            error_parent,
+            self.feedback_frame,
             text="",
             font=self.small_font,
             fg=_ERROR_COLOR,
-            bg=_BG_COLOR,
+            bg="#211b10",
             justify="left",
             anchor="w",
-            wraplength=620 if _LINUX_LAYOUT else _WRAP_LENGTH,
+            wraplength=620,
         )
-        if _LINUX_LAYOUT:
-            self.button_row.pack(fill="x")
-            self.error_label.pack(
-                side="left", fill="x", expand=True, padx=(0, 12)
-            )
-        else:
-            self.error_label.pack(anchor="w", pady=(4, 10))
-            self.button_row.pack(fill="x")
+        self.error_label.grid(
+            row=0, column=1, sticky="ew", padx=(10, 12), pady=6
+        )
+
+        self.button_row = tk.Frame(body, bg=_BG_COLOR)
+        self.button_row.pack(fill="x", pady=(14, 0))
 
         if sys.platform == "darwin":
             cancel_button = self._new_label_button(
@@ -641,8 +695,36 @@ class AdvancedSettingsDialog:
         self.dialog.bind("<Return>", lambda _event: self.apply())
 
     def _set_feedback(self, message: str, message_kind: MessageKind) -> None:
+        if not message:
+            self.error_label.config(text="")
+            if self.feedback_frame is not None:
+                self.feedback_frame.pack_forget()
+            return
+
+        background = "#211b10" if message_kind is MessageKind.WARNING else "#261416"
+        accent = (
+            _BUTTON_BG
+            if message_kind is MessageKind.WARNING
+            else DARK_THEME.invalid_border
+        )
+        if self.feedback_frame is not None:
+            self.feedback_frame.config(
+                bg=background,
+                highlightbackground=accent,
+                highlightcolor=accent,
+            )
+            feedback_accent = getattr(self.feedback_frame, "_cv_accent", None)
+            if feedback_accent is not None:
+                feedback_accent.config(bg=accent)
+            if not self.feedback_frame.winfo_manager():
+                self.feedback_frame.pack(
+                    fill="x",
+                    pady=(8, 0),
+                    before=self.button_row,
+                )
         self.error_label.config(
             text=message,
+            bg=background,
             fg=(
                 _WARNING_COLOR
                 if message_kind is MessageKind.WARNING
@@ -678,6 +760,10 @@ class AdvancedSettingsDialog:
     def _focus_invalid_field(
         self, key: str, *, select_value: bool = False
     ) -> None:
+        page_key = self.field_page_keys.get(key)
+        if page_key is not None:
+            self._show_page(page_key)
+
         def focus() -> None:
             entry = self.field_entries.get(key)
             if entry is None or not entry.winfo_exists():
@@ -699,12 +785,13 @@ class AdvancedSettingsDialog:
         preferred_key: str | None = None,
         focus_invalid: bool = False,
     ) -> None:
+        self.rendered_state = state
         previous_invalid_key = self.rendered_invalid_key
         self.rendered_invalid_key = state.invalid_key
         locked_key = state.invalid_key if state.form_locked else None
         self._set_field_lock(locked_key)
         self._set_apply_enabled(state.apply_enabled)
-        self._set_feedback(state.message, state.message_kind)
+        self._sync_feedback_to_current_state()
 
         if state.invalid_key is not None and (
             focus_invalid or state.invalid_key != previous_invalid_key
@@ -773,10 +860,8 @@ class AdvancedSettingsDialog:
         self.dialog.destroy()
 
     def _natural_height(self) -> int:
-        height = 36
-        height += self.section_row.winfo_reqheight() + 10
-        height += self.button_row.winfo_reqheight()
-        return height
+        self.dialog.update_idletasks()
+        return self.dialog.winfo_reqheight()
 
     def _apply_geometry(self) -> None:
         geometry_applied = False

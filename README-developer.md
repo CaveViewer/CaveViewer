@@ -497,7 +497,7 @@ the automatic right-side HUD scale. These are not required for normal users.
 | `CAVEVIEWER_NAVIGATION_GUARD` | `1` | Set to `0` to disable the navigation boundary that keeps free-fly movement near occupied map chunks. |
 | `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | `2` | Number of chunk cells around occupied map chunks that remain navigable. Larger values allow more free space around the cave; smaller values keep users closer to rendered chunks. |
 | `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
-| `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Directory where clean MP4 flight recordings are saved. The Preferences panel saves this value. |
+| `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Folder where saved recordings are stored. The Preferences panel saves this value. |
 | `CAVEVIEWER_RECORDING_FPS` | `30` | Target MP4 recording frame rate. Range: 1–60. Frames are streamed to `ffmpeg`; they are not buffered in memory. |
 | `CAVEVIEWER_RECORDING_MAX_HEIGHT` | `1080` | Maximum output video height. The framebuffer is downscaled before encoding to keep MP4 playback smooth. |
 | `CAVEVIEWER_RECORDING_CRF` | `23` | H.264 quality value passed to `ffmpeg`. Lower is larger/higher quality; higher is smaller/lower quality. Range: 0–51. |
@@ -505,7 +505,7 @@ the automatic right-side HUD scale. These are not required for normal users.
 ### Streaming Performance
 
 Preferences opens numeric fields with their effective defaults. Numeric
-inputs use a compact, consistent 12-character width. If a numeric value is
+inputs use a compact, consistent width. If a numeric value is
 cleared, only its accepted range immediately appears inside the input as
 muted, unit-free `minimum-maximum` placeholder text without comparison
 operators; the placeholder itself is never applied or saved as a value.
@@ -518,7 +518,8 @@ required field may remain temporarily empty while the user replaces its value;
 Apply is disabled immediately while any required value is blank, while the
 required message and read-only form lock appear only after focus leaves that
 empty field. Cancel, Escape, and window close remain available and discard
-unapplied edits. Advisory worker-thread warnings do not lock the form.
+unapplied edits. Valid worker counts are treated as advisory caps and do not
+show a bottom warning.
 
 The Preferences implementation is split by responsibility:
 `src/caveviewer/gui/advanced_settings.py` owns the typed `SettingSpec` schema,
