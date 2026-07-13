@@ -44,22 +44,34 @@ _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
 _LINUX_LAYOUT = sys.platform.startswith("linux")
-_WRAP_LENGTH = 460 if sys.platform == "win32" else 380
-_TEXT_ENTRY_WIDTH = 38 if sys.platform == "win32" else 30
+# Keep Preferences close to GNOME-style boxed-list proportions: a wider
+# secondary window with enough room for labels, hints, and path controls.
+_WRAP_LENGTH = 520 if sys.platform == "win32" else 460
+_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 36
 _NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
-_BODY_PAD_X = DIALOG_BODY_PAD_X
+_BODY_PAD_X = 32 if _LINUX_LAYOUT else DIALOG_BODY_PAD_X
 _MIN_WIDTH = (
     860
     if sys.platform == "win32"
-    else 720
-    if sys.platform.startswith("linux")
-    else 0
+    else 860
+    if _LINUX_LAYOUT
+    else 760
 )
+_ROW_PAD_X = 18
+_ROW_PAD_Y = 12
+_CONTROL_ROW_TOP_PAD_Y = 14
+_CONTROL_GAP_X = 10
+_TAB_PAD_X = 14
+_TAB_PAD_Y = 7
+_TAB_GAP_X = 10
+_TAB_BOTTOM_PAD_Y = 18
+_BUTTON_ROW_TOP_PAD_Y = 18
+_NOTICE_WRAP_LENGTH = 720
 _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
-    ("downloads", "Recordings"),
+    ("storage", "Storage"),
 )
 
 
@@ -140,7 +152,7 @@ class AdvancedSettingsDialog:
         return True
 
     @staticmethod
-    def _compact_directory_path(path: str, max_chars: int = 42) -> str:
+    def _compact_directory_path(path: str, max_chars: int = 80) -> str:
         expanded = os.path.abspath(os.path.expanduser(path.strip() or "~"))
         home = os.path.abspath(os.path.expanduser("~"))
         if expanded == home:
@@ -268,13 +280,22 @@ class AdvancedSettingsDialog:
     def _render_field(self, section, field: SettingSpec, *, last: bool) -> None:
         key = field.key
         self.field_page_keys[key] = field.section
-        row = tk.Frame(section, bg=_PANEL_COLOR, padx=14, pady=7)
+        compact_path = key == "recording_dir"
+        row = tk.Frame(
+            section,
+            bg=_PANEL_COLOR,
+            padx=_ROW_PAD_X,
+            pady=_ROW_PAD_Y,
+        )
         row.pack(fill="x")
         row.grid_columnconfigure(0, weight=1)
-        row.grid_columnconfigure(1, weight=0)
 
         text_column = tk.Frame(row, bg=_PANEL_COLOR)
-        text_column.grid(row=0, column=0, sticky="ew", padx=(0, 16))
+        text_column.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+        )
         tk.Label(
             text_column,
             text=field.label,
@@ -292,7 +313,6 @@ class AdvancedSettingsDialog:
             if value_type in {ValueType.INT, ValueType.FLOAT}
             else _TEXT_ENTRY_WIDTH
         )
-        compact_path = key == "recording_dir"
         entry_var = var
         placeholder_text = advanced_setting_placeholder_text(field)
         if placeholder_text:
@@ -313,8 +333,15 @@ class AdvancedSettingsDialog:
         self.field_display_vars[key] = entry_var
 
         entry_parent = tk.Frame(row, bg=_PANEL_COLOR)
-        entry_parent.grid(row=0, column=1, sticky="e")
-        entry_pack_options = {"side": "left"}
+        entry_parent.grid(
+            row=1,
+            column=0,
+            sticky="ew" if compact_path else "w",
+            pady=(_CONTROL_ROW_TOP_PAD_Y, 0),
+        )
+        entry_parent.grid_columnconfigure(0, weight=1)
+        if compact_path:
+            entry_parent.grid_columnconfigure(1, weight=0)
 
         entry = tk.Entry(
             entry_parent,
@@ -386,7 +413,10 @@ class AdvancedSettingsDialog:
             lambda _event, field_key=key: self._on_field_blurred(field_key),
             add="+",
         )
-        entry.pack(**entry_pack_options)
+        if compact_path:
+            entry.grid(row=0, column=0, sticky="ew")
+        else:
+            entry.pack(side="left")
 
         if value_type in {ValueType.PATH, ValueType.PATH_CREATE}:
             browse_button = self._new_dialog_button(
@@ -395,9 +425,17 @@ class AdvancedSettingsDialog:
                 lambda field_key=key, title=field.label: self._choose_directory(
                     field_key, title
                 ),
-                padx=8,
+                padx=10,
             )
-            browse_button.pack(side="left", padx=(8, 0))
+            if compact_path:
+                browse_button.grid(
+                    row=0,
+                    column=1,
+                    sticky="e",
+                    padx=(_CONTROL_GAP_X, 0),
+                )
+            else:
+                browse_button.pack(side="left", padx=(_CONTROL_GAP_X, 0))
             self.field_browse_buttons[key] = browse_button
 
         single_line_hint = key == "recording_dir"
@@ -411,7 +449,7 @@ class AdvancedSettingsDialog:
             anchor="w",
             wraplength=0 if single_line_hint else _WRAP_LENGTH,
         )
-        hint_label.pack(anchor="w", fill="x", pady=(2, 0))
+        hint_label.pack(anchor="w", fill="x", pady=(3, 0))
         if _LINUX_LAYOUT and not single_line_hint:
             text_column.bind(
                 "<Configure>",
@@ -449,8 +487,8 @@ class AdvancedSettingsDialog:
             font=self.small_font,
             bg=_BG_COLOR,
             fg=_INSTRUCTION_COLOR,
-            padx=12,
-            pady=6,
+            padx=_TAB_PAD_X,
+            pady=_TAB_PAD_Y,
             cursor="hand2",
             takefocus=True,
             highlightthickness=1,
@@ -511,10 +549,10 @@ class AdvancedSettingsDialog:
         body.pack(fill="both", expand=True)
 
         self.tab_bar = tk.Frame(body, bg=_BG_COLOR)
-        self.tab_bar.pack(fill="x", pady=(0, 14))
+        self.tab_bar.pack(fill="x", pady=(0, _TAB_BOTTOM_PAD_Y))
         for page_key, tab_label in _PREFERENCE_PAGES:
             tab = self._new_page_tab(self.tab_bar, page_key, tab_label)
-            tab.pack(side="left", padx=(0, 8))
+            tab.pack(side="left", padx=(0, _TAB_GAP_X))
             self.page_buttons[page_key] = tab
 
         self.page_stack = tk.Frame(body, bg=_BG_COLOR)
@@ -542,11 +580,11 @@ class AdvancedSettingsDialog:
         self.feedback_frame, self.error_label = create_dialog_notice(
             body,
             font=self.small_font,
-            wraplength=620,
+            wraplength=_NOTICE_WRAP_LENGTH,
         )
 
         self.button_row = tk.Frame(body, bg=_BG_COLOR)
-        self.button_row.pack(fill="x", pady=(14, 0))
+        self.button_row.pack(fill="x", pady=(_BUTTON_ROW_TOP_PAD_Y, 0))
 
         cancel_button = self._new_dialog_button(
             self.button_row,

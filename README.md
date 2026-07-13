@@ -133,8 +133,8 @@ These values are validated in the UI, applied to environment variables for the c
 - Linux settings file: `~/.config/caveviewer/advanced_settings.json` by default
 - macOS/Windows settings file: `~/.caveviewer/advanced_settings.json`
 - Streaming section controls runtime chunk loading and upload behavior.
-- Map Parsing section controls cache-build/import behavior.
-- Recordings section controls the default folder used when saving recordings.
+- Import section controls cache-build/import behavior.
+- Storage section controls folders used when saving recordings and other app data.
 
 ### Map Chunking
 

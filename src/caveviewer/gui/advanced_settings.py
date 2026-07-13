@@ -255,7 +255,7 @@ ADVANCED_SETTING_FIELDS = (
         maximum=32,
     ),
     SettingSpec(
-        section="downloads",
+        section="storage",
         key="recording_dir",
         env_var="CAVEVIEWER_RECORDING_DIR",
         label="Recordings folder",

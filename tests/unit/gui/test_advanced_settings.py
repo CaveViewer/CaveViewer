@@ -552,6 +552,9 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     show_page_source = inspect.getsource(
         advanced_settings_dialog.AdvancedSettingsDialog._show_page
     )
+    render_field_source = inspect.getsource(
+        advanced_settings_dialog.AdvancedSettingsDialog._render_field
+    )
     page_keys = [page[0] for page in advanced_settings_dialog._PREFERENCE_PAGES]
     page_labels = [page[1] for page in advanced_settings_dialog._PREFERENCE_PAGES]
     field_sections = {
@@ -561,8 +564,8 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
         field.key: field for field in advanced_settings_dialog.ADVANCED_SETTING_FIELDS
     }
 
-    assert page_keys == ["streaming", "parsing", "downloads"]
-    assert page_labels == ["Streaming", "Import", "Recordings"]
+    assert page_keys == ["streaming", "parsing", "storage"]
+    assert page_labels == ["Streaming", "Import", "Storage"]
     assert all(len(page) == 2 for page in advanced_settings_dialog._PREFERENCE_PAGES)
     assert set(page_keys) == field_sections
     assert fields_by_key["io_workers"].label == "Loading worker limit"
@@ -578,8 +581,29 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
         fields_by_key["chunk_build_workers"].hint
         == fields_by_key["io_workers"].hint
     )
+    if (
+        advanced_settings_dialog._LINUX_LAYOUT
+        or advanced_settings_dialog.sys.platform == "win32"
+    ):
+        assert advanced_settings_dialog._MIN_WIDTH >= 860
+    else:
+        assert advanced_settings_dialog._MIN_WIDTH >= 760
+    assert advanced_settings_dialog._ROW_PAD_X == 18
+    assert advanced_settings_dialog._ROW_PAD_Y == 12
+    assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 14
+    assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 18
+    assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 18
+    assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 720
     assert fields_by_key["recording_dir"].label == "Recordings folder"
     assert fields_by_key["recording_dir"].hint == "Where saved recordings are stored."
+    assert "compact_path = key == \"recording_dir\"" in render_field_source
+    assert "row=1" in render_field_source
+    assert "pady=(_CONTROL_ROW_TOP_PAD_Y, 0)" in render_field_source
+    assert "entry.grid(row=0, column=0, sticky=\"ew\")" in render_field_source
+    assert "padx=(_CONTROL_GAP_X, 0)" in render_field_source
+    assert "entry_parent.grid(row=0, column=1" not in render_field_source
+    assert "row.grid_columnconfigure(1" not in render_field_source
+    assert "_compact_directory_path(path: str, max_chars: int = 80)" in module_source
     assert "Streaming Performance" not in module_source
     assert "Map Parsing" not in module_source
     assert "Maximum threads used while viewing a cave" not in settings_source
