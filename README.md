@@ -151,7 +151,7 @@ Why this matters: chunk size is one of the most important map settings because i
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
 | System RAM target (%) | — | 8 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
-| GPU memory target (%) | — | 70 | 1 to 80 | Target share of detected GPU memory used for loaded chunks. |
+| GPU memory target (%) | — | 70 | 1 to 80 | Target share of the detected GPU memory budget used for loaded chunks. |
 | GPU memory override (GB) | — | empty | 0.5 to 50 | Optional manual GPU memory ceiling. If auto-detection finds a smaller active GPU, CaveViewer uses the smaller detected value. |
 | Loading worker limit | — | 2 | integer, 1 to 32 | Background chunk-loading worker limit. Worker count may be lower when CPU or RAM is constrained. |
 | Loading CPUs to keep free | — | 3 | integer, 2 to 32 | Reserve CPU cores instead of using them for streaming workers. |
@@ -159,10 +159,14 @@ Why this matters: chunk size is one of the most important map settings because i
 | Upload budget (ms) | — | 3.0 | 0.5 to 50.0 ms | Soft time budget per frame for chunk uploads. |
 
 GPU memory is detected automatically through Linux DRM sysfs for AMD GPUs and
-through `nvidia-smi` for NVIDIA GPUs. Use the GPU memory override only when
-automatic detection is unavailable or does not match the active adapter. If
-GPU memory cannot be detected and no override is set, CaveViewer applies a
-conservative 1 GB fallback instead of disabling the GPU residency cap.
+through `nvidia-smi` for NVIDIA GPUs. For low-VRAM AMD integrated GPUs on
+Linux, CaveViewer adds a conservative shared-memory allowance: 50% of reported
+GTT/shared memory, capped at 2 GB. Windows AMD/Intel GPU memory is not
+currently auto-detected, so Windows uses an 8 GB fallback budget to avoid
+unnecessary automatic texture downscaling on typical systems. macOS GPU memory
+is not currently auto-detected and uses a conservative 1 GB fallback. Use the
+GPU memory override only when automatic detection is unavailable or does not
+match the active adapter.
 CaveViewer keeps geometry visibility separate from texture residency: if a map
 has too many very large texture tiles for the GPU budget, oversized textures are
 downscaled during decode instead of dropping nearby chunks from the visible

@@ -17,6 +17,10 @@ from caveviewer.core.logging_utils import get_logger
 AMD_PCI_VENDOR_ID = 0x1002
 LINUX_DRM_ROOT = "/sys/class/drm"
 UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = 1 * 1024 ** 3
+WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = 8 * 1024 ** 3
+AMD_INTEGRATED_VRAM_THRESHOLD_BYTES = 2 * 1024 ** 3
+AMD_SHARED_GPU_MEMORY_FRACTION = 0.50
+AMD_SHARED_GPU_MEMORY_CAP_BYTES = 2 * 1024 ** 3
 
 _LOG = get_logger("HardwareMemory")
 _DARWIN_VM_STAT_PAGE_SIZE_RE = re.compile(r"page size of\s+(\d+)\s+bytes")
@@ -301,10 +305,39 @@ def read_positive_sysfs_int(path: Path) -> int | None:
     return value if value > 0 else None
 
 
+def _amd_effective_gpu_memory_budget_bytes(
+    vram_bytes: int,
+    gtt_bytes: int | None,
+) -> int:
+    """Return a conservative AMD GPU memory budget.
+
+    AMD APUs report a small ``mem_info_vram_total`` reservation plus a larger
+    GTT/shared-memory aperture.  Treating only the VRAM reservation as the whole
+    GPU budget over-downscales textures, but treating all GTT as VRAM causes
+    stutter because it competes with system RAM and memory bandwidth.  Add only
+    a capped fraction of GTT for low-VRAM UMA-style adapters; leave normal
+    discrete-card budgets unchanged.
+    """
+    if vram_bytes <= 0:
+        return 0
+    if (
+        gtt_bytes is None
+        or gtt_bytes <= 0
+        or vram_bytes > AMD_INTEGRATED_VRAM_THRESHOLD_BYTES
+    ):
+        return vram_bytes
+
+    shared_allowance = min(
+        int(gtt_bytes * AMD_SHARED_GPU_MEMORY_FRACTION),
+        AMD_SHARED_GPU_MEMORY_CAP_BYTES,
+    )
+    return vram_bytes + max(0, shared_allowance)
+
+
 def detect_linux_amd_gpu_memory_bytes(
     drm_root: str | os.PathLike[str] = LINUX_DRM_ROOT,
 ) -> int | None:
-    """Detect AMD VRAM through the Linux DRM/amdgpu sysfs interface."""
+    """Detect an AMD GPU memory budget through Linux DRM/amdgpu sysfs."""
     root = Path(drm_root)
     try:
         entries = sorted(root.iterdir(), key=lambda path: path.name)
@@ -330,8 +363,14 @@ def detect_linux_amd_gpu_memory_bytes(
         if vram_bytes is None:
             continue
 
+        gtt_bytes = read_positive_sysfs_int(
+            device_path / "mem_info_gtt_total"
+        )
+        budget_bytes = _amd_effective_gpu_memory_budget_bytes(
+            vram_bytes, gtt_bytes
+        )
         is_boot_gpu = read_positive_sysfs_int(device_path / "boot_vga") == 1
-        candidates.append((is_boot_gpu, vram_bytes))
+        candidates.append((is_boot_gpu, budget_bytes))
 
     if not candidates:
         return None
@@ -362,6 +401,12 @@ def detect_nvidia_gpu_memory_bytes() -> int | None:
     except Exception:
         pass
     return None
+
+
+def _unknown_gpu_memory_fallback_bytes() -> tuple[int, str]:
+    if os.name == "nt" or sys.platform.startswith("win"):
+        return WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES, "Windows fallback"
+    return UNKNOWN_GPU_MEMORY_FALLBACK_BYTES, "conservative fallback"
 
 
 def detect_total_gpu_memory_bytes(
@@ -414,7 +459,7 @@ def detect_total_gpu_memory_bytes(
         memory_bytes = amd_detector()
         if memory_bytes is not None:
             detected_bytes = memory_bytes
-            detected_source = "AMD GPU memory via Linux DRM sysfs"
+            detected_source = "AMD GPU memory budget via Linux DRM sysfs"
 
     if detected_bytes is not None:
         if override_bytes is None:
@@ -449,8 +494,10 @@ def detect_total_gpu_memory_bytes(
         )
         return override_bytes
 
+    fallback_bytes, fallback_label = _unknown_gpu_memory_fallback_bytes()
     log.warning(
-        "GPU memory detection unavailable; using conservative fallback: %.1f GB.",
-        UNKNOWN_GPU_MEMORY_FALLBACK_BYTES / (1024 ** 3),
+        "GPU memory detection unavailable; using %s: %.1f GB.",
+        fallback_label,
+        fallback_bytes / (1024 ** 3),
     )
-    return UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
+    return fallback_bytes

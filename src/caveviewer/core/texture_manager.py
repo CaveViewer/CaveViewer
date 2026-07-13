@@ -167,13 +167,28 @@ class TextureManager:
         the texture-side safety valve: many huge texture tiles become lower-res
         GPU textures instead of forcing the streamer to reject geometry chunks.
         """
-        explicit_limit = _parse_texture_dimension_limit(
-            os.environ.get(TEXTURE_MAX_SIZE_ENV_VAR)
-        )
+        explicit_raw_value = os.environ.get(TEXTURE_MAX_SIZE_ENV_VAR)
+        explicit_limit = _parse_texture_dimension_limit(explicit_raw_value)
         if explicit_limit is not None:
+            _LOG.info(
+                "Texture max dimension cap selected from %s=%r: %d px.",
+                TEXTURE_MAX_SIZE_ENV_VAR,
+                explicit_raw_value,
+                explicit_limit,
+            )
             return explicit_limit
+        if explicit_raw_value is not None and explicit_raw_value.strip():
+            _LOG.warning(
+                "Ignoring invalid %s=%r; using automatic texture cap selection.",
+                TEXTURE_MAX_SIZE_ENV_VAR,
+                explicit_raw_value,
+            )
 
         if gpu_memory_bytes is None or gpu_memory_bytes <= 0:
+            _LOG.info(
+                "Texture max dimension cap not selected because GPU memory "
+                "budget is unavailable."
+            )
             return None
 
         unique_texture_keys = {
@@ -182,6 +197,10 @@ class TextureManager:
             if key is not None
         }
         if not unique_texture_keys:
+            _LOG.info(
+                "Texture max dimension cap not selected because the map has no "
+                "unique texture files."
+            )
             return None
 
         target_fraction = max(0.01, min(0.80, float(gpu_target_fraction)))
@@ -192,12 +211,54 @@ class TextureManager:
             return _MIN_TEXTURE_DIMENSION_LIMIT
 
         raw_dimension = int(math.sqrt(max_pixels))
-        for step in _AUTO_TEXTURE_DIMENSION_STEPS:
+        for index, step in enumerate(_AUTO_TEXTURE_DIMENSION_STEPS):
             # Treat values close to a common texture size as that size.  This
             # avoids useless 4096 -> 3990 resizes when the budget is only a few
             # percent below the original estimate.
             if raw_dimension >= int(step * 0.875):
+                next_larger_step = (
+                    _AUTO_TEXTURE_DIMENSION_STEPS[index - 1]
+                    if index > 0
+                    else None
+                )
+                next_larger_reason = (
+                    "highest configured step accepted"
+                    if next_larger_step is None
+                    else (
+                        f"next larger {next_larger_step} px step requires "
+                        f"raw limit >= {int(next_larger_step * 0.875)} px"
+                    )
+                )
+                _LOG.info(
+                    "Texture max dimension cap auto-selected: %d px "
+                    "(GPU budget %.1f GB, target %.0f%%, texture share %.0f%% "
+                    "=> %.1f GB for %d unique textures; %.1f MB/texture; "
+                    "raw square limit %d px; %s).",
+                    step,
+                    gpu_memory_bytes / (1024 ** 3),
+                    target_fraction * 100.0,
+                    _TEXTURE_BUDGET_SHARE * 100.0,
+                    texture_budget_bytes / (1024 ** 3),
+                    len(unique_texture_keys),
+                    bytes_per_texture / (1024 ** 2),
+                    raw_dimension,
+                    next_larger_reason,
+                )
                 return step
+        _LOG.info(
+            "Texture max dimension cap auto-selected: %d px "
+            "(GPU budget %.1f GB, target %.0f%%, texture share %.0f%% "
+            "=> %.1f GB for %d unique textures; %.1f MB/texture; "
+            "raw square limit %d px below configured steps).",
+            _MIN_TEXTURE_DIMENSION_LIMIT,
+            gpu_memory_bytes / (1024 ** 3),
+            target_fraction * 100.0,
+            _TEXTURE_BUDGET_SHARE * 100.0,
+            texture_budget_bytes / (1024 ** 3),
+            len(unique_texture_keys),
+            bytes_per_texture / (1024 ** 2),
+            raw_dimension,
+        )
         return _MIN_TEXTURE_DIMENSION_LIMIT
 
     def _placeholder_texture(self):
