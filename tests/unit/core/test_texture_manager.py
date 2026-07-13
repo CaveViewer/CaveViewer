@@ -39,6 +39,16 @@ def test_recommend_texture_dimension_keeps_4k_for_larger_gpu_budget(monkeypatch)
     ) == 4096
 
 
+def test_recommend_texture_dimension_allows_16k_for_large_gpu_budget(monkeypatch):
+    monkeypatch.delenv(TEXTURE_MAX_SIZE_ENV_VAR, raising=False)
+
+    assert TextureManager.recommend_max_texture_dimension(
+        _materials(1),
+        gpu_memory_bytes=24 * GIB,
+        gpu_target_fraction=0.70,
+    ) == 16384
+
+
 def test_explicit_texture_dimension_limit_overrides_auto_recommendation(monkeypatch):
     monkeypatch.setenv(TEXTURE_MAX_SIZE_ENV_VAR, "1536")
 

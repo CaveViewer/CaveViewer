@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ import numpy as np
 import pytest
 
 from caveviewer.core import hardware_memory, streaming_scheduler, streaming_world
+from caveviewer.core.worker_config import WorkerAllocation
 
 
 def _chunk(cell):
@@ -41,7 +43,16 @@ def _drain(world, ready, *, max_per_frame=4, time_budget_ms=100.0):
     )
 
 
-def _streaming_world_with_cells(monkeypatch, cells, *, ram_available, workers=8):
+def _streaming_world_with_cells(
+    monkeypatch,
+    cells,
+    *,
+    ram_available,
+    workers=8,
+    requested_workers: int | None = None,
+    reserved_cpus=3,
+    logical_cpus: int | None = None,
+):
     manifest = {
         "chunks": {
             f"{cell[0]}_{cell[1]}_{cell[2]}": {}
@@ -72,8 +83,13 @@ def _streaming_world_with_cells(monkeypatch, cells, *, ram_available, workers=8)
     )
     monkeypatch.setattr(
         streaming_world,
-        "resolve_worker_count",
-        lambda *_args, **_kwargs: workers,
+        "resolve_worker_allocation",
+        lambda *_args, **_kwargs: WorkerAllocation(
+            workers if requested_workers is None else requested_workers,
+            reserved_cpus,
+            workers + reserved_cpus if logical_cpus is None else logical_cpus,
+            workers,
+        ),
     )
     return streaming_world.StreamingWorld(
         "unused",
@@ -159,7 +175,7 @@ def test_deferred_chunks_use_the_latest_camera_priority():
 
 
 def test_streaming_starts_one_worker_then_grows_after_completed_work(
-    monkeypatch,
+    monkeypatch, caplog
 ):
     cells = {(index, 0, 0) for index in range(6)}
     loaded_count = 0
@@ -180,15 +196,27 @@ def test_streaming_starts_one_worker_then_grows_after_completed_work(
         "prepare_chunk_upload_groups",
         lambda data: data,
     )
-    world = _streaming_world_with_cells(
-        monkeypatch, cells, ram_available=100, workers=8
-    )
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        world = _streaming_world_with_cells(
+            monkeypatch,
+            cells,
+            ram_available=100,
+            workers=5,
+            requested_workers=8,
+            reserved_cpus=3,
+            logical_cpus=8,
+        )
     try:
         assert len(world._workers) == 1
-        world.update(np.zeros(3, dtype=np.float32))
-        assert all_loaded.wait(timeout=2.0)
+        with caplog.at_level(logging.INFO, logger="caveviewer"):
+            world.update(np.zeros(3, dtype=np.float32))
+            assert all_loaded.wait(timeout=2.0)
         assert len(world._workers) > 1
-        assert len(world._workers) <= len(cells)
+        assert len(world._workers) <= 5
+        assert "Streaming worker target resolved to 5 worker(s)" in caplog.text
+        assert "requested 8 capped by reserved CPU policy" in caplog.text
+        assert "additional workers require system RAM" not in caplog.text
+        assert "Detected system RAM for streaming worker admission" in caplog.text
     finally:
         world.shutdown()
 

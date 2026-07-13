@@ -44,7 +44,8 @@ from caveviewer.core.logging_utils import get_logger
 from caveviewer.core.worker_config import (
     MAX_WORKER_RAM_UTILIZATION,
     can_start_additional_worker,
-    resolve_worker_count,
+    describe_worker_target,
+    resolve_worker_allocation,
 )
 from caveviewer.core.obj_parser import RawMesh, MaterialRange
 from caveviewer.core.cache_paths import (
@@ -446,12 +447,14 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         mat_name = material_names[mat_id] if mat_id >= 0 else "__no_material__"
         per_cell_groups.setdefault(real_cell, []).append((mat_name, face_idx_in_order))
 
-    worker_count = resolve_worker_count(
+    worker_allocation = resolve_worker_allocation(
         os.environ.get("CAVEVIEWER_CHUNK_BUILD_WORKERS"),
         os.environ.get("CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS"),
         default_workers=1,
         default_reserved_cpus=2,
     )
+    worker_count = worker_allocation.effective_workers
+    _LOG.info(describe_worker_target("Cache-build", worker_allocation))
 
     cell_items = list(per_cell_groups.items())
     total_cells = len(cell_items)
@@ -519,13 +522,22 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
                     snapshot = hardware_memory.detect_ram_snapshot()
                     if can_start_additional_worker(snapshot):
                         admitted_workers += 1
-                        if admission_blocked:
-                            _LOG.info(
-                                "System RAM pressure eased; increasing cache-build "
-                                "workers to %d of %d.",
-                                admitted_workers,
-                                worker_count,
-                            )
+                        pressure_note = (
+                            "System RAM pressure eased; "
+                            if admission_blocked
+                            else ""
+                        )
+                        _LOG.info(
+                            "%sDetected system RAM for cache-build worker "
+                            "admission: %.1f GB available of %.1f GB "
+                            "(%.1f%% used); increasing workers to %d of %d.",
+                            pressure_note,
+                            snapshot.available_bytes / (1024 ** 3),
+                            snapshot.total_bytes / (1024 ** 3),
+                            snapshot.utilization_fraction * 100.0,
+                            admitted_workers,
+                            worker_count,
+                        )
                         admission_blocked = False
                     else:
                         if not admission_blocked:

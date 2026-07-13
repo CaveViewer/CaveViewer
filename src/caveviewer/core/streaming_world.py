@@ -30,7 +30,8 @@ from caveviewer.core import chunker, hardware_memory
 from caveviewer.core.worker_config import (
     MAX_WORKER_RAM_UTILIZATION,
     can_start_additional_worker,
-    resolve_worker_count,
+    describe_worker_target,
+    resolve_worker_allocation,
 )
 from caveviewer.core.chunker import ChunkData
 from caveviewer.core.logging_utils import get_logger
@@ -208,12 +209,14 @@ class StreamingWorld:
         ready_backlog_capacity = max(16, min(256, self.config.max_loaded_chunks))
         self._ready_backlog = _BoundedReadyBacklog(ready_backlog_capacity)
         self._lock = threading.Lock()
-        self._worker_pool_size = resolve_worker_count(
+        worker_allocation = resolve_worker_allocation(
             os.environ.get("CAVEVIEWER_IO_WORKERS"),
             os.environ.get("CAVEVIEWER_IO_RESERVED_CPUS"),
             default_workers=2,
             default_reserved_cpus=3,
         )
+        self._worker_pool_size = worker_allocation.effective_workers
+        _LOG.info(describe_worker_target("Streaming", worker_allocation))
         self._stop_event = threading.Event()
         self._paused_event = threading.Event()
         self._work_queue: "queue.Queue[tuple[int,int,int]]" = queue.Queue()
@@ -409,13 +412,22 @@ class StreamingWorld:
                 return False
 
             self._start_worker_locked()
-            if self._worker_admission_blocked:
-                _LOG.info(
-                    "System RAM pressure eased; increasing streaming workers "
-                    "to %d of %d.",
-                    len(self._workers),
-                    self._worker_pool_size,
-                )
+            pressure_note = (
+                "System RAM pressure eased; "
+                if self._worker_admission_blocked
+                else ""
+            )
+            _LOG.info(
+                "%sDetected system RAM for streaming worker admission: %.1f GB "
+                "available of %.1f GB (%.1f%% used); increasing workers "
+                "to %d of %d.",
+                pressure_note,
+                snapshot.available_bytes / (1024 ** 3),
+                snapshot.total_bytes / (1024 ** 3),
+                snapshot.utilization_fraction * 100.0,
+                len(self._workers),
+                self._worker_pool_size,
+            )
             self._worker_admission_blocked = False
             return True
 
