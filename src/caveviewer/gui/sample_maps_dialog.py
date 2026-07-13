@@ -16,10 +16,18 @@ and the glue that drives the other one.
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 
+from caveviewer.gui.dialog_style import (
+    DIALOG_BODY_PAD_X,
+    DIALOG_BODY_PAD_Y,
+    DIALOG_PANEL_BORDER,
+    create_dialog_action_button,
+    create_dialog_notice,
+    set_dialog_action_button,
+    set_dialog_notice,
+)
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
@@ -40,10 +48,7 @@ _TITLE_COLOR = DARK_THEME.title
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
-_BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
-_BUTTON_FG = DARK_THEME.primary_button_text
-_BORDER_COLOR = DARK_THEME.border
 _SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX = "caveviewer.sample-map-download"
 
 
@@ -383,7 +388,12 @@ def show_sample_maps_dialog(
     dialog.geometry(f"{window_w}x{preload_h}+{anchor_x}+{anchor_y}")
 
     content = tk.Frame(dialog, bg=_BG_COLOR)
-    content.pack(fill="both", expand=True, padx=_px(24), pady=(_px(22), _px(20)))
+    content.pack(
+        fill="both",
+        expand=True,
+        padx=_px(DIALOG_BODY_PAD_X),
+        pady=(_px(DIALOG_BODY_PAD_Y), _px(DIALOG_BODY_PAD_Y)),
+    )
 
     header = tk.Label(
         content,
@@ -408,37 +418,14 @@ def show_sample_maps_dialog(
     )
     sub.pack(fill="x", pady=(_px(4), _px(14)))
 
-    notice_frame = tk.Frame(
+    notice_frame, notice_label = create_dialog_notice(
         content,
-        bg=_PANEL_COLOR,
-        highlightthickness=1,
-        highlightbackground=_BORDER_COLOR,
-        highlightcolor=_BORDER_COLOR,
-    )
-    notice_frame.grid_columnconfigure(1, weight=1)
-    notice_accent = tk.Frame(notice_frame, bg=_BUTTON_BG, width=_px(4))
-    notice_accent.grid(row=0, column=0, sticky="ns")
-    notice_label = tk.Label(
-        notice_frame,
-        text="",
         font=(_UI_FONT_FAMILY, 9),
-        fg=_SUBTITLE_COLOR,
-        bg=_PANEL_COLOR,
-        anchor="w",
-        justify="left",
         wraplength=window_w - _px(92),
     )
-    notice_label.grid(row=0, column=1, sticky="ew", padx=(_px(10), _px(12)), pady=_px(9))
 
     def _set_notice(message: str, *, kind: FeedbackKind = "info") -> None:
-        colors = {
-            "info": (_PANEL_COLOR, _BUTTON_BG),
-            "warning": ("#211b10", _BUTTON_BG),
-            "error": ("#261416", DARK_THEME.invalid_border),
-        }.get(kind, (_PANEL_COLOR, _BUTTON_BG))
-        notice_frame.config(bg=colors[0], highlightbackground=colors[1], highlightcolor=colors[1])
-        notice_accent.config(bg=colors[1])
-        notice_label.config(text=message, bg=colors[0])
+        set_dialog_notice(notice_frame, notice_label, message, kind=kind)
         if not notice_frame.winfo_manager():
             notice_frame.pack(fill="x", pady=(0, _px(14)))
 
@@ -510,11 +497,14 @@ def show_sample_maps_dialog(
             justify="left",
             anchor="w",
         ).pack(fill="x", pady=(_px(8), _px(16)))
-        close_btn = tk.Button(
-            content, text="Close", command=dialog.destroy,
-            font=(_UI_FONT_FAMILY, 9), bg=_BG_COLOR, fg=_SUBTITLE_COLOR,
-            relief="flat", borderwidth=1, highlightbackground=_BORDER_COLOR,
-            cursor="hand2",
+        close_btn = create_dialog_action_button(
+            content,
+            "Close",
+            dialog.destroy,
+            font=(_UI_FONT_FAMILY, 9),
+            kind="secondary",
+            padx=12,
+            pady=6,
         )
         close_btn.pack(anchor="e", pady=(0, _px(2)))
         close_btn.focus_set()
@@ -545,8 +535,8 @@ def show_sample_maps_dialog(
         list_frame,
         bg=_PANEL_COLOR,
         highlightthickness=1,
-        highlightbackground=_BORDER_COLOR,
-        highlightcolor=_BORDER_COLOR,
+        highlightbackground=DIALOG_PANEL_BORDER,
+        highlightcolor=DIALOG_PANEL_BORDER,
     )
     rows_frame.pack(fill="x")
 
@@ -749,78 +739,25 @@ def show_sample_maps_dialog(
         _close_dialog()
 
     def _make_action_button(parent, text, command, enabled=True):
-        # On macOS native tk.Button ignores bg/fg and renders as a gray
-        # Aqua button, so use a Label styled to match the amber Tk buttons
-        # used elsewhere. Other platforms honor tk.Button colors fine.
-        if sys.platform == "darwin":
-            btn = tk.Label(
-                parent, text=text, font=(_UI_FONT_FAMILY, 10, "bold"),
-                bg=_BUTTON_BG if enabled else _BORDER_COLOR,
-                fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
-                width=12, anchor="center",
-                padx=8, pady=6,
-                cursor="hand2" if enabled else "arrow",
-                takefocus=enabled,
-                highlightthickness=1,
-                highlightbackground=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
-            )
-            btn._cv_command = command
-            btn._cv_enabled = enabled
-
-            def _invoke(_event=None, _b=btn):
-                if getattr(_b, "_cv_enabled", False) and _b._cv_command:
-                    _b._cv_command()
-                return "break"
-
-            if enabled:
-                btn.bind("<Button-1>", _invoke)
-                btn.bind("<Return>", _invoke)
-                btn.bind("<space>", _invoke)
-                btn.bind("<Enter>", lambda _event, _b=btn: _b.config(bg=_BUTTON_HOVER_BG))
-                btn.bind("<Leave>", lambda _event, _b=btn: _b.config(bg=_BUTTON_BG))
-            return btn
-
-        return tk.Button(
-            parent, text=text, command=command if enabled else None,
+        return create_dialog_action_button(
+            parent,
+            text,
+            command,
             font=(_UI_FONT_FAMILY, 10, "bold"),
-            bg=_BUTTON_BG if enabled else _BORDER_COLOR,
-            fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
-            activebackground=_BUTTON_HOVER_BG, activeforeground=_BUTTON_FG,
-            relief="flat", borderwidth=1,
-            highlightthickness=1,
-            highlightbackground=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
-            highlightcolor=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
+            kind="primary",
+            enabled=enabled,
             width=12,
             padx=8, pady=6,
-            state="normal" if enabled else "disabled",
-            cursor="hand2" if enabled else "arrow",
         )
 
     def _set_action_button(btn, text, command, *, enabled: bool = True):
-        if sys.platform == "darwin":
-            btn._cv_command = command
-            btn._cv_enabled = enabled
-            btn.config(
-                text=text,
-                bg=_BUTTON_BG if enabled else _BORDER_COLOR,
-                fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
-                cursor="hand2" if enabled else "arrow",
-                takefocus=enabled,
-                highlightbackground=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
-            )
-        else:
-            btn.config(
-                text=text,
-                command=command if enabled else None,
-                bg=_BUTTON_BG if enabled else _BORDER_COLOR,
-                fg=_BUTTON_FG if enabled else _INSTRUCTION_COLOR,
-                highlightbackground=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR if enabled else _BORDER_COLOR,
-                state="normal" if enabled else "disabled",
-                cursor="hand2" if enabled else "arrow",
-            )
+        set_dialog_action_button(
+            btn,
+            text=text,
+            command=command,
+            enabled=enabled,
+            kind="primary",
+        )
 
     def on_pick(sample):
         sample_path = existing_sample_map_path(sample_maps_root_dir, sample)

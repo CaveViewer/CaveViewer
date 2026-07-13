@@ -148,6 +148,10 @@ def test_sample_maps_dialog_is_modal_and_has_initial_focus_policy():
     assert "dialog.grab_set()" in source
     assert "dialog.wait_visibility()" in source
     assert "focus_set()" in source
+    assert "create_dialog_notice(" in source
+    assert "set_dialog_notice(" in source
+    assert "create_dialog_action_button(" in source
+    assert "set_dialog_action_button(" in source
 
 
 def test_download_start_reuses_action_area_as_cancel_button_without_prompt():

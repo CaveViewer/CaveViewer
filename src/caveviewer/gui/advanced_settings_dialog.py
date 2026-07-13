@@ -22,6 +22,15 @@ from caveviewer.gui.advanced_settings_form import (
     AdvancedSettingsFormState,
     MessageKind,
 )
+from caveviewer.gui.dialog_style import (
+    DIALOG_BODY_PAD_X,
+    DIALOG_BODY_PAD_Y,
+    DIALOG_PANEL_BORDER,
+    create_dialog_action_button,
+    create_dialog_notice,
+    set_dialog_action_button,
+    set_dialog_notice,
+)
 from caveviewer.gui.platform import DesktopServices, get_desktop_services
 from caveviewer.gui.tk_theme import DARK_THEME
 
@@ -32,19 +41,14 @@ _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
-_BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
-_BUTTON_FG = DARK_THEME.primary_button_text
-_BORDER_COLOR = DARK_THEME.border
 
 _LINUX_LAYOUT = sys.platform.startswith("linux")
 _WRAP_LENGTH = 460 if sys.platform == "win32" else 380
 _TEXT_ENTRY_WIDTH = 38 if sys.platform == "win32" else 30
 _NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
-_ERROR_COLOR = DARK_THEME.error_text
-_WARNING_COLOR = _TITLE_COLOR
-_BODY_PAD_X = 18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
+_BODY_PAD_X = DIALOG_BODY_PAD_X
 _MIN_WIDTH = (
     860
     if sys.platform == "win32"
@@ -57,70 +61,6 @@ _PREFERENCE_PAGES = (
     ("parsing", "Import"),
     ("downloads", "Recordings"),
 )
-
-
-class _LabelButton(tk.Label):
-    """Keyboard-accessible label button with an explicit enabled state."""
-
-    def __init__(
-        self,
-        parent,
-        *,
-        text: str,
-        command: Callable[[], None],
-        font,
-        bg: str,
-        fg: str,
-        hover_bg: str,
-        padx: int,
-        pady: int,
-        border_color: str,
-    ) -> None:
-        super().__init__(
-            parent,
-            text=text,
-            font=font,
-            bg=bg,
-            fg=fg,
-            padx=padx,
-            pady=pady,
-            cursor="hand2",
-            takefocus=True,
-            highlightthickness=1,
-            highlightbackground=border_color,
-            highlightcolor=border_color,
-        )
-        self._command = command
-        self._normal_bg = bg
-        self._normal_fg = fg
-        self._hover_bg = hover_bg
-        self._enabled = True
-        self.bind("<Button-1>", self._invoke)
-        self.bind("<Return>", self._invoke)
-        self.bind("<space>", self._invoke)
-        self.bind("<Enter>", self._show_hover)
-        self.bind("<Leave>", self._clear_hover)
-
-    def _invoke(self, _event=None):
-        if self._enabled:
-            self._command()
-        return "break"
-
-    def _show_hover(self, _event=None) -> None:
-        if self._enabled:
-            self.config(bg=self._hover_bg)
-
-    def _clear_hover(self, _event=None) -> None:
-        self.config(bg=self._normal_bg)
-
-    def set_enabled(self, enabled: bool) -> None:
-        self._enabled = bool(enabled)
-        self.config(
-            bg=self._normal_bg,
-            fg=self._normal_fg if self._enabled else _PLACEHOLDER_COLOR,
-            cursor="hand2" if self._enabled else "",
-            takefocus=self._enabled,
-        )
 
 
 class AdvancedSettingsDialog:
@@ -162,7 +102,7 @@ class AdvancedSettingsDialog:
         self.field_entries: dict[str, tk.Entry] = {}
         self.field_display_vars: dict[str, tk.StringVar] = {}
         self.field_entry_states: dict[str, str] = {}
-        self.field_browse_buttons: dict[str, _LabelButton] = {}
+        self.field_browse_buttons: dict[str, tk.Widget] = {}
         self.numeric_entry_states: dict[str, tuple] = {}
         self.numeric_placeholder_keys: set[str] = set()
         self.form_ready = False
@@ -275,30 +215,28 @@ class AdvancedSettingsDialog:
                 lambda field_key=key: self._show_numeric_placeholder(field_key)
             )
 
-    def _new_label_button(
+    def _new_dialog_button(
         self,
         parent,
         text: str,
         command: Callable[[], None],
         *,
-        bg: str = DARK_THEME.secondary_button,
-        fg: str = _SUBTITLE_COLOR,
-        hover_bg: str = DARK_THEME.secondary_button_hover,
+        kind: str = "secondary",
         padx: int = 10,
         pady: int = 5,
-        border_color: str = DARK_THEME.secondary_button_border,
-    ) -> _LabelButton:
-        return _LabelButton(
+        width: int | None = None,
+        default: str | None = None,
+    ):
+        return create_dialog_action_button(
             parent,
-            text=text,
-            command=command,
+            text,
+            command,
             font=self.small_font,
-            bg=bg,
-            fg=fg,
-            hover_bg=hover_bg,
+            kind=kind,
             padx=padx,
             pady=pady,
-            border_color=border_color,
+            width=width,
+            default=default,
         )
 
     def _render_section(self, parent, section_key: str) -> None:
@@ -314,8 +252,8 @@ class AdvancedSettingsDialog:
             padx=0,
             pady=0,
             highlightthickness=1,
-            highlightbackground=DARK_THEME.entry_border,
-            highlightcolor=DARK_THEME.entry_border,
+            highlightbackground=DIALOG_PANEL_BORDER,
+            highlightcolor=DIALOG_PANEL_BORDER,
         )
         group.pack(fill="x")
 
@@ -451,7 +389,7 @@ class AdvancedSettingsDialog:
         entry.pack(**entry_pack_options)
 
         if value_type in {ValueType.PATH, ValueType.PATH_CREATE}:
-            browse_button = self._new_label_button(
+            browse_button = self._new_dialog_button(
                 entry_parent,
                 "Browse",
                 lambda field_key=key, title=field.label: self._choose_directory(
@@ -565,7 +503,10 @@ class AdvancedSettingsDialog:
 
     def _build(self) -> None:
         body = tk.Frame(
-            self.dialog, bg=_BG_COLOR, padx=_BODY_PAD_X, pady=18
+            self.dialog,
+            bg=_BG_COLOR,
+            padx=_BODY_PAD_X,
+            pady=DIALOG_BODY_PAD_Y,
         )
         body.pack(fill="both", expand=True)
 
@@ -598,91 +539,31 @@ class AdvancedSettingsDialog:
         self.page_stack.grid_propagate(False)
         self._show_page(_PREFERENCE_PAGES[0][0])
 
-        self.feedback_frame = tk.Frame(
+        self.feedback_frame, self.error_label = create_dialog_notice(
             body,
-            bg="#211b10",
-            highlightthickness=1,
-            highlightbackground=_BUTTON_BORDER_COLOR,
-            highlightcolor=_BUTTON_BORDER_COLOR,
-        )
-        self.feedback_frame.grid_columnconfigure(1, weight=1)
-        feedback_accent = tk.Frame(self.feedback_frame, bg=_BUTTON_BG, width=4)
-        feedback_accent.grid(row=0, column=0, sticky="ns")
-        self.feedback_frame._cv_accent = feedback_accent
-        self.error_label = tk.Label(
-            self.feedback_frame,
-            text="",
             font=self.small_font,
-            fg=_ERROR_COLOR,
-            bg="#211b10",
-            justify="left",
-            anchor="w",
             wraplength=620,
-        )
-        self.error_label.grid(
-            row=0, column=1, sticky="ew", padx=(10, 12), pady=6
         )
 
         self.button_row = tk.Frame(body, bg=_BG_COLOR)
         self.button_row.pack(fill="x", pady=(14, 0))
 
-        if sys.platform == "darwin":
-            cancel_button = self._new_label_button(
-                self.button_row,
-                "Cancel",
-                self.cancel,
-                padx=12,
-                pady=6,
-            )
-            self.apply_button = self._new_label_button(
-                self.button_row,
-                "Apply",
-                self.apply,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                hover_bg=_BUTTON_HOVER_BG,
-                padx=16,
-                pady=6,
-                border_color=_BUTTON_BORDER_COLOR,
-            )
-        else:
-            cancel_button = tk.Button(
-                self.button_row,
-                text="Cancel",
-                command=self.cancel,
-                font=self.small_font,
-                bg=DARK_THEME.secondary_button,
-                fg=_SUBTITLE_COLOR,
-                activebackground=DARK_THEME.secondary_button_hover,
-                activeforeground=_SUBTITLE_COLOR,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=DARK_THEME.secondary_button_border,
-                highlightcolor=DARK_THEME.secondary_button_border,
-                padx=12,
-                pady=6,
-                cursor="hand2",
-            )
-            self.apply_button = tk.Button(
-                self.button_row,
-                text="Apply",
-                command=self.apply,
-                font=self.small_font,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                activebackground=_BUTTON_HOVER_BG,
-                activeforeground=_BUTTON_FG,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=_BUTTON_BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR,
-                padx=16,
-                pady=6,
-                cursor="hand2",
-                default="active",
-            )
+        cancel_button = self._new_dialog_button(
+            self.button_row,
+            "Cancel",
+            self.cancel,
+            padx=12,
+            pady=6,
+        )
+        self.apply_button = self._new_dialog_button(
+            self.button_row,
+            "Apply",
+            self.apply,
+            kind="primary",
+            padx=16,
+            pady=6,
+            default="active",
+        )
 
         self.apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
@@ -701,42 +582,25 @@ class AdvancedSettingsDialog:
                 self.feedback_frame.pack_forget()
             return
 
-        background = "#211b10" if message_kind is MessageKind.WARNING else "#261416"
-        accent = (
-            _BUTTON_BG
-            if message_kind is MessageKind.WARNING
-            else DARK_THEME.invalid_border
-        )
+        kind = "warning" if message_kind is MessageKind.WARNING else "error"
         if self.feedback_frame is not None:
-            self.feedback_frame.config(
-                bg=background,
-                highlightbackground=accent,
-                highlightcolor=accent,
+            set_dialog_notice(
+                self.feedback_frame,
+                self.error_label,
+                message,
+                kind=kind,
             )
-            feedback_accent = getattr(self.feedback_frame, "_cv_accent", None)
-            if feedback_accent is not None:
-                feedback_accent.config(bg=accent)
             if not self.feedback_frame.winfo_manager():
                 self.feedback_frame.pack(
                     fill="x",
                     pady=(8, 0),
                     before=self.button_row,
                 )
-        self.error_label.config(
-            text=message,
-            bg=background,
-            fg=(
-                _WARNING_COLOR
-                if message_kind is MessageKind.WARNING
-                else _ERROR_COLOR
-            ),
-        )
+        else:
+            self.error_label.config(text=message)
 
     def _set_apply_enabled(self, enabled: bool) -> None:
-        if isinstance(self.apply_button, _LabelButton):
-            self.apply_button.set_enabled(enabled)
-        else:
-            self.apply_button.config(state="normal" if enabled else "disabled")
+        set_dialog_action_button(self.apply_button, enabled=enabled)
 
     def _set_field_lock(self, invalid_key: str | None) -> None:
         for key, entry in self.field_entries.items():
@@ -755,7 +619,10 @@ class AdvancedSettingsDialog:
                 ),
             )
         for key, browse_button in self.field_browse_buttons.items():
-            browse_button.set_enabled(invalid_key is None or key == invalid_key)
+            set_dialog_action_button(
+                browse_button,
+                enabled=invalid_key is None or key == invalid_key,
+            )
 
     def _focus_invalid_field(
         self, key: str, *, select_value: bool = False

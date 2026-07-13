@@ -385,6 +385,9 @@ def show_splash_screen(
         bg=_BG_COLOR,
         cursor="arrow",
         takefocus=False,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
     )
     update_label.pack(pady=(0, 2))
 
@@ -396,6 +399,9 @@ def show_splash_screen(
         bg=_BG_COLOR,
         cursor="arrow",
         takefocus=False,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
     )
     update_action_label.pack(pady=(0, 4))
 
@@ -509,6 +515,17 @@ def show_splash_screen(
     def on_close(_event=None):
         _leave_splash()
 
+    def _invoke_and_break(callback):
+        callback()
+        return "break"
+
+    def _bind_activation(widget, callback) -> None:
+        for sequence in ("<Button-1>", "<Return>", "<space>"):
+            widget.bind(
+                sequence,
+                lambda _event, cb=callback: _invoke_and_break(cb),
+            )
+
     browse_button = tk.Label(
         root,
         text="Open Map Folder…",
@@ -523,9 +540,7 @@ def show_splash_screen(
         highlightbackground=_BUTTON_BORDER_COLOR,
         highlightcolor=_BUTTON_BORDER_COLOR,
     )
-    browse_button.bind("<Button-1>", lambda _event: on_open_map_folder())
-    browse_button.bind("<Return>", lambda _event: on_open_map_folder())
-    browse_button.bind("<space>", lambda _event: on_open_map_folder())
+    _bind_activation(browse_button, on_open_map_folder)
     browse_button.bind("<Enter>", lambda _event: browse_button.config(bg=_BUTTON_HOVER_BG))
     browse_button.bind("<Leave>", lambda _event: browse_button.config(bg=_BUTTON_BG))
     browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
@@ -572,10 +587,11 @@ def show_splash_screen(
         bg=_BG_COLOR,
         cursor="hand2",
         takefocus=True,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
     )
-    advanced_link.bind("<Button-1>", lambda _event: _on_advanced_settings_click())
-    advanced_link.bind("<Return>", lambda _event: _on_advanced_settings_click())
-    advanced_link.bind("<space>", lambda _event: _on_advanced_settings_click())
+    _bind_activation(advanced_link, _on_advanced_settings_click)
     advanced_link.pack(side="left")
 
     secondary_separator = tk.Label(
@@ -595,10 +611,11 @@ def show_splash_screen(
         bg=_BG_COLOR,
         cursor="hand2",
         takefocus=True,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
     )
-    sample_maps_link.bind("<Button-1>", lambda _event: _on_example_maps_click())
-    sample_maps_link.bind("<Return>", lambda _event: _on_example_maps_click())
-    sample_maps_link.bind("<space>", lambda _event: _on_example_maps_click())
+    _bind_activation(sample_maps_link, _on_example_maps_click)
     sample_maps_link.pack(side="left")
 
     credit_label = tk.Label(

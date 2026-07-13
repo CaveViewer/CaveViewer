@@ -594,6 +594,10 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "grid_remove()" in show_page_source
     assert "_apply_geometry" not in show_page_source
     assert "grid_propagate(False)" in source
+    assert "create_dialog_notice(" in source
+    assert "create_dialog_action_button(" in module_source
+    assert "set_dialog_action_button(" in module_source
+    assert "class _LabelButton" not in module_source
 
 
 def test_advanced_settings_invalid_field_switches_to_containing_page():

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from caveviewer.gui import splash_screen
@@ -116,3 +118,17 @@ def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):
     state_file = state_home / "caveviewer" / "last_browse_path"
     assert state_file.read_text(encoding="utf-8") == str(map_root)
     assert splash_screen._load_last_browse_dir() == str(map_root)
+
+
+def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert "highlightthickness=1" in source
+    assert "takefocus=True" in source
+    assert 'label.bind("<Return>", invoke)' in source
+    assert 'label.bind("<space>", invoke)' in source
+    assert "def _invoke_and_break(callback):" in source
+    assert "def _bind_activation(widget, callback) -> None:" in source
+    assert "_bind_activation(browse_button, on_open_map_folder)" in source
+    assert "_bind_activation(advanced_link, _on_advanced_settings_click)" in source
+    assert "_bind_activation(sample_maps_link, _on_example_maps_click)" in source
