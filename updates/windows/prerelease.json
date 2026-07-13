@@ -1,10 +1,10 @@
 {
   "latest_version": "1.0.65",
   "download_url": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.65/CaveViewer-1.0.65-windows.zip",
-  "download_size_bytes": 1764964,
+  "download_size_bytes": 1766450,
   "download_url_windows_zip": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.65/CaveViewer-1.0.65-windows.zip",
-  "download_size_bytes_windows_zip": 1764964,
-  "release_notes": "CaveViewer release",
-  "sha256": "464fc8621d5f6966afd14da0ecd3c266beca98340da8e42ba16b0e4f3c522181",
-  "sha256_windows_zip": "464fc8621d5f6966afd14da0ecd3c266beca98340da8e42ba16b0e4f3c522181"
+  "download_size_bytes_windows_zip": 1766450,
+  "release_notes": "Test increased resource limits to address texture concerns. ",
+  "sha256": "203a92a29eb25cb6a7246c11b6b67f9dae74e4217f0b9107aabe39e564fc63e3",
+  "sha256_windows_zip": "203a92a29eb25cb6a7246c11b6b67f9dae74e4217f0b9107aabe39e564fc63e3"
 }

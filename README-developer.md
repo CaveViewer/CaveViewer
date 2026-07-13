@@ -543,7 +543,8 @@ implementation details.
 
 Runtime chunk streaming is also split by policy boundary:
 `src/caveviewer/core/hardware_memory.py` detects total and currently available
-system RAM, detects GPU memory, and parses target fractions;
+system RAM on Windows, macOS, and Linux; detects GPU memory; and parses target
+fractions;
 `src/caveviewer/core/streaming_budget.py` contains pure
 chunk-size estimation and residency-cap calculation;
 `src/caveviewer/core/streaming_scheduler.py` owns the bounded ready backlog,

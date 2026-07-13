@@ -6,6 +6,7 @@ import ctypes
 import os
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Callable
@@ -18,6 +19,16 @@ LINUX_DRM_ROOT = "/sys/class/drm"
 UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = 1 * 1024 ** 3
 
 _LOG = get_logger("HardwareMemory")
+_DARWIN_VM_STAT_PAGE_SIZE_RE = re.compile(r"page size of\s+(\d+)\s+bytes")
+_DARWIN_VM_STAT_TOTAL_KEYS = (
+    "Pages free",
+    "Pages active",
+    "Pages inactive",
+    "Pages speculative",
+    "Pages throttled",
+    "Pages wired down",
+    "Pages occupied by compressor",
+)
 
 
 @dataclass(frozen=True)
@@ -94,6 +105,112 @@ def _linux_ram_snapshot(
     return RamSnapshot(total_bytes, available_bytes)
 
 
+def _darwin_total_ram_bytes() -> int | None:
+    """Read macOS physical RAM size from sysctl."""
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        total_bytes = int(result.stdout.strip())
+    except Exception:
+        return None
+    return total_bytes if total_bytes > 0 else None
+
+
+def _parse_darwin_vm_stat_pages(output: str) -> tuple[int, dict[str, int]] | None:
+    """Parse macOS ``vm_stat`` page size and named page counters."""
+    lines = output.splitlines()
+    if not lines:
+        return None
+
+    page_size_match = _DARWIN_VM_STAT_PAGE_SIZE_RE.search(lines[0])
+    if page_size_match is None:
+        return None
+
+    try:
+        page_size = int(page_size_match.group(1))
+    except ValueError:
+        return None
+    if page_size <= 0:
+        return None
+
+    pages: dict[str, int] = {}
+    for line in lines[1:]:
+        key, separator, raw_value = line.partition(":")
+        if not separator:
+            continue
+        try:
+            token = raw_value.strip().split()[0].rstrip(".").replace(",", "")
+            pages[key.strip()] = int(token)
+        except (IndexError, ValueError):
+            continue
+    return page_size, pages
+
+
+def _parse_darwin_vm_stat_available_bytes(output: str) -> int | None:
+    """Estimate reclaim-aware available RAM from macOS ``vm_stat`` output."""
+    parsed = _parse_darwin_vm_stat_pages(output)
+    if parsed is None:
+        return None
+
+    page_size, pages = parsed
+    # macOS lacks a stable sysconf available-page counter. Free, inactive, and
+    # speculative pages are either immediately free or reclaimable under memory
+    # pressure, which matches the admission policy's conservative needs.
+    available_pages = sum(
+        pages.get(key, 0)
+        for key in ("Pages free", "Pages inactive", "Pages speculative")
+    )
+    if available_pages < 0:
+        return None
+    return available_pages * page_size
+
+
+def _parse_darwin_vm_stat_total_bytes(output: str) -> int | None:
+    """Estimate physical RAM from disjoint macOS ``vm_stat`` page categories."""
+    parsed = _parse_darwin_vm_stat_pages(output)
+    if parsed is None:
+        return None
+
+    page_size, pages = parsed
+    total_pages = sum(pages.get(key, 0) for key in _DARWIN_VM_STAT_TOTAL_KEYS)
+    if total_pages <= 0:
+        return None
+    return total_pages * page_size
+
+
+def _darwin_ram_snapshot() -> RamSnapshot | None:
+    """Read macOS total and currently reclaimable physical RAM."""
+    total_bytes = _darwin_total_ram_bytes()
+
+    try:
+        result = subprocess.run(
+            ["vm_stat"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except Exception:
+        return None
+
+    available_bytes = _parse_darwin_vm_stat_available_bytes(result.stdout)
+    if available_bytes is None:
+        return None
+    if total_bytes is None:
+        total_bytes = _parse_darwin_vm_stat_total_bytes(result.stdout)
+        if total_bytes is None:
+            return None
+    return RamSnapshot(
+        total_bytes=total_bytes,
+        available_bytes=min(available_bytes, total_bytes),
+    )
+
+
 def _sysconf_ram_snapshot() -> RamSnapshot | None:
     """Use POSIX page counters when the platform exposes available pages."""
     if not hasattr(os, "sysconf"):
@@ -116,6 +233,10 @@ def detect_ram_snapshot() -> RamSnapshot | None:
     """Best-effort current physical-RAM availability across desktop platforms."""
     if os.name == "nt":
         return _windows_ram_snapshot()
+    if sys.platform == "darwin":
+        snapshot = _darwin_ram_snapshot()
+        if snapshot is not None:
+            return snapshot
     if sys.platform.startswith("linux"):
         snapshot = _linux_ram_snapshot()
         if snapshot is not None:
@@ -128,6 +249,10 @@ def detect_total_ram_bytes() -> int:
     snapshot = detect_ram_snapshot()
     if snapshot is not None:
         return snapshot.total_bytes
+    if sys.platform == "darwin":
+        total_bytes = _darwin_total_ram_bytes()
+        if total_bytes is not None:
+            return total_bytes
     try:
         if hasattr(os, "sysconf"):
             page_size = int(os.sysconf("SC_PAGE_SIZE"))
