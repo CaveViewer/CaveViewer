@@ -57,7 +57,7 @@ def _mesh_with_cells(cell_count: int) -> obj_parser.RawMesh:
     """Build one triangle per spatial cell for worker-pool lifecycle tests."""
     positions = []
     for cell_index in range(cell_count):
-        x = float(cell_index * 10)
+        x = float(cell_index * chunker.DEFAULT_CHUNK_SIZE)
         positions.extend(
             ((x, 0.0, 0.0), (x + 1.0, 0.0, 0.0), (x, 1.0, 0.0))
         )
@@ -107,6 +107,7 @@ def test_chunk_size_configuration_handles_default_valid_and_invalid_values(
     monkeypatch, caplog
 ):
     monkeypatch.delenv(chunker.CHUNK_SIZE_ENV_VAR, raising=False)
+    assert chunker._DEFAULT_CHUNK_SIZE_FALLBACK == 50.0
     assert chunker._resolve_default_chunk_size() == chunker._DEFAULT_CHUNK_SIZE_FALLBACK
 
     monkeypatch.setenv(chunker.CHUNK_SIZE_ENV_VAR, "12.5")
@@ -126,6 +127,60 @@ def test_chunk_size_configuration_handles_default_valid_and_invalid_values(
 
     assert chunker.CHUNK_SIZE_ENV_VAR in caplog.text
     assert chunker.configured_chunk_size() == chunker.DEFAULT_CHUNK_SIZE
+
+
+def test_import_memory_estimate_scales_with_geometry_size():
+    small = chunker.estimate_import_memory_bytes(10, 10, 10, 10)
+    large = chunker.estimate_import_memory_bytes(10_000, 10_000, 10_000, 10_000)
+
+    assert small >= chunker.IMPORT_MEMORY_FIXED_OVERHEAD_BYTES
+    assert large > small
+
+
+def test_import_memory_preflight_rejects_when_available_ram_is_too_low(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(
+            total_bytes=8 * 1024 ** 3,
+            available_bytes=1 * 1024 ** 3,
+        ),
+    )
+
+    with pytest.raises(chunker.InsufficientImportMemoryError) as raised:
+        chunker.ensure_sufficient_import_memory(
+            1_000_000,
+            1_000_000,
+            1_000_000,
+            20_000_000,
+            source_path="/maps/huge.obj",
+        )
+
+    assert raised.value.required_bytes > raised.value.allowed_bytes
+    assert "huge.obj" in str(raised.value)
+
+
+def test_import_memory_preflight_allows_import_when_ram_headroom_is_available(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(
+            total_bytes=16 * 1024 ** 3,
+            available_bytes=8 * 1024 ** 3,
+        ),
+    )
+
+    chunker.ensure_sufficient_import_memory(
+        10_000,
+        10_000,
+        10_000,
+        10_000,
+        source_path="/maps/small.obj",
+    )
 
 
 def test_build_cache_reports_progress_and_atomically_replaces_existing_cache(

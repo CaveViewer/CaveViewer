@@ -542,6 +542,16 @@ not discard the rest of the configuration. Settings are saved through an
 atomic temporary-file replacement; a write failure remains visible in the
 dialog and does not close it or alter the previous settings file.
 
+First-time map imports are isolated from the viewer event loop by
+`src/caveviewer/gui/import_process.py`. The viewer process keeps OpenGL/window
+events and progress rendering responsive while a spawned child process runs the
+existing `import_and_cache_any()` path. The child sends progress, completion,
+heartbeat, and traceback-bearing failure events back to the viewer; closing
+the viewer terminates an active child import process and removes abandoned
+private staging directories for that map cache. The child also lowers its
+desktop scheduling priority and caps common native compute libraries to one
+thread unless the user has already set those library-specific variables.
+
 The splash screen, Preferences, and Sample Maps dialogs share their Tk
 color and control tokens through `src/caveviewer/gui/tk_theme.py`. Map-folder
 validation lives in `src/caveviewer/gui/map_selection.py`, allowing both
@@ -578,8 +588,9 @@ and `.caveviewer_cache` directories are not auto-discovered.
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
-| `CAVEVIEWER_CHUNK_SIZE_METERS` | `8` | 0.01-512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
+| `CAVEVIEWER_CHUNK_SIZE_METERS` | `50` | 0.01-512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
 | `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0-50 ms | Time yielded between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
+| `CAVEVIEWER_IMPORT_NICE` | `5` | Integer >= 0 | POSIX-only nice increment applied to the spawned import child. `0` disables the adjustment. Windows uses below-normal process priority instead. |
 | `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 | Requested maximum threads used while writing chunk files during import. Cache construction starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. |
 | `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 

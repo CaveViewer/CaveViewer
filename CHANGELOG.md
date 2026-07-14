@@ -23,6 +23,13 @@ All notable changes to this project are documented in this file.
 - Build and release scripts streamlined, with Linux Docker-based multi-arch build flow updates.
 - Documentation refreshed for platform support, source usage, and setup guidance.
 - Runtime defaults and environment-based performance tuning expanded (GPU/memory/worker settings).
+- Default import chunk size increased to 50 m on all platforms to reduce
+  first-time cache build overhead on large photogrammetry maps.
+- First-time map imports now run in a spawned child process so the viewer
+  event loop stays responsive and import failures return tracebacks to the
+  parent process. The child now reports heartbeat events, runs at reduced
+  desktop priority, and caps common native compute-library threads unless the
+  user already configured them.
 - Streaming and cache-building worker limits are now treated as advisory caps:
   both pools start conservatively and grow only while current system RAM
   availability allows it.
@@ -37,6 +44,10 @@ All notable changes to this project are documented in this file.
 - Texture downscaling diagnostics now log the GPU budget, target percentage,
   texture share, unique texture count, selected texture cap, and first actual
   resize.
+- First-time imports now reject clearly unsafe work earlier: OBJ imports check
+  estimated RAM after the count pass but before large array allocation, disk
+  checks include staged texture bytes when known, and cancelled/killed imports
+  clean abandoned staging directories.
 - Windows stable and prerelease publishing now signs updater manifests and
   commits the required `.json.sig` files.
 - macOS About menu crash and related callback stability issues.

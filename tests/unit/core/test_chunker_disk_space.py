@@ -17,7 +17,7 @@ def _mesh_with_cells(cell_count: int = 2) -> obj_parser.RawMesh:
     positions = []
     faces = []
     for cell_index in range(cell_count):
-        x = float(cell_index * 20)
+        x = float(cell_index * chunker.DEFAULT_CHUNK_SIZE)
         first_vertex = len(positions)
         positions.extend(
             [
@@ -138,6 +138,27 @@ def test_obj_import_checks_space_before_parsing(tmp_path, monkeypatch):
 
     with pytest.raises(chunker.InsufficientDiskSpaceError):
         caveviewer.import_and_cache(str(source), str(material_file))
+
+
+def test_obj_import_counts_texture_space_before_parsing(tmp_path, monkeypatch):
+    source = tmp_path / "map.obj"
+    material_file = tmp_path / "map.mtl"
+    texture = tmp_path / "rock.jpg"
+    source.write_bytes(b"x" * 100)
+    texture.write_bytes(b"t" * 50)
+    material_file.write_text("newmtl rock\nmap_Kd rock.jpg\n", encoding="utf-8")
+    _use_managed_cache_root(tmp_path, monkeypatch)
+    _set_available_space(monkeypatch, 249)
+    monkeypatch.setattr(
+        obj_parser,
+        "parse_obj",
+        lambda *_args, **_kwargs: pytest.fail("parsing must not start"),
+    )
+
+    with pytest.raises(chunker.InsufficientDiskSpaceError) as raised:
+        caveviewer.import_and_cache(str(source), str(material_file))
+
+    assert raised.value.required_bytes == 250
 
 
 def test_glb_import_checks_space_before_parsing(tmp_path, monkeypatch):

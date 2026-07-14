@@ -149,6 +149,7 @@ def test_schema_is_typed_and_has_unique_runtime_mappings():
     assert set(settings.advanced_setting_defaults()) == {
         field.key for field in fields
     }
+    assert settings.advanced_setting_defaults()["chunk_size_meters"] == "50"
 
 
 def test_setting_spec_is_immutable():

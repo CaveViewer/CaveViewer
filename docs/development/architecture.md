@@ -29,6 +29,27 @@ and referenced texture assets are published in one atomic directory
 transaction. Failures must remove staging output and preserve any previously
 valid managed cache.
 
+First-time imports launched from the viewer run in a spawned child process
+through `src/caveviewer/gui/import_process.py`. The viewer process owns OpenGL,
+window events, progress rendering, and desktop idle/suspend inhibition; the
+child process owns parsing, cache construction, texture staging, and cache
+publication. Progress, completion, and traceback-bearing failure events cross
+back to the viewer through a process queue. This keeps desktop event loops
+responsive during CPU-heavy imports and isolates import crashes from the UI
+process. The child emits heartbeat events with the current stage and RAM
+snapshot while it is working, runs at reduced desktop priority, and caps common
+native compute-library thread counts before importing NumPy-heavy modules.
+Parent-side cancellation or abnormal child exit cleans abandoned private
+staging directories for the target cache.
+
+Import preflight is intentionally early. OBJ imports count vertices, UVs,
+normals, and triangulated faces before allocating large arrays; that count is
+used to reject imports whose estimated peak footprint exceeds currently
+available system RAM. Disk preflight runs before parsing and includes both the
+source model and staged texture assets when they are known. `build_cache()`
+repeats disk checks before writing so direct callers and mid-import free-space
+changes remain covered.
+
 Chunk-file construction treats its configured worker count as a maximum. It
 starts with one task, samples current system RAM after completed work, and
 admits only one additional concurrent worker per sample while utilization is

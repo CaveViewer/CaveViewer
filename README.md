@@ -179,7 +179,7 @@ explicit maximum texture dimension in pixels.
 
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
-| Import chunk size (m) | — | 8 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
+| Import chunk size (m) | — | 50 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
 | OBJ scan throttle (ms) | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Yield/throttle behavior during OBJ scanning. |
 | Cache-building worker limit | — | 1 | integer, 1 to 32 | Chunk-cache writer limit. Worker count may be lower when CPU or RAM is constrained. |
 | Cache-build CPUs to keep free | — | 2 | integer, 2 to 32 | CPU cores reserved during cache building. |
@@ -210,6 +210,14 @@ lower worker limits manually. Very large photogrammetry maps can still exceed
 the practical memory available on smaller machines, especially during initial
 import or texture decoding.
 
+During first-time import, CaveViewer now rejects clearly unsafe imports before
+the expensive work starts: disk-space checks include staged texture assets, and
+OBJ imports check the estimated RAM footprint after the count pass but before
+allocating the large geometry arrays. Viewer-launched imports run in a separate
+lower-priority child process that sends heartbeat events back to the viewer; if
+the viewer is closed during import, abandoned staging directories are cleaned
+up.
+
 If this happens:
 
 - Close memory-heavy applications such as browsers, photo tools, video editors,
@@ -219,7 +227,7 @@ If this happens:
 - Keep Chunk uploads per frame at 1 and use a small Upload budget, such as 1 to
   3 ms, while testing a constrained machine.
 - If import still fails, rebuild the cache with a larger Import chunk size such
-  as 16 m, 24 m, or 32 m. Larger chunks reduce total chunk count and bookkeeping
+  as 64 m or 100 m. Larger chunks reduce total chunk count and bookkeeping
   overhead, but avoid pushing this too high on a 16 GB machine because each
   chunk becomes heavier to load.
 
@@ -248,7 +256,7 @@ Check what you have available: GPU memory, CPU cores, and system RAM. More hardw
 Begin with Chunk uploads per frame = 1 and Upload budget = 2 to 4 ms. This usually gives smoother frame pacing while you evaluate map behavior.
 
 4. Test chunking approaches for that specific map.
-Try a few Import chunk size values (for example 16, 32, 64, then 100 m for very large/open maps). Rebuild/import each time so the new chunk layout is actually used. Use separate `CAVEVIEWER_MAP_CACHE_DIR` roots when you want to retain multiple managed-cache experiments side by side.
+Try a few Import chunk size values around the 50 m default (for example 32, 64, then 100 m for very large/open maps). Rebuild/import each time so the new chunk layout is actually used. Use separate `CAVEVIEWER_MAP_CACHE_DIR` roots when you want to retain multiple managed-cache experiments side by side.
 
 5. Tune streaming after choosing a chunk size.
 If pop-in is too visible, raise Chunk uploads per frame gradually (1, then 2, then 3) and increase Upload budget carefully (for example from 3 to 5 ms).

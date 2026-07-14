@@ -138,13 +138,18 @@ def _resolve_index(raw: int, count_so_far: int) -> int:
     raise ValueError("OBJ index of 0 is invalid")
 
 
-def parse_obj(obj_path: str, progress_cb=None) -> RawMesh:
+def parse_obj(obj_path: str, progress_cb=None, preflight_cb=None) -> RawMesh:
     """
     Parse `obj_path` into a RawMesh.
 
     progress_cb(stage: str, fraction: float) is called periodically if given,
     so a GUI can show a progress bar during the (one-time, then cached)
     import of a large map.
+
+    preflight_cb(vertex_count, uv_count, normal_count, face_count), if given,
+    is called after the count pass and before the large NumPy arrays are
+    allocated. Raising from this callback rejects an import before memory
+    pressure can destabilize the desktop.
     """
     if progress_cb:
         progress_cb("scanning file", 0.0)
@@ -154,6 +159,9 @@ def parse_obj(obj_path: str, progress_cb=None) -> RawMesh:
             progress_cb(stage, _SCAN_PROGRESS_WEIGHT * max(0.0, min(1.0, frac)))
 
     n_v, n_vt, n_vn, n_f_est = _count_prepass(obj_path, progress_cb=scan_progress)
+
+    if preflight_cb:
+        preflight_cb(n_v, n_vt, n_vn, n_f_est)
 
     positions = np.empty((n_v, 3), dtype=np.float32)
     uvs = np.empty((n_vt, 2), dtype=np.float32)

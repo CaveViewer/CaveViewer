@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import sys
+import queue
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from caveviewer import app
 from caveviewer.core import cache_paths
 from caveviewer.gui import viewer_window
 from caveviewer.gui.platform.app_identity import tk_root_options
@@ -22,9 +22,40 @@ class FakeImportInhibitor:
         self._calls.append(("close_inhibitor",))
 
 
+class FakeImportProcess:
+    def __init__(self, calls=None, exitcode=None):
+        self._calls = [] if calls is None else calls
+        self.exitcode = exitcode
+        self.joined = False
+        self.terminated = False
+        self.killed = False
+
+    def is_alive(self):
+        return self.exitcode is None and not self.terminated
+
+    def join(self, timeout=None):
+        self._calls.append(("join_process", timeout))
+        self.joined = True
+        if self.exitcode is None:
+            self.exitcode = 0
+
+    def terminate(self):
+        self._calls.append(("terminate_process",))
+        self.terminated = True
+        self.exitcode = -15
+
+    def kill(self):
+        self._calls.append(("kill_process",))
+        self.killed = True
+        self.exitcode = -9
+
+
 def _import_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._import_active = False
+    window._import_process = None
+    window._import_cache_dir = None
+    window._import_stop_event = None
     return window
 
 
@@ -355,22 +386,16 @@ def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(
         calls.append(("acquire_inhibitor", map_name))
         return FakeImportInhibitor(calls)
 
-    def fake_import(model_descriptor, textures_dir, **options):
-        calls.append(
-            (
-                "import",
-                model_descriptor,
-                textures_dir,
-                options["force_rebuild"],
-            )
-        )
-        options["extra_progress_cb"]("building cache", 0.5)
-        return "/cache/cave"
+    def start_process(model_descriptor, textures_dir):
+        calls.append(("start_process", model_descriptor, textures_dir))
+        events = queue.Queue()
+        events.put(("progress", "building cache", 0.5))
+        events.put(("done", "/cache/cave", "/cache/cave", manifest))
+        return SimpleNamespace(process=FakeImportProcess(calls), events=events)
 
     monkeypatch.setattr(viewer_window, "_acquire_map_import_inhibitor", acquire)
     monkeypatch.setattr(viewer_window.chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(viewer_window.chunker, "load_manifest", lambda _path: manifest)
-    monkeypatch.setattr(app, "import_and_cache_any", fake_import)
+    monkeypatch.setattr(viewer_window, "start_import_process", start_process)
 
     window = _import_window()
     window._start_import_async(
@@ -380,7 +405,8 @@ def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(
 
     assert calls == [
         ("acquire_inhibitor", "cave.glb"),
-        ("import", descriptor, "/maps", False),
+        ("start_process", descriptor, "/maps"),
+        ("join_process", 1.0),
         ("close_inhibitor",),
     ]
     assert _queued_import_messages(window) == [
@@ -388,6 +414,56 @@ def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(
         ("progress", "building cache", 0.5),
         ("done", "/cache/cave", "/cache/cave", manifest),
     ]
+
+
+def test_uncached_import_relays_child_heartbeat(monkeypatch):
+    descriptor = {"glb_path": "/maps/cave.glb"}
+    manifest = {"chunks": {}}
+
+    def start_process(_model_descriptor, _textures_dir):
+        events = queue.Queue()
+        events.put(("heartbeat", "building cache", 0.5, 12.0, 3_000, 8_000))
+        events.put(("done", "/cache/cave", "/cache/cave", manifest))
+        return SimpleNamespace(
+            process=FakeImportProcess(),
+            events=events,
+            cache_dir="/cache/cave",
+        )
+
+    monkeypatch.setattr(
+        viewer_window,
+        "_acquire_map_import_inhibitor",
+        lambda _map_name: FakeImportInhibitor([]),
+    )
+    monkeypatch.setattr(viewer_window.chunker, "cache_is_valid", lambda _path: False)
+    monkeypatch.setattr(viewer_window, "start_import_process", start_process)
+
+    window = _import_window()
+    window._start_import_async(
+        descriptor, "/maps", "cave.glb", is_startup=True
+    )
+    _wait_for_import_worker(window)
+
+    assert _queued_import_messages(window) == [
+        ("progress", "starting import", 0.0),
+        ("heartbeat", "building cache", 0.5, 12.0, 3_000, 8_000),
+        ("done", "/cache/cave", "/cache/cave", manifest),
+    ]
+
+
+def test_drain_import_queue_heartbeat_updates_visible_progress():
+    window = _import_window()
+    window._import_queue = queue.Queue()
+    window._import_progress_stage = "starting import"
+    window._import_progress_fraction = 0.0
+    window._import_queue.put(
+        ("heartbeat", "building cache", 0.5, 12.0, 3_000, 8_000)
+    )
+
+    window._drain_import_queue()
+
+    assert window._import_progress_stage == "building cache"
+    assert window._import_progress_fraction == 0.5
 
 
 def test_cached_import_worker_does_not_request_desktop_inhibitor(monkeypatch):
@@ -430,13 +506,15 @@ def test_uncached_import_releases_desktop_inhibitor_after_failure(monkeypatch):
         calls.append(("acquire_inhibitor", map_name))
         return FakeImportInhibitor(calls)
 
-    def fail_import(*_args, **_options):
-        calls.append(("import",))
-        raise RuntimeError("parse failed")
+    def start_process(model_descriptor, textures_dir):
+        calls.append(("start_process", model_descriptor, textures_dir))
+        events = queue.Queue()
+        events.put(("error", "parse failed", "traceback text"))
+        return SimpleNamespace(process=FakeImportProcess(calls), events=events)
 
     monkeypatch.setattr(viewer_window, "_acquire_map_import_inhibitor", acquire)
     monkeypatch.setattr(viewer_window.chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(app, "import_and_cache_any", fail_import)
+    monkeypatch.setattr(viewer_window, "start_import_process", start_process)
 
     window = _import_window()
     window._start_import_async(
@@ -446,10 +524,32 @@ def test_uncached_import_releases_desktop_inhibitor_after_failure(monkeypatch):
 
     assert calls == [
         ("acquire_inhibitor", "broken.glb"),
-        ("import",),
+        ("start_process", descriptor, "/maps"),
+        ("join_process", 1.0),
         ("close_inhibitor",),
     ]
     assert _queued_import_messages(window) == [
         ("progress", "starting import", 0.0),
-        ("error", "parse failed"),
+        ("error", "parse failed", "traceback text"),
     ]
+
+
+def test_cancel_active_import_passes_cache_dir_to_termination(monkeypatch):
+    calls = []
+    process = object()
+    window = _import_window()
+    window._import_stop_event = viewer_window.threading.Event()
+    window._import_process = process
+    window._import_cache_dir = "/cache/cave"
+    window._import_thread = None
+
+    monkeypatch.setattr(
+        viewer_window,
+        "terminate_import_process",
+        lambda process, **kwargs: calls.append((process, kwargs)),
+    )
+
+    window._cancel_active_import()
+
+    assert window._import_stop_event.is_set()
+    assert calls == [(process, {"cache_dir": "/cache/cave"})]
