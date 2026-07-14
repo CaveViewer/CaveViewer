@@ -3,10 +3,10 @@
   "platform": "macos",
   "architecture": "arm64",
   "download_url": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.66/CaveViewer-1.0.66-macos-arm64.dmg",
-  "download_size_bytes": 57516425,
+  "download_size_bytes": 57517165,
   "download_url_macosx_dmg": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.66/CaveViewer-1.0.66-macos-arm64.dmg",
-  "download_size_bytes_macosx_dmg": 57516425,
+  "download_size_bytes_macosx_dmg": 57517165,
   "release_notes": "CaveViewer release candidate",
-  "sha256": "a210e4c94b1a32f5cd20e114ab9e112365cb9949a3cfae8e4a76d721c43136d4",
-  "sha256_macosx_dmg": "a210e4c94b1a32f5cd20e114ab9e112365cb9949a3cfae8e4a76d721c43136d4"
+  "sha256": "e6d6a8c84aef4cd3a011b11903f34c71ae39070d3466a182aa134603f3b70472",
+  "sha256_macosx_dmg": "e6d6a8c84aef4cd3a011b11903f34c71ae39070d3466a182aa134603f3b70472"
 }
