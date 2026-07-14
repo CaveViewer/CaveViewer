@@ -82,9 +82,6 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
     monkeypatch.setattr(
         chunker, "load_manifest", lambda _path: {"chunks": {"0,0": {}, "1,0": {}}}
     )
-    times = iter((10.0, 12.5))
-    monkeypatch.setattr(app.time, "time", lambda: next(times))
-
     result = app.import_and_cache(
         str(source), str(material_file), extra_progress_cb=lambda *item: progress.append(item)
     )
