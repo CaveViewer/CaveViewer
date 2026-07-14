@@ -568,6 +568,9 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert page_labels == ["Streaming", "Import", "Storage"]
     assert all(len(page) == 2 for page in advanced_settings_dialog._PREFERENCE_PAGES)
     assert set(page_keys) == field_sections
+    assert advanced_settings_dialog._WINDOWS_LAYOUT == (
+        advanced_settings_dialog.sys.platform == "win32"
+    )
     assert fields_by_key["io_workers"].label == "Loading worker limit"
     assert (
         fields_by_key["chunk_build_workers"].label
@@ -615,6 +618,12 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "Scrollbar(" not in source
     assert "yscrollcommand" not in source
     assert "content_canvas" not in source
+    assert "resizable(False, _WINDOWS_LAYOUT)" in module_source
+    assert "self.button_row.pack(" in source
+    assert "side=\"bottom\"" in source
+    assert "self.page_stack.pack(side=\"top\", fill=\"both\", expand=True)" in source
+    assert "before=self.page_stack" in module_source
+    assert "self.dialog.minsize(dialog_w, min(dialog_h, 360))" in module_source
     assert "grid_remove()" in show_page_source
     assert "_apply_geometry" not in show_page_source
     assert "grid_propagate(False)" in source

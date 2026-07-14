@@ -43,6 +43,7 @@ _PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
+_WINDOWS_LAYOUT = sys.platform == "win32"
 _LINUX_LAYOUT = sys.platform.startswith("linux")
 # Keep Preferences close to GNOME-style boxed-list proportions: a wider
 # secondary window with enough room for labels, hints, and path controls.
@@ -96,7 +97,10 @@ class AdvancedSettingsDialog:
         self.dialog.withdraw()
         self.dialog.title("Preferences")
         self.dialog.configure(bg=_BG_COLOR)
-        self.dialog.resizable(False, False)
+        # Windows can report less usable vertical space than the GNOME-style
+        # preference layout wants, so keep width fixed but let people grow the
+        # dialog vertically when the page content is constrained.
+        self.dialog.resizable(False, _WINDOWS_LAYOUT)
         self.dialog.transient(parent)
 
         if _LINUX_LAYOUT:
@@ -555,36 +559,15 @@ class AdvancedSettingsDialog:
             tab.pack(side="left", padx=(0, _TAB_GAP_X))
             self.page_buttons[page_key] = tab
 
-        self.page_stack = tk.Frame(body, bg=_BG_COLOR)
-        self.page_stack.pack(fill="x")
-        self.page_stack.grid_rowconfigure(0, weight=1)
-        self.page_stack.grid_columnconfigure(0, weight=1)
-        for page_key, _tab_label in _PREFERENCE_PAGES:
-            page = tk.Frame(self.page_stack, bg=_BG_COLOR)
-            page.grid(row=0, column=0, sticky="nsew")
-            self.pages[page_key] = page
-            self._render_section(page, page_key)
-        self.dialog.update_idletasks()
-        max_page_width = max(
-            (page.winfo_reqwidth() for page in self.pages.values()),
-            default=1,
-        )
-        max_page_height = max(
-            (page.winfo_reqheight() for page in self.pages.values()),
-            default=1,
-        )
-        self.page_stack.configure(width=max_page_width, height=max_page_height)
-        self.page_stack.grid_propagate(False)
-        self._show_page(_PREFERENCE_PAGES[0][0])
-
-        self.feedback_frame, self.error_label = create_dialog_notice(
-            body,
-            font=self.small_font,
-            wraplength=_NOTICE_WRAP_LENGTH,
-        )
-
         self.button_row = tk.Frame(body, bg=_BG_COLOR)
-        self.button_row.pack(fill="x", pady=(_BUTTON_ROW_TOP_PAD_Y, 0))
+        # Pack the action row before the page stack so a height-limited
+        # Windows dialog shrinks form content first instead of clipping
+        # Apply/Cancel off the bottom edge.
+        self.button_row.pack(
+            side="bottom",
+            fill="x",
+            pady=(_BUTTON_ROW_TOP_PAD_Y, 0),
+        )
 
         cancel_button = self._new_dialog_button(
             self.button_row,
@@ -605,6 +588,35 @@ class AdvancedSettingsDialog:
 
         self.apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
+
+        self.feedback_frame, self.error_label = create_dialog_notice(
+            body,
+            font=self.small_font,
+            wraplength=_NOTICE_WRAP_LENGTH,
+        )
+
+        self.page_stack = tk.Frame(body, bg=_BG_COLOR)
+        self.page_stack.pack(side="top", fill="both", expand=True)
+        self.page_stack.grid_rowconfigure(0, weight=1)
+        self.page_stack.grid_columnconfigure(0, weight=1)
+        for page_key, _tab_label in _PREFERENCE_PAGES:
+            page = tk.Frame(self.page_stack, bg=_BG_COLOR)
+            page.grid(row=0, column=0, sticky="nsew")
+            self.pages[page_key] = page
+            self._render_section(page, page_key)
+        self.dialog.update_idletasks()
+        max_page_width = max(
+            (page.winfo_reqwidth() for page in self.pages.values()),
+            default=1,
+        )
+        max_page_height = max(
+            (page.winfo_reqheight() for page in self.pages.values()),
+            default=1,
+        )
+        self.page_stack.configure(width=max_page_width, height=max_page_height)
+        self.page_stack.grid_propagate(False)
+        self._show_page(_PREFERENCE_PAGES[0][0])
+
         self.form_ready = True
         self._render_form_state(self.form.state, focus_invalid=True)
 
@@ -630,9 +642,10 @@ class AdvancedSettingsDialog:
             )
             if not self.feedback_frame.winfo_manager():
                 self.feedback_frame.pack(
+                    side="bottom",
                     fill="x",
                     pady=(8, 0),
-                    before=self.button_row,
+                    before=self.page_stack,
                 )
         else:
             self.error_label.config(text=message)
@@ -788,6 +801,8 @@ class AdvancedSettingsDialog:
             self.dialog.geometry(
                 f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}"
             )
+            if _WINDOWS_LAYOUT:
+                self.dialog.minsize(dialog_w, min(dialog_h, 360))
             if _LINUX_LAYOUT:
                 for _ in range(2):
                     self.dialog.update_idletasks()
