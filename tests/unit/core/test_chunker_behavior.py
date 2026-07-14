@@ -137,8 +137,8 @@ def test_import_memory_estimate_scales_with_geometry_size():
     assert large > small
 
 
-def test_import_memory_preflight_rejects_when_available_ram_is_too_low(
-    monkeypatch,
+def test_import_memory_preflight_warns_when_current_available_ram_is_low(
+    monkeypatch, caplog
 ):
     monkeypatch.setattr(
         chunker.hardware_memory,
@@ -148,18 +148,45 @@ def test_import_memory_preflight_rejects_when_available_ram_is_too_low(
             available_bytes=1 * 1024 ** 3,
         ),
     )
+    caplog.set_level(logging.WARNING, logger="caveviewer")
+
+    chunker.ensure_sufficient_import_memory(
+        1_000_000,
+        1_000_000,
+        1_000_000,
+        20_000_000,
+        source_path="/maps/huge.obj",
+    )
+
+    assert "Import RAM preflight warning for huge.obj" in caplog.text
+    assert "physical-memory overcommit allowance" in caplog.text
+
+
+def test_import_memory_preflight_rejects_when_estimate_exceeds_physical_limit(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(
+            total_bytes=8 * 1024 ** 3,
+            available_bytes=7 * 1024 ** 3,
+        ),
+    )
 
     with pytest.raises(chunker.InsufficientImportMemoryError) as raised:
         chunker.ensure_sufficient_import_memory(
             1_000_000,
             1_000_000,
             1_000_000,
-            20_000_000,
+            200_000_000,
             source_path="/maps/huge.obj",
         )
 
-    assert raised.value.required_bytes > raised.value.allowed_bytes
+    assert raised.value.physical_limit_bytes is not None
+    assert raised.value.required_bytes > raised.value.physical_limit_bytes
     assert "huge.obj" in str(raised.value)
+    assert "physical-memory overcommit allowance" in str(raised.value)
 
 
 def test_import_memory_preflight_allows_import_when_ram_headroom_is_available(

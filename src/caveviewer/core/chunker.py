@@ -57,6 +57,7 @@ MANIFEST_NAME = "manifest.json"
 CHUNKS_DIRNAME = "chunks"
 IMPORT_DISK_SPACE_MULTIPLIER = 2
 IMPORT_MEMORY_HEADROOM_FRACTION = 0.90
+IMPORT_MEMORY_PHYSICAL_OVERCOMMIT_FRACTION = 1.25
 IMPORT_MEMORY_FIXED_OVERHEAD_BYTES = 256 * 1024 ** 2
 
 CHUNK_SIZE_ENV_VAR = "CAVEVIEWER_CHUNK_SIZE_METERS"
@@ -127,10 +128,12 @@ class InsufficientImportMemoryError(MemoryError):
         allowed_bytes: int,
         *,
         source_path: str | None = None,
+        physical_limit_bytes: int | None = None,
     ):
         self.required_bytes = required_bytes
         self.available_bytes = available_bytes
         self.allowed_bytes = allowed_bytes
+        self.physical_limit_bytes = physical_limit_bytes
         self.source_path = source_path
         source_label = (
             os.path.basename(source_path)
@@ -143,8 +146,15 @@ class InsufficientImportMemoryError(MemoryError):
             f"{required_bytes / (1024 ** 3):.1f} GB, while "
             f"{available_bytes / (1024 ** 3):.1f} GB is currently available "
             f"({allowed_bytes / (1024 ** 3):.1f} GB after the "
-            f"{IMPORT_MEMORY_HEADROOM_FRACTION:.0%} safety limit). "
-            "Close other memory-heavy applications and try again."
+            f"{IMPORT_MEMORY_HEADROOM_FRACTION:.0%} safety limit)"
+            + (
+                f"; this also exceeds the "
+                f"{physical_limit_bytes / (1024 ** 3):.1f} GB physical-memory "
+                "overcommit allowance. "
+                if physical_limit_bytes is not None
+                else ". "
+            )
+            + "Close other memory-heavy applications and try again."
         )
         super().__init__(message)
 
@@ -226,13 +236,36 @@ def ensure_sufficient_import_memory(
     )
     available_bytes = max(0, int(snapshot.available_bytes))
     allowed_bytes = int(available_bytes * IMPORT_MEMORY_HEADROOM_FRACTION)
-    if required_bytes > allowed_bytes:
+    physical_overcommit_limit_bytes = int(
+        snapshot.total_bytes * IMPORT_MEMORY_PHYSICAL_OVERCOMMIT_FRACTION
+    )
+    if required_bytes > physical_overcommit_limit_bytes:
         raise InsufficientImportMemoryError(
             required_bytes,
             available_bytes,
             allowed_bytes,
             source_path=source_path,
+            physical_limit_bytes=physical_overcommit_limit_bytes,
         )
+
+    # Available RAM is a moving target, especially on macOS where inactive
+    # pages, compression, and swap can make a previously successful import
+    # look unsafe at one instant. Treat low current availability as a warning
+    # unless the estimate is also beyond the physical-memory envelope above.
+    if required_bytes > allowed_bytes:
+        _LOG.warning(
+            "Import RAM preflight warning for %s: estimated %.1f GB peak; "
+            "%.1f GB currently available (%.1f GB after the %.0f%% safety "
+            "limit). Continuing because the estimate is within the %.1f GB "
+            "physical-memory overcommit allowance.",
+            os.path.basename(source_path) if source_path else "selected map",
+            required_bytes / (1024 ** 3),
+            available_bytes / (1024 ** 3),
+            allowed_bytes / (1024 ** 3),
+            IMPORT_MEMORY_HEADROOM_FRACTION * 100.0,
+            physical_overcommit_limit_bytes / (1024 ** 3),
+        )
+        return
 
     _LOG.info(
         "Import RAM preflight passed for %s: estimated %.1f GB peak; "
