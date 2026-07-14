@@ -37,7 +37,7 @@ from caveviewer.gui.platform import (
     get_desktop_services,
     get_splash_platform_adapter,
 )
-from caveviewer.gui.preferences import migrate_state_file, write_text_atomic
+from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
 from caveviewer.gui.tk_feedback import FeedbackKind, show_feedback
 from caveviewer.gui.tk_theme import DARK_THEME
 

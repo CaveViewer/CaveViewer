@@ -288,7 +288,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_LINUX_BUILD_VENV` | _(none)_ | Path to the venv used by the Linux build scripts. |
 | `CAVEVIEWER_PROJECT_ROOT` | _(set by `scripts/dev/env_setup.sh`)_ | Source checkout root used only by development shell helpers; it is not a user-storage location. |
 | `CAVEVIEWER_HOME` | _(none)_ | Absolute portable-storage root. CaveViewer derives `config`, `data`, `cache`, `state`, and `runtime` children beneath it. |
-| `CAVEVIEWER_MAP_CACHE_DIR` | `$XDG_CACHE_HOME/caveviewer/maps` on Linux | Absolute root for generated map caches. CaveViewer no longer auto-discovers adjacent `_cache` or `.caveviewer_cache` directories. |
+| `CAVEVIEWER_MAP_CACHE_DIR` | Platform cache root + `/maps` | Absolute root for generated map caches. Defaults to `$XDG_CACHE_HOME/caveviewer/maps` on Linux (`~/.cache/...` fallback) and `~/.caveviewer/maps` on macOS/Windows; `CAVEVIEWER_HOME` uses `<root>/cache/maps`. CaveViewer no longer auto-discovers adjacent `_cache` or `.caveviewer_cache` directories. |
 | `CAVEVIEWER_APP_ICON` | _(bundled icon)_ | Path to a custom application icon file. |
 | `CAVEVIEWER_FORCE_STARTUP_FOCUS` | `0` | Set to `1` to force the main window to the front on startup. Disabled by default on frozen macOS builds to avoid window-placement jumps. |
 | `CAVEVIEWER_LOG_LEVEL` | `INFO` | Logging verbosity. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
@@ -522,8 +522,10 @@ unapplied edits. Valid worker counts are treated as advisory caps and do not
 show a bottom warning.
 
 The Preferences implementation is split by responsibility:
-`src/caveviewer/gui/advanced_settings.py` owns the typed `SettingSpec` schema,
+`src/caveviewer/gui/preferences.py` owns the typed `SettingSpec` schema,
 validation, persistence, and environment mapping;
+`src/caveviewer/gui/preference_paths.py` owns preference/state file locations,
+legacy migration, and atomic text writes;
 `src/caveviewer/gui/advanced_settings_form.py` owns focus/change/blur/apply
 state transitions; `src/caveviewer/gui/advanced_settings_dialog.py` only
 renders that state into Tk widgets; and
@@ -548,24 +550,25 @@ implementation details.
 
 Runtime chunk streaming is also split by policy boundary:
 `src/caveviewer/core/hardware_memory.py` detects total and currently available
-system RAM on Windows, macOS, and Linux; detects GPU memory; and parses target
-fractions;
+system RAM on Windows, macOS, and Linux; detects or estimates the active GPU
+memory budget; and parses target fractions;
 `src/caveviewer/core/streaming_budget.py` contains pure
 chunk-size estimation and residency-cap calculation;
 `src/caveviewer/core/streaming_scheduler.py` owns the bounded ready backlog,
 spatial selection, and eviction policy; and
 `src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
 render-thread callbacks. Map imports now write only the cache artifacts used by
-runtime streaming and the minimap. On Linux, caches and their texture assets are
-atomically published under `$XDG_CACHE_HOME/caveviewer/maps`; old adjacent
-`_cache` and `.caveviewer_cache` directories are not auto-discovered.
+runtime streaming and the minimap. Caches and their texture assets are
+atomically published under the managed map-cache root selected by
+`CAVEVIEWER_MAP_CACHE_DIR` or the platform cache default; old adjacent `_cache`
+and `.caveviewer_cache` directories are not auto-discovered.
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
 | `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
 | `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Optional GPU memory ceiling used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; low-VRAM AMD integrated GPUs include 50% of reported GTT/shared memory capped at 2 GB. Windows AMD/Intel GPU memory is not currently auto-detected and uses an 8 GB fallback budget. macOS GPU memory is not currently auto-detected and uses a conservative 1 GB fallback. If detection finds a smaller active GPU budget, the detected value wins. |
 | `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of the GPU memory budget the chunk streaming system targets. |
-| `CAVEVIEWER_MAX_TEXTURE_SIZE` | _(auto)_ | 512-16384 px | Optional maximum decoded texture dimension. When unset, CaveViewer derives a cap from GPU memory, GPU target percentage, and unique texture count so geometry remains visible while oversized texture sets are downscaled instead of overfilling VRAM. |
+| `CAVEVIEWER_MAX_TEXTURE_SIZE` | _(auto)_ | 512-16384 px | Optional maximum decoded texture dimension. When unset, CaveViewer derives a cap from GPU memory, GPU target percentage, and unique texture count so geometry remains visible while oversized texture sets are downscaled instead of overfilling VRAM. The log records the selected cap, budget inputs, and first actual resize. |
 | `CAVEVIEWER_IO_WORKERS` | `2` | Integer 1-32 | Requested maximum number of background threads for loading chunk files from disk. Streaming starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_IO_RESERVED_CPUS`. |
 | `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer 2-32 | Logical CPUs kept out of the loading worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 | `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. |
@@ -580,20 +583,24 @@ atomically published under `$XDG_CACHE_HOME/caveviewer/maps`; old adjacent
 | `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 | Requested maximum threads used while writing chunk files during import. Cache construction starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. |
 | `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 
-### Linux XDG locations
+### Application storage locations
 
-Unless overridden, Linux stores files in these locations:
+Unless overridden, CaveViewer stores files in these locations:
 
-| Kind | Default |
-|---|---|
-| Advanced settings | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback) |
-| Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) |
-| Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) |
+| Kind | Linux default | macOS/Windows default |
+|---|---|---|
+| Advanced settings | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback) | `~/.caveviewer/advanced_settings.json` |
+| Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
+| Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) | `~/.caveviewer/maps/` |
 
-Old `~/.caveviewer/` and `~/.caveviewer_*` files are copied once and left in
-place. A managed cache is self-contained: texture files are staged beside its
-chunks before the manifest becomes visible. Disk-space checks therefore target
-the cache filesystem rather than assuming the map's filesystem is writable.
+`CAVEVIEWER_HOME` creates isolated `config`, `data`, `cache`, `state`, and
+`runtime` children and places map caches under `<root>/cache/maps`.
+`CAVEVIEWER_MAP_CACHE_DIR` overrides only the generated map-cache root. On
+Linux, old `~/.caveviewer/` and `~/.caveviewer_*` files are copied once and
+left in place. A managed cache is self-contained: texture files are staged
+beside its chunks before the manifest becomes visible. Disk-space checks
+therefore target the cache filesystem rather than assuming the map's filesystem
+is writable.
 
 ### Sample Maps
 

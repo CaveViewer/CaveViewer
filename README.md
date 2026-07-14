@@ -47,10 +47,12 @@ chmod +x CaveViewer-*.AppImage
 ./CaveViewer-*-x86_64.AppImage   # amd64 / x86_64
 ```
 
-On GNOME, Linux builds use the native Wayland GLFW backend by default and fall
-back to X11 when automatic initialization fails. Directory choosers and update
-reveal actions use the desktop portal. To diagnose a compositor-specific issue,
-launch with `CAVEVIEWER_WINDOW_SYSTEM=wayland` or
+On GNOME, Linux builds use GLFW with `CAVEVIEWER_WINDOW_SYSTEM=auto` by
+default. Auto mode prefers X11/XWayland when `DISPLAY` is available so source,
+debugger, and AppImage launches get the same titlebar and resize behavior, then
+retries Wayland on recognized initialization failures. Directory choosers and
+update reveal actions use the desktop portal. To diagnose a
+compositor-specific issue, launch with `CAVEVIEWER_WINDOW_SYSTEM=wayland` or
 `CAVEVIEWER_WINDOW_SYSTEM=x11` to require one backend. The viewer opens at 80%
 of the primary monitor's usable work area using the selected backend's scaled
 screen coordinates.
@@ -200,39 +202,41 @@ In practice:
 - Adjust Chunk uploads per frame, Upload budget (ms), and memory targets to tune smoothness without re-importing.
 - Adjust Import chunk size (m) when you want a different chunk layout, then rebuild/import the map to test it.
 
-### If You See an Out-of-Memory Error
+### If a Very Large Map Still Runs Out of Memory
 
-Large photogrammetry maps can exceed the practical memory available on a 16 GB computer, especially while CaveViewer is importing a new map or decoding textures. Start with conservative settings, then increase them only after the map opens reliably.
+CaveViewer starts loading and cache-building conservatively, then grows worker
+counts only when enough system RAM is available. Most users should not need to
+lower worker limits manually. Very large photogrammetry maps can still exceed
+the practical memory available on smaller machines, especially during initial
+import or texture decoding.
 
-In Preferences, try this first:
+If this happens:
 
-| Setting | Safer value |
-|---|---:|
-| System RAM target (%) | 6 to 8 |
-| GPU memory target (%) | 40 to 50 |
-| Loading worker limit | 1 or 2 |
-| Loading CPUs to keep free | 3 or 4 |
-| Chunk uploads per frame | 1 |
-| Upload budget (ms) | 1 to 3 |
-| Cache-building worker limit | 1 |
-| Cache-build CPUs to keep free | 3 or 4 |
-
-If the error happens while importing a map, lower Cache-building worker limit first. The cache-building worker pool can temporarily hold more geometry and texture data in memory, so one worker is the safest option on a constrained machine.
-
-If the error happens while moving around an already-imported map, lower System RAM target (%) and GPU memory target (%). CaveViewer may also downscale oversized textures automatically when the texture set is too large for the GPU budget.
-
-If the map still cannot import, rebuild the cache with a larger Import chunk size such as 16 m, 24 m, or 32 m. Larger chunks reduce total chunk count and bookkeeping overhead, but do not push this too high on a 16 GB machine because each chunk becomes heavier to load.
-
-Close other memory-heavy applications before importing. Browsers, photo tools, video editors, and other 3D apps can leave too little headroom for a large model even when the computer reports 16 GB of installed RAM.
+- Close memory-heavy applications such as browsers, photo tools, video editors,
+  and other 3D apps before importing.
+- Lower System RAM target (%) and GPU memory target (%) if the error happens
+  while moving around an already-imported map.
+- Keep Chunk uploads per frame at 1 and use a small Upload budget, such as 1 to
+  3 ms, while testing a constrained machine.
+- If import still fails, rebuild the cache with a larger Import chunk size such
+  as 16 m, 24 m, or 32 m. Larger chunks reduce total chunk count and bookkeeping
+  overhead, but avoid pushing this too high on a 16 GB machine because each
+  chunk becomes heavier to load.
 
 ### Recommended Map Parsing Approach
 
-On Linux, imports use a self-contained cache under
-`~/.cache/caveviewer/maps/<map-name>-<path-hash>` by default. CaveViewer no
-longer auto-discovers old `_cache` or `.caveviewer_cache` folders beside a map.
-Set `CAVEVIEWER_MAP_CACHE_DIR` to an absolute path when large caches belong on
-another filesystem. The log reports the exact cache directory selected for each
-import.
+CaveViewer imports each map into a self-contained cache directory named
+`<map-name>-<path-hash>`. By default, cache roots are:
+
+- Linux: `$XDG_CACHE_HOME/caveviewer/maps/`, or `~/.cache/caveviewer/maps/`
+  when `XDG_CACHE_HOME` is unset.
+- macOS: `~/.caveviewer/maps/`.
+- Windows: `%USERPROFILE%\.caveviewer\maps\`.
+
+CaveViewer no longer auto-discovers old `_cache` or `.caveviewer_cache` folders
+beside a map. Set `CAVEVIEWER_MAP_CACHE_DIR` to an absolute path when large
+caches belong on another filesystem. The log reports the exact cache directory
+selected for each import.
 
 1. Understand your map first.
 Decide how far ahead you need to see while moving. Long, open passages often benefit from larger chunk sizes. Maps with many twists and short sightlines may not need very large chunks, especially on strong hardware.

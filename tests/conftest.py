@@ -41,7 +41,7 @@ def block_uncontrolled_network(monkeypatch):
 
 @pytest.fixture
 def valid_advanced_settings(tmp_path):
-    from caveviewer.gui.advanced_settings import advanced_setting_defaults
+    from caveviewer.gui.preferences import advanced_setting_defaults
 
     values = advanced_setting_defaults()
     values["recording_dir"] = str(tmp_path / "recordings")

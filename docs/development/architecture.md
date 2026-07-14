@@ -68,7 +68,13 @@ budgets; oversized texture sets are handled in `TextureManager` by deriving a
 decode-time maximum texture dimension from detected GPU memory, target
 percentage, and unique texture count. This keeps the visible cave geometry from
 collapsing to only the few chunks whose original texture tiles fit in VRAM,
-while still preventing obviously oversized texture uploads.
+while still preventing obviously oversized texture uploads. GPU memory
+detection is platform-specific: NVIDIA uses `nvidia-smi` when available, Linux
+AMD uses DRM sysfs, low-VRAM AMD integrated GPUs add 50% of reported GTT/shared
+memory capped at 2 GB, Windows AMD/Intel currently use an 8 GB fallback budget,
+and macOS currently uses a conservative 1 GB fallback when no override is set.
+Texture cap selection logs the budget inputs and the selected common dimension
+before the first oversized texture is resized.
 
 ## UI and platform boundaries
 
@@ -123,16 +129,20 @@ objects.
 ## User storage
 
 `caveviewer.storage_paths` is the platform-neutral path boundary. Linux uses
-the XDG configuration, data, cache, state, and runtime roots. Advanced settings
+the XDG configuration, data, cache, state, and runtime roots; macOS, Windows,
+and unsupported platforms currently preserve the historical `~/.caveviewer/`
+root until their storage conventions are migrated separately. Advanced settings
 are configuration; remembered chooser locations are state; generated map
 caches are rebuildable cache data. `CAVEVIEWER_HOME` creates isolated
 `config/`, `data/`, `cache/`, `state/`, and `runtime/` children for portable or
-test runs. Relative XDG variables are ignored as required by the specification,
-and relative CaveViewer overrides are rejected.
+test runs, and map caches are stored under that cache child unless
+`CAVEVIEWER_MAP_CACHE_DIR` overrides only the map-cache root. Relative XDG
+variables are ignored as required by the specification, and relative CaveViewer
+overrides are rejected.
 
-Migration from `~/.caveviewer/` and older `~/.caveviewer_*` files is copy-once
-and non-destructive. Managed map cache keys derive from the canonical source
-path without reading or hashing a multi-gigabyte map.
+On Linux, migration from `~/.caveviewer/` and older `~/.caveviewer_*` files is
+copy-once and non-destructive. Managed map cache keys derive from the canonical
+source path without reading or hashing a multi-gigabyte map.
 
 The GUI process owns one `caveviewer.gui.update_manager.UpdateManager`, created
 by `caveviewer.app` before the splash/viewer session loop and shut down when

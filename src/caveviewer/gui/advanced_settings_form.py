@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Mapping
 
-from caveviewer.gui.advanced_settings import (
+from caveviewer.gui.preferences import (
     ADVANCED_SETTING_FIELDS,
     AdvancedSettings,
     SettingSpec,

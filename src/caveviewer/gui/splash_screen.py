@@ -36,7 +36,7 @@ from dataclasses import dataclass
 
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.logging_utils import get_logger
-from caveviewer.gui.advanced_settings import (
+from caveviewer.gui.preferences import (
     apply_advanced_settings_to_env as _apply_advanced_settings_to_env,
     load_advanced_settings as _load_advanced_settings,
 )
@@ -53,7 +53,7 @@ from caveviewer.gui.map_selection import (
 )
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import DesktopServices, get_desktop_services, tk_root_options
-from caveviewer.gui.preferences import migrate_state_file, write_text_atomic
+from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
 from caveviewer.gui.tk_feedback import show_feedback
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.update_manager import (

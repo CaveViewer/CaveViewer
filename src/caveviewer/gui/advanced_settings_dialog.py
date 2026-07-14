@@ -7,7 +7,7 @@ import sys
 import tkinter as tk
 from typing import Callable
 
-from caveviewer.gui.advanced_settings import (
+from caveviewer.gui.preferences import (
     ADVANCED_SETTING_FIELDS,
     AdvancedSettingsSaveError,
     SettingSpec,
