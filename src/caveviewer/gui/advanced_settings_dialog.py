@@ -69,6 +69,11 @@ _TAB_GAP_X = 10
 _TAB_BOTTOM_PAD_Y = 18
 _BUTTON_ROW_TOP_PAD_Y = 18
 _NOTICE_WRAP_LENGTH = 720
+_SCROLLBAR_WIDTH = 14
+_SCROLL_THUMB_WIDTH = 5
+_SCROLL_THUMB_MIN_HEIGHT = 36
+_SCROLL_THUMB_COLOR = DARK_THEME.secondary_button_border
+_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
 _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
@@ -130,6 +135,9 @@ class AdvancedSettingsDialog:
         self.page_canvas = None
         self.page_canvas_window = None
         self.page_scrollbar = None
+        self.page_scrollbar_thumb = None
+        self.page_scrollbar_fraction = (0.0, 1.0)
+        self.page_scroll_drag_offset = 0.0
         self.page_stack = None
         self.pages: dict[str, tk.Frame] = {}
         self.page_buttons: dict[str, tk.Label] = {}
@@ -458,7 +466,7 @@ class AdvancedSettingsDialog:
             wraplength=0 if single_line_hint else _WRAP_LENGTH,
         )
         hint_label.pack(anchor="w", fill="x", pady=(3, 0))
-        if _LINUX_LAYOUT and not single_line_hint:
+        if not single_line_hint:
             text_column.bind(
                 "<Configure>",
                 lambda event, label=hint_label: self._resize_hint(event, label),
@@ -552,6 +560,43 @@ class AdvancedSettingsDialog:
         self.page_canvas.itemconfigure(self.page_canvas_window, width=event.width)
         self._sync_page_scrollbar()
 
+    def _draw_page_scrollbar_thumb(self) -> None:
+        if self.page_scrollbar is None:
+            return
+        height = max(1, self.page_scrollbar.winfo_height())
+        first, last = self.page_scrollbar_fraction
+        visible_fraction = max(0.0, min(1.0, last - first))
+        if visible_fraction >= 1.0:
+            if self.page_scrollbar_thumb is not None:
+                self.page_scrollbar.delete(self.page_scrollbar_thumb)
+                self.page_scrollbar_thumb = None
+            return
+
+        thumb_height = max(
+            _SCROLL_THUMB_MIN_HEIGHT,
+            int(round(height * visible_fraction)),
+        )
+        travel = max(1, height - thumb_height)
+        y0 = int(round(max(0.0, min(1.0, first)) * travel))
+        y1 = min(height, y0 + thumb_height)
+        x = _SCROLLBAR_WIDTH // 2
+        if self.page_scrollbar_thumb is None:
+            self.page_scrollbar_thumb = self.page_scrollbar.create_line(
+                x,
+                y0,
+                x,
+                y1,
+                fill=_SCROLL_THUMB_COLOR,
+                width=_SCROLL_THUMB_WIDTH,
+                capstyle="round",
+            )
+        else:
+            self.page_scrollbar.coords(self.page_scrollbar_thumb, x, y0, x, y1)
+
+    def _set_page_scrollbar(self, first: str, last: str) -> None:
+        self.page_scrollbar_fraction = (float(first), float(last))
+        self._draw_page_scrollbar_thumb()
+
     def _scroll_page_content(self, event):
         if (
             self.page_canvas is None
@@ -567,6 +612,58 @@ class AdvancedSettingsDialog:
         elif getattr(event, "num", None) == 5:
             self.page_canvas.yview_scroll(1, "units")
         return "break"
+
+    def _start_page_scrollbar_drag(self, event):
+        if self.page_canvas is None or self.page_scrollbar is None:
+            return "break"
+        first, last = self.page_scrollbar_fraction
+        height = max(1, self.page_scrollbar.winfo_height())
+        visible_fraction = max(0.0, min(1.0, last - first))
+        thumb_height = max(
+            _SCROLL_THUMB_MIN_HEIGHT,
+            int(round(height * visible_fraction)),
+        )
+        travel = max(1, height - thumb_height)
+        thumb_top = int(round(first * travel))
+        thumb_bottom = thumb_top + thumb_height
+        if thumb_top <= event.y <= thumb_bottom:
+            self.page_scroll_drag_offset = event.y - thumb_top
+        else:
+            self.page_scroll_drag_offset = thumb_height / 2
+            self._drag_page_scrollbar(event)
+        if self.page_scrollbar_thumb is not None:
+            self.page_scrollbar.itemconfigure(
+                self.page_scrollbar_thumb,
+                fill=_SCROLL_THUMB_ACTIVE_COLOR,
+            )
+        return "break"
+
+    def _drag_page_scrollbar(self, event):
+        if self.page_canvas is None or self.page_scrollbar is None:
+            return "break"
+        first, last = self.page_scrollbar_fraction
+        height = max(1, self.page_scrollbar.winfo_height())
+        visible_fraction = max(0.0, min(1.0, last - first))
+        thumb_height = max(
+            _SCROLL_THUMB_MIN_HEIGHT,
+            int(round(height * visible_fraction)),
+        )
+        travel = max(1, height - thumb_height)
+        thumb_top = max(0, min(travel, event.y - self.page_scroll_drag_offset))
+        self.page_canvas.yview_moveto(thumb_top / travel)
+        return "break"
+
+    def _end_page_scrollbar_drag(self, _event):
+        if self.page_scrollbar is not None and self.page_scrollbar_thumb is not None:
+            self.page_scrollbar.itemconfigure(
+                self.page_scrollbar_thumb,
+                fill=_SCROLL_THUMB_COLOR,
+            )
+        return "break"
+
+    def _resize_page_scrollbar(self, _event) -> None:
+        self._draw_page_scrollbar_thumb()
+
 
     def _show_page(self, page_key: str) -> None:
         page = self.pages.get(page_key)
@@ -655,12 +752,15 @@ class AdvancedSettingsDialog:
             highlightthickness=0,
             yscrollcommand=lambda *_args: None,
         )
-        self.page_scrollbar = tk.Scrollbar(
+        self.page_scrollbar = tk.Canvas(
             self.page_scroll_shell,
-            orient="vertical",
-            command=self.page_canvas.yview,
+            bg=_BG_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            width=_SCROLLBAR_WIDTH,
+            cursor="sb_v_double_arrow",
         )
-        self.page_canvas.configure(yscrollcommand=self.page_scrollbar.set)
+        self.page_canvas.configure(yscrollcommand=self._set_page_scrollbar)
         self.page_canvas.pack(side="left", fill="both", expand=True)
 
         self.page_stack = tk.Frame(self.page_canvas, bg=_BG_COLOR)
@@ -697,6 +797,18 @@ class AdvancedSettingsDialog:
         self.page_canvas.bind("<MouseWheel>", self._scroll_page_content, add="+")
         self.page_canvas.bind("<Button-4>", self._scroll_page_content, add="+")
         self.page_canvas.bind("<Button-5>", self._scroll_page_content, add="+")
+        self.page_scrollbar.bind("<Configure>", self._resize_page_scrollbar, add="+")
+        self.page_scrollbar.bind(
+            "<ButtonPress-1>",
+            self._start_page_scrollbar_drag,
+            add="+",
+        )
+        self.page_scrollbar.bind("<B1-Motion>", self._drag_page_scrollbar, add="+")
+        self.page_scrollbar.bind(
+            "<ButtonRelease-1>",
+            self._end_page_scrollbar_drag,
+            add="+",
+        )
         self._bind_page_mousewheel(self.page_stack)
         self._show_page(_PREFERENCE_PAGES[0][0])
         self._sync_page_scrollbar()

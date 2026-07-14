@@ -604,6 +604,9 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "pady=(_CONTROL_ROW_TOP_PAD_Y, 0)" in render_field_source
     assert "entry.grid(row=0, column=0, sticky=\"ew\")" in render_field_source
     assert "padx=(_CONTROL_GAP_X, 0)" in render_field_source
+    assert "if not single_line_hint:" in render_field_source
+    assert "self._resize_hint(event, label)" in render_field_source
+    assert "if _LINUX_LAYOUT and not single_line_hint:" not in render_field_source
     assert "entry_parent.grid(row=0, column=1" not in render_field_source
     assert "row.grid_columnconfigure(1" not in render_field_source
     assert "_compact_directory_path(path: str, max_chars: int = 80)" in module_source
@@ -615,8 +618,10 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "Movie recording directory" not in settings_source
     assert "_COMPACT_WORKER_WARNING" not in module_source
     assert "_warning_keys_for_values" not in module_source
-    assert "Scrollbar(" in source
-    assert "yscrollcommand=self.page_scrollbar.set" in source
+    assert "Scrollbar(" not in source
+    assert "yscrollcommand=self._set_page_scrollbar" in source
+    assert "create_line(" in module_source
+    assert "capstyle=\"round\"" in module_source
     assert "content_canvas" not in source
     assert "resizable(False, _WINDOWS_LAYOUT)" in module_source
     assert "self.button_row.pack(" in source
@@ -624,6 +629,7 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
     assert "self.page_scrollbar.pack(side=\"right\", fill=\"y\")" in module_source
     assert "self.page_scrollbar.pack_forget()" in module_source
+    assert "_SCROLL_THUMB_COLOR" in module_source
     assert "before=self.page_scroll_shell" in module_source
     assert "self.dialog.minsize(dialog_w, min(dialog_h, 360))" in module_source
     assert "_bind_page_mousewheel" in module_source
