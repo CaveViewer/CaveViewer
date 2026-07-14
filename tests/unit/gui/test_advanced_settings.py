@@ -571,6 +571,9 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert advanced_settings_dialog._WINDOWS_LAYOUT == (
         advanced_settings_dialog.sys.platform == "win32"
     )
+    assert advanced_settings_dialog._MACOS_LAYOUT == (
+        advanced_settings_dialog.sys.platform == "darwin"
+    )
     assert fields_by_key["io_workers"].label == "Loading worker limit"
     assert (
         fields_by_key["chunk_build_workers"].label
@@ -589,13 +592,21 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
         or advanced_settings_dialog.sys.platform == "win32"
     ):
         assert advanced_settings_dialog._MIN_WIDTH >= 860
+    elif advanced_settings_dialog._MACOS_LAYOUT:
+        assert advanced_settings_dialog._MIN_WIDTH == 680
+        assert advanced_settings_dialog._TEXT_ENTRY_WIDTH == 34
+        assert advanced_settings_dialog._ROW_PAD_Y == 8
+        assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 8
+        assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 12
+        assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 12
     else:
         assert advanced_settings_dialog._MIN_WIDTH >= 760
     assert advanced_settings_dialog._ROW_PAD_X == 18
-    assert advanced_settings_dialog._ROW_PAD_Y == 12
-    assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 14
-    assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 18
-    assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 18
+    if not advanced_settings_dialog._MACOS_LAYOUT:
+        assert advanced_settings_dialog._ROW_PAD_Y == 12
+        assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 14
+        assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 18
+        assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 18
     assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 720
     assert fields_by_key["recording_dir"].label == "Recordings folder"
     assert fields_by_key["recording_dir"].hint == "Where saved recordings are stored."
@@ -633,7 +644,11 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "before=self.page_scroll_shell" in module_source
     assert "self.dialog.minsize(dialog_w, min(dialog_h, 360))" in module_source
     assert "_bind_page_mousewheel" in module_source
-    assert "grid_remove()" in show_page_source
+    assert "grid_remove()" not in show_page_source
+    assert "candidate_page.tkraise()" in show_page_source
+    assert "self.page_canvas.yview_moveto(0)" in show_page_source
+    assert "self.dialog.after_idle(self._sync_page_scrollbar)" in show_page_source
+    assert "active_page.winfo_reqheight()" in module_source
     assert "_apply_geometry" not in show_page_source
     assert "grid_propagate(False)" in source
     assert "create_dialog_notice(" in source

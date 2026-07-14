@@ -44,11 +44,12 @@ _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
 _WINDOWS_LAYOUT = sys.platform == "win32"
+_MACOS_LAYOUT = sys.platform == "darwin"
 _LINUX_LAYOUT = sys.platform.startswith("linux")
 # Keep Preferences close to GNOME-style boxed-list proportions: a wider
 # secondary window with enough room for labels, hints, and path controls.
 _WRAP_LENGTH = 520 if sys.platform == "win32" else 460
-_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 36
+_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 34 if _MACOS_LAYOUT else 36
 _NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _BODY_PAD_X = 32 if _LINUX_LAYOUT else DIALOG_BODY_PAD_X
@@ -57,17 +58,19 @@ _MIN_WIDTH = (
     if sys.platform == "win32"
     else 860
     if _LINUX_LAYOUT
+    else 680
+    if _MACOS_LAYOUT
     else 760
 )
 _ROW_PAD_X = 18
-_ROW_PAD_Y = 12
-_CONTROL_ROW_TOP_PAD_Y = 14
+_ROW_PAD_Y = 8 if _MACOS_LAYOUT else 12
+_CONTROL_ROW_TOP_PAD_Y = 8 if _MACOS_LAYOUT else 14
 _CONTROL_GAP_X = 10
-_TAB_PAD_X = 14
-_TAB_PAD_Y = 7
+_TAB_PAD_X = 12 if _MACOS_LAYOUT else 14
+_TAB_PAD_Y = 6 if _MACOS_LAYOUT else 7
 _TAB_GAP_X = 10
-_TAB_BOTTOM_PAD_Y = 18
-_BUTTON_ROW_TOP_PAD_Y = 18
+_TAB_BOTTOM_PAD_Y = 12 if _MACOS_LAYOUT else 18
+_BUTTON_ROW_TOP_PAD_Y = 12 if _MACOS_LAYOUT else 18
 _NOTICE_WRAP_LENGTH = 720
 _SCROLLBAR_WIDTH = 14
 _SCROLL_THUMB_WIDTH = 5
@@ -113,6 +116,11 @@ class AdvancedSettingsDialog:
             self.body_font = (ui_font_family, 10)
             self.small_font = (ui_font_family, 9)
             self.entry_pad_y = 4
+        elif _MACOS_LAYOUT:
+            self.section_font = (ui_font_family, 14, "bold")
+            self.body_font = (ui_font_family, 14)
+            self.small_font = (ui_font_family, 12)
+            self.entry_pad_y = 3
         else:
             self.section_font = (ui_font_family, 12, "bold")
             self.body_font = (ui_font_family, 12)
@@ -543,8 +551,14 @@ class AdvancedSettingsDialog:
             or self.page_scrollbar is None
         ):
             return
-        self.page_canvas.configure(scrollregion=self.page_canvas.bbox("all"))
-        content_height = self.page_stack.winfo_reqheight()
+        width = max(1, self.page_canvas.winfo_width())
+        active_page = self.pages.get(self.active_page_key or "")
+        content_height = (
+            active_page.winfo_reqheight()
+            if active_page is not None
+            else self.page_stack.winfo_reqheight()
+        )
+        self.page_canvas.configure(scrollregion=(0, 0, width, content_height))
         visible_height = self.page_canvas.winfo_height()
         if content_height > visible_height + 1:
             if not self.page_scrollbar.winfo_manager():
@@ -672,9 +686,7 @@ class AdvancedSettingsDialog:
         self.active_page_key = page_key
         for key, candidate_page in self.pages.items():
             if key == page_key:
-                candidate_page.grid(row=0, column=0, sticky="nsew")
-            else:
-                candidate_page.grid_remove()
+                candidate_page.tkraise()
         for key, tab in self.page_buttons.items():
             active = key == page_key
             tab.config(
@@ -690,6 +702,9 @@ class AdvancedSettingsDialog:
                 ),
             )
         self._sync_feedback_to_current_state()
+        if self.page_canvas is not None:
+            self.page_canvas.yview_moveto(0)
+        self.dialog.after_idle(self._sync_page_scrollbar)
 
     def _build(self) -> None:
         body = tk.Frame(
