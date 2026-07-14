@@ -27,9 +27,7 @@ from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
     DIALOG_PANEL_BORDER,
     create_dialog_action_button,
-    create_dialog_notice,
     set_dialog_action_button,
-    set_dialog_notice,
 )
 from caveviewer.gui.platform import DesktopServices, get_desktop_services
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -67,11 +65,13 @@ _ROW_PAD_Y = 8 if _MACOS_LAYOUT else 12
 _CONTROL_ROW_TOP_PAD_Y = 8 if _MACOS_LAYOUT else 14
 _CONTROL_GAP_X = 10
 _TAB_PAD_X = 12 if _MACOS_LAYOUT else 14
-_TAB_PAD_Y = 6 if _MACOS_LAYOUT else 7
+_TAB_PAD_Y = 8 if _MACOS_LAYOUT else 7
 _TAB_GAP_X = 10
 _TAB_BOTTOM_PAD_Y = 12 if _MACOS_LAYOUT else 18
 _BUTTON_ROW_TOP_PAD_Y = 12 if _MACOS_LAYOUT else 18
+_TAB_HIGHLIGHT_THICKNESS = 0 if _MACOS_LAYOUT else 1
 _NOTICE_WRAP_LENGTH = 720
+_INLINE_FEEDBACK_PAD_X = 10
 _SCROLLBAR_WIDTH = 14
 _SCROLL_THUMB_WIDTH = 5
 _SCROLL_THUMB_MIN_HEIGHT = 36
@@ -515,7 +515,7 @@ class AdvancedSettingsDialog:
             pady=_TAB_PAD_Y,
             cursor="hand2",
             takefocus=True,
-            highlightthickness=1,
+            highlightthickness=_TAB_HIGHLIGHT_THICKNESS,
             highlightbackground=_BG_COLOR,
             highlightcolor=DARK_THEME.entry_focus_border,
         )
@@ -752,10 +752,30 @@ class AdvancedSettingsDialog:
         self.apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
 
-        self.feedback_frame, self.error_label = create_dialog_notice(
-            body,
+        self.feedback_frame = tk.Frame(self.button_row, bg=_BG_COLOR)
+        self.feedback_frame.pack(side="left", fill="x", expand=True)
+        self.error_label = tk.Label(
+            self.feedback_frame,
+            text="",
             font=self.small_font,
+            fg=DARK_THEME.error_text,
+            bg=_BG_COLOR,
+            anchor="w",
+            justify="left",
             wraplength=_NOTICE_WRAP_LENGTH,
+        )
+        self.error_label.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=(_INLINE_FEEDBACK_PAD_X, _INLINE_FEEDBACK_PAD_X),
+        )
+        self.feedback_frame.bind(
+            "<Configure>",
+            lambda event: self.error_label.config(
+                wraplength=max(120, event.width - 2 * _INLINE_FEEDBACK_PAD_X)
+            ),
+            add="+",
         )
 
         self.page_scroll_shell = tk.Frame(body, bg=_BG_COLOR)
@@ -839,28 +859,14 @@ class AdvancedSettingsDialog:
     def _set_feedback(self, message: str, message_kind: MessageKind) -> None:
         if not message:
             self.error_label.config(text="")
-            if self.feedback_frame is not None:
-                self.feedback_frame.pack_forget()
             return
 
-        kind = "warning" if message_kind is MessageKind.WARNING else "error"
-        if self.feedback_frame is not None:
-            set_dialog_notice(
-                self.feedback_frame,
-                self.error_label,
-                message,
-                kind=kind,
-            )
-            if not self.feedback_frame.winfo_manager():
-                self.feedback_frame.pack(
-                    side="bottom",
-                    fill="x",
-                    pady=(8, 0),
-                    before=self.page_scroll_shell,
-                )
-                self.dialog.after_idle(self._sync_page_scrollbar)
-        else:
-            self.error_label.config(text=message)
+        color = (
+            DARK_THEME.title
+            if message_kind is MessageKind.WARNING
+            else DARK_THEME.error_text
+        )
+        self.error_label.config(text=message, fg=color)
 
     def _set_apply_enabled(self, enabled: bool) -> None:
         set_dialog_action_button(self.apply_button, enabled=enabled)

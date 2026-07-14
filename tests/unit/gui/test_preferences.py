@@ -598,6 +598,8 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
         assert advanced_settings_dialog._TEXT_ENTRY_WIDTH == 34
         assert advanced_settings_dialog._ROW_PAD_Y == 8
         assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 8
+        assert advanced_settings_dialog._TAB_PAD_Y == 8
+        assert advanced_settings_dialog._TAB_HIGHLIGHT_THICKNESS == 0
         assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 12
         assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 12
     else:
@@ -606,6 +608,8 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     if not advanced_settings_dialog._MACOS_LAYOUT:
         assert advanced_settings_dialog._ROW_PAD_Y == 12
         assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 14
+        assert advanced_settings_dialog._TAB_PAD_Y == 7
+        assert advanced_settings_dialog._TAB_HIGHLIGHT_THICKNESS == 1
         assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 18
         assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 18
     assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 720
@@ -636,13 +640,17 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "capstyle=\"round\"" in module_source
     assert "content_canvas" not in source
     assert "resizable(False, _WINDOWS_LAYOUT)" in module_source
+    assert "highlightthickness=_TAB_HIGHLIGHT_THICKNESS" in module_source
     assert "self.button_row.pack(" in source
     assert "side=\"bottom\"" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
     assert "self.page_scrollbar.pack(side=\"right\", fill=\"y\")" in module_source
     assert "self.page_scrollbar.pack_forget()" in module_source
     assert "_SCROLL_THUMB_COLOR" in module_source
-    assert "before=self.page_scroll_shell" in module_source
+    assert "before=self.page_scroll_shell" not in module_source
+    assert "self.feedback_frame = tk.Frame(self.button_row" in source
+    assert "self.feedback_frame.pack(side=\"left\", fill=\"x\", expand=True)" in source
+    assert "_INLINE_FEEDBACK_PAD_X" in module_source
     assert "self.dialog.minsize(dialog_w, min(dialog_h, 360))" in module_source
     assert "_bind_page_mousewheel" in module_source
     assert "grid_remove()" not in show_page_source
@@ -652,7 +660,7 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "active_page.winfo_reqheight()" in module_source
     assert "_apply_geometry" not in show_page_source
     assert "grid_propagate(False)" in source
-    assert "create_dialog_notice(" in source
+    assert "create_dialog_notice(" not in module_source
     assert "create_dialog_action_button(" in module_source
     assert "set_dialog_action_button(" in module_source
     assert "class _LabelButton" not in module_source
