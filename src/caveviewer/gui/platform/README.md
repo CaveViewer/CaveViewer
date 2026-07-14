@@ -35,11 +35,12 @@ through one capability instead of importing Tk, shell commands, or D-Bus
 directly. Linux implements file/directory selection, file/URI opening, file
 reveal, notifications, and idle/suspend inhibition portal-first, with
 conservative fallbacks for non-portal sessions. Long sample-map downloads use
-notification and inhibit requests through `DesktopServices`; background update
-downloads use notification and inhibit requests while the package is downloaded
-and verified; uncached map imports use inhibit requests while parsing and
-building the cache. These requests are best-effort and must not affect the
-underlying operation.
+notification and inhibit requests through `DesktopServices`, suppressing
+duplicate desktop notifications while the Sample Maps dialog owns foreground
+feedback; background update downloads use notification and inhibit requests
+while the package is downloaded and verified; uncached map imports use inhibit
+requests while parsing and building the cache. These requests are best-effort
+and must not affect the underlying operation.
 
 `windowing.py` owns Linux display-protocol selection. Automatic mode attempts
 X11/XWayland before Wayland when both session endpoints exist so source,

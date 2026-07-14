@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,8 @@ from caveviewer.gui.platform.desktop_services import (
     DesktopServiceError,
     DirectorySelection,
     FileSelection,
+    TkDesktopServices,
+    get_desktop_services,
     NoopDesktopInhibitor,
 )
 from caveviewer.gui.platform.portal import (
@@ -166,6 +169,22 @@ def test_portal_state_machine_rejects_invalid_transition():
 
     with pytest.raises(RuntimeError, match="Invalid portal request transition"):
         machine.transition(PortalRequestState.COMPLETED)
+
+
+def test_desktop_service_factory_prefers_portals_on_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    services = get_desktop_services()
+
+    assert isinstance(services, LinuxPortalDesktopServices)
+
+
+def test_desktop_service_factory_uses_tk_fallback_off_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    services = get_desktop_services()
+
+    assert isinstance(services, TkDesktopServices)
 
 
 def test_portal_chooser_completes_with_decoded_selection(tmp_path):

@@ -35,7 +35,7 @@ COVERAGE_FILE=/tmp/caveviewer.coverage \
   .venv-dev/bin/python -m pytest -p no:cacheprovider \
   --cov=caveviewer.app \
   --cov=caveviewer.core.chunker \
-  --cov=caveviewer.gui.advanced_settings \
+  --cov=caveviewer.gui.preferences \
   --cov=caveviewer.gui.sample_maps \
   --cov=caveviewer.gui.update_checker \
   --cov=caveviewer.gui.update_manager \

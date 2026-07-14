@@ -53,10 +53,15 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
     }
 
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda *_args: None)
+    monkeypatch.setattr(
+        chunker, "ensure_sufficient_disk_space", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        chunker, "ensure_sufficient_import_memory", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
 
-    def parse_obj(_path, progress_cb):
+    def parse_obj(_path, progress_cb, **_kwargs):
         progress_cb("parse-low", -1.0)
         progress_cb("parse-high", 2.0)
         return mesh
@@ -77,9 +82,6 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
     monkeypatch.setattr(
         chunker, "load_manifest", lambda _path: {"chunks": {"0,0": {}, "1,0": {}}}
     )
-    times = iter((10.0, 12.5))
-    monkeypatch.setattr(app.time, "time", lambda: next(times))
-
     result = app.import_and_cache(
         str(source), str(material_file), extra_progress_cb=lambda *item: progress.append(item)
     )
@@ -114,7 +116,12 @@ def test_obj_import_handles_large_or_unreadable_source_size(
     mesh = _mesh()
 
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda *_args: None)
+    monkeypatch.setattr(
+        chunker, "ensure_sufficient_disk_space", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        chunker, "ensure_sufficient_import_memory", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(obj_parser, "parse_obj", lambda *_args, **_kwargs: mesh)
     monkeypatch.setattr(obj_parser, "parse_mtl", lambda _path: {})
@@ -187,7 +194,12 @@ def test_glb_import_stages_embedded_texture_without_writing_source_directory(
     build_options = {}
 
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda *_args: None)
+    monkeypatch.setattr(
+        chunker, "ensure_sufficient_disk_space", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        chunker, "ensure_sufficient_import_memory", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(app.os.path, "getsize", lambda _path: 11 * 1024**3)
 
@@ -224,7 +236,9 @@ def test_glb_import_stages_embedded_texture_without_writing_source_directory(
 
 def test_glb_import_rejects_unknown_model_format_after_capacity_check(monkeypatch):
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
-    monkeypatch.setattr(chunker, "ensure_sufficient_disk_space", lambda *_args: None)
+    monkeypatch.setattr(
+        chunker, "ensure_sufficient_disk_space", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(app.os.path, "getsize", lambda _path: 0)
 

@@ -62,6 +62,7 @@ def test_console_write_tolerates_missing_or_broken_stdout(monkeypatch):
 def test_environment_default_helpers_cover_static_callable_and_failure(monkeypatch):
     assert app._default_io_workers() == "2"
     assert app._default_chunk_build_workers() == "1"
+    assert app._effective_env_default("CAVEVIEWER_CHUNK_SIZE_METERS") == "50"
     assert app._effective_env_default("CAVEVIEWER_UI_TEXT_SCALE") == "1.28"
     assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"
     assert app._effective_env_default("NOT_CONFIGURED") is None
@@ -153,10 +154,6 @@ def test_pick_folder_dialog_applies_scaling_and_cleans_up(
     root = FakeRoot()
     tkinter = ModuleType("tkinter")
     tkinter.Tk = lambda **kwargs: calls.append(("Tk", kwargs)) or root
-    tkinter.filedialog = SimpleNamespace(
-        askdirectory=lambda **kwargs: calls.append(("askdirectory", kwargs))
-        or selection
-    )
     dpi_utils = ModuleType("caveviewer.gui.dpi_utils")
     dpi_utils.configure_process_dpi_awareness = lambda: calls.append("dpi")
     dpi_utils.apply_tk_scaling = lambda selected_root: calls.append(
@@ -165,9 +162,20 @@ def test_pick_folder_dialog_applies_scaling_and_cleans_up(
     monkeypatch.setitem(sys.modules, "tkinter", tkinter)
     monkeypatch.setitem(sys.modules, "caveviewer.gui.dpi_utils", dpi_utils)
 
-    assert app.pick_folder_dialog() == expected
+    class FakeDesktopServices:
+        def choose_directory(self, **options):
+            calls.append(("choose_directory", options))
+            if not selection:
+                return None
+            return SimpleNamespace(path=selection)
+
+    assert app.pick_folder_dialog(desktop_services=FakeDesktopServices()) == expected
     assert calls[0] == "dpi"
     assert ("scale", root) in calls
+    assert (
+        "choose_directory",
+        {"title": "Open Map Folder", "parent": root},
+    ) in calls
     assert calls[-1] == "destroy"
 
 

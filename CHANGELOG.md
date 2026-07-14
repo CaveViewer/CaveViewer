@@ -7,7 +7,9 @@ All notable changes to this project are documented in this file.
 ### Added
 - Advanced startup settings for streaming and map parsing.
 - Pre-compute and runtime streaming tuning options, including memory and worker-thread controls.
-- Automatic AMD GPU memory detection through Linux DRM sysfs.
+- Automatic GPU memory budgeting: NVIDIA detection through `nvidia-smi`, Linux
+  AMD detection through DRM sysfs, integrated AMD shared-memory allowance, and a
+  Windows fallback budget for AMD/Intel systems without GPU-memory detection.
 - Map parsing preferences with cache compatibility handling when preferences differ from existing manifests.
 - Logging framework and expanded runtime diagnostics.
 - Windows setup automation improvements and packaging/release support updates.
@@ -21,11 +23,31 @@ All notable changes to this project are documented in this file.
 - Build and release scripts streamlined, with Linux Docker-based multi-arch build flow updates.
 - Documentation refreshed for platform support, source usage, and setup guidance.
 - Runtime defaults and environment-based performance tuning expanded (GPU/memory/worker settings).
+- Default import chunk size increased to 50 m on all platforms to reduce
+  first-time cache build overhead on large photogrammetry maps.
+- First-time map imports now run in a spawned child process so the viewer
+  event loop stays responsive and import failures return tracebacks to the
+  parent process. The child now reports heartbeat events, runs at reduced
+  desktop priority, and caps common native compute-library threads unless the
+  user already configured them.
+- Streaming and cache-building worker limits are now treated as advisory caps:
+  both pools start conservatively and grow only while current system RAM
+  availability allows it.
+- Generated map caches are managed under the platform cache root by default,
+  are self-contained with staged texture assets, and no longer use adjacent
+  `_cache` or `.caveviewer_cache` discovery.
 
 ### Fixed
 - Large textured maps now keep geometry visible under GPU pressure by
   downscaling oversized textures instead of dropping nearby chunks from the
   streaming set.
+- Texture downscaling diagnostics now log the GPU budget, target percentage,
+  texture share, unique texture count, selected texture cap, and first actual
+  resize.
+- First-time imports now reject clearly unsafe work earlier: OBJ imports check
+  estimated RAM after the count pass but before large array allocation, disk
+  checks include staged texture bytes when known, and cancelled/killed imports
+  clean abandoned staging directories.
 - Windows stable and prerelease publishing now signs updater manifests and
   commits the required `.json.sig` files.
 - macOS About menu crash and related callback stability issues.

@@ -2,11 +2,9 @@
 caveviewer.gui.splash_screen
 
 The very first thing shown when CaveViewer launches: a small landing
-window with the program name/version, the skull logo, and a Browse
-button to pick the folder containing the cave map's .obj/.mtl/texture
-files -- replacing the old behavior of jumping straight into a bare
-native folder-picker dialog with zero context about what the program
-even is.
+window with the program name/version, the skull logo, and an Open Map Folder
+button -- replacing the old behavior of jumping straight into a bare native
+folder-picker dialog with zero context about what the program even is.
 
 Built with Tkinter (ships with standard Python on Windows/Mac, same
 reasoning as the existing native folder-picker dialog already used
@@ -16,13 +14,12 @@ though Tkinter's native widgets can only approximate that so closely --
 this is a real OS window with title bar and native buttons, not a custom-
 drawn OpenGL overlay like the rest of the program's UI.
 
-This is intentionally a SEPARATE function from pick_folder_dialog() in
-caveviewer.app (which stays a quick bare native dialog) -- the splash
-screen is for the very first launch, when the person hasn't seen the
-program yet and benefits from the context; the OPEN button mid-session
-(see viewer_window.py) is for someone already using the program, where a
-quick plain dialog is the better fit and a full splash screen would just
-be unnecessary ceremony.
+This is intentionally a SEPARATE function from the quick native chooser
+helpers in caveviewer.app -- the splash screen is for the very first launch,
+when the person hasn't seen the program yet and benefits from the context;
+the OPEN button mid-session (see viewer_window.py) is for someone already
+using the program, where a quick plain dialog is the better fit and a full
+splash screen would just be unnecessary ceremony.
 
 This window presents the process-owned update manager's state. Downloads may
 continue after this Tk window closes; verified packages are revealed for
@@ -39,7 +36,7 @@ from dataclasses import dataclass
 
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.logging_utils import get_logger
-from caveviewer.gui.advanced_settings import (
+from caveviewer.gui.preferences import (
     apply_advanced_settings_to_env as _apply_advanced_settings_to_env,
     load_advanced_settings as _load_advanced_settings,
 )
@@ -56,7 +53,8 @@ from caveviewer.gui.map_selection import (
 )
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import DesktopServices, get_desktop_services, tk_root_options
-from caveviewer.gui.preferences import migrate_state_file, write_text_atomic
+from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
+from caveviewer.gui.tk_feedback import show_feedback
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.update_manager import (
     UpdateManager,
@@ -246,32 +244,33 @@ def _update_presentation(
     if snapshot.state == UpdateState.AVAILABLE:
         version = _display_version(snapshot.available_version)
         return _UpdatePresentation(
-            status_text=f"Update {version} is available.",
+            status_text=f"Update {version} available",
             action_text="Download",
             action=_UpdateAction.DOWNLOAD,
         )
     if snapshot.state == UpdateState.DOWNLOADING:
         return _UpdatePresentation(
-            status_text=f"Downloading... {snapshot.progress_percent}%",
+            status_text=f"Downloading… {snapshot.progress_percent}%",
             progress_visible=True,
             progress_fraction=snapshot.progress_percent / 100.0,
         )
     if snapshot.state == UpdateState.VERIFYING:
         return _UpdatePresentation(
-            status_text="Verifying...",
+            status_text="Verifying…",
             progress_visible=True,
             progress_fraction=1.0,
         )
     if snapshot.state == UpdateState.READY:
         return _UpdatePresentation(
-            status_text="Downloaded successfully",
+            status_text="Update ready",
             action_text=reveal_action_label,
             action=_UpdateAction.REVEAL,
         )
     if snapshot.state == UpdateState.FAILED:
         return _UpdatePresentation(
-            status_text="Download failed - Retry",
-            status_action=_UpdateAction.RETRY,
+            status_text="Download failed",
+            action_text="Retry",
+            action=_UpdateAction.RETRY,
             error=True,
         )
     return _UpdatePresentation()
@@ -386,6 +385,9 @@ def show_splash_screen(
         bg=_BG_COLOR,
         cursor="arrow",
         takefocus=False,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
     )
     update_label.pack(pady=(0, 2))
 
@@ -397,6 +399,9 @@ def show_splash_screen(
         bg=_BG_COLOR,
         cursor="arrow",
         takefocus=False,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
     )
     update_action_label.pack(pady=(0, 4))
 
@@ -481,115 +486,26 @@ def show_splash_screen(
         root.quit()
 
     # -- browse button + instructions ---------------------------------------------
-    def _show_invalid_map_dialog(message: str) -> None:
-        dialog = tk.Toplevel(root)
-        dialog.title(APP_NAME)
-        dialog.configure(bg=_BG_COLOR)
-        dialog.resizable(False, False)
-        dialog.transient(root)
-
-        body = tk.Frame(dialog, bg=_BG_COLOR, padx=18, pady=16)
-        body.pack(fill="both", expand=True)
-
-        tk.Label(
-            body,
-            text="Unable to Open This Folder",
-            font=_VERSION_FONT,
-            fg=_TITLE_COLOR,
-            bg=_BG_COLOR,
-        ).pack(anchor="w", pady=(0, 8))
-
-        tk.Label(
-            body,
-            text=message,
+    def _show_invalid_map_feedback(message: str) -> None:
+        show_feedback(
+            root,
+            f"Unable to open this folder: {message}",
+            kind="error",
+            duration_ms=9000,
             font=_BODY_FONT,
-            fg=_SUBTITLE_COLOR,
-            bg=_BG_COLOR,
-            justify="left",
-            wraplength=420,
-        ).pack(anchor="w")
+        )
 
-        button_row = tk.Frame(body, bg=_BG_COLOR)
-        button_row.pack(fill="x", pady=(14, 0))
-
-        def _dismiss(_event=None):
-            dialog.destroy()
-            return "break"
-
-        if sys.platform == "darwin":
-            ok_button = tk.Label(
-                button_row,
-                text="OK",
-                font=_SMALL_FONT,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                padx=16,
-                pady=6,
-                cursor="hand2",
-                takefocus=True,
-                highlightthickness=1,
-                highlightbackground=_BUTTON_BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR,
-            )
-            ok_button.bind("<Button-1>", _dismiss)
-            ok_button.bind("<Return>", _dismiss)
-            ok_button.bind("<space>", _dismiss)
-            ok_button.bind("<Enter>", lambda _event: ok_button.config(bg=_BUTTON_HOVER_BG))
-            ok_button.bind("<Leave>", lambda _event: ok_button.config(bg=_BUTTON_BG))
-        else:
-            ok_button = tk.Button(
-                button_row,
-                text="OK",
-                command=lambda: _dismiss(),
-                font=_SMALL_FONT,
-                bg=_BUTTON_BG,
-                fg=_BUTTON_FG,
-                activebackground=_BUTTON_HOVER_BG,
-                activeforeground=_BUTTON_FG,
-                relief="flat",
-                borderwidth=1,
-                highlightthickness=1,
-                highlightbackground=_BUTTON_BORDER_COLOR,
-                highlightcolor=_BUTTON_BORDER_COLOR,
-                padx=16,
-                pady=6,
-                cursor="hand2",
-                default="active",
-            )
-
-        ok_button.pack(side="right")
-
-        dialog.bind("<Escape>", _dismiss)
-        dialog.bind("<Return>", _dismiss)
-
-        dialog.update_idletasks()
-        try:
-            root.update_idletasks()
-            dialog_w = dialog.winfo_reqwidth()
-            dialog_h = dialog.winfo_reqheight()
-            x = root.winfo_rootx() + max(0, (root.winfo_width() - dialog_w) // 2)
-            y = root.winfo_rooty() + max(0, (root.winfo_height() - dialog_h) // 2)
-            dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
-        except Exception:
-            pass
-
-        dialog.wait_visibility()
-        dialog.grab_set()
-        ok_button.focus_set()
-        dialog.focus_force()
-        dialog.wait_window()
-
-    def on_browse():
+    def on_open_map_folder():
         last_dir = _load_last_browse_dir()
         selection = desktop_services.choose_directory(
-            title="Select a cave map folder",
+            title="Open Map Folder",
             initial_dir=last_dir,
             parent=root,
         )
         if selection:
             is_valid, error_message = _validate_selected_map_folder(selection.path)
             if not is_valid:
-                _show_invalid_map_dialog(error_message)
+                _show_invalid_map_feedback(error_message)
                 return
 
             selected_folder[0] = selection.path
@@ -599,9 +515,20 @@ def show_splash_screen(
     def on_close(_event=None):
         _leave_splash()
 
+    def _invoke_and_break(callback):
+        callback()
+        return "break"
+
+    def _bind_activation(widget, callback) -> None:
+        for sequence in ("<Button-1>", "<Return>", "<space>"):
+            widget.bind(
+                sequence,
+                lambda _event, cb=callback: _invoke_and_break(cb),
+            )
+
     browse_button = tk.Label(
         root,
-        text="Select Map...",
+        text="Open Map Folder…",
         font=_BUTTON_FONT,
         bg=_BUTTON_BG,
         fg=_BUTTON_FG,
@@ -613,17 +540,15 @@ def show_splash_screen(
         highlightbackground=_BUTTON_BORDER_COLOR,
         highlightcolor=_BUTTON_BORDER_COLOR,
     )
-    browse_button.bind("<Button-1>", lambda _event: on_browse())
-    browse_button.bind("<Return>", lambda _event: on_browse())
-    browse_button.bind("<space>", lambda _event: on_browse())
+    _bind_activation(browse_button, on_open_map_folder)
     browse_button.bind("<Enter>", lambda _event: browse_button.config(bg=_BUTTON_HOVER_BG))
     browse_button.bind("<Leave>", lambda _event: browse_button.config(bg=_BUTTON_BG))
     browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
 
     instruction_label = tk.Label(
         root,
-        text="Point this to a folder with your map's .obj+.mtl or .glb file,\n"
-             "or a folder that was already imported by CaveViewer.",
+        text="Choose the folder that contains your cave map files:\n"
+             ".glb, or .obj with its matching .mtl and textures.",
         font=_INSTRUCTION_FONT,
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",
@@ -656,13 +581,17 @@ def show_splash_screen(
 
     advanced_link = tk.Label(
         secondary_link_row,
-        text="Advanced Settings...",
+        text="Preferences",
         font=_SMALL_FONT,
         fg="#5d6f8a",
         bg=_BG_COLOR,
         cursor="hand2",
+        takefocus=True,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
     )
-    advanced_link.bind("<Button-1>", lambda _event: _on_advanced_settings_click())
+    _bind_activation(advanced_link, _on_advanced_settings_click)
     advanced_link.pack(side="left")
 
     secondary_separator = tk.Label(
@@ -681,8 +610,12 @@ def show_splash_screen(
         fg=_BUTTON_BG,
         bg=_BG_COLOR,
         cursor="hand2",
+        takefocus=True,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
     )
-    sample_maps_link.bind("<Button-1>", lambda _event: _on_example_maps_click())
+    _bind_activation(sample_maps_link, _on_example_maps_click)
     sample_maps_link.pack(side="left")
 
     credit_label = tk.Label(
@@ -719,11 +652,17 @@ def show_splash_screen(
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     root.after(50, _refresh_update_presentation)
     root.after(350, update_manager.check_for_updates)
-    root.bind("<Return>", lambda _event: on_browse())
+    root.bind("<Return>", lambda _event: on_open_map_folder())
     root.bind("<Escape>", on_close)
+    root.bind("<Control-w>", on_close)
     root.protocol("WM_DELETE_WINDOW", on_close)
 
-    root.mainloop()
+    update_manager.set_foreground_update_surface_active(True)
+    try:
+        root.mainloop()
+    finally:
+        update_manager.set_foreground_update_surface_active(False)
+
     # On macOS, keep the Tk app object alive for the process lifetime so
     # the global app-menu About callback remains bound to a valid Tk
     # application. Destroying it here leaves a stale About callback that
@@ -751,8 +690,11 @@ def _load_last_browse_dir() -> str | None:
 
 def _save_last_browse_dir(path: str) -> None:
     try:
-        if not path or not os.path.isdir(path):
+        if not path:
             return
-        write_text_atomic(_last_browse_path_file(), path)
+        directory = path if os.path.isdir(path) else os.path.dirname(path)
+        if not directory or not os.path.isdir(directory):
+            return
+        write_text_atomic(_last_browse_path_file(), directory)
     except Exception:
         pass

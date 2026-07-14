@@ -41,6 +41,10 @@ from caveviewer.gui.controls_overlay import ControlsOverlay
 from caveviewer.gui.stepper_control import StepperControl
 from caveviewer.gui.color_picker import ColorPicker
 from caveviewer.gui.import_progress_panel import ImportProgressPanel
+from caveviewer.gui.import_process import (
+    start_import_process,
+    terminate_import_process,
+)
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform import tk_root_options
@@ -55,6 +59,9 @@ _DESKTOP_WINDOW_SCALE = 0.80
 _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
+_IMPORT_EVENT_POLL_SECONDS = 0.25
+_IMPORT_HEARTBEAT_LOG_SECONDS = 30.0
+_IMPORT_STALE_LOG_SECONDS = 30.0
 
 
 def _desktop_relative_window_size() -> tuple[int, int]:
@@ -573,6 +580,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._import_active: bool = False
         self._import_is_startup: bool = False
         self._import_thread: threading.Thread | None = None
+        self._import_process = None
+        self._import_stop_event: threading.Event | None = None
         self._import_queue: queue.Queue | None = None
         self._import_map_name: str = ""
         self._import_progress_stage: str = ""
@@ -1483,7 +1492,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # tkinter and the parser/chunker modules, which the rest of this
         # file doesn't otherwise need -- same reasoning the application
         # startup module uses for its own local imports of these.
-        from caveviewer.app import pick_folder_dialog, find_model_file, import_and_cache_any
+        from caveviewer.app import pick_folder_dialog, find_model_file
         from caveviewer.core import chunker as chunker_module
 
         folder = pick_folder_dialog()
@@ -1531,12 +1540,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         map_name: str,
         is_startup: bool = False,
     ) -> None:
-        """Start the OBJ/GLB import on a background worker thread.
+        """Start the OBJ/GLB import without blocking the viewer event loop.
 
-        The worker posts three types of messages to self._import_queue:
+        Cached maps are resolved in a lightweight monitor thread. Uncached
+        imports run in a spawned child process so heavy parsing/chunking cannot
+        starve the viewer's OpenGL/window event loop.
+
+        The monitor posts these messages to self._import_queue:
           ("progress", stage, fraction)  -- update the progress ring
+          ("heartbeat", stage, fraction, elapsed, available, total)
+                                      -- child is alive; keep same UI stage
           ("done", cache_dir, textures_dir, manifest)  -- load the map
-          ("error", message)             -- log the error (close if startup)
+          ("error", message, traceback)  -- log the error (close if startup)
+          ("cancelled",)                 -- import was stopped by viewer close
 
         on_render() drains the queue every frame and handles each message
         on the main thread where OpenGL calls are legal.
@@ -1550,12 +1566,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._import_progress_stage = "starting import"
         self._import_progress_fraction = 0.0
         self._import_queue = queue.Queue()
+        self._import_process = None
+        self._import_cache_dir = None
+        self._import_stop_event = threading.Event()
         q = self._import_queue
         source_path = (model_descriptor.get("obj_path")
                        or model_descriptor.get("glb_path"))
+        stop_event = self._import_stop_event
 
         def worker():
-            from caveviewer.app import import_and_cache_any
             from caveviewer.core import chunker as _ck
             from caveviewer.core.cache_paths import map_texture_dir
 
@@ -1573,20 +1592,119 @@ class CaveViewerWindow(mglw.WindowConfig):
                     on_progress("starting import", 0.0)
                     inhibitor = _acquire_map_import_inhibitor(map_name)
                     try:
-                        cache_dir = import_and_cache_any(
-                            model_descriptor, textures_dir,
-                            force_rebuild=False,
-                            extra_progress_cb=on_progress,
-                        )
+                        if stop_event.is_set():
+                            q.put(("cancelled",))
+                            return
+                        handle = start_import_process(model_descriptor, textures_dir)
+                        self._import_process = handle.process
+                        self._import_cache_dir = getattr(handle, "cache_dir", None)
+                        last_event_at = time.monotonic()
+                        last_stale_log_at = 0.0
+                        last_heartbeat_log_at = 0.0
+                        last_stage = "starting import"
+                        last_fraction = 0.0
+                        while not stop_event.is_set():
+                            try:
+                                event = handle.events.get(
+                                    timeout=_IMPORT_EVENT_POLL_SECONDS
+                                )
+                            except queue.Empty:
+                                now = time.monotonic()
+                                if handle.process.exitcode is None:
+                                    if (
+                                        now - last_event_at
+                                        >= _IMPORT_STALE_LOG_SECONDS
+                                        and now - last_stale_log_at
+                                        >= _IMPORT_STALE_LOG_SECONDS
+                                    ):
+                                        _LOG.info(
+                                            "Import process is still running but "
+                                            "has not reported progress or a "
+                                            "heartbeat for %.0fs; last stage "
+                                            "%r at %.0f%%.",
+                                            now - last_event_at,
+                                            last_stage,
+                                            last_fraction * 100.0,
+                                        )
+                                        last_stale_log_at = now
+                                    continue
+                                exitcode = handle.process.exitcode
+                                terminate_import_process(
+                                    handle.process,
+                                    cache_dir=getattr(handle, "cache_dir", None),
+                                )
+                                q.put(
+                                    (
+                                        "error",
+                                        "Import process exited without reporting "
+                                        f"a result (exit code {exitcode}).",
+                                        "",
+                                    )
+                                )
+                                break
+
+                            last_event_at = time.monotonic()
+                            kind = event[0]
+                            if kind == "progress":
+                                last_stage = str(event[1])
+                                last_fraction = float(event[2])
+                                q.put(event)
+                            elif kind == "heartbeat":
+                                if len(event) >= 3:
+                                    last_stage = str(event[1])
+                                    last_fraction = float(event[2])
+                                if (
+                                    last_event_at - last_heartbeat_log_at
+                                    >= _IMPORT_HEARTBEAT_LOG_SECONDS
+                                ):
+                                    elapsed = float(event[3]) if len(event) > 3 else 0.0
+                                    available_bytes = event[4] if len(event) > 4 else None
+                                    total_bytes = event[5] if len(event) > 5 else None
+                                    if available_bytes is not None and total_bytes:
+                                        _LOG.info(
+                                            "Import heartbeat: %.0fs elapsed; "
+                                            "stage %r at %.0f%%; system RAM "
+                                            "%.1f GB available of %.1f GB.",
+                                            elapsed,
+                                            last_stage,
+                                            last_fraction * 100.0,
+                                            float(available_bytes) / (1024 ** 3),
+                                            float(total_bytes) / (1024 ** 3),
+                                        )
+                                    else:
+                                        _LOG.info(
+                                            "Import heartbeat: %.0fs elapsed; "
+                                            "stage %r at %.0f%%.",
+                                            elapsed,
+                                            last_stage,
+                                            last_fraction * 100.0,
+                                        )
+                                    last_heartbeat_log_at = last_event_at
+                                q.put(event)
+                            elif kind == "done":
+                                q.put(event)
+                                break
+                            elif kind == "error":
+                                q.put(event)
+                                break
+
+                        if stop_event.is_set():
+                            terminate_import_process(
+                                handle.process,
+                                cache_dir=getattr(handle, "cache_dir", None),
+                            )
+                            q.put(("cancelled",))
+                        else:
+                            handle.process.join(timeout=1.0)
                     finally:
+                        self._import_process = None
+                        self._import_cache_dir = None
                         _release_desktop_inhibitor(inhibitor)
-                    # Every new cache publishes its referenced textures in the
-                    # same atomic staging transaction as its chunks.
-                    resolved_textures_dir = cache_dir
+                    return
                 manifest = _ck.load_manifest(cache_dir)
                 q.put(("done", cache_dir, resolved_textures_dir, manifest))
             except Exception as exc:
-                q.put(("error", str(exc)))
+                q.put(("error", str(exc), ""))
 
         self._import_thread = threading.Thread(target=worker, daemon=True)
         self._import_thread.start()
@@ -1607,24 +1725,44 @@ class CaveViewerWindow(mglw.WindowConfig):
             if kind == "progress":
                 self._import_progress_stage = msg[1]
                 self._import_progress_fraction = msg[2]
+            elif kind == "heartbeat":
+                self._import_progress_stage = msg[1]
+                self._import_progress_fraction = msg[2]
             elif kind == "done":
                 _, cache_dir, textures_dir, manifest = msg
                 self._import_active = False
                 self._import_queue = None
                 self._import_thread = None
+                self._import_process = None
+                self._import_cache_dir = None
+                self._import_stop_event = None
                 self.load_new_map(cache_dir, textures_dir, manifest)
                 break  # queue is gone; nothing more to drain
             elif kind == "error":
                 error_msg = msg[1]
+                error_trace = msg[2] if len(msg) > 2 else ""
                 self._import_active = False
                 self._import_queue = None
                 self._import_thread = None
+                self._import_process = None
+                self._import_cache_dir = None
+                self._import_stop_event = None
                 _LOG.error(f"Import failed: {error_msg}")
+                if error_trace:
+                    _LOG.error("Import process traceback:\n%s", error_trace)
                 if self._import_is_startup:
                     _LOG.error("Closing -- no map to show without a successful import.")
                     if hasattr(self.wnd, "close"):
                         self.wnd.close()
                 break  # queue is gone; nothing more to drain
+            elif kind == "cancelled":
+                self._import_active = False
+                self._import_queue = None
+                self._import_thread = None
+                self._import_process = None
+                self._import_cache_dir = None
+                self._import_stop_event = None
+                break
 
     def _run_pending_import(self) -> None:
         """
@@ -3016,6 +3154,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         keys = self.wnd.keys
         if action == keys.ACTION_PRESS:
+            if self._handle_window_shortcut(key, modifiers):
+                return
             if self.controls_overlay.is_waiting_for_begin:
                 space_key = self._resolve_key_optional(keys, "SPACE", "SPACEBAR")
                 if (
@@ -3036,6 +3176,29 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._keys_down.discard(key)
 
     key_event = on_key_event
+
+    def _handle_window_shortcut(self, key, modifiers: KeyModifiers) -> bool:
+        """Handle desktop-standard window and open shortcuts."""
+        shortcut_down = (
+            self._command_is_down(modifiers)
+            if sys.platform == "darwin"
+            else self._control_is_down(modifiers)
+        )
+        if not shortcut_down:
+            return False
+
+        close_key = self._resolve_key_optional(self.wnd.keys, "W")
+        if close_key is not None and key == close_key:
+            self.on_close()
+            return True
+
+        open_key = self._resolve_key_optional(self.wnd.keys, "O")
+        if open_key is not None and key == open_key:
+            if self._has_map_loaded and not self._import_active:
+                self._handle_open_button_click()
+            return True
+
+        return False
 
     def _handle_recording_hotkey(self, key, modifiers: KeyModifiers) -> bool:
         """Use Shift+R to cancel countdown or stop active recording."""
@@ -3429,6 +3592,23 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     mouse_scroll_event = on_mouse_scroll_event
 
+    def _cancel_active_import(self) -> None:
+        """Stop a child import process when the viewer is closing."""
+        stop_event = getattr(self, "_import_stop_event", None)
+        if stop_event is not None:
+            stop_event.set()
+
+        process = getattr(self, "_import_process", None)
+        if process is not None:
+            terminate_import_process(
+                process,
+                cache_dir=getattr(self, "_import_cache_dir", None),
+            )
+
+        import_thread = getattr(self, "_import_thread", None)
+        if import_thread is not None and import_thread.is_alive():
+            import_thread.join(timeout=2.0)
+
     def on_close(self):
         if self._closing_requested:
             return
@@ -3439,6 +3619,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.wnd.mouse_exclusivity = False
             except Exception:
                 pass
+
+        if getattr(self, "_import_active", False):
+            self._cancel_active_import()
 
         if self._has_map_loaded:
             self._teardown_current_map()

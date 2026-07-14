@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from caveviewer.core import chunker, hardware_memory, obj_parser
+from caveviewer.core.worker_config import WorkerAllocation
 
 
 def _attributed_mesh() -> obj_parser.RawMesh:
@@ -56,7 +57,7 @@ def _mesh_with_cells(cell_count: int) -> obj_parser.RawMesh:
     """Build one triangle per spatial cell for worker-pool lifecycle tests."""
     positions = []
     for cell_index in range(cell_count):
-        x = float(cell_index * 10)
+        x = float(cell_index * chunker.DEFAULT_CHUNK_SIZE)
         positions.extend(
             ((x, 0.0, 0.0), (x + 1.0, 0.0, 0.0), (x, 1.0, 0.0))
         )
@@ -106,6 +107,7 @@ def test_chunk_size_configuration_handles_default_valid_and_invalid_values(
     monkeypatch, caplog
 ):
     monkeypatch.delenv(chunker.CHUNK_SIZE_ENV_VAR, raising=False)
+    assert chunker._DEFAULT_CHUNK_SIZE_FALLBACK == 50.0
     assert chunker._resolve_default_chunk_size() == chunker._DEFAULT_CHUNK_SIZE_FALLBACK
 
     monkeypatch.setenv(chunker.CHUNK_SIZE_ENV_VAR, "12.5")
@@ -125,6 +127,60 @@ def test_chunk_size_configuration_handles_default_valid_and_invalid_values(
 
     assert chunker.CHUNK_SIZE_ENV_VAR in caplog.text
     assert chunker.configured_chunk_size() == chunker.DEFAULT_CHUNK_SIZE
+
+
+def test_import_memory_estimate_scales_with_geometry_size():
+    small = chunker.estimate_import_memory_bytes(10, 10, 10, 10)
+    large = chunker.estimate_import_memory_bytes(10_000, 10_000, 10_000, 10_000)
+
+    assert small >= chunker.IMPORT_MEMORY_FIXED_OVERHEAD_BYTES
+    assert large > small
+
+
+def test_import_memory_preflight_rejects_when_available_ram_is_too_low(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(
+            total_bytes=8 * 1024 ** 3,
+            available_bytes=1 * 1024 ** 3,
+        ),
+    )
+
+    with pytest.raises(chunker.InsufficientImportMemoryError) as raised:
+        chunker.ensure_sufficient_import_memory(
+            1_000_000,
+            1_000_000,
+            1_000_000,
+            20_000_000,
+            source_path="/maps/huge.obj",
+        )
+
+    assert raised.value.required_bytes > raised.value.allowed_bytes
+    assert "huge.obj" in str(raised.value)
+
+
+def test_import_memory_preflight_allows_import_when_ram_headroom_is_available(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(
+            total_bytes=16 * 1024 ** 3,
+            available_bytes=8 * 1024 ** 3,
+        ),
+    )
+
+    chunker.ensure_sufficient_import_memory(
+        10_000,
+        10_000,
+        10_000,
+        10_000,
+        source_path="/maps/small.obj",
+    )
 
 
 def test_build_cache_reports_progress_and_atomically_replaces_existing_cache(
@@ -290,7 +346,11 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
     monkeypatch.setattr(
         chunker.concurrent.futures.Future, "cancel", release_worker_then_cancel
     )
-    monkeypatch.setattr(chunker, "resolve_worker_count", lambda *_args, **_kwargs: 2)
+    monkeypatch.setattr(
+        chunker,
+        "resolve_worker_allocation",
+        lambda *_args, **_kwargs: WorkerAllocation(2, 2, 8, 2),
+    )
     monkeypatch.setattr(
         chunker.hardware_memory,
         "detect_ram_snapshot",
@@ -307,7 +367,7 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
 
 
 def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, caplog
 ):
     source = tmp_path / "map.obj"
     source.write_text("map", encoding="utf-8")
@@ -326,20 +386,60 @@ def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
         probe_write_counts.append(len(written_cells))
         return hardware_memory.RamSnapshot(100, 20)
 
-    monkeypatch.setattr(chunker, "resolve_worker_count", lambda *_args, **_kwargs: 8)
+    monkeypatch.setattr(
+        chunker,
+        "resolve_worker_allocation",
+        lambda *_args, **_kwargs: WorkerAllocation(8, 2, 10, 8),
+    )
     monkeypatch.setattr(
         chunker.hardware_memory, "detect_ram_snapshot", probe_ram
     )
     monkeypatch.setattr(chunker, "_write_chunk_file", write_cell)
 
-    chunker._build_cache_in_directory(
-        str(source), _mesh_with_cells(6), {}, str(cache_dir)
-    )
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        chunker._build_cache_in_directory(
+            str(source), _mesh_with_cells(6), {}, str(cache_dir)
+        )
 
     assert len(written_cells) == 6
     assert len(set(worker_threads)) == 1
     assert probe_write_counts
     assert min(probe_write_counts) >= 1
+    assert "Cache-build worker target resolved to 8 worker(s)" in caplog.text
+    assert "(requested 8, reserved CPUs 2, logical CPUs 10)" in caplog.text
+    assert "System RAM utilization is 80.0%" in caplog.text
+
+
+def test_cache_build_logs_successful_ram_based_worker_admission(
+    tmp_path, monkeypatch, caplog
+):
+    source = tmp_path / "map.obj"
+    source.write_text("map", encoding="utf-8")
+    cache_dir = tmp_path / "staging-cache"
+
+    def write_cell(_chunks_dir, _cell_str, _mesh, _groups):
+        bounds = np.zeros(3, dtype=np.float32)
+        return bounds, bounds.copy(), ["rock"]
+
+    monkeypatch.setattr(
+        chunker,
+        "resolve_worker_allocation",
+        lambda *_args, **_kwargs: WorkerAllocation(2, 2, 8, 2),
+    )
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(100, 100),
+    )
+    monkeypatch.setattr(chunker, "_write_chunk_file", write_cell)
+
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        chunker._build_cache_in_directory(
+            str(source), _mesh_with_cells(4), {}, str(cache_dir)
+        )
+
+    assert "Detected system RAM for cache-build worker admission" in caplog.text
+    assert "increasing workers to 2 of 2" in caplog.text
 
 
 def test_chunk_writer_preserves_attributes_and_bounds(tmp_path):

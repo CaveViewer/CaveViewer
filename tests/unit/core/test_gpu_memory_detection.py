@@ -18,12 +18,15 @@ def _make_drm_card(
     *,
     vendor: str = "0x1002",
     vram: str | int = GIB,
+    gtt: str | int | None = None,
     boot_vga: str | int | None = None,
 ):
     device = drm_root / name / "device"
     device.mkdir(parents=True)
     (device / "vendor").write_text(str(vendor), encoding="ascii")
     (device / "mem_info_vram_total").write_text(str(vram), encoding="ascii")
+    if gtt is not None:
+        (device / "mem_info_gtt_total").write_text(str(gtt), encoding="ascii")
     if boot_vga is not None:
         (device / "boot_vga").write_text(str(boot_vga), encoding="ascii")
 
@@ -41,6 +44,24 @@ def test_linux_amd_detection_prefers_primary_adapter(tmp_path):
 def test_linux_amd_detection_uses_largest_adapter_without_primary(tmp_path):
     _make_drm_card(tmp_path, "card0", vram=2 * GIB)
     _make_drm_card(tmp_path, "card1", vram=8 * GIB, boot_vga=0)
+
+    assert hardware_memory.detect_linux_amd_gpu_memory_bytes(tmp_path) == 8 * GIB
+
+
+def test_linux_amd_detection_adds_capped_shared_budget_for_integrated_gpu(tmp_path):
+    _make_drm_card(tmp_path, "card0", vram=GIB, gtt=8 * GIB, boot_vga=1)
+
+    assert hardware_memory.detect_linux_amd_gpu_memory_bytes(tmp_path) == 3 * GIB
+
+
+def test_linux_amd_detection_uses_fractional_shared_budget_below_cap(tmp_path):
+    _make_drm_card(tmp_path, "card0", vram=GIB, gtt=2 * GIB, boot_vga=1)
+
+    assert hardware_memory.detect_linux_amd_gpu_memory_bytes(tmp_path) == 2 * GIB
+
+
+def test_linux_amd_detection_keeps_discrete_vram_budget(tmp_path):
+    _make_drm_card(tmp_path, "card0", vram=8 * GIB, gtt=8 * GIB, boot_vga=1)
 
     assert hardware_memory.detect_linux_amd_gpu_memory_bytes(tmp_path) == 8 * GIB
 
@@ -162,6 +183,15 @@ def test_unknown_gpu_uses_conservative_fallback(monkeypatch):
     assert (
         hardware_memory.detect_total_gpu_memory_bytes()
         == hardware_memory.UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
+    )
+
+
+def test_unknown_windows_gpu_uses_larger_texture_friendly_fallback(monkeypatch):
+    monkeypatch.setattr(hardware_memory.sys, "platform", "win32")
+
+    assert (
+        hardware_memory.detect_total_gpu_memory_bytes("Intel")
+        == hardware_memory.WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
     )
 
 

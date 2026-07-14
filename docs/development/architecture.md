@@ -29,6 +29,27 @@ and referenced texture assets are published in one atomic directory
 transaction. Failures must remove staging output and preserve any previously
 valid managed cache.
 
+First-time imports launched from the viewer run in a spawned child process
+through `src/caveviewer/gui/import_process.py`. The viewer process owns OpenGL,
+window events, progress rendering, and desktop idle/suspend inhibition; the
+child process owns parsing, cache construction, texture staging, and cache
+publication. Progress, completion, and traceback-bearing failure events cross
+back to the viewer through a process queue. This keeps desktop event loops
+responsive during CPU-heavy imports and isolates import crashes from the UI
+process. The child emits heartbeat events with the current stage and RAM
+snapshot while it is working, runs at reduced desktop priority, and caps common
+native compute-library thread counts before importing NumPy-heavy modules.
+Parent-side cancellation or abnormal child exit cleans abandoned private
+staging directories for the target cache.
+
+Import preflight is intentionally early. OBJ imports count vertices, UVs,
+normals, and triangulated faces before allocating large arrays; that count is
+used to reject imports whose estimated peak footprint exceeds currently
+available system RAM. Disk preflight runs before parsing and includes both the
+source model and staged texture assets when they are known. `build_cache()`
+repeats disk checks before writing so direct callers and mid-import free-space
+changes remain covered.
+
 Chunk-file construction treats its configured worker count as a maximum. It
 starts with one task, samples current system RAM after completed work, and
 admits only one additional concurrent worker per sample while utilization is
@@ -68,7 +89,13 @@ budgets; oversized texture sets are handled in `TextureManager` by deriving a
 decode-time maximum texture dimension from detected GPU memory, target
 percentage, and unique texture count. This keeps the visible cave geometry from
 collapsing to only the few chunks whose original texture tiles fit in VRAM,
-while still preventing obviously oversized texture uploads.
+while still preventing obviously oversized texture uploads. GPU memory
+detection is platform-specific: NVIDIA uses `nvidia-smi` when available, Linux
+AMD uses DRM sysfs, low-VRAM AMD integrated GPUs add 50% of reported GTT/shared
+memory capped at 2 GB, Windows AMD/Intel currently use an 8 GB fallback budget,
+and macOS currently uses a conservative 1 GB fallback when no override is set.
+Texture cap selection logs the budget inputs and the selected common dimension
+before the first oversized texture is resized.
 
 ## UI and platform boundaries
 
@@ -81,8 +108,12 @@ Directory selection, file reveal, notifications, and idle/suspend inhibition
 use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal
 first and falls back to Tk or `xdg-open` only when the portal is unavailable.
 Long sample-map downloads request desktop notification and inhibit support
-through this same capability. Background update downloads request notification
-and inhibit support while the package is being downloaded and verified.
+through this same capability, but the visible Sample Maps dialog suppresses
+duplicate desktop notifications because it already presents progress and
+completion actions. Background update downloads request notification and
+inhibit support while the package is being downloaded and verified; a visible
+splash suppresses duplicate desktop notifications because it already presents
+the update state and actions.
 Uncached map imports request idle/suspend inhibition while parsing and
 building the cache. These requests remain best-effort so desktop integration
 cannot break the underlying work. Portal
@@ -94,7 +125,8 @@ IDLE -> REQUESTING -> WAITING -> {COMPLETED, CANCELLED, FAILED}
 
 Startup map sessions accept either a folder containing a supported map or one
 direct `.glb`/`.obj` file. This keeps Linux `Exec ... %f` desktop launches and
-the in-app folder chooser on the same import/cache path.
+the in-app folder chooser on the same import/cache path as desktop-shell direct
+file launches.
 
 Linux viewer windows use GLFW 3.4. `CAVEVIEWER_WINDOW_SYSTEM=auto` prefers
 X11/XWayland when `DISPLAY` is available, then retries Wayland only for a
@@ -118,16 +150,20 @@ objects.
 ## User storage
 
 `caveviewer.storage_paths` is the platform-neutral path boundary. Linux uses
-the XDG configuration, data, cache, state, and runtime roots. Advanced settings
+the XDG configuration, data, cache, state, and runtime roots; macOS, Windows,
+and unsupported platforms currently preserve the historical `~/.caveviewer/`
+root until their storage conventions are migrated separately. Advanced settings
 are configuration; remembered chooser locations are state; generated map
 caches are rebuildable cache data. `CAVEVIEWER_HOME` creates isolated
 `config/`, `data/`, `cache/`, `state/`, and `runtime/` children for portable or
-test runs. Relative XDG variables are ignored as required by the specification,
-and relative CaveViewer overrides are rejected.
+test runs, and map caches are stored under that cache child unless
+`CAVEVIEWER_MAP_CACHE_DIR` overrides only the map-cache root. Relative XDG
+variables are ignored as required by the specification, and relative CaveViewer
+overrides are rejected.
 
-Migration from `~/.caveviewer/` and older `~/.caveviewer_*` files is copy-once
-and non-destructive. Managed map cache keys derive from the canonical source
-path without reading or hashing a multi-gigabyte map.
+On Linux, migration from `~/.caveviewer/` and older `~/.caveviewer_*` files is
+copy-once and non-destructive. Managed map cache keys derive from the canonical
+source path without reading or hashing a multi-gigabyte map.
 
 The GUI process owns one `caveviewer.gui.update_manager.UpdateManager`, created
 by `caveviewer.app` before the splash/viewer session loop and shut down when

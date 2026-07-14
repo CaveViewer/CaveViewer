@@ -36,6 +36,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+from io import BytesIO
 from dataclasses import dataclass
 from typing import Optional
 
@@ -62,7 +63,8 @@ _LOG = get_logger("TextureManager")
 TEXTURE_MAX_SIZE_ENV_VAR = "CAVEVIEWER_MAX_TEXTURE_SIZE"
 _TEXTURE_BUDGET_SHARE = 0.80
 _TEXTURE_BYTES_PER_PIXEL_WITH_MIPS = 4.0 * (4.0 / 3.0)
-_AUTO_TEXTURE_DIMENSION_STEPS = (8192, 4096, 2048, 1024, 512)
+_AUTO_TEXTURE_DIMENSION_STEPS = (16384, 8192, 4096, 2048, 1024, 512)
+_MAX_TEXTURE_DIMENSION_LIMIT = _AUTO_TEXTURE_DIMENSION_STEPS[0]
 _MIN_TEXTURE_DIMENSION_LIMIT = 512
 
 
@@ -99,7 +101,13 @@ def _parse_texture_dimension_limit(raw_value: str | None) -> int | None:
         value = int(float(text))
     except ValueError:
         return None
-    return max(_MIN_TEXTURE_DIMENSION_LIMIT, min(16384, value))
+    return max(_MIN_TEXTURE_DIMENSION_LIMIT, min(_MAX_TEXTURE_DIMENSION_LIMIT, value))
+
+
+def _format_texture_size(size: tuple[int, int] | None) -> str:
+    if size is None:
+        return "unknown"
+    return f"{size[0]}x{size[1]}"
 
 
 class TextureManager:
@@ -148,11 +156,19 @@ class TextureManager:
         self._decode_cache: dict[object, DecodedImage] = {}
         self._decode_cache_lock = threading.Lock()
         if self.max_texture_dimension is not None:
-            _LOG.info(
-                "Texture max dimension cap active: %d px. Oversized textures "
-                "will be downscaled before GPU upload.",
-                self.max_texture_dimension,
-            )
+            if self.max_texture_dimension >= _MAX_TEXTURE_DIMENSION_LIMIT:
+                _LOG.info(
+                    "Texture budget allows the maximum configured texture "
+                    "dimension: %d px. Textures at or below this size will "
+                    "upload without downscaling.",
+                    self.max_texture_dimension,
+                )
+            else:
+                _LOG.info(
+                    "Texture max dimension cap active: %d px. Oversized textures "
+                    "will be downscaled before GPU upload.",
+                    self.max_texture_dimension,
+                )
 
     @staticmethod
     def recommend_max_texture_dimension(
@@ -167,13 +183,28 @@ class TextureManager:
         the texture-side safety valve: many huge texture tiles become lower-res
         GPU textures instead of forcing the streamer to reject geometry chunks.
         """
-        explicit_limit = _parse_texture_dimension_limit(
-            os.environ.get(TEXTURE_MAX_SIZE_ENV_VAR)
-        )
+        explicit_raw_value = os.environ.get(TEXTURE_MAX_SIZE_ENV_VAR)
+        explicit_limit = _parse_texture_dimension_limit(explicit_raw_value)
         if explicit_limit is not None:
+            _LOG.info(
+                "Texture max dimension cap selected from %s=%r: %d px.",
+                TEXTURE_MAX_SIZE_ENV_VAR,
+                explicit_raw_value,
+                explicit_limit,
+            )
             return explicit_limit
+        if explicit_raw_value is not None and explicit_raw_value.strip():
+            _LOG.warning(
+                "Ignoring invalid %s=%r; using automatic texture cap selection.",
+                TEXTURE_MAX_SIZE_ENV_VAR,
+                explicit_raw_value,
+            )
 
         if gpu_memory_bytes is None or gpu_memory_bytes <= 0:
+            _LOG.info(
+                "Texture max dimension cap not selected because GPU memory "
+                "budget is unavailable."
+            )
             return None
 
         unique_texture_keys = {
@@ -182,6 +213,10 @@ class TextureManager:
             if key is not None
         }
         if not unique_texture_keys:
+            _LOG.info(
+                "Texture max dimension cap not selected because the map has no "
+                "unique texture files."
+            )
             return None
 
         target_fraction = max(0.01, min(0.80, float(gpu_target_fraction)))
@@ -192,12 +227,54 @@ class TextureManager:
             return _MIN_TEXTURE_DIMENSION_LIMIT
 
         raw_dimension = int(math.sqrt(max_pixels))
-        for step in _AUTO_TEXTURE_DIMENSION_STEPS:
+        for index, step in enumerate(_AUTO_TEXTURE_DIMENSION_STEPS):
             # Treat values close to a common texture size as that size.  This
             # avoids useless 4096 -> 3990 resizes when the budget is only a few
             # percent below the original estimate.
             if raw_dimension >= int(step * 0.875):
+                next_larger_step = (
+                    _AUTO_TEXTURE_DIMENSION_STEPS[index - 1]
+                    if index > 0
+                    else None
+                )
+                next_larger_reason = (
+                    "highest configured step accepted"
+                    if next_larger_step is None
+                    else (
+                        f"next larger {next_larger_step} px step requires "
+                        f"raw limit >= {int(next_larger_step * 0.875)} px"
+                    )
+                )
+                _LOG.info(
+                    "Texture max dimension cap auto-selected: %d px "
+                    "(GPU budget %.1f GB, target %.0f%%, texture share %.0f%% "
+                    "=> %.1f GB for %d unique textures; %.1f MB/texture; "
+                    "raw square limit %d px; %s).",
+                    step,
+                    gpu_memory_bytes / (1024 ** 3),
+                    target_fraction * 100.0,
+                    _TEXTURE_BUDGET_SHARE * 100.0,
+                    texture_budget_bytes / (1024 ** 3),
+                    len(unique_texture_keys),
+                    bytes_per_texture / (1024 ** 2),
+                    raw_dimension,
+                    next_larger_reason,
+                )
                 return step
+        _LOG.info(
+            "Texture max dimension cap auto-selected: %d px "
+            "(GPU budget %.1f GB, target %.0f%%, texture share %.0f%% "
+            "=> %.1f GB for %d unique textures; %.1f MB/texture; "
+            "raw square limit %d px below configured steps).",
+            _MIN_TEXTURE_DIMENSION_LIMIT,
+            gpu_memory_bytes / (1024 ** 3),
+            target_fraction * 100.0,
+            _TEXTURE_BUDGET_SHARE * 100.0,
+            texture_budget_bytes / (1024 ** 3),
+            len(unique_texture_keys),
+            bytes_per_texture / (1024 ** 2),
+            raw_dimension,
+        )
         return _MIN_TEXTURE_DIMENSION_LIMIT
 
     def _placeholder_texture(self):
@@ -277,8 +354,7 @@ class TextureManager:
         than a separate file to open from disk -- see GLB/glTF support
         in caveviewer.core.glb_parser."""
         try:
-            import io
-            img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+            img = Image.open(BytesIO(raw_bytes)).convert("RGB")
             img = self._apply_texture_dimension_limit(img, "<embedded texture>")
             # same vertical flip as the disk-file path, for the same
             # reason: OBJ/OpenGL UV origin is bottom-left, most image
@@ -423,9 +499,33 @@ class TextureManager:
         """
         found = []
         missing = []
+        inspected_texture_keys = set()
+        inspected_count = 0
+        oversized_count = 0
+        largest_size = None
+        largest_label = None
         for mat_name, file_or_bytes in self.material_to_file.items():
             if file_or_bytes is None:
                 continue  # no texture assigned to this material
+            texture_key = _texture_cache_key(file_or_bytes)
+            if texture_key not in inspected_texture_keys:
+                inspected_texture_keys.add(texture_key)
+                label = (
+                    "<embedded texture>"
+                    if isinstance(file_or_bytes, bytes)
+                    else str(file_or_bytes)
+                )
+                size = self._inspect_texture_size(file_or_bytes)
+                if size is not None:
+                    inspected_count += 1
+                    if largest_size is None or max(size) > max(largest_size):
+                        largest_size = size
+                        largest_label = label
+                    if (
+                        self.max_texture_dimension is not None
+                        and max(size) > self.max_texture_dimension
+                    ):
+                        oversized_count += 1
             if isinstance(file_or_bytes, bytes):
                 continue  # embedded texture, no file to check
             path = os.path.join(self.textures_dir, file_or_bytes)
@@ -436,7 +536,83 @@ class TextureManager:
                 _LOG.warning(f"VALIDATE: missing texture for '{mat_name}' -> '{path}'")
 
         _LOG.info(f"Validation complete: {len(found)} textures found, {len(missing)} missing.")
+        self._log_texture_downscale_expectation(
+            inspected_count=inspected_count,
+            oversized_count=oversized_count,
+            largest_label=largest_label,
+            largest_size=largest_size,
+        )
         return {"found": found, "missing": missing}
+
+    def _inspect_texture_size(self, file_or_bytes) -> tuple[int, int] | None:
+        """Read image dimensions without performing a full decode."""
+        try:
+            if isinstance(file_or_bytes, bytes):
+                with Image.open(BytesIO(file_or_bytes)) as image:
+                    return image.size
+            path = os.path.join(self.textures_dir, file_or_bytes)
+            if not os.path.exists(path):
+                return None
+            with Image.open(path) as image:
+                return image.size
+        except Exception as exc:
+            _LOG.warning(
+                "VALIDATE: unable to inspect texture dimensions for %r: %s",
+                file_or_bytes if not isinstance(file_or_bytes, bytes) else "<embedded texture>",
+                exc,
+            )
+            return None
+
+    def _log_texture_downscale_expectation(
+        self,
+        *,
+        inspected_count: int,
+        oversized_count: int,
+        largest_label: str | None,
+        largest_size: tuple[int, int] | None,
+    ) -> None:
+        """Log whether the current map is expected to downscale textures."""
+        if inspected_count <= 0:
+            _LOG.info(
+                "Texture downscale check skipped: no inspectable texture "
+                "dimensions were available."
+            )
+            return
+
+        largest_detail = (
+            f"largest source texture {largest_label!r} is "
+            f"{_format_texture_size(largest_size)}"
+        )
+        if self.max_texture_dimension is None:
+            _LOG.info(
+                "Texture downscaling is not configured for this map; %d "
+                "inspected texture(s) will upload at source dimensions "
+                "(%s).",
+                inspected_count,
+                largest_detail,
+            )
+            return
+
+        if oversized_count == 0:
+            _LOG.info(
+                "No texture downscaling will be applied for this map: GPU "
+                "resources allow all %d inspected texture(s) to upload at "
+                "source resolution (%s; selected limit %d px).",
+                inspected_count,
+                largest_detail,
+                self.max_texture_dimension,
+            )
+            return
+
+        _LOG.info(
+            "Texture downscaling will be applied to %d of %d inspected "
+            "texture(s): source textures larger than the selected %d px "
+            "limit are resized before GPU upload (%s).",
+            oversized_count,
+            inspected_count,
+            self.max_texture_dimension,
+            largest_detail,
+        )
 
     def loaded_count(self) -> int:
         return len(self._file_cache)

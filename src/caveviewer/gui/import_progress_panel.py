@@ -7,17 +7,10 @@ one-time cost the very first launch always pays, just now also reachable
 mid-session via the OPEN button (see viewer_window.py's
 _handle_open_button_click).
 
-Important limitation, stated plainly: the actual import work (OBJ
-parsing, chunk-building) runs synchronously on the main thread, the same
-as it always has for the very first launch of any map. That means the
-normal render loop is paused while it runs -- this panel can't animate
-smoothly DURING the heavy parsing work itself, only at the discrete
-progress checkpoints the parser already reports via its progress_cb
-callback (see caveviewer.core.obj_parser / caveviewer.core.chunker). Each time that
-callback fires, this panel redraws once and the frame is explicitly
-swapped to the screen, so progress is genuinely visible as it happens,
-just not as a continuously smooth animation -- an honest tradeoff against
-the much larger work of moving the parser to a background thread.
+The actual import work (OBJ/GLB parsing and cache construction) runs in a
+spawned child process. The viewer process keeps rendering this panel and
+drains progress events sent by that child, so resize/repaint/window-manager
+events stay responsive while the cache is built.
 """
 
 from __future__ import annotations
@@ -450,20 +443,20 @@ class ImportProgressPanel:
     def _stage_label(self, stage: str) -> str:
         normalized = " ".join((stage or "").strip().lower().split())
         labels = {
-            "starting import": "Starting import...",
-            "scanning file": "Scanning map...",
-            "computing face centroids": "Analyzing geometry...",
-            "grouping faces by cell": "Building spatial index...",
-            "grouping chunk faces": "Building map chunks...",
-            "writing chunk files": "Writing map cache...",
-            "writing manifest": "Finalizing map cache...",
-            "loading cached map": "Loading cached map...",
-            "loading chunks": "Opening cave...",
-            "opening cave": "Opening cave...",
-            "done": "Finishing...",
+            "starting import": "Starting import…",
+            "scanning file": "Scanning map…",
+            "computing face centroids": "Analyzing geometry…",
+            "grouping faces by cell": "Building spatial index…",
+            "grouping chunk faces": "Building map chunks…",
+            "writing chunk files": "Writing map cache…",
+            "writing manifest": "Finalizing map cache…",
+            "loading cached map": "Loading cached map…",
+            "loading chunks": "Opening cave…",
+            "opening cave": "Opening cave…",
+            "done": "Finishing…",
         }
         if normalized in labels:
             return labels[normalized]
         if normalized:
-            return normalized[:1].upper() + normalized[1:] + "..."
-        return "Working..."
+            return normalized[:1].upper() + normalized[1:] + "…"
+        return "Working…"

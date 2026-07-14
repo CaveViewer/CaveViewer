@@ -288,7 +288,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_LINUX_BUILD_VENV` | _(none)_ | Path to the venv used by the Linux build scripts. |
 | `CAVEVIEWER_PROJECT_ROOT` | _(set by `scripts/dev/env_setup.sh`)_ | Source checkout root used only by development shell helpers; it is not a user-storage location. |
 | `CAVEVIEWER_HOME` | _(none)_ | Absolute portable-storage root. CaveViewer derives `config`, `data`, `cache`, `state`, and `runtime` children beneath it. |
-| `CAVEVIEWER_MAP_CACHE_DIR` | `$XDG_CACHE_HOME/caveviewer/maps` on Linux | Absolute root for generated map caches. CaveViewer no longer auto-discovers adjacent `_cache` or `.caveviewer_cache` directories. |
+| `CAVEVIEWER_MAP_CACHE_DIR` | Platform cache root + `/maps` | Absolute root for generated map caches. Defaults to `$XDG_CACHE_HOME/caveviewer/maps` on Linux (`~/.cache/...` fallback) and `~/.caveviewer/maps` on macOS/Windows; `CAVEVIEWER_HOME` uses `<root>/cache/maps`. CaveViewer no longer auto-discovers adjacent `_cache` or `.caveviewer_cache` directories. |
 | `CAVEVIEWER_APP_ICON` | _(bundled icon)_ | Path to a custom application icon file. |
 | `CAVEVIEWER_FORCE_STARTUP_FOCUS` | `0` | Set to `1` to force the main window to the front on startup. Disabled by default on frozen macOS builds to avoid window-placement jumps. |
 | `CAVEVIEWER_LOG_LEVEL` | `INFO` | Logging verbosity. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
@@ -329,8 +329,12 @@ any non-SHUTDOWN state -> SHUTDOWN
 ```
 
 The splash polls immutable manager snapshots and maps the visible states to
-`Update <version> is available.`, `Downloading... <percentage>%`,
-`Verifying...`, `Downloaded successfully`, and `Download failed - Retry`.
+`Update <version> available`, `Downloading… <percentage>%`, `Verifying…`,
+`Update ready`, and `Download failed` with a separate `Retry` action.
+While a splash window is visible, it is the foreground update surface and
+suppresses duplicate desktop notifications for update progress or completion.
+If a download finishes after that surface closes, desktop notifications remain
+available for background completion or failure.
 Neither the viewer nor streaming code depends on the update manager. Opening a
 map closes only that splash instance, so an active download continues and a
 later splash presents its current state. Closing the whole app moves the
@@ -493,15 +497,15 @@ the automatic right-side HUD scale. These are not required for normal users.
 | `CAVEVIEWER_NAVIGATION_GUARD` | `1` | Set to `0` to disable the navigation boundary that keeps free-fly movement near occupied map chunks. |
 | `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | `2` | Number of chunk cells around occupied map chunks that remain navigable. Larger values allow more free space around the cave; smaller values keep users closer to rendered chunks. |
 | `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
-| `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Directory where clean MP4 flight recordings are saved. The Advanced Settings panel saves this value. |
+| `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Folder where saved recordings are stored. The Preferences panel saves this value. |
 | `CAVEVIEWER_RECORDING_FPS` | `30` | Target MP4 recording frame rate. Range: 1–60. Frames are streamed to `ffmpeg`; they are not buffered in memory. |
 | `CAVEVIEWER_RECORDING_MAX_HEIGHT` | `1080` | Maximum output video height. The framebuffer is downscaled before encoding to keep MP4 playback smooth. |
 | `CAVEVIEWER_RECORDING_CRF` | `23` | H.264 quality value passed to `ffmpeg`. Lower is larger/higher quality; higher is smaller/lower quality. Range: 0–51. |
 
 ### Streaming Performance
 
-Advanced Settings opens numeric fields with their effective defaults. Numeric
-inputs use a compact, consistent 12-character width. If a numeric value is
+Preferences opens numeric fields with their effective defaults. Numeric
+inputs use a compact, consistent width. If a numeric value is
 cleared, only its accepted range immediately appears inside the input as
 muted, unit-free `minimum-maximum` placeholder text without comparison
 operators; the placeholder itself is never applied or saved as a value.
@@ -514,11 +518,14 @@ required field may remain temporarily empty while the user replaces its value;
 Apply is disabled immediately while any required value is blank, while the
 required message and read-only form lock appear only after focus leaves that
 empty field. Cancel, Escape, and window close remain available and discard
-unapplied edits. Advisory worker-thread warnings do not lock the form.
+unapplied edits. Valid worker counts are treated as advisory caps and do not
+show a bottom warning.
 
-The Advanced Settings implementation is split by responsibility:
-`src/caveviewer/gui/advanced_settings.py` owns the typed `SettingSpec` schema,
+The Preferences implementation is split by responsibility:
+`src/caveviewer/gui/preferences.py` owns the typed `SettingSpec` schema,
 validation, persistence, and environment mapping;
+`src/caveviewer/gui/preference_paths.py` owns preference/state file locations,
+legacy migration, and atomic text writes;
 `src/caveviewer/gui/advanced_settings_form.py` owns focus/change/blur/apply
 state transitions; `src/caveviewer/gui/advanced_settings_dialog.py` only
 renders that state into Tk widgets; and
@@ -535,7 +542,17 @@ not discard the rest of the configuration. Settings are saved through an
 atomic temporary-file replacement; a write failure remains visible in the
 dialog and does not close it or alter the previous settings file.
 
-The splash screen, Advanced Settings, and Sample Maps dialogs share their Tk
+First-time map imports are isolated from the viewer event loop by
+`src/caveviewer/gui/import_process.py`. The viewer process keeps OpenGL/window
+events and progress rendering responsive while a spawned child process runs the
+existing `import_and_cache_any()` path. The child sends progress, completion,
+heartbeat, and traceback-bearing failure events back to the viewer; closing
+the viewer terminates an active child import process and removes abandoned
+private staging directories for that map cache. The child also lowers its
+desktop scheduling priority and caps common native compute libraries to one
+thread unless the user has already set those library-specific variables.
+
+The splash screen, Preferences, and Sample Maps dialogs share their Tk
 color and control tokens through `src/caveviewer/gui/tk_theme.py`. Map-folder
 validation lives in `src/caveviewer/gui/map_selection.py`, allowing both
 map-selection dialogs to reuse it without importing private splash-screen
@@ -543,23 +560,25 @@ implementation details.
 
 Runtime chunk streaming is also split by policy boundary:
 `src/caveviewer/core/hardware_memory.py` detects total and currently available
-system RAM, detects GPU memory, and parses target fractions;
+system RAM on Windows, macOS, and Linux; detects or estimates the active GPU
+memory budget; and parses target fractions;
 `src/caveviewer/core/streaming_budget.py` contains pure
 chunk-size estimation and residency-cap calculation;
 `src/caveviewer/core/streaming_scheduler.py` owns the bounded ready backlog,
 spatial selection, and eviction policy; and
 `src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
 render-thread callbacks. Map imports now write only the cache artifacts used by
-runtime streaming and the minimap. On Linux, caches and their texture assets are
-atomically published under `$XDG_CACHE_HOME/caveviewer/maps`; old adjacent
-`_cache` and `.caveviewer_cache` directories are not auto-discovered.
+runtime streaming and the minimap. Caches and their texture assets are
+atomically published under the managed map-cache root selected by
+`CAVEVIEWER_MAP_CACHE_DIR` or the platform cache default; old adjacent `_cache`
+and `.caveviewer_cache` directories are not auto-discovered.
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
 | `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of system RAM the chunk streaming system targets for loaded chunk data. |
-| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Optional GPU memory ceiling used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; if detection finds a smaller active GPU, the detected value wins. If detection is unavailable and no override is set, CaveViewer uses a conservative 1 GB fallback. |
-| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory the chunk streaming system targets. |
-| `CAVEVIEWER_MAX_TEXTURE_SIZE` | _(auto)_ | 512-16384 px | Optional maximum decoded texture dimension. When unset, CaveViewer derives a cap from GPU memory, GPU target percentage, and unique texture count so geometry remains visible while oversized texture sets are downscaled instead of overfilling VRAM. |
+| `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Optional GPU memory ceiling used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; low-VRAM AMD integrated GPUs include 50% of reported GTT/shared memory capped at 2 GB. Windows AMD/Intel GPU memory is not currently auto-detected and uses an 8 GB fallback budget. macOS GPU memory is not currently auto-detected and uses a conservative 1 GB fallback. If detection finds a smaller active GPU budget, the detected value wins. |
+| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of the GPU memory budget the chunk streaming system targets. |
+| `CAVEVIEWER_MAX_TEXTURE_SIZE` | _(auto)_ | 512-16384 px | Optional maximum decoded texture dimension. When unset, CaveViewer derives a cap from GPU memory, GPU target percentage, and unique texture count so geometry remains visible while oversized texture sets are downscaled instead of overfilling VRAM. The log records the selected cap, budget inputs, and first actual resize. |
 | `CAVEVIEWER_IO_WORKERS` | `2` | Integer 1-32 | Requested maximum number of background threads for loading chunk files from disk. Streaming starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_IO_RESERVED_CPUS`. |
 | `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer 2-32 | Logical CPUs kept out of the loading worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 | `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. |
@@ -569,25 +588,30 @@ atomically published under `$XDG_CACHE_HOME/caveviewer/maps`; old adjacent
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
-| `CAVEVIEWER_CHUNK_SIZE_METERS` | `8` | 0.01-512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
+| `CAVEVIEWER_CHUNK_SIZE_METERS` | `50` | 0.01-512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
 | `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0-50 ms | Time yielded between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
+| `CAVEVIEWER_IMPORT_NICE` | `5` | Integer >= 0 | POSIX-only nice increment applied to the spawned import child. `0` disables the adjustment. Windows uses below-normal process priority instead. |
 | `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 | Requested maximum threads used while writing chunk files during import. Cache construction starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. |
 | `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 
-### Linux XDG locations
+### Application storage locations
 
-Unless overridden, Linux stores files in these locations:
+Unless overridden, CaveViewer stores files in these locations:
 
-| Kind | Default |
-|---|---|
-| Advanced settings | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback) |
-| Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) |
-| Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) |
+| Kind | Linux default | macOS/Windows default |
+|---|---|---|
+| Advanced settings | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback) | `~/.caveviewer/advanced_settings.json` |
+| Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
+| Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) | `~/.caveviewer/maps/` |
 
-Old `~/.caveviewer/` and `~/.caveviewer_*` files are copied once and left in
-place. A managed cache is self-contained: texture files are staged beside its
-chunks before the manifest becomes visible. Disk-space checks therefore target
-the cache filesystem rather than assuming the map's filesystem is writable.
+`CAVEVIEWER_HOME` creates isolated `config`, `data`, `cache`, `state`, and
+`runtime` children and places map caches under `<root>/cache/maps`.
+`CAVEVIEWER_MAP_CACHE_DIR` overrides only the generated map-cache root. On
+Linux, old `~/.caveviewer/` and `~/.caveviewer_*` files are copied once and
+left in place. A managed cache is self-contained: texture files are staged
+beside its chunks before the manifest becomes visible. Disk-space checks
+therefore target the cache filesystem rather than assuming the map's filesystem
+is writable.
 
 ### Sample Maps
 

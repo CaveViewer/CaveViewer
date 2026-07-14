@@ -4,7 +4,7 @@ caveviewer.core.chunker
 Spatial partitioning of a parsed mesh into a 3D grid of chunks, cached to
 disk in a fast-to-load binary format. This is the piece that makes large
 cave maps viewable: instead of one giant draw call / VRAM blob for the
-whole cave, we split the mesh into cells (default 8m cubes -- tune via
+whole cave, we split the mesh into cells (default 50m cubes -- tune via
 CHUNK_SIZE for your cave's scale) and load only the cells near the camera
 at runtime (see caveviewer.core.streaming_world).
 
@@ -44,7 +44,8 @@ from caveviewer.core.logging_utils import get_logger
 from caveviewer.core.worker_config import (
     MAX_WORKER_RAM_UTILIZATION,
     can_start_additional_worker,
-    resolve_worker_count,
+    describe_worker_target,
+    resolve_worker_allocation,
 )
 from caveviewer.core.obj_parser import RawMesh, MaterialRange
 from caveviewer.core.cache_paths import (
@@ -55,9 +56,11 @@ from caveviewer.core.cache_paths import (
 MANIFEST_NAME = "manifest.json"
 CHUNKS_DIRNAME = "chunks"
 IMPORT_DISK_SPACE_MULTIPLIER = 2
+IMPORT_MEMORY_HEADROOM_FRACTION = 0.90
+IMPORT_MEMORY_FIXED_OVERHEAD_BYTES = 256 * 1024 ** 2
 
 CHUNK_SIZE_ENV_VAR = "CAVEVIEWER_CHUNK_SIZE_METERS"
-_DEFAULT_CHUNK_SIZE_FALLBACK = 8.0  # meters; preserve existing default behavior
+_DEFAULT_CHUNK_SIZE_FALLBACK = 50.0  # meters; default for new cache builds
 _LOG = get_logger("chunker")
 
 
@@ -114,6 +117,38 @@ class InsufficientDiskSpaceError(OSError):
         super().__init__(errno.ENOSPC, message)
 
 
+class InsufficientImportMemoryError(MemoryError):
+    """Raised before large import allocations when RAM headroom is insufficient."""
+
+    def __init__(
+        self,
+        required_bytes: int,
+        available_bytes: int,
+        allowed_bytes: int,
+        *,
+        source_path: str | None = None,
+    ):
+        self.required_bytes = required_bytes
+        self.available_bytes = available_bytes
+        self.allowed_bytes = allowed_bytes
+        self.source_path = source_path
+        source_label = (
+            os.path.basename(source_path)
+            if source_path
+            else "selected map"
+        )
+        message = (
+            f"Not enough available system RAM to import {source_label!r}: "
+            f"the estimated peak import footprint is "
+            f"{required_bytes / (1024 ** 3):.1f} GB, while "
+            f"{available_bytes / (1024 ** 3):.1f} GB is currently available "
+            f"({allowed_bytes / (1024 ** 3):.1f} GB after the "
+            f"{IMPORT_MEMORY_HEADROOM_FRACTION:.0%} safety limit). "
+            "Close other memory-heavy applications and try again."
+        )
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class CacheAsset:
     """One texture or other immutable asset published with a map cache."""
@@ -132,6 +167,80 @@ class CacheAsset:
 def configured_chunk_size() -> float:
     """Return the chunk size currently used by default for cache builds."""
     return DEFAULT_CHUNK_SIZE
+
+
+def estimate_import_memory_bytes(
+    vertex_count: int,
+    uv_count: int,
+    normal_count: int,
+    face_count: int,
+) -> int:
+    """Estimate peak RAM needed for OBJ/GLB parse arrays plus chunking temps."""
+    vertex_count = max(0, int(vertex_count))
+    uv_count = max(0, int(uv_count))
+    normal_count = max(0, int(normal_count))
+    face_count = max(0, int(face_count))
+
+    mesh_array_bytes = (
+        vertex_count * 3 * 4
+        + uv_count * 2 * 4
+        + normal_count * 3 * 4
+        + face_count * 3 * 4 * 3
+    )
+    chunking_temp_bytes = face_count * (
+        3 * 4  # cell_coords
+        + 4    # face_material_id
+        + 8    # cell_key / combined_key
+        + 8    # material_key
+        + 8    # order
+        + 8    # sorted_keys
+    )
+    return int(
+        (mesh_array_bytes + chunking_temp_bytes) * 1.20
+        + IMPORT_MEMORY_FIXED_OVERHEAD_BYTES
+    )
+
+
+def ensure_sufficient_import_memory(
+    vertex_count: int,
+    uv_count: int,
+    normal_count: int,
+    face_count: int,
+    *,
+    source_path: str | None = None,
+) -> None:
+    """Reject imports whose estimated peak footprint exceeds available RAM."""
+    snapshot = hardware_memory.detect_ram_snapshot()
+    if snapshot is None:
+        _LOG.warning(
+            "Could not measure available system RAM before import allocation; "
+            "continuing without import RAM preflight."
+        )
+        return
+
+    required_bytes = estimate_import_memory_bytes(
+        vertex_count,
+        uv_count,
+        normal_count,
+        face_count,
+    )
+    available_bytes = max(0, int(snapshot.available_bytes))
+    allowed_bytes = int(available_bytes * IMPORT_MEMORY_HEADROOM_FRACTION)
+    if required_bytes > allowed_bytes:
+        raise InsufficientImportMemoryError(
+            required_bytes,
+            available_bytes,
+            allowed_bytes,
+            source_path=source_path,
+        )
+
+    _LOG.info(
+        "Import RAM preflight passed for %s: estimated %.1f GB peak; "
+        "%.1f GB available.",
+        os.path.basename(source_path) if source_path else "selected map",
+        required_bytes / (1024 ** 3),
+        available_bytes / (1024 ** 3),
+    )
 
 
 @dataclass
@@ -235,7 +344,8 @@ def build_cache(
     os.makedirs(cache_parent, exist_ok=True)
 
     staging_dir = tempfile.mkdtemp(
-        prefix=f".{os.path.basename(cache_dir)}.tmp-", dir=cache_parent
+        prefix=f".{os.path.basename(cache_dir)}.tmp-{os.getpid()}-",
+        dir=cache_parent,
     )
     try:
         _stage_cache_assets(staging_dir, assets)
@@ -276,6 +386,11 @@ def _cache_asset_size(asset: CacheAsset) -> int:
     if asset.source_path is not None:
         return os.path.getsize(asset.source_path)
     return len(asset.data or b"")
+
+
+def cache_assets_size(assets: tuple[CacheAsset, ...] | list[CacheAsset]) -> int:
+    """Return the total bytes that cache assets will add to staging."""
+    return sum(_cache_asset_size(asset) for asset in assets)
 
 
 def _stage_cache_assets(
@@ -446,12 +561,14 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         mat_name = material_names[mat_id] if mat_id >= 0 else "__no_material__"
         per_cell_groups.setdefault(real_cell, []).append((mat_name, face_idx_in_order))
 
-    worker_count = resolve_worker_count(
+    worker_allocation = resolve_worker_allocation(
         os.environ.get("CAVEVIEWER_CHUNK_BUILD_WORKERS"),
         os.environ.get("CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS"),
         default_workers=1,
         default_reserved_cpus=2,
     )
+    worker_count = worker_allocation.effective_workers
+    _LOG.info(describe_worker_target("Cache-build", worker_allocation))
 
     cell_items = list(per_cell_groups.items())
     total_cells = len(cell_items)
@@ -519,13 +636,22 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
                     snapshot = hardware_memory.detect_ram_snapshot()
                     if can_start_additional_worker(snapshot):
                         admitted_workers += 1
-                        if admission_blocked:
-                            _LOG.info(
-                                "System RAM pressure eased; increasing cache-build "
-                                "workers to %d of %d.",
-                                admitted_workers,
-                                worker_count,
-                            )
+                        pressure_note = (
+                            "System RAM pressure eased; "
+                            if admission_blocked
+                            else ""
+                        )
+                        _LOG.info(
+                            "%sDetected system RAM for cache-build worker "
+                            "admission: %.1f GB available of %.1f GB "
+                            "(%.1f%% used); increasing workers to %d of %d.",
+                            pressure_note,
+                            snapshot.available_bytes / (1024 ** 3),
+                            snapshot.total_bytes / (1024 ** 3),
+                            snapshot.utilization_fraction * 100.0,
+                            admitted_workers,
+                            worker_count,
+                        )
                         admission_blocked = False
                     else:
                         if not admission_blocked:

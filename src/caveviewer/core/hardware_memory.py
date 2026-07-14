@@ -6,6 +6,7 @@ import ctypes
 import os
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Callable
@@ -16,8 +17,22 @@ from caveviewer.core.logging_utils import get_logger
 AMD_PCI_VENDOR_ID = 0x1002
 LINUX_DRM_ROOT = "/sys/class/drm"
 UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = 1 * 1024 ** 3
+WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = 8 * 1024 ** 3
+AMD_INTEGRATED_VRAM_THRESHOLD_BYTES = 2 * 1024 ** 3
+AMD_SHARED_GPU_MEMORY_FRACTION = 0.50
+AMD_SHARED_GPU_MEMORY_CAP_BYTES = 2 * 1024 ** 3
 
 _LOG = get_logger("HardwareMemory")
+_DARWIN_VM_STAT_PAGE_SIZE_RE = re.compile(r"page size of\s+(\d+)\s+bytes")
+_DARWIN_VM_STAT_TOTAL_KEYS = (
+    "Pages free",
+    "Pages active",
+    "Pages inactive",
+    "Pages speculative",
+    "Pages throttled",
+    "Pages wired down",
+    "Pages occupied by compressor",
+)
 
 
 @dataclass(frozen=True)
@@ -94,6 +109,112 @@ def _linux_ram_snapshot(
     return RamSnapshot(total_bytes, available_bytes)
 
 
+def _darwin_total_ram_bytes() -> int | None:
+    """Read macOS physical RAM size from sysctl."""
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        total_bytes = int(result.stdout.strip())
+    except Exception:
+        return None
+    return total_bytes if total_bytes > 0 else None
+
+
+def _parse_darwin_vm_stat_pages(output: str) -> tuple[int, dict[str, int]] | None:
+    """Parse macOS ``vm_stat`` page size and named page counters."""
+    lines = output.splitlines()
+    if not lines:
+        return None
+
+    page_size_match = _DARWIN_VM_STAT_PAGE_SIZE_RE.search(lines[0])
+    if page_size_match is None:
+        return None
+
+    try:
+        page_size = int(page_size_match.group(1))
+    except ValueError:
+        return None
+    if page_size <= 0:
+        return None
+
+    pages: dict[str, int] = {}
+    for line in lines[1:]:
+        key, separator, raw_value = line.partition(":")
+        if not separator:
+            continue
+        try:
+            token = raw_value.strip().split()[0].rstrip(".").replace(",", "")
+            pages[key.strip()] = int(token)
+        except (IndexError, ValueError):
+            continue
+    return page_size, pages
+
+
+def _parse_darwin_vm_stat_available_bytes(output: str) -> int | None:
+    """Estimate reclaim-aware available RAM from macOS ``vm_stat`` output."""
+    parsed = _parse_darwin_vm_stat_pages(output)
+    if parsed is None:
+        return None
+
+    page_size, pages = parsed
+    # macOS lacks a stable sysconf available-page counter. Free, inactive, and
+    # speculative pages are either immediately free or reclaimable under memory
+    # pressure, which matches the admission policy's conservative needs.
+    available_pages = sum(
+        pages.get(key, 0)
+        for key in ("Pages free", "Pages inactive", "Pages speculative")
+    )
+    if available_pages < 0:
+        return None
+    return available_pages * page_size
+
+
+def _parse_darwin_vm_stat_total_bytes(output: str) -> int | None:
+    """Estimate physical RAM from disjoint macOS ``vm_stat`` page categories."""
+    parsed = _parse_darwin_vm_stat_pages(output)
+    if parsed is None:
+        return None
+
+    page_size, pages = parsed
+    total_pages = sum(pages.get(key, 0) for key in _DARWIN_VM_STAT_TOTAL_KEYS)
+    if total_pages <= 0:
+        return None
+    return total_pages * page_size
+
+
+def _darwin_ram_snapshot() -> RamSnapshot | None:
+    """Read macOS total and currently reclaimable physical RAM."""
+    total_bytes = _darwin_total_ram_bytes()
+
+    try:
+        result = subprocess.run(
+            ["vm_stat"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except Exception:
+        return None
+
+    available_bytes = _parse_darwin_vm_stat_available_bytes(result.stdout)
+    if available_bytes is None:
+        return None
+    if total_bytes is None:
+        total_bytes = _parse_darwin_vm_stat_total_bytes(result.stdout)
+        if total_bytes is None:
+            return None
+    return RamSnapshot(
+        total_bytes=total_bytes,
+        available_bytes=min(available_bytes, total_bytes),
+    )
+
+
 def _sysconf_ram_snapshot() -> RamSnapshot | None:
     """Use POSIX page counters when the platform exposes available pages."""
     if not hasattr(os, "sysconf"):
@@ -116,6 +237,10 @@ def detect_ram_snapshot() -> RamSnapshot | None:
     """Best-effort current physical-RAM availability across desktop platforms."""
     if os.name == "nt":
         return _windows_ram_snapshot()
+    if sys.platform == "darwin":
+        snapshot = _darwin_ram_snapshot()
+        if snapshot is not None:
+            return snapshot
     if sys.platform.startswith("linux"):
         snapshot = _linux_ram_snapshot()
         if snapshot is not None:
@@ -128,6 +253,10 @@ def detect_total_ram_bytes() -> int:
     snapshot = detect_ram_snapshot()
     if snapshot is not None:
         return snapshot.total_bytes
+    if sys.platform == "darwin":
+        total_bytes = _darwin_total_ram_bytes()
+        if total_bytes is not None:
+            return total_bytes
     try:
         if hasattr(os, "sysconf"):
             page_size = int(os.sysconf("SC_PAGE_SIZE"))
@@ -176,10 +305,39 @@ def read_positive_sysfs_int(path: Path) -> int | None:
     return value if value > 0 else None
 
 
+def _amd_effective_gpu_memory_budget_bytes(
+    vram_bytes: int,
+    gtt_bytes: int | None,
+) -> int:
+    """Return a conservative AMD GPU memory budget.
+
+    AMD APUs report a small ``mem_info_vram_total`` reservation plus a larger
+    GTT/shared-memory aperture.  Treating only the VRAM reservation as the whole
+    GPU budget over-downscales textures, but treating all GTT as VRAM causes
+    stutter because it competes with system RAM and memory bandwidth.  Add only
+    a capped fraction of GTT for low-VRAM UMA-style adapters; leave normal
+    discrete-card budgets unchanged.
+    """
+    if vram_bytes <= 0:
+        return 0
+    if (
+        gtt_bytes is None
+        or gtt_bytes <= 0
+        or vram_bytes > AMD_INTEGRATED_VRAM_THRESHOLD_BYTES
+    ):
+        return vram_bytes
+
+    shared_allowance = min(
+        int(gtt_bytes * AMD_SHARED_GPU_MEMORY_FRACTION),
+        AMD_SHARED_GPU_MEMORY_CAP_BYTES,
+    )
+    return vram_bytes + max(0, shared_allowance)
+
+
 def detect_linux_amd_gpu_memory_bytes(
     drm_root: str | os.PathLike[str] = LINUX_DRM_ROOT,
 ) -> int | None:
-    """Detect AMD VRAM through the Linux DRM/amdgpu sysfs interface."""
+    """Detect an AMD GPU memory budget through Linux DRM/amdgpu sysfs."""
     root = Path(drm_root)
     try:
         entries = sorted(root.iterdir(), key=lambda path: path.name)
@@ -205,8 +363,14 @@ def detect_linux_amd_gpu_memory_bytes(
         if vram_bytes is None:
             continue
 
+        gtt_bytes = read_positive_sysfs_int(
+            device_path / "mem_info_gtt_total"
+        )
+        budget_bytes = _amd_effective_gpu_memory_budget_bytes(
+            vram_bytes, gtt_bytes
+        )
         is_boot_gpu = read_positive_sysfs_int(device_path / "boot_vga") == 1
-        candidates.append((is_boot_gpu, vram_bytes))
+        candidates.append((is_boot_gpu, budget_bytes))
 
     if not candidates:
         return None
@@ -237,6 +401,12 @@ def detect_nvidia_gpu_memory_bytes() -> int | None:
     except Exception:
         pass
     return None
+
+
+def _unknown_gpu_memory_fallback_bytes() -> tuple[int, str]:
+    if os.name == "nt" or sys.platform.startswith("win"):
+        return WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES, "Windows fallback"
+    return UNKNOWN_GPU_MEMORY_FALLBACK_BYTES, "conservative fallback"
 
 
 def detect_total_gpu_memory_bytes(
@@ -289,7 +459,7 @@ def detect_total_gpu_memory_bytes(
         memory_bytes = amd_detector()
         if memory_bytes is not None:
             detected_bytes = memory_bytes
-            detected_source = "AMD GPU memory via Linux DRM sysfs"
+            detected_source = "AMD GPU memory budget via Linux DRM sysfs"
 
     if detected_bytes is not None:
         if override_bytes is None:
@@ -324,8 +494,10 @@ def detect_total_gpu_memory_bytes(
         )
         return override_bytes
 
+    fallback_bytes, fallback_label = _unknown_gpu_memory_fallback_bytes()
     log.warning(
-        "GPU memory detection unavailable; using conservative fallback: %.1f GB.",
-        UNKNOWN_GPU_MEMORY_FALLBACK_BYTES / (1024 ** 3),
+        "GPU memory detection unavailable; using %s: %.1f GB.",
+        fallback_label,
+        fallback_bytes / (1024 ** 3),
     )
-    return UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
+    return fallback_bytes

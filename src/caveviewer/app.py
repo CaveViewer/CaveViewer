@@ -5,13 +5,13 @@ caveviewer.app
 CaveViewer entry point.
 
 Workflow:
-  1. User picks a folder containing the Agisoft export (.obj + .mtl + .jpg
-     texture tiles).
-  2. We find the .obj/.mtl, and check whether a valid chunk cache already
+  1. User picks a map folder, or launches a direct .glb/.obj file from the
+     desktop shell or CLI.
+  2. We find the source model, and check whether a valid chunk cache already
      exists (built on a previous run). If valid, skip straight to step 4.
-  3. If no valid cache: parse the OBJ (streaming, handles 2GB+ files) and
-     build the spatial chunk cache on disk -- this is the one-time cost
-     that makes all future loads of this same map instant. Shows progress.
+  3. If no valid cache: parse the model and build the spatial chunk cache on
+     disk -- this is the one-time cost that makes all future loads of this
+     same map instant. Shows progress.
   4. Launch the OpenGL viewer window, which streams chunks in/out based on
      where the user flies, so frame rate stays smooth regardless of total
      map size.
@@ -54,6 +54,7 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_GPU_MEMORY_GB",
     "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
     "CAVEVIEWER_HOME",
+    "CAVEVIEWER_IMPORT_NICE",
     "CAVEVIEWER_IO_RESERVED_CPUS",
     "CAVEVIEWER_IO_WORKERS",
     "CAVEVIEWER_LINUX_BUILD_VENV",
@@ -109,9 +110,10 @@ def _default_text_aa_mode() -> str:
 _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
     "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS": "2",
     "CAVEVIEWER_CHUNK_BUILD_WORKERS": _default_chunk_build_workers,
-    "CAVEVIEWER_CHUNK_SIZE_METERS": "8",
+    "CAVEVIEWER_CHUNK_SIZE_METERS": "50",
     "CAVEVIEWER_GPU_MEMORY_GB": "auto-detect",
     "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET": "70",
+    "CAVEVIEWER_IMPORT_NICE": "5",
     "CAVEVIEWER_IO_RESERVED_CPUS": "3",
     "CAVEVIEWER_IO_WORKERS": _default_io_workers,
     "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "8",
@@ -326,11 +328,20 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         _LOG.info(f"Found cache in: {cache_dir}")
         return cache_dir
 
+    materials = parse_mtl(mtl_path)
+    texture_assets = _file_texture_assets(
+        materials, os.path.dirname(os.path.abspath(mtl_path))
+    )
+
     # Reject imports that are unlikely to fit before parsing a potentially
     # multi-gigabyte source. build_cache() repeats this check as a safety net
     # for direct callers and for free-space changes during parsing.
     target_cache_dir = map_cache_build_dir(obj_path)
-    chunker.ensure_sufficient_disk_space(obj_path, target_cache_dir)
+    chunker.ensure_sufficient_disk_space(
+        obj_path,
+        target_cache_dir,
+        staged_asset_bytes=chunker.cache_assets_size(texture_assets),
+    )
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
@@ -342,7 +353,7 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         source_size_gb = os.path.getsize(obj_path) / (1024 ** 3)
         if source_size_gb >= 10.0:
             _LOG.info("Large-map tip: for very large sources, try "
-                    f"{chunker.CHUNK_SIZE_ENV_VAR}=16 or 24 to reduce "
+                    f"{chunker.CHUNK_SIZE_ENV_VAR}=64 or 100 to reduce "
                     "chunk-file count and improve streaming performance.")
     except OSError:
         pass
@@ -366,15 +377,28 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     def cache_progress(stage: str, frac: float):
         _emit_progress(stage, parse_weight + (1.0 - parse_weight) * frac)
 
-    mesh = parse_obj(obj_path, progress_cb=parse_progress)
+    def import_memory_preflight(
+        vertex_count: int,
+        uv_count: int,
+        normal_count: int,
+        face_count: int,
+    ) -> None:
+        chunker.ensure_sufficient_import_memory(
+            vertex_count,
+            uv_count,
+            normal_count,
+            face_count,
+            source_path=obj_path,
+        )
+
+    mesh = parse_obj(
+        obj_path,
+        progress_cb=parse_progress,
+        preflight_cb=import_memory_preflight,
+    )
     _console_newline()  # newline after the parse progress bar
 
-    materials = parse_mtl(mtl_path)
-
     _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
-    texture_assets = _file_texture_assets(
-        materials, os.path.dirname(os.path.abspath(mtl_path))
-    )
     cache_dir = chunker.build_cache(
         obj_path,
         mesh,
@@ -444,7 +468,7 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
         source_size_gb = os.path.getsize(source_path) / (1024 ** 3)
         if source_size_gb >= 10.0:
             _LOG.info("Large-map tip: for very large sources, try "
-                    f"{chunker.CHUNK_SIZE_ENV_VAR}=16 or 24 to reduce "
+                    f"{chunker.CHUNK_SIZE_ENV_VAR}=64 or 100 to reduce "
                     "chunk-file count and improve streaming performance.")
     except OSError:
         pass
@@ -471,6 +495,13 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     if fmt == "glb":
         from caveviewer.core.glb_parser import parse_glb
         mesh, embedded_textures = parse_glb(source_path, progress_cb=parse_progress)
+        chunker.ensure_sufficient_import_memory(
+            len(getattr(mesh, "positions", ())),
+            len(getattr(mesh, "uvs", ())),
+            len(getattr(mesh, "normals", ())),
+            len(getattr(mesh, "face_pos_idx", ())),
+            source_path=source_path,
+        )
 
         # Embedded images become ordinary named cache assets. They remain in
         # the private staging tree until the chunks and manifest are complete,
@@ -507,6 +538,11 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     _console_newline()  # newline after the parse progress bar
 
     _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
+    chunker.ensure_sufficient_disk_space(
+        source_path,
+        target_cache_dir,
+        staged_asset_bytes=chunker.cache_assets_size(texture_assets),
+    )
     cache_dir = chunker.build_cache(
         source_path,
         mesh,
@@ -555,20 +591,28 @@ def _embedded_texture_filename(image_bytes: bytes, material_name: str) -> str:
     return f"{material_name}{ext}"
 
 
-def pick_folder_dialog(*, desktop_services=None) -> str | None:
-    """Open the platform directory chooser used by the in-viewer Open action."""
+def _hidden_tk_root():
+    """Create the hidden Tk owner used for native chooser dialogs."""
     import tkinter as tk
     from caveviewer.gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
-    from caveviewer.gui.platform import get_desktop_services, tk_root_options
+    from caveviewer.gui.platform import tk_root_options
 
     configure_process_dpi_awareness()
     root = tk.Tk(**tk_root_options())
+    apply_tk_scaling(root)
+    root.withdraw()
+    return root
+
+
+def pick_folder_dialog(*, desktop_services=None) -> str | None:
+    """Open the platform directory chooser used by folder/cache workflows."""
+    from caveviewer.gui.platform import get_desktop_services
+
+    root = _hidden_tk_root()
     try:
-        apply_tk_scaling(root)
-        root.withdraw()
         services = desktop_services or get_desktop_services()
         selection = services.choose_directory(
-            title="Select folder containing your cave map (.obj, .mtl, .jpg)",
+            title="Open Map Folder",
             parent=root,
         )
         return selection.path if selection else None
@@ -762,6 +806,9 @@ def main():
 def run() -> None:
     """Run the application and present a best-effort fatal-error dialog."""
     try:
+        import multiprocessing
+
+        multiprocessing.freeze_support()
         main()
     except Exception as e:
         import traceback

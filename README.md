@@ -47,10 +47,12 @@ chmod +x CaveViewer-*.AppImage
 ./CaveViewer-*-x86_64.AppImage   # amd64 / x86_64
 ```
 
-On GNOME, Linux builds use the native Wayland GLFW backend by default and fall
-back to X11 when automatic initialization fails. Directory choosers and update
-reveal actions use the desktop portal. To diagnose a compositor-specific issue,
-launch with `CAVEVIEWER_WINDOW_SYSTEM=wayland` or
+On GNOME, Linux builds use GLFW with `CAVEVIEWER_WINDOW_SYSTEM=auto` by
+default. Auto mode prefers X11/XWayland when `DISPLAY` is available so source,
+debugger, and AppImage launches get the same titlebar and resize behavior, then
+retries Wayland on recognized initialization failures. Directory choosers and
+update reveal actions use the desktop portal. To diagnose a
+compositor-specific issue, launch with `CAVEVIEWER_WINDOW_SYSTEM=wayland` or
 `CAVEVIEWER_WINDOW_SYSTEM=x11` to require one backend. The viewer opens at 80%
 of the primary monitor's usable work area using the selected backend's scaled
 screen coordinates.
@@ -59,8 +61,10 @@ screen coordinates.
 
 The splash screen checks the signed update manifest for the current platform
 and architecture. If you start a download, it continues in the background
-while you open maps, download sample maps, or change settings. Update status is
-shown only on the splash screen, so it does not interrupt map viewing.
+while you open maps, download sample maps, or change settings. When the splash
+screen is visible it owns update progress and completion feedback; if a
+download completes in the background, CaveViewer may use a desktop
+notification instead of interrupting map viewing.
 
 After verification, CaveViewer keeps the package in `~/Downloads` and reveals
 it for manual installation: macOS mounts the DMG read-only and shows the app in
@@ -103,8 +107,8 @@ Sample maps are a good way to confirm that CaveViewer is working before you impo
 
 ## Recording a Flight
 
-CaveViewer can record a clean MP4 of your flight through the cave. The app uses
-`ffmpeg` for MP4 encoding.
+CaveViewer can record a clean flight through the cave. Recordings are currently
+encoded as MP4 files with `ffmpeg`.
 
 Use the `REC` button to arm recording. The minimap, controls, and control panel
 disappear immediately, a 3-to-0 countdown appears in the amber loading ring,
@@ -124,15 +128,15 @@ height by default so they play back smoothly on normal video players.
 
 ## Importing and Streaming Preferences
 
-The Advanced Settings panel in the startup window acts as the advanced installer/preferences surface for import and streaming behavior. Open it from the splash screen with Advanced Settings....
+The Preferences panel in the startup window acts as the advanced installer/preferences surface for import and streaming behavior. Open it from the splash screen with Preferences.
 
 These values are validated in the UI, applied to environment variables for the current launch, and saved to a local settings file so they are reused next time.
 
 - Linux settings file: `~/.config/caveviewer/advanced_settings.json` by default
 - macOS/Windows settings file: `~/.caveviewer/advanced_settings.json`
 - Streaming section controls runtime chunk loading and upload behavior.
-- Map Parsing section controls cache-build/import behavior.
-- Recordings section controls the default folder used when saving MP4 flight recordings.
+- Import section controls cache-build/import behavior.
+- Storage section controls folders used when saving recordings and other app data.
 
 ### Map Chunking
 
@@ -149,18 +153,22 @@ Why this matters: chunk size is one of the most important map settings because i
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
 | System RAM target (%) | — | 8 | 1 to 80 | Target share of total system RAM used for loaded chunks. |
-| GPU memory target (%) | — | 70 | 1 to 80 | Target share of detected GPU memory used for loaded chunks. |
+| GPU memory target (%) | — | 70 | 1 to 80 | Target share of the detected GPU memory budget used for loaded chunks. |
 | GPU memory override (GB) | — | empty | 0.5 to 50 | Optional manual GPU memory ceiling. If auto-detection finds a smaller active GPU, CaveViewer uses the smaller detected value. |
-| Chunk-loading workers | — | 2 | integer, at least 1 | Maximum background chunk-loading workers. CaveViewer starts one and grows one at a time only while system RAM use is below 80%. |
+| Loading worker limit | — | 2 | integer, 1 to 32 | Background chunk-loading worker limit. Worker count may be lower when CPU or RAM is constrained. |
 | Loading CPUs to keep free | — | 3 | integer, 2 to 32 | Reserve CPU cores instead of using them for streaming workers. |
 | Chunk uploads per frame | — | 1 | integer, 1 to 16 | Hard cap for how many ready chunks are uploaded each frame on the render thread. |
 | Upload budget (ms) | — | 3.0 | 0.5 to 50.0 ms | Soft time budget per frame for chunk uploads. |
 
 GPU memory is detected automatically through Linux DRM sysfs for AMD GPUs and
-through `nvidia-smi` for NVIDIA GPUs. Use the GPU memory override only when
-automatic detection is unavailable or does not match the active adapter. If
-GPU memory cannot be detected and no override is set, CaveViewer applies a
-conservative 1 GB fallback instead of disabling the GPU residency cap.
+through `nvidia-smi` for NVIDIA GPUs. For low-VRAM AMD integrated GPUs on
+Linux, CaveViewer adds a conservative shared-memory allowance: 50% of reported
+GTT/shared memory, capped at 2 GB. Windows AMD/Intel GPU memory is not
+currently auto-detected, so Windows uses an 8 GB fallback budget to avoid
+unnecessary automatic texture downscaling on typical systems. macOS GPU memory
+is not currently auto-detected and uses a conservative 1 GB fallback. Use the
+GPU memory override only when automatic detection is unavailable or does not
+match the active adapter.
 CaveViewer keeps geometry visibility separate from texture residency: if a map
 has too many very large texture tiles for the GPU budget, oversized textures are
 downscaled during decode instead of dropping nearby chunks from the visible
@@ -171,16 +179,16 @@ explicit maximum texture dimension in pixels.
 
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
-| Import chunk size (m) | — | 8 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
+| Import chunk size (m) | — | 50 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
 | OBJ scan throttle (ms) | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Yield/throttle behavior during OBJ scanning. |
-| Cache-building workers | — | 1 | integer, at least 1 | Maximum chunk-cache writers. CaveViewer starts one and grows one at a time only while system RAM use is below 80%. |
+| Cache-building worker limit | — | 1 | integer, 1 to 32 | Chunk-cache writer limit. Worker count may be lower when CPU or RAM is constrained. |
 | Cache-build CPUs to keep free | — | 2 | integer, 2 to 32 | CPU cores reserved during cache building. |
 
 ### Recordings
 
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
-| Movie recording directory | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | writable folder, or a folder that can be created | Folder where MP4 flight recordings are saved. |
+| Recordings folder | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | writable folder, or a folder that can be created | Where saved recordings are stored. |
 
 ### Streaming vs Chunking: What Changes Now vs Later
 
@@ -194,39 +202,49 @@ In practice:
 - Adjust Chunk uploads per frame, Upload budget (ms), and memory targets to tune smoothness without re-importing.
 - Adjust Import chunk size (m) when you want a different chunk layout, then rebuild/import the map to test it.
 
-### If You See an Out-of-Memory Error
+### If a Very Large Map Still Runs Out of Memory
 
-Large photogrammetry maps can exceed the practical memory available on a 16 GB computer, especially while CaveViewer is importing a new map or decoding textures. Start with conservative settings, then increase them only after the map opens reliably.
+CaveViewer starts loading and cache-building conservatively, then grows worker
+counts only when enough system RAM is available. Most users should not need to
+lower worker limits manually. Very large photogrammetry maps can still exceed
+the practical memory available on smaller machines, especially during initial
+import or texture decoding.
 
-In Advanced Settings, try this first:
+During first-time import, CaveViewer now rejects clearly unsafe imports before
+the expensive work starts: disk-space checks include staged texture assets, and
+OBJ imports check the estimated RAM footprint after the count pass but before
+allocating the large geometry arrays. Viewer-launched imports run in a separate
+lower-priority child process that sends heartbeat events back to the viewer; if
+the viewer is closed during import, abandoned staging directories are cleaned
+up.
 
-| Setting | Safer value |
-|---|---:|
-| System RAM target (%) | 6 to 8 |
-| GPU memory target (%) | 40 to 50 |
-| Chunk-loading workers | 1 or 2 |
-| Loading CPUs to keep free | 3 or 4 |
-| Chunk uploads per frame | 1 |
-| Upload budget (ms) | 1 to 3 |
-| Cache-building workers | 1 |
-| Cache-build CPUs to keep free | 3 or 4 |
+If this happens:
 
-If the error happens while importing a map, lower Cache-building workers first. Cache-building workers can temporarily hold more geometry and texture data in memory, so one worker is the safest option on a constrained machine.
-
-If the error happens while moving around an already-imported map, lower System RAM target (%) and GPU memory target (%). CaveViewer may also downscale oversized textures automatically when the texture set is too large for the GPU budget.
-
-If the map still cannot import, rebuild the cache with a larger Import chunk size such as 16 m, 24 m, or 32 m. Larger chunks reduce total chunk count and bookkeeping overhead, but do not push this too high on a 16 GB machine because each chunk becomes heavier to load.
-
-Close other memory-heavy applications before importing. Browsers, photo tools, video editors, and other 3D apps can leave too little headroom for a large model even when the computer reports 16 GB of installed RAM.
+- Close memory-heavy applications such as browsers, photo tools, video editors,
+  and other 3D apps before importing.
+- Lower System RAM target (%) and GPU memory target (%) if the error happens
+  while moving around an already-imported map.
+- Keep Chunk uploads per frame at 1 and use a small Upload budget, such as 1 to
+  3 ms, while testing a constrained machine.
+- If import still fails, rebuild the cache with a larger Import chunk size such
+  as 64 m or 100 m. Larger chunks reduce total chunk count and bookkeeping
+  overhead, but avoid pushing this too high on a 16 GB machine because each
+  chunk becomes heavier to load.
 
 ### Recommended Map Parsing Approach
 
-On Linux, imports use a self-contained cache under
-`~/.cache/caveviewer/maps/<map-name>-<path-hash>` by default. CaveViewer no
-longer auto-discovers old `_cache` or `.caveviewer_cache` folders beside a map.
-Set `CAVEVIEWER_MAP_CACHE_DIR` to an absolute path when large caches belong on
-another filesystem. The log reports the exact cache directory selected for each
-import.
+CaveViewer imports each map into a self-contained cache directory named
+`<map-name>-<path-hash>`. By default, cache roots are:
+
+- Linux: `$XDG_CACHE_HOME/caveviewer/maps/`, or `~/.cache/caveviewer/maps/`
+  when `XDG_CACHE_HOME` is unset.
+- macOS: `~/.caveviewer/maps/`.
+- Windows: `%USERPROFILE%\.caveviewer\maps\`.
+
+CaveViewer no longer auto-discovers old `_cache` or `.caveviewer_cache` folders
+beside a map. Set `CAVEVIEWER_MAP_CACHE_DIR` to an absolute path when large
+caches belong on another filesystem. The log reports the exact cache directory
+selected for each import.
 
 1. Understand your map first.
 Decide how far ahead you need to see while moving. Long, open passages often benefit from larger chunk sizes. Maps with many twists and short sightlines may not need very large chunks, especially on strong hardware.
@@ -238,13 +256,13 @@ Check what you have available: GPU memory, CPU cores, and system RAM. More hardw
 Begin with Chunk uploads per frame = 1 and Upload budget = 2 to 4 ms. This usually gives smoother frame pacing while you evaluate map behavior.
 
 4. Test chunking approaches for that specific map.
-Try a few Import chunk size values (for example 16, 32, 64, then 100 m for very large/open maps). Rebuild/import each time so the new chunk layout is actually used. Use separate `CAVEVIEWER_MAP_CACHE_DIR` roots when you want to retain multiple managed-cache experiments side by side.
+Try a few Import chunk size values around the 50 m default (for example 32, 64, then 100 m for very large/open maps). Rebuild/import each time so the new chunk layout is actually used. Use separate `CAVEVIEWER_MAP_CACHE_DIR` roots when you want to retain multiple managed-cache experiments side by side.
 
 5. Tune streaming after choosing a chunk size.
 If pop-in is too visible, raise Chunk uploads per frame gradually (1, then 2, then 3) and increase Upload budget carefully (for example from 3 to 5 ms).
 
 6. Balance quality and stability.
-If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Cache-building workers or reduce Cache-build CPUs to keep free.
+If you see memory pressure, lower System RAM target (%) and GPU memory target (%). If import is slow but runtime is fine, increase Cache-building worker limit or reduce Cache-build CPUs to keep free.
 
 Important: there is no single best value for all maps. The best result comes from trying several import strategies and streaming settings for your map and your hardware.
 
