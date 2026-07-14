@@ -615,15 +615,18 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "Movie recording directory" not in settings_source
     assert "_COMPACT_WORKER_WARNING" not in module_source
     assert "_warning_keys_for_values" not in module_source
-    assert "Scrollbar(" not in source
-    assert "yscrollcommand" not in source
+    assert "Scrollbar(" in source
+    assert "yscrollcommand=self.page_scrollbar.set" in source
     assert "content_canvas" not in source
     assert "resizable(False, _WINDOWS_LAYOUT)" in module_source
     assert "self.button_row.pack(" in source
     assert "side=\"bottom\"" in source
-    assert "self.page_stack.pack(side=\"top\", fill=\"both\", expand=True)" in source
-    assert "before=self.page_stack" in module_source
+    assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
+    assert "self.page_scrollbar.pack(side=\"right\", fill=\"y\")" in module_source
+    assert "self.page_scrollbar.pack_forget()" in module_source
+    assert "before=self.page_scroll_shell" in module_source
     assert "self.dialog.minsize(dialog_w, min(dialog_h, 360))" in module_source
+    assert "_bind_page_mousewheel" in module_source
     assert "grid_remove()" in show_page_source
     assert "_apply_geometry" not in show_page_source
     assert "grid_propagate(False)" in source

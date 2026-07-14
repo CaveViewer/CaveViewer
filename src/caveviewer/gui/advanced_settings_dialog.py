@@ -126,6 +126,10 @@ class AdvancedSettingsDialog:
         self.rendered_invalid_key: str | None = None
         self.apply_button = None
         self.tab_bar = None
+        self.page_scroll_shell = None
+        self.page_canvas = None
+        self.page_canvas_window = None
+        self.page_scrollbar = None
         self.page_stack = None
         self.pages: dict[str, tk.Frame] = {}
         self.page_buttons: dict[str, tk.Label] = {}
@@ -517,6 +521,53 @@ class AdvancedSettingsDialog:
             self.rendered_state.message_kind,
         )
 
+    def _bind_page_mousewheel(self, widget) -> None:
+        widget.bind("<MouseWheel>", self._scroll_page_content, add="+")
+        widget.bind("<Button-4>", self._scroll_page_content, add="+")
+        widget.bind("<Button-5>", self._scroll_page_content, add="+")
+        for child in widget.winfo_children():
+            self._bind_page_mousewheel(child)
+
+    def _sync_page_scrollbar(self) -> None:
+        if (
+            self.page_canvas is None
+            or self.page_stack is None
+            or self.page_scrollbar is None
+        ):
+            return
+        self.page_canvas.configure(scrollregion=self.page_canvas.bbox("all"))
+        content_height = self.page_stack.winfo_reqheight()
+        visible_height = self.page_canvas.winfo_height()
+        if content_height > visible_height + 1:
+            if not self.page_scrollbar.winfo_manager():
+                self.page_scrollbar.pack(side="right", fill="y")
+        else:
+            if self.page_scrollbar.winfo_manager():
+                self.page_scrollbar.pack_forget()
+            self.page_canvas.yview_moveto(0)
+
+    def _resize_page_canvas_window(self, event) -> None:
+        if self.page_canvas is None or self.page_canvas_window is None:
+            return
+        self.page_canvas.itemconfigure(self.page_canvas_window, width=event.width)
+        self._sync_page_scrollbar()
+
+    def _scroll_page_content(self, event):
+        if (
+            self.page_canvas is None
+            or self.page_scrollbar is None
+            or not self.page_scrollbar.winfo_manager()
+        ):
+            return None
+        delta = getattr(event, "delta", 0)
+        if delta:
+            self.page_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+        elif getattr(event, "num", None) == 4:
+            self.page_canvas.yview_scroll(-1, "units")
+        elif getattr(event, "num", None) == 5:
+            self.page_canvas.yview_scroll(1, "units")
+        return "break"
+
     def _show_page(self, page_key: str) -> None:
         page = self.pages.get(page_key)
         if page is None:
@@ -595,8 +646,29 @@ class AdvancedSettingsDialog:
             wraplength=_NOTICE_WRAP_LENGTH,
         )
 
-        self.page_stack = tk.Frame(body, bg=_BG_COLOR)
-        self.page_stack.pack(side="top", fill="both", expand=True)
+        self.page_scroll_shell = tk.Frame(body, bg=_BG_COLOR)
+        self.page_scroll_shell.pack(side="top", fill="both", expand=True)
+        self.page_canvas = tk.Canvas(
+            self.page_scroll_shell,
+            bg=_BG_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            yscrollcommand=lambda *_args: None,
+        )
+        self.page_scrollbar = tk.Scrollbar(
+            self.page_scroll_shell,
+            orient="vertical",
+            command=self.page_canvas.yview,
+        )
+        self.page_canvas.configure(yscrollcommand=self.page_scrollbar.set)
+        self.page_canvas.pack(side="left", fill="both", expand=True)
+
+        self.page_stack = tk.Frame(self.page_canvas, bg=_BG_COLOR)
+        self.page_canvas_window = self.page_canvas.create_window(
+            (0, 0),
+            window=self.page_stack,
+            anchor="nw",
+        )
         self.page_stack.grid_rowconfigure(0, weight=1)
         self.page_stack.grid_columnconfigure(0, weight=1)
         for page_key, _tab_label in _PREFERENCE_PAGES:
@@ -614,8 +686,20 @@ class AdvancedSettingsDialog:
             default=1,
         )
         self.page_stack.configure(width=max_page_width, height=max_page_height)
+        self.page_canvas.configure(width=max_page_width, height=max_page_height)
         self.page_stack.grid_propagate(False)
+        self.page_stack.bind(
+            "<Configure>",
+            lambda _event: self._sync_page_scrollbar(),
+            add="+",
+        )
+        self.page_canvas.bind("<Configure>", self._resize_page_canvas_window, add="+")
+        self.page_canvas.bind("<MouseWheel>", self._scroll_page_content, add="+")
+        self.page_canvas.bind("<Button-4>", self._scroll_page_content, add="+")
+        self.page_canvas.bind("<Button-5>", self._scroll_page_content, add="+")
+        self._bind_page_mousewheel(self.page_stack)
         self._show_page(_PREFERENCE_PAGES[0][0])
+        self._sync_page_scrollbar()
 
         self.form_ready = True
         self._render_form_state(self.form.state, focus_invalid=True)
@@ -645,8 +729,9 @@ class AdvancedSettingsDialog:
                     side="bottom",
                     fill="x",
                     pady=(8, 0),
-                    before=self.page_stack,
+                    before=self.page_scroll_shell,
                 )
+                self.dialog.after_idle(self._sync_page_scrollbar)
         else:
             self.error_label.config(text=message)
 
@@ -813,6 +898,7 @@ class AdvancedSettingsDialog:
                     f"{dialog_w}x{fitted_height}+{clamped_x}+{clamped_y}"
                 )
             geometry_applied = True
+            self.dialog.after_idle(self._sync_page_scrollbar)
         except Exception:
             pass
         if not geometry_applied:
