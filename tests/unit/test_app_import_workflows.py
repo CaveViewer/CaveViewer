@@ -23,9 +23,9 @@ def test_obj_import_reuses_a_valid_cache(monkeypatch):
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: True)
     monkeypatch.setattr(chunker, "get_cache_dir", lambda _path: "/cache/reused")
     monkeypatch.setattr(
-        obj_parser,
-        "parse_obj",
-        lambda *_args, **_kwargs: pytest.fail("valid caches must skip parsing"),
+        chunker,
+        "build_cache_incremental_obj",
+        lambda *_args, **_kwargs: pytest.fail("valid caches must skip importing"),
     )
 
     assert app.import_and_cache("map.obj", "map.mtl") == "/cache/reused"
@@ -44,7 +44,6 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
     cache_dir.mkdir()
     progress = []
     build_options = {}
-    mesh = _mesh("copy", "missing", "existing", "plain")
     materials = {
         "copy": SimpleNamespace(diffuse_texture="copy.jpg"),
         "missing": SimpleNamespace(diffuse_texture="missing.jpg"),
@@ -56,31 +55,27 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
     monkeypatch.setattr(
         chunker, "ensure_sufficient_disk_space", lambda *_args, **_kwargs: None
     )
-    monkeypatch.setattr(
-        chunker, "ensure_sufficient_import_memory", lambda *_args, **_kwargs: None
-    )
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
 
-    def parse_obj(_path, progress_cb, **_kwargs):
-        progress_cb("parse-low", -1.0)
-        progress_cb("parse-high", 2.0)
-        return mesh
-
-    def build_cache(
-        _path, received_mesh, received_materials, progress_cb, **options
+    def build_cache_incremental_obj(
+        _path, received_materials, progress_cb, **options
     ):
-        assert received_mesh is mesh
         assert received_materials is materials
         build_options.update(options)
-        progress_cb("cache-low", -1.0)
-        progress_cb("cache-high", 2.0)
+        progress_cb("incremental-low", -1.0)
+        progress_cb("incremental-high", 2.0)
         return str(cache_dir)
 
-    monkeypatch.setattr(obj_parser, "parse_obj", parse_obj)
     monkeypatch.setattr(obj_parser, "parse_mtl", lambda _path: materials)
-    monkeypatch.setattr(chunker, "build_cache", build_cache)
     monkeypatch.setattr(
-        chunker, "load_manifest", lambda _path: {"chunks": {"0,0": {}, "1,0": {}}}
+        chunker,
+        "build_cache_incremental_obj",
+        build_cache_incremental_obj,
+    )
+    monkeypatch.setattr(
+        chunker,
+        "load_manifest",
+        lambda _path: {"triangle_count": 2, "chunks": {"0,0": {}, "1,0": {}}},
     )
     result = app.import_and_cache(
         str(source), str(material_file), extra_progress_cb=lambda *item: progress.append(item)
@@ -96,10 +91,8 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
         str(resolve_application_paths().cache_dir / "maps")
     )
     assert progress == [
-        ("parse-low", 0.0),
-        ("parse-high", 1.0),
-        ("cache-low", 0.0),
-        ("cache-high", 1.0),
+        ("incremental-low", 0.0),
+        ("incremental-high", 1.0),
     ]
 
 
@@ -113,19 +106,18 @@ def test_obj_import_handles_large_or_unreadable_source_size(
     material_file.write_text("material", encoding="utf-8")
     cache_dir = tmp_path / "managed-cache"
     cache_dir.mkdir()
-    mesh = _mesh()
 
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
     monkeypatch.setattr(
         chunker, "ensure_sufficient_disk_space", lambda *_args, **_kwargs: None
     )
-    monkeypatch.setattr(
-        chunker, "ensure_sufficient_import_memory", lambda *_args, **_kwargs: None
-    )
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
-    monkeypatch.setattr(obj_parser, "parse_obj", lambda *_args, **_kwargs: mesh)
     monkeypatch.setattr(obj_parser, "parse_mtl", lambda _path: {})
-    monkeypatch.setattr(chunker, "build_cache", lambda *_args, **_kwargs: str(cache_dir))
+    monkeypatch.setattr(
+        chunker,
+        "build_cache_incremental_obj",
+        lambda *_args, **_kwargs: str(cache_dir),
+    )
     monkeypatch.setattr(chunker, "load_manifest", lambda _path: {"chunks": {}})
     if size_behavior == "large":
         monkeypatch.setattr(app.os.path, "getsize", lambda _path: 11 * 1024**3)
@@ -159,7 +151,11 @@ def test_format_agnostic_obj_import_delegates_all_options(monkeypatch):
     assert received == [
         (
             ("map.obj", "map.mtl"),
-            {"force_rebuild": True, "extra_progress_cb": callback},
+            {
+                "force_rebuild": True,
+                "extra_progress_cb": callback,
+                "console_progress": True,
+            },
         )
     ]
 

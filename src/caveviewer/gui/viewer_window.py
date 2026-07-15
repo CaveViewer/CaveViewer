@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+import logging
 import math
 import os
 import queue
@@ -31,7 +32,11 @@ import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
 from caveviewer.core import chunker, hardware_memory
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.logging_utils import (
+    finish_console_progress_line,
+    get_logger,
+    set_console_progress,
+)
 from caveviewer.core.streaming_world import StreamingWorld, StreamingConfig
 from caveviewer.core.texture_manager import TextureManager
 from caveviewer.gui.camera import FlyCamera
@@ -1552,7 +1557,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                                       -- child is alive; keep same UI stage
           ("done", cache_dir, textures_dir, manifest)  -- load the map
           ("error", message, traceback)  -- log the error (close if startup)
+          ("error", message, "", suggestion) -- expected actionable failure
           ("cancelled",)                 -- import was stopped by viewer close
+                                             or a child KeyboardInterrupt
 
         on_render() drains the queue every frame and handles each message
         on the main thread where OpenGL calls are legal.
@@ -1579,6 +1586,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             from caveviewer.core.cache_paths import map_texture_dir
 
             def on_progress(stage: str, fraction: float):
+                set_console_progress(stage, fraction)
                 q.put(("progress", stage, fraction))
 
             try:
@@ -1648,11 +1656,13 @@ class CaveViewerWindow(mglw.WindowConfig):
                             if kind == "progress":
                                 last_stage = str(event[1])
                                 last_fraction = float(event[2])
+                                set_console_progress(last_stage, last_fraction)
                                 q.put(event)
                             elif kind == "heartbeat":
                                 if len(event) >= 3:
                                     last_stage = str(event[1])
                                     last_fraction = float(event[2])
+                                    set_console_progress(last_stage, last_fraction)
                                 if (
                                     last_event_at - last_heartbeat_log_at
                                     >= _IMPORT_HEARTBEAT_LOG_SECONDS
@@ -1681,11 +1691,26 @@ class CaveViewerWindow(mglw.WindowConfig):
                                         )
                                     last_heartbeat_log_at = last_event_at
                                 q.put(event)
+                            elif kind == "log":
+                                level = int(event[1])
+                                component = str(event[2])
+                                message = str(event[3])
+                                logging.getLogger("caveviewer").log(
+                                    level,
+                                    message,
+                                    extra={"component": component},
+                                )
                             elif kind == "done":
+                                finish_console_progress_line()
                                 q.put(event)
                                 break
                             elif kind == "error":
+                                finish_console_progress_line()
                                 q.put(event)
+                                break
+                            elif kind == "cancelled":
+                                finish_console_progress_line()
+                                q.put(("cancelled",))
                                 break
 
                         if stop_event.is_set():
@@ -1702,8 +1727,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                         _release_desktop_inhibitor(inhibitor)
                     return
                 manifest = _ck.load_manifest(cache_dir)
+                finish_console_progress_line()
                 q.put(("done", cache_dir, resolved_textures_dir, manifest))
             except Exception as exc:
+                finish_console_progress_line()
                 q.put(("error", str(exc), ""))
 
         self._import_thread = threading.Thread(target=worker, daemon=True)
@@ -1729,6 +1756,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._import_progress_stage = msg[1]
                 self._import_progress_fraction = msg[2]
             elif kind == "done":
+                finish_console_progress_line()
                 _, cache_dir, textures_dir, manifest = msg
                 self._import_active = False
                 self._import_queue = None
@@ -1739,8 +1767,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.load_new_map(cache_dir, textures_dir, manifest)
                 break  # queue is gone; nothing more to drain
             elif kind == "error":
+                finish_console_progress_line()
                 error_msg = msg[1]
                 error_trace = msg[2] if len(msg) > 2 else ""
+                error_suggestion = msg[3] if len(msg) > 3 else ""
                 self._import_active = False
                 self._import_queue = None
                 self._import_thread = None
@@ -1748,6 +1778,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._import_cache_dir = None
                 self._import_stop_event = None
                 _LOG.error(f"Import failed: {error_msg}")
+                if error_suggestion:
+                    _LOG.error("Suggestion: %s", error_suggestion)
                 if error_trace:
                     _LOG.error("Import process traceback:\n%s", error_trace)
                 if self._import_is_startup:
@@ -1756,6 +1788,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                         self.wnd.close()
                 break  # queue is gone; nothing more to drain
             elif kind == "cancelled":
+                finish_console_progress_line()
                 self._import_active = False
                 self._import_queue = None
                 self._import_thread = None
@@ -3637,6 +3670,40 @@ class CaveViewerWindow(mglw.WindowConfig):
     close = on_close
 
 
+def _run_moderngl_window_config(config_class: type, args=None) -> None:
+    """
+    Run moderngl-window while preserving CaveViewer's normal shutdown path
+    when the blocking render loop is interrupted by Ctrl+C/SIGINT.
+
+    moderngl-window destroys the backend window only after its loop exits
+    normally.  A KeyboardInterrupt can arrive inside any render callback and
+    bypass that tail cleanup, so create the config explicitly and close/destroy
+    the window ourselves before re-raising to the application boundary.
+    """
+    config = mglw.create_window_config_instance(config_class, args=args)
+    window_destroyed_by_runner = False
+    try:
+        mglw.run_window_config_instance(config)
+        window_destroyed_by_runner = True
+    except BaseException:
+        wnd = getattr(config, "wnd", None)
+        if wnd is not None:
+            try:
+                if not getattr(wnd, "is_closing", False):
+                    wnd.close()
+            except Exception:
+                _LOG.exception("Error while closing viewer after interrupted window loop.")
+        raise
+    finally:
+        if not window_destroyed_by_runner:
+            wnd = getattr(config, "wnd", None)
+            if wnd is not None:
+                try:
+                    wnd.destroy()
+                except Exception:
+                    pass
+
+
 def _launch_viewer_window() -> None:
     """Launch with dimensions expressed in the selected backend's coordinates."""
     if sys.platform.startswith("linux"):
@@ -3647,7 +3714,7 @@ def _launch_viewer_window() -> None:
         CaveViewerWindow.window_size = _desktop_relative_window_size()
     run_window_config(
         CaveViewerWindow,
-        runner=mglw.run_window_config,
+        runner=_run_moderngl_window_config,
         window_size_fraction=_DESKTOP_WINDOW_SCALE,
         fallback_window_size=_DEFAULT_WINDOW_SIZE,
         force_resizable_window=True,

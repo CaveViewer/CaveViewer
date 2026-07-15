@@ -181,6 +181,8 @@ explicit maximum texture dimension in pixels.
 |---|---|---:|---|---|
 | Import chunk size (m) | — | 50 | greater than 0 and up to 512 | Spatial chunk size used when building new cache data. |
 | OBJ scan throttle (ms) | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Yield/throttle behavior during OBJ scanning. |
+| OBJ import batch (k faces) | `CAVEVIEWER_OBJ_IMPORT_BATCH_FACES` | 200 | integer, 1 to 2000 | Triangulated OBJ faces processed per incremental import batch, in thousands. Lower values can reduce transient RAM; higher values reduce import I/O overhead. |
+| OBJ bucket workers (env only) | `CAVEVIEWER_OBJ_BUCKET_WORKERS` | 2 | integer, 1 to 32 | Worker threads used to de-index, group, and write incremental OBJ face batches. Higher values can speed imports on SSDs at the cost of extra transient RAM and temporary-file I/O. |
 | Cache-building worker limit | — | 1 | integer, 1 to 32 | Chunk-cache writer limit. Worker count may be lower when CPU or RAM is constrained. |
 | Cache-build CPUs to keep free | — | 2 | integer, 2 to 32 | CPU cores reserved during cache building. |
 

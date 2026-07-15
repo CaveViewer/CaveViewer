@@ -8,6 +8,7 @@ viewer recover cleanly when an import fails.
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import os
 import shutil
@@ -44,6 +45,28 @@ class ImportProcessHandle:
     process: Any
     events: Any
     cache_dir: str
+
+
+class _ImportEventLogHandler(logging.Handler):
+    """Send child-process log records to the parent import event queue."""
+
+    def __init__(self, events: Any):
+        super().__init__(logging.DEBUG)
+        self._events = events
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            component = getattr(record, "component", "CaveViewer")
+            _put_event(
+                self._events,
+                ("log", int(record.levelno), str(component), record.getMessage()),
+            )
+        except Exception:
+            pass
+
+
+def _configure_import_child_logging(events: Any) -> None:
+    configure_logging(force=True, handlers=(_ImportEventLogHandler(events),))
 
 
 def source_path_from_descriptor(model_descriptor: dict) -> str:
@@ -286,24 +309,51 @@ def _start_heartbeat_thread(
     return thread
 
 
+def _actionable_import_failure(exc: BaseException) -> tuple[str, str] | None:
+    """Return a user-actionable message/suggestion for expected import failures."""
+    exc_type = type(exc)
+    if exc_type.__module__ != "caveviewer.core.chunker":
+        return None
+
+    if exc_type.__name__ == "InsufficientImportMemoryError":
+        return (
+            str(exc),
+            "Close memory-heavy applications and retry, or import this map on a "
+            "machine with more RAM. Reducing source-model detail before import "
+            "can also lower the peak memory requirement.",
+        )
+
+    if exc_type.__name__ == "InsufficientDiskSpaceError":
+        return (
+            str(exc),
+            "Free space on the cache drive and retry, or move CaveViewer's map "
+            "cache to a larger drive with CAVEVIEWER_MAP_CACHE_DIR.",
+        )
+
+    return None
+
+
 def _run_import_process(model_descriptor: dict, textures_dir: str, events: Any) -> None:
     """Child-process entry point. Sends progress, done, or error events."""
-    configure_logging()
-    configure_import_child_runtime()
-    heartbeat_stop = threading.Event()
-    heartbeat_state: dict[str, float | str] = {
-        "stage": "starting import",
-        "fraction": 0.0,
-        "started_at": time.monotonic(),
-    }
-    heartbeat_lock = threading.Lock()
-    heartbeat_thread = _start_heartbeat_thread(
-        events,
-        heartbeat_state,
-        heartbeat_lock,
-        heartbeat_stop,
-    )
+    _configure_import_child_logging(events)
+    heartbeat_stop: threading.Event | None = None
+    heartbeat_thread: threading.Thread | None = None
     try:
+        configure_import_child_runtime()
+        heartbeat_stop = threading.Event()
+        heartbeat_state: dict[str, float | str] = {
+            "stage": "starting import",
+            "fraction": 0.0,
+            "started_at": time.monotonic(),
+        }
+        heartbeat_lock = threading.Lock()
+        heartbeat_thread = _start_heartbeat_thread(
+            events,
+            heartbeat_state,
+            heartbeat_lock,
+            heartbeat_stop,
+        )
+
         from caveviewer.app import import_and_cache_any
         from caveviewer.core import chunker as _ck
 
@@ -324,13 +374,27 @@ def _run_import_process(model_descriptor: dict, textures_dir: str, events: Any) 
             textures_dir,
             force_rebuild=False,
             extra_progress_cb=on_progress,
+            console_progress=False,
         )
         manifest = _ck.load_manifest(cache_dir)
         _put_event(events, ("done", cache_dir, cache_dir, manifest))
+    except KeyboardInterrupt:
+        _LOG.info("Import process interrupted by user.")
+        _put_event(events, ("cancelled",))
     except BaseException as exc:
+        actionable_failure = _actionable_import_failure(exc)
+        if actionable_failure is not None:
+            message, suggestion = actionable_failure
+            _LOG.error("Import failed: %s", message)
+            _LOG.error("Suggestion: %s", suggestion)
+            _put_event(events, ("error", message, "", suggestion))
+            return
+
         trace = traceback.format_exc()
         _LOG.error("Import process failed: %s\n%s", exc, trace)
         _put_event(events, ("error", str(exc), trace))
     finally:
-        heartbeat_stop.set()
-        heartbeat_thread.join(timeout=1.0)
+        if heartbeat_stop is not None:
+            heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1.0)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 import queue
 from types import SimpleNamespace
@@ -48,6 +49,18 @@ class FakeImportProcess:
         self._calls.append(("kill_process",))
         self.killed = True
         self.exitcode = -9
+
+
+class FakeLogger:
+    def __init__(self):
+        self.error_messages = []
+
+    @staticmethod
+    def _format(message, args):
+        return message % args if args else str(message)
+
+    def error(self, message, *args):
+        self.error_messages.append(self._format(message, args))
 
 
 def _import_window():
@@ -198,9 +211,87 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
 
     assert viewer_window.CaveViewerWindow.window_size == (1600, 1000)
     assert calls[0][0] == (viewer_window.CaveViewerWindow,)
+    assert calls[0][1]["runner"] is viewer_window._run_moderngl_window_config
     assert calls[0][1]["window_size_fraction"] == 0.8
     assert calls[0][1]["fallback_window_size"] == (1600, 1000)
     assert calls[0][1]["force_resizable_window"] is True
+
+
+def test_moderngl_runner_closes_and_destroys_window_on_keyboard_interrupt(monkeypatch):
+    calls = []
+
+    class FakeWindow:
+        is_closing = False
+
+        def close(self):
+            calls.append("close")
+            self.is_closing = True
+
+        def destroy(self):
+            calls.append("destroy")
+
+    fake_window = FakeWindow()
+    fake_config = SimpleNamespace(wnd=fake_window)
+    fake_config_class = type("FakeConfigClass", (), {})
+    created = []
+
+    def create_window_config_instance(config_class, args=None):
+        created.append((config_class, args))
+        return fake_config
+
+    def run_window_config_instance(config):
+        assert config is fake_config
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(
+        viewer_window.mglw,
+        "create_window_config_instance",
+        create_window_config_instance,
+    )
+    monkeypatch.setattr(
+        viewer_window.mglw,
+        "run_window_config_instance",
+        run_window_config_instance,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        viewer_window._run_moderngl_window_config(
+            fake_config_class,
+            args=["--window", "glfw"],
+        )
+
+    assert created == [(fake_config_class, ["--window", "glfw"])]
+    assert calls == ["close", "destroy"]
+
+
+def test_moderngl_runner_does_not_close_window_after_normal_loop(monkeypatch):
+    calls = []
+
+    class FakeWindow:
+        is_closing = False
+
+        def close(self):
+            calls.append("close")
+
+        def destroy(self):
+            calls.append("destroy")
+
+    fake_config = SimpleNamespace(wnd=FakeWindow())
+
+    monkeypatch.setattr(
+        viewer_window.mglw,
+        "create_window_config_instance",
+        lambda _config_class, args=None: fake_config,
+    )
+    monkeypatch.setattr(
+        viewer_window.mglw,
+        "run_window_config_instance",
+        lambda _config: calls.append("run"),
+    )
+
+    viewer_window._run_moderngl_window_config(type("FakeConfigClass", (), {}))
+
+    assert calls == ["run"]
 
 
 class _ScaledStepperProbe:
@@ -422,6 +513,7 @@ def test_uncached_import_relays_child_heartbeat(monkeypatch):
 
     def start_process(_model_descriptor, _textures_dir):
         events = queue.Queue()
+        events.put(("log", logging.INFO, "ImportProcess", "child import started"))
         events.put(("heartbeat", "building cache", 0.5, 12.0, 3_000, 8_000))
         events.put(("done", "/cache/cave", "/cache/cave", manifest))
         return SimpleNamespace(
@@ -451,6 +543,45 @@ def test_uncached_import_relays_child_heartbeat(monkeypatch):
     ]
 
 
+def test_uncached_import_relays_child_keyboard_interrupt_as_cancelled(monkeypatch):
+    calls = []
+    descriptor = {"glb_path": "/maps/cancelled.glb"}
+
+    def start_process(model_descriptor, textures_dir):
+        calls.append(("start_process", model_descriptor, textures_dir))
+        events = queue.Queue()
+        events.put(("cancelled",))
+        return SimpleNamespace(
+            process=FakeImportProcess(calls),
+            events=events,
+            cache_dir="/cache/cancelled",
+        )
+
+    monkeypatch.setattr(
+        viewer_window,
+        "_acquire_map_import_inhibitor",
+        lambda _map_name: FakeImportInhibitor(calls),
+    )
+    monkeypatch.setattr(viewer_window.chunker, "cache_is_valid", lambda _path: False)
+    monkeypatch.setattr(viewer_window, "start_import_process", start_process)
+
+    window = _import_window()
+    window._start_import_async(
+        descriptor, "/maps", "cancelled.glb", is_startup=True
+    )
+    _wait_for_import_worker(window)
+
+    assert calls == [
+        ("start_process", descriptor, "/maps"),
+        ("join_process", 1.0),
+        ("close_inhibitor",),
+    ]
+    assert _queued_import_messages(window) == [
+        ("progress", "starting import", 0.0),
+        ("cancelled",),
+    ]
+
+
 def test_drain_import_queue_heartbeat_updates_visible_progress():
     window = _import_window()
     window._import_queue = queue.Queue()
@@ -464,6 +595,39 @@ def test_drain_import_queue_heartbeat_updates_visible_progress():
 
     assert window._import_progress_stage == "building cache"
     assert window._import_progress_fraction == 0.5
+
+
+def test_drain_import_queue_logs_actionable_error_without_traceback(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+
+    window = _import_window()
+    window._import_active = True
+    window._import_is_startup = False
+    window._import_queue = queue.Queue()
+    window._import_thread = object()
+    window._import_process = object()
+    window._import_cache_dir = "/cache/cave"
+    window._import_stop_event = viewer_window.threading.Event()
+    window._import_queue.put(
+        (
+            "error",
+            "Not enough available system RAM to import 'DevilsEye Start.obj'.",
+            "",
+            "Close memory-heavy applications and retry.",
+        )
+    )
+
+    window._drain_import_queue()
+
+    assert logger.error_messages == [
+        "Import failed: Not enough available system RAM to import "
+        "'DevilsEye Start.obj'.",
+        "Suggestion: Close memory-heavy applications and retry.",
+    ]
+    assert window._import_active is False
+    assert window._import_queue is None
+    assert not any("traceback" in message.lower() for message in logger.error_messages)
 
 
 def test_cached_import_worker_does_not_request_desktop_inhibitor(monkeypatch):

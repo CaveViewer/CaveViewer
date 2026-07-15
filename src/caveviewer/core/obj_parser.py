@@ -74,6 +74,27 @@ class RawMesh:
     mtl_file: str | None = None
 
 
+@dataclass
+class ObjVertexData:
+    """OBJ vertex attributes loaded without retaining any face index arrays."""
+
+    positions: np.ndarray
+    uvs: np.ndarray
+    normals: np.ndarray
+    face_count: int
+    mtl_file: str | None = None
+
+
+@dataclass
+class ObjFaceBatch:
+    """A bounded batch of triangulated OBJ faces and their active materials."""
+
+    face_pos_idx: np.ndarray
+    face_uv_idx: np.ndarray
+    face_nrm_idx: np.ndarray
+    material_names: list[str | None]
+
+
 def _count_prepass(obj_path: str, progress_cb=None) -> tuple[int, int, int, int]:
     """
     Fast first pass: count vertices/uvs/normals/faces (post-triangulation
@@ -136,6 +157,192 @@ def _resolve_index(raw: int, count_so_far: int) -> int:
     if raw < 0:
         return count_so_far + raw
     raise ValueError("OBJ index of 0 is invalid")
+
+
+def _parse_face_vertices(
+    tokens: list[str],
+    *,
+    vertex_count: int,
+    uv_count: int,
+    normal_count: int,
+) -> list[tuple[int, int, int]]:
+    verts = []
+    for tok in tokens:
+        m = _FACE_VERT_RE.match(tok)
+        if not m:
+            continue
+        p_raw = int(m.group(1))
+        p_idx = _resolve_index(p_raw, vertex_count)
+        uv_idx = -1
+        nrm_idx = -1
+        if m.group(2):
+            uv_idx = _resolve_index(int(m.group(2)), uv_count)
+        if m.group(3):
+            nrm_idx = _resolve_index(int(m.group(3)), normal_count)
+        verts.append((p_idx, uv_idx, nrm_idx))
+    return verts
+
+
+def parse_obj_vertices(obj_path: str, progress_cb=None, preflight_cb=None) -> ObjVertexData:
+    """
+    Parse only OBJ vertex/UV/normal arrays.
+
+    This is the front half of the incremental importer. Faces are deliberately
+    skipped here so large maps do not allocate whole-model face-index arrays.
+    """
+    if progress_cb:
+        progress_cb("scanning file", 0.0)
+
+    def scan_progress(stage: str, frac: float) -> None:
+        if progress_cb:
+            progress_cb(stage, _SCAN_PROGRESS_WEIGHT * max(0.0, min(1.0, frac)))
+
+    n_v, n_vt, n_vn, n_f_est = _count_prepass(obj_path, progress_cb=scan_progress)
+
+    if preflight_cb:
+        preflight_cb(n_v, n_vt, n_vn, n_f_est)
+
+    positions = np.empty((n_v, 3), dtype=np.float32)
+    uvs = np.empty((n_vt, 2), dtype=np.float32)
+    normals = np.empty((n_vn, 3), dtype=np.float32)
+
+    vi = vti = vni = 0
+    mtl_file = None
+    file_size = os.path.getsize(obj_path)
+    bytes_read = 0
+    last_reported = 0.0
+
+    with open(obj_path, "r", buffering=1024 * 1024, errors="replace") as fh:
+        for line in fh:
+            bytes_read += len(line)
+            if progress_cb and file_size:
+                frac = bytes_read / file_size
+                if frac - last_reported > 0.01:
+                    progress_cb(
+                        "parsing vertices",
+                        _SCAN_PROGRESS_WEIGHT + (1.0 - _SCAN_PROGRESS_WEIGHT) * frac,
+                    )
+                    last_reported = frac
+
+            if not line or line[0] == "#":
+                continue
+
+            if line[:2] == "v ":
+                parts = line.split()
+                positions[vi, 0] = float(parts[1])
+                positions[vi, 1] = float(parts[2])
+                positions[vi, 2] = float(parts[3])
+                vi += 1
+
+            elif line[:3] == "vt ":
+                parts = line.split()
+                uvs[vti, 0] = float(parts[1])
+                uvs[vti, 1] = float(parts[2])
+                vti += 1
+
+            elif line[:3] == "vn ":
+                parts = line.split()
+                normals[vni, 0] = float(parts[1])
+                normals[vni, 1] = float(parts[2])
+                normals[vni, 2] = float(parts[3])
+                vni += 1
+
+            elif line[:7] == "mtllib ":
+                mtl_file = line.split(maxsplit=1)[1].strip()
+
+    if progress_cb:
+        progress_cb("parsing vertices", 1.0)
+
+    return ObjVertexData(
+        positions=positions,
+        uvs=uvs,
+        normals=normals,
+        face_count=n_f_est,
+        mtl_file=mtl_file,
+    )
+
+
+def iter_obj_face_batches(
+    obj_path: str,
+    *,
+    batch_size: int = 200_000,
+    progress_cb=None,
+):
+    """Yield bounded batches of triangulated OBJ faces with material names."""
+    batch_size = max(1, int(batch_size))
+    face_pos_idx = np.empty((batch_size, 3), dtype=np.int32)
+    face_uv_idx = np.empty((batch_size, 3), dtype=np.int32)
+    face_nrm_idx = np.empty((batch_size, 3), dtype=np.int32)
+    material_names: list[str | None] = [None] * batch_size
+
+    file_size = os.path.getsize(obj_path)
+    bytes_read = 0
+    last_reported = 0.0
+    vi = vti = vni = 0
+    fi = 0
+    current_material = None
+
+    def emit_batch():
+        nonlocal face_pos_idx, face_uv_idx, face_nrm_idx, material_names, fi
+        if fi <= 0:
+            return None
+        batch = ObjFaceBatch(
+            face_pos_idx=face_pos_idx[:fi],
+            face_uv_idx=face_uv_idx[:fi],
+            face_nrm_idx=face_nrm_idx[:fi],
+            material_names=material_names[:fi],
+        )
+        face_pos_idx = np.empty((batch_size, 3), dtype=np.int32)
+        face_uv_idx = np.empty((batch_size, 3), dtype=np.int32)
+        face_nrm_idx = np.empty((batch_size, 3), dtype=np.int32)
+        material_names = [None] * batch_size
+        fi = 0
+        return batch
+
+    with open(obj_path, "r", buffering=1024 * 1024, errors="replace") as fh:
+        for line in fh:
+            bytes_read += len(line)
+            if progress_cb and file_size:
+                frac = bytes_read / file_size
+                if frac - last_reported > 0.01:
+                    progress_cb("bucketing faces", frac)
+                    last_reported = frac
+
+            if not line or line[0] == "#":
+                continue
+
+            if line[:2] == "v ":
+                vi += 1
+            elif line[:3] == "vt ":
+                vti += 1
+            elif line[:3] == "vn ":
+                vni += 1
+            elif line[:7] == "usemtl ":
+                current_material = line.split(maxsplit=1)[1].strip()
+            elif line[:2] == "f ":
+                verts = _parse_face_vertices(
+                    line.split()[1:],
+                    vertex_count=vi,
+                    uv_count=vti,
+                    normal_count=vni,
+                )
+                for k in range(1, len(verts) - 1):
+                    a, b, c = verts[0], verts[k], verts[k + 1]
+                    face_pos_idx[fi] = (a[0], b[0], c[0])
+                    face_uv_idx[fi] = (a[1], b[1], c[1])
+                    face_nrm_idx[fi] = (a[2], b[2], c[2])
+                    material_names[fi] = current_material
+                    fi += 1
+                    if fi >= batch_size:
+                        batch = emit_batch()
+                        if batch is not None:
+                            yield batch
+
+    batch = emit_batch()
+    if batch is not None:
+        yield batch
+    if progress_cb:
+        progress_cb("bucketing faces", 1.0)
 
 
 def parse_obj(obj_path: str, progress_cb=None, preflight_cb=None) -> RawMesh:
@@ -218,21 +425,12 @@ def parse_obj(obj_path: str, progress_cb=None, preflight_cb=None) -> RawMesh:
                 vni += 1
 
             elif line[:2] == "f ":
-                tokens = line.split()[1:]
-                verts = []
-                for tok in tokens:
-                    m = _FACE_VERT_RE.match(tok)
-                    if not m:
-                        continue
-                    p_raw = int(m.group(1))
-                    p_idx = _resolve_index(p_raw, vi)
-                    uv_idx = -1
-                    nrm_idx = -1
-                    if m.group(2):
-                        uv_idx = _resolve_index(int(m.group(2)), vti)
-                    if m.group(3):
-                        nrm_idx = _resolve_index(int(m.group(3)), vni)
-                    verts.append((p_idx, uv_idx, nrm_idx))
+                verts = _parse_face_vertices(
+                    line.split()[1:],
+                    vertex_count=vi,
+                    uv_count=vti,
+                    normal_count=vni,
+                )
 
                 # fan-triangulate (handles tris natively, n-gons defensively)
                 for k in range(1, len(verts) - 1):
