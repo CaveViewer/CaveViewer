@@ -759,7 +759,7 @@ section { position: relative; }
 .mono { font-family: var(--mono); }
 .center-narrow { max-width: 640px; }
 
-/* ---- added: quad shot grid (Windows setup sequence) ---- */
+/* ---- quad shot grid (Windows setup sequence) ---- */
 .shot-quad {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -771,7 +771,7 @@ section { position: relative; }
   .shot-quad { grid-template-columns: 1fr 1fr 1fr 1fr; }
 }
 
-/* ---- added: ring sequence strip (import stages) ---- */
+/* ---- ring sequence strip (import stages) ---- */
 .ring-strip {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -804,7 +804,7 @@ section { position: relative; }
   letter-spacing: 0.02em;
 }
 
-/* ---- added: settings breakdown (Station 05) ---- */
+/* ---- settings breakdown (Preferences) ---- */
 .settings-cols {
   display: grid;
   grid-template-columns: 1fr;
@@ -817,7 +817,7 @@ section { position: relative; }
 }
 
 @media (min-width: 760px) {
-  .settings-cols { grid-template-columns: 1fr 1fr; }
+  .settings-cols { grid-template-columns: 1fr 1fr 1fr; }
 }
 
 .settings-col {
@@ -869,10 +869,21 @@ section { position: relative; }
 
 .settings-shot {
   margin-top: 28px;
-  max-width: 620px;
 }
 
-/* ---- added: click-to-enlarge screenshots (opens full image in a new tab) ---- */
+/* ---- recording feature layout ---- */
+.rec-lead {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 28px;
+  margin-top: 8px;
+}
+
+@media (min-width: 860px) {
+  .rec-lead { grid-template-columns: 3fr 2fr; align-items: start; }
+}
+
+/* ---- click-to-enlarge screenshots (opens full image in a new tab) ---- */
 .shot-link {
   display: block;
   cursor: zoom-in;
@@ -930,8 +941,10 @@ section { position: relative; }
     <div class="nav__links">
       <a href="#features">Features</a>
       <a href="#formats">Formats</a>
+      <a href="#controls">Controls</a>
+      <a href="#recording">Recording</a>
       <a href="#install">Install</a>
-      <a href="#tuning">Tuning</a>
+      <a href="#tuning">Preferences</a>
       <a href="#media">Media</a>
       <a href="#about">About</a>
     </div>
@@ -954,11 +967,11 @@ section { position: relative; }
       <div></div>
       <div style="display:grid; grid-template-columns: 1fr; gap: 32px;">
         <div>
-          <p class="hero__lede">          
+          <p class="hero__lede">
             CaveViewer is a free 3D viewer built for cave divers and survey
             teams, made to open photogrammetry scans too large for anything
-            else — from a few hundred megabytes up past 150GB — and fly
-            through them smoothly on Windows, macOS, or Linux.
+            else — models far bigger than your computer's memory — and fly
+            through them smoothly on Windows, macOS, and Linux.
           </p>
           <div class="hero__actions">
             <a class="btn btn--primary" href="https://github.com/KernalPanic/CaveViewer/releases/latest">Download</a>
@@ -970,6 +983,7 @@ section { position: relative; }
           <div class="row"><span>STATUS</span><span class="amber">READY</span></div>
           <div class="row"><span>PLATFORMS</span><span class="amber">WIN · MAC · LINUX</span></div>
           <div class="row"><span>SOURCE FORMATS</span><span class="amber">.OBJ · .GLB</span></div>
+          <div class="row"><span>RECORDING</span><span class="amber">MP4</span></div>
           <div class="row"><span>LICENSE COST</span><span class="amber">$0</span></div>
           <hr>
           <div class="row"><span>NETWORK REQUIRED</span><span>NO</span></div>
@@ -982,9 +996,9 @@ section { position: relative; }
 
   <div class="wrap">
     <div class="shot shot--hero">
-      <a class="shot-link" href="images/screenshot-hero.jpg" target="_blank" rel="noopener"><img src="images/screenshot-hero.jpg" alt="CaveViewer rendering a textured cave passage in blue-lit photogrammetry detail, with the minimap and control column visible"></a>
+      <a class="shot-link" href="images/screenshot-hero.jpg" target="_blank" rel="noopener"><img src="images/screenshot-hero.jpg" alt="CaveViewer rendering a textured cave passage in photogrammetry detail, with the minimap and bottom-right control column visible"></a>
     </div>
-    <p class="shot-caption">Inside an actual cave scan, fully textured — minimap bottom-left, brightness / global light / distance / mesh / texture / shade / open / help / color controls bottom-right.</p>
+    <p class="shot-caption">Inside an actual cave scan, fully textured — minimap bottom-left, and the full control column bottom-right: brightness, global light, distance, then mesh / texture / shade / open / help / color / rec.</p>
   </div>
 
   <section class="section" id="features">
@@ -1003,58 +1017,67 @@ section { position: relative; }
           <div class="passage">
             <p class="passage__label">Navigation</p>
             <h3>Fly through it like you're really there</h3>
-            <p>Free-fly camera — WASD to move and strafe, E/Q for up and
-            down, hold left-click and move the mouse to look around, Z/X
-            for a barrel roll, and Shift for a speed boost. Camera
-            bookmarks (save a view with Ctrl+1–9, jump back with 1–9,
-            clear one with Del+1–9) let you return to a spot instantly.</p>
+            <p>Free-fly camera with no gravity or floor — WASD to move and
+            strafe, E and Q for up and down, and hold left-click while moving
+            the mouse to look around (or use J/L/I/K on the keyboard). Z/X
+            barrel-roll the view, and Shift is a speed boost. Camera bookmarks
+            let you return to a spot instantly — save with Ctrl+1–9, jump back
+            with 1–9, clear one with Del+1–9.</p>
           </div>
           <div class="passage">
             <p class="passage__label">Lighting</p>
             <h3>Headlamp, plus an ambient fill when you need it</h3>
             <p>Adjustable headlamp brightness for the cone in front of you,
-            and a separate global ambient light to wash out shadows across
+            and a separate global light that raises a flat ambient fill across
             the whole cave when you want to see everything at once.</p>
           </div>
           <div class="passage">
             <p class="passage__label">Orientation</p>
             <h3>A minimap that knows where the passage actually is</h3>
             <p>Click anywhere on the minimap to jump there instantly — it
-            lands you inside the actual passage near your current depth,
-            not floating in empty rock. A Reset View button squares your
-            camera back to level without moving you.</p>
+            lands you inside the actual passage near your current depth, not
+            floating in empty rock. Ctrl+0 levels your view back to the
+            horizon without moving you.</p>
           </div>
           <div class="passage">
             <p class="passage__label">Inspection</p>
             <h3>Mesh, texture, or flat-faceted shading</h3>
             <p>Toggle wireframe to inspect scan density and quality, toggle
-            photo texture on or off, and switch between smooth and
-            flat-faceted shading to see the raw triangulation of the scan.</p>
+            the photo texture on or off, and switch between smooth and
+            flat-faceted shading to read the raw triangulation of the scan.</p>
             <div class="passage__shot">
-              <a class="shot-link" href="images/screenshot-mesh-texture.jpg" target="_blank" rel="noopener"><img src="images/screenshot-mesh-texture.jpg" alt="CaveViewer showing a dense cave mesh in pure wireframe mode, Mesh on and Texture off, render distance pushed up to 10"></a>
+              <a class="shot-link" href="images/screenshot-mesh-texture.jpg" target="_blank" rel="noopener"><img src="images/screenshot-mesh-texture.jpg" alt="CaveViewer showing a dense cave mesh in pure wireframe mode, Mesh on and Texture off"></a>
             </div>
+          </div>
+          <div class="passage">
+            <p class="passage__label">Recording</p>
+            <h3>Record a clean flythrough to MP4</h3>
+            <p>Press REC to arm a 3-2-1 countdown; the interface clears and
+            CaveViewer records your flight straight to an MP4 file — no
+            in-memory buffer. Stop or cancel any time with Shift+R.
+            <a href="#recording">Full breakdown below.</a></p>
           </div>
           <div class="passage">
             <p class="passage__label">Multiple maps</p>
             <h3>Switch caves without closing the program</h3>
-            <p>Open a different map mid-session with one click. First-time
-            imports show real progress in-window; maps you've opened before
-            load instantly from a local cache.</p>
+            <p>Open a different map mid-session with one click, or Ctrl+O.
+            First-time imports show real progress in-window; maps you've opened
+            before load instantly from a local cache.</p>
           </div>
           <div class="passage">
             <p class="passage__label">Always current</p>
             <h3>Download updates from the launch screen</h3>
-            <p>Start the download, keep using your maps, and return to the
-            launch screen whenever convenient. CaveViewer verifies the package
-            and reveals it for manual installation, but never runs or installs
-            it for you.</p>
+            <p>CaveViewer checks a signed update manifest on launch. Start a
+            download and keep working — it continues in the background. After
+            verifying the package, CaveViewer keeps it in your Downloads folder
+            and reveals it for you to install manually. It never runs or
+            installs anything for you.</p>
           </div>
           <div class="passage">
             <p class="passage__label">Any machine</p>
             <h3>Windows, macOS, and Linux, the same way</h3>
-            <p>Download the build for your system and run it — no Python
-            install, no terminal commands, no dependencies to track down.
-            The controls and features are identical everywhere.</p>
+            <p>Download the build for your system and run it. The controls and
+            features are identical everywhere.</p>
           </div>
           <div class="passage">
             <p class="passage__label">No size limit</p>
@@ -1086,14 +1109,13 @@ section { position: relative; }
           </div>
           <div class="passage">
             <p class="passage__label">Tuning</p>
-            <h3>Advanced settings for underpowered laptops and huge caves</h3>
-            <p>An optional settings panel lets you cap how much RAM and GPU
-            memory CaveViewer is allowed to use, how many background
-            threads help load and import chunks, and how big those chunks
-            are — useful if you're running on a laptop, or importing a scan
-            on the larger end. <a href="#tuning">Full breakdown below.</a></p>
+            <h3>Preferences for underpowered laptops and huge caves</h3>
+            <p>An optional Preferences panel lets you cap how much RAM and GPU
+            memory CaveViewer uses, how many background threads load and import
+            chunks, and how big those chunks are — useful on a laptop, or when
+            importing a scan on the larger end. <a href="#tuning">Full breakdown below.</a></p>
             <div class="passage__shot">
-              <a class="shot-link" href="images/screenshot-advanced-settings.png" target="_blank" rel="noopener"><img src="images/screenshot-advanced-settings.png" alt="CaveViewer's Advanced Settings window, showing Streaming Performance and Map Parsing fields"></a>
+              <a class="shot-link" href="images/screenshot-preferences-streaming.png" target="_blank" rel="noopener"><img src="images/screenshot-preferences-streaming.png" alt="CaveViewer's Preferences window, Streaming tab, showing memory and worker fields"></a>
             </div>
           </div>
           <div class="passage">
@@ -1104,7 +1126,7 @@ section { position: relative; }
             background that makes wireframe or thin passages easier to
             read against.</p>
             <div class="passage__shot">
-              <a class="shot-link" href="images/screenshot-color-picker.jpg" target="_blank" rel="noopener"><img src="images/screenshot-color-picker.jpg" alt="CaveViewer's Background Color panel open, with R, G, and B sliders set to a dusty blue"></a>
+              <a class="shot-link" href="images/screenshot-color-picker.jpg" target="_blank" rel="noopener"><img src="images/screenshot-color-picker.jpg" alt="CaveViewer's Background Color panel open, with R, G, and B sliders"></a>
             </div>
           </div>
         </div>
@@ -1114,13 +1136,12 @@ section { position: relative; }
 
   <section class="section" id="formats">
     <div class="section__grid">
-
       <p class="section__eyebrow">Station 02<br>Compatibility</p>
       <div>
         <h2>Bring your own scan</h2>
         <p class="section__lede">
           CaveViewer reads the formats survey and photogrammetry software
-          actually export. Drop in a folder, and it figures out the rest.
+          actually export. Point it at a folder, and it works out the rest.
         </p>
         <div class="formats">
           <div class="format-chip"><b>.OBJ</b> + .MTL + tiled .JPG — Agisoft Metashape and similar photogrammetry exports</div>
@@ -1130,42 +1151,80 @@ section { position: relative; }
     </div>
   </section>
 
-  <section class="section">
+  <section class="section" id="controls">
     <div class="section__grid">
       <p class="section__eyebrow">Station 03<br>On Screen</p>
       <div>
-        <h2>Everything you need is one column, one corner</h2>
+        <h2>Every control in one column, one corner</h2>
         <p class="section__lede">
           Every adjustable control — headlamp brightness, global light,
-          render distance, mesh and texture toggles, the background color
-          picker, switching maps — lives in a single column anchored to the
-          bottom-right corner, and applies live while you're still flying.
+          render distance, the mesh/texture/shade toggles, the color picker,
+          opening another map, and recording — lives in a single column
+          anchored to the bottom-right corner, and applies live while you're
+          still flying.
         </p>
         <div class="readout">
-          <div><span class="dim">BRIGHTNESS</span> − 6 + &nbsp;&nbsp; <span class="dim">GLOBAL LIGHT</span> − 6 + &nbsp;&nbsp; <span class="dim">DISTANCE</span> − 3 +</div>
-          <div><span class="dim">[ MESH ]  [ TEXTURE ]  [ SHADE ]  [ OPEN ]  [ HELP ]  [ COLOR ]</span></div>
+          <div><span class="dim">BRIGHTNESS</span> − 5 + &nbsp;&nbsp; <span class="dim">GLOBAL LIGHT</span> − 5 + &nbsp;&nbsp; <span class="dim">DISTANCE</span> − 3 +</div>
+          <div><span class="dim">[ MESH ]  [ TEXTURE ]  [ SHADE ]&nbsp;&nbsp;&nbsp;[ OPEN ]  [ HELP ]  [ COLOR ]  [ REC ]</span></div>
         </div>
         <div class="shot-pair" style="margin-top: 28px;">
           <div>
             <div class="shot">
-              <a class="shot-link" href="images/screenshot-control-column.jpg" target="_blank" rel="noopener"><img src="images/screenshot-control-column.jpg" alt="Close-up of CaveViewer's bottom-right control column: brightness, global light, distance, then Mesh, Texture, Shade, Open, Help, and Color buttons"></a>
+              <a class="shot-link" href="images/screenshot-control-column.png" target="_blank" rel="noopener"><img src="images/screenshot-control-column.png" alt="Close-up of CaveViewer's bottom-right control column: Brightness, Global Light, Distance, then Mesh, Texture, Shade, Open, Help, Color, and Rec buttons"></a>
             </div>
-            <p class="shot-caption">The whole column, live — Mesh, Texture, and the Shade toggle for switching between smooth and flat-faceted surfaces.</p>
+            <p class="shot-caption">The whole column, live — the three steppers up top, then Mesh / Texture / Shade, then Open / Help / Color / Rec.</p>
           </div>
           <div>
             <div class="shot">
-              <a class="shot-link" href="images/screenshot-loading-overlay.jpg" target="_blank" rel="noopener"><img src="images/screenshot-loading-overlay.jpg" alt="CaveViewer's full-screen controls reference, listing every key and button, shown while a cave loads"></a>
+              <a class="shot-link" href="images/screenshot-controls.png" target="_blank" rel="noopener"><img src="images/screenshot-controls.png" alt="CaveViewer's full-screen controls reference, grouped into Move, Look, Navigate, and Record"></a>
             </div>
-            <p class="shot-caption">This full reference appears automatically while a map loads, and anytime after via the HELP button — including camera bookmark slots (save with Ctrl+1–9, recall with 1–9, clear with Del+1–9).</p>
+            <p class="shot-caption">This full reference appears automatically while a map loads, and any time after via the HELP button — grouped into Move, Look, Navigate, and Record, including the camera bookmark slots.</p>
           </div>
         </div>
       </div>
     </div>
   </section>
 
+  <section class="section" id="recording">
+    <div class="section__grid">
+      <p class="section__eyebrow">Station 04<br>On The Record</p>
+      <div>
+        <h2>Record a clean flight to share</h2>
+        <p class="section__lede">
+          CaveViewer can capture your flythrough as a video, straight to disk
+          while you fly — nothing is held in memory, so even a long recording
+          won't balloon your RAM.
+        </p>
+        <div class="rec-lead">
+          <div>
+            <p style="margin-top:0;">Press REC to start a short 3-2-1 countdown. The minimap, controls,
+            and control column disappear so nothing clutters the shot, then
+            recording begins. Press Shift+R to cancel the countdown or to stop
+            a recording in progress.</p>
+            <p>Files are saved as MP4 to <span class="mono" style="color: var(--amber);">~/Movies/CaveViewer/</span>
+            (you can change this folder under Preferences → Storage), scaled to
+            1080p by default so they play smoothly anywhere. Each file is named
+            for the date and time it was captured, e.g.
+            <span class="mono">CaveViewerDive-20260715-162609.mp4</span>.</p>
+          </div>
+          <div>
+            <div class="shot">
+              <a class="shot-link" href="images/screenshot-recording-countdown.png" target="_blank" rel="noopener"><img src="images/screenshot-recording-countdown.png" alt="CaveViewer with the interface cleared and an amber ring counting down before recording begins"></a>
+            </div>
+            <p class="shot-caption">REC armed — the interface clears and an amber ring counts down before capture starts.</p>
+          </div>
+        </div>
+        <div class="shot settings-shot" style="max-width: 620px;">
+          <a class="shot-link" href="images/screenshot-recording-saved.png" target="_blank" rel="noopener"><img src="images/screenshot-recording-saved.png" alt="CaveViewer showing the Recording saved confirmation with the output MP4 file path"></a>
+        </div>
+        <p class="shot-caption">When you stop, CaveViewer confirms the save and shows exactly where the MP4 landed.</p>
+      </div>
+    </div>
+  </section>
+
   <section class="section" id="install">
     <div class="section__grid">
-      <p class="section__eyebrow">Station 04<br>Getting In</p>
+      <p class="section__eyebrow">Station 05<br>Getting In</p>
       <div>
         <h2>Install</h2>
         <p class="section__lede">
@@ -1176,31 +1235,31 @@ section { position: relative; }
           <li class="step">
             <div>
               <h4>Download the build for your platform</h4>
-              <p>From the <a href="https://github.com/KernalPanic/CaveViewer/releases/latest">Releases page</a>, grab the <code>.dmg</code> for macOS, the <code>.zip</code> for Windows, or the Linux x86_64 <code>.AppImage</code>.</p>
+              <p>From the <a href="https://github.com/KernalPanic/CaveViewer/releases/latest">Releases page</a>, grab the <code>.dmg</code> for macOS (Apple Silicon or Intel), the <code>.zip</code> for Windows, or the Linux x86_64 <code>.AppImage</code>.</p>
             </div>
           </li>
           <li class="step">
             <div>
               <h4>Install it</h4>
               <p><b>macOS:</b> open the DMG and drag CaveViewer into Applications. The first time it opens, go to Settings → Privacy &amp; Security and allow it to run.<br>
-              <b>Windows:</b> extract the zip, open the <code>setup</code> folder, and double-click <code>Launch_Setup.bat</code>. Click Install and let it check for Python, install the Visual C++ runtime and required libraries, open a firewall rule so update checks can reach GitHub, and create a Desktop shortcut.<br>
+              <b>Windows:</b> extract the zip and double-click <code>launch.bat</code>. It installs Python if needed, the Visual C++ runtime and required libraries, opens a firewall rule so update checks can reach GitHub, and creates a Desktop shortcut.<br>
               <b>Linux:</b> run <code>chmod +x CaveViewer-*.AppImage</code>, then launch it directly — no system install needed.</p>
               <div class="shot-quad">
                 <div>
                   <div class="shot">
-                    <a class="shot-link" href="images/setup-ready.png" target="_blank" rel="noopener"><img src="images/setup-ready.png" alt="CaveViewer Setup window, ready to install, listing five setup steps"></a>
+                    <a class="shot-link" href="images/setup-ready.png" target="_blank" rel="noopener"><img src="images/setup-ready.png" alt="CaveViewer Setup window, ready to install, listing the setup steps"></a>
                   </div>
                   <p class="shot-caption">Ready to install</p>
                 </div>
                 <div>
                   <div class="shot">
-                    <a class="shot-link" href="images/setup-progress.png" target="_blank" rel="noopener"><img src="images/setup-progress.png" alt="CaveViewer Setup window mid-install, preparing the Visual C++ runtime, with a live log"></a>
+                    <a class="shot-link" href="images/setup-progress.png" target="_blank" rel="noopener"><img src="images/setup-progress.png" alt="CaveViewer Setup window mid-install, with a live log"></a>
                   </div>
                   <p class="shot-caption">Installing, live log</p>
                 </div>
                 <div>
                   <div class="shot">
-                    <a class="shot-link" href="images/setup-success.png" target="_blank" rel="noopener"><img src="images/setup-success.png" alt="CaveViewer Setup window showing the CaveViewer is ready dialog with all five steps checked off"></a>
+                    <a class="shot-link" href="images/setup-success.png" target="_blank" rel="noopener"><img src="images/setup-success.png" alt="CaveViewer Setup window showing the CaveViewer is ready dialog with all steps checked off"></a>
                   </div>
                   <p class="shot-caption">Ready to launch</p>
                 </div>
@@ -1216,120 +1275,146 @@ section { position: relative; }
           <li class="step">
             <div>
               <h4>Launch CaveViewer</h4>
-              <p>You'll land on the splash screen with a Select Map button — or click Download Sample Maps if you don't have a scan of your own yet and want to try it out first.</p>
+              <p>You'll land on the splash screen. Click Open Map Folder… — or Download sample maps if you don't have a scan of your own yet and want to try it first.</p>
             </div>
           </li>
           <li class="step">
             <div>
               <h4>Point it at your map</h4>
-              <p>Select the folder containing your <code>.obj</code>+<code>.mtl</code> or <code>.glb</code> file. First time opening a new map, it imports and caches it once — every open after that is instant.</p>
+              <p>Choose the folder with your <code>.obj</code> (+ <code>.mtl</code> + textures) or <code>.glb</code> file. The first time you open a new map it imports and caches it once — every open after that is instant.</p>
             </div>
           </li>
         </ol>
         <div class="shot-pair">
           <div>
             <div class="shot">
-              <a class="shot-link" href="images/screenshot-splash.png" target="_blank" rel="noopener"><img src="images/screenshot-splash.png" alt="CaveViewer's splash screen with the logo, version number, Select Map button, Advanced Settings link, and Download sample maps link"></a>
+              <a class="shot-link" href="images/screenshot-splash.png" target="_blank" rel="noopener"><img src="images/screenshot-splash.png" alt="CaveViewer's splash screen with the logo, version number, Open Map Folder button, Preferences link, and Download sample maps link"></a>
             </div>
-            <p class="shot-caption">What you see on launch — click Select Map and pick your map folder, or try a sample map instead.</p>
+            <p class="shot-caption">What you see on launch — click Open Map Folder… or try a sample map.</p>
           </div>
           <div>
             <div class="shot">
-              <a class="shot-link" href="images/screenshot-importing.png" target="_blank" rel="noopener"><img src="images/screenshot-importing.png" alt="CaveViewer's progress screen while importing a brand-new map for the first time, parsing geometry"></a>
+              <a class="shot-link" href="images/screenshot-importing.png" target="_blank" rel="noopener"><img src="images/screenshot-importing.png" alt="CaveViewer's progress screen while importing a brand-new map for the first time"></a>
             </div>
             <p class="shot-caption">First time opening a new map only — every open after this is instant.</p>
           </div>
         </div>
         <div class="shot" style="margin-top: 28px; max-width: 400px;">
-          <a class="shot-link" href="images/screenshot-sample-maps.png" target="_blank" rel="noopener"><img src="images/screenshot-sample-maps.png" alt="CaveViewer's Sample Maps dialog, listing Devils Eye (Open) and Peacock Springs Cave System (Save to)"></a>
+          <a class="shot-link" href="images/screenshot-sample-maps.png" target="_blank" rel="noopener"><img src="images/screenshot-sample-maps.png" alt="CaveViewer's Sample Maps dialog, listing Devils Eye and Peacock Springs Cave System"></a>
         </div>
-        <p class="shot-caption">No scan of your own yet? Download a real cave system from the Sample Maps dialog and open it the same way.</p>
+        <p class="shot-caption">No scan of your own yet? Download a real cave system — Devils Eye or Peacock Springs — from the Sample Maps dialog and open it the same way.</p>
       </div>
     </div>
   </section>
 
   <section class="section" id="tuning">
     <div class="section__grid">
-      <p class="section__eyebrow">Station 05<br>Tuning</p>
+      <p class="section__eyebrow">Station 06<br>Tuning</p>
       <div>
-        <h2>Advanced Settings, explained</h2>
+        <h2>Preferences, explained</h2>
         <p class="section__lede">
           Most people never need to open this. It's here for large maps on
-          constrained hardware, or for squeezing more performance out of a
-          strong one. <b style="color: var(--amber);">Streaming Performance</b>
-          applies live to your current session — <b style="color: var(--amber);">Map Parsing</b>
-          only affects a map the next time it's imported or re-imported.
+          constrained hardware, or for squeezing more out of a strong machine.
+          Open it from the splash screen with <b style="color: var(--amber);">Preferences</b>.
+          <b style="color: var(--amber);">Streaming</b> settings apply live to your current
+          session; <b style="color: var(--amber);">Import</b> settings only affect a map the
+          next time it's imported or re-imported; <b style="color: var(--amber);">Storage</b>
+          sets where recordings are saved.
         </p>
 
         <div class="settings-cols">
           <div class="settings-col">
-            <h4>Streaming Performance</h4>
+            <h4>Streaming</h4>
             <p class="col-note">Applies immediately, every launch</p>
 
             <div class="setting-row">
-              <span class="name">System RAM target (%)</span><span class="default">default 80</span>
-              <p class="blurb">Higher lets more chunks stay resident at once, at the cost of leaving less RAM for everything else running.</p>
+              <span class="name">System RAM target (%)</span><span class="default">default 8</span>
+              <p class="blurb">Share of total system RAM that loaded chunks are allowed to use. Higher keeps more resident at once, at the cost of leaving less RAM for everything else.</p>
             </div>
             <div class="setting-row">
               <span class="name">GPU memory target (%)</span><span class="default">default 70</span>
-              <p class="blurb">Higher keeps more geometry loaded on the GPU — push it too high on a weaker card and you risk stutter instead of smoothness.</p>
+              <p class="blurb">Share of the detected GPU memory budget used for loaded chunks. Push it too high on a weaker card and you risk stutter instead of smoothness.</p>
             </div>
             <div class="setting-row">
               <span class="name">GPU memory override (GB)</span><span class="default">default empty</span>
-              <p class="blurb">Only needed if auto-detection gets your GPU's memory size wrong — set it manually to correct that.</p>
+              <p class="blurb">Optional manual GPU memory ceiling. Only needed if auto-detection gets your GPU's size wrong; a smaller detected GPU still wins.</p>
             </div>
             <div class="setting-row">
-              <span class="name">Worker count</span><span class="default">default CPUs − 3</span>
-              <p class="blurb">More threads load chunks faster in the background, but compete with the render thread for CPU time.</p>
+              <span class="name">Loading worker limit</span><span class="default">default 2</span>
+              <p class="blurb">Cap on background chunk-loading threads. The actual count can drop lower when CPU or RAM is constrained.</p>
             </div>
             <div class="setting-row">
-              <span class="name">CPU cores to keep free</span><span class="default">default 3</span>
-              <p class="blurb">Reserves cores for the rest of your system instead of handing everything to streaming — raise it on a machine you're also using for other things.</p>
+              <span class="name">Loading CPUs to keep free</span><span class="default">default 3</span>
+              <p class="blurb">Logical CPUs held back from the loading pool, so streaming doesn't take over the whole machine.</p>
             </div>
             <div class="setting-row">
               <span class="name">Chunk uploads per frame</span><span class="default">default 1</span>
-              <p class="blurb">A higher cap brings new chunks on screen faster when flying fast, at the cost of occasional frame-time spikes.</p>
+              <p class="blurb">Hard cap on how many ready chunks are uploaded to the GPU each frame. A higher cap brings new chunks on screen faster when flying fast, at the cost of occasional frame-time spikes.</p>
             </div>
             <div class="setting-row">
               <span class="name">Upload budget (ms)</span><span class="default">default 3.0</span>
-              <p class="blurb">A larger budget uploads more per frame before yielding — smoother streaming, but a slightly heavier hit each frame it happens.</p>
+              <p class="blurb">Soft per-frame time budget for chunk uploads. A larger budget uploads more before yielding — smoother streaming, but a slightly heavier hit each frame it happens.</p>
             </div>
           </div>
 
           <div class="settings-col">
-            <h4>Map Parsing</h4>
+            <h4>Import</h4>
             <p class="col-note">Only affects the next import / re-import</p>
 
             <div class="setting-row">
               <span class="name">Import chunk size (m)</span><span class="default">default 50</span>
-              <p class="blurb">Smaller chunks give finer streaming control in tight, twisty passages; larger chunks mean fewer draw calls in big open rooms.</p>
+              <p class="blurb">Spatial chunk size used when building new cache data. Smaller chunks give finer streaming control in tight, twisty passages; larger chunks mean fewer draw calls in big open rooms.</p>
             </div>
             <div class="setting-row">
-              <span class="name">OBJ scan throttle (ms)</span><span class="default">default 0 / 1 on Windows</span>
-              <p class="blurb">A small yield during scanning keeps the machine responsive on slower disks, at the cost of a slightly longer import.</p>
+              <span class="name">OBJ scan throttle (ms)</span><span class="default">default 0 (1 on Windows)</span>
+              <p class="blurb">A small yield during OBJ scanning keeps the machine responsive on slower disks, at the cost of a slightly longer import.</p>
             </div>
             <div class="setting-row">
-              <span class="name">Import worker count</span><span class="default">default CPUs − 2</span>
-              <p class="blurb">More threads speed up the one-time cache build, competing with whatever else is running on your machine while it works.</p>
+              <span class="name">Cache-building worker limit</span><span class="default">default 1</span>
+              <p class="blurb">Cap on chunk-cache writer threads for the one-time import. The actual count can drop lower when CPU or RAM is constrained.</p>
             </div>
             <div class="setting-row">
-              <span class="name">Import CPUs to keep free</span><span class="default">default 2</span>
-              <p class="blurb">Reserves cores during import so the rest of your system doesn't grind to a halt while a huge map is being chunked.</p>
+              <span class="name">Cache-build CPUs to keep free</span><span class="default">default 2</span>
+              <p class="blurb">Logical CPUs reserved during import so the rest of your system stays usable while a huge map is being chunked.</p>
+            </div>
+          </div>
+
+          <div class="settings-col">
+            <h4>Storage</h4>
+            <p class="col-note">Where files are saved</p>
+
+            <div class="setting-row">
+              <span class="name">Recordings folder</span><span class="default">default ~/Movies/CaveViewer</span>
+              <p class="blurb">Where saved MP4 flight recordings are stored. Point it anywhere writable, or a folder that can be created.</p>
             </div>
           </div>
         </div>
 
-        <div class="shot settings-shot">
-          <a class="shot-link" href="images/screenshot-advanced-settings.png" target="_blank" rel="noopener"><img src="images/screenshot-advanced-settings.png" alt="CaveViewer's Advanced Settings window, showing Streaming Performance and Map Parsing fields side by side"></a>
+        <div class="shot-pair" style="margin-top: 32px;">
+          <div>
+            <div class="shot">
+              <a class="shot-link" href="images/screenshot-preferences-streaming.png" target="_blank" rel="noopener"><img src="images/screenshot-preferences-streaming.png" alt="CaveViewer Preferences window, Streaming tab"></a>
+            </div>
+            <p class="shot-caption">Streaming — runtime memory, worker, and upload behavior.</p>
+          </div>
+          <div>
+            <div class="shot">
+              <a class="shot-link" href="images/screenshot-preferences-import.png" target="_blank" rel="noopener"><img src="images/screenshot-preferences-import.png" alt="CaveViewer Preferences window, Import tab"></a>
+            </div>
+            <p class="shot-caption">Import — chunk size and cache-build behavior.</p>
+          </div>
         </div>
-        <p class="shot-caption">Opened from the splash screen's Advanced Settings link. On Linux, saved under <span class="mono">~/.config/caveviewer/</span>; on macOS and Windows, saved under <span class="mono">~/.caveviewer/</span>.</p>
+        <div class="shot settings-shot" style="max-width: 620px;">
+          <a class="shot-link" href="images/screenshot-preferences-storage.png" target="_blank" rel="noopener"><img src="images/screenshot-preferences-storage.png" alt="CaveViewer Preferences window, Storage tab, showing the recordings folder"></a>
+        </div>
+        <p class="shot-caption">Opened from the splash screen's Preferences link. Saved on Linux under <span class="mono">~/.config/caveviewer/</span>; on macOS and Windows under <span class="mono">~/.caveviewer/</span>.</p>
       </div>
     </div>
   </section>
 
   <section class="section" id="media">
     <div class="section__grid">
-      <p class="section__eyebrow">Station 06<br>Field Notes</p>
+      <p class="section__eyebrow">Station 07<br>Field Notes</p>
       <div>
         <h2>The dives behind the data</h2>
         <p class="section__lede">
@@ -1369,7 +1454,7 @@ section { position: relative; }
 
   <section class="section" id="about">
     <div class="section__grid">
-      <p class="section__eyebrow">Station 07<br>Surface</p>
+      <p class="section__eyebrow">Station 08<br>Surface</p>
       <div>
         <h2>Built by people who use it</h2>
         <p class="section__lede">
@@ -1447,7 +1532,6 @@ section { position: relative; }
   placeStations();
   update();
 })();
-
 </script>
 </body>
 </html>
