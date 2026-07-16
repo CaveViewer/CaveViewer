@@ -3,6 +3,9 @@ name: Essential Tests
 
 on:
   pull_request:
+    branches:
+      - main
+      - "release/**"
   push:
     branches:
       - main
@@ -14,10 +17,77 @@ permissions:
   contents: read
 
 jobs:
-  essential-tests:
-    name: Settings and I/O regression suite
+  sanity:
+    name: Syntax, import, and whitespace sanity
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile source tree
+        run: python -m compileall -q src/caveviewer
+
+      - name: Import lightweight entry modules
+        run: |
+          PYTHONPATH=src python - <<'PY'
+          import caveviewer
+          import caveviewer.app
+          import caveviewer.__main__
+          PY
+
+      - name: Check whitespace
+        run: git diff --check
+
+  unit-tests:
+    name: Unit tests (${{ matrix.label }})
+    needs: sanity
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux
+            os: ubuntu-latest
+          - label: Windows
+            os: windows-latest
+          - label: macOS
+            os: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install runtime and test dependencies
+        run: |
+          python -m pip install --upgrade pip -r requirements.txt -r requirements-dev.txt
+          python -m pip install --no-deps -e .
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit
+
+  coverage-and-metadata:
+    name: Coverage and Linux metadata
+    needs: sanity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -96,7 +166,76 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: essential-test-coverage
+          name: essential-test-coverage-linux
           path: coverage.xml
           if-no-files-found: ignore
           retention-days: 14
+
+  cli-smoke:
+    name: CLI smoke (${{ matrix.label }})
+    needs: sanity
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux
+            os: ubuntu-latest
+          - label: Windows
+            os: windows-latest
+          - label: macOS
+            os: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip -r requirements.txt
+          python -m pip install --no-deps -e .
+
+      - name: Run CLI smoke checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+
+          def run(command):
+              return subprocess.run(
+                  command,
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+
+          module_result = run([sys.executable, "-m", "caveviewer", "--update-branch"])
+          if module_result.returncode != 2:
+              raise SystemExit(
+                  f"module CLI smoke expected exit 2, got "
+                  f"{module_result.returncode}:\n"
+                  f"{module_result.stdout}\n{module_result.stderr}"
+              )
+          if "Error:" not in module_result.stderr:
+              raise SystemExit("module CLI smoke did not report a controlled error")
+
+          script_result = run(["caveviewer", "--update-branch"])
+          if script_result.returncode != 2:
+              raise SystemExit(
+                  f"script CLI smoke expected exit 2, got "
+                  f"{script_result.returncode}:\n"
+                  f"{script_result.stdout}\n{script_result.stderr}"
+              )
+          if "Error:" not in script_result.stderr:
+              raise SystemExit("script CLI smoke did not report a controlled error")
+          PY
