@@ -115,6 +115,7 @@ def test_pyproject_declares_src_package_and_entry_point():
 
     assert '[project.scripts]' in pyproject
     assert 'caveviewer = "caveviewer.__main__:run"' in pyproject
+    assert 'caveviewer-chunker = "caveviewer.chunker:main"' in pyproject
     assert 'where = ["src"]' in pyproject
     assert 'pythonpath = ["src"]' in pyproject
     assert '"caveviewer.resources"' in pyproject

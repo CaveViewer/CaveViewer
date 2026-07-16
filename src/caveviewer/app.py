@@ -22,7 +22,6 @@ Workflow:
 import os
 import sys
 import glob
-import time
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.logging_utils import (
     configure_logging,
@@ -315,7 +314,8 @@ def find_model_file(folder: str) -> dict:
 
 def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
                       extra_progress_cb=None, *, console_progress: bool = True,
-                      pause_requested=None) -> str:
+                      pause_requested=None,
+                      chunk_size: float | None = None) -> str:
     """Parse + chunk the mesh if needed, returning the cache directory.
     Skips straight to the existing cache if one's already valid, since
     re-parsing a 2GB OBJ on every launch would defeat the whole point.
@@ -354,21 +354,11 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         staged_asset_bytes=chunker.cache_assets_size(texture_assets),
     )
 
-    _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
-    _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
-
-    active_chunk_size = chunker.configured_chunk_size()
-    _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
-    try:
-        source_size_gb = os.path.getsize(obj_path) / (1024 ** 3)
-        if source_size_gb >= 10.0:
-            _LOG.info("Large-map tip: for very large sources, try "
-                    f"{chunker.CHUNK_SIZE_ENV_VAR}=64 or 100 to reduce "
-                    "chunk-file count and improve streaming performance.")
-    except OSError:
-        pass
-
-    t_start = time.time()
+    active_chunk_size = (
+        float(chunk_size)
+        if chunk_size is not None
+        else chunker.configured_chunk_size()
+    )
 
     def _emit_progress(stage: str, frac: float):
         frac = max(0.0, min(1.0, frac))
@@ -377,7 +367,6 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         if extra_progress_cb:
             extra_progress_cb(stage, frac)
 
-    _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
     cache_dir = chunker.build_cache_incremental_obj(
         obj_path,
         materials,
@@ -385,21 +374,10 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         cache_dir=target_cache_dir,
         assets=texture_assets,
         pause_requested=pause_requested,
+        chunk_size=active_chunk_size,
     )
     if console_progress:
         _console_newline()
-
-    elapsed = time.time() - t_start
-    manifest = chunker.load_manifest(cache_dir) or {}
-    n_chunks = len(manifest.get("chunks", {}))
-    triangle_count = manifest.get("triangle_count")
-    if isinstance(triangle_count, int):
-        _LOG.info(
-            f"Import complete in {elapsed:.1f}s -- "
-            f"{triangle_count:,} triangles split into {n_chunks:,} spatial chunks."
-        )
-    else:
-        _LOG.info(f"Import complete in {elapsed:.1f}s -- {n_chunks:,} spatial chunks.")
 
     return cache_dir
 
@@ -412,6 +390,7 @@ def import_and_cache_any(
     *,
     console_progress: bool = True,
     pause_requested=None,
+    chunk_size: float | None = None,
 ) -> str:
     """
     Format-agnostic version of import_and_cache() -- dispatches on
@@ -438,6 +417,7 @@ def import_and_cache_any(
             extra_progress_cb=extra_progress_cb,
             console_progress=console_progress,
             pause_requested=pause_requested,
+            chunk_size=chunk_size,
         )
 
     source_path = model_descriptor["glb_path"]
@@ -454,21 +434,11 @@ def import_and_cache_any(
     target_cache_dir = map_cache_build_dir(source_path)
     chunker.ensure_sufficient_disk_space(source_path, target_cache_dir)
 
-    _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
-    _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
-
-    active_chunk_size = chunker.configured_chunk_size()
-    _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
-    try:
-        source_size_gb = os.path.getsize(source_path) / (1024 ** 3)
-        if source_size_gb >= 10.0:
-            _LOG.info("Large-map tip: for very large sources, try "
-                    f"{chunker.CHUNK_SIZE_ENV_VAR}=64 or 100 to reduce "
-                    "chunk-file count and improve streaming performance.")
-    except OSError:
-        pass
-
-    t_start = time.time()
+    active_chunk_size = (
+        float(chunk_size)
+        if chunk_size is not None
+        else chunker.configured_chunk_size()
+    )
 
     parse_weight = 0.5
 
@@ -531,7 +501,6 @@ def import_and_cache_any(
     if console_progress:
         _console_newline()  # newline after the parse progress bar
 
-    _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
     chunker.ensure_sufficient_disk_space(
         source_path,
         target_cache_dir,
@@ -544,14 +513,10 @@ def import_and_cache_any(
         progress_cb=cache_progress,
         cache_dir=target_cache_dir,
         assets=texture_assets,
+        chunk_size=active_chunk_size,
     )
     if console_progress:
         _console_newline()
-
-    elapsed = time.time() - t_start
-    n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
-    _LOG.info(f"Import complete in {elapsed:.1f}s -- "
-              f"{len(mesh.face_pos_idx):,} triangles split into {n_chunks:,} spatial chunks.")
 
     return cache_dir
 

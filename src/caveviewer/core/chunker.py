@@ -1177,7 +1177,7 @@ def _build_incremental_obj_cache_in_directory(
             chunk_size=chunk_size,
         )
 
-    _LOG.info(
+    _LOG.debug(
         "Incremental OBJ import using %d face(s) per batch and %d bucket worker(s).",
         face_batch_size,
         bucket_workers,

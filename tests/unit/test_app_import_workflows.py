@@ -32,7 +32,7 @@ def test_obj_import_reuses_a_valid_cache(monkeypatch):
 
 
 def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textures(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, caplog
 ):
     source = tmp_path / "map.obj"
     source.write_text("mesh", encoding="utf-8")
@@ -77,6 +77,7 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
         "load_manifest",
         lambda _path: {"triangle_count": 2, "chunks": {"0,0": {}, "1,0": {}}},
     )
+    caplog.set_level("INFO")
     result = app.import_and_cache(
         str(source), str(material_file), extra_progress_cb=lambda *item: progress.append(item)
     )
@@ -94,6 +95,10 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
         ("incremental-low", 0.0),
         ("incremental-high", 1.0),
     ]
+    assert "No valid cache found" not in caplog.text
+    assert "Using import chunk size" not in caplog.text
+    assert "No reusable cache found" not in caplog.text
+    assert "Import complete" not in caplog.text
 
 
 @pytest.mark.parametrize("size_behavior", ["large", "error"])
@@ -145,6 +150,7 @@ def test_format_agnostic_obj_import_delegates_all_options(monkeypatch):
         "textures",
         force_rebuild=True,
         extra_progress_cb=callback,
+        chunk_size=12.0,
     )
 
     assert result == "/cache/obj"
@@ -156,6 +162,7 @@ def test_format_agnostic_obj_import_delegates_all_options(monkeypatch):
                 "extra_progress_cb": callback,
                 "console_progress": True,
                 "pause_requested": None,
+                "chunk_size": 12.0,
             },
         )
     ]

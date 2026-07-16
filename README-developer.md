@@ -607,6 +607,112 @@ and `.caveviewer_cache` directories are not auto-discovered.
 | `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 workers | Requested maximum threads used by the in-memory cache builder while writing chunk files. Cache construction starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. Incremental OBJ batch bucketing is controlled separately by `CAVEVIEWER_OBJ_BUCKET_WORKERS`, then finalized sequentially into chunk files. The runtime also honors `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. |
 | `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 logical CPUs | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 
+### Command-line cache compilation
+
+`caveviewer-chunker` compiles or rebuilds managed map caches without launching
+the GUI. It is intended for developers and advanced users who want to run map
+imports from a shell, CI job, cron/systemd timer, or benchmark workflow.
+
+```bash
+caveviewer-chunker --source=/path/to/map-or-folder --chunk-size=64
+```
+
+From a source checkout, the module entry point is equivalent:
+
+```bash
+.venv-dev/bin/python -m caveviewer.chunker \
+  --source=/path/to/map-or-folder \
+  --chunk-size=64
+```
+
+Windows PowerShell examples:
+
+```powershell
+caveviewer-chunker --source="C:\Maps\Peacock.obj" --chunk-size=64
+```
+
+From a source checkout on Windows, use the development virtual environment's
+Python executable:
+
+```powershell
+.\.venv-dev\Scripts\python.exe -m caveviewer.chunker `
+  --source="C:\Maps\Peacock.obj" `
+  --chunk-size=64
+```
+
+Use `--cache-root` when compiled maps should live on a specific drive:
+
+```powershell
+.\.venv-dev\Scripts\python.exe -m caveviewer.chunker `
+  --source="C:\Maps\Peacock.obj" `
+  --cache-root="D:\CaveViewer\maps" `
+  --chunk-size=64 `
+  --json
+```
+
+To have the GUI auto-discover that cache later, launch CaveViewer from a shell
+with the same cache root:
+
+```powershell
+$env:CAVEVIEWER_MAP_CACHE_DIR = "D:\CaveViewer\maps"
+caveviewer
+```
+
+The PowerShell environment assignment applies to the current shell session.
+Set it again in new shells, or configure a persistent user environment variable
+if this cache root should be reused regularly.
+
+The command follows the same public CLI conventions as the shell scripts in
+`scripts/STANDARDS.md`: named options only, `-h`/`--help`, compact usage text,
+and exact errors for positional arguments, unknown options, and missing option
+values. Run the command with `--help` to see the latest supported options,
+defaults, and examples:
+
+```bash
+caveviewer-chunker --help
+```
+
+From a source checkout:
+
+```bash
+.venv-dev/bin/python -m caveviewer.chunker --help
+```
+
+From a Windows source checkout:
+
+```powershell
+.\.venv-dev\Scripts\python.exe -m caveviewer.chunker --help
+```
+
+Normal GUI-compatible output does not require `--cache-root`; CaveViewer uses
+the platform managed map-cache root. Use `--cache-root` when compiled maps
+should live in a specific root folder. For example, this command:
+
+```bash
+caveviewer-chunker \
+  --source=/maps/Peacock.obj \
+  --cache-root=/data/caveviewer/maps \
+  --chunk-size=64
+```
+
+writes a cache similar to:
+
+```text
+/data/caveviewer/maps/Peacock-<source-path-hash>/
+```
+
+The GUI must use the same cache root to auto-discover that cache when opening
+the source map:
+
+```bash
+CAVEVIEWER_MAP_CACHE_DIR=/data/caveviewer/maps caveviewer
+```
+
+If the existing cache is valid and its manifest chunk size matches the
+requested chunk size, the command skips the import. If the existing cache is
+valid but its manifest chunk size differs, the command rebuilds automatically.
+`--force` is only needed to rebuild an already-matching cache.
+
 ### Application storage locations
 
 Unless overridden, CaveViewer stores files in these locations:
