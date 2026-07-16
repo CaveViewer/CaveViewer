@@ -769,6 +769,7 @@ def test_startup_render_presents_splash_before_starting_import():
     window._startup_focus_enabled = False
     window._is_iconified = False
     window._has_map_loaded = False
+    window._import_active = False
     window._pending_import_started = False
     window._pending_import_splash_rendered = False
     window._sync_render_mode_loading_policy = lambda: None
@@ -799,6 +800,7 @@ def test_startup_render_starts_import_when_splash_was_already_presented():
     window._startup_focus_enabled = False
     window._is_iconified = False
     window._has_map_loaded = False
+    window._import_active = False
     window._pending_import_started = False
     window._pending_import_splash_rendered = True
     window._sync_render_mode_loading_policy = lambda: None

@@ -225,7 +225,7 @@ def test_streaming_stays_at_one_worker_at_eighty_percent_ram(
     monkeypatch,
 ):
     cells = {(index, 0, 0) for index in range(4)}
-    all_loaded = threading.Event()
+    first_loaded = threading.Event()
     loaded_count = 0
     loaded_lock = threading.Lock()
 
@@ -233,8 +233,7 @@ def test_streaming_stays_at_one_worker_at_eighty_percent_ram(
         nonlocal loaded_count
         with loaded_lock:
             loaded_count += 1
-            if loaded_count == len(cells):
-                all_loaded.set()
+            first_loaded.set()
         return _chunk(cell)
 
     monkeypatch.setattr(streaming_world.chunker, "load_chunk_file", load_chunk)
@@ -248,7 +247,8 @@ def test_streaming_stays_at_one_worker_at_eighty_percent_ram(
     )
     try:
         world.update(np.zeros(3, dtype=np.float32))
-        assert all_loaded.wait(timeout=2.0)
+        assert first_loaded.wait(timeout=2.0)
+        assert world.config.max_loaded_chunks == 1
         assert len(world._workers) == 1
     finally:
         world.shutdown()

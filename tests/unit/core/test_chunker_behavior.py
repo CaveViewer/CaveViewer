@@ -413,7 +413,17 @@ def test_incremental_obj_cache_progress_never_regresses(tmp_path, monkeypatch):
         del _vertex_data, _batch, _bucket_root, chunk_size
         return 1, {((0, 0, 0), "rock"): "fake-bucket-part"}
 
-    def finalize_buckets(_chunks_dir, _bucket_parts, *, progress_cb=None):
+    def finalize_buckets(
+        _chunks_dir,
+        _bucket_parts,
+        *,
+        progress_cb=None,
+        pause_requested=None,
+        checkpoint_cb=None,
+        initial_manifest_chunks=None,
+        total_cell_count=None,
+    ):
+        del pause_requested, checkpoint_cb, initial_manifest_chunks, total_cell_count
         if progress_cb:
             progress_cb("writing chunk files", 0.66)
         return {
