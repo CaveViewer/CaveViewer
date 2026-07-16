@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import sys
 
 import pytest
 
@@ -108,6 +109,7 @@ def test_non_actionable_update_states_remain_quiet(state):
 
 
 def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     state_home = tmp_path / "state"
     map_root = tmp_path / "maps"
     map_root.mkdir()
