@@ -356,7 +356,6 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     )
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
-    _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
     active_chunk_size = (
         float(chunk_size)
@@ -455,7 +454,6 @@ def import_and_cache_any(
     chunker.ensure_sufficient_disk_space(source_path, target_cache_dir)
 
     _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
-    _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
     active_chunk_size = (
         float(chunk_size)

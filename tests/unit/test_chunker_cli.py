@@ -31,6 +31,7 @@ def test_help_uses_public_command_name(capsys):
     assert "--profile" not in output
     assert "Saved GUI Preferences are not loaded by default." in output
     assert "Built-in import defaults:" in output
+    assert ".venv-dev/bin/python -m caveviewer.chunker" in output
     assert "--chunk-size=50" in output
     assert "--obj-bucket-workers=2" in output
     assert "Cache root default:" in output
