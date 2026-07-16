@@ -19,7 +19,7 @@ All notable changes to this project are documented in this file.
   semantics.
 - Refined the viewer and startup experience across Windows, macOS, and Linux:
   advanced settings, splash sizing, DPI scaling, sample-map dialogs, progress
-  indicators, control-panel rendering, profile viewing, bookmarks, minimap
+  indicators, control-panel rendering, profiI see map chunker evolve into an intelligent module where people don't have to think aboutI see map chunker evolve into an intelligent module where people don't have to think about chunk size (unle chunk size (unlele viewing, bookmarks, minimap
   behavior, FPS/readout handling, and movie recording all received updates.
 - Strengthened update and release infrastructure with signed updater manifests,
   stricter public-key signature checks, platform-specific release workflows,
