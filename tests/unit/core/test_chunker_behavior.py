@@ -380,6 +380,163 @@ def test_incremental_obj_cache_build_writes_standard_chunks(tmp_path, monkeypatc
     np.testing.assert_allclose(second.groups["sand"].normals, [[0.0, 0.0, 1.0]] * 3)
 
 
+def test_incremental_obj_cache_progress_never_regresses(tmp_path, monkeypatch):
+    source = tmp_path / "map.obj"
+    source.write_text("unused", encoding="utf-8")
+    cache_dir = tmp_path / "managed" / "map-key"
+    progress: list[tuple[str, float]] = []
+    vertex_data = obj_parser.ObjVertexData(
+        positions=np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
+        uvs=np.zeros((0, 2), dtype=np.float32),
+        normals=np.zeros((0, 3), dtype=np.float32),
+        face_count=100,
+    )
+    batch = obj_parser.ObjFaceBatch(
+        face_pos_idx=np.zeros((1, 3), dtype=np.int32),
+        face_uv_idx=np.full((1, 3), -1, dtype=np.int32),
+        face_nrm_idx=np.full((1, 3), -1, dtype=np.int32),
+        material_names=["rock"],
+    )
+
+    def parse_vertices(_path, progress_cb=None, preflight_cb=None):
+        if progress_cb:
+            progress_cb("parsing vertices", 1.0)
+        return vertex_data
+
+    def iter_batches(_path, *, batch_size, progress_cb=None):
+        del batch_size
+        if progress_cb:
+            progress_cb("bucketing faces", 1.0)
+        yield batch
+
+    def write_bucket_parts(_vertex_data, _batch, _bucket_root, *, chunk_size):
+        del _vertex_data, _batch, _bucket_root, chunk_size
+        return 1, {((0, 0, 0), "rock"): "fake-bucket-part"}
+
+    def finalize_buckets(_chunks_dir, _bucket_parts, *, progress_cb=None):
+        if progress_cb:
+            progress_cb("writing chunk files", 0.66)
+        return {
+            "0_0_0": {
+                "materials": ["rock"],
+                "bounds_min": [0.0, 0.0, 0.0],
+                "bounds_max": [1.0, 1.0, 1.0],
+            }
+        }
+
+    monkeypatch.setattr(chunker, "parse_obj_vertices", parse_vertices)
+    monkeypatch.setattr(chunker, "iter_obj_face_batches", iter_batches)
+    monkeypatch.setattr(
+        chunker, "_write_obj_face_batch_bucket_parts", write_bucket_parts
+    )
+    monkeypatch.setattr(chunker, "_finalize_incremental_buckets", finalize_buckets)
+
+    chunker.build_cache_incremental_obj(
+        str(source),
+        {"rock": obj_parser.Material("rock", "rock.jpg")},
+        cache_dir=str(cache_dir),
+        chunk_size=8.0,
+        face_batch_size=1,
+        bucket_workers=1,
+        progress_cb=lambda stage, fraction: progress.append((stage, fraction)),
+    )
+
+    fractions = [fraction for _stage, fraction in progress]
+    assert fractions == sorted(fractions)
+    assert ("bucketing faces", 0.65) in progress
+    assert progress[-1] == ("done", 1.0)
+
+
+def test_incremental_obj_import_pauses_and_resumes_from_checkpoint(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    source = tmp_path / "map.obj"
+    source.write_text(
+        "\n".join(
+            [
+                "v 0 0 0",
+                "v 1 0 0",
+                "v 0 1 0",
+                "v 10 0 0",
+                "v 11 0 0",
+                "v 10 1 0",
+                "vn 0 0 1",
+                "usemtl rock",
+                "f 1//1 2//1 3//1",
+                "usemtl sand",
+                "f 4//1 5//1 6//1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cache_dir = tmp_path / "managed" / "map-key"
+    monkeypatch.setattr(
+        chunker.hardware_memory,
+        "detect_ram_snapshot",
+        lambda: hardware_memory.RamSnapshot(
+            total_bytes=64 * 1024**3,
+            available_bytes=48 * 1024**3,
+        ),
+    )
+    pause_checks = 0
+
+    def pause_after_first_batch():
+        nonlocal pause_checks
+        pause_checks += 1
+        return pause_checks >= 2
+
+    with pytest.raises(chunker.ImportPaused) as paused:
+        chunker.build_cache_incremental_obj(
+            str(source),
+            {
+                "rock": obj_parser.Material("rock", "rock.jpg"),
+                "sand": obj_parser.Material("sand", "sand.jpg"),
+            },
+            cache_dir=str(cache_dir),
+            chunk_size=8.0,
+            face_batch_size=1,
+            bucket_workers=1,
+            pause_requested=pause_after_first_batch,
+        )
+
+    resume_dir = Path(paused.value.resume_dir)
+    assert resume_dir.is_dir()
+    assert not cache_dir.exists()
+    checkpoint = json.loads(
+        (resume_dir / chunker.IMPORT_RESUME_MANIFEST_NAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert checkpoint["stage"] == "bucketing"
+    assert checkpoint["next_batch_index"] == 1
+    assert checkpoint["bucketed_faces"] == 1
+
+    caplog.set_level(logging.INFO, logger="caveviewer")
+    result = chunker.build_cache_incremental_obj(
+        str(source),
+        {
+            "rock": obj_parser.Material("rock", "rock.jpg"),
+            "sand": obj_parser.Material("sand", "sand.jpg"),
+        },
+        cache_dir=str(cache_dir),
+        chunk_size=8.0,
+        face_batch_size=1,
+        bucket_workers=1,
+        pause_requested=lambda: False,
+    )
+
+    assert result == str(cache_dir)
+    assert "Resuming previously paused OBJ import from checkpoint" in caplog.text
+    assert not resume_dir.exists()
+    assert not (cache_dir / chunker.IMPORT_RESUME_MANIFEST_NAME).exists()
+    manifest = chunker.load_manifest(str(cache_dir))
+    assert manifest["triangle_count"] == 2
+    assert set(manifest["chunks"]) == {"0_0_0", "1_0_0"}
+
+
 def test_publish_failure_restores_previous_cache(tmp_path, monkeypatch):
     staging = tmp_path / "staging"
     cache = tmp_path / "cache"

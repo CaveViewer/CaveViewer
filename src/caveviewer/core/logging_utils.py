@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import threading
 from collections.abc import Sequence
@@ -12,6 +13,30 @@ _PROGRESS_LOCK = threading.RLock()
 _ACTIVE_PROGRESS_LINE: str | None = None
 _ACTIVE_PROGRESS_WIDTH = 0
 _ACTIVE_PROGRESS_STREAM = None
+_ADOPTED_EXTERNAL_LOGGERS = ("moderngl_window",)
+
+
+def _normalize_component_name(component: object) -> str:
+    """Return a stable parse-friendly component id for bracketed log tags."""
+    raw = str(component or "").strip()
+    if not raw:
+        return "caveviewer"
+
+    normalized_parts = []
+    for part in raw.split("."):
+        cleaned = re.sub(r"[^0-9A-Za-z_]+", "_", part.strip())
+        if not cleaned:
+            continue
+        if cleaned.lower().replace("_", "") == "caveviewer":
+            normalized_parts.append("caveviewer")
+            continue
+        cleaned = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", cleaned)
+        cleaned = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cleaned)
+        cleaned = re.sub(r"_+", "_", cleaned).strip("_").lower()
+        if cleaned:
+            normalized_parts.append(cleaned)
+
+    return ".".join(normalized_parts) or "caveviewer"
 
 
 class _MaxLevelFilter(logging.Filter):
@@ -21,6 +46,16 @@ class _MaxLevelFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         return record.levelno <= self.max_level
+
+
+class _ComponentFilter(logging.Filter):
+    """Ensure every log record has the component field used by our formatter."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "component"):
+            record.component = "CaveViewer" if record.name == "root" else record.name
+        record.component = _normalize_component_name(record.component)
+        return True
 
 
 def _safe_stream_write(stream, text: str) -> bool:
@@ -127,6 +162,44 @@ def _resolve_level(explicit_level: Optional[int | str] = None) -> int:
     return logging.INFO
 
 
+def _adopt_external_logger(name: str) -> None:
+    """Route an external package logger through CaveViewer's root handlers."""
+    logger = logging.getLogger(name)
+    logger.handlers.clear()
+    logger.propagate = True
+    logger.setLevel(logging.NOTSET)
+
+
+def _patch_moderngl_window_logging() -> None:
+    """
+    Prevent moderngl-window from installing its own timestamp/name formatter.
+
+    moderngl_window.setup_basic_logging() normally attaches a private handler
+    and sets propagate=False during create_window_config_instance().  Replace it
+    with a small adapter that keeps the package logger routed through
+    CaveViewer's root handlers even when moderngl-window calls it later.
+    """
+    try:
+        import moderngl_window
+    except Exception:
+        return
+
+    def _setup_basic_logging(_level: int | None) -> None:
+        _adopt_external_logger("moderngl_window")
+
+    try:
+        moderngl_window.setup_basic_logging = _setup_basic_logging
+    except Exception:
+        pass
+    _adopt_external_logger("moderngl_window")
+
+
+def _adopt_external_loggers() -> None:
+    for logger_name in _ADOPTED_EXTERNAL_LOGGERS:
+        _adopt_external_logger(logger_name)
+    _patch_moderngl_window_logging()
+
+
 def configure_logging(
     level: Optional[int | str] = None,
     *,
@@ -142,21 +215,24 @@ def configure_logging(
 
     formatter = logging.Formatter(
         "[%(component)s] %(levelname)s: %(message)s",
-        defaults={"component": "CaveViewer"},
+        defaults={"component": "caveviewer"},
     )
 
     if handlers is None:
         stdout_handler = _ProgressAwareStreamHandler(stream=sys.stdout)
         stdout_handler.setLevel(logging.DEBUG)
         stdout_handler.addFilter(_MaxLevelFilter(logging.WARNING))
+        stdout_handler.addFilter(_ComponentFilter())
         stdout_handler.setFormatter(formatter)
 
         stderr_handler = _ProgressAwareStreamHandler(stream=sys.stderr)
         stderr_handler.setLevel(logging.ERROR)
+        stderr_handler.addFilter(_ComponentFilter())
         stderr_handler.setFormatter(formatter)
         handlers = (stdout_handler, stderr_handler)
     else:
         for handler in handlers:
+            handler.addFilter(_ComponentFilter())
             if handler.formatter is None:
                 handler.setFormatter(formatter)
 
@@ -165,10 +241,11 @@ def configure_logging(
     root.handlers.clear()
     for handler in handlers:
         root.addHandler(handler)
+    _adopt_external_loggers()
 
     _CONFIGURED = True
 
 
 def get_logger(component: str) -> logging.LoggerAdapter:
-    """Return a logger that emits with a stable [Component] prefix."""
+    """Return a logger that emits with a stable parse-friendly [component] prefix."""
     return logging.LoggerAdapter(logging.getLogger("caveviewer"), {"component": component})

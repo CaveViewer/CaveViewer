@@ -431,15 +431,15 @@ def test_every_numeric_setting_has_a_display_range():
         "memory_target_percent": "1-80%",
         "gpu_memory_target_percent": "1-80%",
         "gpu_memory_gb": "0.5-50 GB",
-        "io_workers": "1-32",
-        "io_reserved_cpus": "2-32",
-        "upload_chunks_per_frame": "1-16",
+        "io_workers": "1-32 workers",
+        "io_reserved_cpus": "2-32 logical CPUs",
+        "upload_chunks_per_frame": "1-16 chunks",
         "upload_time_budget_ms": "0.5-50 ms",
-        "chunk_size_meters": "0.01-512 m",
+        "chunk_size_meters": "0.01-512",
         "obj_scan_throttle_ms": "0-50 ms",
-        "obj_import_batch_thousands": "1-2000 k faces",
-        "chunk_build_workers": "1-32",
-        "chunk_build_reserved_cpus": "2-32",
+        "obj_import_batch_thousands": "1-2000 thousand faces",
+        "chunk_build_workers": "1-32 workers",
+        "chunk_build_reserved_cpus": "2-32 logical CPUs",
     }
 
     numeric_fields = {
@@ -604,17 +604,24 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     )
     assert (
         fields_by_key["obj_import_batch_thousands"].label
-        == "OBJ import batch (k faces)"
+        == "Faces per .obj batch"
     )
     assert (
         fields_by_key["io_workers"].hint
-        == "Worker count may be lower when CPU or RAM is constrained."
+        == "Max chunk-loading worker threads."
     )
     assert (
         fields_by_key["chunk_build_workers"].hint
-        == fields_by_key["io_workers"].hint
+        == "Max cache-building worker threads."
     )
-    assert "lower uses less RAM" in fields_by_key["obj_import_batch_thousands"].hint
+    assert (
+        fields_by_key["upload_time_budget_ms"].hint
+        == "Target milliseconds spent uploading chunks each frame."
+    )
+    assert (
+        fields_by_key["obj_import_batch_thousands"].hint
+        == "Thousands of triangulated faces per batch."
+    )
     if (
         advanced_settings_dialog._LINUX_LAYOUT
         or advanced_settings_dialog.sys.platform == "win32"

@@ -322,6 +322,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._window_setup_complete = False
         self._set_runtime_window_icon()
 
         force_focus_env = os.getenv(self.FORCE_STARTUP_FOCUS_ENV, "").strip().lower()
@@ -368,6 +369,14 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "was set before launch. One or the other must be set by "
                 "run_viewer() / run_viewer_with_pending_import() before "
                 "constructing this window."
+            )
+
+        self.import_progress_panel = None
+        self._pending_import_splash_rendered = False
+        if have_pending_import:
+            self.import_progress_panel = ImportProgressPanel(self.ctx)
+            self._pending_import_splash_rendered = (
+                self._present_pending_import_splash_now()
             )
 
         with open(os.path.join(SHADER_DIR, "mesh.vert")) as f:
@@ -543,7 +552,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         # for the first time (see _handle_open_button_click) -- never
         # active during normal viewing, so it has no on/off state of its
         # own the way the other overlays do.
-        self.import_progress_panel = ImportProgressPanel(self.ctx)
+        if self.import_progress_panel is None:
+            self.import_progress_panel = ImportProgressPanel(self.ctx)
         self.controls_overlay.set_logo_renderer(self.import_progress_panel)
 
         self.ctx.enable(moderngl.DEPTH_TEST)
@@ -575,6 +585,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
+        self._initial_compilation_started_at = None
+        self._initial_compilation_logged = False
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
         self._chunk_prep_completion_armed = False
@@ -586,11 +598,23 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._import_is_startup: bool = False
         self._import_thread: threading.Thread | None = None
         self._import_process = None
+        self._import_command_queue = None
         self._import_stop_event: threading.Event | None = None
         self._import_queue: queue.Queue | None = None
+        self._import_pause_requested: bool = False
+        self._import_model_format: str | None = None
         self._import_map_name: str = ""
         self._import_progress_stage: str = ""
         self._import_progress_fraction: float = 0.0
+        self._import_progress_title: str = ""
+        self._import_progress_note: str = ""
+        self._import_resuming_from_checkpoint: bool = False
+        self._import_pause_notice_until: float | None = None
+        self._import_pause_notice_close_after: bool = False
+        self._import_pause_notice_map_name: str = ""
+        self._import_pause_notice_title: str = "Import paused"
+        self._import_pause_notice_stage: str = "resume point saved"
+        self._import_pause_notice_note: str = ""
 
         if have_ready_cache:
             self._load_map(
@@ -608,6 +632,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # has truly finished and the window is on screen, would risk the
         # exact same "nothing to draw into yet" problem this feature
         # exists to avoid.
+        self._window_setup_complete = True
 
     def _set_runtime_window_icon(self) -> None:
         """Set the native viewer-window icon when the backend exposes one."""
@@ -659,6 +684,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.cache_dir = cache_dir
         self.textures_dir = textures_dir
         self.manifest = manifest
+        self._initial_compilation_started_at = time.perf_counter()
+        self._initial_compilation_logged = False
 
         gpu_vendor = str(self.ctx.info.get("GL_VENDOR", ""))
         gpu_memory_bytes = hardware_memory.detect_total_gpu_memory_bytes(
@@ -672,11 +699,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             gpu_memory_bytes,
             gpu_target_fraction,
         )
+        ram_snapshot = hardware_memory.detect_ram_snapshot()
+        max_decoded_cache_bytes = TextureManager.recommend_decoded_cache_bytes(
+            ram_snapshot.available_bytes if ram_snapshot is not None else None
+        )
         self.texture_manager = TextureManager(
             self.ctx,
             self.textures_dir,
             self.manifest["mtl_materials"],
             max_texture_dimension=max_texture_dimension,
+            max_decoded_cache_bytes=max_decoded_cache_bytes,
         )
         self.texture_manager.validate_textures()
 
@@ -697,10 +729,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "of CaveViewer."
             )
         configured_chunk_size = chunker.configured_chunk_size()
-        _LOG.info(f"Opening map cache with manifest chunk size: {chunk_size:g}m.")
+        _LOG.info(f"Opening map cache with manifest chunk size: {chunk_size:g}.")
         if abs(chunk_size - configured_chunk_size) > 1e-6:
             _LOG.info(
-                f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}m, "
+                f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}, "
                 "but existing/prebuilt caches stream using the chunk size recorded in manifest.json."
             )
         config = StreamingConfig(
@@ -1408,6 +1440,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._import_active = False
         self._import_queue = None
         self._import_thread = None
+        self._import_command_queue = None
 
         def _release_attr(obj, attr_name: str) -> None:
             resource = getattr(obj, attr_name, None)
@@ -1538,6 +1571,140 @@ class CaveViewerWindow(mglw.WindowConfig):
         map_name = os.path.basename(source_path)
         self._start_import_async(model_descriptor, folder, map_name, is_startup=False)
 
+    def _import_model_format_from_descriptor(self, model_descriptor: dict) -> str | None:
+        return (
+            model_descriptor.get("format")
+            or ("obj" if model_descriptor.get("obj_path") else None)
+            or ("glb" if model_descriptor.get("glb_path") else None)
+        )
+
+    def _default_import_progress_note(self) -> str:
+        return "First-time setup in progress. Next time, this map will open faster."
+
+    def _set_import_progress_message(self, title: str, note: str) -> None:
+        self._import_progress_title = title
+        self._import_progress_note = note
+
+    def _update_import_progress_message_for_stage(self, stage: str) -> None:
+        normalized = " ".join(str(stage or "").strip().lower().split())
+        if normalized == "resuming import":
+            self._import_resuming_from_checkpoint = True
+
+        if self._import_pause_requested or normalized == "pausing import":
+            self._set_import_progress_message(
+                "Pausing import",
+                "Saving a resume point.",
+            )
+        elif self._import_resuming_from_checkpoint:
+            self._set_import_progress_message(
+                "Resuming import",
+                "Using saved work from the previous session.",
+            )
+        else:
+            self._set_import_progress_message(
+                "",
+                self._default_import_progress_note(),
+            )
+
+    def _show_import_pause_notice(
+        self,
+        map_name: str,
+        *,
+        close_after: bool = False,
+        duration: float = 6.0,
+    ) -> None:
+        self._import_pause_notice_until = time.perf_counter() + duration
+        self._import_pause_notice_close_after = close_after
+        self._import_pause_notice_map_name = map_name
+        self._import_pause_notice_title = "Import paused"
+        self._import_pause_notice_stage = "resume point saved"
+        if close_after:
+            self._import_pause_notice_note = (
+                "This window will close shortly; open this map again to continue."
+            )
+        else:
+            self._import_pause_notice_note = (
+                "Open this map again to continue."
+            )
+
+    def _clear_import_pause_notice(self) -> bool:
+        close_after = self._import_pause_notice_close_after
+        self._import_pause_notice_until = None
+        self._import_pause_notice_close_after = False
+        self._import_pause_notice_map_name = ""
+        self._import_pause_notice_title = "Import paused"
+        self._import_pause_notice_stage = "resume point saved"
+        self._import_pause_notice_note = ""
+        return close_after
+
+    def _render_import_pause_notice_if_active(self) -> bool:
+        until = self._import_pause_notice_until
+        if until is None:
+            return False
+        if time.perf_counter() >= until:
+            close_after = self._clear_import_pause_notice()
+            if close_after and hasattr(self.wnd, "close"):
+                self.wnd.close()
+            return close_after
+
+        self.import_progress_panel.render(
+            self.wnd.size,
+            self._import_pause_notice_map_name or self._import_map_name or "map",
+            self._import_pause_notice_stage,
+            1.0,
+            title=self._import_pause_notice_title,
+            note=self._import_pause_notice_note,
+        )
+        return True
+
+    def _render_pending_import_splash(self) -> None:
+        pending = CaveViewerWindow.cave_pending_import or {}
+        model_descriptor = pending.get("model_descriptor") or {}
+        source_path = (
+            model_descriptor.get("obj_path")
+            or model_descriptor.get("glb_path")
+            or ""
+        )
+        map_name = os.path.basename(source_path) if source_path else "map"
+        self.import_progress_panel.render(
+            self.wnd.size,
+            map_name,
+            "starting import",
+            0.0,
+            title="",
+            note=self._default_import_progress_note(),
+        )
+
+    def _present_pending_import_splash_now(self) -> bool:
+        """Best-effort immediate splash presentation during window setup."""
+        try:
+            self._render_pending_import_splash()
+        except Exception as exc:
+            _LOG.debug("Could not render early import splash: %s", exc)
+            return False
+
+        for target in (
+            getattr(self, "wnd", None),
+            getattr(getattr(self, "wnd", None), "_window", None),
+        ):
+            if target is None:
+                continue
+            for method_name in ("swap_buffers", "flip", "swap"):
+                swap = getattr(target, method_name, None)
+                if not callable(swap):
+                    continue
+                try:
+                    swap()
+                    return True
+                except Exception as exc:
+                    _LOG.debug(
+                        "Could not present early import splash with %s.%s: %s",
+                        type(target).__name__,
+                        method_name,
+                        exc,
+                    )
+        return False
+
     def _start_import_async(
         self,
         model_descriptor: dict,
@@ -1555,11 +1722,12 @@ class CaveViewerWindow(mglw.WindowConfig):
           ("progress", stage, fraction)  -- update the progress ring
           ("heartbeat", stage, fraction, elapsed, available, total)
                                       -- child is alive; keep same UI stage
-          ("done", cache_dir, textures_dir, manifest)  -- load the map
+          ("done", cache_dir, textures_dir)  -- load manifest and map
           ("error", message, traceback)  -- log the error (close if startup)
           ("error", message, "", suggestion) -- expected actionable failure
           ("cancelled",)                 -- import was stopped by viewer close
                                              or a child KeyboardInterrupt
+          ("paused", resume_dir)          -- resumable checkpoint was saved
 
         on_render() drains the queue every frame and handles each message
         on the main thread where OpenGL calls are legal.
@@ -1574,8 +1742,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._import_progress_fraction = 0.0
         self._import_queue = queue.Queue()
         self._import_process = None
+        self._import_command_queue = None
         self._import_cache_dir = None
         self._import_stop_event = threading.Event()
+        self._import_pause_requested = False
+        self._import_model_format = self._import_model_format_from_descriptor(
+            model_descriptor
+        )
+        self._import_resuming_from_checkpoint = False
+        self._set_import_progress_message(
+            "",
+            self._default_import_progress_note(),
+        )
+        self._clear_import_pause_notice()
         q = self._import_queue
         source_path = (model_descriptor.get("obj_path")
                        or model_descriptor.get("glb_path"))
@@ -1605,7 +1784,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                             return
                         handle = start_import_process(model_descriptor, textures_dir)
                         self._import_process = handle.process
+                        self._import_command_queue = getattr(handle, "commands", None)
                         self._import_cache_dir = getattr(handle, "cache_dir", None)
+                        if self._import_pause_requested and self._import_command_queue is not None:
+                            self._import_command_queue.put(("pause",))
                         last_event_at = time.monotonic()
                         last_stale_log_at = 0.0
                         last_heartbeat_log_at = 0.0
@@ -1712,6 +1894,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                                 finish_console_progress_line()
                                 q.put(("cancelled",))
                                 break
+                            elif kind == "paused":
+                                finish_console_progress_line()
+                                q.put(event)
+                                break
 
                         if stop_event.is_set():
                             terminate_import_process(
@@ -1723,12 +1909,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                             handle.process.join(timeout=1.0)
                     finally:
                         self._import_process = None
+                        self._import_command_queue = None
                         self._import_cache_dir = None
                         _release_desktop_inhibitor(inhibitor)
                     return
-                manifest = _ck.load_manifest(cache_dir)
                 finish_console_progress_line()
-                q.put(("done", cache_dir, resolved_textures_dir, manifest))
+                q.put(("done", cache_dir, resolved_textures_dir))
             except Exception as exc:
                 finish_console_progress_line()
                 q.put(("error", str(exc), ""))
@@ -1752,18 +1938,37 @@ class CaveViewerWindow(mglw.WindowConfig):
             if kind == "progress":
                 self._import_progress_stage = msg[1]
                 self._import_progress_fraction = msg[2]
+                self._update_import_progress_message_for_stage(msg[1])
             elif kind == "heartbeat":
                 self._import_progress_stage = msg[1]
                 self._import_progress_fraction = msg[2]
+                self._update_import_progress_message_for_stage(msg[1])
             elif kind == "done":
                 finish_console_progress_line()
-                _, cache_dir, textures_dir, manifest = msg
+                _, cache_dir, textures_dir = msg
                 self._import_active = False
                 self._import_queue = None
                 self._import_thread = None
                 self._import_process = None
+                self._import_command_queue = None
                 self._import_cache_dir = None
                 self._import_stop_event = None
+                self._import_pause_requested = False
+                self._import_model_format = None
+                self._import_resuming_from_checkpoint = False
+                try:
+                    manifest = chunker.load_manifest(cache_dir)
+                    if manifest is None:
+                        raise ValueError(
+                            f"Map cache manifest could not be loaded from {cache_dir}."
+                        )
+                except Exception as exc:
+                    _LOG.error("Failed to load imported map manifest: %s", exc)
+                    if self._import_is_startup:
+                        _LOG.error("Closing -- no map to show without a valid cache manifest.")
+                        if hasattr(self.wnd, "close"):
+                            self.wnd.close()
+                    break
                 self.load_new_map(cache_dir, textures_dir, manifest)
                 break  # queue is gone; nothing more to drain
             elif kind == "error":
@@ -1775,8 +1980,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._import_queue = None
                 self._import_thread = None
                 self._import_process = None
+                self._import_command_queue = None
                 self._import_cache_dir = None
                 self._import_stop_event = None
+                self._import_pause_requested = False
+                self._import_model_format = None
+                self._import_resuming_from_checkpoint = False
                 _LOG.error(f"Import failed: {error_msg}")
                 if error_suggestion:
                     _LOG.error("Suggestion: %s", error_suggestion)
@@ -1793,8 +2002,47 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._import_queue = None
                 self._import_thread = None
                 self._import_process = None
+                self._import_command_queue = None
                 self._import_cache_dir = None
                 self._import_stop_event = None
+                self._import_pause_requested = False
+                self._import_model_format = None
+                self._import_resuming_from_checkpoint = False
+                break
+            elif kind == "paused":
+                finish_console_progress_line()
+                resume_dir = msg[1] if len(msg) > 1 else ""
+                was_startup_import = self._import_is_startup
+                map_name = self._import_map_name
+                self._import_active = False
+                self._import_queue = None
+                self._import_thread = None
+                self._import_process = None
+                self._import_command_queue = None
+                self._import_cache_dir = None
+                self._import_stop_event = None
+                self._import_pause_requested = False
+                self._import_model_format = None
+                self._import_resuming_from_checkpoint = False
+                if resume_dir:
+                    _LOG.info("Import paused. Resume checkpoint: %s", resume_dir)
+                _LOG.info("Open this map again to resume the import.")
+                if self._has_map_loaded:
+                    self._show_recording_status(
+                        "Import paused",
+                        "Resume point saved. Open this map again to continue.",
+                        kind="success",
+                        duration=5.0,
+                    )
+                else:
+                    self._show_import_pause_notice(
+                        map_name,
+                        close_after=was_startup_import,
+                    )
+                    if was_startup_import:
+                        _LOG.info(
+                            "Viewer will close after showing the paused import message."
+                        )
                 break
 
     def _run_pending_import(self) -> None:
@@ -1975,8 +2223,22 @@ class CaveViewerWindow(mglw.WindowConfig):
     _AMBIENT_MIN = 0.04
     _AMBIENT_MAX = 0.9
     _INITIAL_LOAD_MIN_CHUNKS = 6
+    _STARTUP_LOAD_RADIUS_CELLS = 1
     _CHUNK_PREP_MAX_FRACTION = 0.97
     _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.85
+
+    def _target_streaming_load_radius(self) -> int:
+        target = int(self.render_distance_stepper.value)
+        overlay = getattr(self, "controls_overlay", None)
+        if (
+            not getattr(self, "_initial_chunks_loaded", False)
+            or (
+                overlay is not None
+                and overlay.is_waiting_for_begin
+            )
+        ):
+            return min(target, self._STARTUP_LOAD_RADIUS_CELLS)
+        return target
 
     def _initial_chunk_load_is_ready(self, stats: dict) -> bool:
         loaded = max(0, int(stats.get("loaded", 0)))
@@ -1990,6 +2252,25 @@ class CaveViewerWindow(mglw.WindowConfig):
         # forever for chunks the scheduler correctly refused to request.
         needed = min(self._INITIAL_LOAD_MIN_CHUNKS, total_available, max_loaded, wanted)
         return loaded >= needed
+
+    def _log_initial_compilation_complete(self, stats: dict) -> None:
+        if getattr(self, "_initial_compilation_logged", False):
+            return
+        started_at = getattr(self, "_initial_compilation_started_at", None)
+        if started_at is None:
+            return
+
+        elapsed_s = max(0.0, time.perf_counter() - started_at)
+        self._initial_compilation_logged = True
+        _LOG.info(
+            "Initial map compilation completed in %.2fs "
+            "(loaded=%d pending=%d ready=%d wanted=%d).",
+            elapsed_s,
+            int(stats.get("loaded", 0)),
+            int(stats.get("pending", 0)),
+            int(stats.get("ready", 0)),
+            int(stats.get("wanted", 0)),
+        )
 
     def _initial_chunk_load_progress(self, stats: dict) -> float:
         loaded = max(0, int(stats.get("loaded", 0)))
@@ -2462,6 +2743,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.ctx.enable(moderngl.CULL_FACE)
 
     def on_render(self, current_time: float, frame_time: float):
+        if not getattr(self, "_window_setup_complete", False):
+            return
         if self._closing_requested:
             return
         bitmap_font.set_raster_scale(_window_pixel_ratio(self.wnd))
@@ -2504,6 +2787,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.import_progress_panel.render(
                     self.wnd.size, self._import_map_name,
                     self._import_progress_stage, fraction,
+                    title=self._import_progress_title,
+                    note=self._import_progress_note,
                 )
             # 30 fps cap: the progress ring doesn't need more, and without
             # this the render loop spins at hundreds of fps during import,
@@ -2513,18 +2798,19 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         if not self._has_map_loaded:
-            # First frame with no map loaded yet: just clear to a neutral
-            # background and let this frame actually reach the screen
-            # before doing anything else -- _handle_continuous_input,
-            # world.update, the camera, etc all assume a loaded map and
-            # would crash if touched here. The actual import is kicked
-            # off AFTER this first real frame has rendered (see the
-            # _pending_import_started check below), specifically so the
-            # window is confirmed visibly open first, rather than risking
-            # the import starting before anything has actually been drawn
-            # to the screen even once.
-            self.ctx.clear(0.02, 0.02, 0.03)
+            if self._render_import_pause_notice_if_active():
+                time.sleep(1.0 / 30.0)
+                return
+            # First frame with no map loaded yet: draw the loading panel
+            # immediately so the user sees the logo instead of a blank window.
+            # The actual import starts on the next frame so the splash has a
+            # chance to present before import startup work contends with the
+            # render loop.
             if self._pending_import_started:
+                return
+            self._render_pending_import_splash()
+            if not self._pending_import_splash_rendered:
+                self._pending_import_splash_rendered = True
                 return
             self._pending_import_started = True
             self._run_pending_import()
@@ -2548,8 +2834,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         # detects a changed load_radius_cells on its own, not just a
         # moved camera -- this assignment is what actually gives it a
         # changed value to detect).
-        if self.world.config.load_radius_cells != self.render_distance_stepper.value:
-            self.world.config.load_radius_cells = self.render_distance_stepper.value
+        target_load_radius = self._target_streaming_load_radius()
+        if self.world.config.load_radius_cells != target_load_radius:
+            self.world.config.load_radius_cells = target_load_radius
 
         t0 = time.perf_counter()
         self.world.update(self.camera.position.astype(np.float32))
@@ -2562,6 +2849,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         stats = self.world.stats()
         if not self._initial_chunks_loaded and self._initial_chunk_load_is_ready(stats):
             self._initial_chunks_loaded = True
+            self._log_initial_compilation_complete(stats)
 
         # As soon as prep crosses the readiness threshold, hold a brief
         # fully-complete frame so the progress bar doesn't disappear abruptly.
@@ -2582,7 +2870,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._chunk_prep_progress = max(self._chunk_prep_progress, target)
             self.import_progress_panel.render(
                 self.wnd.size, _map_name, "opening cave", self._chunk_prep_progress,
-                title="Preparing Map", note="",
+                title="", note="",
             )
             return
 
@@ -2590,7 +2878,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
             self.import_progress_panel.render(
                 self.wnd.size, _map_name, "opening cave", 1.0,
-                title="Preparing Map", note="",
+                title="", note="",
             )
             return
 
@@ -2775,13 +3063,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             active_interval_s = max(self._frame_active_time_s, 1e-6)
             rendered_fps = self._frame_count / active_interval_s
             wall_fps = self._frame_count / wall_interval_s
-            stats = self.world.stats()
-            _LOG.info(f"rendered_fps={rendered_fps:.1f} wall_fps={wall_fps:.1f} "
-                      f"frame_cost={rolling_avg:.1f}ms "
-                      f"| chunks loaded={stats['loaded']} "
-                      f"pending={stats['pending']} drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
-                      f"| speed={self.camera.move_speed:.1f}m/s "
-                      f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
+            if _LOG.isEnabledFor(logging.DEBUG):
+                stats = self.world.stats()
+                _LOG.debug(f"rendered_fps={rendered_fps:.1f} wall_fps={wall_fps:.1f} "
+                           f"frame_cost={rolling_avg:.1f}ms "
+                           f"| chunks loaded={stats['loaded']} "
+                           f"pending={stats['pending']} drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
+                           f"| speed={self.camera.move_speed:.1f}m/s "
+                           f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
             self._frame_count = 0
             self._frame_active_time_s = 0.0
             self._last_fps_print = now
@@ -3225,6 +3514,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.on_close()
             return True
 
+        pause_key = self._resolve_key_optional(self.wnd.keys, "P")
+        if (
+            pause_key is not None
+            and key == pause_key
+            and self._shift_is_down(modifiers)
+        ):
+            if self._import_active:
+                self._request_import_pause()
+                return True
+
         open_key = self._resolve_key_optional(self.wnd.keys, "O")
         if open_key is not None and key == open_key:
             if self._has_map_loaded and not self._import_active:
@@ -3232,6 +3531,29 @@ class CaveViewerWindow(mglw.WindowConfig):
             return True
 
         return False
+
+    def _request_import_pause(self) -> None:
+        """Ask the import child to checkpoint at the next safe pause point."""
+        if not self._import_active:
+            return
+        if self._import_model_format != "obj":
+            _LOG.warning("Import pause/resume is currently supported only for .obj maps.")
+            return
+        if self._import_pause_requested:
+            return
+
+        self._import_pause_requested = True
+        self._import_progress_stage = "pausing import"
+        self._set_import_progress_message(
+            "Pausing import",
+            "Saving a resume point.",
+        )
+        command_queue = getattr(self, "_import_command_queue", None)
+        if command_queue is not None:
+            command_queue.put(("pause",))
+        _LOG.info(
+            "Import pause requested; waiting for the current safe checkpoint."
+        )
 
     def _handle_recording_hotkey(self, key, modifiers: KeyModifiers) -> bool:
         """Use Shift+R to cancel countdown or stop active recording."""

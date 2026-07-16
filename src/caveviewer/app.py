@@ -314,7 +314,8 @@ def find_model_file(folder: str) -> dict:
 
 
 def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
-                      extra_progress_cb=None, *, console_progress: bool = True) -> str:
+                      extra_progress_cb=None, *, console_progress: bool = True,
+                      pause_requested=None) -> str:
     """Parse + chunk the mesh if needed, returning the cache directory.
     Skips straight to the existing cache if one's already valid, since
     re-parsing a 2GB OBJ on every launch would defeat the whole point.
@@ -357,8 +358,7 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
     active_chunk_size = chunker.configured_chunk_size()
-    _LOG.info(f"Using chunk size: {active_chunk_size:.1f}m "
-              f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
+    _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
     try:
         source_size_gb = os.path.getsize(obj_path) / (1024 ** 3)
         if source_size_gb >= 10.0:
@@ -384,6 +384,7 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         progress_cb=_emit_progress,
         cache_dir=target_cache_dir,
         assets=texture_assets,
+        pause_requested=pause_requested,
     )
     if console_progress:
         _console_newline()
@@ -410,6 +411,7 @@ def import_and_cache_any(
     extra_progress_cb=None,
     *,
     console_progress: bool = True,
+    pause_requested=None,
 ) -> str:
     """
     Format-agnostic version of import_and_cache() -- dispatches on
@@ -435,6 +437,7 @@ def import_and_cache_any(
             force_rebuild=force_rebuild,
             extra_progress_cb=extra_progress_cb,
             console_progress=console_progress,
+            pause_requested=pause_requested,
         )
 
     source_path = model_descriptor["glb_path"]
@@ -455,8 +458,7 @@ def import_and_cache_any(
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
     active_chunk_size = chunker.configured_chunk_size()
-    _LOG.info(f"Using chunk size: {active_chunk_size:.1f}m "
-              f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
+    _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
     try:
         source_size_gb = os.path.getsize(source_path) / (1024 ** 3)
         if source_size_gb >= 10.0:
@@ -631,10 +633,10 @@ def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> No
         )
         return
 
-    _LOG.info(f"{context} chunk size: {cache_chunk_size:g}m.")
+    _LOG.info(f"{context} chunk size: {cache_chunk_size:g}.")
     if abs(cache_chunk_size - configured_chunk_size) > 1e-6:
         _LOG.info(
-            f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}m, "
+            f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}, "
             "but existing/prebuilt caches always open with their manifest chunk size. "
             "Rebuild the reported cache directory to apply a different import chunk size."
         )

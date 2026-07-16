@@ -47,6 +47,7 @@ def calculate_residency_budget(
     *,
     available_cell_count: int,
     total_ram_bytes: int,
+    available_ram_bytes: int | None = None,
     ram_target_fraction: float,
     estimated_chunk_ram_bytes: int,
     total_gpu_memory_bytes: int | None,
@@ -57,7 +58,10 @@ def calculate_residency_budget(
     if estimated_chunk_ram_bytes <= 0:
         raise ValueError("estimated chunk RAM bytes must be positive")
 
-    ram_budget_bytes = int(total_ram_bytes * ram_target_fraction)
+    ram_base_bytes = total_ram_bytes
+    if available_ram_bytes is not None and available_ram_bytes > 0:
+        ram_base_bytes = min(total_ram_bytes, available_ram_bytes)
+    ram_budget_bytes = int(ram_base_bytes * ram_target_fraction)
     ram_budget_chunks = max(1, ram_budget_bytes // estimated_chunk_ram_bytes)
     max_loaded_chunks = ram_budget_chunks
 

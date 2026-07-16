@@ -155,6 +155,7 @@ def test_format_agnostic_obj_import_delegates_all_options(monkeypatch):
                 "force_rebuild": True,
                 "extra_progress_cb": callback,
                 "console_progress": True,
+                "pause_requested": None,
             },
         )
     ]

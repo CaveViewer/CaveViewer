@@ -69,11 +69,13 @@ class FakeLogger:
 
 class FakeSpawnContext:
     def __init__(self):
-        self.queue = FakeEventQueue()
+        self.queues = []
         self.processes = []
 
     def Queue(self):
-        return self.queue
+        queue = FakeEventQueue()
+        self.queues.append(queue)
+        return queue
 
     def Process(self, *, target, args, name):
         process = FakeProcess(target, args, name)
@@ -102,7 +104,8 @@ def test_start_import_process_uses_spawn_context_and_event_queue():
         {"glb_path": "/maps/cave.glb"}, "/maps", context=context
     )
 
-    assert handle.events is context.queue
+    assert handle.events is context.queues[0]
+    assert handle.commands is context.queues[1]
     assert handle.process is context.processes[0]
     assert handle.cache_dir
     assert handle.process.name == "CaveViewer-import"
@@ -111,7 +114,8 @@ def test_start_import_process_uses_spawn_context_and_event_queue():
     assert handle.process.args == (
         {"glb_path": "/maps/cave.glb"},
         "/maps",
-        context.queue,
+        context.queues[0],
+        context.queues[1],
     )
 
 
@@ -147,7 +151,6 @@ def test_import_process_reports_progress_and_done(monkeypatch):
         return "/cache/cave"
 
     monkeypatch.setattr(app, "import_and_cache_any", fake_import)
-    monkeypatch.setattr(chunker, "load_manifest", lambda _path: {"chunks": {}})
     monkeypatch.setattr(
         import_process,
         "_configure_import_child_logging",
@@ -167,8 +170,46 @@ def test_import_process_reports_progress_and_done(monkeypatch):
     assert events.events == [
         ("progress", "starting import", 0.0),
         ("progress", "building cache", 0.5),
-        ("done", "/cache/cave", "/cache/cave", {"chunks": {}}),
+        ("done", "/cache/cave", "/cache/cave"),
     ]
+
+
+def test_import_process_reports_paused_checkpoint(monkeypatch):
+    events = FakeEventQueue()
+    logger = FakeLogger()
+
+    def fake_import(_model_descriptor, _textures_dir, **options):
+        assert options["pause_requested"]() is True
+        raise chunker.ImportPaused("/cache/.map.resume-123")
+
+    def start_command_thread(_commands, pause_event, _stop_event):
+        pause_event.set()
+        return SimpleNamespace(join=lambda timeout=None: None)
+
+    monkeypatch.setattr(app, "import_and_cache_any", fake_import)
+    monkeypatch.setattr(import_process, "_LOG", logger)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+    monkeypatch.setattr(import_process, "_start_command_thread", start_command_thread)
+
+    import_process._run_import_process(
+        {"obj_path": "/maps/cave.obj"}, "/maps", events, object()
+    )
+
+    assert events.events == [
+        ("progress", "starting import", 0.0),
+        ("paused", "/cache/.map.resume-123"),
+    ]
+    assert any("Import paused" in message for message in logger.info_messages)
 
 
 def test_import_process_reports_error_with_traceback(monkeypatch):

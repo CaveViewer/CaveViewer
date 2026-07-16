@@ -1267,32 +1267,32 @@ section { position: relative; }
             <p class="col-note">Applies immediately, every launch</p>
 
             <div class="setting-row">
-              <span class="name">System RAM target (%)</span><span class="default">default 80</span>
+              <span class="name">System RAM target</span><span class="default">default 8%</span>
               <p class="blurb">Higher lets more chunks stay resident at once, at the cost of leaving less RAM for everything else running.</p>
             </div>
             <div class="setting-row">
-              <span class="name">GPU memory target (%)</span><span class="default">default 70</span>
+              <span class="name">GPU memory target</span><span class="default">default 70%</span>
               <p class="blurb">Higher keeps more geometry loaded on the GPU — push it too high on a weaker card and you risk stutter instead of smoothness.</p>
             </div>
             <div class="setting-row">
-              <span class="name">GPU memory override (GB)</span><span class="default">default empty</span>
+              <span class="name">GPU memory override</span><span class="default">default empty</span>
               <p class="blurb">Only needed if auto-detection gets your GPU's memory size wrong — set it manually to correct that.</p>
             </div>
             <div class="setting-row">
-              <span class="name">Worker count</span><span class="default">default CPUs − 3</span>
+              <span class="name">Loading worker limit</span><span class="default">default 2 workers</span>
               <p class="blurb">More threads load chunks faster in the background, but compete with the render thread for CPU time.</p>
             </div>
             <div class="setting-row">
-              <span class="name">CPU cores to keep free</span><span class="default">default 3</span>
+              <span class="name">Loading CPUs to keep free</span><span class="default">default 3 logical CPUs</span>
               <p class="blurb">Reserves cores for the rest of your system instead of handing everything to streaming — raise it on a machine you're also using for other things.</p>
             </div>
             <div class="setting-row">
-              <span class="name">Chunk uploads per frame</span><span class="default">default 1</span>
+              <span class="name">Chunk uploads per frame</span><span class="default">default 1 chunk</span>
               <p class="blurb">A higher cap brings new chunks on screen faster when flying fast, at the cost of occasional frame-time spikes.</p>
             </div>
             <div class="setting-row">
-              <span class="name">Upload budget (ms)</span><span class="default">default 3.0</span>
-              <p class="blurb">A larger budget uploads more per frame before yielding — smoother streaming, but a slightly heavier hit each frame it happens.</p>
+              <span class="name">Upload budget</span><span class="default">default 3.0 ms</span>
+              <p class="blurb">Target milliseconds spent uploading chunks each frame — higher values can fill in geometry faster, but may increase frame-time spikes.</p>
             </div>
           </div>
 
@@ -1301,19 +1301,19 @@ section { position: relative; }
             <p class="col-note">Only affects the next import / re-import</p>
 
             <div class="setting-row">
-              <span class="name">Import chunk size (m)</span><span class="default">default 50</span>
-              <p class="blurb">Smaller chunks give finer streaming control in tight, twisty passages; larger chunks mean fewer draw calls in big open rooms.</p>
+              <span class="name">Import chunk size</span><span class="default">default 50</span>
+              <p class="blurb">Unitless chunk edge length for new caches. Smaller values give finer streaming; larger values reduce chunk count.</p>
             </div>
             <div class="setting-row">
-              <span class="name">OBJ scan throttle (ms)</span><span class="default">default 0 / 1 on Windows</span>
-              <p class="blurb">A small yield during scanning keeps the machine responsive on slower disks, at the cost of a slightly longer import.</p>
+              <span class="name">.obj scan throttle</span><span class="default">default 0 / 1 ms on Windows</span>
+              <p class="blurb">Milliseconds paused while scanning .obj files. A small value keeps slower machines responsive during import.</p>
             </div>
             <div class="setting-row">
-              <span class="name">Import worker count</span><span class="default">default CPUs − 2</span>
+              <span class="name">Cache-building worker limit</span><span class="default">default 1 worker</span>
               <p class="blurb">More threads speed up the one-time cache build, competing with whatever else is running on your machine while it works.</p>
             </div>
             <div class="setting-row">
-              <span class="name">Import CPUs to keep free</span><span class="default">default 2</span>
+              <span class="name">Cache-build CPUs to keep free</span><span class="default">default 2 logical CPUs</span>
               <p class="blurb">Reserves cores during import so the rest of your system doesn't grind to a halt while a huge map is being chunked.</p>
             </div>
           </div>

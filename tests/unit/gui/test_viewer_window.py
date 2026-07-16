@@ -54,6 +54,9 @@ class FakeImportProcess:
 class FakeLogger:
     def __init__(self):
         self.error_messages = []
+        self.info_messages = []
+        self.warning_messages = []
+        self.debug_messages = []
 
     @staticmethod
     def _format(message, args):
@@ -62,13 +65,43 @@ class FakeLogger:
     def error(self, message, *args):
         self.error_messages.append(self._format(message, args))
 
+    def info(self, message, *args):
+        self.info_messages.append(self._format(message, args))
+
+    def warning(self, message, *args):
+        self.warning_messages.append(self._format(message, args))
+
+    def debug(self, message, *args):
+        self.debug_messages.append(self._format(message, args))
+
 
 def _import_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._import_active = False
+    window._import_is_startup = False
+    window._import_thread = None
     window._import_process = None
+    window._import_command_queue = None
+    window._import_queue = None
     window._import_cache_dir = None
     window._import_stop_event = None
+    window._import_pause_requested = False
+    window._import_model_format = None
+    window._import_map_name = ""
+    window._import_progress_stage = ""
+    window._import_progress_fraction = 0.0
+    window._import_progress_title = ""
+    window._import_progress_note = ""
+    window._import_resuming_from_checkpoint = False
+    window._import_pause_notice_until = None
+    window._import_pause_notice_close_after = False
+    window._import_pause_notice_map_name = ""
+    window._import_pause_notice_title = "Import paused"
+    window._import_pause_notice_stage = "resume point saved"
+    window._import_pause_notice_note = ""
+    window._has_map_loaded = False
+    window._pending_import_started = False
+    window._pending_import_splash_rendered = False
     return window
 
 
@@ -412,6 +445,42 @@ def test_initial_chunk_readiness_respects_budget_limited_wanted_count():
     ) is False
 
 
+def test_initial_compilation_completion_is_logged_once(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 12.25)
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._initial_compilation_started_at = 10.0
+    window._initial_compilation_logged = False
+
+    stats = {"loaded": 6, "pending": 1, "ready": 0, "wanted": 7}
+    window._log_initial_compilation_complete(stats)
+    window._log_initial_compilation_complete(stats)
+
+    assert logger.info_messages == [
+        "Initial map compilation completed in 2.25s "
+        "(loaded=6 pending=1 ready=0 wanted=7)."
+    ]
+
+
+def test_startup_streaming_radius_is_capped_until_begin_screen_is_dismissed():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.render_distance_stepper = SimpleNamespace(value=6)
+    window.controls_overlay = SimpleNamespace(is_waiting_for_begin=True)
+    window._initial_chunks_loaded = True
+
+    assert window._target_streaming_load_radius() == 1
+
+
+def test_streaming_radius_uses_stepper_after_begin_screen_is_dismissed():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.render_distance_stepper = SimpleNamespace(value=6)
+    window.controls_overlay = SimpleNamespace(is_waiting_for_begin=False)
+    window._initial_chunks_loaded = True
+
+    assert window._target_streaming_load_radius() == 6
+
+
 class _FakeGpuResource:
     def release(self):
         pass
@@ -471,7 +540,6 @@ def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(
 ):
     calls = []
     descriptor = {"glb_path": "/maps/cave.glb"}
-    manifest = {"chunks": {}}
 
     def acquire(map_name):
         calls.append(("acquire_inhibitor", map_name))
@@ -481,7 +549,7 @@ def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(
         calls.append(("start_process", model_descriptor, textures_dir))
         events = queue.Queue()
         events.put(("progress", "building cache", 0.5))
-        events.put(("done", "/cache/cave", "/cache/cave", manifest))
+        events.put(("done", "/cache/cave", "/cache/cave"))
         return SimpleNamespace(process=FakeImportProcess(calls), events=events)
 
     monkeypatch.setattr(viewer_window, "_acquire_map_import_inhibitor", acquire)
@@ -503,19 +571,18 @@ def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(
     assert _queued_import_messages(window) == [
         ("progress", "starting import", 0.0),
         ("progress", "building cache", 0.5),
-        ("done", "/cache/cave", "/cache/cave", manifest),
+        ("done", "/cache/cave", "/cache/cave"),
     ]
 
 
 def test_uncached_import_relays_child_heartbeat(monkeypatch):
     descriptor = {"glb_path": "/maps/cave.glb"}
-    manifest = {"chunks": {}}
 
     def start_process(_model_descriptor, _textures_dir):
         events = queue.Queue()
         events.put(("log", logging.INFO, "ImportProcess", "child import started"))
         events.put(("heartbeat", "building cache", 0.5, 12.0, 3_000, 8_000))
-        events.put(("done", "/cache/cave", "/cache/cave", manifest))
+        events.put(("done", "/cache/cave", "/cache/cave"))
         return SimpleNamespace(
             process=FakeImportProcess(),
             events=events,
@@ -539,7 +606,7 @@ def test_uncached_import_relays_child_heartbeat(monkeypatch):
     assert _queued_import_messages(window) == [
         ("progress", "starting import", 0.0),
         ("heartbeat", "building cache", 0.5, 12.0, 3_000, 8_000),
-        ("done", "/cache/cave", "/cache/cave", manifest),
+        ("done", "/cache/cave", "/cache/cave"),
     ]
 
 
@@ -585,6 +652,7 @@ def test_uncached_import_relays_child_keyboard_interrupt_as_cancelled(monkeypatc
 def test_drain_import_queue_heartbeat_updates_visible_progress():
     window = _import_window()
     window._import_queue = queue.Queue()
+    window._import_model_format = "obj"
     window._import_progress_stage = "starting import"
     window._import_progress_fraction = 0.0
     window._import_queue.put(
@@ -595,6 +663,298 @@ def test_drain_import_queue_heartbeat_updates_visible_progress():
 
     assert window._import_progress_stage == "building cache"
     assert window._import_progress_fraction == 0.5
+    assert window._import_progress_title == ""
+    assert (
+        window._import_progress_note
+        == "First-time setup in progress. Next time, this map will open faster."
+    )
+
+
+def test_import_progress_message_switches_for_resume(monkeypatch):
+    monkeypatch.setattr(viewer_window.sys, "platform", "linux")
+    window = _import_window()
+    window._import_model_format = "obj"
+
+    window._update_import_progress_message_for_stage("resuming import")
+
+    assert window._import_resuming_from_checkpoint is True
+    assert window._import_progress_title == "Resuming import"
+    assert window._import_progress_note == "Using saved work from the previous session."
+
+
+def test_pending_import_splash_renders_logo_before_import_starts(monkeypatch):
+    rendered = []
+
+    class FakeImportProgressPanel:
+        def render(self, window_size, map_name, stage, fraction, *, title, note):
+            rendered.append((window_size, map_name, stage, fraction, title, note))
+
+    monkeypatch.setattr(
+        viewer_window.CaveViewerWindow,
+        "cave_pending_import",
+        {"model_descriptor": {"obj_path": "/maps/cave.obj"}},
+    )
+
+    window = _import_window()
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window.import_progress_panel = FakeImportProgressPanel()
+
+    window._render_pending_import_splash()
+
+    assert rendered == [
+        (
+            (800, 600),
+            "cave.obj",
+            "starting import",
+            0.0,
+            "",
+            "First-time setup in progress. Next time, this map will open faster.",
+        )
+    ]
+
+
+def test_present_pending_import_splash_swaps_when_backend_supports_it(monkeypatch):
+    rendered = []
+    calls = []
+
+    class FakeImportProgressPanel:
+        def render(self, window_size, map_name, stage, fraction, *, title, note):
+            rendered.append((window_size, map_name, stage, fraction, title, note))
+
+    monkeypatch.setattr(
+        viewer_window.CaveViewerWindow,
+        "cave_pending_import",
+        {"model_descriptor": {"obj_path": "/maps/cave.obj"}},
+    )
+
+    window = _import_window()
+    window.wnd = SimpleNamespace(
+        size=(800, 600),
+        swap_buffers=lambda: calls.append("swap"),
+    )
+    window.import_progress_panel = FakeImportProgressPanel()
+
+    assert window._present_pending_import_splash_now() is True
+    assert calls == ["swap"]
+    assert rendered[0][1:5] == ("cave.obj", "starting import", 0.0, "")
+
+
+def test_present_pending_import_splash_renders_without_swap_support(monkeypatch):
+    rendered = []
+
+    class FakeImportProgressPanel:
+        def render(self, window_size, map_name, stage, fraction, *, title, note):
+            rendered.append((window_size, map_name, stage, fraction, title, note))
+
+    monkeypatch.setattr(
+        viewer_window.CaveViewerWindow,
+        "cave_pending_import",
+        {"model_descriptor": {"obj_path": "/maps/cave.obj"}},
+    )
+
+    window = _import_window()
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window.import_progress_panel = FakeImportProgressPanel()
+
+    assert window._present_pending_import_splash_now() is False
+    assert rendered[0][1:5] == ("cave.obj", "starting import", 0.0, "")
+
+
+def test_startup_render_presents_splash_before_starting_import():
+    calls = []
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(800, 600))
+    window._closing_requested = False
+    window._startup_focus_enabled = False
+    window._is_iconified = False
+    window._has_map_loaded = False
+    window._pending_import_started = False
+    window._pending_import_splash_rendered = False
+    window._sync_render_mode_loading_policy = lambda: None
+    window._query_runtime_iconified_state = lambda: False
+    window._set_background_pause = lambda _should_pause, _reason: None
+    window._render_import_pause_notice_if_active = lambda: False
+    window._render_pending_import_splash = lambda: calls.append("splash")
+    window._run_pending_import = lambda: calls.append("start import")
+
+    window.on_render(0.0, 0.0)
+
+    assert calls == ["splash"]
+    assert window._pending_import_splash_rendered is True
+    assert window._pending_import_started is False
+
+    window.on_render(0.0, 0.0)
+
+    assert calls == ["splash", "splash", "start import"]
+    assert window._pending_import_started is True
+
+
+def test_startup_render_starts_import_when_splash_was_already_presented():
+    calls = []
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(800, 600))
+    window._closing_requested = False
+    window._startup_focus_enabled = False
+    window._is_iconified = False
+    window._has_map_loaded = False
+    window._pending_import_started = False
+    window._pending_import_splash_rendered = True
+    window._sync_render_mode_loading_policy = lambda: None
+    window._query_runtime_iconified_state = lambda: False
+    window._set_background_pause = lambda _should_pause, _reason: None
+    window._render_import_pause_notice_if_active = lambda: False
+    window._render_pending_import_splash = lambda: calls.append("splash")
+    window._run_pending_import = lambda: calls.append("start import")
+
+    window.on_render(0.0, 0.0)
+
+    assert calls == ["splash", "start import"]
+    assert window._pending_import_started is True
+
+
+def test_render_during_window_setup_returns_before_full_state_exists():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = False
+
+    window.on_render(0.0, 0.0)
+
+
+def test_request_import_pause_sends_child_command(monkeypatch):
+    logger = FakeLogger()
+    commands = queue.Queue()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    window = _import_window()
+    window._import_active = True
+    window._import_model_format = "obj"
+    window._import_command_queue = commands
+    window._import_pause_requested = False
+    window._import_progress_stage = "building cache"
+
+    window._request_import_pause()
+
+    assert window._import_pause_requested is True
+    assert window._import_progress_stage == "pausing import"
+    assert window._import_progress_title == "Pausing import"
+    assert window._import_progress_note == "Saving a resume point."
+    assert commands.get_nowait() == ("pause",)
+    assert "Import pause requested" in logger.info_messages[-1]
+
+
+def test_request_import_pause_warns_for_non_obj_import(monkeypatch):
+    logger = FakeLogger()
+    commands = queue.Queue()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    window = _import_window()
+    window._import_active = True
+    window._import_model_format = "glb"
+    window._import_command_queue = commands
+    window._import_pause_requested = False
+
+    window._request_import_pause()
+
+    assert window._import_pause_requested is False
+    assert commands.empty()
+    assert "only for .obj maps" in logger.warning_messages[-1]
+
+
+def test_drain_import_queue_handles_paused_import(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    window = _import_window()
+    window._has_map_loaded = True
+    window._import_active = True
+    window._import_is_startup = False
+    window._import_queue = queue.Queue()
+    window._import_thread = object()
+    window._import_process = object()
+    window._import_command_queue = object()
+    window._import_cache_dir = "/cache/cave"
+    window._import_stop_event = viewer_window.threading.Event()
+    window._import_pause_requested = True
+    window._import_model_format = "obj"
+    window._import_queue.put(("paused", "/cache/.cave.resume-123"))
+
+    window._drain_import_queue()
+
+    assert window._import_active is False
+    assert window._import_queue is None
+    assert window._import_command_queue is None
+    assert window._import_pause_requested is False
+    assert window._import_model_format is None
+    assert window._recording_status_message == "Import paused"
+    assert (
+        window._recording_status_detail
+        == "Resume point saved. Open this map again to continue."
+    )
+    assert any("Resume checkpoint" in message for message in logger.info_messages)
+
+
+def test_drain_import_queue_paused_startup_sets_visible_notice(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 100.0)
+    window = _import_window()
+    window._has_map_loaded = False
+    window._import_active = True
+    window._import_is_startup = True
+    window._import_map_name = "cave.obj"
+    window._import_queue = queue.Queue()
+    window._import_thread = object()
+    window._import_process = object()
+    window._import_command_queue = object()
+    window._import_cache_dir = "/cache/cave"
+    window._import_stop_event = viewer_window.threading.Event()
+    window._import_pause_requested = True
+    window._import_model_format = "obj"
+    window._import_queue.put(("paused", "/cache/.cave.resume-123"))
+
+    window._drain_import_queue()
+
+    assert window._import_active is False
+    assert window._import_pause_notice_until == 106.0
+    assert window._import_pause_notice_close_after is True
+    assert window._import_pause_notice_map_name == "cave.obj"
+    assert window._import_pause_notice_title == "Import paused"
+    assert window._import_pause_notice_stage == "resume point saved"
+    assert (
+        window._import_pause_notice_note
+        == "This window will close shortly; open this map again to continue."
+    )
+
+
+def test_drain_import_queue_loads_manifest_once_on_render_thread(monkeypatch):
+    manifest = {"chunks": {}}
+    loaded = []
+
+    monkeypatch.setattr(
+        viewer_window.chunker,
+        "load_manifest",
+        lambda path: loaded.append(("manifest", path)) or manifest,
+    )
+
+    window = _import_window()
+    window._import_active = True
+    window._import_is_startup = False
+    window._import_queue = queue.Queue()
+    window._import_thread = object()
+    window._import_process = object()
+    window._import_cache_dir = "/cache/cave"
+    window._import_stop_event = viewer_window.threading.Event()
+    window.load_new_map = lambda cache_dir, textures_dir, loaded_manifest: loaded.append(
+        ("load", cache_dir, textures_dir, loaded_manifest)
+    )
+    window._import_queue.put(("done", "/cache/cave", "/textures/cave"))
+
+    window._drain_import_queue()
+
+    assert loaded == [
+        ("manifest", "/cache/cave"),
+        ("load", "/cache/cave", "/textures/cave", manifest),
+    ]
+    assert window._import_active is False
+    assert window._import_queue is None
 
 
 def test_drain_import_queue_logs_actionable_error_without_traceback(monkeypatch):
@@ -632,7 +992,6 @@ def test_drain_import_queue_logs_actionable_error_without_traceback(monkeypatch)
 
 def test_cached_import_worker_does_not_request_desktop_inhibitor(monkeypatch):
     descriptor = {"obj_path": "/maps/cave.obj"}
-    manifest = {"chunks": {}}
 
     monkeypatch.setattr(
         viewer_window,
@@ -643,7 +1002,6 @@ def test_cached_import_worker_does_not_request_desktop_inhibitor(monkeypatch):
     )
     monkeypatch.setattr(viewer_window.chunker, "cache_is_valid", lambda _path: True)
     monkeypatch.setattr(viewer_window.chunker, "get_cache_dir", lambda _path: "/cache/cave")
-    monkeypatch.setattr(viewer_window.chunker, "load_manifest", lambda _path: manifest)
     monkeypatch.setattr(
         cache_paths,
         "map_texture_dir",
@@ -658,7 +1016,7 @@ def test_cached_import_worker_does_not_request_desktop_inhibitor(monkeypatch):
 
     assert _queued_import_messages(window) == [
         ("progress", "loading cached map", 1.0),
-        ("done", "/cache/cave", "/textures/cave", manifest),
+        ("done", "/cache/cave", "/textures/cave"),
     ]
 
 

@@ -118,10 +118,14 @@ _LOGO_PATH = str(image_path("app_mark_transparent.png"))
 
 class ImportProgressPanel:
     LOGO_SIZE = 172.0
+    TITLE_TEXT_SIZE = 2.1
     STAGE_TEXT_SIZE = 2.65
+    NOTE_TEXT_SIZE = 1.94
 
     _BACKDROP_RGBA = (0.0039, 0.0078, 0.0118, 0.88)  # near-black blue
+    _TITLE_TEXT_RGBA = (0.8980, 0.6314, 0.1216, 1.0)
     _STAGE_TEXT_RGBA = (0.8000, 0.8039, 0.8392, 1.0)
+    _NOTE_TEXT_RGBA = (0.690, 0.720, 0.750, 0.92)
 
     def __init__(self, ctx: moderngl.Context):
         self.ctx = ctx
@@ -198,6 +202,24 @@ class ImportProgressPanel:
                 glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
                 add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
 
+        def add_centered_text(text, y, pixel_size, rgba, *, max_width=None) -> float:
+            text = " ".join(str(text or "").split())
+            if not text:
+                return 0.0
+            max_width = (w - 96.0) if max_width is None else max_width
+            min_pixel_size = 1.20
+            bounds = bitmap_font.text_bounds_px(text, pixel_size)
+            text_w = bounds[2] - bounds[0]
+            if text_w > max_width:
+                pixel_size = max(min_pixel_size, pixel_size * max_width / text_w)
+                bounds = bitmap_font.text_bounds_px(text, pixel_size)
+                text_w = bounds[2] - bounds[0]
+            text_h = bounds[3] - bounds[1]
+            origin_x = (w - text_w) / 2.0 - bounds[0]
+            origin_y = y - bounds[1]
+            add_text(text, origin_x, origin_y, pixel_size, rgba)
+            return text_h
+
         add_quad_px(0, 0, w, h, self._BACKDROP_RGBA)
 
         panel_h = 310.0
@@ -218,12 +240,21 @@ class ImportProgressPanel:
 
         logo_cx = w / 2.0
         logo_cy = panel_y0 + panel_h * 0.50
+        title_y = logo_cy - (self.LOGO_SIZE / 2.0) - 42.0
+        add_centered_text(title, title_y, self.TITLE_TEXT_SIZE, self._TITLE_TEXT_RGBA)
+
         stage_label = self._stage_label(stage)
         stage_size = self.STAGE_TEXT_SIZE
-        stage_w = bitmap_font.text_width_px(stage_label, stage_size)
-        stage_x = (w - stage_w) / 2.0
         stage_y = logo_cy + (self.LOGO_SIZE / 2.0) + 30.0
-        add_text(stage_label, stage_x, stage_y, stage_size, self._STAGE_TEXT_RGBA)
+        stage_h = add_centered_text(
+            stage_label, stage_y, stage_size, self._STAGE_TEXT_RGBA
+        )
+        add_centered_text(
+            note,
+            stage_y + stage_h + 22.0,
+            self.NOTE_TEXT_SIZE,
+            self._NOTE_TEXT_RGBA,
+        )
 
         data = np.array(verts, dtype=np.float32)
         if data.nbytes > self._max_verts * 6 * 4:
@@ -451,6 +482,10 @@ class ImportProgressPanel:
             "writing chunk files": "Writing map cache…",
             "writing manifest": "Finalizing map cache…",
             "loading cached map": "Loading cached map…",
+            "resuming import": "Resuming import…",
+            "continuing saved import": "Continuing saved import…",
+            "pausing import": "Pausing import…",
+            "resume point saved": "Resume point saved",
             "loading chunks": "Opening cave…",
             "opening cave": "Opening cave…",
             "done": "Finishing…",

@@ -186,12 +186,12 @@ def test_unknown_gpu_uses_conservative_fallback(monkeypatch):
     )
 
 
-def test_unknown_windows_gpu_uses_larger_texture_friendly_fallback(monkeypatch):
+def test_unknown_windows_gpu_uses_conservative_fallback(monkeypatch):
     monkeypatch.setattr(hardware_memory.sys, "platform", "win32")
 
     assert (
         hardware_memory.detect_total_gpu_memory_bytes("Intel")
-        == hardware_memory.WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
+        == hardware_memory.UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
     )
 
 

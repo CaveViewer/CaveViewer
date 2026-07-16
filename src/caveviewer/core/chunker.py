@@ -35,7 +35,9 @@ import os
 import shutil
 import struct
 import tempfile
+import time
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
@@ -62,6 +64,7 @@ from caveviewer.core.cache_paths import (
 
 MANIFEST_NAME = "manifest.json"
 CHUNKS_DIRNAME = "chunks"
+IMPORT_RESUME_MANIFEST_NAME = "import_resume.json"
 IMPORT_DISK_SPACE_MULTIPLIER = 2
 IMPORT_MEMORY_HEADROOM_FRACTION = 0.90
 IMPORT_MEMORY_PHYSICAL_OVERCOMMIT_FRACTION = 1.25
@@ -74,6 +77,7 @@ _DEFAULT_CHUNK_SIZE_FALLBACK = 50.0  # meters; default for new cache builds
 _DEFAULT_OBJ_IMPORT_BATCH_FACES = 200_000
 _DEFAULT_OBJ_BUCKET_WORKERS = 2
 _MAX_OBJ_BUCKET_WORKERS = 32
+_INCREMENTAL_OBJ_RESUME_VERSION = 1
 _LOG = get_logger("chunker")
 
 
@@ -168,6 +172,17 @@ class InsufficientImportMemoryError(MemoryError):
             )
             + "Close other memory-heavy applications and try again."
         )
+        super().__init__(message)
+
+
+class ImportPaused(RuntimeError):
+    """Raised internally when a resumable import checkpoint has been saved."""
+
+    def __init__(self, resume_dir: str | None = None):
+        self.resume_dir = resume_dir
+        message = "Import paused; resume checkpoint saved."
+        if resume_dir:
+            message = f"{message} Resume directory: {resume_dir}"
         super().__init__(message)
 
 
@@ -567,6 +582,7 @@ def build_cache_incremental_obj(
     assets: tuple[CacheAsset, ...] | list[CacheAsset] = (),
     face_batch_size: int | None = None,
     bucket_workers: int | None = None,
+    pause_requested: Callable[[], bool] | None = None,
 ) -> str:
     """
     Build a cache from an OBJ without retaining whole-model face arrays.
@@ -579,6 +595,16 @@ def build_cache_incremental_obj(
     cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
     cache_parent = os.path.dirname(cache_dir)
     assets = tuple(assets)
+    resolved_face_batch_size = (
+        _configured_obj_import_batch_faces()
+        if face_batch_size is None
+        else max(1, int(face_batch_size))
+    )
+    resolved_bucket_workers = (
+        _configured_obj_bucket_workers()
+        if bucket_workers is None
+        else max(1, min(_MAX_OBJ_BUCKET_WORKERS, int(bucket_workers)))
+    )
     ensure_sufficient_disk_space(
         obj_path,
         cache_dir,
@@ -586,22 +612,57 @@ def build_cache_incremental_obj(
     )
     os.makedirs(cache_parent, exist_ok=True)
 
-    staging_dir = tempfile.mkdtemp(
-        prefix=f".{os.path.basename(cache_dir)}.tmp-{os.getpid()}-",
-        dir=cache_parent,
+    resume = _find_incremental_obj_resume(
+        cache_dir,
+        obj_path=obj_path,
+        materials=materials,
+        chunk_size=chunk_size,
+        face_batch_size=resolved_face_batch_size,
     )
+    if resume is None:
+        staging_dir = tempfile.mkdtemp(
+            prefix=f".{os.path.basename(cache_dir)}.tmp-{os.getpid()}-",
+            dir=cache_parent,
+        )
+        resume_checkpoint = None
+        is_resuming = False
+    else:
+        staging_dir, resume_checkpoint = resume
+        is_resuming = True
+        _LOG.info(
+            "Resuming previously paused OBJ import from checkpoint: %s "
+            "(stage=%s, progress=%.0f%%).",
+            staging_dir,
+            resume_checkpoint.get("stage", "unknown"),
+            float(resume_checkpoint.get("progress_fraction", 0.0)) * 100.0,
+        )
+        if progress_cb:
+            progress_cb(
+                "resuming import",
+                float(resume_checkpoint.get("progress_fraction", 0.0)),
+            )
+
     try:
-        _stage_cache_assets(staging_dir, assets)
+        if not is_resuming:
+            _stage_cache_assets(staging_dir, assets)
         _build_incremental_obj_cache_in_directory(
             obj_path,
             materials,
             staging_dir,
             chunk_size=chunk_size,
             progress_cb=progress_cb,
-            face_batch_size=face_batch_size,
-            bucket_workers=bucket_workers,
+            face_batch_size=resolved_face_batch_size,
+            bucket_workers=resolved_bucket_workers,
+            pause_requested=pause_requested,
+            resume_checkpoint=resume_checkpoint,
         )
+        _remove_resume_checkpoint(staging_dir)
         _publish_cache_directory(staging_dir, cache_dir)
+    except ImportPaused as paused:
+        resume_dir = _preserve_resumable_import(staging_dir, cache_dir)
+        paused.resume_dir = resume_dir
+        _LOG.info("Paused OBJ import checkpoint saved in: %s", resume_dir)
+        raise
     except BaseException:
         shutil.rmtree(staging_dir, ignore_errors=True)
         raise
@@ -696,6 +757,241 @@ def _publish_cache_directory(staging_dir: str, cache_dir: str) -> None:
             )
 
 
+def _import_resume_prefix(cache_dir: str) -> str:
+    return f".{os.path.basename(cache_dir)}.resume-"
+
+
+def _import_resume_checkpoint_path(staging_dir: str) -> str:
+    return os.path.join(staging_dir, IMPORT_RESUME_MANIFEST_NAME)
+
+
+def _source_resume_identity(source_path: str) -> dict:
+    stat = os.stat(source_path)
+    return {
+        "path": os.path.abspath(source_path),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def _materials_resume_identity(materials: dict) -> dict[str, str | None]:
+    return {
+        str(name): getattr(material, "diffuse_texture", None)
+        for name, material in sorted(materials.items(), key=lambda item: str(item[0]))
+    }
+
+
+def _atomic_write_json(path: str, payload: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.",
+        suffix=".tmp",
+        dir=os.path.dirname(path),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(payload, output, sort_keys=True)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _serialize_bucket_parts(
+    bucket_parts: dict[tuple[tuple[int, int, int], str], list[str]],
+    root_dir: str,
+) -> list[dict]:
+    serialized = []
+    for (cell, material_name), paths in sorted(
+        bucket_parts.items(),
+        key=lambda item: (item[0][0], item[0][1]),
+    ):
+        serialized.append(
+            {
+                "cell": [int(cell[0]), int(cell[1]), int(cell[2])],
+                "material": str(material_name),
+                "paths": [
+                    os.path.relpath(path, root_dir)
+                    for path in paths
+                ],
+            }
+        )
+    return serialized
+
+
+def _deserialize_bucket_parts(
+    payload: list[dict],
+    root_dir: str,
+) -> dict[tuple[tuple[int, int, int], str], list[str]]:
+    bucket_parts: dict[tuple[tuple[int, int, int], str], list[str]] = {}
+    for item in payload:
+        cell_payload = item.get("cell", [])
+        if len(cell_payload) != 3:
+            raise ValueError("Resume checkpoint contains an invalid bucket cell.")
+        cell = (
+            int(cell_payload[0]),
+            int(cell_payload[1]),
+            int(cell_payload[2]),
+        )
+        material_name = str(item.get("material", "__no_material__"))
+        paths = [
+            os.path.normpath(os.path.join(root_dir, str(relative_path)))
+            for relative_path in item.get("paths", [])
+        ]
+        bucket_parts[(cell, material_name)] = paths
+    return bucket_parts
+
+
+def _write_incremental_obj_resume_checkpoint(
+    staging_dir: str,
+    *,
+    obj_path: str,
+    materials: dict,
+    chunk_size: float,
+    face_batch_size: int,
+    stage: str,
+    next_batch_index: int,
+    bucketed_faces: int,
+    face_count: int,
+    bucket_parts: dict[tuple[tuple[int, int, int], str], list[str]],
+    progress_fraction: float,
+    completed_manifest_chunks: dict | None = None,
+    total_cell_count: int | None = None,
+) -> None:
+    payload = {
+        "version": _INCREMENTAL_OBJ_RESUME_VERSION,
+        "kind": "incremental_obj_import",
+        "source": _source_resume_identity(obj_path),
+        "chunk_size": float(chunk_size),
+        "face_batch_size": int(face_batch_size),
+        "materials": _materials_resume_identity(materials),
+        "stage": str(stage),
+        "next_batch_index": int(next_batch_index),
+        "bucketed_faces": int(bucketed_faces),
+        "face_count": int(face_count),
+        "progress_fraction": max(0.0, min(1.0, float(progress_fraction))),
+        "bucket_parts": _serialize_bucket_parts(bucket_parts, staging_dir),
+        "completed_manifest_chunks": completed_manifest_chunks or {},
+        "total_cell_count": (
+            None if total_cell_count is None else int(total_cell_count)
+        ),
+        "updated_at": time.time(),
+    }
+    _atomic_write_json(_import_resume_checkpoint_path(staging_dir), payload)
+
+
+def _read_incremental_obj_resume_checkpoint(path: str) -> dict | None:
+    try:
+        with open(path, "r", encoding="utf-8") as checkpoint_file:
+            checkpoint = json.load(checkpoint_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(checkpoint, dict):
+        return None
+    return checkpoint
+
+
+def _incremental_obj_resume_checkpoint_matches(
+    checkpoint: dict,
+    *,
+    obj_path: str,
+    materials: dict,
+    chunk_size: float,
+    face_batch_size: int,
+) -> bool:
+    if checkpoint.get("version") != _INCREMENTAL_OBJ_RESUME_VERSION:
+        return False
+    if checkpoint.get("kind") != "incremental_obj_import":
+        return False
+    if checkpoint.get("stage") not in {"bucketing", "finalizing"}:
+        return False
+    if float(checkpoint.get("chunk_size", -1.0)) != float(chunk_size):
+        return False
+    if int(checkpoint.get("face_batch_size", -1)) != int(face_batch_size):
+        return False
+    if checkpoint.get("materials") != _materials_resume_identity(materials):
+        return False
+    try:
+        return checkpoint.get("source") == _source_resume_identity(obj_path)
+    except OSError:
+        return False
+
+
+def _find_incremental_obj_resume(
+    cache_dir: str,
+    *,
+    obj_path: str,
+    materials: dict,
+    chunk_size: float,
+    face_batch_size: int,
+) -> tuple[str, dict] | None:
+    cache_parent = os.path.dirname(cache_dir)
+    prefix = _import_resume_prefix(cache_dir)
+    try:
+        names = os.listdir(cache_parent)
+    except OSError:
+        return None
+
+    candidates: list[tuple[float, str, dict]] = []
+    for name in names:
+        if not name.startswith(prefix):
+            continue
+        resume_dir = os.path.join(cache_parent, name)
+        if not os.path.isdir(resume_dir):
+            continue
+        checkpoint_path = _import_resume_checkpoint_path(resume_dir)
+        checkpoint = _read_incremental_obj_resume_checkpoint(checkpoint_path)
+        if checkpoint is None:
+            continue
+        if not _incremental_obj_resume_checkpoint_matches(
+            checkpoint,
+            obj_path=obj_path,
+            materials=materials,
+            chunk_size=chunk_size,
+            face_batch_size=face_batch_size,
+        ):
+            continue
+        candidates.append(
+            (
+                float(checkpoint.get("updated_at", os.path.getmtime(resume_dir))),
+                resume_dir,
+                checkpoint,
+            )
+        )
+
+    if not candidates:
+        return None
+    _updated_at, resume_dir, checkpoint = max(candidates, key=lambda item: item[0])
+    return resume_dir, checkpoint
+
+
+def _preserve_resumable_import(staging_dir: str, cache_dir: str) -> str:
+    cache_parent = os.path.dirname(cache_dir)
+    prefix = _import_resume_prefix(cache_dir)
+    if os.path.basename(staging_dir).startswith(prefix):
+        return staging_dir
+
+    for attempt in range(1000):
+        suffix = f"{os.getpid()}-{time.time_ns()}"
+        if attempt:
+            suffix = f"{suffix}-{attempt}"
+        resume_dir = os.path.join(cache_parent, f"{prefix}{suffix}")
+        if not os.path.exists(resume_dir):
+            os.replace(staging_dir, resume_dir)
+            return resume_dir
+    raise RuntimeError("Could not allocate a paused import resume directory.")
+
+
+def _remove_resume_checkpoint(staging_dir: str) -> None:
+    try:
+        os.remove(_import_resume_checkpoint_path(staging_dir))
+    except FileNotFoundError:
+        pass
+
+
 def _build_incremental_obj_cache_in_directory(
     obj_path: str,
     materials: dict,
@@ -705,6 +1001,8 @@ def _build_incremental_obj_cache_in_directory(
     progress_cb=None,
     face_batch_size: int | None = None,
     bucket_workers: int | None = None,
+    pause_requested: Callable[[], bool] | None = None,
+    resume_checkpoint: dict | None = None,
 ) -> str:
     """Build cache artifacts incrementally inside an unpublished directory."""
     chunks_dir = os.path.join(cache_dir, CHUNKS_DIRNAME)
@@ -722,10 +1020,26 @@ def _build_incremental_obj_cache_in_directory(
         if bucket_workers is None
         else max(1, min(_MAX_OBJ_BUCKET_WORKERS, int(bucket_workers)))
     )
+    checkpoint = resume_checkpoint or {}
+    checkpoint_stage = checkpoint.get("stage")
+    last_progress_fraction = float(checkpoint.get("progress_fraction", 0.0))
+
+    def emit_progress(stage: str, fraction: float) -> None:
+        nonlocal last_progress_fraction
+        if progress_cb is None:
+            return
+        fraction = max(0.0, min(1.0, float(fraction)))
+        if fraction < last_progress_fraction:
+            fraction = last_progress_fraction
+        else:
+            last_progress_fraction = fraction
+        progress_cb(stage, fraction)
+
+    def should_pause() -> bool:
+        return bool(pause_requested and pause_requested())
 
     def vertex_progress(stage: str, fraction: float) -> None:
-        if progress_cb:
-            progress_cb(stage, 0.25 * max(0.0, min(1.0, fraction)))
+        emit_progress(stage, 0.25 * max(0.0, min(1.0, fraction)))
 
     def incremental_preflight(
         vertex_count: int,
@@ -749,12 +1063,72 @@ def _build_incremental_obj_cache_in_directory(
         preflight_cb=incremental_preflight,
     )
 
-    bucket_parts: dict[tuple[tuple[int, int, int], str], list[str]] = {}
-    bucketed_faces = 0
+    if checkpoint_stage in {"bucketing", "finalizing"}:
+        bucket_parts = _deserialize_bucket_parts(
+            checkpoint.get("bucket_parts", []),
+            cache_dir,
+        )
+        bucketed_faces = int(checkpoint.get("bucketed_faces", 0))
+        next_batch_index = int(checkpoint.get("next_batch_index", 0))
+        completed_manifest_chunks = dict(
+            checkpoint.get("completed_manifest_chunks", {})
+        )
+        total_cell_count = checkpoint.get("total_cell_count")
+        total_cell_count = (
+            None if total_cell_count is None else int(total_cell_count)
+        )
+    else:
+        bucket_parts: dict[tuple[tuple[int, int, int], str], list[str]] = {}
+        bucketed_faces = 0
+        next_batch_index = 0
+        completed_manifest_chunks = {}
+        total_cell_count = None
+
+    def write_pause_checkpoint(
+        stage: str,
+        *,
+        progress_fraction: float | None = None,
+        finalizing_manifest_chunks: dict | None = None,
+        finalizing_bucket_parts: dict[
+            tuple[tuple[int, int, int], str], list[str]
+        ] | None = None,
+        finalizing_total_cell_count: int | None = None,
+    ) -> None:
+        _write_incremental_obj_resume_checkpoint(
+            cache_dir,
+            obj_path=obj_path,
+            materials=materials,
+            chunk_size=chunk_size,
+            face_batch_size=face_batch_size,
+            stage=stage,
+            next_batch_index=next_batch_index,
+            bucketed_faces=bucketed_faces,
+            face_count=vertex_data.face_count,
+            bucket_parts=(
+                bucket_parts
+                if finalizing_bucket_parts is None
+                else finalizing_bucket_parts
+            ),
+            progress_fraction=(
+                last_progress_fraction
+                if progress_fraction is None
+                else progress_fraction
+            ),
+            completed_manifest_chunks=(
+                completed_manifest_chunks
+                if finalizing_manifest_chunks is None
+                else finalizing_manifest_chunks
+            ),
+            total_cell_count=(
+                total_cell_count
+                if finalizing_total_cell_count is None
+                else finalizing_total_cell_count
+            ),
+        )
+        raise ImportPaused(cache_dir)
 
     def face_progress(stage: str, fraction: float) -> None:
-        if progress_cb:
-            progress_cb(stage, 0.25 + 0.40 * max(0.0, min(1.0, fraction)))
+        emit_progress(stage, 0.25 + 0.40 * max(0.0, min(1.0, fraction)))
 
     def collect_bucket_result(
         result: tuple[int, dict[tuple[tuple[int, int, int], str], str]],
@@ -764,8 +1138,8 @@ def _build_incremental_obj_cache_in_directory(
         bucketed_faces += face_count
         for key, path in batch_bucket_paths.items():
             bucket_parts.setdefault(key, []).append(path)
-        if progress_cb and vertex_data.face_count:
-            progress_cb(
+        if vertex_data.face_count:
+            emit_progress(
                 "bucketing faces",
                 0.25 + 0.40 * min(1.0, bucketed_faces / vertex_data.face_count),
             )
@@ -787,23 +1161,48 @@ def _build_incremental_obj_cache_in_directory(
         face_batch_size,
         bucket_workers,
     )
-    batches = iter_obj_face_batches(
-        obj_path,
-        batch_size=face_batch_size,
-        progress_cb=face_progress,
-    )
-    if bucket_workers <= 1:
-        for batch_index, batch in enumerate(batches):
-            collect_bucket_result(bucket_batch(batch_index, batch))
-    else:
-        active_futures: set[concurrent.futures.Future] = set()
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=bucket_workers,
-            thread_name_prefix="obj-bucket",
-        ) as executor:
+    if checkpoint_stage != "finalizing":
+        submitted_until_batch = next_batch_index
+        batches = iter_obj_face_batches(
+            obj_path,
+            batch_size=face_batch_size,
+            progress_cb=face_progress,
+        )
+        if bucket_workers <= 1:
             for batch_index, batch in enumerate(batches):
-                active_futures.add(executor.submit(bucket_batch, batch_index, batch))
-                if len(active_futures) >= bucket_workers:
+                if batch_index < next_batch_index:
+                    continue
+                if should_pause():
+                    write_pause_checkpoint("bucketing")
+                collect_bucket_result(bucket_batch(batch_index, batch))
+                submitted_until_batch = batch_index + 1
+                next_batch_index = submitted_until_batch
+        else:
+            active_futures: set[concurrent.futures.Future] = set()
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=bucket_workers,
+                thread_name_prefix="obj-bucket",
+            ) as executor:
+                for batch_index, batch in enumerate(batches):
+                    if batch_index < next_batch_index:
+                        continue
+                    if should_pause():
+                        break
+                    active_futures.add(
+                        executor.submit(bucket_batch, batch_index, batch)
+                    )
+                    submitted_until_batch = batch_index + 1
+                    if len(active_futures) >= bucket_workers:
+                        done, active_futures = concurrent.futures.wait(
+                            active_futures,
+                            return_when=concurrent.futures.FIRST_COMPLETED,
+                        )
+                        for future in done:
+                            collect_bucket_result(future.result())
+                        if should_pause():
+                            break
+
+                while active_futures:
                     done, active_futures = concurrent.futures.wait(
                         active_futures,
                         return_when=concurrent.futures.FIRST_COMPLETED,
@@ -811,26 +1210,38 @@ def _build_incremental_obj_cache_in_directory(
                     for future in done:
                         collect_bucket_result(future.result())
 
-            while active_futures:
-                done, active_futures = concurrent.futures.wait(
-                    active_futures,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                for future in done:
-                    collect_bucket_result(future.result())
+                next_batch_index = submitted_until_batch
+                if should_pause():
+                    write_pause_checkpoint("bucketing")
 
-    if progress_cb:
-        progress_cb("writing chunk files", 0.65)
+        next_batch_index = submitted_until_batch
+
+    emit_progress("writing chunk files", 0.65)
+
+    def checkpoint_finalization(
+        manifest_chunks: dict,
+        remaining_bucket_parts: dict[tuple[tuple[int, int, int], str], list[str]],
+        final_total_cell_count: int,
+    ) -> None:
+        write_pause_checkpoint(
+            "finalizing",
+            finalizing_manifest_chunks=manifest_chunks,
+            finalizing_bucket_parts=remaining_bucket_parts,
+            finalizing_total_cell_count=final_total_cell_count,
+        )
 
     manifest_chunks = _finalize_incremental_buckets(
         chunks_dir,
         bucket_parts,
-        progress_cb=progress_cb,
+        progress_cb=emit_progress,
+        pause_requested=should_pause,
+        checkpoint_cb=checkpoint_finalization,
+        initial_manifest_chunks=completed_manifest_chunks,
+        total_cell_count=total_cell_count,
     )
     shutil.rmtree(bucket_root, ignore_errors=True)
 
-    if progress_cb:
-        progress_cb("writing manifest", 0.98)
+    emit_progress("writing manifest", 0.98)
 
     footprint_cell_size, footprint_flat = _footprint_from_positions(
         vertex_data.positions
@@ -976,14 +1387,39 @@ def _finalize_incremental_buckets(
     bucket_parts: dict[tuple[tuple[int, int, int], str], list[str]],
     *,
     progress_cb=None,
+    pause_requested: Callable[[], bool] | None = None,
+    checkpoint_cb: Callable[
+        [
+            dict,
+            dict[tuple[tuple[int, int, int], str], list[str]],
+            int,
+        ],
+        None,
+    ] | None = None,
+    initial_manifest_chunks: dict | None = None,
+    total_cell_count: int | None = None,
 ) -> dict:
     per_cell_groups: dict[tuple[int, int, int], list[tuple[str, list[str]]]] = {}
     for (cell, material_name), paths in bucket_parts.items():
         per_cell_groups.setdefault(cell, []).append((material_name, paths))
 
-    manifest_chunks = {}
+    manifest_chunks = dict(initial_manifest_chunks or {})
     cell_items = sorted(per_cell_groups.items())
-    total_cells = len(cell_items)
+    total_cells = int(total_cell_count or (len(manifest_chunks) + len(cell_items)))
+    completed_cells = len(manifest_chunks)
+
+    def maybe_checkpoint(next_index: int) -> None:
+        if not pause_requested or not pause_requested():
+            return
+        if checkpoint_cb is None:
+            return
+        remaining_bucket_parts: dict[tuple[tuple[int, int, int], str], list[str]] = {}
+        for cell_coord, groups in cell_items[next_index:]:
+            for material_name, paths in groups:
+                remaining_bucket_parts[(cell_coord, material_name)] = paths
+        checkpoint_cb(dict(manifest_chunks), remaining_bucket_parts, total_cells)
+
+    maybe_checkpoint(0)
     for index, (cell_coord, groups) in enumerate(cell_items, start=1):
         cell_str = f"{cell_coord[0]}_{cell_coord[1]}_{cell_coord[2]}"
         bounds_min, bounds_max, used_materials = _write_chunk_file_from_buckets(
@@ -996,11 +1432,15 @@ def _finalize_incremental_buckets(
             "bounds_min": bounds_min.tolist(),
             "bounds_max": bounds_max.tolist(),
         }
-        if progress_cb and (index % 25 == 0 or index == total_cells):
+        completed_cells += 1
+        if progress_cb and (
+            completed_cells % 25 == 0 or completed_cells == total_cells
+        ):
             progress_cb(
                 "writing chunk files",
-                0.65 + 0.33 * (index / max(total_cells, 1)),
+                0.65 + 0.33 * (completed_cells / max(total_cells, 1)),
             )
+        maybe_checkpoint(index)
     return manifest_chunks
 
 
