@@ -614,6 +614,43 @@ From a source checkout, the module entry point is equivalent:
   --chunk-size=64
 ```
 
+Windows PowerShell examples:
+
+```powershell
+caveviewer-chunker --source="C:\Maps\Peacock.obj" --chunk-size=64
+```
+
+From a source checkout on Windows, use the development virtual environment's
+Python executable:
+
+```powershell
+.\.venv-dev\Scripts\python.exe -m caveviewer.chunker `
+  --source="C:\Maps\Peacock.obj" `
+  --chunk-size=64
+```
+
+Use `--cache-root` when compiled maps should live on a specific drive:
+
+```powershell
+.\.venv-dev\Scripts\python.exe -m caveviewer.chunker `
+  --source="C:\Maps\Peacock.obj" `
+  --cache-root="D:\CaveViewer\maps" `
+  --chunk-size=64 `
+  --json
+```
+
+To have the GUI auto-discover that cache later, launch CaveViewer from a shell
+with the same cache root:
+
+```powershell
+$env:CAVEVIEWER_MAP_CACHE_DIR = "D:\CaveViewer\maps"
+caveviewer
+```
+
+The PowerShell environment assignment applies to the current shell session.
+Set it again in new shells, or configure a persistent user environment variable
+if this cache root should be reused regularly.
+
 The command follows the same public CLI conventions as the shell scripts in
 `scripts/STANDARDS.md`: named options only, `-h`/`--help`, compact usage text,
 and exact errors for positional arguments, unknown options, and missing option
