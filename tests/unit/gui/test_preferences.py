@@ -6,6 +6,7 @@ import json
 import inspect
 import logging
 import os
+import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
@@ -333,6 +334,7 @@ def test_settings_save_and_load_round_trip(valid_advanced_settings, tmp_path):
 def test_default_settings_path_uses_xdg_config_not_state(
     valid_advanced_settings, tmp_path, monkeypatch
 ):
+    monkeypatch.setattr(sys, "platform", "linux")
     config_home = tmp_path / "config"
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
