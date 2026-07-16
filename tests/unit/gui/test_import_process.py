@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -50,13 +51,31 @@ class FakeProcess:
         self.join_calls.append(timeout)
 
 
+class FakeLogger:
+    def __init__(self):
+        self.info_messages = []
+        self.error_messages = []
+
+    @staticmethod
+    def _format(message, args):
+        return message % args if args else str(message)
+
+    def info(self, message, *args):
+        self.info_messages.append(self._format(message, args))
+
+    def error(self, message, *args):
+        self.error_messages.append(self._format(message, args))
+
+
 class FakeSpawnContext:
     def __init__(self):
-        self.queue = FakeEventQueue()
+        self.queues = []
         self.processes = []
 
     def Queue(self):
-        return self.queue
+        queue = FakeEventQueue()
+        self.queues.append(queue)
+        return queue
 
     def Process(self, *, target, args, name):
         process = FakeProcess(target, args, name)
@@ -85,7 +104,8 @@ def test_start_import_process_uses_spawn_context_and_event_queue():
         {"glb_path": "/maps/cave.glb"}, "/maps", context=context
     )
 
-    assert handle.events is context.queue
+    assert handle.events is context.queues[0]
+    assert handle.commands is context.queues[1]
     assert handle.process is context.processes[0]
     assert handle.cache_dir
     assert handle.process.name == "CaveViewer-import"
@@ -94,8 +114,30 @@ def test_start_import_process_uses_spawn_context_and_event_queue():
     assert handle.process.args == (
         {"glb_path": "/maps/cave.glb"},
         "/maps",
-        context.queue,
+        context.queues[0],
+        context.queues[1],
     )
+
+
+def test_import_event_log_handler_sends_log_event_to_parent_queue():
+    events = FakeEventQueue()
+    handler = import_process._ImportEventLogHandler(events)
+    record = logging.LogRecord(
+        "caveviewer",
+        logging.WARNING,
+        __file__,
+        1,
+        "slow import at %s%%",
+        (50,),
+        None,
+    )
+    record.component = "ImportProcess"
+
+    handler.emit(record)
+
+    assert events.events == [
+        ("log", logging.WARNING, "ImportProcess", "slow import at 50%")
+    ]
 
 
 def test_import_process_reports_progress_and_done(monkeypatch):
@@ -109,7 +151,11 @@ def test_import_process_reports_progress_and_done(monkeypatch):
         return "/cache/cave"
 
     monkeypatch.setattr(app, "import_and_cache_any", fake_import)
-    monkeypatch.setattr(chunker, "load_manifest", lambda _path: {"chunks": {}})
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
     monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
     monkeypatch.setattr(
         import_process,
@@ -124,8 +170,46 @@ def test_import_process_reports_progress_and_done(monkeypatch):
     assert events.events == [
         ("progress", "starting import", 0.0),
         ("progress", "building cache", 0.5),
-        ("done", "/cache/cave", "/cache/cave", {"chunks": {}}),
+        ("done", "/cache/cave", "/cache/cave"),
     ]
+
+
+def test_import_process_reports_paused_checkpoint(monkeypatch):
+    events = FakeEventQueue()
+    logger = FakeLogger()
+
+    def fake_import(_model_descriptor, _textures_dir, **options):
+        assert options["pause_requested"]() is True
+        raise chunker.ImportPaused("/cache/.map.resume-123")
+
+    def start_command_thread(_commands, pause_event, _stop_event):
+        pause_event.set()
+        return SimpleNamespace(join=lambda timeout=None: None)
+
+    monkeypatch.setattr(app, "import_and_cache_any", fake_import)
+    monkeypatch.setattr(import_process, "_LOG", logger)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+    monkeypatch.setattr(import_process, "_start_command_thread", start_command_thread)
+
+    import_process._run_import_process(
+        {"obj_path": "/maps/cave.obj"}, "/maps", events, object()
+    )
+
+    assert events.events == [
+        ("progress", "starting import", 0.0),
+        ("paused", "/cache/.map.resume-123"),
+    ]
+    assert any("Import paused" in message for message in logger.info_messages)
 
 
 def test_import_process_reports_error_with_traceback(monkeypatch):
@@ -135,6 +219,11 @@ def test_import_process_reports_error_with_traceback(monkeypatch):
         raise RuntimeError("parse failed")
 
     monkeypatch.setattr(app, "import_and_cache_any", fail_import)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
     monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
     monkeypatch.setattr(
         import_process,
@@ -151,6 +240,86 @@ def test_import_process_reports_error_with_traceback(monkeypatch):
     assert kind == "error"
     assert message == "parse failed"
     assert "RuntimeError: parse failed" in trace
+
+
+def test_import_process_reports_actionable_chunker_error_without_traceback(
+    monkeypatch,
+):
+    events = FakeEventQueue()
+    logger = FakeLogger()
+
+    def fail_import(*_args, **kwargs):
+        assert kwargs["console_progress"] is False
+        raise chunker.InsufficientImportMemoryError(
+            20 * 1024**3,
+            9 * 1024**3,
+            8 * 1024**3,
+            source_path="/maps/DevilsEye Start.obj",
+            physical_limit_bytes=18 * 1024**3,
+        )
+
+    monkeypatch.setattr(app, "import_and_cache_any", fail_import)
+    monkeypatch.setattr(import_process, "_LOG", logger)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+
+    import_process._run_import_process(
+        {"obj_path": "/maps/DevilsEye Start.obj"}, "/maps", events
+    )
+
+    assert events.events[0] == ("progress", "starting import", 0.0)
+    kind, message, trace, suggestion = events.events[1]
+    assert kind == "error"
+    assert "Not enough available system RAM" in message
+    assert trace == ""
+    assert "machine with more RAM" in suggestion
+    assert any(message in logged for logged in logger.error_messages)
+    assert any("Suggestion:" in logged for logged in logger.error_messages)
+    assert not any("Traceback" in logged for logged in logger.error_messages)
+
+
+def test_import_process_reports_cancelled_without_traceback_on_keyboard_interrupt(
+    monkeypatch,
+):
+    events = FakeEventQueue()
+    logger = FakeLogger()
+
+    def interrupt_import(*_args, **_kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(app, "import_and_cache_any", interrupt_import)
+    monkeypatch.setattr(import_process, "_LOG", logger)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+
+    import_process._run_import_process(
+        {"glb_path": "/maps/cancelled.glb"}, "/maps", events
+    )
+
+    assert events.events == [
+        ("progress", "starting import", 0.0),
+        ("cancelled",),
+    ]
+    assert logger.info_messages[-1] == "Import process interrupted by user."
+    assert logger.error_messages == []
 
 
 def test_terminate_import_process_terminates_alive_process():

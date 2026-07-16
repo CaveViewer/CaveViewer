@@ -204,7 +204,7 @@ def test_cache_chunk_size_logging_handles_missing_matching_and_different_values(
 
     monkeypatch.setattr(chunker, "cache_chunk_size", lambda _path: 8.0)
     app._log_cache_chunk_size("cache")
-    assert recorder.info_messages[-1] == "Chunk cache chunk size: 8m."
+    assert recorder.info_messages[-1] == "Chunk cache chunk size: 8."
 
     monkeypatch.setattr(chunker, "cache_chunk_size", lambda _path: 16.0)
     app._log_cache_chunk_size("cache")

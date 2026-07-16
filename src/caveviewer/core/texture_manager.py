@@ -66,6 +66,10 @@ _TEXTURE_BYTES_PER_PIXEL_WITH_MIPS = 4.0 * (4.0 / 3.0)
 _AUTO_TEXTURE_DIMENSION_STEPS = (16384, 8192, 4096, 2048, 1024, 512)
 _MAX_TEXTURE_DIMENSION_LIMIT = _AUTO_TEXTURE_DIMENSION_STEPS[0]
 _MIN_TEXTURE_DIMENSION_LIMIT = 512
+_DEFAULT_DECODE_CACHE_BYTES = 256 * 1024 ** 2
+_MIN_DECODE_CACHE_BYTES = 32 * 1024 ** 2
+_MAX_DECODE_CACHE_BYTES = 512 * 1024 ** 2
+_DECODE_CACHE_AVAILABLE_RAM_FRACTION = 0.05
 
 
 @dataclass
@@ -117,6 +121,7 @@ class TextureManager:
         textures_dir: str,
         material_to_file: dict,
         max_texture_dimension: int | None = None,
+        max_decoded_cache_bytes: int | None = None,
     ):
         """
         gl_context: a moderngl.Context (or any object exposing .texture(size, components, data))
@@ -142,7 +147,11 @@ class TextureManager:
         self.max_texture_dimension = _parse_texture_dimension_limit(
             str(max_texture_dimension) if max_texture_dimension else None
         )
+        self.max_decoded_cache_bytes = self._normalize_decoded_cache_limit(
+            max_decoded_cache_bytes
+        )
         self._texture_downscale_logged = False
+        self._decode_cache_limit_logged = False
         self._loaded: dict[str, LoadedTexture] = {}  # keyed by material name
         # multiple materials can point at the same physical jpg (rare, but
         # cheap to dedupe so we don't decode the same file twice) -- or,
@@ -154,7 +163,14 @@ class TextureManager:
         # thread via upload_decoded(). Guarded by a lock since multiple
         # worker threads may populate it concurrently.
         self._decode_cache: dict[object, DecodedImage] = {}
+        self._decode_cache_bytes = 0
+        self._decode_inflight: set[object] = set()
         self._decode_cache_lock = threading.Lock()
+        _LOG.info(
+            "Texture predecode cache cap active: %.1f MB. Oversized or "
+            "over-budget textures will decode on demand at original resolution.",
+            self.max_decoded_cache_bytes / (1024 ** 2),
+        )
         if self.max_texture_dimension is not None:
             if self.max_texture_dimension >= _MAX_TEXTURE_DIMENSION_LIMIT:
                 _LOG.info(
@@ -277,6 +293,35 @@ class TextureManager:
         )
         return _MIN_TEXTURE_DIMENSION_LIMIT
 
+    @staticmethod
+    def recommend_decoded_cache_bytes(available_ram_bytes: int | None) -> int:
+        """Choose a CPU-side texture predecode cache cap from available RAM.
+
+        This does not resize textures.  It only limits how many fully decoded
+        RGB images background workers may keep waiting for main-thread upload.
+        If the cap is too small for the next texture, that texture is decoded
+        on demand during upload at its original selected resolution.
+        """
+        if available_ram_bytes is None or available_ram_bytes <= 0:
+            return _DEFAULT_DECODE_CACHE_BYTES
+        return max(
+            _MIN_DECODE_CACHE_BYTES,
+            min(
+                _MAX_DECODE_CACHE_BYTES,
+                int(available_ram_bytes * _DECODE_CACHE_AVAILABLE_RAM_FRACTION),
+            ),
+        )
+
+    @staticmethod
+    def _normalize_decoded_cache_limit(max_decoded_cache_bytes: int | None) -> int:
+        if max_decoded_cache_bytes is None:
+            return _DEFAULT_DECODE_CACHE_BYTES
+        try:
+            value = int(max_decoded_cache_bytes)
+        except (TypeError, ValueError):
+            return _DEFAULT_DECODE_CACHE_BYTES
+        return max(1, value)
+
     def _placeholder_texture(self):
         """1x1 magenta texture used when a material's image file is missing,
         so a bad texture reference degrades visibly (obviously wrong color)
@@ -323,16 +368,80 @@ class TextureManager:
             return  # no texture for this material; placeholder path handles it on upload
         if file_or_bytes in self._file_cache:
             return  # already GPU-resident
+        estimated_bytes = self._estimate_decoded_image_bytes(file_or_bytes)
         with self._decode_cache_lock:
             if file_or_bytes in self._decode_cache:
                 return  # already decoded, waiting for main-thread upload
+            if file_or_bytes in self._decode_inflight:
+                return  # another worker is already decoding/reserving this texture
+            if estimated_bytes is None:
+                estimated_bytes = self.max_decoded_cache_bytes
+            if (
+                estimated_bytes > self.max_decoded_cache_bytes
+                or self._decode_cache_bytes + estimated_bytes > self.max_decoded_cache_bytes
+            ):
+                self._log_decode_cache_skip(file_or_bytes, estimated_bytes)
+                return
+            self._decode_cache_bytes += estimated_bytes
+            self._decode_inflight.add(file_or_bytes)
 
         decoded = self._decode_image(file_or_bytes)
         with self._decode_cache_lock:
-            # double check another thread didn't decode it in the meantime;
-            # if so, just discard our redundant decode rather than overwrite
-            if file_or_bytes not in self._decode_cache and file_or_bytes not in self._file_cache:
+            self._decode_inflight.discard(file_or_bytes)
+            self._decode_cache_bytes = max(
+                0,
+                self._decode_cache_bytes - estimated_bytes,
+            )
+            if decoded is None:
+                return
+            actual_bytes = len(decoded.data)
+            # double check another thread didn't upload or decode it in the
+            # meantime; if so, just discard our redundant decode rather than
+            # overwrite.  If the actual decoded payload is larger than the
+            # estimate/cap, keep memory bounded and fall back to on-demand
+            # decode during upload.
+            if (
+                file_or_bytes not in self._decode_cache
+                and file_or_bytes not in self._file_cache
+                and actual_bytes <= self.max_decoded_cache_bytes
+                and self._decode_cache_bytes + actual_bytes <= self.max_decoded_cache_bytes
+            ):
                 self._decode_cache[file_or_bytes] = decoded
+                self._decode_cache_bytes += actual_bytes
+
+    def _log_decode_cache_skip(self, file_or_bytes, estimated_bytes: int) -> None:
+        if self._decode_cache_limit_logged:
+            return
+        label = (
+            "<embedded texture>"
+            if isinstance(file_or_bytes, bytes)
+            else str(file_or_bytes)
+        )
+        _LOG.info(
+            "Texture predecode cache is limiting background decode memory; "
+            "%r needs about %.1f MB while %.1f MB is available in the "
+            "predecode cache. It will decode on demand at upload time.",
+            label,
+            estimated_bytes / (1024 ** 2),
+            max(0, self.max_decoded_cache_bytes - self._decode_cache_bytes)
+            / (1024 ** 2),
+        )
+        self._decode_cache_limit_logged = True
+
+    def _estimate_decoded_image_bytes(self, file_or_bytes) -> int | None:
+        size = self._inspect_texture_size(file_or_bytes)
+        if size is None:
+            return None
+        width, height = self._size_after_texture_limit(size)
+        return max(1, int(width) * int(height) * 3)
+
+    def _size_after_texture_limit(self, size: tuple[int, int]) -> tuple[int, int]:
+        limit = self.max_texture_dimension
+        width, height = size
+        if limit is None or max(width, height) <= limit:
+            return width, height
+        scale = float(limit) / float(max(width, height))
+        return max(1, int(round(width * scale))), max(1, int(round(height * scale)))
 
     def _decode_image(self, file_or_bytes) -> Optional[DecodedImage]:
         """
@@ -428,6 +537,11 @@ class TextureManager:
         decoded = None
         with self._decode_cache_lock:
             decoded = self._decode_cache.pop(file_or_bytes, None)
+            if decoded is not None:
+                self._decode_cache_bytes = max(
+                    0,
+                    self._decode_cache_bytes - len(decoded.data),
+                )
 
         if decoded is None:
             # fallback: decode synchronously on the main thread. Slower
@@ -485,6 +599,8 @@ class TextureManager:
         # Drop decoded-but-not-uploaded CPU images.
         with self._decode_cache_lock:
             self._decode_cache.clear()
+            self._decode_cache_bytes = 0
+            self._decode_inflight.clear()
 
     def validate_textures(self) -> dict:
         """
@@ -620,8 +736,10 @@ class TextureManager:
     def stats(self) -> dict:
         with self._decode_cache_lock:
             n_decoded_waiting = len(self._decode_cache)
+            decoded_waiting_bytes = self._decode_cache_bytes
         return {
             "unique_materials_loaded": len(self._loaded),
             "unique_files_resident": len(self._file_cache),
             "decoded_waiting_for_upload": n_decoded_waiting,
+            "decoded_waiting_bytes": decoded_waiting_bytes,
         }

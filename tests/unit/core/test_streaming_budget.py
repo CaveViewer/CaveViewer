@@ -67,6 +67,22 @@ def test_available_cells_cap_ram_only_budget():
     assert budget.max_loaded_chunks == 3
 
 
+def test_ram_budget_uses_current_available_ram_when_lower():
+    budget = calculate_residency_budget(
+        available_cell_count=100,
+        total_ram_bytes=10_000,
+        available_ram_bytes=1_000,
+        ram_target_fraction=0.5,
+        estimated_chunk_ram_bytes=100,
+        total_gpu_memory_bytes=None,
+        gpu_target_fraction=0.7,
+        estimated_chunk_gpu_bytes=100,
+    )
+
+    assert budget.ram_budget_chunks == 5
+    assert budget.max_loaded_chunks == 5
+
+
 def test_budget_rejects_non_positive_ram_estimate():
     with pytest.raises(ValueError, match="must be positive"):
         calculate_residency_budget(

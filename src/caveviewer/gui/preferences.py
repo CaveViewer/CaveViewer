@@ -29,6 +29,7 @@ class ValueType(str, Enum):
 
 
 DefaultProvider = str | Callable[[], str]
+SettingEnvConverter = Callable[[str], str]
 
 
 @dataclass(frozen=True)
@@ -44,10 +45,24 @@ class SettingSpec:
     minimum: float | int | None = None
     maximum: float | int | None = None
     units: str = ""
+    env_to_setting: SettingEnvConverter | None = None
+    setting_to_env: SettingEnvConverter | None = None
 
     def built_in_default(self) -> str:
         value = self.default() if callable(self.default) else self.default
         return str(value).strip()
+
+    def value_from_env(self, raw_value: str) -> str:
+        value = str(raw_value).strip()
+        if self.env_to_setting is None:
+            return value
+        return self.env_to_setting(value)
+
+    def value_to_env(self, setting_value: str) -> str:
+        value = str(setting_value).strip()
+        if self.setting_to_env is None:
+            return value
+        return self.setting_to_env(value)
 
 
 @dataclass(frozen=True)
@@ -125,13 +140,24 @@ def _scan_throttle_default() -> str:
     return "1" if sys.platform.startswith("win") else "0"
 
 
+def _faces_env_to_thousands(raw_value: str) -> str:
+    face_count = int(str(raw_value).strip())
+    if not 1_000 <= face_count <= 2_000_000:
+        raise ValueError("face count must be between 1,000 and 2,000,000")
+    return str(max(1, round(face_count / 1000)))
+
+
+def _thousands_to_faces_env(raw_value: str) -> str:
+    return str(int(str(raw_value).strip()) * 1000)
+
+
 ADVANCED_SETTING_FIELDS = (
     SettingSpec(
         section="streaming",
         key="memory_target_percent",
         env_var="CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
-        label="System RAM target (%)",
-        hint="Limits RAM used by loaded chunks only.",
+        label="System RAM target",
+        hint="Target percent of available RAM for loaded chunks.",
         value_type=ValueType.FLOAT,
         default="8",
         minimum=1.0,
@@ -142,8 +168,8 @@ ADVANCED_SETTING_FIELDS = (
         section="streaming",
         key="gpu_memory_target_percent",
         env_var="CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
-        label="GPU memory target (%)",
-        hint="GPU memory limit for loaded chunks.",
+        label="GPU memory target",
+        hint="Target percent of GPU memory for loaded chunks.",
         value_type=ValueType.FLOAT,
         default="70",
         minimum=1.0,
@@ -154,8 +180,8 @@ ADVANCED_SETTING_FIELDS = (
         section="streaming",
         key="gpu_memory_gb",
         env_var="CAVEVIEWER_GPU_MEMORY_GB",
-        label="GPU memory override (GB)",
-        hint="Optional GPU memory ceiling; detected smaller GPUs still win.",
+        label="GPU memory override",
+        hint="Manual GPU memory ceiling in GB.",
         value_type=ValueType.FLOAT,
         default="",
         optional=True,
@@ -168,40 +194,43 @@ ADVANCED_SETTING_FIELDS = (
         key="io_workers",
         env_var="CAVEVIEWER_IO_WORKERS",
         label="Loading worker limit",
-        hint="Worker count may be lower when CPU or RAM is constrained.",
+        hint="Max chunk-loading worker threads.",
         value_type=ValueType.INT,
         default="2",
         minimum=1,
         maximum=32,
+        units="workers",
     ),
     SettingSpec(
         section="streaming",
         key="io_reserved_cpus",
         env_var="CAVEVIEWER_IO_RESERVED_CPUS",
         label="Loading CPUs to keep free",
-        hint="Logical CPUs excluded from the loading worker pool.",
+        hint="Logical CPUs reserved from loading.",
         value_type=ValueType.INT,
         default="3",
         minimum=2,
         maximum=32,
+        units="logical CPUs",
     ),
     SettingSpec(
         section="streaming",
         key="upload_chunks_per_frame",
         env_var="CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
         label="Chunk uploads per frame",
-        hint="Ready chunks uploaded per frame.",
+        hint="Max ready chunks uploaded each frame.",
         value_type=ValueType.INT,
         default="1",
         minimum=1,
         maximum=16,
+        units="chunks",
     ),
     SettingSpec(
         section="streaming",
         key="upload_time_budget_ms",
         env_var="CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
-        label="Upload budget (ms)",
-        hint="Soft per-frame upload budget.",
+        label="Upload budget",
+        hint="Target milliseconds spent uploading chunks each frame.",
         value_type=ValueType.FLOAT,
         default="3.0",
         minimum=0.5,
@@ -212,20 +241,19 @@ ADVANCED_SETTING_FIELDS = (
         section="parsing",
         key="chunk_size_meters",
         env_var="CAVEVIEWER_CHUNK_SIZE_METERS",
-        label="Import chunk size (m)",
-        hint="Chunk size for new caches.",
+        label="Import chunk size",
+        hint="Unitless chunk edge length for new caches.",
         value_type=ValueType.FLOAT,
         default="50",
         minimum=0.01,
         maximum=512.0,
-        units="m",
     ),
     SettingSpec(
         section="parsing",
         key="obj_scan_throttle_ms",
         env_var="CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
-        label="OBJ scan throttle (ms)",
-        hint="Yield during OBJ scanning.",
+        label=".obj scan throttle",
+        hint="Milliseconds paused while scanning .obj files.",
         value_type=ValueType.FLOAT,
         default=_scan_throttle_default,
         minimum=0.0,
@@ -234,25 +262,41 @@ ADVANCED_SETTING_FIELDS = (
     ),
     SettingSpec(
         section="parsing",
+        key="obj_import_batch_thousands",
+        env_var="CAVEVIEWER_OBJ_IMPORT_BATCH_FACES",
+        label="Faces per .obj batch",
+        hint="Thousands of triangulated faces per batch.",
+        value_type=ValueType.INT,
+        default="200",
+        minimum=1,
+        maximum=2000,
+        units="thousand faces",
+        env_to_setting=_faces_env_to_thousands,
+        setting_to_env=_thousands_to_faces_env,
+    ),
+    SettingSpec(
+        section="parsing",
         key="chunk_build_workers",
         env_var="CAVEVIEWER_CHUNK_BUILD_WORKERS",
         label="Cache-building worker limit",
-        hint="Worker count may be lower when CPU or RAM is constrained.",
+        hint="Max cache-building worker threads.",
         value_type=ValueType.INT,
         default="1",
         minimum=1,
         maximum=32,
+        units="workers",
     ),
     SettingSpec(
         section="parsing",
         key="chunk_build_reserved_cpus",
         env_var="CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
         label="Cache-build CPUs to keep free",
-        hint="Logical CPUs excluded from the cache-building worker pool.",
+        hint="Logical CPUs reserved from cache build.",
         value_type=ValueType.INT,
         default="2",
         minimum=2,
         maximum=32,
+        units="logical CPUs",
     ),
     SettingSpec(
         section="storage",
@@ -453,15 +497,25 @@ def validate_advanced_settings(values: Mapping[str, str]) -> ValidationResult:
 def _validated_default(field: SettingSpec) -> str:
     configured = os.getenv(field.env_var, "").strip()
     if configured:
-        configured_result = validate_advanced_setting(field, configured)
-        if configured_result.is_valid:
-            return configured_result.normalized_value
-        _LOG.warning(
-            "Ignoring invalid %s value %r: %s",
-            field.env_var,
-            configured,
-            configured_result.message,
-        )
+        try:
+            configured_value = field.value_from_env(configured)
+        except Exception as exc:
+            _LOG.warning(
+                "Ignoring invalid %s value %r: %s",
+                field.env_var,
+                configured,
+                exc,
+            )
+        else:
+            configured_result = validate_advanced_setting(field, configured_value)
+            if configured_result.is_valid:
+                return configured_result.normalized_value
+            _LOG.warning(
+                "Ignoring invalid %s value %r: %s",
+                field.env_var,
+                configured,
+                configured_result.message,
+            )
 
     built_in = field.built_in_default()
     result = validate_advanced_setting(field, built_in)
@@ -570,4 +624,4 @@ def apply_advanced_settings_to_env(settings: AdvancedSettings) -> None:
             "apply_advanced_settings_to_env requires an AdvancedSettings snapshot"
         )
     for field in ADVANCED_SETTING_FIELDS:
-        os.environ[field.env_var] = settings[field.key]
+        os.environ[field.env_var] = field.value_to_env(settings[field.key])

@@ -579,20 +579,22 @@ and `.caveviewer_cache` directories are not auto-discovered.
 | `CAVEVIEWER_GPU_MEMORY_GB` | _(auto-detect)_ | 0.5-50 GB (optional) | Optional GPU memory ceiling used by the streaming budget. Linux AMD GPUs are detected through DRM sysfs and NVIDIA GPUs through `nvidia-smi`; low-VRAM AMD integrated GPUs include 50% of reported GTT/shared memory capped at 2 GB. Windows AMD/Intel GPU memory is not currently auto-detected and uses an 8 GB fallback budget. macOS GPU memory is not currently auto-detected and uses a conservative 1 GB fallback. If detection finds a smaller active GPU budget, the detected value wins. |
 | `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of the GPU memory budget the chunk streaming system targets. |
 | `CAVEVIEWER_MAX_TEXTURE_SIZE` | _(auto)_ | 512-16384 px | Optional maximum decoded texture dimension. When unset, CaveViewer derives a cap from GPU memory, GPU target percentage, and unique texture count so geometry remains visible while oversized texture sets are downscaled instead of overfilling VRAM. The log records the selected cap, budget inputs, and first actual resize. |
-| `CAVEVIEWER_IO_WORKERS` | `2` | Integer 1-32 | Requested maximum number of background threads for loading chunk files from disk. Streaming starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_IO_RESERVED_CPUS`. |
-| `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer 2-32 | Logical CPUs kept out of the loading worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
-| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. |
-| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5-50 ms | Soft per-frame time budget for GPU uploads. |
+| `CAVEVIEWER_IO_WORKERS` | `2` | Integer 1-32 workers | Requested maximum number of background threads for loading chunk files from disk. Streaming starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_IO_RESERVED_CPUS`. |
+| `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | Integer 2-32 logical CPUs | Logical CPUs kept out of the loading worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
+| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 chunks | Maximum number of chunk GPU uploads per render frame. Increase to load geometry faster at the cost of brief frame-time spikes. |
+| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5-50 ms | Target milliseconds spent uploading chunks to the GPU each frame. |
 
 ### Map Import (First-Time Parsing)
 
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
-| `CAVEVIEWER_CHUNK_SIZE_METERS` | `50` | 0.01-512 m | Spatial chunk size used when building a new chunk cache. Does not affect already-cached maps. |
-| `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0-50 ms | Time yielded between OBJ scanning steps. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
+| `CAVEVIEWER_CHUNK_SIZE_METERS` | `50` | 0.01-512 | Unitless chunk edge length used when building a new chunk cache. Does not affect already-cached maps. |
+| `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0-50 ms | Milliseconds paused while scanning .obj files. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
+| `CAVEVIEWER_OBJ_IMPORT_BATCH_FACES` | `200000` | Integer 1,000-2,000,000 | Number of triangulated OBJ faces processed per incremental import batch. Preferences display this as “Faces per .obj batch” in thousands, default 200 with accepted range 1-2,000 thousand faces. |
+| `CAVEVIEWER_OBJ_BUCKET_WORKERS` | `2` | Integer 1-32 workers | Worker threads used to de-index, group, and write incremental .obj face batches into temporary bucket parts. Increase on SSDs to reduce import time at the cost of extra transient RAM and higher temporary-file I/O. |
 | `CAVEVIEWER_IMPORT_NICE` | `5` | Integer >= 0 | POSIX-only nice increment applied to the spawned import child. `0` disables the adjustment. Windows uses below-normal process priority instead. |
-| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 | Requested maximum threads used while writing chunk files during import. Cache construction starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. The runtime also honors `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. |
-| `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
+| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 workers | Requested maximum threads used by the in-memory cache builder while writing chunk files. Cache construction starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. Incremental OBJ batch bucketing is controlled separately by `CAVEVIEWER_OBJ_BUCKET_WORKERS`, then finalized sequentially into chunk files. The runtime also honors `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. |
+| `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 logical CPUs | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 
 ### Application storage locations
 

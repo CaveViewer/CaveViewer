@@ -8,8 +8,10 @@ viewer recover cleanly when an import fails.
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import os
+import queue
 import shutil
 import threading
 import time
@@ -43,7 +45,30 @@ class ImportProcessHandle:
 
     process: Any
     events: Any
+    commands: Any
     cache_dir: str
+
+
+class _ImportEventLogHandler(logging.Handler):
+    """Send child-process log records to the parent import event queue."""
+
+    def __init__(self, events: Any):
+        super().__init__(logging.DEBUG)
+        self._events = events
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            component = getattr(record, "component", "CaveViewer")
+            _put_event(
+                self._events,
+                ("log", int(record.levelno), str(component), record.getMessage()),
+            )
+        except Exception:
+            pass
+
+
+def _configure_import_child_logging(events: Any) -> None:
+    configure_logging(force=True, handlers=(_ImportEventLogHandler(events),))
 
 
 def source_path_from_descriptor(model_descriptor: dict) -> str:
@@ -71,14 +96,20 @@ def start_import_process(
     process_context = context or multiprocessing.get_context("spawn")
     cache_dir = cache_dir_for_descriptor(model_descriptor)
     events = process_context.Queue()
+    commands = process_context.Queue()
     process = process_context.Process(
         target=_run_import_process,
-        args=(dict(model_descriptor), str(textures_dir), events),
+        args=(dict(model_descriptor), str(textures_dir), events, commands),
         name="CaveViewer-import",
     )
     process.daemon = True
     process.start()
-    return ImportProcessHandle(process=process, events=events, cache_dir=cache_dir)
+    return ImportProcessHandle(
+        process=process,
+        events=events,
+        commands=commands,
+        cache_dir=cache_dir,
+    )
 
 
 def terminate_import_process(
@@ -286,27 +317,92 @@ def _start_heartbeat_thread(
     return thread
 
 
-def _run_import_process(model_descriptor: dict, textures_dir: str, events: Any) -> None:
-    """Child-process entry point. Sends progress, done, or error events."""
-    configure_logging()
-    configure_import_child_runtime()
-    heartbeat_stop = threading.Event()
-    heartbeat_state: dict[str, float | str] = {
-        "stage": "starting import",
-        "fraction": 0.0,
-        "started_at": time.monotonic(),
-    }
-    heartbeat_lock = threading.Lock()
-    heartbeat_thread = _start_heartbeat_thread(
-        events,
-        heartbeat_state,
-        heartbeat_lock,
-        heartbeat_stop,
-    )
-    try:
-        from caveviewer.app import import_and_cache_any
-        from caveviewer.core import chunker as _ck
+def _start_command_thread(
+    commands: Any,
+    pause_event: threading.Event,
+    stop_event: threading.Event,
+) -> threading.Thread | None:
+    """Listen for cooperative commands from the viewer process."""
+    if commands is None:
+        return None
 
+    def loop() -> None:
+        while not stop_event.is_set():
+            try:
+                command = commands.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            except Exception:
+                return
+            kind = command[0] if isinstance(command, tuple) and command else command
+            if kind == "pause":
+                pause_event.set()
+
+    thread = threading.Thread(target=loop, name="CaveViewer-import-command", daemon=True)
+    thread.start()
+    return thread
+
+
+def _actionable_import_failure(exc: BaseException) -> tuple[str, str] | None:
+    """Return a user-actionable message/suggestion for expected import failures."""
+    exc_type = type(exc)
+    if exc_type.__module__ != "caveviewer.core.chunker":
+        return None
+
+    if exc_type.__name__ == "InsufficientImportMemoryError":
+        return (
+            str(exc),
+            "Close memory-heavy applications and retry, or import this map on a "
+            "machine with more RAM. Reducing source-model detail before import "
+            "can also lower the peak memory requirement.",
+        )
+
+    if exc_type.__name__ == "InsufficientDiskSpaceError":
+        return (
+            str(exc),
+            "Free space on the cache drive and retry, or move CaveViewer's map "
+            "cache to a larger drive with CAVEVIEWER_MAP_CACHE_DIR.",
+        )
+
+    return None
+
+
+def _run_import_process(
+    model_descriptor: dict,
+    textures_dir: str,
+    events: Any,
+    commands: Any = None,
+) -> None:
+    """Child-process entry point. Sends progress, done, or error events."""
+    _configure_import_child_logging(events)
+    heartbeat_stop: threading.Event | None = None
+    heartbeat_thread: threading.Thread | None = None
+    command_stop: threading.Event | None = None
+    command_thread: threading.Thread | None = None
+    pause_event = threading.Event()
+    try:
+        configure_import_child_runtime()
+        heartbeat_stop = threading.Event()
+        command_stop = threading.Event()
+        heartbeat_state: dict[str, float | str] = {
+            "stage": "starting import",
+            "fraction": 0.0,
+            "started_at": time.monotonic(),
+        }
+        heartbeat_lock = threading.Lock()
+        heartbeat_thread = _start_heartbeat_thread(
+            events,
+            heartbeat_state,
+            heartbeat_lock,
+            heartbeat_stop,
+        )
+        command_thread = _start_command_thread(
+            commands,
+            pause_event,
+            command_stop,
+        )
+
+        from caveviewer.app import import_and_cache_any
         source_path = source_path_from_descriptor(model_descriptor)
         _LOG.info("Import process started for %s.", source_path)
 
@@ -324,13 +420,41 @@ def _run_import_process(model_descriptor: dict, textures_dir: str, events: Any) 
             textures_dir,
             force_rebuild=False,
             extra_progress_cb=on_progress,
+            console_progress=False,
+            pause_requested=pause_event.is_set,
         )
-        manifest = _ck.load_manifest(cache_dir)
-        _put_event(events, ("done", cache_dir, cache_dir, manifest))
+        _put_event(events, ("done", cache_dir, cache_dir))
+    except KeyboardInterrupt:
+        _LOG.info("Import process interrupted by user.")
+        _put_event(events, ("cancelled",))
     except BaseException as exc:
+        exc_type = type(exc)
+        if (
+            exc_type.__module__ == "caveviewer.core.chunker"
+            and exc_type.__name__ == "ImportPaused"
+        ):
+            resume_dir = getattr(exc, "resume_dir", None)
+            _LOG.info("Import paused; resume checkpoint saved in %s.", resume_dir)
+            _put_event(events, ("paused", resume_dir or ""))
+            return
+
+        actionable_failure = _actionable_import_failure(exc)
+        if actionable_failure is not None:
+            message, suggestion = actionable_failure
+            _LOG.error("Import failed: %s", message)
+            _LOG.error("Suggestion: %s", suggestion)
+            _put_event(events, ("error", message, "", suggestion))
+            return
+
         trace = traceback.format_exc()
         _LOG.error("Import process failed: %s\n%s", exc, trace)
         _put_event(events, ("error", str(exc), trace))
     finally:
-        heartbeat_stop.set()
-        heartbeat_thread.join(timeout=1.0)
+        if command_stop is not None:
+            command_stop.set()
+        if command_thread is not None:
+            command_thread.join(timeout=1.0)
+        if heartbeat_stop is not None:
+            heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1.0)

@@ -307,8 +307,10 @@ class ControlsOverlay:
         finishes, the overlay deactivates entirely (render() becomes a
         no-op).
 
-        The startup fullscreen screen remains visible until the map is
-        ready, then until Space is pressed. The auto-dismiss logic below
+        The startup fullscreen screen remains visible until enough chunks are
+        loaded for a usable initial view, then until Space is pressed. It does
+        not wait for every pending chunk in the requested render radius; large
+        maps keep streaming after the user begins. The auto-dismiss logic below
         still applies to the compact panel variant:
           - Panel (teleport) does NOT require pending to fully reach zero
             -- a teleport can land somewhere needing many chunks loaded
@@ -349,7 +351,7 @@ class ControlsOverlay:
             # when pending work is reprioritized across frames.
             self._progress_fraction = max(self._progress_fraction, frac)
 
-        if self._awaiting_begin and loaded >= chunks_needed and pending == 0:
+        if self._awaiting_begin and loaded >= chunks_needed:
             self._ready_to_begin = True
 
         if self._manual_mode or self._awaiting_begin:

@@ -254,6 +254,22 @@ def test_streaming_stays_at_one_worker_at_eighty_percent_ram(
         world.shutdown()
 
 
+def test_streaming_residency_budget_uses_available_ram_snapshot(monkeypatch):
+    monkeypatch.delenv("CAVEVIEWER_MEMORY_UTILIZATION_TARGET", raising=False)
+    cells = {(index, 0, 0) for index in range(20)}
+
+    world = _streaming_world_with_cells(
+        monkeypatch,
+        cells,
+        ram_available=50,
+        workers=1,
+    )
+    try:
+        assert world.config.max_loaded_chunks == 4
+    finally:
+        world.shutdown()
+
+
 def test_worker_load_failure_does_not_stop_later_ready_work(monkeypatch):
     failed_cell = (1, 0, 0)
     ready_cell = (2, 0, 0)
@@ -376,6 +392,33 @@ def test_texture_budget_does_not_limit_geometry_wanted_set():
 
     assert world._last_wanted_cells == world.available_cells
     assert world._work_queue.qsize() == 3
+
+
+def test_update_dispatch_is_bounded_by_work_queue_capacity():
+    world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
+    world._paused_event = threading.Event()
+    world.available_cells = {(index, 0, 0) for index in range(10)}
+    world.config = streaming_world.StreamingConfig(
+        chunk_size=1.0,
+        load_radius_cells=9,
+        max_loaded_chunks=10,
+    )
+    world._last_camera_cell = None
+    world._last_load_radius = None
+    world.loaded_cells = set()
+    world._pending = set()
+    world._lock = threading.Lock()
+    world._work_queue = queue.Queue(maxsize=2)
+    world._ready_backlog = streaming_scheduler.BoundedReadyBacklog(capacity=16)
+    world._last_wanted_cells = set()
+    world._last_cam_cell_for_priority = None
+    world._cells_to_unload_next_drain = set()
+
+    world.update(np.zeros(3, dtype=np.float32))
+
+    assert len(world._last_wanted_cells) == 10
+    assert world._work_queue.qsize() == 2
+    assert len(world._pending) == 2
 
 
 def test_texture_gpu_estimate_includes_mipmap_and_driver_alignment(tmp_path):

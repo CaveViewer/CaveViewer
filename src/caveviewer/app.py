@@ -24,7 +24,12 @@ import sys
 import glob
 import time
 from caveviewer.version import APP_NAME, APP_VERSION
-from caveviewer.core.logging_utils import configure_logging, get_logger
+from caveviewer.core.logging_utils import (
+    configure_logging,
+    finish_console_progress_line,
+    get_logger,
+    set_console_progress,
+)
 
 __version__ = APP_VERSION
 
@@ -62,6 +67,8 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_MACOS_BUILD_VENV",
     "CAVEVIEWER_MAP_CACHE_DIR",
     "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
+    "CAVEVIEWER_OBJ_BUCKET_WORKERS",
+    "CAVEVIEWER_OBJ_IMPORT_BATCH_FACES",
     "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
     "CAVEVIEWER_PROJECT_ROOT",
     "CAVEVIEWER_TEXT_AA_MODE",
@@ -92,7 +99,8 @@ def _console_write(text: str) -> None:
 
 
 def _console_newline() -> None:
-    _console_write("\n")
+    if not finish_console_progress_line():
+        _console_write("\n")
 
 
 def _default_io_workers() -> str:
@@ -117,6 +125,8 @@ _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
     "CAVEVIEWER_IO_RESERVED_CPUS": "3",
     "CAVEVIEWER_IO_WORKERS": _default_io_workers,
     "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "8",
+    "CAVEVIEWER_OBJ_BUCKET_WORKERS": "2",
+    "CAVEVIEWER_OBJ_IMPORT_BATCH_FACES": "200000",
     "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS": "1" if os.name == "nt" else "0",
     "CAVEVIEWER_TEXT_AA_MODE": _default_text_aa_mode,
     "CAVEVIEWER_UI_TEXT_SCALE": "1.28",
@@ -304,7 +314,8 @@ def find_model_file(folder: str) -> dict:
 
 
 def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
-                      extra_progress_cb=None) -> str:
+                      extra_progress_cb=None, *, console_progress: bool = True,
+                      pause_requested=None) -> str:
     """Parse + chunk the mesh if needed, returning the cache directory.
     Skips straight to the existing cache if one's already valid, since
     re-parsing a 2GB OBJ on every launch would defeat the whole point.
@@ -317,7 +328,7 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     the console output anyone running from a terminal already sees."""
     from caveviewer.core import chunker
     from caveviewer.core.cache_paths import map_cache_build_dir
-    from caveviewer.core.obj_parser import parse_obj, parse_mtl
+    from caveviewer.core.obj_parser import parse_mtl
 
     if not force_rebuild and chunker.cache_is_valid(obj_path):
         cache_dir = chunker.get_cache_dir(obj_path)
@@ -333,9 +344,9 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         materials, os.path.dirname(os.path.abspath(mtl_path))
     )
 
-    # Reject imports that are unlikely to fit before parsing a potentially
-    # multi-gigabyte source. build_cache() repeats this check as a safety net
-    # for direct callers and for free-space changes during parsing.
+    # Reject imports that lack cache-disk headroom before parsing a potentially
+    # multi-gigabyte source. The incremental builder repeats this check as a
+    # safety net for direct callers and for free-space changes during parsing.
     target_cache_dir = map_cache_build_dir(obj_path)
     chunker.ensure_sufficient_disk_space(
         obj_path,
@@ -347,8 +358,7 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
     active_chunk_size = chunker.configured_chunk_size()
-    _LOG.info(f"Using chunk size: {active_chunk_size:.1f}m "
-              f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
+    _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
     try:
         source_size_gb = os.path.getsize(obj_path) / (1024 ** 3)
         if source_size_gb >= 10.0:
@@ -360,72 +370,55 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
 
     t_start = time.time()
 
-    parse_weight = 0.5
-
     def _emit_progress(stage: str, frac: float):
         frac = max(0.0, min(1.0, frac))
-        bar_width = 40
-        filled = int(bar_width * frac)
-        bar = "#" * filled + "-" * (bar_width - filled)
-        _console_write(f"\r  [{bar}] {frac*100:5.1f}%  {stage:<28}")
+        if console_progress:
+            set_console_progress(stage, frac)
         if extra_progress_cb:
             extra_progress_cb(stage, frac)
 
-    def parse_progress(stage: str, frac: float):
-        _emit_progress(stage, parse_weight * frac)
-
-    def cache_progress(stage: str, frac: float):
-        _emit_progress(stage, parse_weight + (1.0 - parse_weight) * frac)
-
-    def import_memory_preflight(
-        vertex_count: int,
-        uv_count: int,
-        normal_count: int,
-        face_count: int,
-    ) -> None:
-        chunker.ensure_sufficient_import_memory(
-            vertex_count,
-            uv_count,
-            normal_count,
-            face_count,
-            source_path=obj_path,
-        )
-
-    mesh = parse_obj(
-        obj_path,
-        progress_cb=parse_progress,
-        preflight_cb=import_memory_preflight,
-    )
-    _console_newline()  # newline after the parse progress bar
-
     _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
-    cache_dir = chunker.build_cache(
+    cache_dir = chunker.build_cache_incremental_obj(
         obj_path,
-        mesh,
         materials,
-        progress_cb=cache_progress,
+        progress_cb=_emit_progress,
         cache_dir=target_cache_dir,
         assets=texture_assets,
+        pause_requested=pause_requested,
     )
-    _console_newline()
+    if console_progress:
+        _console_newline()
 
     elapsed = time.time() - t_start
-    n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
-    _LOG.info(f"Import complete in {elapsed:.1f}s -- "
-              f"{len(mesh.face_pos_idx):,} triangles split into {n_chunks:,} spatial chunks.")
+    manifest = chunker.load_manifest(cache_dir) or {}
+    n_chunks = len(manifest.get("chunks", {}))
+    triangle_count = manifest.get("triangle_count")
+    if isinstance(triangle_count, int):
+        _LOG.info(
+            f"Import complete in {elapsed:.1f}s -- "
+            f"{triangle_count:,} triangles split into {n_chunks:,} spatial chunks."
+        )
+    else:
+        _LOG.info(f"Import complete in {elapsed:.1f}s -- {n_chunks:,} spatial chunks.")
 
     return cache_dir
 
 
-def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuild: bool = False,
-                          extra_progress_cb=None) -> str:
+def import_and_cache_any(
+    model_descriptor: dict,
+    textures_dir: str,
+    force_rebuild: bool = False,
+    extra_progress_cb=None,
+    *,
+    console_progress: bool = True,
+    pause_requested=None,
+) -> str:
     """
     Format-agnostic version of import_and_cache() -- dispatches on
     model_descriptor["format"] (see find_model_file()) to the right
-    parser, then feeds the result into the EXACT SAME chunker.build_cache()
-    used for OBJ, since caveviewer.core.obj_parser's RawMesh shape is what every
-    format's parser converts into (see caveviewer.core.glb_parser's module
-    docstring for the conversion details).
+    parser/cache path. OBJ uses the incremental disk-bucket builder so it does
+    not retain whole-model face arrays; GLB still feeds its parsed RawMesh into
+    chunker.build_cache() because GLB parsing already materializes that mesh.
 
     GLB's embedded texture bytes are named here and handed to the cache
     builder as staged assets. Once the complete cache is published, every
@@ -441,7 +434,10 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     if fmt == "obj":
         return import_and_cache(
             model_descriptor["obj_path"], model_descriptor["mtl_path"],
-            force_rebuild=force_rebuild, extra_progress_cb=extra_progress_cb,
+            force_rebuild=force_rebuild,
+            extra_progress_cb=extra_progress_cb,
+            console_progress=console_progress,
+            pause_requested=pause_requested,
         )
 
     source_path = model_descriptor["glb_path"]
@@ -462,8 +458,7 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
     active_chunk_size = chunker.configured_chunk_size()
-    _LOG.info(f"Using chunk size: {active_chunk_size:.1f}m "
-              f"(set {chunker.CHUNK_SIZE_ENV_VAR} to override).")
+    _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
     try:
         source_size_gb = os.path.getsize(source_path) / (1024 ** 3)
         if source_size_gb >= 10.0:
@@ -479,10 +474,8 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
 
     def _emit_progress(stage: str, frac: float):
         frac = max(0.0, min(1.0, frac))
-        bar_width = 40
-        filled = int(bar_width * frac)
-        bar = "#" * filled + "-" * (bar_width - filled)
-        _console_write(f"\r  [{bar}] {frac*100:5.1f}%  {stage:<28}")
+        if console_progress:
+            set_console_progress(stage, frac)
         if extra_progress_cb:
             extra_progress_cb(stage, frac)
 
@@ -535,7 +528,8 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
     else:
         raise ValueError(f"Unknown model format: {fmt!r}")
 
-    _console_newline()  # newline after the parse progress bar
+    if console_progress:
+        _console_newline()  # newline after the parse progress bar
 
     _LOG.info(f"No reusable cache found. Building cache in: {target_cache_dir}")
     chunker.ensure_sufficient_disk_space(
@@ -551,7 +545,8 @@ def import_and_cache_any(model_descriptor: dict, textures_dir: str, force_rebuil
         cache_dir=target_cache_dir,
         assets=texture_assets,
     )
-    _console_newline()
+    if console_progress:
+        _console_newline()
 
     elapsed = time.time() - t_start
     n_chunks = len(chunker.load_manifest(cache_dir)["chunks"])
@@ -638,10 +633,10 @@ def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> No
         )
         return
 
-    _LOG.info(f"{context} chunk size: {cache_chunk_size:g}m.")
+    _LOG.info(f"{context} chunk size: {cache_chunk_size:g}.")
     if abs(cache_chunk_size - configured_chunk_size) > 1e-6:
         _LOG.info(
-            f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}m, "
+            f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}, "
             "but existing/prebuilt caches always open with their manifest chunk size. "
             "Rebuild the reported cache directory to apply a different import chunk size."
         )
@@ -810,6 +805,10 @@ def run() -> None:
 
         multiprocessing.freeze_support()
         main()
+    except KeyboardInterrupt:
+        configure_logging()
+        _LOG.info("%s interrupted by user.", APP_NAME)
+        sys.exit(130)
     except Exception as e:
         import traceback
         user_error = f"{APP_NAME} encountered a fatal error:\n\n{e}"

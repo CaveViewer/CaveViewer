@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -17,6 +18,15 @@ GIB = 1024 ** 3
 
 def _materials(count: int) -> dict[str, str]:
     return {f"mat_{index}": f"texture_{index}.jpg" for index in range(count)}
+
+
+class FakeTextureContext:
+    def __init__(self):
+        self.uploads = []
+
+    def texture(self, size, components, data):
+        self.uploads.append((size, components, len(data)))
+        return SimpleNamespace(build_mipmaps=lambda: None)
 
 
 def test_recommend_texture_dimension_caps_large_texture_set_for_low_gpu_budget(
@@ -130,6 +140,43 @@ def test_decode_downscales_oversized_texture(tmp_path):
     assert decoded is not None
     assert decoded.size == (512, 256)
     assert len(decoded.data) == 512 * 256 * 3
+
+
+def test_predecode_skips_texture_that_exceeds_decode_cache_cap(tmp_path):
+    Image.new("RGB", (64, 64), color=(10, 20, 30)).save(tmp_path / "large.png")
+    manager = TextureManager(
+        object(),
+        str(tmp_path),
+        {"mat": "large.png"},
+        max_decoded_cache_bytes=1024,
+    )
+
+    manager.decode_for_material("mat")
+
+    assert manager.stats()["decoded_waiting_for_upload"] == 0
+    assert manager.stats()["decoded_waiting_bytes"] == 0
+
+
+def test_predecoded_texture_bytes_are_released_on_upload(tmp_path):
+    Image.new("RGB", (16, 16), color=(10, 20, 30)).save(tmp_path / "tile.png")
+    context = FakeTextureContext()
+    manager = TextureManager(
+        context,
+        str(tmp_path),
+        {"mat": "tile.png"},
+        max_decoded_cache_bytes=4096,
+    )
+
+    manager.decode_for_material("mat")
+
+    assert manager.stats()["decoded_waiting_for_upload"] == 1
+    assert manager.stats()["decoded_waiting_bytes"] == 16 * 16 * 3
+
+    manager.acquire("mat")
+
+    assert manager.stats()["decoded_waiting_for_upload"] == 0
+    assert manager.stats()["decoded_waiting_bytes"] == 0
+    assert context.uploads == [((16, 16), 3, 16 * 16 * 3)]
 
 
 def test_validate_textures_logs_when_no_downscale_will_be_applied(

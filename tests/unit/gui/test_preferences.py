@@ -47,6 +47,9 @@ from caveviewer.gui import preferences as settings
         ("chunk_size_meters", "512.1", "no more than 512"),
         ("obj_scan_throttle_ms", "-0.1", "cannot be negative"),
         ("obj_scan_throttle_ms", "50.1", "no more than 50"),
+        ("obj_import_batch_thousands", "0", "at least 1"),
+        ("obj_import_batch_thousands", "2001", "no more than 2000"),
+        ("obj_import_batch_thousands", "1.5", "whole number"),
         ("chunk_build_workers", "0", "at least 1"),
         ("chunk_build_workers", "33", "no more than 32"),
         ("chunk_build_reserved_cpus", "-1", "cannot be negative"),
@@ -99,6 +102,8 @@ def test_invalid_setting_reports_field(
         ("chunk_size_meters", "512", "512"),
         ("obj_scan_throttle_ms", "0", "0"),
         ("obj_scan_throttle_ms", "50", "50"),
+        ("obj_import_batch_thousands", "1", "1"),
+        ("obj_import_batch_thousands", "2000", "2000"),
         ("chunk_build_workers", "1", "1"),
         ("chunk_build_workers", "32", "32"),
         ("chunk_build_reserved_cpus", "2", "2"),
@@ -150,6 +155,7 @@ def test_schema_is_typed_and_has_unique_runtime_mappings():
         field.key for field in fields
     }
     assert settings.advanced_setting_defaults()["chunk_size_meters"] == "50"
+    assert settings.advanced_setting_defaults()["obj_import_batch_thousands"] == "200"
 
 
 def test_setting_spec_is_immutable():
@@ -383,9 +389,11 @@ def test_atomic_save_preserves_existing_file_when_replace_fails(
 def test_environment_overrides_are_used_as_defaults(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_IO_WORKERS", "9")
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "3")
+    monkeypatch.setenv("CAVEVIEWER_OBJ_IMPORT_BATCH_FACES", "300000")
     defaults = settings.advanced_setting_defaults()
     assert defaults["io_workers"] == "9"
     assert defaults["upload_chunks_per_frame"] == "3"
+    assert defaults["obj_import_batch_thousands"] == "300"
 
 
 def test_invalid_environment_override_falls_back_to_built_in(monkeypatch, caplog):
@@ -423,14 +431,15 @@ def test_every_numeric_setting_has_a_display_range():
         "memory_target_percent": "1-80%",
         "gpu_memory_target_percent": "1-80%",
         "gpu_memory_gb": "0.5-50 GB",
-        "io_workers": "1-32",
-        "io_reserved_cpus": "2-32",
-        "upload_chunks_per_frame": "1-16",
+        "io_workers": "1-32 workers",
+        "io_reserved_cpus": "2-32 logical CPUs",
+        "upload_chunks_per_frame": "1-16 chunks",
         "upload_time_budget_ms": "0.5-50 ms",
-        "chunk_size_meters": "0.01-512 m",
+        "chunk_size_meters": "0.01-512",
         "obj_scan_throttle_ms": "0-50 ms",
-        "chunk_build_workers": "1-32",
-        "chunk_build_reserved_cpus": "2-32",
+        "obj_import_batch_thousands": "1-2000 thousand faces",
+        "chunk_build_workers": "1-32 workers",
+        "chunk_build_reserved_cpus": "2-32 logical CPUs",
     }
 
     numeric_fields = {
@@ -465,6 +474,7 @@ def test_every_numeric_setting_has_an_in_field_placeholder():
         "upload_time_budget_ms": "0.5-50",
         "chunk_size_meters": "0.01-512",
         "obj_scan_throttle_ms": "0-50",
+        "obj_import_batch_thousands": "1-2000",
         "chunk_build_workers": "1-32",
         "chunk_build_reserved_cpus": "2-32",
     }
@@ -521,7 +531,19 @@ def test_apply_maps_every_setting_to_its_declared_environment_variable(
     settings.apply_advanced_settings_to_env(expected)
 
     for field in settings.ADVANCED_SETTING_FIELDS:
-        assert os.environ[field.env_var] == expected[field.key]
+        assert os.environ[field.env_var] == field.value_to_env(expected[field.key])
+
+
+def test_obj_import_batch_preference_maps_thousands_to_faces_env(
+    valid_advanced_settings,
+):
+    valid_advanced_settings["obj_import_batch_thousands"] = "250"
+
+    snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
+    settings.apply_advanced_settings_to_env(snapshot)
+
+    assert snapshot["obj_import_batch_thousands"] == "250"
+    assert os.environ["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
 
 
 def test_advanced_settings_dialog_uses_extracted_settings_logic():
@@ -581,12 +603,24 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
         == "Cache-building worker limit"
     )
     assert (
+        fields_by_key["obj_import_batch_thousands"].label
+        == "Faces per .obj batch"
+    )
+    assert (
         fields_by_key["io_workers"].hint
-        == "Worker count may be lower when CPU or RAM is constrained."
+        == "Max chunk-loading worker threads."
     )
     assert (
         fields_by_key["chunk_build_workers"].hint
-        == fields_by_key["io_workers"].hint
+        == "Max cache-building worker threads."
+    )
+    assert (
+        fields_by_key["upload_time_budget_ms"].hint
+        == "Target milliseconds spent uploading chunks each frame."
+    )
+    assert (
+        fields_by_key["obj_import_batch_thousands"].hint
+        == "Thousands of triangulated faces per batch."
     )
     if (
         advanced_settings_dialog._LINUX_LAYOUT

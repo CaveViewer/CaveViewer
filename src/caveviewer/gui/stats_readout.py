@@ -4,7 +4,7 @@ caveviewer.gui.stats_readout
 A small text readout showing live FPS and chunk-loading stats (loaded /
 pending), positioned directly above the minimap panel in the bottom-left
 corner. This is the same information the console already prints every
-couple seconds (see viewer_window.py's periodic "[CaveViewer] X fps |
+couple seconds (see viewer_window.py's periodic "[caveviewer] X fps |
 chunks loaded=..." line), surfaced on-screen too -- it used to live next
 to the old render-distance slider before that was replaced with a
 plain +/- stepper button (which has no natural place to attach a readout

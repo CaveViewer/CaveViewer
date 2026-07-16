@@ -17,7 +17,7 @@ from caveviewer.core.logging_utils import get_logger
 AMD_PCI_VENDOR_ID = 0x1002
 LINUX_DRM_ROOT = "/sys/class/drm"
 UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = 1 * 1024 ** 3
-WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = 8 * 1024 ** 3
+WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES = UNKNOWN_GPU_MEMORY_FALLBACK_BYTES
 AMD_INTEGRATED_VRAM_THRESHOLD_BYTES = 2 * 1024 ** 3
 AMD_SHARED_GPU_MEMORY_FRACTION = 0.50
 AMD_SHARED_GPU_MEMORY_CAP_BYTES = 2 * 1024 ** 3
@@ -404,8 +404,6 @@ def detect_nvidia_gpu_memory_bytes() -> int | None:
 
 
 def _unknown_gpu_memory_fallback_bytes() -> tuple[int, str]:
-    if os.name == "nt" or sys.platform.startswith("win"):
-        return WINDOWS_UNKNOWN_GPU_MEMORY_FALLBACK_BYTES, "Windows fallback"
     return UNKNOWN_GPU_MEMORY_FALLBACK_BYTES, "conservative fallback"
 
 

@@ -186,7 +186,13 @@ class StreamingWorld:
 
         target_env = os.environ.get("CAVEVIEWER_MEMORY_UTILIZATION_TARGET")
         self._memory_target_fraction = _parse_memory_target_fraction(target_env)
-        self._total_ram_bytes = _detect_total_ram_bytes()
+        ram_snapshot = _detect_ram_snapshot()
+        if ram_snapshot is not None:
+            self._total_ram_bytes = ram_snapshot.total_bytes
+            self._available_ram_bytes = ram_snapshot.available_bytes
+        else:
+            self._total_ram_bytes = _detect_total_ram_bytes()
+            self._available_ram_bytes = self._total_ram_bytes
         self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes(sampled_chunk_keys)
         gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
         self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
@@ -219,7 +225,15 @@ class StreamingWorld:
         _LOG.info(describe_worker_target("Streaming", worker_allocation))
         self._stop_event = threading.Event()
         self._paused_event = threading.Event()
-        self._work_queue: "queue.Queue[tuple[int,int,int]]" = queue.Queue()
+        # Keep queued-but-not-yet-decoded work bounded.  The ready backlog
+        # already caps decoded payloads; this caps the earlier scheduling
+        # stage so a dense start cell or high render radius cannot enqueue the
+        # whole desired view at once and force the startup overlay to wait for
+        # a large pending set before the user can begin.
+        self._work_queue_capacity = max(16, min(512, self.config.max_loaded_chunks * 2))
+        self._work_queue: "queue.Queue[tuple[int,int,int]]" = queue.Queue(
+            maxsize=self._work_queue_capacity
+        )
         self._worker_start_lock = threading.Lock()
         self._worker_admission_blocked = False
         self._workers: list[threading.Thread] = []
@@ -329,6 +343,7 @@ class StreamingWorld:
         budget = calculate_residency_budget(
             available_cell_count=len(self.available_cells),
             total_ram_bytes=self._total_ram_bytes,
+            available_ram_bytes=self._available_ram_bytes,
             ram_target_fraction=self._memory_target_fraction,
             estimated_chunk_ram_bytes=self._estimated_chunk_ram_bytes,
             total_gpu_memory_bytes=self._total_gpu_memory_bytes,
@@ -340,8 +355,10 @@ class StreamingWorld:
         # raise and lower residency as intended.
         self.config.max_loaded_chunks = budget.max_loaded_chunks
         _LOG.info(
-            "Memory target %.0f%% of %.1f GB => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
+            "Memory target %.0f%% of %.1f GB currently available "
+            "(%.1f GB total) => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
             self._memory_target_fraction * 100.0,
+            self._available_ram_bytes / (1024 ** 3),
             self._total_ram_bytes / (1024 ** 3),
             budget.ram_budget_chunks,
             self._estimated_chunk_ram_bytes / (1024 ** 2),
@@ -585,8 +602,11 @@ class StreamingWorld:
                 key=lambda cell: self._cell_distance_sq(cell, cam_cell),
             )
             for cell in ordered:
+                try:
+                    self._work_queue.put_nowait(cell)
+                except queue.Full:
+                    break
                 self._pending.add(cell)
-                self._work_queue.put(cell)
 
         stale_ready = self._ready_backlog.discard_if(
             lambda data: data.cell not in wanted

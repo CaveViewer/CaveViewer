@@ -383,6 +383,26 @@ def test_run_returns_normally_when_main_succeeds(monkeypatch):
     assert called == [True]
 
 
+def test_run_exits_cleanly_on_keyboard_interrupt(monkeypatch):
+    recorder = _LogRecorder()
+    configured = []
+    monkeypatch.setattr(app, "_LOG", recorder)
+    monkeypatch.setattr(app, "configure_logging", lambda: configured.append(True))
+
+    def interrupt():
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(app, "main", interrupt)
+
+    with pytest.raises(SystemExit) as raised:
+        app.run()
+
+    assert raised.value.code == 130
+    assert configured == [True]
+    assert recorder.info_messages == [f"{app.APP_NAME} interrupted by user."]
+    assert recorder.error_messages == []
+
+
 @pytest.mark.parametrize("dialog_fails", [False, True])
 def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fails):
     recorder = _LogRecorder()
