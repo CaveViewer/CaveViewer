@@ -106,6 +106,7 @@ def test_compile_rebuilds_valid_cache_when_chunk_size_differs(
                 "chunk_size_meters": "64",
                 "obj_import_batch_thousands": "250",
             },
+            obj_bucket_workers="4",
             json_output=True,
         )
     )
@@ -120,6 +121,7 @@ def test_compile_rebuilds_valid_cache_when_chunk_size_differs(
     assert kwargs["chunk_size"] == 64.0
     assert environ["CAVEVIEWER_MAP_CACHE_DIR"] == str(cache_root)
     assert environ["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
+    assert environ["CAVEVIEWER_OBJ_BUCKET_WORKERS"] == "4"
     assert "CAVEVIEWER_MAP_CACHE_DIR" not in os.environ
 
 
@@ -151,6 +153,94 @@ def test_dry_run_reports_planned_cache_without_importing(tmp_path, monkeypatch):
     assert result.cache_dir.startswith(str(cache_root))
     assert result.chunk_size == 32.0
     assert not cache_root.exists()
+
+
+def test_compile_ignores_saved_gui_preferences_by_default(tmp_path):
+    source = tmp_path / "cave.glb"
+    source.write_bytes(b"glTF")
+    cache_root = tmp_path / "cache-root"
+    saved_preferences = tmp_path / "config" / "caveviewer" / "advanced_settings.json"
+    saved_preferences.parent.mkdir(parents=True, exist_ok=True)
+    saved_preferences.write_text(
+        json.dumps({"chunk_size_meters": "99"}),
+        encoding="utf-8",
+    )
+
+    result = map_compiler.compile_map(
+        map_compiler.CompileOptions(
+            source=str(source),
+            cache_root=str(cache_root),
+            dry_run=True,
+        )
+    )
+
+    assert result.status == "planned"
+    assert result.chunk_size == 50.0
+
+
+def test_compile_uses_explicit_partial_settings_file(tmp_path):
+    source = tmp_path / "cave.glb"
+    source.write_bytes(b"glTF")
+    cache_root = tmp_path / "cache-root"
+    settings_file = tmp_path / "chunker-settings.json"
+    settings_file.write_text(
+        json.dumps({"chunk_size_meters": "72"}),
+        encoding="utf-8",
+    )
+
+    result = map_compiler.compile_map(
+        map_compiler.CompileOptions(
+            source=str(source),
+            cache_root=str(cache_root),
+            settings_file=str(settings_file),
+            dry_run=True,
+        )
+    )
+
+    assert result.status == "planned"
+    assert result.chunk_size == 72.0
+
+
+def test_compile_defaults_obj_bucket_workers_to_two(tmp_path, monkeypatch):
+    source = tmp_path / "cave.glb"
+    source.write_bytes(b"glTF")
+    cache_root = tmp_path / "cache-root"
+
+    from caveviewer import app
+
+    captured_environ = []
+
+    def fake_import(_model_descriptor, _textures_dir, **_kwargs):
+        captured_environ.append(os.environ.copy())
+        return str(cache_root / "built-cache")
+
+    monkeypatch.setattr(app, "import_and_cache_any", fake_import)
+
+    result = map_compiler.compile_map(
+        map_compiler.CompileOptions(
+            source=str(source),
+            cache_root=str(cache_root),
+        )
+    )
+
+    assert result.status == "built"
+    assert captured_environ[0]["CAVEVIEWER_OBJ_BUCKET_WORKERS"] == "2"
+
+
+def test_compile_rejects_invalid_obj_bucket_workers(tmp_path):
+    source = tmp_path / "cave.glb"
+    source.write_bytes(b"glTF")
+
+    with pytest.raises(
+        map_compiler.MapCompileConfigurationError,
+        match="--obj-bucket-workers must be at least 1",
+    ):
+        map_compiler.compile_map(
+            map_compiler.CompileOptions(
+                source=str(source),
+                obj_bucket_workers="0",
+            )
+        )
 
 
 def test_compile_rejects_relative_cache_root(tmp_path):

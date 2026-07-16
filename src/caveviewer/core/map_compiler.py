@@ -21,14 +21,19 @@ from caveviewer.gui.preferences import (
     ADVANCED_SETTING_FIELDS,
     AdvancedSettings,
     require_validated_advanced_settings,
-    load_advanced_settings,
-    resolve_advanced_settings,
+    validate_advanced_setting,
 )
 
 
-PARSING_SETTING_KEYS = frozenset(
-    field.key for field in ADVANCED_SETTING_FIELDS if field.section == "parsing"
+PARSING_SETTING_FIELDS = tuple(
+    field for field in ADVANCED_SETTING_FIELDS if field.section == "parsing"
 )
+PARSING_SETTING_KEYS = frozenset(field.key for field in PARSING_SETTING_FIELDS)
+ADVANCED_SETTING_KEYS = frozenset(field.key for field in ADVANCED_SETTING_FIELDS)
+DEFAULT_OBJ_BUCKET_WORKERS = 2
+MIN_OBJ_BUCKET_WORKERS = 1
+MAX_OBJ_BUCKET_WORKERS = 32
+OBJ_BUCKET_WORKERS_ENV_VAR = "CAVEVIEWER_OBJ_BUCKET_WORKERS"
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,7 @@ class CompileOptions:
     cache_root: str | None = None
     settings_file: str | None = None
     parsing_overrides: Mapping[str, str] | None = None
+    obj_bucket_workers: str | None = None
     force_rebuild: bool = False
     dry_run: bool = False
     json_output: bool = False
@@ -97,11 +103,13 @@ def compile_map(options: CompileOptions) -> CompileResult:
     cache_root = _normalize_cache_root(options.cache_root)
     settings = _resolve_settings(options.settings_file, options.parsing_overrides)
     chunk_size = _float_setting(settings, "chunk_size_meters")
+    obj_bucket_workers = _resolve_obj_bucket_workers(options.obj_bucket_workers)
 
     env_updates = {
         field.env_var: field.value_to_env(settings[field.key])
-        for field in ADVANCED_SETTING_FIELDS
+        for field in PARSING_SETTING_FIELDS
     }
+    env_updates[OBJ_BUCKET_WORKERS_ENV_VAR] = str(obj_bucket_workers)
     if cache_root is not None:
         env_updates[MANAGED_CACHE_ENV_VAR] = cache_root
 
@@ -245,7 +253,7 @@ def _resolve_settings(
     parsing_overrides: Mapping[str, str] | None,
 ) -> AdvancedSettings:
     settings = (
-        load_advanced_settings()
+        _built_in_settings()
         if settings_file is None
         else _load_explicit_settings(settings_file)
     )
@@ -280,7 +288,30 @@ def _load_explicit_settings(settings_file: str) -> AdvancedSettings:
         raise MapCompileConfigurationError(
             f"--settings-file must contain a JSON object: {path}"
         )
-    return resolve_advanced_settings(payload)
+    values = _built_in_settings().as_dict()
+    for key, value in payload.items():
+        key = str(key)
+        if key not in ADVANCED_SETTING_KEYS:
+            raise MapCompileConfigurationError(
+                f"--settings-file contains an unknown setting: {key}"
+            )
+        values[key] = str(value).strip() if value is not None else ""
+    try:
+        return require_validated_advanced_settings(values)
+    except Exception as exc:
+        raise MapCompileConfigurationError(str(exc)) from exc
+
+
+def _built_in_settings() -> AdvancedSettings:
+    values: dict[str, str] = {}
+    for field in ADVANCED_SETTING_FIELDS:
+        result = validate_advanced_setting(field, field.built_in_default())
+        if not result.is_valid:
+            raise MapCompileConfigurationError(
+                f"Invalid built-in default for {field.key}: {result.message}"
+            )
+        values[field.key] = result.normalized_value
+    return AdvancedSettings(values)
 
 
 def _float_setting(settings: AdvancedSettings, key: str) -> float:
@@ -288,6 +319,23 @@ def _float_setting(settings: AdvancedSettings, key: str) -> float:
         return float(settings[key])
     except Exception as exc:
         raise MapCompileConfigurationError(f"Invalid numeric setting: {key}") from exc
+
+
+def _resolve_obj_bucket_workers(raw_value: str | None) -> int:
+    text = str(raw_value).strip() if raw_value is not None else ""
+    if not text:
+        return DEFAULT_OBJ_BUCKET_WORKERS
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise MapCompileConfigurationError(
+            "--obj-bucket-workers must be a whole number."
+        ) from exc
+    if value < MIN_OBJ_BUCKET_WORKERS or value > MAX_OBJ_BUCKET_WORKERS:
+        raise MapCompileConfigurationError(
+            "--obj-bucket-workers must be at least 1 and no more than 32 workers."
+        )
+    return value
 
 
 def _require_non_empty_path(value: object, option_name: str) -> str:

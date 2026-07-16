@@ -29,9 +29,11 @@ def test_help_uses_public_command_name(capsys):
     output = capsys.readouterr().out
     assert output.startswith("Usage:\n  caveviewer-chunker --source=<path>")
     assert "--profile" not in output
+    assert "Saved GUI Preferences are not loaded by default." in output
     assert "Built-in import defaults:" in output
     assert "--chunk-size=50" in output
-    assert "CAVEVIEWER_OBJ_BUCKET_WORKERS=2" in output
+    assert "--obj-bucket-workers=2" in output
+    assert "Env-only:" not in output
 
 
 def test_cli_rejects_positional_arguments(capsys):
@@ -74,6 +76,7 @@ def test_cli_passes_named_options_to_compiler(monkeypatch, capsys):
             "--chunk-size=64",
             "--obj-scan-throttle-ms=2",
             "--obj-import-batch-thousands=250",
+            "--obj-bucket-workers=4",
             "--chunk-build-workers=4",
             "--chunk-build-reserved-cpus=2",
             "--force",
@@ -85,6 +88,7 @@ def test_cli_passes_named_options_to_compiler(monkeypatch, capsys):
     assert options.source == "/maps/cave.glb"
     assert options.cache_root == "/cache/maps"
     assert options.force_rebuild is True
+    assert options.obj_bucket_workers == "4"
     assert options.parsing_overrides == {
         "chunk_size_meters": "64",
         "obj_scan_throttle_ms": "2",

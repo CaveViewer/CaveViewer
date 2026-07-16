@@ -364,14 +364,6 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         else chunker.configured_chunk_size()
     )
     _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
-    try:
-        source_size_gb = os.path.getsize(obj_path) / (1024 ** 3)
-        if source_size_gb >= 10.0:
-            _LOG.info("Large-map tip: for very large sources, try "
-                    f"{chunker.CHUNK_SIZE_ENV_VAR}=64 or 100 to reduce "
-                    "chunk-file count and improve streaming performance.")
-    except OSError:
-        pass
 
     t_start = time.time()
 
@@ -471,14 +463,6 @@ def import_and_cache_any(
         else chunker.configured_chunk_size()
     )
     _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
-    try:
-        source_size_gb = os.path.getsize(source_path) / (1024 ** 3)
-        if source_size_gb >= 10.0:
-            _LOG.info("Large-map tip: for very large sources, try "
-                    f"{chunker.CHUNK_SIZE_ENV_VAR}=64 or 100 to reduce "
-                    "chunk-file count and improve streaming performance.")
-    except OSError:
-        pass
 
     t_start = time.time()
 

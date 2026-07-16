@@ -32,6 +32,7 @@ Options:
   --chunk-size=<value>               Import chunk size for new/rebuilt caches
   --obj-scan-throttle-ms=<value>     Milliseconds paused while scanning OBJ files
   --obj-import-batch-thousands=<n>   Thousands of triangulated OBJ faces per batch
+  --obj-bucket-workers=<n>           Worker threads for temporary OBJ buckets
   --chunk-build-workers=<n>          Cache-building worker limit
   --chunk-build-reserved-cpus=<n>    Logical CPUs kept free during cache build
   --force                            Rebuild even if a valid matching cache already exists
@@ -44,18 +45,16 @@ Examples:
   {PROGRAM_NAME} --source=/maps/cave --cache-root=/data/caveviewer/maps --json
 
 Defaults:
-  Import options default to saved CaveViewer Preferences, or built-in defaults
-  when no saved value exists.
+  Import options use built-in defaults unless overridden by CLI flags or an
+  explicit --settings-file. Saved GUI Preferences are not loaded by default.
 
 Built-in import defaults:
   --chunk-size=50
   --obj-scan-throttle-ms=0 on Linux/macOS, 1 on Windows
   --obj-import-batch-thousands=200
+  --obj-bucket-workers=2
   --chunk-build-workers=1
   --chunk-build-reserved-cpus=2
-
-Env-only:
-  CAVEVIEWER_OBJ_BUCKET_WORKERS=2
 """
 
 
@@ -66,6 +65,7 @@ _VALUE_OPTIONS = {
     "--chunk-size": "chunk_size_meters",
     "--obj-scan-throttle-ms": "obj_scan_throttle_ms",
     "--obj-import-batch-thousands": "obj_import_batch_thousands",
+    "--obj-bucket-workers": "obj_bucket_workers",
     "--chunk-build-workers": "chunk_build_workers",
     "--chunk-build-reserved-cpus": "chunk_build_reserved_cpus",
 }
@@ -87,6 +87,7 @@ class _ParsedCli:
     cache_root: str | None = None
     settings_file: str | None = None
     parsing_overrides: dict[str, str] = field(default_factory=dict)
+    obj_bucket_workers: str | None = None
     force_rebuild: bool = False
     dry_run: bool = False
     json_output: bool = False
@@ -99,6 +100,7 @@ class _ParsedCli:
             cache_root=self.cache_root,
             settings_file=self.settings_file,
             parsing_overrides=self.parsing_overrides,
+            obj_bucket_workers=self.obj_bucket_workers,
             force_rebuild=self.force_rebuild,
             dry_run=self.dry_run,
             json_output=self.json_output,
@@ -181,6 +183,8 @@ def _store_value_option(parsed: _ParsedCli, option: str, value: str) -> None:
     target = _VALUE_OPTIONS[option]
     if target in {"source", "cache_root", "settings_file"}:
         setattr(parsed, target, value)
+    elif target == "obj_bucket_workers":
+        parsed.obj_bucket_workers = value
     else:
         parsed.parsing_overrides[target] = value
 

@@ -625,34 +625,38 @@ Supported options:
 |---|---|
 | `--source=<path>` | Required. OBJ file, GLB file, or folder containing a supported map. Folder discovery matches the GUI: OBJ is preferred before GLB. |
 | `--cache-root=<path>` | Managed cache root. This has the same meaning as `CAVEVIEWER_MAP_CACHE_DIR`, not an exact output directory. |
-| `--settings-file=<path>` | Advanced settings JSON to use instead of the saved Preferences file. Explicit unreadable or invalid files fail. |
+| `--settings-file=<path>` | Explicit settings JSON to use. The file may contain a full Preferences snapshot or only selected known settings. Explicit unreadable or invalid files fail. |
 | `--chunk-size=<value>` | Import chunk size for new or rebuilt caches. |
 | `--obj-scan-throttle-ms=<value>` | Milliseconds paused while scanning OBJ files. |
 | `--obj-import-batch-thousands=<n>` | Thousands of triangulated OBJ faces per incremental import batch. |
+| `--obj-bucket-workers=<n>` | Worker threads used to de-index, group, and write incremental OBJ face batches into temporary bucket parts. |
 | `--chunk-build-workers=<n>` | Cache-building worker limit. |
 | `--chunk-build-reserved-cpus=<n>` | Logical CPUs kept free during cache build. |
 | `--force` | Rebuild even if a valid matching cache already exists. |
 | `--dry-run` | Validate inputs and print the planned cache path without importing. |
 | `--json` | Print a single machine-readable JSON result. Useful for automation. |
 
-Import options default to saved CaveViewer Preferences, or built-in defaults
-when no saved value exists. Built-in import defaults are:
+Import options use built-in defaults unless overridden by CLI flags or an
+explicit `--settings-file`. Saved GUI Preferences are not loaded by default.
+Built-in import defaults are:
 
 | Option / variable | Built-in default |
 |---|---:|
 | `--chunk-size` | `50` |
 | `--obj-scan-throttle-ms` | `0` on Linux/macOS, `1` on Windows |
 | `--obj-import-batch-thousands` | `200` |
+| `--obj-bucket-workers` | `2` |
 | `--chunk-build-workers` | `1` |
 | `--chunk-build-reserved-cpus` | `2` |
-| `CAVEVIEWER_OBJ_BUCKET_WORKERS` | `2` |
 
-`CAVEVIEWER_OBJ_BUCKET_WORKERS` remains environment-only because it is not part
-of the Preferences Import tab. For example:
+`--obj-bucket-workers` maps to `CAVEVIEWER_OBJ_BUCKET_WORKERS` for the import
+worker process. For example:
 
 ```bash
-CAVEVIEWER_OBJ_BUCKET_WORKERS=4 \
-  caveviewer-chunker --source=/path/to/map-or-folder --chunk-size=64
+caveviewer-chunker \
+  --source=/path/to/map-or-folder \
+  --chunk-size=64 \
+  --obj-bucket-workers=4
 ```
 
 `--cache-root` selects the root used to derive the managed cache directory. For
