@@ -596,6 +596,111 @@ and `.caveviewer_cache` directories are not auto-discovered.
 | `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` | Integer 1-32 workers | Requested maximum threads used by the in-memory cache builder while writing chunk files. Cache construction starts one worker and grows one at a time after completed chunk work, provided system RAM utilization remains below 80%. If availability cannot be measured, it remains at one. Incremental OBJ batch bucketing is controlled separately by `CAVEVIEWER_OBJ_BUCKET_WORKERS`, then finalized sequentially into chunk files. The runtime also honors `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS`. |
 | `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` | Integer 2-32 logical CPUs | Logical CPUs kept out of the cache-building worker pool. Effective workers are capped at `logical CPUs - reserved CPUs`, with at least one worker. |
 
+### Command-line cache compilation
+
+`caveviewer-chunker` compiles or rebuilds managed map caches without launching
+the GUI. It is intended for developers and advanced users who want to run map
+imports from a shell, CI job, cron/systemd timer, or benchmark workflow.
+
+```bash
+caveviewer-chunker --source=/path/to/map-or-folder --chunk-size=64
+```
+
+From a source checkout, the module entry point is equivalent:
+
+```bash
+.venv-dev/bin/python -m caveviewer.chunker \
+  --source=/path/to/map-or-folder \
+  --chunk-size=64
+```
+
+The command follows the same public CLI conventions as the shell scripts in
+`scripts/STANDARDS.md`: named options only, `-h`/`--help`, compact usage text,
+and exact errors for positional arguments, unknown options, and missing option
+values.
+
+Supported options:
+
+| Option | Description |
+|---|---|
+| `--source=<path>` | Required. OBJ file, GLB file, or folder containing a supported map. Folder discovery matches the GUI: OBJ is preferred before GLB. |
+| `--cache-root=<path>` | Managed cache root. This has the same meaning as `CAVEVIEWER_MAP_CACHE_DIR`, not an exact output directory. |
+| `--settings-file=<path>` | Advanced settings JSON to use instead of the saved Preferences file. Explicit unreadable or invalid files fail. |
+| `--chunk-size=<value>` | Import chunk size for new or rebuilt caches. |
+| `--obj-scan-throttle-ms=<value>` | Milliseconds paused while scanning OBJ files. |
+| `--obj-import-batch-thousands=<n>` | Thousands of triangulated OBJ faces per incremental import batch. |
+| `--chunk-build-workers=<n>` | Cache-building worker limit. |
+| `--chunk-build-reserved-cpus=<n>` | Logical CPUs kept free during cache build. |
+| `--force` | Rebuild even if a valid matching cache already exists. |
+| `--dry-run` | Validate inputs and print the planned cache path without importing. |
+| `--json` | Print a single machine-readable JSON result. Useful for automation. |
+
+Import options default to saved CaveViewer Preferences, or built-in defaults
+when no saved value exists. Built-in import defaults are:
+
+| Option / variable | Built-in default |
+|---|---:|
+| `--chunk-size` | `50` |
+| `--obj-scan-throttle-ms` | `0` on Linux/macOS, `1` on Windows |
+| `--obj-import-batch-thousands` | `200` |
+| `--chunk-build-workers` | `1` |
+| `--chunk-build-reserved-cpus` | `2` |
+| `CAVEVIEWER_OBJ_BUCKET_WORKERS` | `2` |
+
+`CAVEVIEWER_OBJ_BUCKET_WORKERS` remains environment-only because it is not part
+of the Preferences Import tab. For example:
+
+```bash
+CAVEVIEWER_OBJ_BUCKET_WORKERS=4 \
+  caveviewer-chunker --source=/path/to/map-or-folder --chunk-size=64
+```
+
+`--cache-root` selects the root used to derive the managed cache directory. For
+example, this command:
+
+```bash
+caveviewer-chunker \
+  --source=/maps/Peacock.obj \
+  --cache-root=/data/caveviewer/maps \
+  --chunk-size=64
+```
+
+writes a cache similar to:
+
+```text
+/data/caveviewer/maps/Peacock-<source-path-hash>/
+```
+
+The GUI must use the same cache root to auto-discover that cache when opening
+the source map:
+
+```bash
+CAVEVIEWER_MAP_CACHE_DIR=/data/caveviewer/maps caveviewer
+```
+
+If the existing cache is valid and its manifest chunk size matches the
+requested chunk size, the command skips the import. If the existing cache is
+valid but its manifest chunk size differs, the command rebuilds automatically.
+`--force` is only needed to rebuild an already-matching cache.
+
+Automation examples:
+
+```bash
+caveviewer-chunker \
+  --source=/maps/Peacock.obj \
+  --cache-root=/data/caveviewer/maps \
+  --chunk-size=64 \
+  --dry-run
+```
+
+```bash
+caveviewer-chunker \
+  --source=/maps/Peacock.obj \
+  --cache-root=/data/caveviewer/maps \
+  --chunk-size=64 \
+  --json
+```
+
 ### Application storage locations
 
 Unless overridden, CaveViewer stores files in these locations:

@@ -315,7 +315,8 @@ def find_model_file(folder: str) -> dict:
 
 def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
                       extra_progress_cb=None, *, console_progress: bool = True,
-                      pause_requested=None) -> str:
+                      pause_requested=None,
+                      chunk_size: float | None = None) -> str:
     """Parse + chunk the mesh if needed, returning the cache directory.
     Skips straight to the existing cache if one's already valid, since
     re-parsing a 2GB OBJ on every launch would defeat the whole point.
@@ -357,7 +358,11 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     _LOG.info(f"No valid cache found -- importing {os.path.basename(obj_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
-    active_chunk_size = chunker.configured_chunk_size()
+    active_chunk_size = (
+        float(chunk_size)
+        if chunk_size is not None
+        else chunker.configured_chunk_size()
+    )
     _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
     try:
         source_size_gb = os.path.getsize(obj_path) / (1024 ** 3)
@@ -385,6 +390,7 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
         cache_dir=target_cache_dir,
         assets=texture_assets,
         pause_requested=pause_requested,
+        chunk_size=active_chunk_size,
     )
     if console_progress:
         _console_newline()
@@ -412,6 +418,7 @@ def import_and_cache_any(
     *,
     console_progress: bool = True,
     pause_requested=None,
+    chunk_size: float | None = None,
 ) -> str:
     """
     Format-agnostic version of import_and_cache() -- dispatches on
@@ -438,6 +445,7 @@ def import_and_cache_any(
             extra_progress_cb=extra_progress_cb,
             console_progress=console_progress,
             pause_requested=pause_requested,
+            chunk_size=chunk_size,
         )
 
     source_path = model_descriptor["glb_path"]
@@ -457,7 +465,11 @@ def import_and_cache_any(
     _LOG.info(f"No valid cache found -- importing {os.path.basename(source_path)}.")
     _LOG.info("This is a one-time cost; subsequent opens of this map will be instant.")
 
-    active_chunk_size = chunker.configured_chunk_size()
+    active_chunk_size = (
+        float(chunk_size)
+        if chunk_size is not None
+        else chunker.configured_chunk_size()
+    )
     _LOG.info(f"Using import chunk size: {active_chunk_size:g}.")
     try:
         source_size_gb = os.path.getsize(source_path) / (1024 ** 3)
@@ -544,6 +556,7 @@ def import_and_cache_any(
         progress_cb=cache_progress,
         cache_dir=target_cache_dir,
         assets=texture_assets,
+        chunk_size=active_chunk_size,
     )
     if console_progress:
         _console_newline()

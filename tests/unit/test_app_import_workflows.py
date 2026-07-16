@@ -145,6 +145,7 @@ def test_format_agnostic_obj_import_delegates_all_options(monkeypatch):
         "textures",
         force_rebuild=True,
         extra_progress_cb=callback,
+        chunk_size=12.0,
     )
 
     assert result == "/cache/obj"
@@ -156,6 +157,7 @@ def test_format_agnostic_obj_import_delegates_all_options(monkeypatch):
                 "extra_progress_cb": callback,
                 "console_progress": True,
                 "pause_requested": None,
+                "chunk_size": 12.0,
             },
         )
     ]

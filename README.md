@@ -248,6 +248,18 @@ beside a map. Set `CAVEVIEWER_MAP_CACHE_DIR` to an absolute path when large
 caches belong on another filesystem. The log reports the exact cache directory
 selected for each import.
 
+Advanced users can compile or rebuild a map cache without launching the GUI:
+
+```text
+caveviewer-chunker --source=/path/to/map-or-folder --chunk-size=64
+```
+
+`--cache-root=/path/to/cache-root` has the same meaning as
+`CAVEVIEWER_MAP_CACHE_DIR`. To have the GUI auto-discover a command-line-built
+cache later, launch CaveViewer with the same cache root. If a valid cache exists
+but its manifest chunk size differs from the requested import chunk size,
+`caveviewer-chunker` rebuilds it automatically.
+
 1. Understand your map first.
 Decide how far ahead you need to see while moving. Long, open passages often benefit from larger chunk sizes. Maps with many twists and short sightlines may not need very large chunks, especially on strong hardware.
 
