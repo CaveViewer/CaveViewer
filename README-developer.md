@@ -624,7 +624,7 @@ Supported options:
 | Option | Description |
 |---|---|
 | `--source=<path>` | Required. OBJ file, GLB file, or folder containing a supported map. Folder discovery matches the GUI: OBJ is preferred before GLB. |
-| `--cache-root=<path>` | Managed cache root. This has the same meaning as `CAVEVIEWER_MAP_CACHE_DIR`, not an exact output directory. |
+| `--cache-root=<path>` | Root folder where compiled map caches are stored. This is a cache root, not an exact output directory. |
 | `--settings-file=<path>` | Explicit settings JSON to use. The file may contain a full Preferences snapshot or only selected known settings. Explicit unreadable or invalid files fail. |
 | `--chunk-size=<value>` | Import chunk size for new or rebuilt caches. |
 | `--obj-scan-throttle-ms=<value>` | Milliseconds paused while scanning OBJ files. |
@@ -660,7 +660,10 @@ caveviewer-chunker \
 ```
 
 `--cache-root` selects the root used to derive the managed cache directory. For
-example, this command:
+normal GUI-compatible output, omit it and CaveViewer uses the platform managed
+map-cache root: `$XDG_CACHE_HOME/caveviewer/maps` or
+`~/.cache/caveviewer/maps` on Linux, `~/.caveviewer/maps` on macOS, and
+`%USERPROFILE%\.caveviewer\maps` on Windows. For example, this command:
 
 ```bash
 caveviewer-chunker \

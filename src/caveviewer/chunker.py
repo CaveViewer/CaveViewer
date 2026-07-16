@@ -27,7 +27,7 @@ Required options:
   --source=<path>                    OBJ file, GLB file, or folder containing a map
 
 Options:
-  --cache-root=<path>                Managed cache root, same meaning as CAVEVIEWER_MAP_CACHE_DIR
+  --cache-root=<path>                Root folder where compiled map caches are stored
   --settings-file=<path>             Advanced settings JSON to use
   --chunk-size=<value>               Import chunk size for new/rebuilt caches
   --obj-scan-throttle-ms=<value>     Milliseconds paused while scanning OBJ files
@@ -55,6 +55,12 @@ Built-in import defaults:
   --obj-bucket-workers=2
   --chunk-build-workers=1
   --chunk-build-reserved-cpus=2
+
+Cache root default:
+  --cache-root defaults to the same managed map-cache root used by the GUI:
+    Linux:   $XDG_CACHE_HOME/caveviewer/maps, or ~/.cache/caveviewer/maps
+    macOS:   ~/.caveviewer/maps
+    Windows: %USERPROFILE%\\.caveviewer\\maps
 """
 
 
