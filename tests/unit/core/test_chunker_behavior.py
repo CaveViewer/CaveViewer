@@ -380,6 +380,121 @@ def test_incremental_obj_cache_build_writes_standard_chunks(tmp_path, monkeypatc
     np.testing.assert_allclose(second.groups["sand"].normals, [[0.0, 0.0, 1.0]] * 3)
 
 
+def test_incremental_bucket_writer_uses_bounded_record_slices(tmp_path, monkeypatch):
+    vertex_data = obj_parser.ObjVertexData(
+        positions=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [3.0, 0.0, 0.0],
+                [2.0, 1.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+        uvs=np.array(
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [0.0, 1.0],
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [0.0, 1.0],
+            ],
+            dtype=np.float32,
+        ),
+        normals=np.array([[0.0, 0.0, 1.0]], dtype=np.float32),
+        face_count=2,
+    )
+    batch = obj_parser.ObjFaceBatch(
+        face_pos_idx=np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int32),
+        face_uv_idx=np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int32),
+        face_nrm_idx=np.zeros((2, 3), dtype=np.int32),
+        material_names=["rock", "rock"],
+    )
+    original_empty = np.empty
+
+    def guarded_empty(shape, *args, **kwargs):
+        normalized_shape = (shape,) if isinstance(shape, int) else tuple(shape)
+        if normalized_shape == (2, 3, 8):
+            raise AssertionError("bucket writer allocated full-batch records")
+        return original_empty(shape, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(chunker, "_OBJ_BUCKET_RECORD_SLICE_FACES", 1)
+        patch.setattr(chunker.np, "empty", guarded_empty)
+        face_count, bucket_paths = chunker._write_obj_face_batch_bucket_parts(
+            vertex_data,
+            batch,
+            str(tmp_path / "buckets"),
+            chunk_size=10.0,
+        )
+
+    assert face_count == 2
+    assert set(bucket_paths) == {((0, 0, 0), "rock")}
+    records = np.fromfile(next(iter(bucket_paths.values())), dtype=np.float32)
+    records = records.reshape(-1, 8)
+    assert records.shape == (6, 8)
+    np.testing.assert_allclose(records[:, 0:3], vertex_data.positions)
+    np.testing.assert_allclose(records[:, 3:5], vertex_data.uvs)
+    np.testing.assert_allclose(records[:, 5:8], [[0.0, 0.0, 1.0]] * 6)
+
+
+def test_incremental_bucket_finalizer_streams_parts_without_concatenate(
+    tmp_path,
+    monkeypatch,
+):
+    chunks_dir = tmp_path / chunker.CHUNKS_DIRNAME
+    chunks_dir.mkdir()
+    bucket_a = tmp_path / "bucket-a.bin"
+    bucket_b = tmp_path / "bucket-b.bin"
+    records_a = np.array(
+        [
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    records_b = np.array(
+        [
+            [2.0, 0.0, 0.0, 0.2, 0.0, 0.0, 1.0, 0.0],
+            [3.0, 0.0, 0.0, 0.3, 0.0, 0.0, 1.0, 0.0],
+            [2.0, 1.0, 0.0, 0.2, 1.0, 0.0, 1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    records_a.tofile(bucket_a)
+    records_b.tofile(bucket_b)
+
+    def fail_concatenate(*_args, **_kwargs):
+        raise AssertionError("bucket finalizer concatenated bucket parts")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(chunker.np, "concatenate", fail_concatenate)
+        bounds_min, bounds_max, used_materials = (
+            chunker._write_chunk_file_from_buckets(
+                str(chunks_dir),
+                "0_0_0",
+                [("rock", [str(bucket_a), str(bucket_b)])],
+            )
+        )
+
+    assert used_materials == ["rock"]
+    np.testing.assert_allclose(bounds_min, [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(bounds_max, [3.0, 1.0, 0.0])
+    assert not bucket_a.exists()
+    assert not bucket_b.exists()
+
+    chunk = chunker.load_chunk_file(str(tmp_path), (0, 0, 0))
+    group = chunk.groups["rock"]
+    expected_records = np.concatenate((records_a, records_b), axis=0)
+    np.testing.assert_allclose(group.positions, expected_records[:, 0:3])
+    np.testing.assert_allclose(group.uvs, expected_records[:, 3:5])
+    np.testing.assert_allclose(group.normals, expected_records[:, 5:8])
+
+
 def test_incremental_obj_cache_progress_never_regresses(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     source.write_text("unused", encoding="utf-8")
@@ -862,6 +977,61 @@ def test_flat_normals_and_upload_payloads_handle_degenerate_and_empty_groups():
     expected_bytes = len(positions) * 8 * np.dtype(np.float32).itemsize
     assert len(result.upload_groups[0].smooth_vertex_bytes) == expected_bytes
     assert len(result.upload_groups[0].flat_vertex_bytes) == expected_bytes
+
+
+def test_prepare_chunk_upload_groups_defers_flat_payload(monkeypatch):
+    calls = []
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    uvs = np.zeros((3, 2), dtype=np.float32)
+    smooth_normals = np.tile(
+        np.array([[0.0, 1.0, 0.0]], dtype=np.float32), (3, 1)
+    )
+
+    def fake_flat_normals(flat_pos):
+        calls.append(len(flat_pos))
+        return smooth_normals.copy()
+
+    monkeypatch.setattr(chunker, "compute_flat_normals", fake_flat_normals)
+    data = chunker.ChunkData(
+        cell=(0, 0, 0),
+        groups={
+            "rock": chunker.ChunkMaterialGroup(
+                "rock", positions, uvs, smooth_normals
+            ),
+        },
+        bounds_min=np.zeros(3, dtype=np.float32),
+        bounds_max=np.ones(3, dtype=np.float32),
+    )
+
+    chunker.prepare_chunk_upload_groups(data)
+
+    assert calls == []
+    assert data.upload_groups is not None
+    _flat_bytes = data.upload_groups[0].flat_vertex_bytes
+    assert calls == [3]
+
+
+def test_footprint_from_positions_matches_dense_unique_across_blocks():
+    base_positions = np.array(
+        [
+            [-4.0, 0.0, -2.0],
+            [-1.0, 0.0, 3.0],
+            [2.0, 0.0, -2.0],
+            [5.0, 0.0, 7.0],
+        ],
+        dtype=np.float32,
+    )
+    positions = np.tile(base_positions, (70_000, 1))
+
+    cell_size, footprint_flat = chunker._footprint_from_positions(positions)
+
+    fine_cx = np.floor(positions[:, 0] / cell_size).astype(np.int32)
+    fine_cz = np.floor(positions[:, 2] / cell_size).astype(np.int32)
+    expected = np.unique(np.column_stack([fine_cx, fine_cz]), axis=0)
+    assert footprint_flat == expected.flatten().tolist()
 
 
 def test_manifest_chunk_size_helpers_reject_bad_values_and_io_failures(monkeypatch):
