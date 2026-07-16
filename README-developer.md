@@ -654,53 +654,28 @@ if this cache root should be reused regularly.
 The command follows the same public CLI conventions as the shell scripts in
 `scripts/STANDARDS.md`: named options only, `-h`/`--help`, compact usage text,
 and exact errors for positional arguments, unknown options, and missing option
-values.
-
-Supported options:
-
-| Option | Description |
-|---|---|
-| `--source=<path>` | Required. OBJ file, GLB file, or folder containing a supported map. Folder discovery matches the GUI: OBJ is preferred before GLB. |
-| `--cache-root=<path>` | Root folder where compiled map caches are stored. This is a cache root, not an exact output directory. |
-| `--settings-file=<path>` | Explicit settings JSON to use. The file may contain a full Preferences snapshot or only selected known settings. Explicit unreadable or invalid files fail. |
-| `--chunk-size=<value>` | Import chunk size for new or rebuilt caches. |
-| `--obj-scan-throttle-ms=<value>` | Milliseconds paused while scanning OBJ files. |
-| `--obj-import-batch-thousands=<n>` | Thousands of triangulated OBJ faces per incremental import batch. |
-| `--obj-bucket-workers=<n>` | Worker threads used to de-index, group, and write incremental OBJ face batches into temporary bucket parts. |
-| `--chunk-build-workers=<n>` | Cache-building worker limit. |
-| `--chunk-build-reserved-cpus=<n>` | Logical CPUs kept free during cache build. |
-| `--force` | Rebuild even if a valid matching cache already exists. |
-| `--dry-run` | Validate inputs and print the planned cache path without importing. |
-| `--json` | Print a single machine-readable JSON result. Useful for automation. |
-
-Import options use built-in defaults unless overridden by CLI flags or an
-explicit `--settings-file`. Saved GUI Preferences are not loaded by default.
-Built-in import defaults are:
-
-| Option / variable | Built-in default |
-|---|---:|
-| `--chunk-size` | `50` |
-| `--obj-scan-throttle-ms` | `0` on Linux/macOS, `1` on Windows |
-| `--obj-import-batch-thousands` | `200` |
-| `--obj-bucket-workers` | `2` |
-| `--chunk-build-workers` | `1` |
-| `--chunk-build-reserved-cpus` | `2` |
-
-`--obj-bucket-workers` maps to `CAVEVIEWER_OBJ_BUCKET_WORKERS` for the import
-worker process. For example:
+values. Run the command with `--help` to see the latest supported options,
+defaults, and examples:
 
 ```bash
-caveviewer-chunker \
-  --source=/path/to/map-or-folder \
-  --chunk-size=64 \
-  --obj-bucket-workers=4
+caveviewer-chunker --help
 ```
 
-`--cache-root` selects the root used to derive the managed cache directory. For
-normal GUI-compatible output, omit it and CaveViewer uses the platform managed
-map-cache root: `$XDG_CACHE_HOME/caveviewer/maps` or
-`~/.cache/caveviewer/maps` on Linux, `~/.caveviewer/maps` on macOS, and
-`%USERPROFILE%\.caveviewer\maps` on Windows. For example, this command:
+From a source checkout:
+
+```bash
+.venv-dev/bin/python -m caveviewer.chunker --help
+```
+
+From a Windows source checkout:
+
+```powershell
+.\.venv-dev\Scripts\python.exe -m caveviewer.chunker --help
+```
+
+Normal GUI-compatible output does not require `--cache-root`; CaveViewer uses
+the platform managed map-cache root. Use `--cache-root` when compiled maps
+should live in a specific root folder. For example, this command:
 
 ```bash
 caveviewer-chunker \
@@ -726,24 +701,6 @@ If the existing cache is valid and its manifest chunk size matches the
 requested chunk size, the command skips the import. If the existing cache is
 valid but its manifest chunk size differs, the command rebuilds automatically.
 `--force` is only needed to rebuild an already-matching cache.
-
-Automation examples:
-
-```bash
-caveviewer-chunker \
-  --source=/maps/Peacock.obj \
-  --cache-root=/data/caveviewer/maps \
-  --chunk-size=64 \
-  --dry-run
-```
-
-```bash
-caveviewer-chunker \
-  --source=/maps/Peacock.obj \
-  --cache-root=/data/caveviewer/maps \
-  --chunk-size=64 \
-  --json
-```
 
 ### Application storage locations
 
