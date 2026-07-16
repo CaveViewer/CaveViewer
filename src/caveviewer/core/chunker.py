@@ -78,6 +78,8 @@ _DEFAULT_OBJ_IMPORT_BATCH_FACES = 200_000
 _DEFAULT_OBJ_BUCKET_WORKERS = 2
 _MAX_OBJ_BUCKET_WORKERS = 32
 _INCREMENTAL_OBJ_RESUME_VERSION = 1
+_OBJ_BUCKET_RECORD_SLICE_FACES = 25_000
+_OBJ_BUCKET_FINALIZE_BLOCK_RECORDS = 100_000
 _LOG = get_logger("chunker")
 
 
@@ -446,15 +448,34 @@ def ensure_sufficient_import_memory(
 
 @dataclass
 class ChunkUploadGroup:
-    """CPU-prepared vertex payload for one material group in a chunk.
+    """CPU-side source data for one material group in a chunk.
 
     OpenGL object creation still has to happen on the render thread, but
-    normal generation, interleaving, and bytes conversion can happen in a
-    streaming worker before the chunk reaches the renderer.
+    the expensive chunk-file decode happens in a streaming worker before the
+    chunk reaches the renderer.  Vertex-byte payloads are generated lazily so
+    the ready backlog and loaded-chunk cache do not retain both smooth and
+    flat-shaded copies of the same geometry.
     """
     material_name: str
-    smooth_vertex_bytes: bytes
-    flat_vertex_bytes: bytes
+    positions: np.ndarray
+    uvs: np.ndarray
+    smooth_normals: np.ndarray
+
+    def vertex_bytes(self, *, smooth_shading: bool) -> bytes:
+        return vertex_bytes_for_shading(
+            self.positions,
+            self.uvs,
+            self.smooth_normals,
+            smooth_shading=smooth_shading,
+        )
+
+    @property
+    def smooth_vertex_bytes(self) -> bytes:
+        return self.vertex_bytes(smooth_shading=True)
+
+    @property
+    def flat_vertex_bytes(self) -> bytes:
+        return self.vertex_bytes(smooth_shading=False)
 
 
 @dataclass
@@ -1291,39 +1312,21 @@ def _write_obj_face_batch_bucket_parts(
     os.makedirs(bucket_root, exist_ok=True)
     bucket_paths: dict[tuple[tuple[int, int, int], str], str] = {}
 
-    flat_pos = vertex_data.positions[batch.face_pos_idx.reshape(-1)].reshape(
-        face_count, 3, 3
-    )
-    centroid_scaled = (
-        flat_pos[:, 0, :] + flat_pos[:, 1, :] + flat_pos[:, 2, :]
-    ) * (1.0 / (3.0 * chunk_size))
-    cell_coords = np.floor(centroid_scaled).astype(np.int32, copy=False)
-    del centroid_scaled
-
-    flat_uv = np.zeros((face_count, 3, 2), dtype=np.float32)
-    uv_idx_flat = batch.face_uv_idx.reshape(-1)
-    valid_uv = uv_idx_flat >= 0
-    if len(vertex_data.uvs) and valid_uv.any():
-        flat_uv.reshape(-1, 2)[valid_uv] = vertex_data.uvs[uv_idx_flat[valid_uv]]
-
-    flat_nrm = np.zeros((face_count, 3, 3), dtype=np.float32)
-    nrm_idx_flat = batch.face_nrm_idx.reshape(-1)
-    valid_nrm = nrm_idx_flat >= 0
-    if len(vertex_data.normals) and valid_nrm.any():
-        flat_nrm.reshape(-1, 3)[valid_nrm] = vertex_data.normals[
-            nrm_idx_flat[valid_nrm]
-        ]
-    missing_normal_faces = ~np.all(batch.face_nrm_idx >= 0, axis=1)
-    if missing_normal_faces.any():
-        flat_nrm[missing_normal_faces] = _compute_flat_normals(
-            flat_pos[missing_normal_faces].reshape(-1, 3)
-        ).reshape(-1, 3, 3)
-
-    records = np.empty((face_count, 3, 8), dtype=np.float32)
-    records[:, :, 0:3] = flat_pos
-    records[:, :, 3:5] = flat_uv
-    records[:, :, 5:8] = flat_nrm
-    del flat_uv, flat_nrm
+    # Assign faces to chunk cells without materializing the full
+    # (faces, 3, 3) position array.  Only the final cell coordinates are kept
+    # for the batch; de-indexed vertex records are written later in bounded
+    # slices per sorted bucket run.
+    cell_coords = np.empty((face_count, 3), dtype=np.int32)
+    face_pos_idx = batch.face_pos_idx
+    inv_scaled_triangle = 1.0 / (3.0 * chunk_size)
+    for axis in range(3):
+        vertex_axis = vertex_data.positions[:, axis]
+        centroid_axis = (
+            vertex_axis[face_pos_idx[:, 0]]
+            + vertex_axis[face_pos_idx[:, 1]]
+            + vertex_axis[face_pos_idx[:, 2]]
+        ) * inv_scaled_triangle
+        cell_coords[:, axis] = np.floor(centroid_axis).astype(np.int32, copy=False)
 
     material_name_to_id: dict[str, int] = {}
     material_names: list[str] = []
@@ -1375,11 +1378,63 @@ def _write_obj_face_batch_bucket_parts(
         )
         face_indices = order[start:end]
         with open(path, "ab") as output:
-            output.write(
-                np.ascontiguousarray(records[face_indices].reshape(-1, 8)).tobytes()
-            )
+            for slice_start in range(
+                0,
+                len(face_indices),
+                _OBJ_BUCKET_RECORD_SLICE_FACES,
+            ):
+                slice_end = min(
+                    slice_start + _OBJ_BUCKET_RECORD_SLICE_FACES,
+                    len(face_indices),
+                )
+                _write_obj_bucket_record_slice(
+                    output,
+                    vertex_data,
+                    batch,
+                    face_indices[slice_start:slice_end],
+                )
 
     return face_count, bucket_paths
+
+
+def _write_obj_bucket_record_slice(
+    output,
+    vertex_data: ObjVertexData,
+    batch: ObjFaceBatch,
+    face_indices: np.ndarray,
+) -> None:
+    """Write interleaved bucket records for a bounded face-index slice."""
+    if len(face_indices) == 0:
+        return
+
+    pos_idx = batch.face_pos_idx[face_indices].reshape(-1)
+    records = np.empty((len(pos_idx), 8), dtype=np.float32)
+    records[:, 0:3] = vertex_data.positions[pos_idx]
+    records[:, 3:5] = 0.0
+    records[:, 5:8] = 0.0
+
+    uv_idx = batch.face_uv_idx[face_indices]
+    uv_idx_flat = uv_idx.reshape(-1)
+    valid_uv = uv_idx_flat >= 0
+    if len(vertex_data.uvs) and valid_uv.any():
+        records[valid_uv, 3:5] = vertex_data.uvs[uv_idx_flat[valid_uv]]
+
+    nrm_idx = batch.face_nrm_idx[face_indices]
+    nrm_idx_flat = nrm_idx.reshape(-1)
+    valid_nrm = nrm_idx_flat >= 0
+    if len(vertex_data.normals) and valid_nrm.any():
+        records[valid_nrm, 5:8] = vertex_data.normals[nrm_idx_flat[valid_nrm]]
+
+    missing_normal_faces = ~np.all(nrm_idx >= 0, axis=1)
+    if missing_normal_faces.any():
+        record_faces = records.reshape(-1, 3, 8)
+        missing_indices = np.nonzero(missing_normal_faces)[0]
+        flat_normals = _compute_flat_normals(
+            record_faces[missing_indices, :, 0:3].reshape(-1, 3)
+        ).reshape(-1, 3, 3)
+        record_faces[missing_indices, :, 5:8] = flat_normals
+
+    output.write(records.tobytes())
 
 
 def _finalize_incremental_buckets(
@@ -1460,40 +1515,48 @@ def _write_chunk_file_from_buckets(
         output.write(struct.pack("<I", len(groups)))
 
         for material_name, bucket_paths in groups:
-            record_parts = []
+            record_count = 0
             for bucket_path in bucket_paths:
-                records = np.fromfile(bucket_path, dtype=np.float32)
-                if records.size % 8 != 0:
-                    raise ValueError(f"Corrupt incremental bucket: {bucket_path}")
-                if records.size:
-                    record_parts.append(records.reshape(-1, 8))
-            if not record_parts:
-                records = np.empty((0, 8), dtype=np.float32)
-            elif len(record_parts) == 1:
-                records = record_parts[0]
-            else:
-                records = np.concatenate(record_parts, axis=0)
-            flat_pos = np.ascontiguousarray(records[:, 0:3], dtype=np.float32)
-            flat_uv = np.ascontiguousarray(records[:, 3:5], dtype=np.float32)
-            flat_nrm = np.ascontiguousarray(records[:, 5:8], dtype=np.float32)
-
-            if len(flat_pos):
-                group_min = flat_pos.min(axis=0)
-                group_max = flat_pos.max(axis=0)
-                if bounds_min is None:
-                    bounds_min = group_min.copy()
-                    bounds_max = group_max.copy()
-                else:
-                    np.minimum(bounds_min, group_min, out=bounds_min)
-                    np.maximum(bounds_max, group_max, out=bounds_max)
+                record_count += _bucket_record_count(bucket_path)
 
             name_bytes = material_name.encode("utf-8")
             output.write(struct.pack("<I", len(name_bytes)))
             output.write(name_bytes)
-            output.write(struct.pack("<I", len(flat_pos)))
-            output.write(flat_pos.tobytes())
-            output.write(flat_uv.tobytes())
-            output.write(flat_nrm.tobytes())
+            output.write(struct.pack("<I", record_count))
+
+            for bucket_path in bucket_paths:
+                for records in _iter_bucket_record_blocks(bucket_path):
+                    flat_pos = np.ascontiguousarray(
+                        records[:, 0:3],
+                        dtype=np.float32,
+                    )
+                    if len(flat_pos):
+                        group_min = flat_pos.min(axis=0)
+                        group_max = flat_pos.max(axis=0)
+                        if bounds_min is None:
+                            bounds_min = group_min.copy()
+                            bounds_max = group_max.copy()
+                        else:
+                            np.minimum(bounds_min, group_min, out=bounds_min)
+                            np.maximum(bounds_max, group_max, out=bounds_max)
+                    output.write(flat_pos.tobytes())
+
+            for bucket_path in bucket_paths:
+                for records in _iter_bucket_record_blocks(bucket_path):
+                    flat_uv = np.ascontiguousarray(
+                        records[:, 3:5],
+                        dtype=np.float32,
+                    )
+                    output.write(flat_uv.tobytes())
+
+            for bucket_path in bucket_paths:
+                for records in _iter_bucket_record_blocks(bucket_path):
+                    flat_nrm = np.ascontiguousarray(
+                        records[:, 5:8],
+                        dtype=np.float32,
+                    )
+                    output.write(flat_nrm.tobytes())
+
             used_materials.append(material_name)
             for bucket_path in bucket_paths:
                 try:
@@ -1507,20 +1570,70 @@ def _write_chunk_file_from_buckets(
     return bounds_min, bounds_max, used_materials
 
 
+def _bucket_record_count(bucket_path: str) -> int:
+    record_bytes = 8 * np.dtype(np.float32).itemsize
+    byte_count = os.path.getsize(bucket_path)
+    if byte_count % record_bytes != 0:
+        raise ValueError(f"Corrupt incremental bucket: {bucket_path}")
+    return byte_count // record_bytes
+
+
+def _iter_bucket_record_blocks(bucket_path: str):
+    floats_per_record = 8
+    read_count = max(1, _OBJ_BUCKET_FINALIZE_BLOCK_RECORDS) * floats_per_record
+    with open(bucket_path, "rb") as input_file:
+        while True:
+            records = np.fromfile(
+                input_file,
+                dtype=np.float32,
+                count=read_count,
+            )
+            if records.size == 0:
+                break
+            if records.size % floats_per_record != 0:
+                raise ValueError(f"Corrupt incremental bucket: {bucket_path}")
+            yield records.reshape(-1, floats_per_record)
+
+
 def _footprint_from_positions(positions: np.ndarray) -> tuple[float, list[int]]:
     _FOOTPRINT_TARGET_CELLS = 200
+    _FOOTPRINT_BLOCK_VERTICES = 250_000
+    if len(positions) == 0:
+        return 2.0, []
+
     pos_x = positions[:, 0]
     pos_z = positions[:, 2]
+    min_x = float(pos_x.min())
+    max_x = float(pos_x.max())
+    min_z = float(pos_z.min())
+    max_z = float(pos_z.max())
     extent_max = max(
-        float(pos_x.max() - pos_x.min()),
-        float(pos_z.max() - pos_z.min()),
+        max_x - min_x,
+        max_z - min_z,
         1.0,
     )
     footprint_cell_size = max(2.0, extent_max / _FOOTPRINT_TARGET_CELLS)
-    fine_cx = np.floor(pos_x / footprint_cell_size).astype(np.int32)
-    fine_cz = np.floor(pos_z / footprint_cell_size).astype(np.int32)
-    footprint_pairs = np.unique(np.column_stack([fine_cx, fine_cz]), axis=0)
-    footprint_flat = footprint_pairs.flatten().tolist()
+    min_cx = int(np.floor(min_x / footprint_cell_size))
+    min_cz = int(np.floor(min_z / footprint_cell_size))
+    max_cz = int(np.floor(max_z / footprint_cell_size))
+    z_span = max(1, max_cz - min_cz + 1)
+
+    unique_keys = np.empty(0, dtype=np.int64)
+    for start in range(0, len(positions), _FOOTPRINT_BLOCK_VERTICES):
+        end = min(start + _FOOTPRINT_BLOCK_VERTICES, len(positions))
+        block_cx = np.floor(pos_x[start:end] / footprint_cell_size).astype(np.int64)
+        block_cz = np.floor(pos_z[start:end] / footprint_cell_size).astype(np.int64)
+        block_keys = (block_cx - min_cx) * z_span + (block_cz - min_cz)
+        block_unique = np.unique(block_keys)
+        if unique_keys.size:
+            unique_keys = np.unique(np.concatenate((unique_keys, block_unique)))
+        else:
+            unique_keys = block_unique
+
+    footprint_flat: list[int] = []
+    for key in unique_keys.tolist():
+        footprint_flat.append(int(key // z_span) + min_cx)
+        footprint_flat.append(int(key % z_span) + min_cz)
     return footprint_cell_size, footprint_flat
 
 
@@ -1760,20 +1873,7 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
     # minimap panel regardless of the 3D chunk_size.  Stored as a flat list
     # [cx0, cz0, cx1, cz1, ...] of int32 pairs so the minimap can render a
     # detailed outline even when 3D chunks are very large (e.g. 100 m).
-    _FOOTPRINT_TARGET_CELLS = 200
-    pos_x = mesh.positions[:, 0]
-    pos_z = mesh.positions[:, 2]
-    extent_max = max(
-        float(pos_x.max() - pos_x.min()),
-        float(pos_z.max() - pos_z.min()),
-        1.0,
-    )
-    footprint_cell_size = max(2.0, extent_max / _FOOTPRINT_TARGET_CELLS)
-    fine_cx = np.floor(pos_x / footprint_cell_size).astype(np.int32)
-    fine_cz = np.floor(pos_z / footprint_cell_size).astype(np.int32)
-    footprint_pairs = np.unique(np.column_stack([fine_cx, fine_cz]), axis=0)
-    footprint_flat = footprint_pairs.flatten().tolist()
-    del fine_cx, fine_cz, footprint_pairs
+    footprint_cell_size, footprint_flat = _footprint_from_positions(mesh.positions)
 
     manifest = {
         "version": _VERSION,
@@ -1906,6 +2006,18 @@ def _interleaved_vertex_bytes(positions: np.ndarray, uvs: np.ndarray,
     return interleaved.tobytes()
 
 
+def vertex_bytes_for_shading(
+    positions: np.ndarray,
+    uvs: np.ndarray,
+    smooth_normals: np.ndarray,
+    *,
+    smooth_shading: bool,
+) -> bytes:
+    """Pack renderer vertex bytes for the requested shading mode."""
+    normals = smooth_normals if smooth_shading else compute_flat_normals(positions)
+    return _interleaved_vertex_bytes(positions, uvs, normals)
+
+
 def prepare_chunk_upload_groups(chunk_data: ChunkData) -> ChunkData:
     """
     Precompute CPU-side renderer payloads for a loaded chunk.
@@ -1920,12 +2032,11 @@ def prepare_chunk_upload_groups(chunk_data: ChunkData) -> ChunkData:
         if n == 0:
             continue
 
-        smooth_normals = group.normals
-        flat_normals = compute_flat_normals(group.positions)
         upload_groups.append(ChunkUploadGroup(
             material_name=mat_name,
-            smooth_vertex_bytes=_interleaved_vertex_bytes(group.positions, group.uvs, smooth_normals),
-            flat_vertex_bytes=_interleaved_vertex_bytes(group.positions, group.uvs, flat_normals),
+            positions=group.positions,
+            uvs=group.uvs,
+            smooth_normals=group.normals,
         ))
 
     chunk_data.upload_groups = upload_groups

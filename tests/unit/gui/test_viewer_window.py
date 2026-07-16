@@ -512,15 +512,19 @@ def test_chunk_aabbs_are_tracked_only_for_loaded_chunks():
     window._chunk_normal_cache = {}
     window._chunk_aabbs = {}
     cell = (1, 2, 3)
+    positions = np.zeros((3, 3), dtype=np.float32)
+    uvs = np.zeros((3, 2), dtype=np.float32)
+    normals = np.tile(np.array([[0.0, 1.0, 0.0]], dtype=np.float32), (3, 1))
     chunk_data = SimpleNamespace(
         cell=cell,
         bounds_min=np.array([1.0, 2.0, 3.0], dtype=np.float64),
         bounds_max=np.array([4.0, 5.0, 6.0], dtype=np.float64),
         upload_groups=[
-            SimpleNamespace(
+            viewer_window.chunker.ChunkUploadGroup(
                 material_name="mat",
-                smooth_vertex_bytes=b"\x00" * 96,
-                flat_vertex_bytes=b"\x00" * 96,
+                positions=positions,
+                uvs=uvs,
+                smooth_normals=normals,
             )
         ],
     )

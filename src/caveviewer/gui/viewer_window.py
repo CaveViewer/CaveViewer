@@ -2093,9 +2093,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             upload_groups = chunk_data.upload_groups or []
 
         for group in upload_groups:
-            active_bytes = (group.smooth_vertex_bytes
-                            if self.render_mode_buttons.smooth_shading_enabled
-                            else group.flat_vertex_bytes)
+            active_bytes = group.vertex_bytes(
+                smooth_shading=self.render_mode_buttons.smooth_shading_enabled
+            )
 
             vbo = self.ctx.buffer(active_bytes)
             vao = self.ctx.vertex_array(
@@ -2105,8 +2105,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             vao_list.append((vao, vbo, group.material_name, texture))
             normal_cache_entry.append((
                 group.material_name,
-                group.smooth_vertex_bytes,
-                group.flat_vertex_bytes,
+                group.positions,
+                group.uvs,
+                group.smooth_normals,
             ))
 
         self._chunk_gpu_objects[chunk_data.cell] = vao_list
@@ -2129,19 +2130,34 @@ class CaveViewerWindow(mglw.WindowConfig):
         """
         Rewrites the normal columns of every currently-loaded chunk's VBO
         in place to match the current smooth_shading_enabled state -- no
-        chunk reload or new GPU objects needed. Both normal variants were
-        precomputed by the streaming worker, so this is an instant in-place
-        update. Chunks that stream in after this point pick up the new
-        state automatically via _on_chunk_ready's active_normals selection.
+        chunk reload or new GPU objects needed. The alternate payload is
+        rebuilt only when the user toggles shading so loaded chunks do not
+        retain both smooth and flat byte streams in RAM.
         """
         smooth = self.render_mode_buttons.smooth_shading_enabled
         for cell, vao_list in self._chunk_gpu_objects.items():
             cache_entries = self._chunk_normal_cache.get(cell)
             if not cache_entries or len(cache_entries) != len(vao_list):
                 continue
-            for (vao, vbo, mat_name, texture), (cached_mat, smooth_bytes, flat_bytes) in zip(
-                    vao_list, cache_entries):
-                vbo.write(smooth_bytes if smooth else flat_bytes)
+            for (
+                _vao,
+                vbo,
+                _mat_name,
+                _texture,
+            ), (
+                _cached_mat,
+                positions,
+                uvs,
+                smooth_normals,
+            ) in zip(vao_list, cache_entries):
+                vbo.write(
+                    chunker.vertex_bytes_for_shading(
+                        positions,
+                        uvs,
+                        smooth_normals,
+                        smooth_shading=smooth,
+                    )
+                )
 
     def _buttons_locked_for_loading(self) -> bool:
         """True while map loading should disable the right-side button block."""
