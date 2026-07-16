@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from caveviewer.core import map_compiler
+from caveviewer.core.chunk_size_advisor import ChunkSizeRecommendation
 from caveviewer.core.cache_paths import MapCacheLocator
 
 
@@ -96,6 +97,12 @@ def test_compile_rebuilds_valid_cache_when_chunk_size_differs(
         )
         return str(cache_dir)
 
+    elapsed_markers = iter([100.0, 102.5])
+    monkeypatch.setattr(
+        map_compiler.time,
+        "perf_counter",
+        lambda: next(elapsed_markers),
+    )
     monkeypatch.setattr(app, "import_and_cache_any", fake_import)
 
     result = map_compiler.compile_map(
@@ -112,6 +119,7 @@ def test_compile_rebuilds_valid_cache_when_chunk_size_differs(
     )
 
     assert result.status == "built"
+    assert result.elapsed_seconds == 2.5
     assert result.rebuilt_for_chunk_size is True
     assert result.chunk_count == 2
     _descriptor, textures_dir, kwargs, environ = calls[0]
@@ -201,6 +209,88 @@ def test_compile_uses_explicit_partial_settings_file(tmp_path):
     assert result.chunk_size == 72.0
 
 
+def test_analyze_chunk_sizes_resolves_source_and_import_settings(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "cave.obj"
+    source.write_text("v 0 0 0\n", encoding="utf-8")
+    cache_root = tmp_path / "cache-root"
+    captured = {}
+
+    from caveviewer import app
+    from caveviewer.core import chunk_size_advisor
+
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
+    monkeypatch.delenv("CAVEVIEWER_OBJ_IMPORT_BATCH_FACES", raising=False)
+
+    def fake_find_model_file(selected_path):
+        captured["selected_path"] = selected_path
+        return {"format": "obj", "obj_path": str(source)}
+
+    def fake_recommend(
+        model_descriptor,
+        *,
+        candidate_sizes,
+        face_batch_size,
+        worker_count,
+        progress_cb=None,
+    ):
+        captured["model_descriptor"] = model_descriptor
+        captured["candidate_sizes"] = candidate_sizes
+        captured["face_batch_size"] = face_batch_size
+        captured["worker_count"] = worker_count
+        captured["progress_cb"] = progress_cb
+        captured["environ"] = os.environ.copy()
+        if progress_cb is not None:
+            progress_cb("analyzing faces", 0.75)
+        return ChunkSizeRecommendation(
+            recommended_size=73.0,
+            candidates=(),
+            explanation="test recommendation",
+        )
+
+    monkeypatch.setattr(app, "find_model_file", fake_find_model_file)
+    monkeypatch.setattr(
+        chunk_size_advisor,
+        "recommend_chunk_size_for_descriptor",
+        fake_recommend,
+    )
+    monkeypatch.setattr(
+        app,
+        "import_and_cache_any",
+        lambda *_args, **_kwargs: pytest.fail("analysis must not import"),
+    )
+    progress = []
+
+    result = map_compiler.analyze_chunk_sizes(
+        map_compiler.CompileOptions(
+            source=str(source),
+            cache_root=str(cache_root),
+            parsing_overrides={
+                "chunk_size_meters": "73",
+                "obj_import_batch_thousands": "250",
+            },
+            obj_bucket_workers="4",
+            analyze_workers="3",
+        ),
+        progress_cb=lambda *item: progress.append(item),
+    )
+
+    assert result.recommended_size == 73.0
+    assert captured["selected_path"] == str(source)
+    assert captured["model_descriptor"] == {"format": "obj", "obj_path": str(source)}
+    assert 73.0 in captured["candidate_sizes"]
+    assert captured["face_batch_size"] == 250000
+    assert captured["worker_count"] == 3
+    assert captured["progress_cb"] is not None
+    assert progress == [("locating source", 0.0), ("analyzing faces", 0.75)]
+    assert captured["environ"]["CAVEVIEWER_MAP_CACHE_DIR"] == str(cache_root)
+    assert captured["environ"]["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
+    assert captured["environ"]["CAVEVIEWER_OBJ_BUCKET_WORKERS"] == "4"
+    assert "CAVEVIEWER_MAP_CACHE_DIR" not in os.environ
+    assert "CAVEVIEWER_OBJ_IMPORT_BATCH_FACES" not in os.environ
+
+
 def test_compile_defaults_obj_bucket_workers_to_two(tmp_path, monkeypatch):
     source = tmp_path / "cave.glb"
     source.write_bytes(b"glTF")
@@ -239,6 +329,22 @@ def test_compile_rejects_invalid_obj_bucket_workers(tmp_path):
             map_compiler.CompileOptions(
                 source=str(source),
                 obj_bucket_workers="0",
+            )
+        )
+
+
+def test_analyze_rejects_invalid_worker_count(tmp_path):
+    source = tmp_path / "cave.glb"
+    source.write_bytes(b"glTF")
+
+    with pytest.raises(
+        map_compiler.MapCompileConfigurationError,
+        match="--analyze-workers must be at least 1",
+    ):
+        map_compiler.analyze_chunk_sizes(
+            map_compiler.CompileOptions(
+                source=str(source),
+                analyze_workers="0",
             )
         )
 

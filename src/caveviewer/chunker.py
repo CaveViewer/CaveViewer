@@ -7,11 +7,16 @@ import sys
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from caveviewer.core.logging_utils import configure_logging
+from caveviewer.core.logging_utils import (
+    configure_logging,
+    finish_console_progress_line,
+    set_console_progress,
+)
 from caveviewer.core.map_compiler import (
     CompileOptions,
     MapCompileConfigurationError,
     MapCompileError,
+    analyze_chunk_sizes,
     compile_map,
 )
 
@@ -35,6 +40,8 @@ Options:
   --obj-bucket-workers=<n>           Worker threads for temporary OBJ buckets
   --chunk-build-workers=<n>          Cache-building worker limit
   --chunk-build-reserved-cpus=<n>    Logical CPUs kept free during cache build
+  --analyze-chunk-sizes              Analyze source geometry and recommend a chunk size
+  --analyze-workers=<n>              Worker threads for chunk-size analysis
   --force                            Rebuild even if a valid matching cache already exists
   --dry-run                          Validate inputs and print the planned cache path
   --json                             Print machine-readable output
@@ -42,6 +49,7 @@ Options:
 
 Examples:
   {PROGRAM_NAME} --source=/maps/cave.obj --chunk-size=64
+  {PROGRAM_NAME} --source=/maps/cave.obj --analyze-chunk-sizes
   {PROGRAM_NAME} --source=/maps/cave --cache-root=/data/caveviewer/maps --json
 
 Source checkout:
@@ -58,6 +66,9 @@ Built-in import defaults:
   --obj-bucket-workers=2
   --chunk-build-workers=1
   --chunk-build-reserved-cpus=2
+
+Analysis defaults:
+  --analyze-workers=2
 
 Cache root default:
   --cache-root defaults to the same managed map-cache root used by the GUI:
@@ -77,8 +88,10 @@ _VALUE_OPTIONS = {
     "--obj-bucket-workers": "obj_bucket_workers",
     "--chunk-build-workers": "chunk_build_workers",
     "--chunk-build-reserved-cpus": "chunk_build_reserved_cpus",
+    "--analyze-workers": "analyze_workers",
 }
 _FLAG_OPTIONS = {
+    "--analyze-chunk-sizes": "analyze_chunk_sizes",
     "--force": "force_rebuild",
     "--dry-run": "dry_run",
     "--json": "json_output",
@@ -97,6 +110,8 @@ class _ParsedCli:
     settings_file: str | None = None
     parsing_overrides: dict[str, str] = field(default_factory=dict)
     obj_bucket_workers: str | None = None
+    analyze_workers: str | None = None
+    analyze_chunk_sizes: bool = False
     force_rebuild: bool = False
     dry_run: bool = False
     json_output: bool = False
@@ -104,12 +119,17 @@ class _ParsedCli:
     def to_compile_options(self) -> CompileOptions:
         if not self.source:
             raise CliUsageError("--source is required.")
+        if self.analyze_workers is not None and not self.analyze_chunk_sizes:
+            raise CliUsageError(
+                "--analyze-workers requires --analyze-chunk-sizes."
+            )
         return CompileOptions(
             source=self.source,
             cache_root=self.cache_root,
             settings_file=self.settings_file,
             parsing_overrides=self.parsing_overrides,
             obj_bucket_workers=self.obj_bucket_workers,
+            analyze_workers=self.analyze_workers,
             force_rebuild=self.force_rebuild,
             dry_run=self.dry_run,
             json_output=self.json_output,
@@ -167,7 +187,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if not options.json_output:
             configure_logging()
-        result = compile_map(options)
+        result = (
+            _analyze_with_optional_progress(options)
+            if parsed.analyze_chunk_sizes
+            else compile_map(options)
+        )
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)
         return 130
@@ -183,6 +207,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if options.json_output:
         print(json.dumps(result.as_dict(), sort_keys=True))
+    elif parsed.analyze_chunk_sizes:
+        _print_text_analysis(result)
     else:
         _print_text_result(result)
     return 0
@@ -194,27 +220,85 @@ def _store_value_option(parsed: _ParsedCli, option: str, value: str) -> None:
         setattr(parsed, target, value)
     elif target == "obj_bucket_workers":
         parsed.obj_bucket_workers = value
+    elif target == "analyze_workers":
+        parsed.analyze_workers = value
     else:
         parsed.parsing_overrides[target] = value
 
 
+def _analyze_with_optional_progress(options: CompileOptions):
+    if options.json_output:
+        return analyze_chunk_sizes(options)
+    try:
+        return analyze_chunk_sizes(options, progress_cb=set_console_progress)
+    finally:
+        finish_console_progress_line()
+
+
 def _print_text_result(result) -> None:
     if result.status == "planned":
-        print(f"Planned cache directory: {result.cache_dir}")
+        print("Planned cache:")
     elif result.status == "skipped":
-        print(f"Cache is up to date: {result.cache_dir}")
+        print("Cache is up to date:")
     else:
-        print(f"Cache built: {result.cache_dir}")
+        print("Cache built:")
 
-    print(f"Source: {result.source_path}")
-    print(f"Cache root: {result.cache_root}")
-    print(f"Import chunk size: {result.chunk_size:g}")
+    _print_field("Cache", result.cache_dir)
+    _print_field("Source", result.source_path)
+    _print_field("Cache root", result.cache_root)
+    _print_field("Import chunk size", f"{result.chunk_size:g}")
     if result.chunk_count is not None:
-        print(f"Chunks: {result.chunk_count}")
+        _print_field("Chunks", _format_count(result.chunk_count))
     if result.triangle_count is not None:
-        print(f"Triangles: {result.triangle_count}")
+        _print_field("Triangles", _format_count(result.triangle_count))
+    if result.elapsed_seconds is not None:
+        _print_field("Elapsed", _format_seconds(result.elapsed_seconds))
     if result.rebuilt_for_chunk_size and result.status == "built":
-        print("Rebuilt because the existing cache used a different chunk size.")
+        _print_field("Reason", "existing cache used a different chunk size")
+
+
+def _print_field(label: str, value: object) -> None:
+    print(f"  {label}: {value}")
+
+
+def _format_count(value: int) -> str:
+    return f"{int(value):,}"
+
+
+def _format_seconds(value: float) -> str:
+    return f"{float(value):.1f}s"
+
+
+def _print_text_analysis(recommendation) -> None:
+    print(f"Recommended chunk size: {recommendation.recommended_size:g}")
+    print(f"Reason: {recommendation.explanation}")
+    print("Candidate scores:")
+    for candidate in recommendation.candidates:
+        warning_suffix = ""
+        if candidate.warnings:
+            warning_suffix = f" warnings={'; '.join(candidate.warnings)}"
+        print(
+            f"  {candidate.chunk_size:>6g}  "
+            f"score={candidate.score:.4f}  "
+            f"chunks={_format_count(candidate.chunk_count)}  "
+            f"p95_faces={_format_count(candidate.p95_chunk_faces)}  "
+            f"max_faces={_format_count(candidate.max_chunk_faces)}  "
+            f"p95_est={_format_bytes(candidate.p95_chunk_bytes_estimate)}"
+            f"{warning_suffix}"
+        )
+
+
+def _format_bytes(value: int) -> str:
+    size = float(value)
+    units = ("B", "KiB", "MiB", "GiB")
+    unit = units[0]
+    for unit in units:
+        if size < 1024.0 or unit == units[-1]:
+            break
+        size /= 1024.0
+    if unit == "B":
+        return f"{int(size)} {unit}"
+    return f"{size:.1f} {unit}"
 
 
 if __name__ == "__main__":

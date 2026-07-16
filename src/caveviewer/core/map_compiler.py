@@ -8,13 +8,14 @@ existing app import pipeline.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
+import time
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from caveviewer.core.cache_paths import MANAGED_CACHE_ENV_VAR, MapCacheLocator
 from caveviewer.gui.preferences import (
@@ -23,6 +24,10 @@ from caveviewer.gui.preferences import (
     require_validated_advanced_settings,
     validate_advanced_setting,
 )
+
+
+if TYPE_CHECKING:
+    from caveviewer.core.chunk_size_advisor import ChunkSizeRecommendation
 
 
 PARSING_SETTING_FIELDS = tuple(
@@ -34,6 +39,10 @@ DEFAULT_OBJ_BUCKET_WORKERS = 2
 MIN_OBJ_BUCKET_WORKERS = 1
 MAX_OBJ_BUCKET_WORKERS = 32
 OBJ_BUCKET_WORKERS_ENV_VAR = "CAVEVIEWER_OBJ_BUCKET_WORKERS"
+DEFAULT_ANALYZE_WORKERS = 2
+MIN_ANALYZE_WORKERS = 1
+MAX_ANALYZE_WORKERS = 32
+ProgressCallback = Callable[[str, float], None]
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,7 @@ class CompileOptions:
     settings_file: str | None = None
     parsing_overrides: Mapping[str, str] | None = None
     obj_bucket_workers: str | None = None
+    analyze_workers: str | None = None
     force_rebuild: bool = False
     dry_run: bool = False
     json_output: bool = False
@@ -64,6 +74,7 @@ class CompileResult:
     chunk_size: float
     chunk_count: int | None = None
     triangle_count: int | None = None
+    elapsed_seconds: float | None = None
     rebuilt_for_chunk_size: bool = False
     force_rebuild: bool = False
     dry_run: bool = False
@@ -80,6 +91,7 @@ class CompileResult:
             "chunk_size": self.chunk_size,
             "chunk_count": self.chunk_count,
             "triangle_count": self.triangle_count,
+            "elapsed_seconds": self.elapsed_seconds,
             "rebuilt_for_chunk_size": self.rebuilt_for_chunk_size,
             "force_rebuild": self.force_rebuild,
             "dry_run": self.dry_run,
@@ -118,6 +130,41 @@ def compile_map(options: CompileOptions) -> CompileResult:
             options,
             source_argument=source_argument,
             chunk_size=chunk_size,
+        )
+
+
+def analyze_chunk_sizes(
+    options: CompileOptions,
+    *,
+    progress_cb: ProgressCallback | None = None,
+) -> "ChunkSizeRecommendation":
+    """Analyze source geometry and recommend a chunk size without building."""
+    if not isinstance(options, CompileOptions):
+        raise TypeError("analyze_chunk_sizes requires CompileOptions")
+
+    source_argument = _require_non_empty_path(options.source, "--source")
+    cache_root = _normalize_cache_root(options.cache_root)
+    settings = _resolve_settings(options.settings_file, options.parsing_overrides)
+    requested_chunk_size = _float_setting(settings, "chunk_size_meters")
+    obj_bucket_workers = _resolve_obj_bucket_workers(options.obj_bucket_workers)
+    face_batch_size = _obj_face_batch_size(settings)
+    analyze_workers = _resolve_analyze_workers(options.analyze_workers)
+
+    env_updates = {
+        field.env_var: field.value_to_env(settings[field.key])
+        for field in PARSING_SETTING_FIELDS
+    }
+    env_updates[OBJ_BUCKET_WORKERS_ENV_VAR] = str(obj_bucket_workers)
+    if cache_root is not None:
+        env_updates[MANAGED_CACHE_ENV_VAR] = cache_root
+
+    with _temporary_environ(env_updates):
+        return _analyze_with_environment(
+            source_argument=source_argument,
+            requested_chunk_size=requested_chunk_size,
+            face_batch_size=face_batch_size,
+            worker_count=analyze_workers,
+            progress_cb=progress_cb,
         )
 
 
@@ -189,6 +236,7 @@ def _compile_with_environment(
             rebuilt_for_chunk_size=False,
         )
 
+    build_started_at = time.perf_counter()
     built_cache_dir = app.import_and_cache_any(
         model_descriptor,
         textures_dir,
@@ -196,6 +244,7 @@ def _compile_with_environment(
         console_progress=not options.json_output,
         chunk_size=chunk_size,
     )
+    elapsed_seconds = time.perf_counter() - build_started_at
     built_manifest = chunker.load_manifest(built_cache_dir)
     return _result_from_manifest(
         status="built",
@@ -208,8 +257,47 @@ def _compile_with_environment(
         cache_dir=built_cache_dir,
         chunk_size=chunk_size,
         manifest=built_manifest,
+        elapsed_seconds=elapsed_seconds,
         rebuilt_for_chunk_size=rebuild_for_chunk_size,
     )
+
+
+def _analyze_with_environment(
+    *,
+    source_argument: str,
+    requested_chunk_size: float,
+    face_batch_size: int,
+    worker_count: int,
+    progress_cb: ProgressCallback | None = None,
+) -> "ChunkSizeRecommendation":
+    from caveviewer import app
+    from caveviewer.core.chunk_size_advisor import (
+        DEFAULT_CANDIDATE_SIZES,
+        recommend_chunk_size_for_descriptor,
+    )
+
+    selected_path = os.path.abspath(os.path.expanduser(source_argument))
+    if progress_cb is not None:
+        progress_cb("locating source", 0.0)
+    try:
+        model_descriptor = app.find_model_file(selected_path)
+    except FileNotFoundError as exc:
+        raise MapCompileConfigurationError(str(exc)) from exc
+
+    candidate_sizes = tuple(sorted({
+        *DEFAULT_CANDIDATE_SIZES,
+        float(requested_chunk_size),
+    }))
+    try:
+        return recommend_chunk_size_for_descriptor(
+            model_descriptor,
+            candidate_sizes=candidate_sizes,
+            face_batch_size=face_batch_size,
+            worker_count=worker_count,
+            progress_cb=progress_cb,
+        )
+    except ValueError as exc:
+        raise MapCompileConfigurationError(str(exc)) from exc
 
 
 def _result_from_manifest(
@@ -224,7 +312,8 @@ def _result_from_manifest(
     cache_dir: str,
     chunk_size: float,
     manifest: dict | None,
-    rebuilt_for_chunk_size: bool,
+    elapsed_seconds: float | None = None,
+    rebuilt_for_chunk_size: bool = False,
 ) -> CompileResult:
     chunks = manifest.get("chunks") if isinstance(manifest, dict) else None
     chunk_count = len(chunks) if isinstance(chunks, dict) else None
@@ -242,6 +331,7 @@ def _result_from_manifest(
         chunk_size=chunk_size,
         chunk_count=chunk_count,
         triangle_count=triangle_count,
+        elapsed_seconds=elapsed_seconds,
         rebuilt_for_chunk_size=rebuilt_for_chunk_size,
         force_rebuild=bool(options.force_rebuild),
         dry_run=bool(options.dry_run),
@@ -321,6 +411,15 @@ def _float_setting(settings: AdvancedSettings, key: str) -> float:
         raise MapCompileConfigurationError(f"Invalid numeric setting: {key}") from exc
 
 
+def _obj_face_batch_size(settings: AdvancedSettings) -> int:
+    try:
+        return int(settings["obj_import_batch_thousands"]) * 1000
+    except Exception as exc:
+        raise MapCompileConfigurationError(
+            "Invalid numeric setting: obj_import_batch_thousands"
+        ) from exc
+
+
 def _resolve_obj_bucket_workers(raw_value: str | None) -> int:
     text = str(raw_value).strip() if raw_value is not None else ""
     if not text:
@@ -334,6 +433,23 @@ def _resolve_obj_bucket_workers(raw_value: str | None) -> int:
     if value < MIN_OBJ_BUCKET_WORKERS or value > MAX_OBJ_BUCKET_WORKERS:
         raise MapCompileConfigurationError(
             "--obj-bucket-workers must be at least 1 and no more than 32 workers."
+        )
+    return value
+
+
+def _resolve_analyze_workers(raw_value: str | None) -> int:
+    text = str(raw_value).strip() if raw_value is not None else ""
+    if not text:
+        return DEFAULT_ANALYZE_WORKERS
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise MapCompileConfigurationError(
+            "--analyze-workers must be a whole number."
+        ) from exc
+    if value < MIN_ANALYZE_WORKERS or value > MAX_ANALYZE_WORKERS:
+        raise MapCompileConfigurationError(
+            "--analyze-workers must be at least 1 and no more than 32 workers."
         )
     return value
 
