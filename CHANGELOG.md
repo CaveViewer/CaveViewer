@@ -2,57 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
-## Recent Changes
+## Release 1.0.67
 
-### Added
-- Advanced startup settings for streaming and map parsing.
-- Pre-compute and runtime streaming tuning options, including memory and worker-thread controls.
-- Automatic GPU memory budgeting: NVIDIA detection through `nvidia-smi`, Linux
-  AMD detection through DRM sysfs, integrated AMD shared-memory allowance, and a
-  Windows fallback budget for AMD/Intel systems without GPU-memory detection.
-- Map parsing preferences with cache compatibility handling when preferences differ from existing manifests.
-- Logging framework and expanded runtime diagnostics.
-- Windows setup automation improvements and packaging/release support updates.
-
-### Changed
-- All-platform releases now package targets in parallel from one source revision and publish through a single signed-metadata finalizer.
-- Removed the longitudinal cross-section map and its auxiliary import cache to reduce map-open and import latency.
-- Advanced Settings now shows numeric defaults initially and muted in-field range placeholders when values are cleared.
-- Splash/startup UI layout and sizing refined across macOS, Windows, and Linux, including DPI scaling updates.
-- Startup and viewer visual consistency improved, including progress bar behavior and control panel styling.
-- Build and release scripts streamlined, with Linux Docker-based multi-arch build flow updates.
-- Documentation refreshed for platform support, source usage, and setup guidance.
-- Runtime defaults and environment-based performance tuning expanded (GPU/memory/worker settings).
-- Default import chunk size increased to 50 m on all platforms to reduce
-  first-time cache build overhead on large photogrammetry maps.
-- First-time map imports now run in a spawned child process so the viewer
-  event loop stays responsive and import failures return tracebacks to the
-  parent process. The child now reports heartbeat events, runs at reduced
-  desktop priority, and caps common native compute-library threads unless the
-  user already configured them.
-- Streaming and cache-building worker limits are now treated as advisory caps:
-  both pools start conservatively and grow only while current system RAM
-  availability allows it.
-- Generated map caches are managed under the platform cache root by default,
-  are self-contained with staged texture assets, and no longer use adjacent
-  `_cache` or `.caveviewer_cache` discovery.
-
-### Fixed
-- Large textured maps now keep geometry visible under GPU pressure by
-  downscaling oversized textures instead of dropping nearby chunks from the
-  streaming set.
-- Texture downscaling diagnostics now log the GPU budget, target percentage,
-  texture share, unique texture count, selected texture cap, and first actual
-  resize.
-- First-time imports now reject clearly unsafe work earlier: OBJ imports check
-  estimated RAM after the count pass but before large array allocation, disk
-  checks include staged texture bytes when known, and cancelled/killed imports
-  clean abandoned staging directories.
-- Windows stable and prerelease publishing now signs updater manifests and
-  commits the required `.json.sig` files.
-- macOS About menu crash and related callback stability issues.
-- Linux compatibility issues (including Ubuntu/Fedora adjustments and font path handling).
-- Windows loading/setup and progress behavior issues.
-- Texture filename parsing edge cases in MTL handling.
-- Open dialog behavior for pre-compiled map binaries.
-- Startup dialog/advanced settings interaction issues, spacing regressions, and accidental-click exceptions.
+- Added resumable first-time OBJ imports. Active imports can now be paused at a
+  safe checkpoint and resumed automatically when the same map is reopened.
+- Improved import robustness for large maps with spawned import processes,
+  heartbeat reporting, staged texture assets, earlier RAM/disk safety checks,
+  cancelled-import cleanup, and better parent-process error reporting.
+- Reworked chunking, streaming, and rendering behavior for lower-memory systems.
+  Worker limits now grow conservatively from advisory caps, chunk builds are more
+  memory-aware, and nearby geometry is preserved under GPU pressure by
+  downscaling oversized textures instead of dropping chunks.
+- Expanded GPU and system-memory budgeting across platforms, including NVIDIA
+  `nvidia-smi` detection, Linux AMD DRM sysfs detection, integrated/shared-memory
+  handling, safer fallback budgets, and clearer manual GPU memory ceiling
+  semantics.
+- Refined the viewer and startup experience across Windows, macOS, and Linux:
+  advanced settings, splash sizing, DPI scaling, sample-map dialogs, progress
+  indicators, control-panel rendering, profile viewing, bookmarks, minimap
+  behavior, FPS/readout handling, and movie recording all received updates.
+- Strengthened update and release infrastructure with signed updater manifests,
+  stricter public-key signature checks, platform-specific release workflows,
+  parallel all-platform packaging, and improved Linux/macOS/Windows build
+  scripts.
+- Reorganized the application into the `src/caveviewer` package layout and
+  refreshed documentation, developer notes, website content, screenshots,
+  desktop metadata, and test coverage.
