@@ -150,16 +150,27 @@ Install the development-only test tools after the runtime dependencies:
 On Windows, use `.venv-dev\Scripts\python` in place of `.venv-dev/bin/python`.
 
 The suite isolates the home/preferences directory, blocks uncontrolled network
-connections, and uses temporary directories for all generated files. The same
-essential suite and branch-coverage gate run automatically for pull requests
-and before GitHub release builds. `All Platform Release` runs it once for the
-whole parallel package fan-out; a directly dispatched platform workflow runs its own
-gate. Direct `scripts/release.sh` runs also execute the complete pytest suite
-before changing the application version or creating artifacts. It uses
+connections, and uses temporary directories for all generated files. GitHub runs
+syntax/import sanity checks, the unit suite on Linux, Windows, and macOS, CLI
+smoke checks, and a Linux coverage/desktop-metadata gate for pull requests and
+pushes to `main` or `release/**`. The same gate runs before GitHub release
+builds. `All Platform Release` runs it once for the whole parallel package
+fan-out; a directly dispatched platform workflow runs its own gate. Direct
+`scripts/release.sh` runs also execute the complete pytest suite before changing
+the application version or creating artifacts. It uses
 `.venv-dev` when available, then falls back to
 `python3`/`python`; set `CAVEVIEWER_TEST_PYTHON=/path/to/python` to select
 another prepared interpreter. The interpreter must have `requirements.txt` and
 `requirements-dev.txt` installed.
+
+GitHub also runs a separate Linux package smoke workflow for pull requests and
+pushes to `main` or `release/**` when packaging, release scripts, runtime
+source, or dependency files change. It also runs weekly and can be dispatched
+manually. That workflow builds the Linux x86_64 AppImage through the Docker
+release path, validates the AppImage desktop install/uninstall behavior in a
+temporary home directory, validates the installed desktop/AppStream metadata,
+and uploads the AppImage as a short-lived workflow artifact for inspection. It
+does not publish releases or write repository contents.
 
 GitHub platform jobs pass `--skip-tests` because the application source has
 already passed an essential test gate with coverage. Individually dispatched
