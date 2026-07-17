@@ -90,6 +90,7 @@ jobs:
       - name: Publish assets and signed update metadata
         env:
           GH_TOKEN: ${{ github.token }}
+          CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
           RELEASE_PLATFORMS: ${{ inputs.platforms }}

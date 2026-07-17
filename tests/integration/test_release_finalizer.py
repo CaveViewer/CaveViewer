@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -233,6 +234,10 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         assert f"{manifest_path}.sig" in committed_paths
 
         manifest = working_repository / manifest_path
+        manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+        assert manifest_payload["download_url"].startswith(
+            f"https://github.com/example/CaveViewer/releases/download/v{version}/"
+        )
         signature = base64.b64decode(
             manifest.with_name(f"{manifest.name}.sig").read_text(encoding="ascii").strip(),
             validate=True,

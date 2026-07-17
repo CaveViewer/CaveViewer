@@ -238,6 +238,7 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "actions/download-artifact@v4" in workflow
     assert "merge-multiple: true" in workflow
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+    assert "CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}" in workflow
     assert "./scripts/common/finalize_release.sh" in workflow
 
     assert finalizer.count("gh release create") == 1
