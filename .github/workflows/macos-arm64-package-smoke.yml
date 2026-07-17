@@ -150,7 +150,7 @@ jobs:
           lipo -archs "$executable" | grep -qw "arm64"
 
       - name: Upload macOS ARM64 package smoke artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CaveViewer-${{ env.SMOKE_VERSION }}-macos-arm64-package-smoke
           path: |

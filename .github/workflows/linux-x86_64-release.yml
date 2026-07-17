@@ -161,7 +161,7 @@ jobs:
           fi
 
       - name: Upload Linux x86_64 AppImage for testing
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CaveViewer-${{ inputs.version }}-linux-x86_64
           path: dist/linux/x86_64/packages/CaveViewer-${{ inputs.version }}-x86_64.AppImage
