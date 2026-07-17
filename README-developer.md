@@ -38,14 +38,14 @@ The application About text should identify CaveViewer as licensed under the GNU 
 ## Requirements
 
 - Git
-- Python 3.10+
+- Python 3.12
 
 You also need to run a typical workstation setup with C++ and other compilers if you desired to compile from source.
 
 Ubuntu should work out of the box. Fedora 44 is special, so you have to install additional packages
 ```bash
-sudo dnf install gcc gcc-c++ make python3-devel \
-    mesa-libGL-devel mesa-libEGL-devel libX11-devel sudo python3.14-tkinter
+sudo dnf install gcc gcc-c++ make python3.12 python3.12-devel \
+    python3.12-tkinter mesa-libGL-devel mesa-libEGL-devel libX11-devel
 ```
 
 ## Clone the Repository
@@ -97,6 +97,7 @@ Use the project bootstrap script:
 What it does:
 
 - Creates a development virtual environment at `.venv-dev` (or `CAVEVIEWER_DEV_VENV` if set)
+- Uses Python 3.12 from `CAVEVIEWER_PYTHON`, `python3.12`, or `python3`
 - Installs dependencies from `requirements.txt`
 - Installs CaveViewer in editable mode from `src/`
 - Generates `run_caveviewer.sh`
@@ -120,7 +121,7 @@ source .venv-dev/bin/activate
 Option A (recommended for technical users): manual venv flow.
 
 ```powershell
-py -3 -m venv .venv-dev
+py -3.12 -m venv .venv-dev
 .\.venv-dev\Scripts\python -m pip install --upgrade pip
 .\.venv-dev\Scripts\python -m pip install -r requirements.txt
 .\.venv-dev\Scripts\python -m pip install --no-deps -e .
@@ -159,9 +160,9 @@ fan-out; a directly dispatched platform workflow runs its own gate. Direct
 `scripts/release.sh` runs also execute the complete pytest suite before changing
 the application version or creating artifacts. It uses
 `.venv-dev` when available, then falls back to
-`python3`/`python`; set `CAVEVIEWER_TEST_PYTHON=/path/to/python` to select
-another prepared interpreter. The interpreter must have `requirements.txt` and
-`requirements-dev.txt` installed.
+`python3.12`/`python3`/`python`; set `CAVEVIEWER_TEST_PYTHON=/path/to/python` to
+select another prepared Python 3.12 interpreter. The interpreter must have
+`requirements.txt` and `requirements-dev.txt` installed.
 
 GitHub also runs separate Linux and macOS ARM64 package smoke workflows for
 pull requests and pushes to `main` or `release/**` when packaging, release
@@ -249,7 +250,8 @@ On Windows (PowerShell):
 
 ## Troubleshooting
 
-- `python3 not found` (macOS/Linux): install Python 3.10+ and rerun setup.
+- Python 3.12 not found (macOS/Linux): install Python 3.12 or set
+  `CAVEVIEWER_PYTHON=/path/to/python3.12`, then rerun setup.
 - Broken `.venv-dev`: remove it and rerun `./scripts/dev/install.sh`.
 - Windows PowerShell policy blocks setup script: run with `-ExecutionPolicy Bypass` as shown above.
 

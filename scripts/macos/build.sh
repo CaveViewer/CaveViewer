@@ -7,6 +7,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+source "$script_dir/../common/python.sh"
 
 print_usage() {
   cat <<'EOF'
@@ -34,6 +35,7 @@ if [ "$#" -gt 0 ]; then
 fi
 
 venv_dir="${CAVEVIEWER_MACOS_BUILD_VENV:-$repo_root/.venv-macos-build}"
+venv_python="$venv_dir/bin/python"
 spec_file="$repo_root/packaging/pyinstaller/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/macos/app"
 work_dir="$repo_root/build/pyinstaller"
@@ -52,18 +54,15 @@ if [ ! -f "$spec_file" ]; then
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Error: python3 not found. Install Python 3.10+ and re-run."
-  exit 1
-fi
+python_bin="$(cv_resolve_project_python)"
 
-if [ ! -x "$venv_dir/bin/python" ] || ! "$venv_dir/bin/python" -c "import sys" >/dev/null 2>&1; then
+if [ ! -x "$venv_python" ] || ! cv_python_is_supported "$venv_python"; then
   if [ -d "$venv_dir" ]; then
     echo "Existing macOS build virtual environment at $venv_dir is invalid; recreating it."
     rm -rf "$venv_dir"
   fi
   echo "Creating macOS build virtual environment at $venv_dir"
-  python3 -m venv "$venv_dir"
+  "$python_bin" -m venv "$venv_dir"
 fi
 
 if [ ! -f "$logo_png" ]; then
@@ -82,8 +81,8 @@ if ! command -v iconutil >/dev/null 2>&1; then
 fi
 
 echo "Using venv: $venv_dir"
-"$venv_dir/bin/python" -m pip install --upgrade -r "$repo_root/requirements.txt"
-"$venv_dir/bin/python" -m pip install --upgrade "pyinstaller==6.21.0"
+"$venv_python" -m pip install --upgrade -r "$repo_root/requirements.txt"
+"$venv_python" -m pip install --upgrade "pyinstaller==6.21.0"
 
 cd "$repo_root"
 mkdir -p "$dist_app_dir" "$work_dir"

@@ -7,7 +7,7 @@ name = "CaveViewer"
 dynamic = ["version"]
 description = "A desktop viewer for large cave-survey 3D scans"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 license = "GPL-3.0-only"
 dependencies = [
     "moderngl==5.12.0",
