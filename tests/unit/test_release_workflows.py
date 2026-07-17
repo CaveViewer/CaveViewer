@@ -4,10 +4,16 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = REPOSITORY_ROOT / ".github" / "workflows"
 RELEASE_SCRIPT = REPOSITORY_ROOT / "scripts" / "release.sh"
+requires_executable_shell_scripts = pytest.mark.skipif(
+    os.name == "nt",
+    reason="release shell scripts are executed by Unix CI jobs",
+)
 
 
 def test_macos_release_workflows_use_architecture_specific_contracts():
@@ -193,6 +199,7 @@ def test_release_finalizer_is_the_single_shared_state_writer():
         assert manifest_path in finalizer
 
 
+@requires_executable_shell_scripts
 def test_release_finalizer_help_and_shell_syntax():
     finalizer = REPOSITORY_ROOT / "scripts" / "common" / "finalize_release.sh"
 
@@ -207,6 +214,7 @@ def test_release_finalizer_help_and_shell_syntax():
     assert "Single-writer" not in help_result.stdout
 
 
+@requires_executable_shell_scripts
 def test_release_dispatcher_exposes_architecture_specific_macos_targets():
     completed = subprocess.run(
         [str(RELEASE_SCRIPT), "--help"],
@@ -233,6 +241,7 @@ def test_release_dispatcher_exposes_architecture_specific_macos_targets():
         assert f"--target={target}" in target_help.stdout
 
 
+@requires_executable_shell_scripts
 def test_release_dispatcher_rejects_linux_arm64_target():
     completed = subprocess.run(
         [str(RELEASE_SCRIPT), "--target=linux-arm64", "--help"],
@@ -246,6 +255,7 @@ def test_release_dispatcher_rejects_linux_arm64_target():
     assert "linux-x86_64" in completed.stdout
 
 
+@requires_executable_shell_scripts
 def test_release_dispatcher_rejects_legacy_macos_arch_options():
     for legacy_option in ("--macos-arch=arm64", "--mac-arch=arm64"):
         completed = subprocess.run(
@@ -273,6 +283,7 @@ def test_release_dispatcher_rejects_legacy_macos_arch_options():
     assert "Error: unknown target 'macos-15'" in legacy_target.stdout
 
 
+@requires_executable_shell_scripts
 def test_release_dispatcher_rejects_both_macos_architectures_together():
     completed = subprocess.run(
         [
@@ -292,6 +303,7 @@ def test_release_dispatcher_rejects_both_macos_architectures_together():
     assert "macos-arm64 and macos-x86_64 cannot be selected together" in completed.stdout
 
 
+@requires_executable_shell_scripts
 def test_all_target_takes_precedence_over_macos_architecture_conflict():
     completed = subprocess.run(
         [
@@ -326,6 +338,7 @@ def test_release_dispatcher_runs_complete_suite_before_version_mutation():
     )
 
 
+@requires_executable_shell_scripts
 def test_failed_release_test_gate_does_not_change_version(tmp_path):
     fake_python = tmp_path / "failing-python"
     fake_python.write_text(

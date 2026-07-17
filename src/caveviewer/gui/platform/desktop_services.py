@@ -41,7 +41,19 @@ class FileSelection:
             raise DesktopServiceError(
                 f"The desktop portal returned an unsupported local file URI: {uri}"
             )
-        return cls.from_path(unquote(parsed.path))
+        path = unquote(parsed.path)
+        if os.name == "nt" and _starts_with_windows_drive_uri_path(path):
+            path = path[1:].replace("/", "\\")
+        return cls.from_path(path)
+
+
+def _starts_with_windows_drive_uri_path(path: str) -> bool:
+    return (
+        len(path) >= 3
+        and path[0] == "/"
+        and path[1].isalpha()
+        and path[2] == ":"
+    )
 
 
 class DirectorySelection(FileSelection):

@@ -188,7 +188,7 @@ def test_save_directory_chooser_is_owned_focused_and_not_left_topmost():
         initial_dir="/maps",
     )
 
-    assert result.path == "/chosen/folder"
+    assert result == DirectorySelection.from_path("/chosen/folder")
     assert desktop_services.options == {
         "title": "Save Test Cave to…",
         "initial_dir": "/maps",
