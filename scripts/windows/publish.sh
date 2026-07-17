@@ -240,7 +240,7 @@ echo "Signing Windows $manifest_channel update manifest: $update_manifest_path"
 echo "Committing version bump and updated signed $manifest_channel manifest..."
 git -C "$repo_root" add \
   src/caveviewer/version.py \
-  packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml \
+  packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml \
   "updates/windows/$manifest_channel.json" \
   "updates/windows/$manifest_channel.json.sig"
 git -C "$repo_root" commit -m "Release $tag Windows $manifest_channel"

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.kernalpanic.caveviewer</id>
+  <id>io.github.caveviewer.caveviewer</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <name>CaveViewer</name>
@@ -16,32 +16,32 @@
       save viewpoints, adjust rendering, and record the viewer when needed.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.kernalpanic.caveviewer.desktop</launchable>
+  <launchable type="desktop-id">io.github.caveviewer.caveviewer.desktop</launchable>
   <provides>
     <mediatype>model/gltf-binary</mediatype>
     <mediatype>model/obj</mediatype>
   </provides>
-  <developer id="io.github.kernalpanic">
+  <developer id="io.github.caveviewer">
     <name>CaveViewer contributors</name>
   </developer>
-  <url type="homepage">https://github.com/KernalPanic/CaveViewer</url>
-  <url type="bugtracker">https://github.com/KernalPanic/CaveViewer/issues</url>
-  <url type="vcs-browser">https://github.com/KernalPanic/CaveViewer</url>
+  <url type="homepage">https://github.com/CaveViewer/CaveViewer</url>
+  <url type="bugtracker">https://github.com/CaveViewer/CaveViewer/issues</url>
+  <url type="vcs-browser">https://github.com/CaveViewer/CaveViewer</url>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-hero.jpg</image>
+      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/docs/images/screenshot-hero.jpg</image>
       <caption>Exploring a streamed 3D cave survey</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-splash.png</image>
+      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/docs/images/screenshot-splash.png</image>
       <caption>Opening a cave map folder</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-importing.png</image>
+      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/docs/images/screenshot-importing.png</image>
       <caption>Importing a large cave survey</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/docs/images/screenshot-sample-maps.png</image>
+      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/docs/images/screenshot-sample-maps.png</image>
       <caption>Choosing a sample map</caption>
     </screenshot>
   </screenshots>

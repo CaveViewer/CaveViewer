@@ -344,7 +344,7 @@ install_desktop_integration() {
   applications_dir="$data_home/applications"
   metainfo_dir="$data_home/metainfo"
   icons_hicolor_dir="$data_home/icons/hicolor"
-  application_id="io.github.kernalpanic.caveviewer"
+  application_id="io.github.caveviewer.caveviewer"
   desktop_path="$applications_dir/${application_id}.desktop"
   desktop_source="$appdir/usr/share/applications/${application_id}.desktop"
   metainfo_path="$metainfo_dir/${application_id}.metainfo.xml"
@@ -396,7 +396,7 @@ uninstall_desktop_integration() {
   applications_dir="$data_home/applications"
   metainfo_dir="$data_home/metainfo"
   icons_hicolor_dir="$data_home/icons/hicolor"
-  application_id="io.github.kernalpanic.caveviewer"
+  application_id="io.github.caveviewer.caveviewer"
   desktop_path="$applications_dir/${application_id}.desktop"
   metainfo_path="$metainfo_dir/${application_id}.metainfo.xml"
 

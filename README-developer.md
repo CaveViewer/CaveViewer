@@ -51,7 +51,7 @@ sudo dnf install gcc gcc-c++ make python3-devel \
 ## Clone the Repository
 
 ```bash
-git clone https://github.com/KernalPanic/CaveViewer.git
+git clone git@github.com:CaveViewer/CaveViewer.git
 cd CaveViewer
 ```
 
@@ -191,7 +191,7 @@ in release archives.
 
 By default, the built-in sample maps dialog reads release assets from:
 
-- Repository: `KernalPanic/CaveViewer`
+- Repository: `CaveViewer/CaveViewer`
 - Release tag: `sample-data`
 
 For local development, you can point the sample maps dialog at a different source before launching the program. These settings are environment variables only; they are not exposed in the app UI.
@@ -312,7 +312,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_GITHUB_REPO` | `KernalPanic/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork or testing a package from Terminal. |
+| `CAVEVIEWER_GITHUB_REPO` | `CaveViewer/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork or testing a package from Terminal. |
 | `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for update testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_CHANNEL` | `stable` | Update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
@@ -740,6 +740,6 @@ is writable.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_SAMPLE_MAPS_REPO` | `KernalPanic/CaveViewer` | GitHub `owner/repo` for the sample maps release. |
+| `CAVEVIEWER_SAMPLE_MAPS_REPO` | `CaveViewer/CaveViewer` | GitHub `owner/repo` for the sample maps release. |
 | `CAVEVIEWER_SAMPLE_DATA_TAG` | `sample-data` | Release tag to fetch sample map assets from. |
 | `CAVEVIEWER_SAMPLE_MAPS_API_URL` | _(derived from repo + tag)_ | Full GitHub release API URL. Overrides the repo/tag variables when set. |

@@ -42,7 +42,7 @@ cv_set_app_version() {
   local repo_root
   local metainfo_file
   repo_root="$(cd "$(dirname "$version_file")/../.." && pwd)"
-  metainfo_file="$repo_root/packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml"
+  metainfo_file="$repo_root/packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
   if [ -f "$metainfo_file" ] && \
       ! grep -q "<release version=\"${target_version}\"" "$metainfo_file"; then
     local metainfo_tmp

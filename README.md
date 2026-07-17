@@ -20,7 +20,7 @@ Support for additional operating systems and distributions may be added in the f
 
 ### macOS
 
-Download the latest DMG from https://github.com/KernalPanic/CaveViewer/releases.
+Download the latest DMG from https://github.com/CaveViewer/CaveViewer/releases.
 Use `CaveViewer-<version>-macos-arm64.dmg` on Apple Silicon or
 `CaveViewer-<version>-macos-x86_64.dmg` on an Intel Mac. Open it and drag
 CaveViewer into Applications.
@@ -29,13 +29,13 @@ If this is your first time installing the app, you have to go to Settings -> Pri
 
 ### Windows
 
-Download the latest zip from https://github.com/KernalPanic/CaveViewer/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install.
+Download the latest zip from https://github.com/CaveViewer/CaveViewer/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install.
 
 ### Linux
 
 The best-practice distribution format for Linux is the self-contained AppImage — a single executable file that bundles Python, all dependencies, and the app itself. No system-wide installation or package manager involvement required.
 
-Download the Linux x86_64 AppImage from https://github.com/KernalPanic/CaveViewer/releases:
+Download the Linux x86_64 AppImage from https://github.com/CaveViewer/CaveViewer/releases:
 
 - `CaveViewer-<version>-x86_64.AppImage` (amd64 / x86_64)
 

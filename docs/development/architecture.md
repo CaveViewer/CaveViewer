@@ -134,7 +134,7 @@ recognized GLFW initialization/window-creation failure. This keeps source,
 debugger, and AppImage launches on the same GNOME window-management path with
 normal titlebar and resize decorations. Explicit `wayland` and `x11` modes
 never silently switch protocols. The Wayland application ID and X11 window class
-both use `io.github.kernalpanic.caveviewer`. Initial window geometry is 80% of
+both use `io.github.caveviewer.caveviewer`. Initial window geometry is 80% of
 GLFW's primary-monitor work area in screen coordinates. Framebuffer DPI scaling
 remains enabled, while duplicate X11 monitor scaling of that already-relative
 geometry is suppressed during window creation.

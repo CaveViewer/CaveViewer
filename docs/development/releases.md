@@ -71,7 +71,7 @@ metadata. It verifies a newer manifest's Ed25519 signature before offering its
 artifact, then verifies the artifact size and SHA-256 while downloading.
 
 Linux packages install the stable application ID
-`io.github.kernalpanic.caveviewer`. The desktop filename, AppStream ID,
+`io.github.caveviewer.caveviewer`. The desktop filename, AppStream ID,
 hicolor icon basename, Wayland app ID, and X11 `StartupWMClass` must remain
 identical, and the desktop file keeps `StartupNotify=true` for compositor
 launch feedback. The desktop file advertises `model/gltf-binary` and
@@ -154,7 +154,7 @@ This matters when the same version is first published as a prerelease and later
 promoted to stable. Uploading stable assets and manifests is not enough. After
 all stable platform jobs succeed, edit that tag on GitHub, clear the prerelease
 flag, publish it as the normal release, and verify that
-[`releases/latest`](https://github.com/KernalPanic/CaveViewer/releases/latest)
+[`releases/latest`](https://github.com/CaveViewer/CaveViewer/releases/latest)
 resolves to it.
 
 ## Individual and resumed releases

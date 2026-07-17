@@ -123,7 +123,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
-          app_id="io.github.kernalpanic.caveviewer"
+          app_id="io.github.caveviewer.caveviewer"
           appimage="$(pwd)/dist/linux/x86_64/packages/CaveViewer-${RELEASE_VERSION}-x86_64.AppImage"
           test -x "$appimage"
 
