@@ -176,6 +176,26 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
     assert "CFBundleShortVersionString" in macos_workflow
 
 
+def test_pages_workflow_deploys_docs_independently_from_releases():
+    workflow = (WORKFLOWS_DIR / "pages.yml").read_text(encoding="utf-8")
+
+    assert "name: Pages" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "push:" in workflow
+    assert "branches:\n      - main" in workflow
+    assert '      - "docs/**"' in workflow
+    assert '      - ".github/workflows/pages.yml"' in workflow
+    assert "release:" not in workflow
+    assert "actions/configure-pages@v5" in workflow
+    assert "actions/upload-pages-artifact@v4" in workflow
+    assert "path: docs" in workflow
+    assert "actions/deploy-pages@v4" in workflow
+    assert "name: github-pages" in workflow
+    assert "pages: write" in workflow
+    assert "id-token: write" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
+
+
 def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():
     workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
         encoding="utf-8"
