@@ -37,10 +37,15 @@ compare them and will not offer the release as a newer update. Select
 dispatcher accepts an optional leading `v`, but GitHub workflow inputs require
 the bare numeric version.
 
+Project development, tests, and application builds use Python 3.12. Package
+metadata and local scripts reject other Python minor versions so local output
+matches CI and release artifacts.
+
 Before any action changes the version or invokes a builder, `release.sh` runs
 the complete pytest suite with `-p no:cacheprovider -q`. A failing or missing
-test environment stops the release. The interpreter is selected in this order:
-`CAVEVIEWER_TEST_PYTHON`, `.venv-dev`, `python3`, then `python`.
+test environment stops the release. The Python 3.12 interpreter is selected in
+this order: `CAVEVIEWER_TEST_PYTHON`, `.venv-dev`, `python3.12`, `python3`, then
+`python`.
 
 `--skip-tests` bypasses this local gate. It is intended for orchestrators such
 as the GitHub release workflows that require an equivalent test job for the

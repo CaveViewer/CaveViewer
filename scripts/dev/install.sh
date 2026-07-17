@@ -45,6 +45,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The script has a fixed home under scripts/dev; validate the package root so
 # a copied/partial script cannot install from the wrong directory.
 project_root="$(cd "$script_dir/../.." && pwd)"
+source "$script_dir/../common/python.sh"
 if [ ! -f "$project_root/pyproject.toml" ] \
   || [ ! -f "$project_root/src/caveviewer/__main__.py" ]; then
   echo "Error: could not find the CaveViewer package relative to install.sh."
@@ -54,11 +55,7 @@ fi
 
 echo "Setting up CaveViewer (project root: $project_root)"
 
-# Ensure python3 exists (attempt brew install if missing)
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Error: python3 not found. Install Python 3.10+ and re-run."
-  exit 1
-fi
+python_bin="$(cv_resolve_project_python)"
 
 # Create development virtual environment
 legacy_venv_dir="$project_root/.venv"
@@ -69,18 +66,18 @@ if [ "$venv_dir" = "$project_root/.venv-dev" ] \
   && [ ! -e "$venv_dir" ] \
   && [ -d "$legacy_venv_dir" ] \
   && [ -x "$legacy_venv_dir/bin/python" ] \
-  && "$legacy_venv_dir/bin/python" -c "import sys" >/dev/null 2>&1; then
+  && cv_python_is_supported "$legacy_venv_dir/bin/python"; then
   echo "Migrating existing development virtual environment: $legacy_venv_dir -> $venv_dir"
   mv "$legacy_venv_dir" "$venv_dir"
 fi
 
-if [ ! -x "$venv_python" ] || ! "$venv_python" -c "import sys" >/dev/null 2>&1; then
+if [ ! -x "$venv_python" ] || ! cv_python_is_supported "$venv_python"; then
   if [ -d "$venv_dir" ]; then
     echo "Existing virtual environment at $venv_dir is invalid; recreating it."
     rm -rf "$venv_dir"
   fi
   echo "Creating virtual environment at $venv_dir"
-  python3 -m venv "$venv_dir"
+  "$python_bin" -m venv "$venv_dir"
 fi
 
 echo "Using development virtual environment: $venv_dir"

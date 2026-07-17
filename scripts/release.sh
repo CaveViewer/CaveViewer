@@ -10,6 +10,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 source "$script_dir/common/version.sh"
 source "$script_dir/common/artifacts.sh"
+source "$script_dir/common/python.sh"
 source "$script_dir/macos/architecture.sh"
 version_file="$repo_root/src/caveviewer/version.py"
 
@@ -99,43 +100,55 @@ is_known_action() {
 
 resolve_release_test_python() {
   local requested="${CAVEVIEWER_TEST_PYTHON:-}"
+  local candidate=""
   if [ -n "$requested" ]; then
     if [ -x "$requested" ]; then
-      echo "$requested"
-      return
+      candidate="$requested"
+    elif command -v "$requested" >/dev/null 2>&1; then
+      candidate="$(command -v "$requested")"
+    else
+      echo "Error: CAVEVIEWER_TEST_PYTHON is not executable or on PATH: $requested" >&2
+      return 1
     fi
-    if command -v "$requested" >/dev/null 2>&1; then
-      command -v "$requested"
-      return
+
+    if cv_python_is_supported "$candidate"; then
+      echo "$candidate"
+      return 0
     fi
-    echo "Error: CAVEVIEWER_TEST_PYTHON is not executable or on PATH: $requested" >&2
+    echo "Error: CAVEVIEWER_TEST_PYTHON must use Python $CV_PYTHON_SERIES: $candidate" >&2
     return 1
   fi
 
-  local candidate
   for candidate in \
     "$repo_root/.venv-dev/bin/python" \
     "$repo_root/.venv-dev/Scripts/python.exe"; do
-    if [ -x "$candidate" ]; then
+    if [ -x "$candidate" ] && cv_python_is_supported "$candidate"; then
       echo "$candidate"
-      return
+      return 0
     fi
   done
 
-  for candidate in python3 python; do
+  for candidate in python3.12 python3 python; do
     if command -v "$candidate" >/dev/null 2>&1; then
-      command -v "$candidate"
-      return
+      candidate="$(command -v "$candidate")"
+      if cv_python_is_supported "$candidate"; then
+        echo "$candidate"
+        return 0
+      fi
     fi
   done
 
-  echo "Error: no Python interpreter is available for the release test gate." >&2
+  echo "Error: Python $CV_PYTHON_SERIES is required for the release test gate." >&2
   return 1
 }
 
 run_all_tests() {
   local test_python
   test_python="$(resolve_release_test_python)"
+  if ! cv_python_is_supported "$test_python"; then
+    echo "Error: release tests require Python $CV_PYTHON_SERIES: $test_python" >&2
+    return 1
+  fi
   if ! "$test_python" -c "import pytest" >/dev/null 2>&1; then
     echo "Error: pytest is unavailable in $test_python." >&2
     echo "Install requirements.txt and requirements-dev.txt before releasing." >&2
