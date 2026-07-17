@@ -227,6 +227,18 @@ ADVANCED_SETTING_FIELDS = (
     ),
     SettingSpec(
         section="streaming",
+        key="upload_groups_per_frame",
+        env_var="CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME",
+        label="Upload groups per frame",
+        hint="Max material groups uploaded from one ready chunk",
+        value_type=ValueType.INT,
+        default="1",
+        minimum=1,
+        maximum=64,
+        units="groups",
+    ),
+    SettingSpec(
+        section="streaming",
         key="upload_time_budget_ms",
         env_var="CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
         label="Upload budget",

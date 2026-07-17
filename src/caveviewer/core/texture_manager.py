@@ -161,12 +161,14 @@ class TextureManager:
 
         # Decoded-but-not-yet-uploaded images, populated by background
         # worker threads via decode_from_disk(), consumed on the main
-        # thread via upload_decoded(). Guarded by a lock since multiple
-        # worker threads may populate it concurrently.
+        # thread via upload_decoded(). Guarded by a condition since multiple
+        # worker threads may populate it concurrently and workers that need
+        # the same texture must wait for the first decode to finish before
+        # handing their chunk to the render thread.
         self._decode_cache: dict[object, DecodedImage] = {}
         self._decode_cache_bytes = 0
         self._decode_inflight: set[object] = set()
-        self._decode_cache_lock = threading.Lock()
+        self._decode_cache_lock = threading.Condition()
         _LOG.info(
             "Texture predecode cache cap active: %.1f MB. Oversized or "
             "over-budget textures will decode on demand at original resolution.",
@@ -370,21 +372,31 @@ class TextureManager:
         if file_or_bytes in self._file_cache:
             return  # already GPU-resident
         estimated_bytes = self._estimate_decoded_image_bytes(file_or_bytes)
-        with self._decode_cache_lock:
-            if file_or_bytes in self._decode_cache:
-                return  # already decoded, waiting for main-thread upload
-            if file_or_bytes in self._decode_inflight:
-                return  # another worker is already decoding/reserving this texture
-            if estimated_bytes is None:
-                estimated_bytes = self.max_decoded_cache_bytes
-            if (
-                estimated_bytes > self.max_decoded_cache_bytes
-                or self._decode_cache_bytes + estimated_bytes > self.max_decoded_cache_bytes
-            ):
-                self._log_decode_cache_skip(file_or_bytes, estimated_bytes)
-                return
-            self._decode_cache_bytes += estimated_bytes
-            self._decode_inflight.add(file_or_bytes)
+        while True:
+            with self._decode_cache_lock:
+                if file_or_bytes in self._decode_cache:
+                    return  # already decoded, waiting for main-thread upload
+                if file_or_bytes in self._decode_inflight:
+                    # Another worker is doing the slow decode. If we return
+                    # immediately, this chunk can reach the render thread before
+                    # the decoded pixels exist, forcing acquire() into a large
+                    # synchronous decode. Wait here instead; this is a worker
+                    # thread, and the first decoder notifies when it finishes.
+                    self._decode_cache_lock.wait()
+                    continue
+                if file_or_bytes in self._file_cache:
+                    return  # already GPU-resident
+                if estimated_bytes is None:
+                    estimated_bytes = self.max_decoded_cache_bytes
+                if (
+                    estimated_bytes > self.max_decoded_cache_bytes
+                    or self._decode_cache_bytes + estimated_bytes > self.max_decoded_cache_bytes
+                ):
+                    self._log_decode_cache_skip(file_or_bytes, estimated_bytes)
+                    return
+                self._decode_cache_bytes += estimated_bytes
+                self._decode_inflight.add(file_or_bytes)
+                break
 
         decoded = self._decode_image(file_or_bytes)
         with self._decode_cache_lock:
@@ -394,6 +406,7 @@ class TextureManager:
                 self._decode_cache_bytes - estimated_bytes,
             )
             if decoded is None:
+                self._decode_cache_lock.notify_all()
                 return
             actual_bytes = len(decoded.data)
             # double check another thread didn't upload or decode it in the
@@ -409,6 +422,7 @@ class TextureManager:
             ):
                 self._decode_cache[file_or_bytes] = decoded
                 self._decode_cache_bytes += actual_bytes
+            self._decode_cache_lock.notify_all()
 
     def _log_decode_cache_skip(self, file_or_bytes, estimated_bytes: int) -> None:
         if self._decode_cache_limit_logged:
@@ -573,6 +587,7 @@ class TextureManager:
                     0,
                     self._decode_cache_bytes - len(decoded.data),
                 )
+                self._decode_cache_lock.notify_all()
         if decoded is not None and timing is not None:
             timing["decoded_cache_hit"] = True
 
@@ -651,6 +666,7 @@ class TextureManager:
             self._decode_cache.clear()
             self._decode_cache_bytes = 0
             self._decode_inflight.clear()
+            self._decode_cache_lock.notify_all()
 
     def validate_textures(self) -> dict:
         """

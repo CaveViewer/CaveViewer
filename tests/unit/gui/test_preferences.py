@@ -42,6 +42,9 @@ from caveviewer.gui import preferences as settings
         ("upload_chunks_per_frame", "0", "at least 1"),
         ("upload_chunks_per_frame", "17", "no more than 16"),
         ("upload_chunks_per_frame", "2.5", "whole number"),
+        ("upload_groups_per_frame", "0", "at least 1"),
+        ("upload_groups_per_frame", "65", "no more than 64"),
+        ("upload_groups_per_frame", "2.5", "whole number"),
         ("upload_time_budget_ms", "0.49", "at least 0.5"),
         ("upload_time_budget_ms", "50.1", "no more than 50"),
         ("chunk_size_meters", "0", "at least 0.01"),
@@ -100,6 +103,8 @@ def test_invalid_setting_reports_field(
         ("io_reserved_cpus", "32", "32"),
         ("upload_chunks_per_frame", "1", "1"),
         ("upload_chunks_per_frame", "16", "16"),
+        ("upload_groups_per_frame", "1", "1"),
+        ("upload_groups_per_frame", "64", "64"),
         ("upload_time_budget_ms", "0.5", "0.5"),
         ("upload_time_budget_ms", "50", "50"),
         ("chunk_size_meters", "0.01", "0.01"),
@@ -397,10 +402,12 @@ def test_atomic_save_preserves_existing_file_when_replace_fails(
 def test_environment_overrides_are_used_as_defaults(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_IO_WORKERS", "9")
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "3")
+    monkeypatch.setenv("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", "4")
     monkeypatch.setenv("CAVEVIEWER_OBJ_IMPORT_BATCH_FACES", "300000")
     defaults = settings.advanced_setting_defaults()
     assert defaults["io_workers"] == "9"
     assert defaults["upload_chunks_per_frame"] == "3"
+    assert defaults["upload_groups_per_frame"] == "4"
     assert defaults["obj_import_batch_thousands"] == "300"
 
 
@@ -442,6 +449,7 @@ def test_every_numeric_setting_has_a_display_range():
         "io_workers": "1-32 workers",
         "io_reserved_cpus": "2-32 logical CPUs",
         "upload_chunks_per_frame": "1-16 chunks",
+        "upload_groups_per_frame": "1-64 groups",
         "upload_time_budget_ms": "0.5-50 ms",
         "chunk_size_meters": "0.01-512",
         "max_upload_group_mb": "1-512 MB",
@@ -480,6 +488,7 @@ def test_every_numeric_setting_has_an_in_field_placeholder():
         "io_workers": "1-32",
         "io_reserved_cpus": "2-32",
         "upload_chunks_per_frame": "1-16",
+        "upload_groups_per_frame": "1-64",
         "upload_time_budget_ms": "0.5-50",
         "chunk_size_meters": "0.01-512",
         "max_upload_group_mb": "1-512",
@@ -628,6 +637,10 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert (
         fields_by_key["upload_time_budget_ms"].hint
         == "Target milliseconds spent uploading chunks each frame."
+    )
+    assert (
+        fields_by_key["upload_groups_per_frame"].hint
+        == "Max material groups uploaded from one ready chunk"
     )
     assert (
         fields_by_key["obj_import_batch_thousands"].hint

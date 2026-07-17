@@ -176,6 +176,11 @@ def test_viewer_ui_scale_env_override_is_developer_only_escape_hatch():
     ) == 1.0
 
 
+def test_optional_ms_formatter_reports_disabled_timer():
+    assert viewer_window.CaveViewerWindow._format_optional_ms(None) == "n/a"
+    assert viewer_window.CaveViewerWindow._format_optional_ms(9.34) == "9.3ms"
+
+
 def test_window_shortcut_closes_viewer_on_control_w(monkeypatch):
     monkeypatch.setattr(viewer_window.sys, "platform", "linux")
     window = object.__new__(viewer_window.CaveViewerWindow)
@@ -537,6 +542,55 @@ def test_chunk_aabbs_are_tracked_only_for_loaded_chunks():
     window._on_chunk_unload(cell)
 
     assert window._chunk_aabbs == {}
+
+
+def test_chunk_upload_can_be_split_across_group_frames():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.ctx = _FakeViewerContext()
+    window.program = object()
+    window.texture_manager = _FakeTextureManager()
+    window.render_mode_buttons = SimpleNamespace(smooth_shading_enabled=True)
+    window._upload_groups_per_frame = 1
+    window._upload_time_budget_ms = 100.0
+    window._streaming_frame_timing = None
+    window._chunk_gpu_objects = {}
+    window._chunk_upload_states = {}
+    window._chunk_normal_cache = {}
+    window._chunk_aabbs = {}
+    cell = (1, 2, 3)
+    positions = np.zeros((3, 3), dtype=np.float32)
+    uvs = np.zeros((3, 2), dtype=np.float32)
+    normals = np.tile(np.array([[0.0, 1.0, 0.0]], dtype=np.float32), (3, 1))
+    chunk_data = SimpleNamespace(
+        cell=cell,
+        bounds_min=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        bounds_max=np.array([4.0, 5.0, 6.0], dtype=np.float64),
+        upload_groups=[
+            viewer_window.chunker.ChunkUploadGroup(
+                material_name="mat_a",
+                positions=positions,
+                uvs=uvs,
+                smooth_normals=normals,
+            ),
+            viewer_window.chunker.ChunkUploadGroup(
+                material_name="mat_b",
+                positions=positions,
+                uvs=uvs,
+                smooth_normals=normals,
+            ),
+        ],
+    )
+
+    assert window._on_chunk_ready(chunk_data) is False
+
+    assert cell not in window._chunk_gpu_objects
+    assert cell in window._chunk_upload_states
+
+    assert window._on_chunk_ready(chunk_data) is True
+
+    assert cell not in window._chunk_upload_states
+    assert len(window._chunk_gpu_objects[cell]) == 2
+    assert window._chunk_aabbs[cell][0].dtype == np.float32
 
 
 def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(
