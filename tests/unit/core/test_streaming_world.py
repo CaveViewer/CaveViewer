@@ -18,17 +18,29 @@ def _chunk(cell):
     return SimpleNamespace(cell=cell)
 
 
-def _world_with_ready_chunks(*cells, capacity=16):
+def _world_with_ready_chunks(
+    *cells,
+    capacity=16,
+    unload_chunks_per_frame=1,
+    unload_time_budget_ms=1.0,
+    unload_retire_frames=0,
+):
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world._paused_event = threading.Event()
     world._ready_backlog = streaming_scheduler.BoundedReadyBacklog(capacity)
     world._lock = threading.Lock()
     world._pending = set(cells)
     world.loaded_cells = set()
+    world.available_cells = set(cells)
     world._last_wanted_cells = set(cells)
     world._last_cam_cell_for_priority = (0, 0, 0)
     world._cells_to_unload_next_drain = set()
-    world.config = SimpleNamespace(max_loaded_chunks=capacity)
+    world.config = SimpleNamespace(
+        max_loaded_chunks=capacity,
+        unload_chunks_per_frame=unload_chunks_per_frame,
+        unload_time_budget_ms=unload_time_budget_ms,
+        unload_retire_frames=unload_retire_frames,
+    )
     for cell in cells:
         world._ready_backlog.put(_chunk(cell), timeout=0.0)
     return world
@@ -391,6 +403,42 @@ def test_ready_callback_observes_cell_as_uncommitted_until_it_succeeds():
     assert cell not in world._pending
 
 
+def test_partial_ready_callback_keeps_cell_pending_until_completed():
+    cell = (1, 0, 0)
+    world = _world_with_ready_chunks(cell)
+    calls = 0
+
+    def upload(data):
+        nonlocal calls
+        calls += 1
+        assert data.cell == cell
+        return calls >= 2
+
+    world.drain_ready_chunks(
+        upload,
+        lambda _cell: None,
+        max_per_frame=1,
+        time_budget_ms=100.0,
+    )
+
+    assert calls == 1
+    assert world.loaded_cells == set()
+    assert cell in world._pending
+    assert world.stats()["ready"] == 1
+
+    world.drain_ready_chunks(
+        upload,
+        lambda _cell: None,
+        max_per_frame=1,
+        time_budget_ms=100.0,
+    )
+
+    assert calls == 2
+    assert world.loaded_cells == {cell}
+    assert cell not in world._pending
+    assert world.stats()["ready"] == 0
+
+
 def test_scheduled_unloads_run_before_new_uploads():
     old_cell = (9, 0, 0)
     new_cell = (1, 0, 0)
@@ -410,6 +458,134 @@ def test_scheduled_unloads_run_before_new_uploads():
     )
 
     assert events == [("unload", old_cell), ("upload", new_cell, False)]
+
+
+def test_scheduled_unloads_can_retire_before_release():
+    old_cell = (9, 0, 0)
+    new_cell = (1, 0, 0)
+    world = _world_with_ready_chunks(new_cell, unload_retire_frames=2)
+    world.loaded_cells = {old_cell}
+    world._cells_to_unload_next_drain = {old_cell}
+    events = []
+
+    world.drain_ready_chunks(
+        lambda data: events.append(("upload", data.cell)),
+        lambda cell: events.append(("unload", cell)),
+        max_per_frame=1,
+        time_budget_ms=100.0,
+    )
+
+    assert events == [("upload", new_cell)]
+    assert old_cell in world.loaded_cells
+    assert world.stats()["unload_pending"] == 1
+
+    world.drain_ready_chunks(
+        lambda data: events.append(("upload", data.cell)),
+        lambda cell: events.append(("unload", cell)),
+        max_per_frame=1,
+        time_budget_ms=100.0,
+    )
+
+    assert events == [("upload", new_cell), ("unload", old_cell)]
+    assert old_cell not in world.loaded_cells
+    assert world.stats()["unload_pending"] == 0
+
+
+def test_unload_queue_limits_releases_per_frame():
+    cells = {(3, 0, 0), (4, 0, 0), (5, 0, 0)}
+    world = _world_with_ready_chunks(
+        capacity=16,
+        unload_chunks_per_frame=1,
+        unload_retire_frames=0,
+    )
+    world.loaded_cells = set(cells)
+    world._last_wanted_cells = set()
+    world._cells_to_unload_next_drain = set(cells)
+    unloaded = []
+
+    world.drain_ready_chunks(
+        lambda _data: None,
+        lambda cell: unloaded.append(cell),
+        max_per_frame=4,
+        time_budget_ms=100.0,
+    )
+
+    assert len(unloaded) == 1
+    assert len(world.loaded_cells) == 2
+    assert world.stats()["unload_pending"] == 2
+
+    world.drain_ready_chunks(
+        lambda _data: None,
+        lambda cell: unloaded.append(cell),
+        max_per_frame=4,
+        time_budget_ms=100.0,
+    )
+
+    assert len(unloaded) == 2
+    assert len(world.loaded_cells) == 1
+    assert world.stats()["unload_pending"] == 1
+
+
+def test_queued_unload_is_cancelled_when_loaded_cell_is_wanted_again():
+    cell = (3, 0, 0)
+    world = _world_with_ready_chunks(unload_retire_frames=2)
+    world.loaded_cells = {cell}
+    world._last_wanted_cells = set()
+    world._cells_to_unload_next_drain = {cell}
+    unloaded = []
+
+    world.drain_ready_chunks(
+        lambda _data: None,
+        lambda unload_cell: unloaded.append(unload_cell),
+        max_per_frame=4,
+        time_budget_ms=100.0,
+    )
+    assert world.stats()["unload_pending"] == 1
+
+    world._cancel_queued_unloads({cell})
+    world._last_wanted_cells = {cell}
+
+    world.drain_ready_chunks(
+        lambda _data: None,
+        lambda unload_cell: unloaded.append(unload_cell),
+        max_per_frame=4,
+        time_budget_ms=100.0,
+    )
+
+    assert unloaded == []
+    assert world.loaded_cells == {cell}
+    assert world.stats()["unload_pending"] == 0
+
+
+def test_stale_partial_ready_chunk_is_unloaded_without_becoming_loaded():
+    cell = (1, 0, 0)
+    world = _world_with_ready_chunks(cell)
+    world._ready_backlog.clear()
+    world._partial_ready = [_chunk(cell)]
+    world.available_cells = set()
+    world.config = streaming_world.StreamingConfig(
+        chunk_size=1.0,
+        load_radius_cells=0,
+        max_loaded_chunks=16,
+        unload_retire_frames=0,
+    )
+    world._last_camera_cell = None
+    world._last_load_radius = None
+    world._work_queue = queue.Queue()
+
+    world.update(np.zeros(3, dtype=np.float32))
+
+    events = []
+    world.drain_ready_chunks(
+        lambda _data: events.append("upload"),
+        lambda unload_cell: events.append(("unload", unload_cell)),
+        max_per_frame=1,
+        time_budget_ms=100.0,
+    )
+
+    assert events == [("unload", cell)]
+    assert world.loaded_cells == set()
+    assert cell not in world._pending
 
 
 def test_texture_budget_does_not_limit_geometry_wanted_set():

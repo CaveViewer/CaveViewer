@@ -1,0 +1,299 @@
+# CaveViewer Import and Streaming Rendering
+
+This document describes how CaveViewer turns very large photogrammetry maps into
+something that can be explored interactively, and how to tune that behavior on
+low-memory or unreliable-GPU systems.
+
+## Rendering philosophy
+
+CaveViewer does not try to render a source model as one giant mesh. First-time
+import compiles the source map into a managed cache made of spatial chunks and
+staged texture assets. Runtime rendering then keeps only the nearby working set
+resident, uploads new GPU resources in bounded slices, and unloads old chunks as
+the camera moves.
+
+The main goals are:
+
+- keep geometry visible even when the original texture set is too large for the
+  GPU;
+- avoid long render-thread stalls by doing disk reads, geometry preparation, and
+  texture decode work off the render thread;
+- limit render-thread GPU upload work per frame;
+- prefer conservative defaults that work on laptops and integrated GPUs, while
+  still allowing higher-end machines to stream more aggressively.
+
+Chunking and streaming are separate decisions:
+
+- Import/chunking settings affect the cache layout and apply only to new or
+  rebuilt caches.
+- Streaming settings affect runtime loading and GPU upload behavior and can be
+  changed without rebuilding the map.
+
+## Import model
+
+When you open a new OBJ or GLB map, CaveViewer builds a self-contained cache.
+The cache contains chunk files, manifest metadata, and any staged texture assets
+needed by the map. The cache is published atomically under the managed map-cache
+root so interrupted imports do not leave a half-valid cache visible to normal
+launches.
+
+Chunk size is the most important import-time rendering choice:
+
+- Larger chunks reduce total chunk count and can be smoother in long/open
+  passages, but each chunk costs more to upload and keep resident.
+- Smaller chunks provide finer-grained culling and loading in tight/twisty
+  passages, but can increase chunk churn and bookkeeping.
+
+Dense material groups can also be split during import with the max upload group
+size. This limits a single VBO payload, which matters for frame pacing during
+runtime upload.
+
+## Streaming model
+
+At runtime, CaveViewer selects wanted chunks around the camera, loads chunk data
+on background workers, pre-packs vertex bytes, pre-decodes textures where memory
+allows, and then hands ready chunks to the render thread.
+
+The render thread owns OpenGL resources, so VBOs, VAOs, and textures must still
+be created there. CaveViewer limits that work in two layers:
+
+- chunk upload throttling: how many ready chunks may advance per frame;
+- material-group upload throttling: how much of one heavy chunk may upload per
+  frame.
+
+A chunk is not drawn until all of its groups have finished uploading. Partial
+GPU resources are tracked separately and released if the chunk becomes stale
+before completion.
+
+Texture handling is intentionally separate from geometry residency. If a map has
+too many large texture tiles for the GPU budget, CaveViewer downsizes oversized
+textures during decode instead of dropping nearby geometry from the visible
+world.
+
+## Low-memory and VM recommendations
+
+Start conservative when testing a constrained machine, VM, integrated GPU, or
+unreliable graphics driver:
+
+```bash
+CAVEVIEWER_MEMORY_UTILIZATION_TARGET=6 \
+CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET=50 \
+CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1 \
+CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME=1 \
+CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=2 \
+./run_caveviewer.sh
+```
+
+Windows PowerShell equivalent from a source checkout:
+
+```powershell
+$env:CAVEVIEWER_MEMORY_UTILIZATION_TARGET = "6"
+$env:CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET = "50"
+$env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
+$env:CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME = "1"
+$env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
+.\.venv-dev\Scripts\python -m caveviewer
+```
+
+If you are using the Windows setup package instead of a development venv, set
+the same `$env:` values in PowerShell and launch with `python -m caveviewer`
+from the CaveViewer folder. PowerShell environment variables apply to the
+current shell session; close the window or run `Remove-Item Env:\NAME` to clear
+one.
+
+### Virtual machines or GPU driver instability
+
+If CaveViewer crashes, freezes, or leaves a stuck process inside a virtual
+machine such as Parallels, or when using an unreliable Mesa/OpenGL driver, first
+disable vsync:
+
+```bash
+CAVEVIEWER_VSYNC=0 ./run_caveviewer.sh
+```
+
+For an AppImage launch, use the same prefix with `./CaveViewer-*.AppImage`.
+
+Windows PowerShell equivalent from a source checkout:
+
+```powershell
+$env:CAVEVIEWER_VSYNC = "0"
+.\.venv-dev\Scripts\python -m caveviewer
+```
+
+If you are using the Windows setup package instead of a development venv, run
+PowerShell from the CaveViewer folder and use:
+
+```powershell
+$env:CAVEVIEWER_VSYNC = "0"
+python -m caveviewer
+```
+
+If the GPU driver still hangs, force software OpenGL rendering as a stronger
+fallback on Linux/Mesa:
+
+```bash
+LIBGL_ALWAYS_SOFTWARE=1 \
+CAVEVIEWER_VSYNC=0 \
+CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1 \
+CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME=1 \
+CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=1 \
+./run_caveviewer.sh
+```
+
+`LIBGL_ALWAYS_SOFTWARE=1` tells the Linux OpenGL stack to use software rendering
+instead of the GPU driver. This is slower, but it can avoid crashes or
+kernel-level hangs caused by virtual GPU drivers or unstable graphics drivers.
+
+Windows does not use `LIBGL_ALWAYS_SOFTWARE`. For a stronger Windows stability
+profile, keep vsync disabled and lower render-thread upload work:
+
+```powershell
+$env:CAVEVIEWER_VSYNC = "0"
+$env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
+$env:CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME = "1"
+$env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "1"
+.\.venv-dev\Scripts\python -m caveviewer
+```
+
+For the Windows setup package, use the same `$env:` values and launch with
+`python -m caveviewer` from the CaveViewer folder.
+
+Practical tuning order:
+
+1. Keep `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME=1` and
+   `CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME=1` until frame pacing is stable.
+2. Use an upload budget around 1-3 ms on constrained systems, 2-5 ms on typical
+   desktops, then increase only if pop-in is too visible.
+3. Lower system/GPU memory targets before lowering visual range.
+4. Set `CAVEVIEWER_GPU_MEMORY_GB` explicitly when auto-detection is unavailable
+   or wrong.
+5. Use `CAVEVIEWER_MAX_TEXTURE_SIZE` only for debugging or hard caps; automatic
+   texture sizing is usually preferable.
+6. If import itself fails, reduce cache-build workers or rebuild with a different
+   chunk size. Larger chunks reduce chunk count but make each chunk heavier, so
+   test a few values instead of assuming one global best setting.
+
+## CLI launch parameters for runtime rendering
+
+The GUI viewer does not use rendering-specific command-line flags. Runtime
+rendering is configured through Preferences or environment variables supplied at
+launch. On macOS/Linux, set environment variables before launching, or prefix
+them inline:
+
+```bash
+CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME=1 CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=2 ./run_caveviewer.sh
+```
+
+PowerShell does not support POSIX-style inline environment assignment. Set the
+variables first, then launch CaveViewer:
+
+```powershell
+$env:CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME = "1"
+$env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
+.\.venv-dev\Scripts\python -m caveviewer
+```
+
+| Variable | Default | Range | Purpose |
+|---|---:|---|---|
+| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of available system RAM targeted for loaded chunk data. |
+| `CAVEVIEWER_GPU_MEMORY_GB` | auto | 0.5-50 GB | Optional GPU memory ceiling. If active-GPU detection finds a smaller budget, the detected value wins. |
+| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory targeted for streaming residency. |
+| `CAVEVIEWER_MAX_TEXTURE_SIZE` | auto | 512-16384 px | Optional maximum decoded texture dimension. Automatic sizing usually gives better balance. |
+| `CAVEVIEWER_IO_WORKERS` | `2` | 1-32 workers | Requested maximum background chunk-loading workers. Runtime starts conservatively and grows only when RAM allows. |
+| `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | 2-32 logical CPUs | Logical CPUs kept out of the loading pool. |
+| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 chunks | Maximum ready chunks advanced by the render thread per frame. |
+| `CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME` | `1` | 1-64 groups | Maximum material groups uploaded from one ready chunk per frame. |
+| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5-50 ms | Soft per-frame target for render-thread upload work. |
+| `CAVEVIEWER_GPU_DRAW_TIMER` | `0` | 0 or 1 | Enable same-frame OpenGL GPU draw timer queries in frame diagnostics. This can block on some drivers, so leave it disabled during normal viewing. |
+| `CAVEVIEWER_VSYNC` | `1` | 0 or 1 | Disable with `0` when virtual display drivers block swap buffers. |
+| `LIBGL_ALWAYS_SOFTWARE` | unset | `1` on Linux/Mesa | Force software OpenGL rendering when GPU/VM drivers are unstable. |
+
+GPU memory detection currently uses Linux DRM sysfs for AMD GPUs and
+`nvidia-smi` for NVIDIA GPUs. Low-VRAM AMD integrated GPUs include a conservative
+shared-memory allowance: 50% of reported GTT/shared memory, capped at 2 GB.
+Windows AMD/Intel GPU memory is not currently auto-detected and uses an 8 GB
+fallback budget; macOS uses a conservative 1 GB fallback.
+
+## Cache import CLI
+
+Use `caveviewer-chunker` when you want to compile or rebuild a map cache without
+launching the GUI.
+
+```bash
+caveviewer-chunker --source=/path/to/map-or-folder --chunk-size=64
+```
+
+From a source checkout, the module entry point is equivalent:
+
+```bash
+.venv-dev/bin/python -m caveviewer.chunker --source=/path/to/map-or-folder --chunk-size=64
+```
+
+Windows PowerShell examples:
+
+```powershell
+caveviewer-chunker --source="C:\Maps\DevilsEye.obj" --chunk-size=64
+```
+
+```powershell
+.\.venv-dev\Scripts\python -m caveviewer.chunker `
+  --source="C:\Maps\DevilsEye" `
+  --cache-root="D:\CaveViewer\maps" `
+  --chunk-size=64 `
+  --json
+```
+
+| Option | Purpose |
+|---|---|
+| `--source=<path>` | Required. OBJ file, GLB file, or folder containing a map. |
+| `--cache-root=<path>` | Root folder where compiled map caches are stored. Defaults to the same managed cache root used by the GUI. |
+| `--settings-file=<path>` | Advanced settings JSON to use for import defaults. Saved GUI Preferences are not loaded by default. |
+| `--chunk-size=<value>` | Import chunk size for new or rebuilt caches. |
+| `--max-upload-group-mb=<value>` | Maximum VBO payload size for dense chunk groups, in MB. |
+| `--obj-scan-throttle-ms=<value>` | Milliseconds paused while scanning OBJ files. |
+| `--obj-import-batch-thousands=<n>` | Thousands of triangulated OBJ faces processed per batch. |
+| `--obj-bucket-workers=<n>` | Worker threads used for temporary OBJ bucket files. |
+| `--chunk-build-workers=<n>` | Cache-building worker limit. |
+| `--chunk-build-reserved-cpus=<n>` | Logical CPUs kept free during cache build. |
+| `--analyze-chunk-sizes` | Analyze source geometry and recommend a chunk size without building. |
+| `--analyze-workers=<n>` | Worker threads used by chunk-size analysis. |
+| `--force` | Rebuild even if a valid matching cache already exists. |
+| `--dry-run` | Validate inputs and print the planned cache path. |
+| `--json` | Print machine-readable output. |
+| `-h`, `--help` | Show CLI help. |
+
+Built-in import defaults:
+
+| Import setting | Default |
+|---|---:|
+| `--chunk-size` / `CAVEVIEWER_CHUNK_SIZE_METERS` | `50` |
+| `--max-upload-group-mb` / `CAVEVIEWER_MAX_UPLOAD_GROUP_MB` | `16` |
+| `--obj-scan-throttle-ms` / `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `0` on Linux/macOS, `1` on Windows |
+| `--obj-import-batch-thousands` / `CAVEVIEWER_OBJ_IMPORT_BATCH_FACES` | `200` thousand faces |
+| `--obj-bucket-workers` / `CAVEVIEWER_OBJ_BUCKET_WORKERS` | `2` |
+| `--chunk-build-workers` / `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` |
+| `--chunk-build-reserved-cpus` / `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` |
+
+Cache root defaults:
+
+- Linux: `$XDG_CACHE_HOME/caveviewer/maps`, or `~/.cache/caveviewer/maps`
+  when `XDG_CACHE_HOME` is unset.
+- macOS: `~/.caveviewer/maps`.
+- Windows: `%USERPROFILE%\.caveviewer\maps`.
+
+`CAVEVIEWER_MAP_CACHE_DIR` and `--cache-root` both select the managed map-cache
+root. CaveViewer no longer auto-discovers adjacent `_cache` or
+`.caveviewer_cache` directories.
+
+PowerShell session-only cache override:
+
+```powershell
+$env:CAVEVIEWER_MAP_CACHE_DIR = "D:\CaveViewer\maps"
+python -m caveviewer
+```
+
+Persistent user-level cache override:
+
+```powershell
+[Environment]::SetEnvironmentVariable("CAVEVIEWER_MAP_CACHE_DIR", "D:\CaveViewer\maps", "User")
+```

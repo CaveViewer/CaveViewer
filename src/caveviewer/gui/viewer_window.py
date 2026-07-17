@@ -413,7 +413,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._last_fps_print = time.time()
         self._frame_active_time_s = 0.0
         self._frame_time_history: list[float] = []
-        self._last_gpu_draw_ms = 0.0
+        self._last_gpu_draw_ms: float | None = None
+        self._gpu_draw_timer_enabled = _env_bool("CAVEVIEWER_GPU_DRAW_TIMER", False)
         self._streaming_frame_timing: dict | None = None
         self._last_input_reset_log = 0.0
         self._layout_cache_size: tuple | None = None
@@ -423,6 +424,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._closing_requested = False
         self._startup_focus_requested = False
         self._upload_chunks_per_frame = _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
+        self._upload_groups_per_frame = _env_int("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", 1, 1, 64)
         self._upload_time_budget_ms = _env_float("CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", 3.0, 0.5, 50.0)
         self._navigation_guard_enabled = _env_bool("CAVEVIEWER_NAVIGATION_GUARD", True)
         self._navigation_guard_radius_cells = _env_int("CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS", 2, 0, 12)
@@ -573,6 +575,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.minimap = None
         self.texture_manager = None
         self._chunk_gpu_objects: dict[tuple, list] = {}
+        self._chunk_upload_states: dict[tuple, dict] = {}
         # Per-chunk, per-material CPU-side data for instant SHADE toggle:
         # each entry holds (mat_name, positions, uvs, smooth_normals, flat_normals)
         # tuples in the same order as _chunk_gpu_objects, so toggling shading
@@ -1398,6 +1401,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._stop_recording()
         self.world.shutdown()
 
+        for cell in list(getattr(self, "_chunk_upload_states", {}).keys()):
+            self._on_chunk_unload(cell)
+
         for cell in list(self._chunk_gpu_objects.keys()):
             self._on_chunk_unload(cell)
 
@@ -1405,6 +1411,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # shouldn't be, given the loop above), don't carry it into the
         # next map's state
         self._chunk_gpu_objects.clear()
+        self._chunk_upload_states.clear()
         self._chunk_normal_cache.clear()
         self._chunk_aabbs.clear()
         self._navigation_guard_cells = set()
@@ -2140,6 +2147,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         }
 
     @staticmethod
+    def _format_optional_ms(value: float | None) -> str:
+        if value is None:
+            return "n/a"
+        return f"{value:.1f}ms"
+
+    @staticmethod
     def _format_streaming_frame_timing(timing: dict) -> str:
         uploaded_mb = timing["bytes_uploaded"] / (1024 ** 2)
         texture_mb = timing["texture_image_bytes"] / (1024 ** 2)
@@ -2218,163 +2231,257 @@ class CaveViewerWindow(mglw.WindowConfig):
             f"book={timing['worst_chunk_bookkeeping_ms']:.1f}ms"
         )
 
+    @staticmethod
+    def _new_chunk_upload_counters() -> dict:
+        return {
+            "chunk_prepare_ms": 0.0,
+            "vertex_pack_ms": 0.0,
+            "buffer_ms": 0.0,
+            "vao_ms": 0.0,
+            "texture_ms": 0.0,
+            "texture_decode_ms": 0.0,
+            "texture_upload_ms": 0.0,
+            "texture_mipmap_ms": 0.0,
+            "texture_image_bytes": 0,
+            "texture_material_cache_hits": 0,
+            "texture_file_cache_hits": 0,
+            "texture_decoded_cache_hits": 0,
+            "texture_sync_decodes": 0,
+            "texture_placeholders": 0,
+            "chunk_bookkeeping_ms": 0.0,
+            "groups": 0,
+            "prepacked_groups": 0,
+            "fallback_pack_groups": 0,
+            "vertices": 0,
+            "bytes": 0,
+        }
+
+    @staticmethod
+    def _add_chunk_upload_counters(target: dict, source: dict) -> None:
+        for key, value in source.items():
+            target[key] += value
+
+    def _upload_chunk_group(self, group, smooth_shading: bool, timing: dict | None):
+        counters = self._new_chunk_upload_counters()
+
+        used_prepacked = group.has_prepacked_vertex_bytes(
+            smooth_shading=smooth_shading
+        )
+        t_pack = time.perf_counter()
+        active_bytes = group.vertex_bytes(
+            smooth_shading=smooth_shading
+        )
+        counters["vertex_pack_ms"] += (time.perf_counter() - t_pack) * 1000.0
+        counters["groups"] += 1
+        if used_prepacked:
+            counters["prepacked_groups"] += 1
+        else:
+            counters["fallback_pack_groups"] += 1
+        counters["vertices"] += len(group.positions)
+        counters["bytes"] += len(active_bytes)
+
+        t_buffer = time.perf_counter()
+        vbo = self.ctx.buffer(active_bytes)
+        counters["buffer_ms"] += (time.perf_counter() - t_buffer) * 1000.0
+        t_vao = time.perf_counter()
+        vao = self.ctx.vertex_array(
+            self.program, [(vbo, "3f 2f 3f", "in_position", "in_uv", "in_normal")]
+        )
+        counters["vao_ms"] += (time.perf_counter() - t_vao) * 1000.0
+        t_texture = time.perf_counter()
+        acquire_with_timing = getattr(
+            self.texture_manager,
+            "acquire_with_timing",
+            None,
+        )
+        texture_timing = None
+        if callable(acquire_with_timing):
+            texture, texture_timing = acquire_with_timing(group.material_name)
+        else:
+            texture = self.texture_manager.acquire(group.material_name)
+        counters["texture_ms"] += (time.perf_counter() - t_texture) * 1000.0
+        if texture_timing is not None:
+            counters["texture_decode_ms"] += texture_timing["decode_ms"]
+            counters["texture_upload_ms"] += texture_timing["texture_ms"]
+            counters["texture_mipmap_ms"] += texture_timing["mipmap_ms"]
+            counters["texture_image_bytes"] += texture_timing["image_bytes"]
+            if texture_timing["material_cache_hit"]:
+                counters["texture_material_cache_hits"] += 1
+            if texture_timing["file_cache_hit"]:
+                counters["texture_file_cache_hits"] += 1
+            if texture_timing["decoded_cache_hit"]:
+                counters["texture_decoded_cache_hits"] += 1
+            if texture_timing["sync_decode"]:
+                counters["texture_sync_decodes"] += 1
+            if texture_timing["placeholder"]:
+                counters["texture_placeholders"] += 1
+            if (
+                timing is not None
+                and texture_timing["total_ms"] > timing["worst_texture_ms"]
+            ):
+                timing["worst_texture_ms"] = texture_timing["total_ms"]
+                timing["worst_texture_material"] = texture_timing["material"]
+                timing["worst_texture_size"] = texture_timing["image_size"]
+                timing["worst_texture_bytes"] = texture_timing["image_bytes"]
+                timing["worst_texture_decode_ms"] = texture_timing["decode_ms"]
+                timing["worst_texture_upload_ms"] = texture_timing["texture_ms"]
+                timing["worst_texture_mipmap_ms"] = texture_timing["mipmap_ms"]
+                timing["worst_texture_sync_decode"] = texture_timing["sync_decode"]
+                timing["worst_texture_decoded_cache_hit"] = texture_timing[
+                    "decoded_cache_hit"
+                ]
+
+        vao_entry = (vao, vbo, group.material_name, texture)
+        normal_entry = (
+            group.material_name,
+            group.positions,
+            group.uvs,
+            group.smooth_normals,
+        )
+        return vao_entry, normal_entry, counters
+
+    def _record_chunk_upload_timing(
+        self,
+        timing: dict | None,
+        counters: dict,
+        *,
+        chunk_ms: float,
+        cell,
+        completed: bool,
+    ) -> None:
+        if timing is None:
+            return
+
+        timing["chunk_ready_ms"] += chunk_ms
+        timing["chunk_prepare_ms"] += counters["chunk_prepare_ms"]
+        timing["vertex_pack_ms"] += counters["vertex_pack_ms"]
+        timing["buffer_ms"] += counters["buffer_ms"]
+        timing["vao_ms"] += counters["vao_ms"]
+        timing["texture_ms"] += counters["texture_ms"]
+        timing["texture_decode_ms"] += counters["texture_decode_ms"]
+        timing["texture_upload_ms"] += counters["texture_upload_ms"]
+        timing["texture_mipmap_ms"] += counters["texture_mipmap_ms"]
+        timing["texture_image_bytes"] += counters["texture_image_bytes"]
+        timing["texture_material_cache_hits"] += counters["texture_material_cache_hits"]
+        timing["texture_file_cache_hits"] += counters["texture_file_cache_hits"]
+        timing["texture_decoded_cache_hits"] += counters["texture_decoded_cache_hits"]
+        timing["texture_sync_decodes"] += counters["texture_sync_decodes"]
+        timing["texture_placeholders"] += counters["texture_placeholders"]
+        timing["chunk_bookkeeping_ms"] += counters["chunk_bookkeeping_ms"]
+        if completed:
+            timing["chunks_uploaded"] += 1
+        timing["groups_uploaded"] += counters["groups"]
+        timing["prepacked_groups"] += counters["prepacked_groups"]
+        timing["fallback_pack_groups"] += counters["fallback_pack_groups"]
+        timing["vertices_uploaded"] += counters["vertices"]
+        timing["bytes_uploaded"] += counters["bytes"]
+        if chunk_ms > timing["worst_chunk_ms"]:
+            timing["worst_chunk_ms"] = chunk_ms
+            timing["worst_chunk_cell"] = cell
+            timing["worst_chunk_groups"] = counters["groups"]
+            timing["worst_chunk_vertices"] = counters["vertices"]
+            timing["worst_chunk_bytes"] = counters["bytes"]
+            timing["worst_chunk_prepare_ms"] = counters["chunk_prepare_ms"]
+            timing["worst_chunk_vertex_pack_ms"] = counters["vertex_pack_ms"]
+            timing["worst_chunk_buffer_ms"] = counters["buffer_ms"]
+            timing["worst_chunk_vao_ms"] = counters["vao_ms"]
+            timing["worst_chunk_texture_ms"] = counters["texture_ms"]
+            timing["worst_chunk_bookkeeping_ms"] = counters["chunk_bookkeeping_ms"]
+
     def _on_chunk_ready(self, chunk_data):
         timing = getattr(self, "_streaming_frame_timing", None)
         chunk_start = time.perf_counter()
-        chunk_prepare_ms = 0.0
-        chunk_vertex_pack_ms = 0.0
-        chunk_buffer_ms = 0.0
-        chunk_vao_ms = 0.0
-        chunk_texture_ms = 0.0
-        chunk_texture_decode_ms = 0.0
-        chunk_texture_upload_ms = 0.0
-        chunk_texture_mipmap_ms = 0.0
-        chunk_texture_image_bytes = 0
-        chunk_texture_material_cache_hits = 0
-        chunk_texture_file_cache_hits = 0
-        chunk_texture_decoded_cache_hits = 0
-        chunk_texture_sync_decodes = 0
-        chunk_texture_placeholders = 0
-        chunk_bookkeeping_ms = 0.0
-        chunk_groups = 0
-        chunk_prepacked_groups = 0
-        chunk_fallback_pack_groups = 0
-        chunk_vertices = 0
-        chunk_bytes = 0
+        frame_counters = self._new_chunk_upload_counters()
 
-        vao_list = []
-        normal_cache_entry = []
-        upload_groups = chunk_data.upload_groups
-        if upload_groups is None:
-            t_prepare = time.perf_counter()
-            chunker.prepare_chunk_upload_groups(chunk_data)
-            chunk_prepare_ms = (time.perf_counter() - t_prepare) * 1000.0
-            upload_groups = chunk_data.upload_groups or []
+        upload_states = getattr(self, "_chunk_upload_states", None)
+        if upload_states is None:
+            self._chunk_upload_states = {}
+            upload_states = self._chunk_upload_states
 
-        smooth_shading = self.render_mode_buttons.smooth_shading_enabled
-        for group in upload_groups:
-            used_prepacked = group.has_prepacked_vertex_bytes(
-                smooth_shading=smooth_shading
-            )
-            t_pack = time.perf_counter()
-            active_bytes = group.vertex_bytes(
-                smooth_shading=smooth_shading
-            )
-            chunk_vertex_pack_ms += (time.perf_counter() - t_pack) * 1000.0
-            chunk_groups += 1
-            if used_prepacked:
-                chunk_prepacked_groups += 1
-            else:
-                chunk_fallback_pack_groups += 1
-            chunk_vertices += len(group.positions)
-            chunk_bytes += len(active_bytes)
+        state = upload_states.get(chunk_data.cell)
+        if state is None:
+            upload_groups = chunk_data.upload_groups
+            if upload_groups is None:
+                t_prepare = time.perf_counter()
+                chunker.prepare_chunk_upload_groups(chunk_data)
+                frame_counters["chunk_prepare_ms"] = (
+                    time.perf_counter() - t_prepare
+                ) * 1000.0
+                upload_groups = chunk_data.upload_groups or []
 
-            t_buffer = time.perf_counter()
-            vbo = self.ctx.buffer(active_bytes)
-            chunk_buffer_ms += (time.perf_counter() - t_buffer) * 1000.0
-            t_vao = time.perf_counter()
-            vao = self.ctx.vertex_array(
-                self.program, [(vbo, "3f 2f 3f", "in_position", "in_uv", "in_normal")]
-            )
-            chunk_vao_ms += (time.perf_counter() - t_vao) * 1000.0
-            t_texture = time.perf_counter()
-            acquire_with_timing = getattr(
-                self.texture_manager,
-                "acquire_with_timing",
-                None,
-            )
-            texture_timing = None
-            if callable(acquire_with_timing):
-                texture, texture_timing = acquire_with_timing(group.material_name)
-            else:
-                texture = self.texture_manager.acquire(group.material_name)
-            chunk_texture_ms += (time.perf_counter() - t_texture) * 1000.0
-            if texture_timing is not None:
-                chunk_texture_decode_ms += texture_timing["decode_ms"]
-                chunk_texture_upload_ms += texture_timing["texture_ms"]
-                chunk_texture_mipmap_ms += texture_timing["mipmap_ms"]
-                chunk_texture_image_bytes += texture_timing["image_bytes"]
-                if texture_timing["material_cache_hit"]:
-                    chunk_texture_material_cache_hits += 1
-                if texture_timing["file_cache_hit"]:
-                    chunk_texture_file_cache_hits += 1
-                if texture_timing["decoded_cache_hit"]:
-                    chunk_texture_decoded_cache_hits += 1
-                if texture_timing["sync_decode"]:
-                    chunk_texture_sync_decodes += 1
-                if texture_timing["placeholder"]:
-                    chunk_texture_placeholders += 1
-                if (
-                    timing is not None
-                    and texture_timing["total_ms"] > timing["worst_texture_ms"]
-                ):
-                    timing["worst_texture_ms"] = texture_timing["total_ms"]
-                    timing["worst_texture_material"] = texture_timing["material"]
-                    timing["worst_texture_size"] = texture_timing["image_size"]
-                    timing["worst_texture_bytes"] = texture_timing["image_bytes"]
-                    timing["worst_texture_decode_ms"] = texture_timing["decode_ms"]
-                    timing["worst_texture_upload_ms"] = texture_timing["texture_ms"]
-                    timing["worst_texture_mipmap_ms"] = texture_timing["mipmap_ms"]
-                    timing["worst_texture_sync_decode"] = texture_timing["sync_decode"]
-                    timing["worst_texture_decoded_cache_hit"] = texture_timing[
-                        "decoded_cache_hit"
-                    ]
-            vao_list.append((vao, vbo, group.material_name, texture))
-            normal_cache_entry.append((
-                group.material_name,
-                group.positions,
-                group.uvs,
-                group.smooth_normals,
-            ))
+            state = {
+                "upload_groups": upload_groups or [],
+                "next_group_index": 0,
+                "vao_list": [],
+                "normal_cache_entry": [],
+                "smooth_shading": bool(
+                    self.render_mode_buttons.smooth_shading_enabled
+                ),
+            }
+            upload_states[chunk_data.cell] = state
 
-        t_book = time.perf_counter()
-        self._chunk_gpu_objects[chunk_data.cell] = vao_list
-        self._chunk_normal_cache[chunk_data.cell] = normal_cache_entry
-        self._chunk_aabbs[chunk_data.cell] = (
-            chunk_data.bounds_min.astype(np.float32, copy=False),
-            chunk_data.bounds_max.astype(np.float32, copy=False),
+        max_groups = max(1, int(getattr(self, "_upload_groups_per_frame", 1)))
+        time_budget_ms = max(0.5, float(getattr(self, "_upload_time_budget_ms", 3.0)))
+        groups_this_call = 0
+        upload_groups = state["upload_groups"]
+
+        while state["next_group_index"] < len(upload_groups):
+            if groups_this_call >= max_groups:
+                break
+            if (
+                groups_this_call > 0
+                and (time.perf_counter() - chunk_start) * 1000.0 >= time_budget_ms
+            ):
+                break
+
+            group = upload_groups[state["next_group_index"]]
+            vao_entry, normal_entry, group_counters = self._upload_chunk_group(
+                group,
+                state["smooth_shading"],
+                timing,
+            )
+            state["vao_list"].append(vao_entry)
+            state["normal_cache_entry"].append(normal_entry)
+            state["next_group_index"] += 1
+            groups_this_call += 1
+            self._add_chunk_upload_counters(frame_counters, group_counters)
+
+        completed = state["next_group_index"] >= len(upload_groups)
+        if completed:
+            t_book = time.perf_counter()
+            self._chunk_gpu_objects[chunk_data.cell] = state["vao_list"]
+            self._chunk_normal_cache[chunk_data.cell] = state["normal_cache_entry"]
+            self._chunk_aabbs[chunk_data.cell] = (
+                chunk_data.bounds_min.astype(np.float32, copy=False),
+                chunk_data.bounds_max.astype(np.float32, copy=False),
+            )
+            frame_counters["chunk_bookkeeping_ms"] += (
+                time.perf_counter() - t_book
+            ) * 1000.0
+            del upload_states[chunk_data.cell]
+            if state["smooth_shading"] != bool(
+                self.render_mode_buttons.smooth_shading_enabled
+            ):
+                self._apply_shading_toggle_to_cell(chunk_data.cell)
+
+        chunk_ms = (time.perf_counter() - chunk_start) * 1000.0
+        self._record_chunk_upload_timing(
+            timing,
+            frame_counters,
+            chunk_ms=chunk_ms,
+            cell=chunk_data.cell,
+            completed=completed,
         )
-        chunk_bookkeeping_ms = (time.perf_counter() - t_book) * 1000.0
-
-        if timing is not None:
-            chunk_ms = (time.perf_counter() - chunk_start) * 1000.0
-            timing["chunk_ready_ms"] += chunk_ms
-            timing["chunk_prepare_ms"] += chunk_prepare_ms
-            timing["vertex_pack_ms"] += chunk_vertex_pack_ms
-            timing["buffer_ms"] += chunk_buffer_ms
-            timing["vao_ms"] += chunk_vao_ms
-            timing["texture_ms"] += chunk_texture_ms
-            timing["texture_decode_ms"] += chunk_texture_decode_ms
-            timing["texture_upload_ms"] += chunk_texture_upload_ms
-            timing["texture_mipmap_ms"] += chunk_texture_mipmap_ms
-            timing["texture_image_bytes"] += chunk_texture_image_bytes
-            timing["texture_material_cache_hits"] += chunk_texture_material_cache_hits
-            timing["texture_file_cache_hits"] += chunk_texture_file_cache_hits
-            timing["texture_decoded_cache_hits"] += chunk_texture_decoded_cache_hits
-            timing["texture_sync_decodes"] += chunk_texture_sync_decodes
-            timing["texture_placeholders"] += chunk_texture_placeholders
-            timing["chunk_bookkeeping_ms"] += chunk_bookkeeping_ms
-            timing["chunks_uploaded"] += 1
-            timing["groups_uploaded"] += chunk_groups
-            timing["prepacked_groups"] += chunk_prepacked_groups
-            timing["fallback_pack_groups"] += chunk_fallback_pack_groups
-            timing["vertices_uploaded"] += chunk_vertices
-            timing["bytes_uploaded"] += chunk_bytes
-            if chunk_ms > timing["worst_chunk_ms"]:
-                timing["worst_chunk_ms"] = chunk_ms
-                timing["worst_chunk_cell"] = chunk_data.cell
-                timing["worst_chunk_groups"] = chunk_groups
-                timing["worst_chunk_vertices"] = chunk_vertices
-                timing["worst_chunk_bytes"] = chunk_bytes
-                timing["worst_chunk_prepare_ms"] = chunk_prepare_ms
-                timing["worst_chunk_vertex_pack_ms"] = chunk_vertex_pack_ms
-                timing["worst_chunk_buffer_ms"] = chunk_buffer_ms
-                timing["worst_chunk_vao_ms"] = chunk_vao_ms
-                timing["worst_chunk_texture_ms"] = chunk_texture_ms
-                timing["worst_chunk_bookkeeping_ms"] = chunk_bookkeeping_ms
+        return completed
 
     def _on_chunk_unload(self, cell):
         t_unload = time.perf_counter()
+        partial_state = getattr(self, "_chunk_upload_states", {}).pop(cell, None)
+        if partial_state is not None:
+            for vao, vbo, mat_name, texture in partial_state.get("vao_list", []):
+                vao.release()
+                vbo.release()
+                self.texture_manager.release(mat_name)
         vao_list = self._chunk_gpu_objects.pop(cell, [])
         for vao, vbo, mat_name, texture in vao_list:
             vao.release()
@@ -2387,6 +2494,32 @@ class CaveViewerWindow(mglw.WindowConfig):
             timing["unload_ms"] += (time.perf_counter() - t_unload) * 1000.0
             timing["chunks_unloaded"] += 1
 
+    def _apply_shading_toggle_to_cell(self, cell) -> None:
+        smooth = self.render_mode_buttons.smooth_shading_enabled
+        vao_list = self._chunk_gpu_objects.get(cell)
+        cache_entries = self._chunk_normal_cache.get(cell)
+        if not vao_list or not cache_entries or len(cache_entries) != len(vao_list):
+            return
+        for (
+            _vao,
+            vbo,
+            _mat_name,
+            _texture,
+        ), (
+            _cached_mat,
+            positions,
+            uvs,
+            smooth_normals,
+        ) in zip(vao_list, cache_entries):
+            vbo.write(
+                chunker.vertex_bytes_for_shading(
+                    positions,
+                    uvs,
+                    smooth_normals,
+                    smooth_shading=smooth,
+                )
+            )
+
     def _apply_shading_toggle(self) -> None:
         """
         Rewrites the normal columns of every currently-loaded chunk's VBO
@@ -2395,30 +2528,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         rebuilt only when the user toggles shading so loaded chunks do not
         retain both smooth and flat byte streams in RAM.
         """
-        smooth = self.render_mode_buttons.smooth_shading_enabled
-        for cell, vao_list in self._chunk_gpu_objects.items():
-            cache_entries = self._chunk_normal_cache.get(cell)
-            if not cache_entries or len(cache_entries) != len(vao_list):
-                continue
-            for (
-                _vao,
-                vbo,
-                _mat_name,
-                _texture,
-            ), (
-                _cached_mat,
-                positions,
-                uvs,
-                smooth_normals,
-            ) in zip(vao_list, cache_entries):
-                vbo.write(
-                    chunker.vertex_bytes_for_shading(
-                        positions,
-                        uvs,
-                        smooth_normals,
-                        smooth_shading=smooth,
-                    )
-                )
+        for cell in list(self._chunk_gpu_objects.keys()):
+            self._apply_shading_toggle_to_cell(cell)
 
     def _buttons_locked_for_loading(self) -> bool:
         """True while map loading should disable the right-side button block."""
@@ -3209,17 +3320,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # in the first place when inspecting wireframe-only.
         show_solid_pass = self.render_mode_buttons.texture_enabled or not self.render_mode_buttons.wireframe_enabled
 
-        # GPU timer query wraps both draw passes so the elapsed value
-        # reflects actual GPU execution time -- distinct from the CPU
-        # wall-clock mesh_draw_ms below, which includes Python loop
-        # overhead and driver submission but not necessarily the GPU's
-        # own fill/shading cost. Reading .elapsed after the with-block
-        # stalls until the GPU result is ready; this is intentional for
-        # diagnostic accuracy and adds negligible overhead on modern
-        # drivers where the query resolves within the same frame.
         # Frustum-cull loaded chunks against the current view before drawing.
         # Build _visible_cells once so both solid and wireframe passes share
         # the same culled set without repeating the test.
+        t_cull = time.perf_counter()
         _vp_planes = self._frustum_planes(view, proj)
         _visible_cells = []
         for cell, vao_list in self._chunk_gpu_objects.items():
@@ -3227,11 +3331,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             if aabb is None or self._aabb_inside_frustum(_vp_planes, aabb[0], aabb[1]):
                 _visible_cells.append((cell, vao_list))
         _chunks_drawn = len(_visible_cells)
+        mesh_cull_ms = (time.perf_counter() - t_cull) * 1000.0
 
         # u_texture always refers to sampler unit 0 -- set it once before
         # the loop rather than redundantly on every single draw call.
-        self.program["u_texture"].value = 0
-        with self.ctx.query(time=True) as _gpu_q:
+        def _draw_visible_mesh() -> None:
+            self.program["u_texture"].value = 0
             if show_solid_pass:
                 for cell, vao_list in _visible_cells:
                     for vao, vbo, mat_name, texture in vao_list:
@@ -3260,7 +3365,24 @@ class CaveViewerWindow(mglw.WindowConfig):
                         vao.render(moderngl.TRIANGLES)
                 self.ctx.wireframe = False
 
-        self._last_gpu_draw_ms = _gpu_q.elapsed / 1_000_000
+        mesh_gpu_query_wait_ms = 0.0
+        t_submit = time.perf_counter()
+        if self._gpu_draw_timer_enabled:
+            # GPU timer queries are useful diagnostics but reading the result
+            # in the same frame can block until the driver has completed the
+            # measured work. Keep that synchronization out of normal viewing;
+            # enable CAVEVIEWER_GPU_DRAW_TIMER=1 only while actively measuring
+            # GPU-side draw cost.
+            with self.ctx.query(time=True) as _gpu_q:
+                _draw_visible_mesh()
+            mesh_submit_ms = (time.perf_counter() - t_submit) * 1000.0
+            t_query_wait = time.perf_counter()
+            self._last_gpu_draw_ms = _gpu_q.elapsed / 1_000_000
+            mesh_gpu_query_wait_ms = (time.perf_counter() - t_query_wait) * 1000.0
+        else:
+            self._last_gpu_draw_ms = None
+            _draw_visible_mesh()
+            mesh_submit_ms = (time.perf_counter() - t_submit) * 1000.0
         mesh_draw_ms = (time.perf_counter() - t0) * 1000.0
 
         if self._recording_hides_hud():
@@ -3340,6 +3462,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         if len(self._frame_time_history) >= 10 and total_ms > max(rolling_avg * 3, 25.0):
             stats = self.world.stats()
+            gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
             other_ms = max(
                 0.0,
                 total_ms
@@ -3352,11 +3475,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             _LOG.warning(f"FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
                          f"input={input_ms:.1f}ms streaming={streaming_ms:.1f}ms "
                          f"scene_setup={scene_setup_ms:.1f}ms mesh_draw={mesh_draw_ms:.1f}ms "
-                         f"gpu_draw={self._last_gpu_draw_ms:.1f}ms "
+                         f"mesh_cull={mesh_cull_ms:.1f}ms "
+                         f"mesh_submit={mesh_submit_ms:.1f}ms "
+                         f"gpu_query_wait={mesh_gpu_query_wait_ms:.1f}ms "
+                         f"gpu_draw={gpu_draw_text} "
                          f"overlay={overlay_ms:.1f}ms other={other_ms:.1f}ms | "
                          f"drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
                          f"loaded={stats['loaded']} pending={stats['pending']} "
-                         f"ready={stats.get('ready', 0)} wanted={stats.get('wanted', 0)}")
+                         f"ready={stats.get('ready', 0)} "
+                         f"unload_pending={stats.get('unload_pending', 0)} "
+                         f"wanted={stats.get('wanted', 0)}")
             _LOG.warning(
                 "FRAME SPIKE STREAMING DETAIL: %s",
                 self._format_streaming_frame_timing(streaming_timing),
@@ -3372,12 +3500,18 @@ class CaveViewerWindow(mglw.WindowConfig):
             wall_fps = self._frame_count / wall_interval_s
             if _LOG.isEnabledFor(logging.DEBUG):
                 stats = self.world.stats()
+                gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
                 _LOG.debug(f"rendered_fps={rendered_fps:.1f} wall_fps={wall_fps:.1f} "
                            f"frame_cost={rolling_avg:.1f}ms "
                            f"| chunks loaded={stats['loaded']} "
-                           f"pending={stats['pending']} drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
+                           f"pending={stats['pending']} "
+                           f"unload_pending={stats.get('unload_pending', 0)} "
+                           f"drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
                            f"| speed={self.camera.move_speed:.1f}m/s "
-                           f"| gpu_draw={self._last_gpu_draw_ms:.1f}ms")
+                           f"| mesh_cull={mesh_cull_ms:.1f}ms "
+                           f"mesh_submit={mesh_submit_ms:.1f}ms "
+                           f"gpu_query_wait={mesh_gpu_query_wait_ms:.1f}ms "
+                           f"gpu_draw={gpu_draw_text}")
             self._frame_count = 0
             self._frame_active_time_s = 0.0
             self._last_fps_print = now

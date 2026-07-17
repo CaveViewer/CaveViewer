@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from types import SimpleNamespace
 
 from PIL import Image
 
 from caveviewer.core.texture_manager import (
+    DecodedImage,
     TEXTURE_MAX_SIZE_ENV_VAR,
     TextureManager,
 )
@@ -201,6 +204,56 @@ def test_acquire_with_timing_reports_predecoded_upload(tmp_path):
     assert timing["mipmap_ms"] >= 0.0
     assert timing["total_ms"] >= 0.0
     assert context.uploads == [((16, 8), 3, 16 * 8 * 3)]
+
+
+def test_predecode_waits_for_shared_texture_already_inflight(tmp_path, monkeypatch):
+    context = FakeTextureContext()
+    manager = TextureManager(
+        context,
+        str(tmp_path),
+        {"mat": "shared.png"},
+        max_decoded_cache_bytes=4096,
+    )
+    file_key = "shared.png"
+
+    def unexpected_decode(_file_or_bytes):
+        raise AssertionError("waiting worker should not start a duplicate decode")
+
+    monkeypatch.setattr(manager, "_decode_image", unexpected_decode)
+
+    with manager._decode_cache_lock:
+        manager._decode_inflight.add(file_key)
+
+    waiter = threading.Thread(
+        target=manager.decode_for_material,
+        args=("mat",),
+        daemon=True,
+    )
+    waiter.start()
+    time.sleep(0.05)
+
+    assert waiter.is_alive()
+
+    decoded = DecodedImage(
+        size=(4, 4),
+        components=3,
+        data=bytes(4 * 4 * 3),
+    )
+    with manager._decode_cache_lock:
+        manager._decode_inflight.discard(file_key)
+        manager._decode_cache[file_key] = decoded
+        manager._decode_cache_bytes += len(decoded.data)
+        manager._decode_cache_lock.notify_all()
+
+    waiter.join(timeout=1.0)
+
+    assert not waiter.is_alive()
+
+    _texture, timing = manager.acquire_with_timing("mat")
+
+    assert timing["decoded_cache_hit"] is True
+    assert timing["sync_decode"] is False
+    assert context.uploads == [((4, 4), 3, 4 * 4 * 3)]
 
 
 def test_validate_textures_logs_when_no_downscale_will_be_applied(

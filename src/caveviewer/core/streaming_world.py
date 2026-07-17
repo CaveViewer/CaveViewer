@@ -22,7 +22,7 @@ import threading
 import queue
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import numpy as np
 
@@ -112,6 +112,9 @@ class StreamingConfig:
     #  near a cell boundary and jitters back and forth)
     unload_radius_margin: int = 1  # how many cells beyond load_radius before eviction
     max_loaded_chunks: int = 400   # hard cap as a safety valve regardless of radius
+    unload_chunks_per_frame: int = 1
+    unload_time_budget_ms: float = 1.0
+    unload_retire_frames: int = 2
 
     @property
     def unload_radius_cells(self) -> int:
@@ -217,6 +220,14 @@ class StreamingWorld:
 
         self.loaded_cells: set[tuple[int, int, int]] = set()
         self._pending: set[tuple[int, int, int]] = set()
+        self._partial_ready: list[ChunkData] = []
+        # Cells leave loaded_cells only when their caller-provided unload
+        # callback actually runs.  Evictions are queued here first so the
+        # render thread never has to delete many VAO/VBO/texture objects in
+        # one frame; OpenGL deletion can otherwise synchronize with recent
+        # GPU use and create visible hitches.
+        self._unload_backlog: list[tuple[tuple[int, int, int], int]] = []
+        self._unload_backlog_cells: set[tuple[int, int, int]] = set()
         # Cap how many fully-decoded chunk payloads can wait in RAM.
         # This bounds worst-case worker-ahead memory spikes when the
         # render thread is temporarily slower than background decoding.
@@ -469,6 +480,9 @@ class StreamingWorld:
         for w in workers:
             w.join(timeout=2.0)
         self._ready_backlog.clear()
+        partial_ready = getattr(self, "_partial_ready", None)
+        if partial_ready is not None:
+            partial_ready.clear()
         with self._lock:
             self._pending.clear()
 
@@ -611,6 +625,7 @@ class StreamingWorld:
             load_r,
             self.config.max_loaded_chunks,
         )
+        self._cancel_queued_unloads(wanted)
         with self._lock:
             self._last_wanted_cells = wanted
             to_request = wanted - self.loaded_cells - self._pending
@@ -635,10 +650,29 @@ class StreamingWorld:
         stale_ready = self._ready_backlog.discard_if(
             lambda data: data.cell not in wanted
         )
-        if stale_ready:
+        partial_ready = getattr(self, "_partial_ready", [])
+        stale_partial_ready = [
+            data
+            for data in partial_ready
+            if data.cell not in wanted
+        ]
+        if stale_partial_ready:
+            self._partial_ready = [
+                data
+                for data in partial_ready
+                if data.cell in wanted
+            ]
+
+        stale_partial_cells = set()
+        if stale_ready or stale_partial_ready:
             with self._lock:
-                for data in stale_ready:
+                for data in stale_ready + stale_partial_ready:
                     self._pending.discard(data.cell)
+            if stale_partial_ready:
+                stale_partial_cells = {
+                    data.cell
+                    for data in stale_partial_ready
+                }
 
         # eviction uses a larger radius than load, so a chunk isn't dropped
         # the instant it's outside the tight load ring -- avoids reload
@@ -647,8 +681,107 @@ class StreamingWorld:
         cells_to_unload = cells_outside_cube_radius(
             self.loaded_cells, cam_cell, unload_r
         )
-        self._cells_to_unload_next_drain = cells_to_unload
+        self._cells_to_unload_next_drain = cells_to_unload | stale_partial_cells
         self._last_cam_cell_for_priority = cam_cell
+
+    def _ensure_unload_backlog(
+        self,
+    ) -> tuple[list[tuple[tuple[int, int, int], int]], set[tuple[int, int, int]]]:
+        if not hasattr(self, "_unload_backlog"):
+            self._unload_backlog = []
+        if not hasattr(self, "_unload_backlog_cells"):
+            self._unload_backlog_cells = {
+                cell for cell, _remaining_frames in self._unload_backlog
+            }
+        return self._unload_backlog, self._unload_backlog_cells
+
+    def _cancel_queued_unloads(self, wanted: set[tuple[int, int, int]]) -> None:
+        backlog, backlog_cells = self._ensure_unload_backlog()
+        if not backlog:
+            return
+        with self._lock:
+            loaded_wanted = self.loaded_cells & wanted
+        if not loaded_wanted:
+            return
+        retained = []
+        for cell, remaining_frames in backlog:
+            if cell in loaded_wanted:
+                backlog_cells.discard(cell)
+            else:
+                retained.append((cell, remaining_frames))
+        backlog[:] = retained
+
+    def _queue_cells_for_unload(
+        self,
+        cells: Iterable[tuple[int, int, int]],
+        *,
+        retire_frames: int | None = None,
+    ) -> None:
+        cells_to_queue = tuple(cells)
+        if not cells_to_queue:
+            return
+        backlog, backlog_cells = self._ensure_unload_backlog()
+        if retire_frames is None:
+            retire_frames = max(
+                0,
+                int(getattr(self.config, "unload_retire_frames", 2)),
+            )
+        with self._lock:
+            loaded_wanted = self.loaded_cells & self._last_wanted_cells
+        for cell in sorted(cells_to_queue):
+            if cell in backlog_cells:
+                continue
+            if cell in loaded_wanted:
+                continue
+            backlog.append((cell, retire_frames))
+            backlog_cells.add(cell)
+
+    def _drain_unload_backlog(
+        self,
+        on_chunk_unload: Callable[[tuple], None],
+    ) -> None:
+        backlog, backlog_cells = self._ensure_unload_backlog()
+        if not backlog:
+            return
+
+        max_unloads = max(
+            1,
+            int(getattr(self.config, "unload_chunks_per_frame", 1)),
+        )
+        time_budget_ms = max(
+            0.0,
+            float(getattr(self.config, "unload_time_budget_ms", 1.0)),
+        )
+
+        aged_backlog = []
+        for cell, remaining_frames in backlog:
+            aged_backlog.append((cell, max(0, remaining_frames - 1)))
+        backlog[:] = aged_backlog
+
+        start = time.perf_counter()
+        released = 0
+        retained = []
+        for cell, remaining_frames in backlog:
+            if remaining_frames > 0:
+                retained.append((cell, remaining_frames))
+                continue
+            if released >= max_unloads:
+                retained.append((cell, remaining_frames))
+                continue
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            if released > 0 and elapsed_ms >= time_budget_ms:
+                retained.append((cell, remaining_frames))
+                continue
+
+            with self._lock:
+                if cell in self.loaded_cells and cell in self._last_wanted_cells:
+                    backlog_cells.discard(cell)
+                    continue
+                self.loaded_cells.discard(cell)
+            on_chunk_unload(cell)
+            backlog_cells.discard(cell)
+            released += 1
+        backlog[:] = retained
 
     def _cell_distance_sq(self, cell: tuple[int, int, int], center: tuple[int, int, int]) -> int:
         return cell_distance_sq(cell, center)
@@ -665,7 +798,7 @@ class StreamingWorld:
     def _cell_in_cube_radius(cell: tuple[int, int, int], center: tuple[int, int, int], radius: int) -> bool:
         return cell_in_cube_radius(cell, center, radius)
 
-    def drain_ready_chunks(self, on_chunk_ready: Callable[[ChunkData], None],
+    def drain_ready_chunks(self, on_chunk_ready: Callable[[ChunkData], object],
                              on_chunk_unload: Callable[[tuple], None],
                              max_per_frame: int = 4,
                              time_budget_ms: float = 4.0) -> None:
@@ -691,9 +824,15 @@ class StreamingWorld:
         so if multiple chunks are ready, the one most likely to cause a visible
         hole if delayed is uploaded first. Deferred chunks remain in the same
         bounded backlog for a later frame.
+
+        `on_chunk_ready` may return False when it performed only a partial
+        render-thread upload. In that case the chunk remains pending and is
+        resumed on a later drain call instead of being marked loaded/drawable.
         """
         if self._paused_event.is_set():
             return
+        if not hasattr(self, "_partial_ready"):
+            self._partial_ready = []
 
         cam_cell = getattr(self, "_last_cam_cell_for_priority", None)
         distance_key = None
@@ -704,20 +843,29 @@ class StreamingWorld:
         n = 0
         unload_now = getattr(self, "_cells_to_unload_next_drain", set())
         if unload_now:
-            for cell in list(unload_now):
-                with self._lock:
-                    self.loaded_cells.discard(cell)
-                on_chunk_unload(cell)
+            self._queue_cells_for_unload(unload_now)
             self._cells_to_unload_next_drain = set()
+        self._drain_unload_backlog(on_chunk_unload)
 
         while n < max_per_frame:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             if elapsed_ms >= time_budget_ms:
                 break
-            try:
-                data = self._ready_backlog.get_closest_nowait(distance_key)
-            except queue.Empty:
-                break
+            partial_ready = getattr(self, "_partial_ready", [])
+            if partial_ready:
+                if distance_key is None:
+                    data = partial_ready.pop(0)
+                else:
+                    item_index = min(
+                        range(len(partial_ready)),
+                        key=lambda index: distance_key(partial_ready[index]),
+                    )
+                    data = partial_ready.pop(item_index)
+            else:
+                try:
+                    data = self._ready_backlog.get_closest_nowait(distance_key)
+                except queue.Empty:
+                    break
             with self._lock:
                 is_wanted = data.cell in self._last_wanted_cells
                 if not is_wanted:
@@ -725,18 +873,23 @@ class StreamingWorld:
             if not is_wanted:
                 continue
             try:
-                on_chunk_ready(data)
+                upload_complete = on_chunk_ready(data)
             except BaseException:
                 self._clear_pending_cell(data.cell)
                 raise
+            if upload_complete is False:
+                self._partial_ready.append(data)
+                n += 1
+                continue
             with self._lock:
                 self._pending.discard(data.cell)
                 self.loaded_cells.add(data.cell)
             n += 1
 
-        # Hard memory residency cap: if loaded chunk count exceeds budget,
-        # evict farthest chunks first (prefer those outside the immediate
-        # wanted set) until within max_loaded_chunks.
+        # Memory residency cap: if loaded chunk count exceeds budget, evict
+        # farthest chunks first (prefer those outside the immediate wanted set).
+        # Actual GL release is queued so many deletions cannot bunch into one
+        # render frame; loaded_cells is updated at the callback transaction.
         with self._lock:
             evicted_cells = select_evictions(
                 self.loaded_cells,
@@ -744,17 +897,17 @@ class StreamingWorld:
                 getattr(self, "_last_cam_cell_for_priority", None),
                 self.config.max_loaded_chunks,
             )
-            for cell in evicted_cells:
-                self.loaded_cells.discard(cell)
-
-        for cell in evicted_cells:
-            on_chunk_unload(cell)
+        self._queue_cells_for_unload(evicted_cells)
 
     def stats(self) -> dict:
         return {
             "loaded": len(self.loaded_cells),
             "pending": len(self._pending),
-            "ready": self._ready_backlog.qsize(),
+            "ready": (
+                self._ready_backlog.qsize()
+                + len(getattr(self, "_partial_ready", []))
+            ),
+            "unload_pending": len(getattr(self, "_unload_backlog", [])),
             "wanted": len(self._last_wanted_cells),
             "total_available": len(self.available_cells),
         }

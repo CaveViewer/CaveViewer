@@ -1352,6 +1352,10 @@ section { position: relative; }
               <p class="blurb">Hard cap on how many ready chunks are uploaded to the GPU each frame. A higher cap brings new chunks on screen faster when flying fast, at the cost of occasional frame-time spikes.</p>
             </div>
             <div class="setting-row">
+              <span class="name">Upload groups per frame</span><span class="default">default 1</span>
+              <p class="blurb">Hard cap on material groups uploaded from one ready chunk each frame. This spreads huge chunks across multiple frames instead of uploading all VBOs and textures at once.</p>
+            </div>
+            <div class="setting-row">
               <span class="name">Upload budget (ms)</span><span class="default">default 3.0</span>
               <p class="blurb">Soft per-frame time budget for chunk uploads. A larger budget uploads more before yielding — smoother streaming, but a slightly heavier hit each frame it happens.</p>
             </div>
