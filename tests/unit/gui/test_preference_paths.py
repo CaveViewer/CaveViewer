@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from caveviewer.gui import preference_paths as preferences
 
 
 def test_current_legacy_config_is_copied_once_without_deletion(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     home = Path.home()
     old_path = home / ".caveviewer" / "advanced_settings.json"
     old_path.parent.mkdir()
@@ -33,6 +35,7 @@ def test_current_legacy_config_is_copied_once_without_deletion(tmp_path, monkeyp
 
 
 def test_ui_history_uses_xdg_state_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
 
@@ -48,6 +51,7 @@ def test_ui_history_uses_xdg_state_home(tmp_path, monkeypatch):
 def test_current_legacy_state_is_copied_to_xdg_state_without_deletion(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setattr(sys, "platform", "linux")
     home = Path.home()
     old_path = home / ".caveviewer" / "last_browse_path"
     old_path.parent.mkdir()

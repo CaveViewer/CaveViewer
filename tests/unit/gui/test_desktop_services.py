@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import sys
 from types import SimpleNamespace
 
@@ -26,6 +27,11 @@ from caveviewer.gui.platform.portal import (
     _PortalResponseWaiter,
     XdgPortalClient,
     portal_parent_window,
+)
+
+requires_dbus_fast = pytest.mark.skipif(
+    importlib.util.find_spec("dbus_fast") is None,
+    reason="dbus-fast is required for low-level Linux D-Bus portal transport tests",
 )
 
 
@@ -396,6 +402,7 @@ class CapturingDbusTransport(DbusPortalTransport):
         return SimpleNamespace(body=["/org/freedesktop/portal/desktop/request/test"])
 
 
+@requires_dbus_fast
 def test_dbus_directory_request_sets_versioned_directory_options(tmp_path):
     transport = CapturingDbusTransport()
 
@@ -417,6 +424,7 @@ def test_dbus_directory_request_sets_versioned_directory_options(tmp_path):
     assert options["current_folder"].value == bytes(tmp_path) + b"\0"
 
 
+@requires_dbus_fast
 def test_dbus_file_chooser_and_save_request_options(tmp_path):
     transport = CapturingDbusTransport()
 
@@ -453,6 +461,7 @@ def test_dbus_file_chooser_and_save_request_options(tmp_path):
     assert options["current_name"].value == "survey.glb"
 
 
+@requires_dbus_fast
 def test_dbus_open_uri_request_uses_openuri_portal():
     transport = CapturingDbusTransport()
 
@@ -466,6 +475,7 @@ def test_dbus_open_uri_request_uses_openuri_portal():
     assert transport.request["body"][0:2] == ["x11:2a", "https://example.invalid"]
 
 
+@requires_dbus_fast
 def test_dbus_reveal_closes_descriptor_after_success_and_failure(tmp_path):
     payload = tmp_path / "CaveViewer.AppImage"
     payload.write_bytes(b"package")
@@ -491,6 +501,7 @@ def test_dbus_reveal_closes_descriptor_after_success_and_failure(tmp_path):
     assert closed == [71, 71]
 
 
+@requires_dbus_fast
 def test_dbus_open_file_closes_descriptor_after_success_and_failure(tmp_path):
     payload = tmp_path / "survey.glb"
     payload.write_bytes(b"glb")
@@ -517,6 +528,7 @@ def test_dbus_open_file_closes_descriptor_after_success_and_failure(tmp_path):
     assert closed == [73, 73]
 
 
+@requires_dbus_fast
 def test_dbus_notification_calls_portal_methods():
     transport = CapturingDbusTransport()
 
@@ -543,6 +555,7 @@ def test_dbus_notification_calls_portal_methods():
     assert transport.call_request["body"] == ["sample-download"]
 
 
+@requires_dbus_fast
 def test_dbus_inhibit_request_uses_idle_and_suspend_flags():
     transport = CapturingDbusTransport()
 
@@ -564,6 +577,7 @@ def test_dbus_inhibit_request_uses_idle_and_suspend_flags():
     assert options["reason"].value == "Importing map"
 
 
+@requires_dbus_fast
 def test_response_waiter_keeps_signal_that_arrives_before_handle_return():
     from dbus_fast.constants import MessageType
 

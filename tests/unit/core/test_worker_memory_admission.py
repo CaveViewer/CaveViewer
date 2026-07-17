@@ -154,6 +154,7 @@ def test_darwin_ram_snapshot_estimates_total_when_sysctl_is_unavailable(monkeypa
 def test_detect_ram_snapshot_uses_darwin_probe(monkeypatch):
     expected = hardware_memory.RamSnapshot(total_bytes=100, available_bytes=50)
 
+    monkeypatch.setattr(hardware_memory.os, "name", "posix")
     monkeypatch.setattr(hardware_memory.sys, "platform", "darwin")
     monkeypatch.setattr(hardware_memory, "_darwin_ram_snapshot", lambda: expected)
 

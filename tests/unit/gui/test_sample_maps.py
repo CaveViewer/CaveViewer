@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import urllib.error
 import zipfile
 from pathlib import Path
@@ -127,6 +128,7 @@ def test_sample_map_paths_accept_portal_directory_selection(tmp_path):
 
 
 def test_default_sample_maps_install_dir_uses_xdg_data_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
 

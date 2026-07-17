@@ -8,6 +8,8 @@ import subprocess
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
+import pytest
+
 from caveviewer.version import APPLICATION_ID, APP_VERSION
 
 
@@ -15,6 +17,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 LINUX_PACKAGING = REPOSITORY_ROOT / "packaging" / "linux"
 PACKAGE_SCRIPT = REPOSITORY_ROOT / "scripts" / "linux" / "common" / "package.sh"
 RAW_GITHUB_MAIN_URL = "https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/"
+requires_executable_shell_scripts = pytest.mark.skipif(
+    os.name == "nt",
+    reason="Linux AppRun shell-script smoke tests are exercised on Unix CI",
+)
 
 
 def _generated_apprun_script() -> str:
@@ -92,6 +98,7 @@ def test_linux_packager_installs_canonical_metadata_without_inline_duplicate():
     assert "mimeapps.list" not in package_script
 
 
+@requires_executable_shell_scripts
 def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_path):
     appdir = tmp_path / "AppDir"
     appdir.mkdir()
@@ -208,6 +215,7 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
     assert unrelated_icon.read_bytes() == b"keep"
 
 
+@requires_executable_shell_scripts
 def test_generated_apprun_does_not_override_window_system_policy(tmp_path):
     appdir = tmp_path / "AppDir"
     executable = appdir / "usr" / "lib" / "caveviewer" / "CaveViewer"

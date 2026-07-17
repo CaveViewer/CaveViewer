@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -187,7 +188,7 @@ def test_save_directory_chooser_is_owned_focused_and_not_left_topmost():
         initial_dir="/maps",
     )
 
-    assert result.path == "/chosen/folder"
+    assert result == DirectorySelection.from_path("/chosen/folder")
     assert desktop_services.options == {
         "title": "Save Test Cave to…",
         "initial_dir": "/maps",
@@ -450,6 +451,7 @@ def test_sample_download_continues_when_desktop_activity_is_unavailable(
 
 
 def test_last_sample_maps_directory_uses_xdg_state_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     state_home = tmp_path / "state"
     sample_root = tmp_path / "downloads"
     sample_root.mkdir()

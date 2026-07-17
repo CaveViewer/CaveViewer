@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from caveviewer import storage_paths
 from caveviewer.storage_paths import (
     STORAGE_HOME_ENV_VAR,
     StoragePathError,
@@ -21,10 +22,15 @@ def _expected_runtime_fallback_dir() -> Path:
     return Path(tempfile.gettempdir()) / f"caveviewer-{suffix}" / "caveviewer"
 
 
-def test_linux_paths_follow_absolute_xdg_roots(tmp_path):
+def test_linux_paths_follow_absolute_xdg_roots(tmp_path, monkeypatch):
     runtime_root = tmp_path / "runtime"
     runtime_root.mkdir()
     runtime_root.chmod(0o700)
+    monkeypatch.setattr(
+        storage_paths,
+        "_is_valid_xdg_runtime_dir",
+        lambda path: path == runtime_root,
+    )
     environment = {
         "XDG_CONFIG_HOME": str(tmp_path / "config"),
         "XDG_DATA_HOME": str(tmp_path / "data"),
