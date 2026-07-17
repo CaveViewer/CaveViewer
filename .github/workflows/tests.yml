@@ -116,13 +116,13 @@ jobs:
         run: |
           rendered_desktop_dir="$(mktemp -d)"
           trap 'rm -rf "$rendered_desktop_dir"' EXIT
-          rendered_desktop="$rendered_desktop_dir/io.github.kernalpanic.caveviewer.desktop"
+          rendered_desktop="$rendered_desktop_dir/io.github.caveviewer.caveviewer.desktop"
           sed 's|@EXEC@|AppRun|' \
-            packaging/linux/io.github.kernalpanic.caveviewer.desktop.in \
+            packaging/linux/io.github.caveviewer.caveviewer.desktop.in \
             > "$rendered_desktop"
           desktop-file-validate "$rendered_desktop"
           appstreamcli validate --no-net --pedantic \
-            packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml
+            packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml
 
       - name: Run essential tests with branch coverage
         run: >-

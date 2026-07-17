@@ -16,7 +16,7 @@ from caveviewer.version import APPLICATION_ID, APP_VERSION
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 LINUX_PACKAGING = REPOSITORY_ROOT / "packaging" / "linux"
 PACKAGE_SCRIPT = REPOSITORY_ROOT / "scripts" / "linux" / "common" / "package.sh"
-RAW_GITHUB_MAIN_URL = "https://raw.githubusercontent.com/KernalPanic/CaveViewer/main/"
+RAW_GITHUB_MAIN_URL = "https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/"
 requires_executable_shell_scripts = pytest.mark.skipif(
     os.name == "nt",
     reason="Linux AppRun shell-script smoke tests are exercised on Unix CI",
@@ -43,7 +43,7 @@ def test_linux_metadata_uses_one_stable_application_id():
     desktop = parser["Desktop Entry"]
     metainfo = ElementTree.parse(metainfo_path).getroot()
 
-    assert APPLICATION_ID == "io.github.kernalpanic.caveviewer"
+    assert APPLICATION_ID == "io.github.caveviewer.caveviewer"
     assert desktop["Icon"] == APPLICATION_ID
     assert desktop["StartupWMClass"] == APPLICATION_ID
     assert desktop["StartupNotify"] == "true"

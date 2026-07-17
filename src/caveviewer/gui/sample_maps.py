@@ -46,8 +46,8 @@ _LOG = get_logger("SampleMaps")
 
 # Configuration for sample maps repository.
 # Sample maps are hosted by default at:
-# https://github.com/KernalPanic/CaveViewer/releases/tag/sample-data
-_DEFAULT_SAMPLE_MAPS_REPO = "KernalPanic/CaveViewer"
+# https://github.com/CaveViewer/CaveViewer/releases/tag/sample-data
+_DEFAULT_SAMPLE_MAPS_REPO = "CaveViewer/CaveViewer"
 _DEFAULT_SAMPLE_DATA_TAG = "sample-data"
 
 def _env_or_default(name: str, default: str) -> str:

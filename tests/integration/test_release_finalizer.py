@@ -39,7 +39,7 @@ def _copy_release_files(destination: Path) -> None:
         "scripts/macos/update_manifest.sh",
         "scripts/sign_update_manifest.py",
         "scripts/windows/update_manifest.sh",
-        "packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml",
+        "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml",
         "src/caveviewer/version.py",
     )
     for relative_path in release_files:
@@ -220,12 +220,12 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     }
     assert "src/caveviewer/version.py" in committed_paths
     assert (
-        "packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml"
+        "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
         in committed_paths
     )
     metainfo = (
         working_repository
-        / "packaging/linux/io.github.kernalpanic.caveviewer.metainfo.xml"
+        / "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
     ).read_text(encoding="utf-8")
     assert f'<release version="{version}"' in metainfo
     for manifest_path in expected_manifests:

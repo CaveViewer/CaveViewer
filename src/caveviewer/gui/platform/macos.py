@@ -184,7 +184,7 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         )
 
     def default_update_repo(self) -> str:
-        return "KernalPanic/CaveViewer"
+        return "CaveViewer/CaveViewer"
 
     def default_update_manifest_url(self, repo: str, branch: str) -> str:
         architecture = _macos_process_architecture()
