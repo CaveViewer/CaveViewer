@@ -129,7 +129,7 @@ jobs:
           python -m pytest
           --cov=caveviewer.app
           --cov=caveviewer.core.chunker
-          --cov=caveviewer.gui.advanced_settings
+          --cov=caveviewer.gui.preferences
           --cov=caveviewer.gui.sample_maps
           --cov=caveviewer.gui.update_checker
           --cov=caveviewer.gui.update_manager
@@ -142,6 +142,12 @@ jobs:
         run: >-
           python -m coverage report
           --include=src/caveviewer/gui/sample_maps.py
+          --fail-under=85
+
+      - name: Enforce Preferences coverage floor
+        run: >-
+          python -m coverage report
+          --include=src/caveviewer/gui/preferences.py
           --fail-under=85
 
       - name: Enforce application coverage floor
