@@ -196,6 +196,26 @@ def test_pages_workflow_deploys_docs_independently_from_releases():
     assert "github.ref == 'refs/heads/main'" in workflow
 
 
+def test_dependabot_updates_only_github_actions_with_bounded_pr_noise():
+    config_path = REPOSITORY_ROOT / ".github" / "dependabot.yml"
+
+    assert config_path.is_file()
+    config = config_path.read_text(encoding="utf-8")
+
+    assert 'package-ecosystem: "github-actions"' in config
+    assert 'directory: "/"' in config
+    assert 'interval: "weekly"' in config
+    assert 'day: "tuesday"' in config
+    assert 'time: "09:00"' in config
+    assert 'timezone: "Europe/Zagreb"' in config
+    assert "default-days: 7" in config
+    assert "open-pull-requests-limit: 2" in config
+    assert '- "dependencies"' in config
+    assert '- "github-actions"' in config
+    assert 'prefix: "ci(deps)"' in config
+    assert 'package-ecosystem: "pip"' not in config
+
+
 def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():
     workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
         encoding="utf-8"
