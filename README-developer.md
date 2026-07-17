@@ -163,14 +163,18 @@ the application version or creating artifacts. It uses
 another prepared interpreter. The interpreter must have `requirements.txt` and
 `requirements-dev.txt` installed.
 
-GitHub also runs a separate Linux package smoke workflow for pull requests and
-pushes to `main` or `release/**` when packaging, release scripts, runtime
-source, or dependency files change. It also runs weekly and can be dispatched
-manually. That workflow builds the Linux x86_64 AppImage through the Docker
-release path, validates the AppImage desktop install/uninstall behavior in a
-temporary home directory, validates the installed desktop/AppStream metadata,
-and uploads the AppImage as a short-lived workflow artifact for inspection. It
-does not publish releases or write repository contents.
+GitHub also runs separate Linux and macOS ARM64 package smoke workflows for
+pull requests and pushes to `main` or `release/**` when packaging, release
+scripts, runtime source, or dependency files change. They also run weekly and
+can be dispatched manually. The Linux workflow builds the x86_64 AppImage
+through the Docker release path, validates AppImage desktop install/uninstall
+behavior in a temporary home directory, and validates the installed
+desktop/AppStream metadata. The macOS workflow builds the ARM64 DMG through the
+release path, validates the package metadata against the actual DMG hash and
+size, mounts the DMG, and checks the packaged `CaveViewer.app` bundle identity,
+version, architecture, and bundled support documents. These workflows upload
+short-lived workflow artifacts for inspection; they do not publish releases or
+write repository contents.
 
 GitHub platform jobs pass `--skip-tests` because the application source has
 already passed an essential test gate with coverage. Individually dispatched
