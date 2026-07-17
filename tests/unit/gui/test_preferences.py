@@ -635,7 +635,7 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     )
     assert (
         fields_by_key["max_upload_group_mb"].hint
-        == "Target maximum VBO payload size for dense chunk upload groups."
+        == "Maximum VBO payload size for dense chunk groups, in MB."
     )
     if (
         advanced_settings_dialog._LINUX_LAYOUT
