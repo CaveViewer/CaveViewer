@@ -186,10 +186,10 @@ def test_pages_workflow_deploys_docs_independently_from_releases():
     assert '      - "docs/**"' in workflow
     assert '      - ".github/workflows/pages.yml"' in workflow
     assert "release:" not in workflow
-    assert "actions/configure-pages@v5" in workflow
-    assert "actions/upload-pages-artifact@v4" in workflow
+    assert "actions/configure-pages@v6" in workflow
+    assert "actions/upload-pages-artifact@v5" in workflow
     assert "path: docs" in workflow
-    assert "actions/deploy-pages@v4" in workflow
+    assert "actions/deploy-pages@v5" in workflow
     assert "name: github-pages" in workflow
     assert "pages: write" in workflow
     assert "id-token: write" in workflow
