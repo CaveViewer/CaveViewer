@@ -719,8 +719,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             # time, so the eventual main-thread GPU upload can use
             # already-decoded pixels rather than doing a slow
             # decode-and-upload combination.
-            for mat_name in chunk_data.groups.keys():
-                self.texture_manager.decode_for_material(mat_name)
+            for group in chunk_data.groups.values():
+                self.texture_manager.decode_for_material(group.material_name)
 
         chunk_size = chunker.manifest_chunk_size(self.manifest)
         if chunk_size is None:

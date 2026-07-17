@@ -604,7 +604,7 @@ and `.caveviewer_cache` directories are not auto-discovered.
 | Variable | Default | Accepted range | Description |
 |---|---|---|---|
 | `CAVEVIEWER_CHUNK_SIZE_METERS` | `50` | 0.01-512 | Unitless chunk edge length used when building a new chunk cache. Does not affect already-cached maps. |
-| `CAVEVIEWER_MAX_UPLOAD_GROUP_MB` | `32` | 1-512 MB | Target maximum VBO payload size for dense chunk upload groups. |
+| `CAVEVIEWER_MAX_UPLOAD_GROUP_MB` | `16` | 1-512 MB | Maximum VBO payload size for dense chunk groups, in MB. |
 | `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | `1` (Windows), `0` (others) | 0-50 ms | Milliseconds paused while scanning .obj files. A small value keeps the UI responsive during large imports on Windows; `0` disables throttling. |
 | `CAVEVIEWER_OBJ_IMPORT_BATCH_FACES` | `200000` | Integer 1,000-2,000,000 | Number of triangulated OBJ faces processed per incremental import batch. Preferences display this as “Faces per .obj batch” in thousands, default 200 with accepted range 1-2,000 thousand faces. |
 | `CAVEVIEWER_OBJ_BUCKET_WORKERS` | `2` | Integer 1-32 workers | Worker threads used to de-index, group, and write incremental .obj face batches into temporary bucket parts. Increase on SSDs to reduce import time at the cost of extra transient RAM and higher temporary-file I/O. |

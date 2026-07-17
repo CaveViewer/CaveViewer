@@ -1014,6 +1014,37 @@ def test_prepare_chunk_upload_groups_defers_flat_payload(monkeypatch):
     assert calls == [3]
 
 
+def test_prepare_chunk_upload_groups_splits_dense_groups_by_payload_size():
+    positions = np.arange(12 * 3, dtype=np.float32).reshape(12, 3)
+    uvs = np.arange(12 * 2, dtype=np.float32).reshape(12, 2)
+    smooth_normals = np.ones((12, 3), dtype=np.float32)
+    data = chunker.ChunkData(
+        cell=(0, 0, 0),
+        groups={
+            "rock": chunker.ChunkMaterialGroup(
+                "rock", positions, uvs, smooth_normals
+            ),
+        },
+        bounds_min=np.zeros(3, dtype=np.float32),
+        bounds_max=np.ones(3, dtype=np.float32),
+    )
+    max_group_bytes = 6 * 8 * np.dtype(np.float32).itemsize
+
+    chunker.prepare_chunk_upload_groups(data, max_group_bytes=max_group_bytes)
+
+    assert data.upload_groups is not None
+    assert [group.material_name for group in data.upload_groups] == ["rock", "rock"]
+    assert [len(group.positions) for group in data.upload_groups] == [6, 6]
+    assert all(
+        len(group.smooth_vertex_bytes) <= max_group_bytes
+        for group in data.upload_groups
+    )
+    np.testing.assert_array_equal(
+        np.concatenate([group.positions for group in data.upload_groups]),
+        positions,
+    )
+
+
 def test_prepack_chunk_vertex_bytes_reuses_requested_payload(monkeypatch):
     calls = []
     positions = np.array(
@@ -1054,6 +1085,92 @@ def test_prepack_chunk_vertex_bytes_reuses_requested_payload(monkeypatch):
     assert calls == []
 
 
+def test_load_chunk_file_preserves_repeated_material_groups(tmp_path):
+    cache_dir = tmp_path / "cache"
+    chunks_dir = cache_dir / chunker.CHUNKS_DIRNAME
+    chunks_dir.mkdir(parents=True)
+    path = chunks_dir / "0_0_0.bin"
+    positions = [
+        np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32),
+        np.array([[2, 0, 0], [3, 0, 0], [2, 1, 0]], dtype=np.float32),
+    ]
+    uvs = np.zeros((3, 2), dtype=np.float32)
+    normals = np.tile(np.array([[0, 0, 1]], dtype=np.float32), (3, 1))
+    with path.open("wb") as output:
+        output.write(chunker._MAGIC)
+        output.write((chunker._VERSION).to_bytes(4, "little"))
+        output.write((2).to_bytes(4, "little"))
+        for group_positions in positions:
+            name = b"rock"
+            output.write(len(name).to_bytes(4, "little"))
+            output.write(name)
+            output.write((3).to_bytes(4, "little"))
+            output.write(group_positions.tobytes())
+            output.write(uvs.tobytes())
+            output.write(normals.tobytes())
+
+    data = chunker.load_chunk_file(str(cache_dir), (0, 0, 0))
+
+    assert list(data.groups) == ["rock", "rock#2"]
+    assert [group.material_name for group in data.groups.values()] == ["rock", "rock"]
+    np.testing.assert_array_equal(data.groups["rock#2"].positions, positions[1])
+
+
+def test_write_chunk_file_splits_material_groups_by_payload_size(tmp_path):
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    positions = np.arange(12 * 3, dtype=np.float32).reshape(12, 3)
+    uvs = np.zeros((12, 2), dtype=np.float32)
+    normals = np.tile(np.array([[0, 0, 1]], dtype=np.float32), (12, 1))
+    face_idx = np.arange(12, dtype=np.int32).reshape(4, 3)
+    mesh = obj_parser.RawMesh(
+        positions=positions,
+        uvs=uvs,
+        normals=normals,
+        face_pos_idx=face_idx,
+        face_uv_idx=face_idx,
+        face_nrm_idx=face_idx,
+    )
+    max_group_bytes = 6 * 8 * np.dtype(np.float32).itemsize
+
+    _bounds_min, _bounds_max, materials = chunker._write_chunk_file(
+        str(chunks_dir),
+        "0_0_0",
+        mesh,
+        [("rock", np.arange(4, dtype=np.int32))],
+        max_group_bytes=max_group_bytes,
+    )
+
+    data = chunker.load_chunk_file(str(tmp_path), (0, 0, 0))
+    assert materials == ["rock"]
+    assert [group.material_name for group in data.groups.values()] == ["rock", "rock"]
+    assert [len(group.positions) for group in data.groups.values()] == [6, 6]
+
+
+def test_write_chunk_file_from_buckets_splits_material_groups_by_payload_size(
+    tmp_path,
+):
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    bucket_path = tmp_path / "bucket.bin"
+    records = np.arange(12 * 8, dtype=np.float32).reshape(12, 8)
+    records.tofile(bucket_path)
+    max_group_bytes = 6 * 8 * np.dtype(np.float32).itemsize
+
+    _bounds_min, _bounds_max, materials = chunker._write_chunk_file_from_buckets(
+        str(chunks_dir),
+        "0_0_0",
+        [("rock", [str(bucket_path)])],
+        max_group_bytes=max_group_bytes,
+    )
+
+    data = chunker.load_chunk_file(str(tmp_path), (0, 0, 0))
+    assert materials == ["rock"]
+    assert [group.material_name for group in data.groups.values()] == ["rock", "rock"]
+    assert [len(group.positions) for group in data.groups.values()] == [6, 6]
+    assert not bucket_path.exists()
+
+
 def test_footprint_from_positions_matches_dense_unique_across_blocks():
     base_positions = np.array(
         [
@@ -1080,6 +1197,17 @@ def test_manifest_chunk_size_helpers_reject_bad_values_and_io_failures(monkeypat
     assert chunker.manifest_chunk_size({"chunk_size": "invalid"}) is None
     assert chunker.manifest_chunk_size({"chunk_size": 0}) is None
     assert chunker.manifest_chunk_size({"chunk_size": "4.5"}) == 4.5
+    assert chunker.manifest_max_upload_group_mb(None) is None
+    assert (
+        chunker.manifest_max_upload_group_mb({"max_upload_group_mb": "invalid"})
+        is None
+    )
+    assert chunker.manifest_max_upload_group_mb({"max_upload_group_mb": 0}) is None
+    assert (
+        chunker.manifest_max_upload_group_mb({"max_upload_group_mb": "nan"})
+        is None
+    )
+    assert chunker.manifest_max_upload_group_mb({"max_upload_group_mb": "16"}) == 16
 
     monkeypatch.setattr(
         chunker, "load_manifest", lambda _cache_dir: (_ for _ in ()).throw(OSError())

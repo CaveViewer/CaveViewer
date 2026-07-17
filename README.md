@@ -180,7 +180,7 @@ explicit maximum texture dimension in pixels.
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
 | Import chunk size | — | 50 | greater than 0 and up to 512 | Unitless chunk edge length for new caches. |
-| Max upload group size | — | 32 | 1 to 512 MB | Target maximum VBO payload size for dense chunk upload groups. |
+| Max upload group size | — | 16 | 1 to 512 MB | Maximum VBO payload size for dense chunk groups, in MB. |
 | .obj scan throttle | — | 0 on macOS/Linux, 1 on Windows | 0 to 50 ms | Milliseconds paused while scanning .obj files. |
 | Faces per .obj batch | `CAVEVIEWER_OBJ_IMPORT_BATCH_FACES` | 200 | integer, 1 to 2000 thousand faces | Thousands of triangulated faces per batch. |
 | .obj bucket workers (env only) | `CAVEVIEWER_OBJ_BUCKET_WORKERS` | 2 | integer, 1 to 32 workers | Worker threads used to de-index, group, and write incremental .obj face batches. Higher values can speed imports on SSDs at the cost of extra transient RAM and temporary-file I/O. |

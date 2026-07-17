@@ -161,7 +161,7 @@ def test_schema_is_typed_and_has_unique_runtime_mappings():
         field.key for field in fields
     }
     assert settings.advanced_setting_defaults()["chunk_size_meters"] == "50"
-    assert settings.advanced_setting_defaults()["max_upload_group_mb"] == "32"
+    assert settings.advanced_setting_defaults()["max_upload_group_mb"] == "16"
     assert settings.advanced_setting_defaults()["obj_import_batch_thousands"] == "200"
 
 
