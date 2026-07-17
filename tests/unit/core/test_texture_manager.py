@@ -179,6 +179,30 @@ def test_predecoded_texture_bytes_are_released_on_upload(tmp_path):
     assert context.uploads == [((16, 16), 3, 16 * 16 * 3)]
 
 
+def test_acquire_with_timing_reports_predecoded_upload(tmp_path):
+    Image.new("RGB", (16, 8), color=(10, 20, 30)).save(tmp_path / "tile.png")
+    context = FakeTextureContext()
+    manager = TextureManager(
+        context,
+        str(tmp_path),
+        {"mat": "tile.png"},
+        max_decoded_cache_bytes=4096,
+    )
+
+    manager.decode_for_material("mat")
+    _texture, timing = manager.acquire_with_timing("mat")
+
+    assert timing["material"] == "mat"
+    assert timing["decoded_cache_hit"] is True
+    assert timing["sync_decode"] is False
+    assert timing["image_size"] == (16, 8)
+    assert timing["image_bytes"] == 16 * 8 * 3
+    assert timing["texture_ms"] >= 0.0
+    assert timing["mipmap_ms"] >= 0.0
+    assert timing["total_ms"] >= 0.0
+    assert context.uploads == [((16, 8), 3, 16 * 8 * 3)]
+
+
 def test_validate_textures_logs_when_no_downscale_will_be_applied(
     tmp_path, caplog
 ):

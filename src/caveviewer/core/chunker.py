@@ -31,6 +31,7 @@ import concurrent.futures
 import errno
 import gc
 import json
+import math
 import os
 import shutil
 import struct
@@ -71,9 +72,13 @@ IMPORT_MEMORY_PHYSICAL_OVERCOMMIT_FRACTION = 1.25
 IMPORT_MEMORY_FIXED_OVERHEAD_BYTES = 256 * 1024 ** 2
 
 CHUNK_SIZE_ENV_VAR = "CAVEVIEWER_CHUNK_SIZE_METERS"
+MAX_UPLOAD_GROUP_MB_ENV_VAR = "CAVEVIEWER_MAX_UPLOAD_GROUP_MB"
 OBJ_IMPORT_BATCH_FACES_ENV_VAR = "CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"
 OBJ_BUCKET_WORKERS_ENV_VAR = "CAVEVIEWER_OBJ_BUCKET_WORKERS"
 _DEFAULT_CHUNK_SIZE_FALLBACK = 50.0  # meters; default for new cache builds
+_DEFAULT_MAX_UPLOAD_GROUP_MB = 16.0
+_MIN_MAX_UPLOAD_GROUP_MB = 1.0
+_MAX_MAX_UPLOAD_GROUP_MB = 512.0
 _DEFAULT_OBJ_IMPORT_BATCH_FACES = 200_000
 _DEFAULT_OBJ_BUCKET_WORKERS = 2
 _MAX_OBJ_BUCKET_WORKERS = 32
@@ -81,6 +86,7 @@ _INCREMENTAL_OBJ_RESUME_VERSION = 1
 _OBJ_BUCKET_RECORD_SLICE_FACES = 25_000
 _OBJ_BUCKET_FINALIZE_BLOCK_RECORDS = 100_000
 _LOG = get_logger("chunker")
+_UPLOAD_VERTEX_BYTES = 8 * np.dtype(np.float32).itemsize
 
 
 def _resolve_default_chunk_size() -> float:
@@ -206,6 +212,35 @@ class CacheAsset:
 def configured_chunk_size() -> float:
     """Return the chunk size currently used by default for cache builds."""
     return DEFAULT_CHUNK_SIZE
+
+
+def configured_max_upload_group_mb(
+    environ: dict[str, str] | None = None,
+) -> float:
+    """Return the configured maximum renderer upload-group payload in MB."""
+    env = os.environ if environ is None else environ
+    raw = env.get(MAX_UPLOAD_GROUP_MB_ENV_VAR, "").strip()
+    if not raw:
+        return _DEFAULT_MAX_UPLOAD_GROUP_MB
+    try:
+        value = float(raw)
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError("must be finite and > 0")
+    except Exception:
+        _LOG.warning(
+            "ignoring invalid %s=%r; using default %.1f MB",
+            MAX_UPLOAD_GROUP_MB_ENV_VAR,
+            raw,
+            _DEFAULT_MAX_UPLOAD_GROUP_MB,
+        )
+        return _DEFAULT_MAX_UPLOAD_GROUP_MB
+    return max(_MIN_MAX_UPLOAD_GROUP_MB, min(_MAX_MAX_UPLOAD_GROUP_MB, value))
+
+
+def configured_max_upload_group_bytes(
+    environ: dict[str, str] | None = None,
+) -> int:
+    return max(1, int(configured_max_upload_group_mb(environ) * 1024 ** 2))
 
 
 def _configured_obj_import_batch_faces(environ: dict[str, str] | None = None) -> int:
@@ -452,16 +487,36 @@ class ChunkUploadGroup:
 
     OpenGL object creation still has to happen on the render thread, but
     the expensive chunk-file decode happens in a streaming worker before the
-    chunk reaches the renderer.  Vertex-byte payloads are generated lazily so
-    the ready backlog and loaded-chunk cache do not retain both smooth and
-    flat-shaded copies of the same geometry.
+    chunk reaches the renderer.  A worker may prepack one vertex-byte payload
+    for the shade mode expected at upload time; the source arrays remain
+    available so a late SHADE toggle can still fall back to building the other
+    mode correctly.
     """
     material_name: str
     positions: np.ndarray
     uvs: np.ndarray
     smooth_normals: np.ndarray
+    prepacked_vertex_bytes: bytes | None = None
+    prepacked_smooth_shading: bool | None = None
+
+    def prepack_vertex_bytes(self, *, smooth_shading: bool) -> None:
+        self.prepacked_vertex_bytes = vertex_bytes_for_shading(
+            self.positions,
+            self.uvs,
+            self.smooth_normals,
+            smooth_shading=smooth_shading,
+        )
+        self.prepacked_smooth_shading = bool(smooth_shading)
+
+    def has_prepacked_vertex_bytes(self, *, smooth_shading: bool) -> bool:
+        return (
+            self.prepacked_vertex_bytes is not None
+            and self.prepacked_smooth_shading == bool(smooth_shading)
+        )
 
     def vertex_bytes(self, *, smooth_shading: bool) -> bytes:
+        if self.has_prepacked_vertex_bytes(smooth_shading=smooth_shading):
+            return self.prepacked_vertex_bytes
         return vertex_bytes_for_shading(
             self.positions,
             self.uvs,
@@ -1270,6 +1325,7 @@ def _build_incremental_obj_cache_in_directory(
     manifest = {
         "version": _VERSION,
         "chunk_size": chunk_size,
+        "max_upload_group_mb": configured_max_upload_group_mb(),
         "source_obj": os.path.basename(obj_path),
         "mtl_materials": {
             name: mat.diffuse_texture for name, mat in materials.items()
@@ -1503,61 +1559,84 @@ def _write_chunk_file_from_buckets(
     chunks_dir: str,
     cell_str: str,
     groups: list[tuple[str, list[str]]],
+    *,
+    max_group_bytes: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     path = os.path.join(chunks_dir, f"{cell_str}.bin")
     bounds_min = None
     bounds_max = None
     used_materials = []
+    max_group_bytes = (
+        configured_max_upload_group_bytes()
+        if max_group_bytes is None
+        else max(1, int(max_group_bytes))
+    )
+    split_groups: list[tuple[str, list[str], int, int]] = []
+    for material_name, bucket_paths in groups:
+        record_count = 0
+        for bucket_path in bucket_paths:
+            record_count += _bucket_record_count(bucket_path)
+        ranges = _upload_group_vertex_ranges(
+            record_count,
+            max_group_bytes=max_group_bytes,
+        )
+        if not ranges:
+            ranges = [(0, 0)]
+        for start, end in ranges:
+            split_groups.append((material_name, bucket_paths, start, end))
 
     with open(path, "wb") as output:
         output.write(_MAGIC)
         output.write(struct.pack("<I", _VERSION))
-        output.write(struct.pack("<I", len(groups)))
+        output.write(struct.pack("<I", len(split_groups)))
 
-        for material_name, bucket_paths in groups:
-            record_count = 0
-            for bucket_path in bucket_paths:
-                record_count += _bucket_record_count(bucket_path)
-
+        for material_name, bucket_paths, start, end in split_groups:
+            record_count = end - start
             name_bytes = material_name.encode("utf-8")
             output.write(struct.pack("<I", len(name_bytes)))
             output.write(name_bytes)
             output.write(struct.pack("<I", record_count))
 
-            for bucket_path in bucket_paths:
-                for records in _iter_bucket_record_blocks(bucket_path):
-                    flat_pos = np.ascontiguousarray(
-                        records[:, 0:3],
-                        dtype=np.float32,
-                    )
-                    if len(flat_pos):
-                        group_min = flat_pos.min(axis=0)
-                        group_max = flat_pos.max(axis=0)
-                        if bounds_min is None:
-                            bounds_min = group_min.copy()
-                            bounds_max = group_max.copy()
-                        else:
-                            np.minimum(bounds_min, group_min, out=bounds_min)
-                            np.maximum(bounds_max, group_max, out=bounds_max)
-                    output.write(flat_pos.tobytes())
+            for records in _iter_bucket_record_blocks_for_range(
+                bucket_paths, start, end
+            ):
+                flat_pos = np.ascontiguousarray(
+                    records[:, 0:3],
+                    dtype=np.float32,
+                )
+                if len(flat_pos):
+                    group_min = flat_pos.min(axis=0)
+                    group_max = flat_pos.max(axis=0)
+                    if bounds_min is None:
+                        bounds_min = group_min.copy()
+                        bounds_max = group_max.copy()
+                    else:
+                        np.minimum(bounds_min, group_min, out=bounds_min)
+                        np.maximum(bounds_max, group_max, out=bounds_max)
+                output.write(flat_pos.tobytes())
 
-            for bucket_path in bucket_paths:
-                for records in _iter_bucket_record_blocks(bucket_path):
-                    flat_uv = np.ascontiguousarray(
-                        records[:, 3:5],
-                        dtype=np.float32,
-                    )
-                    output.write(flat_uv.tobytes())
+            for records in _iter_bucket_record_blocks_for_range(
+                bucket_paths, start, end
+            ):
+                flat_uv = np.ascontiguousarray(
+                    records[:, 3:5],
+                    dtype=np.float32,
+                )
+                output.write(flat_uv.tobytes())
 
-            for bucket_path in bucket_paths:
-                for records in _iter_bucket_record_blocks(bucket_path):
-                    flat_nrm = np.ascontiguousarray(
-                        records[:, 5:8],
-                        dtype=np.float32,
-                    )
-                    output.write(flat_nrm.tobytes())
+            for records in _iter_bucket_record_blocks_for_range(
+                bucket_paths, start, end
+            ):
+                flat_nrm = np.ascontiguousarray(
+                    records[:, 5:8],
+                    dtype=np.float32,
+                )
+                output.write(flat_nrm.tobytes())
 
-            used_materials.append(material_name)
+            if material_name not in used_materials:
+                used_materials.append(material_name)
+
+        for _material_name, bucket_paths in groups:
             for bucket_path in bucket_paths:
                 try:
                     os.remove(bucket_path)
@@ -1578,21 +1657,48 @@ def _bucket_record_count(bucket_path: str) -> int:
     return byte_count // record_bytes
 
 
-def _iter_bucket_record_blocks(bucket_path: str):
+def _iter_bucket_record_blocks_for_range(
+    bucket_paths: list[str],
+    start: int,
+    end: int,
+):
+    """Yield contiguous record blocks for [start, end) across bucket files."""
+    start = max(0, int(start))
+    end = max(start, int(end))
     floats_per_record = 8
-    read_count = max(1, _OBJ_BUCKET_FINALIZE_BLOCK_RECORDS) * floats_per_record
-    with open(bucket_path, "rb") as input_file:
-        while True:
-            records = np.fromfile(
-                input_file,
-                dtype=np.float32,
-                count=read_count,
-            )
-            if records.size == 0:
-                break
-            if records.size % floats_per_record != 0:
-                raise ValueError(f"Corrupt incremental bucket: {bucket_path}")
-            yield records.reshape(-1, floats_per_record)
+    record_bytes = floats_per_record * np.dtype(np.float32).itemsize
+    read_records = max(1, _OBJ_BUCKET_FINALIZE_BLOCK_RECORDS)
+    absolute_offset = 0
+    for bucket_path in bucket_paths:
+        bucket_count = _bucket_record_count(bucket_path)
+        bucket_start = absolute_offset
+        bucket_end = absolute_offset + bucket_count
+        absolute_offset = bucket_end
+
+        if bucket_end <= start:
+            continue
+        if bucket_start >= end:
+            break
+
+        local_start = max(0, start - bucket_start)
+        local_end = min(bucket_count, end - bucket_start)
+        remaining = local_end - local_start
+        if remaining <= 0:
+            continue
+
+        with open(bucket_path, "rb") as input_file:
+            input_file.seek(local_start * record_bytes)
+            while remaining > 0:
+                records_to_read = min(read_records, remaining)
+                records = np.fromfile(
+                    input_file,
+                    dtype=np.float32,
+                    count=records_to_read * floats_per_record,
+                )
+                if records.size != records_to_read * floats_per_record:
+                    raise ValueError(f"Corrupt incremental bucket: {bucket_path}")
+                yield records.reshape(-1, floats_per_record)
+                remaining -= records_to_read
 
 
 def _footprint_from_positions(positions: np.ndarray) -> tuple[float, list[int]]:
@@ -1878,6 +1984,7 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
     manifest = {
         "version": _VERSION,
         "chunk_size": chunk_size,
+        "max_upload_group_mb": configured_max_upload_group_mb(),
         "source_obj": os.path.basename(obj_path),
         "mtl_materials": {
             name: mat.diffuse_texture for name, mat in materials.items()
@@ -1892,7 +1999,14 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
     return cache_dir
 
 
-def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
+def _write_chunk_file(
+    chunks_dir,
+    cell_str,
+    mesh,
+    groups,
+    *,
+    max_group_bytes: int | None = None,
+):
     """
     Write one chunk binary file containing all material groups for a cell.
     De-indexes faces into flat (position, uv, normal) vertex triples per
@@ -1912,6 +2026,21 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
     path = os.path.join(chunks_dir, f"{cell_str}.bin")
     has_normals = mesh.normals.shape[0] > 0
     has_uvs = mesh.uvs.shape[0] > 0
+    max_group_bytes = (
+        configured_max_upload_group_bytes()
+        if max_group_bytes is None
+        else max(1, int(max_group_bytes))
+    )
+    split_groups: list[tuple[str, object]] = []
+    for mat_name, face_idx in groups:
+        ranges = _upload_group_face_ranges(
+            len(face_idx),
+            max_group_bytes=max_group_bytes,
+        )
+        if not ranges:
+            ranges = [(0, 0)]
+        for start, end in ranges:
+            split_groups.append((mat_name, face_idx[start:end]))
 
     bounds_min = None
     bounds_max = None
@@ -1920,9 +2049,9 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
     with open(path, "wb") as f:
         f.write(_MAGIC)
         f.write(struct.pack("<I", _VERSION))
-        f.write(struct.pack("<I", len(groups)))
+        f.write(struct.pack("<I", len(split_groups)))
 
-        for mat_name, face_idx in groups:
+        for mat_name, face_idx in split_groups:
             pos_idx = mesh.face_pos_idx[face_idx].reshape(-1)
             uv_idx = mesh.face_uv_idx[face_idx].reshape(-1)
             nrm_idx = mesh.face_nrm_idx[face_idx].reshape(-1)
@@ -1960,7 +2089,8 @@ def _write_chunk_file(chunks_dir, cell_str, mesh, groups):
             f.write(flat_uv.tobytes())
             f.write(flat_nrm.tobytes())
 
-            used_materials.append(mat_name)
+            if mat_name not in used_materials:
+                used_materials.append(mat_name)
 
     if bounds_min is None:
         bounds_min = np.zeros(3, dtype=np.float32)
@@ -2006,6 +2136,62 @@ def _interleaved_vertex_bytes(positions: np.ndarray, uvs: np.ndarray,
     return interleaved.tobytes()
 
 
+def _max_upload_group_vertices(max_group_bytes: int | None = None) -> int:
+    resolved_bytes = (
+        configured_max_upload_group_bytes()
+        if max_group_bytes is None
+        else max(1, int(max_group_bytes))
+    )
+    vertices = max(3, resolved_bytes // _UPLOAD_VERTEX_BYTES)
+    # Renderer payloads are flat triangle lists.  Keep split groups
+    # triangle-aligned so normals, wireframe, and culling assumptions stay
+    # unchanged.  A single triangle is the hard minimum.
+    vertices -= vertices % 3
+    return max(3, int(vertices))
+
+
+def _upload_group_vertex_ranges(
+    vertex_count: int,
+    *,
+    max_group_bytes: int | None = None,
+) -> list[tuple[int, int]]:
+    if vertex_count <= 0:
+        return []
+
+    max_vertices = _max_upload_group_vertices(max_group_bytes)
+    if vertex_count <= max_vertices:
+        return [(0, int(vertex_count))]
+
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    vertex_count = int(vertex_count)
+    while start < vertex_count:
+        end = min(vertex_count, start + max_vertices)
+        if end < vertex_count:
+            end -= (end - start) % 3
+        if end <= start:
+            end = min(vertex_count, start + max_vertices)
+        ranges.append((start, end))
+        start = end
+    return ranges
+
+
+def _upload_group_face_ranges(
+    face_count: int,
+    *,
+    max_group_bytes: int | None = None,
+) -> list[tuple[int, int]]:
+    if face_count <= 0:
+        return []
+    max_faces = max(1, _max_upload_group_vertices(max_group_bytes) // 3)
+    if face_count <= max_faces:
+        return [(0, int(face_count))]
+    return [
+        (start, min(int(face_count), start + max_faces))
+        for start in range(0, int(face_count), max_faces)
+    ]
+
+
 def vertex_bytes_for_shading(
     positions: np.ndarray,
     uvs: np.ndarray,
@@ -2018,7 +2204,11 @@ def vertex_bytes_for_shading(
     return _interleaved_vertex_bytes(positions, uvs, normals)
 
 
-def prepare_chunk_upload_groups(chunk_data: ChunkData) -> ChunkData:
+def prepare_chunk_upload_groups(
+    chunk_data: ChunkData,
+    *,
+    max_group_bytes: int | None = None,
+) -> ChunkData:
     """
     Precompute CPU-side renderer payloads for a loaded chunk.
 
@@ -2027,19 +2217,42 @@ def prepare_chunk_upload_groups(chunk_data: ChunkData) -> ChunkData:
     context-bound buffer/VAO/texture operations.
     """
     upload_groups: list[ChunkUploadGroup] = []
-    for mat_name, group in chunk_data.groups.items():
+    for _group_key, group in chunk_data.groups.items():
         n = len(group.positions)
         if n == 0:
             continue
 
-        upload_groups.append(ChunkUploadGroup(
-            material_name=mat_name,
-            positions=group.positions,
-            uvs=group.uvs,
-            smooth_normals=group.normals,
-        ))
+        for start, end in _upload_group_vertex_ranges(
+            n,
+            max_group_bytes=max_group_bytes,
+        ):
+            upload_groups.append(ChunkUploadGroup(
+                material_name=group.material_name,
+                positions=group.positions[start:end],
+                uvs=group.uvs[start:end],
+                smooth_normals=group.normals[start:end],
+            ))
 
     chunk_data.upload_groups = upload_groups
+    return chunk_data
+
+
+def prepack_chunk_vertex_bytes(
+    chunk_data: ChunkData,
+    *,
+    smooth_shading: bool,
+) -> ChunkData:
+    """
+    Precompute renderer VBO bytes for one shade mode without doing OpenGL work.
+
+    This is safe for a background streaming worker. The render thread still
+    owns the actual GL buffer/VAO creation, but it no longer has to spend a
+    frame packing large numpy arrays into interleaved bytes.
+    """
+    if chunk_data.upload_groups is None:
+        prepare_chunk_upload_groups(chunk_data)
+    for group in chunk_data.upload_groups or []:
+        group.prepack_vertex_bytes(smooth_shading=smooth_shading)
     return chunk_data
 
 
@@ -2076,6 +2289,19 @@ def manifest_chunk_size(manifest: dict | None) -> float | None:
     if chunk_size <= 0.0:
         return None
     return chunk_size
+
+
+def manifest_max_upload_group_mb(manifest: dict | None) -> float | None:
+    """Return the upload-group MB limit recorded in a cache manifest."""
+    if not isinstance(manifest, dict):
+        return None
+    try:
+        value = float(manifest.get("max_upload_group_mb"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value <= 0.0:
+        return None
+    return value
 
 
 def cache_chunk_size(cache_dir: str) -> float | None:
@@ -2140,7 +2366,13 @@ def load_chunk_file(cache_dir: str, cell: tuple[int, int, int]) -> ChunkData:
         normals = np.frombuffer(blob, dtype=np.float32, count=nrm_count, offset=offset).reshape(n_verts, 3)
         offset += nrm_count * 4
 
-        groups[name] = ChunkMaterialGroup(name, positions, uvs, normals)
+        group_key = name
+        if group_key in groups:
+            duplicate_index = 2
+            while f"{name}#{duplicate_index}" in groups:
+                duplicate_index += 1
+            group_key = f"{name}#{duplicate_index}"
+        groups[group_key] = ChunkMaterialGroup(name, positions, uvs, normals)
         if len(positions):
             group_min = positions.min(axis=0)
             group_max = positions.max(axis=0)

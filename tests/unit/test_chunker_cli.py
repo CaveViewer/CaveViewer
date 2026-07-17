@@ -125,6 +125,7 @@ def test_cli_passes_named_options_to_compiler(monkeypatch, capsys):
             "/maps/cave.glb",
             "--cache-root=/cache/maps",
             "--chunk-size=64",
+            "--max-upload-group-mb=24",
             "--obj-scan-throttle-ms=2",
             "--obj-import-batch-thousands=250",
             "--obj-bucket-workers=4",
@@ -142,6 +143,7 @@ def test_cli_passes_named_options_to_compiler(monkeypatch, capsys):
     assert options.obj_bucket_workers == "4"
     assert options.parsing_overrides == {
         "chunk_size_meters": "64",
+        "max_upload_group_mb": "24",
         "obj_scan_throttle_ms": "2",
         "obj_import_batch_thousands": "250",
         "chunk_build_workers": "4",

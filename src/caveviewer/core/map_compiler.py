@@ -115,6 +115,7 @@ def compile_map(options: CompileOptions) -> CompileResult:
     cache_root = _normalize_cache_root(options.cache_root)
     settings = _resolve_settings(options.settings_file, options.parsing_overrides)
     chunk_size = _float_setting(settings, "chunk_size_meters")
+    max_upload_group_mb = _float_setting(settings, "max_upload_group_mb")
     obj_bucket_workers = _resolve_obj_bucket_workers(options.obj_bucket_workers)
 
     env_updates = {
@@ -130,6 +131,7 @@ def compile_map(options: CompileOptions) -> CompileResult:
             options,
             source_argument=source_argument,
             chunk_size=chunk_size,
+            max_upload_group_mb=max_upload_group_mb,
         )
 
 
@@ -173,6 +175,7 @@ def _compile_with_environment(
     *,
     source_argument: str,
     chunk_size: float,
+    max_upload_group_mb: float,
 ) -> CompileResult:
     from caveviewer import app
     from caveviewer.core import chunker
@@ -197,6 +200,7 @@ def _compile_with_environment(
 
     manifest = chunker.load_manifest(cache_dir)
     cached_chunk_size = chunker.manifest_chunk_size(manifest)
+    cached_max_upload_group_mb = chunker.manifest_max_upload_group_mb(manifest)
     cache_valid = chunker.cache_is_valid(source_path)
     chunk_size_mismatch = (
         cache_valid
@@ -205,6 +209,15 @@ def _compile_with_environment(
     )
     missing_manifest_chunk_size = cache_valid and cached_chunk_size is None
     rebuild_for_chunk_size = chunk_size_mismatch or missing_manifest_chunk_size
+    max_upload_group_mismatch = (
+        cache_valid
+        and cached_max_upload_group_mb is not None
+        and abs(cached_max_upload_group_mb - max_upload_group_mb) > 1e-6
+    )
+    rebuild_for_import_settings = (
+        rebuild_for_chunk_size
+        or max_upload_group_mismatch
+    )
 
     if options.dry_run:
         return _result_from_manifest(
@@ -221,7 +234,7 @@ def _compile_with_environment(
             rebuilt_for_chunk_size=rebuild_for_chunk_size,
         )
 
-    if cache_valid and not options.force_rebuild and not rebuild_for_chunk_size:
+    if cache_valid and not options.force_rebuild and not rebuild_for_import_settings:
         return _result_from_manifest(
             status="skipped",
             options=options,
@@ -240,7 +253,7 @@ def _compile_with_environment(
     built_cache_dir = app.import_and_cache_any(
         model_descriptor,
         textures_dir,
-        force_rebuild=bool(options.force_rebuild or rebuild_for_chunk_size),
+        force_rebuild=bool(options.force_rebuild or rebuild_for_import_settings),
         console_progress=not options.json_output,
         chunk_size=chunk_size,
     )

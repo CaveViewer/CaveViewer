@@ -13,24 +13,28 @@ from caveviewer.core.chunk_size_advisor import ChunkSizeRecommendation
 from caveviewer.core.cache_paths import MapCacheLocator
 
 
-def _write_valid_cache(source: Path, cache_root: Path, *, chunk_size: float) -> Path:
+def _write_valid_cache(
+    source: Path,
+    cache_root: Path,
+    *,
+    chunk_size: float,
+    max_upload_group_mb: float | None = None,
+) -> Path:
     cache_dir = MapCacheLocator(
         environ={"CAVEVIEWER_MAP_CACHE_DIR": str(cache_root)}
     ).build_cache_dir(source)
     chunks_dir = cache_dir / "chunks"
     chunks_dir.mkdir(parents=True)
     manifest_path = cache_dir / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "chunk_size": chunk_size,
-                "chunks": {"0_0_0": {}},
-                "triangle_count": 12,
-            }
-        ),
-        encoding="utf-8",
-    )
+    manifest = {
+        "version": 1,
+        "chunk_size": chunk_size,
+        "chunks": {"0_0_0": {}},
+        "triangle_count": 12,
+    }
+    if max_upload_group_mb is not None:
+        manifest["max_upload_group_mb"] = max_upload_group_mb
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     newer_than_source = source.stat().st_mtime + 1
     os.utime(manifest_path, (newer_than_source, newer_than_source))
     return cache_dir
@@ -111,6 +115,7 @@ def test_compile_rebuilds_valid_cache_when_chunk_size_differs(
             cache_root=str(cache_root),
             parsing_overrides={
                 "chunk_size_meters": "64",
+                "max_upload_group_mb": "24",
                 "obj_import_batch_thousands": "250",
             },
             obj_bucket_workers="4",
@@ -128,9 +133,71 @@ def test_compile_rebuilds_valid_cache_when_chunk_size_differs(
     assert kwargs["console_progress"] is False
     assert kwargs["chunk_size"] == 64.0
     assert environ["CAVEVIEWER_MAP_CACHE_DIR"] == str(cache_root)
+    assert environ["CAVEVIEWER_MAX_UPLOAD_GROUP_MB"] == "24"
     assert environ["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
     assert environ["CAVEVIEWER_OBJ_BUCKET_WORKERS"] == "4"
     assert "CAVEVIEWER_MAP_CACHE_DIR" not in os.environ
+
+
+def test_compile_rebuilds_valid_cache_when_upload_group_size_differs(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "cave.glb"
+    source.write_bytes(b"glTF")
+    cache_root = tmp_path / "cache-root"
+    cache_dir = _write_valid_cache(
+        source,
+        cache_root,
+        chunk_size=64.0,
+        max_upload_group_mb=32.0,
+    )
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
+
+    from caveviewer import app
+
+    calls = []
+
+    def fake_import(model_descriptor, textures_dir, **kwargs):
+        calls.append((model_descriptor, textures_dir, kwargs, os.environ.copy()))
+        (cache_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "chunk_size": 64.0,
+                    "max_upload_group_mb": 16.0,
+                    "chunks": {"0_0_0": {}, "1_0_0": {}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return str(cache_dir)
+
+    elapsed_markers = iter([100.0, 101.0])
+    monkeypatch.setattr(
+        map_compiler.time,
+        "perf_counter",
+        lambda: next(elapsed_markers),
+    )
+    monkeypatch.setattr(app, "import_and_cache_any", fake_import)
+
+    result = map_compiler.compile_map(
+        map_compiler.CompileOptions(
+            source=str(source),
+            cache_root=str(cache_root),
+            parsing_overrides={
+                "chunk_size_meters": "64",
+                "max_upload_group_mb": "16",
+            },
+        )
+    )
+
+    assert result.status == "built"
+    assert result.rebuilt_for_chunk_size is False
+    assert result.chunk_count == 2
+    _descriptor, _textures_dir, kwargs, environ = calls[0]
+    assert kwargs["force_rebuild"] is True
+    assert kwargs["chunk_size"] == 64.0
+    assert environ["CAVEVIEWER_MAX_UPLOAD_GROUP_MB"] == "16"
 
 
 def test_dry_run_reports_planned_cache_without_importing(tmp_path, monkeypatch):

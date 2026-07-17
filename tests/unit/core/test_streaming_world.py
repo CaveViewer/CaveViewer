@@ -306,6 +306,50 @@ def test_worker_load_failure_does_not_stop_later_ready_work(monkeypatch):
     assert ready_cell in world._pending
 
 
+def test_worker_prepacks_vertex_bytes_before_ready_handoff(monkeypatch):
+    cell = (2, 0, 0)
+    prepacked = []
+    world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
+    world.cache_dir = "unused"
+    world.on_decode_textures = None
+    world.prepack_smooth_shading = lambda: True
+    world._stop_event = threading.Event()
+    world._paused_event = threading.Event()
+    world._work_queue = queue.Queue()
+    world._ready_backlog = streaming_scheduler.BoundedReadyBacklog(capacity=1)
+    world._lock = threading.Lock()
+    world._pending = {cell}
+    world._last_wanted_cells = {cell}
+    world._work_queue.put(cell)
+    world._work_queue.put(None)
+
+    monkeypatch.setattr(
+        streaming_world.chunker,
+        "load_chunk_file",
+        lambda _cache_dir, requested_cell: _chunk(requested_cell),
+    )
+    monkeypatch.setattr(
+        streaming_world.chunker,
+        "prepare_chunk_upload_groups",
+        lambda data: data,
+    )
+
+    def prepack(data, *, smooth_shading):
+        prepacked.append((data.cell, smooth_shading))
+        return data
+
+    monkeypatch.setattr(
+        streaming_world.chunker,
+        "prepack_chunk_vertex_bytes",
+        prepack,
+    )
+
+    world._worker_loop()
+
+    assert prepacked == [(cell, True)]
+    assert world._ready_backlog.get_closest_nowait().cell == cell
+
+
 def test_ready_callback_failure_does_not_discard_unattempted_chunks():
     failed_cell = (1, 0, 0)
     deferred_cell = (2, 0, 0)
