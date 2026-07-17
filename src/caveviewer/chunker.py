@@ -35,6 +35,7 @@ Options:
   --cache-root=<path>                Root folder where compiled map caches are stored
   --settings-file=<path>             Advanced settings JSON to use
   --chunk-size=<value>               Import chunk size for new/rebuilt caches
+  --max-upload-group-mb=<value>      Target maximum VBO upload group size in MB
   --obj-scan-throttle-ms=<value>     Milliseconds paused while scanning OBJ files
   --obj-import-batch-thousands=<n>   Thousands of triangulated OBJ faces per batch
   --obj-bucket-workers=<n>           Worker threads for temporary OBJ buckets
@@ -61,6 +62,7 @@ Defaults:
 
 Built-in import defaults:
   --chunk-size=50
+  --max-upload-group-mb=32
   --obj-scan-throttle-ms=0 on Linux/macOS, 1 on Windows
   --obj-import-batch-thousands=200
   --obj-bucket-workers=2
@@ -83,6 +85,7 @@ _VALUE_OPTIONS = {
     "--cache-root": "cache_root",
     "--settings-file": "settings_file",
     "--chunk-size": "chunk_size_meters",
+    "--max-upload-group-mb": "max_upload_group_mb",
     "--obj-scan-throttle-ms": "obj_scan_throttle_ms",
     "--obj-import-batch-thousands": "obj_import_batch_thousands",
     "--obj-bucket-workers": "obj_bucket_workers",

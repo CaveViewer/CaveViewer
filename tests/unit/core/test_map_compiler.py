@@ -111,6 +111,7 @@ def test_compile_rebuilds_valid_cache_when_chunk_size_differs(
             cache_root=str(cache_root),
             parsing_overrides={
                 "chunk_size_meters": "64",
+                "max_upload_group_mb": "24",
                 "obj_import_batch_thousands": "250",
             },
             obj_bucket_workers="4",
@@ -128,6 +129,7 @@ def test_compile_rebuilds_valid_cache_when_chunk_size_differs(
     assert kwargs["console_progress"] is False
     assert kwargs["chunk_size"] == 64.0
     assert environ["CAVEVIEWER_MAP_CACHE_DIR"] == str(cache_root)
+    assert environ["CAVEVIEWER_MAX_UPLOAD_GROUP_MB"] == "24"
     assert environ["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
     assert environ["CAVEVIEWER_OBJ_BUCKET_WORKERS"] == "4"
     assert "CAVEVIEWER_MAP_CACHE_DIR" not in os.environ

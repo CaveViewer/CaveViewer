@@ -1014,6 +1014,46 @@ def test_prepare_chunk_upload_groups_defers_flat_payload(monkeypatch):
     assert calls == [3]
 
 
+def test_prepack_chunk_vertex_bytes_reuses_requested_payload(monkeypatch):
+    calls = []
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    uvs = np.zeros((3, 2), dtype=np.float32)
+    smooth_normals = np.tile(
+        np.array([[0.0, 1.0, 0.0]], dtype=np.float32), (3, 1)
+    )
+
+    def fake_flat_normals(flat_pos):
+        calls.append(len(flat_pos))
+        return smooth_normals.copy()
+
+    monkeypatch.setattr(chunker, "compute_flat_normals", fake_flat_normals)
+    data = chunker.ChunkData(
+        cell=(0, 0, 0),
+        groups={
+            "rock": chunker.ChunkMaterialGroup(
+                "rock", positions, uvs, smooth_normals
+            ),
+        },
+        bounds_min=np.zeros(3, dtype=np.float32),
+        bounds_max=np.ones(3, dtype=np.float32),
+    )
+
+    chunker.prepare_chunk_upload_groups(data)
+    group = data.upload_groups[0]
+    assert not group.has_prepacked_vertex_bytes(smooth_shading=False)
+
+    chunker.prepack_chunk_vertex_bytes(data, smooth_shading=False)
+
+    assert calls == [3]
+    assert group.has_prepacked_vertex_bytes(smooth_shading=False)
+    calls.clear()
+    _flat_bytes = group.flat_vertex_bytes
+    assert calls == []
+
+
 def test_footprint_from_positions_matches_dense_unique_across_blocks():
     base_positions = np.array(
         [

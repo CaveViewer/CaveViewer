@@ -36,6 +36,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import time
 from io import BytesIO
 from dataclasses import dataclass
 from typing import Optional
@@ -503,6 +504,10 @@ class TextureManager:
     # -- main-thread-only GPU upload step ------------------------------------
 
     def acquire(self, material_name: str) -> object:
+        tex, _timing = self.acquire_with_timing(material_name)
+        return tex
+
+    def acquire_with_timing(self, material_name: str) -> tuple[object, dict]:
         """
         Increment refcount for `material_name`'s texture, uploading it to
         the GPU on first use. MUST be called from the main/render thread.
@@ -514,24 +519,50 @@ class TextureManager:
         used standalone), it falls back to decoding synchronously here --
         slower, but still correct.
         """
+        timing = {
+            "material": material_name,
+            "total_ms": 0.0,
+            "material_cache_hit": False,
+            "file_cache_hit": False,
+            "decoded_cache_hit": False,
+            "sync_decode": False,
+            "placeholder": False,
+            "decode_ms": 0.0,
+            "texture_ms": 0.0,
+            "mipmap_ms": 0.0,
+            "image_bytes": 0,
+            "image_size": None,
+        }
+        start = time.perf_counter()
         if material_name in self._loaded:
             entry = self._loaded[material_name]
             entry.ref_count += 1
-            return entry.moderngl_texture
+            timing["material_cache_hit"] = True
+            timing["total_ms"] = (time.perf_counter() - start) * 1000.0
+            return entry.moderngl_texture, timing
 
         file_or_bytes = self.material_to_file.get(material_name)
         if file_or_bytes and file_or_bytes in self._file_cache:
             tex = self._file_cache[file_or_bytes]
+            timing["file_cache_hit"] = True
         else:
-            tex = self._upload_for_material(material_name, file_or_bytes)
+            tex = self._upload_for_material(
+                material_name,
+                file_or_bytes,
+                timing=timing,
+            )
             if file_or_bytes:
                 self._file_cache[file_or_bytes] = tex
 
         self._loaded[material_name] = LoadedTexture(moderngl_texture=tex, ref_count=1)
-        return tex
+        timing["total_ms"] = (time.perf_counter() - start) * 1000.0
+        return tex, timing
 
-    def _upload_for_material(self, material_name: str, file_or_bytes) -> object:
+    def _upload_for_material(self, material_name: str, file_or_bytes,
+                             *, timing: dict | None = None) -> object:
         if not file_or_bytes:
+            if timing is not None:
+                timing["placeholder"] = True
             return self._placeholder_texture()
 
         decoded = None
@@ -542,19 +573,38 @@ class TextureManager:
                     0,
                     self._decode_cache_bytes - len(decoded.data),
                 )
+        if decoded is not None and timing is not None:
+            timing["decoded_cache_hit"] = True
 
         if decoded is None:
             # fallback: decode synchronously on the main thread. Slower
             # (this is the case we're trying to avoid via pre-decoding),
             # but correctness matters more than speed here.
+            if timing is not None:
+                timing["sync_decode"] = True
+            t_decode = time.perf_counter()
             decoded = self._decode_image(file_or_bytes)
+            if timing is not None:
+                timing["decode_ms"] = (time.perf_counter() - t_decode) * 1000.0
 
         if decoded is None:
+            if timing is not None:
+                timing["placeholder"] = True
             return self._placeholder_texture()
 
+        if timing is not None:
+            timing["image_size"] = decoded.size
+            timing["image_bytes"] = len(decoded.data)
+
+        t_texture = time.perf_counter()
         tex = self.ctx.texture(decoded.size, decoded.components, decoded.data)
+        if timing is not None:
+            timing["texture_ms"] = (time.perf_counter() - t_texture) * 1000.0
         if hasattr(tex, "build_mipmaps"):
+            t_mipmap = time.perf_counter()
             tex.build_mipmaps()
+            if timing is not None:
+                timing["mipmap_ms"] = (time.perf_counter() - t_mipmap) * 1000.0
         return tex
 
     def release(self, material_name: str) -> None:

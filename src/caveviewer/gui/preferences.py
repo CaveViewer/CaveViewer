@@ -250,6 +250,18 @@ ADVANCED_SETTING_FIELDS = (
     ),
     SettingSpec(
         section="parsing",
+        key="max_upload_group_mb",
+        env_var="CAVEVIEWER_MAX_UPLOAD_GROUP_MB",
+        label="Max upload group size",
+        hint="Target maximum VBO payload size for dense chunk upload groups.",
+        value_type=ValueType.FLOAT,
+        default="32",
+        minimum=1.0,
+        maximum=512.0,
+        units="MB",
+    ),
+    SettingSpec(
+        section="parsing",
         key="obj_scan_throttle_ms",
         env_var="CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
         label=".obj scan throttle",

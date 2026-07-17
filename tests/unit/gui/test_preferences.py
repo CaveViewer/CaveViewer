@@ -46,6 +46,9 @@ from caveviewer.gui import preferences as settings
         ("upload_time_budget_ms", "50.1", "no more than 50"),
         ("chunk_size_meters", "0", "at least 0.01"),
         ("chunk_size_meters", "512.1", "no more than 512"),
+        ("max_upload_group_mb", "", "required"),
+        ("max_upload_group_mb", "0.9", "at least 1"),
+        ("max_upload_group_mb", "512.1", "no more than 512"),
         ("obj_scan_throttle_ms", "-0.1", "cannot be negative"),
         ("obj_scan_throttle_ms", "50.1", "no more than 50"),
         ("obj_import_batch_thousands", "0", "at least 1"),
@@ -101,6 +104,8 @@ def test_invalid_setting_reports_field(
         ("upload_time_budget_ms", "50", "50"),
         ("chunk_size_meters", "0.01", "0.01"),
         ("chunk_size_meters", "512", "512"),
+        ("max_upload_group_mb", "1", "1"),
+        ("max_upload_group_mb", "512", "512"),
         ("obj_scan_throttle_ms", "0", "0"),
         ("obj_scan_throttle_ms", "50", "50"),
         ("obj_import_batch_thousands", "1", "1"),
@@ -156,6 +161,7 @@ def test_schema_is_typed_and_has_unique_runtime_mappings():
         field.key for field in fields
     }
     assert settings.advanced_setting_defaults()["chunk_size_meters"] == "50"
+    assert settings.advanced_setting_defaults()["max_upload_group_mb"] == "32"
     assert settings.advanced_setting_defaults()["obj_import_batch_thousands"] == "200"
 
 
@@ -438,6 +444,7 @@ def test_every_numeric_setting_has_a_display_range():
         "upload_chunks_per_frame": "1-16 chunks",
         "upload_time_budget_ms": "0.5-50 ms",
         "chunk_size_meters": "0.01-512",
+        "max_upload_group_mb": "1-512 MB",
         "obj_scan_throttle_ms": "0-50 ms",
         "obj_import_batch_thousands": "1-2000 thousand faces",
         "chunk_build_workers": "1-32 workers",
@@ -475,6 +482,7 @@ def test_every_numeric_setting_has_an_in_field_placeholder():
         "upload_chunks_per_frame": "1-16",
         "upload_time_budget_ms": "0.5-50",
         "chunk_size_meters": "0.01-512",
+        "max_upload_group_mb": "1-512",
         "obj_scan_throttle_ms": "0-50",
         "obj_import_batch_thousands": "1-2000",
         "chunk_build_workers": "1-32",
@@ -608,6 +616,7 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
         fields_by_key["obj_import_batch_thousands"].label
         == "Faces per .obj batch"
     )
+    assert fields_by_key["max_upload_group_mb"].label == "Max upload group size"
     assert (
         fields_by_key["io_workers"].hint
         == "Max chunk-loading worker threads."
@@ -623,6 +632,10 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert (
         fields_by_key["obj_import_batch_thousands"].hint
         == "Thousands of triangulated faces per batch."
+    )
+    assert (
+        fields_by_key["max_upload_group_mb"].hint
+        == "Target maximum VBO payload size for dense chunk upload groups."
     )
     if (
         advanced_settings_dialog._LINUX_LAYOUT

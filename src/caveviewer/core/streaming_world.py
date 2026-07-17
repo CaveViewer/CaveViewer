@@ -149,6 +149,7 @@ class StreamingWorld:
 
     def __init__(self, cache_dir: str, config: StreamingConfig,
                  on_decode_textures: Optional[Callable[[ChunkData], None]] = None,
+                 prepack_smooth_shading: Optional[Callable[[], bool]] = None,
                  gpu_vendor: str | None = None,
                  textures_dir: str | None = None,
                  total_gpu_memory_bytes: int | None = None):
@@ -163,6 +164,12 @@ class StreamingWorld:
         directly here preserves this module's GPU-API-agnostic design and
         keeps it unit-testable without any texture/GPU machinery at all.
 
+        prepack_smooth_shading, if given, is called from the same background
+        worker to decide which shade mode's interleaved vertex bytes should be
+        packed before the chunk reaches the render thread. If the user toggles
+        SHADE after this point, the renderer can still compute the other mode
+        from the retained source arrays.
+
         gpu_vendor is the active OpenGL context's GL_VENDOR string when the
         caller has one. It prevents a secondary adapter from supplying the
         memory budget on hybrid-GPU systems.
@@ -174,6 +181,7 @@ class StreamingWorld:
         self.cache_dir = cache_dir
         self.config = config
         self.on_decode_textures = on_decode_textures
+        self.prepack_smooth_shading = prepack_smooth_shading
         manifest = chunker.load_manifest(cache_dir) or {"chunks": {}}
         chunks = manifest.get("chunks", {})
         sampled_chunk_keys: list[str] = []
@@ -507,6 +515,22 @@ class StreamingWorld:
                     continue
                 data = chunker.load_chunk_file(self.cache_dir, cell)
                 chunker.prepare_chunk_upload_groups(data)
+                prepack_smooth_shading = getattr(
+                    self, "prepack_smooth_shading", None
+                )
+                if prepack_smooth_shading is not None:
+                    try:
+                        chunker.prepack_chunk_vertex_bytes(
+                            data,
+                            smooth_shading=bool(prepack_smooth_shading()),
+                        )
+                    except Exception as e:
+                        # Prepacking is an optimization. If it fails, keep the
+                        # chunk stream correct and let the render thread fall
+                        # back to the existing on-demand pack path.
+                        _LOG.warning(
+                            "vertex-byte prepack failed for %s: %s", cell, e
+                        )
                 if self.on_decode_textures is not None:
                     try:
                         self.on_decode_textures(data)

@@ -63,6 +63,7 @@ def test_environment_default_helpers_cover_static_callable_and_failure(monkeypat
     assert app._default_io_workers() == "2"
     assert app._default_chunk_build_workers() == "1"
     assert app._effective_env_default("CAVEVIEWER_CHUNK_SIZE_METERS") == "50"
+    assert app._effective_env_default("CAVEVIEWER_MAX_UPLOAD_GROUP_MB") == "32"
     assert app._effective_env_default("CAVEVIEWER_UI_TEXT_SCALE") == "1.28"
     assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"
     assert app._effective_env_default("NOT_CONFIGURED") is None

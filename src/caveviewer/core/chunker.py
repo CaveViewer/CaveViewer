@@ -452,16 +452,36 @@ class ChunkUploadGroup:
 
     OpenGL object creation still has to happen on the render thread, but
     the expensive chunk-file decode happens in a streaming worker before the
-    chunk reaches the renderer.  Vertex-byte payloads are generated lazily so
-    the ready backlog and loaded-chunk cache do not retain both smooth and
-    flat-shaded copies of the same geometry.
+    chunk reaches the renderer.  A worker may prepack one vertex-byte payload
+    for the shade mode expected at upload time; the source arrays remain
+    available so a late SHADE toggle can still fall back to building the other
+    mode correctly.
     """
     material_name: str
     positions: np.ndarray
     uvs: np.ndarray
     smooth_normals: np.ndarray
+    prepacked_vertex_bytes: bytes | None = None
+    prepacked_smooth_shading: bool | None = None
+
+    def prepack_vertex_bytes(self, *, smooth_shading: bool) -> None:
+        self.prepacked_vertex_bytes = vertex_bytes_for_shading(
+            self.positions,
+            self.uvs,
+            self.smooth_normals,
+            smooth_shading=smooth_shading,
+        )
+        self.prepacked_smooth_shading = bool(smooth_shading)
+
+    def has_prepacked_vertex_bytes(self, *, smooth_shading: bool) -> bool:
+        return (
+            self.prepacked_vertex_bytes is not None
+            and self.prepacked_smooth_shading == bool(smooth_shading)
+        )
 
     def vertex_bytes(self, *, smooth_shading: bool) -> bytes:
+        if self.has_prepacked_vertex_bytes(smooth_shading=smooth_shading):
+            return self.prepacked_vertex_bytes
         return vertex_bytes_for_shading(
             self.positions,
             self.uvs,
@@ -2040,6 +2060,25 @@ def prepare_chunk_upload_groups(chunk_data: ChunkData) -> ChunkData:
         ))
 
     chunk_data.upload_groups = upload_groups
+    return chunk_data
+
+
+def prepack_chunk_vertex_bytes(
+    chunk_data: ChunkData,
+    *,
+    smooth_shading: bool,
+) -> ChunkData:
+    """
+    Precompute renderer VBO bytes for one shade mode without doing OpenGL work.
+
+    This is safe for a background streaming worker. The render thread still
+    owns the actual GL buffer/VAO creation, but it no longer has to spend a
+    frame packing large numpy arrays into interleaved bytes.
+    """
+    if chunk_data.upload_groups is None:
+        prepare_chunk_upload_groups(chunk_data)
+    for group in chunk_data.upload_groups or []:
+        group.prepack_vertex_bytes(smooth_shading=smooth_shading)
     return chunk_data
 
 
