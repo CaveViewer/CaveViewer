@@ -429,6 +429,12 @@ def test_failed_release_test_gate_does_not_change_version(tmp_path):
 def test_essential_workflow_enforces_module_coverage_floors():
     workflow = (WORKFLOWS_DIR / "tests.yml").read_text(encoding="utf-8")
 
+    assert "--cov=caveviewer.gui.preferences" in workflow
+    assert "--cov=caveviewer.gui.advanced_settings" not in workflow
+    assert (
+        "--include=src/caveviewer/gui/preferences.py\n"
+        "          --fail-under=85"
+    ) in workflow
     assert (
         "--include=src/caveviewer/app.py\n"
         "          --fail-under=90"
