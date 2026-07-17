@@ -144,6 +144,18 @@ The repository secret `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the
 Ed25519 private key used for update manifests. Only the finalizer receives this
 secret. Package-only runs do not require it.
 
+## GitHub Pages
+
+GitHub Pages deployment is independent from application releases. The
+[`Pages`](../../.github/workflows/pages.yml) workflow packages only `docs/` and
+deploys it through the `github-pages` environment. It runs after changes to
+`docs/**` or its own workflow reach `main`, and it can also be dispatched
+manually from `main`. Release workflows do not call or depend on it.
+
+Repository Pages settings must use **GitHub Actions** as the publishing source,
+not the legacy `main` branch `/docs` source. Keep the `github-pages` environment
+restricted to `main` so a manual dispatch from another branch cannot publish.
+
 ## Existing tags and prerelease promotion
 
 The release finalizer creates the tag/release only when it does not already
