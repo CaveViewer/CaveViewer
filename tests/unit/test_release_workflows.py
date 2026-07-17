@@ -162,7 +162,7 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
         assert "--skip-tests" in workflow
         assert "--action=release" not in workflow
         assert "finalize-release.yml" not in workflow
-        assert "actions/upload-artifact@v4" in workflow
+        assert "actions/upload-artifact@v7" in workflow
         assert smoke_marker in workflow
         assert artifact_label in workflow
 
