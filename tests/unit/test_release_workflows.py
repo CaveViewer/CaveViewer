@@ -122,6 +122,60 @@ def test_linux_release_workflow_smoke_tests_appimage_desktop_integration():
     )
 
 
+def test_package_smoke_workflows_are_read_only_and_non_publishing():
+    workflow_contracts = (
+        (
+            "linux-package-smoke.yml",
+            "Linux Package Smoke",
+            "ubuntu-latest",
+            "x86_64.AppImage",
+            "--target=linux-x86_64",
+            "CAVEVIEWER_APPRUN_INSTALL_ONLY=1",
+        ),
+        (
+            "macos-arm64-package-smoke.yml",
+            "macOS ARM64 Package Smoke",
+            "macos-15",
+            "macos-arm64.dmg",
+            "--target=macos-arm64",
+            "Smoke-test macOS ARM64 DMG",
+        ),
+    )
+
+    for (
+        workflow_name,
+        display_name,
+        runner,
+        artifact_label,
+        target,
+        smoke_marker,
+    ) in workflow_contracts:
+        workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+        assert f"name: {display_name}" in workflow
+        assert "workflow_dispatch:" in workflow
+        assert "schedule:" in workflow
+        assert "pull_request:" in workflow
+        assert "push:" in workflow
+        assert "permissions:\n  contents: read" in workflow
+        assert f"runs-on: {runner}" in workflow
+        assert target in workflow
+        assert "--skip-tests" in workflow
+        assert "--action=release" not in workflow
+        assert "finalize-release.yml" not in workflow
+        assert "actions/upload-artifact@v4" in workflow
+        assert smoke_marker in workflow
+        assert artifact_label in workflow
+
+    macos_workflow = (WORKFLOWS_DIR / "macos-arm64-package-smoke.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "hdiutil attach" in macos_workflow
+    assert "PlistBuddy" in macos_workflow
+    assert "lipo -archs" in macos_workflow
+    assert '"architecture": "arm64"' in macos_workflow
+    assert "CFBundleShortVersionString" in macos_workflow
+
+
 def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():
     workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
         encoding="utf-8"
