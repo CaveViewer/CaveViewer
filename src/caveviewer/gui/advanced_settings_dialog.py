@@ -44,33 +44,34 @@ _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 _WINDOWS_LAYOUT = sys.platform == "win32"
 _MACOS_LAYOUT = sys.platform == "darwin"
 _LINUX_LAYOUT = sys.platform.startswith("linux")
-# Keep Preferences close to GNOME-style boxed-list proportions: a wider
-# secondary window with enough room for labels, hints, and path controls.
-_WRAP_LENGTH = 520 if sys.platform == "win32" else 460
-_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 34 if _MACOS_LAYOUT else 36
+# Keep Preferences close to platform-native boxed-list proportions. macOS gets
+# a narrower, denser panel because the window chrome and Tk font metrics leave
+# noticeably more unused space than the Linux and Windows layouts.
+_WRAP_LENGTH = 520 if sys.platform == "win32" else 300 if _MACOS_LAYOUT else 460
+_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 24 if _MACOS_LAYOUT else 36
 _NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
-_BODY_PAD_X = 32 if _LINUX_LAYOUT else DIALOG_BODY_PAD_X
+_BODY_PAD_X = 32 if _LINUX_LAYOUT else 12 if _MACOS_LAYOUT else DIALOG_BODY_PAD_X
 _MIN_WIDTH = (
     860
     if sys.platform == "win32"
     else 860
     if _LINUX_LAYOUT
-    else 680
+    else 430
     if _MACOS_LAYOUT
     else 760
 )
-_ROW_PAD_X = 18
-_ROW_PAD_Y = 8 if _MACOS_LAYOUT else 12
-_CONTROL_ROW_TOP_PAD_Y = 8 if _MACOS_LAYOUT else 14
+_ROW_PAD_X = 14 if _MACOS_LAYOUT else 18
+_ROW_PAD_Y = 5 if _MACOS_LAYOUT else 12
+_CONTROL_ROW_TOP_PAD_Y = 5 if _MACOS_LAYOUT else 14
 _CONTROL_GAP_X = 10
-_TAB_PAD_X = 12 if _MACOS_LAYOUT else 14
-_TAB_PAD_Y = 8 if _MACOS_LAYOUT else 7
+_TAB_PAD_X = 10 if _MACOS_LAYOUT else 14
+_TAB_PAD_Y = 6 if _MACOS_LAYOUT else 7
 _TAB_GAP_X = 10
-_TAB_BOTTOM_PAD_Y = 12 if _MACOS_LAYOUT else 18
-_BUTTON_ROW_TOP_PAD_Y = 12 if _MACOS_LAYOUT else 18
+_TAB_BOTTOM_PAD_Y = 8 if _MACOS_LAYOUT else 18
+_BUTTON_ROW_TOP_PAD_Y = 8 if _MACOS_LAYOUT else 18
 _TAB_HIGHLIGHT_THICKNESS = 0 if _MACOS_LAYOUT else 1
-_NOTICE_WRAP_LENGTH = 720
+_NOTICE_WRAP_LENGTH = 390 if _MACOS_LAYOUT else 720
 _INLINE_FEEDBACK_PAD_X = 10
 _SCROLLBAR_WIDTH = 14
 _SCROLL_THUMB_WIDTH = 5

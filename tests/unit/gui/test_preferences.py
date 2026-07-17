@@ -656,25 +656,31 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     ):
         assert advanced_settings_dialog._MIN_WIDTH >= 860
     elif advanced_settings_dialog._MACOS_LAYOUT:
-        assert advanced_settings_dialog._MIN_WIDTH == 680
-        assert advanced_settings_dialog._TEXT_ENTRY_WIDTH == 34
-        assert advanced_settings_dialog._ROW_PAD_Y == 8
-        assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 8
-        assert advanced_settings_dialog._TAB_PAD_Y == 8
+        assert advanced_settings_dialog._BODY_PAD_X == 12
+        assert advanced_settings_dialog._MIN_WIDTH == 430
+        assert advanced_settings_dialog._TEXT_ENTRY_WIDTH == 24
+        assert advanced_settings_dialog._ROW_PAD_X == 14
+        assert advanced_settings_dialog._ROW_PAD_Y == 5
+        assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 5
+        assert advanced_settings_dialog._TAB_PAD_X == 10
+        assert advanced_settings_dialog._TAB_PAD_Y == 6
         assert advanced_settings_dialog._TAB_HIGHLIGHT_THICKNESS == 0
-        assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 12
-        assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 12
+        assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 8
+        assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 8
+        assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 390
     else:
         assert advanced_settings_dialog._MIN_WIDTH >= 760
-    assert advanced_settings_dialog._ROW_PAD_X == 18
+    if not advanced_settings_dialog._MACOS_LAYOUT:
+        assert advanced_settings_dialog._ROW_PAD_X == 18
     if not advanced_settings_dialog._MACOS_LAYOUT:
         assert advanced_settings_dialog._ROW_PAD_Y == 12
         assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 14
+        assert advanced_settings_dialog._TAB_PAD_X == 14
         assert advanced_settings_dialog._TAB_PAD_Y == 7
         assert advanced_settings_dialog._TAB_HIGHLIGHT_THICKNESS == 1
         assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 18
         assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 18
-    assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 720
+        assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 720
     assert fields_by_key["recording_dir"].label == "Recordings folder"
     assert fields_by_key["recording_dir"].hint == "Where saved recordings are stored."
     assert "compact_path = key == \"recording_dir\"" in render_field_source
