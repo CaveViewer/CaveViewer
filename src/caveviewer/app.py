@@ -736,7 +736,8 @@ def main():
 
     # CLI argument: open that path and exit when the viewer closes.
     if len(sys.argv) > 1 and sys.argv[1].strip():
-        _run_map_session(sys.argv[1].strip())
+        selected_path = sys.argv.pop(1).strip()
+        _run_map_session(selected_path)
         return
 
     # GUI mode: show the splash screen, run the viewer, then show the
