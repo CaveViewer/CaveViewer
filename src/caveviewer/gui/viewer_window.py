@@ -4145,13 +4145,24 @@ class CaveViewerWindow(mglw.WindowConfig):
     iconify_event = on_iconify_event
 
     def _handle_mouse_look_motion(self, x, y, dx, dy):
+        # Cocoa can deliver passive mouse-move callbacks while the native
+        # window exists but before our Python-side controls are fully built.
+        # Treat those early/late events as no-ops so ctypes does not print
+        # ignored callback exceptions to stderr.
+        if (
+            not getattr(self, "_window_setup_complete", False)
+            or getattr(self, "_closing_requested", False)
+        ):
+            return
+
         # Color picker's RGB sliders still use continuous drag (a
         # separate feature from the brightness/render-distance controls
         # below, which were converted to discrete +/- steppers) -- this
         # still needs to take priority over camera look while one of its
         # sliders is being dragged, same reasoning as before.
-        if self.color_picker.is_dragging:
-            self.color_picker.on_mouse_drag(x, y, self.wnd.size)
+        color_picker = getattr(self, "color_picker", None)
+        if color_picker is not None and color_picker.is_dragging:
+            color_picker.on_mouse_drag(x, y, self.wnd.size)
             return
         # macOS-friendly fallback: Option + pointer movement can drive
         # look even without a physical click/drag gesture.
