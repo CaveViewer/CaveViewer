@@ -3913,6 +3913,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.camera.barrel_roll(roll_dir * roll_speed * dt)
 
     def on_key_event(self, key, action, modifiers: KeyModifiers):
+        # Cocoa may dispatch key callbacks before viewer controls exist or
+        # after teardown has started. Input is not actionable in either state.
+        if (
+            not getattr(self, "_window_setup_complete", False)
+            or getattr(self, "_closing_requested", False)
+        ):
+            return
+
         if self.controls_overlay is None:
             return
         keys = self.wnd.keys

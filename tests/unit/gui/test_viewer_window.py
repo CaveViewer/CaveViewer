@@ -881,6 +881,12 @@ def test_render_during_window_setup_returns_before_full_state_exists():
     window.on_render(0.0, 0.0)
 
 
+def test_key_event_during_window_setup_returns_before_full_state_exists():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+
+    window.on_key_event(0, 0, None)
+
+
 def test_mouse_motion_during_window_setup_returns_before_full_state_exists():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._window_setup_complete = False
