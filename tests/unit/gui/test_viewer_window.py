@@ -881,6 +881,24 @@ def test_render_during_window_setup_returns_before_full_state_exists():
     window.on_render(0.0, 0.0)
 
 
+def test_mouse_motion_during_window_setup_returns_before_full_state_exists():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = False
+
+    window.on_mouse_position_event(10, 20, 1, -1)
+
+
+def test_mouse_motion_after_color_picker_release_is_noop():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window._closing_requested = False
+    window.color_picker = None
+    window._mouse_look_active = False
+    window._option_look_active = lambda: False
+
+    window.on_mouse_position_event(10, 20, 1, -1)
+
+
 def test_request_import_pause_sends_child_command(monkeypatch):
     logger = FakeLogger()
     commands = queue.Queue()
