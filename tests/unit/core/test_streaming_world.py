@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -16,6 +17,16 @@ from caveviewer.core.worker_config import WorkerAllocation
 
 def _chunk(cell):
     return SimpleNamespace(cell=cell)
+
+
+class _LockCheckingSet(set):
+    def __init__(self, lock: threading.Lock, values=()):
+        super().__init__(values)
+        self._lock = lock
+
+    def __len__(self):
+        assert self._lock.locked()
+        return super().__len__()
 
 
 def _world_with_ready_chunks(
@@ -222,7 +233,17 @@ def test_streaming_starts_one_worker_then_grows_after_completed_work(
         assert len(world._workers) == 1
         with caplog.at_level(logging.INFO, logger="caveviewer"):
             world.update(np.zeros(3, dtype=np.float32))
-            assert all_loaded.wait(timeout=2.0)
+            deadline = time.perf_counter() + 2.0
+            ready = []
+            while not all_loaded.is_set() and time.perf_counter() < deadline:
+                world.drain_ready_chunks(
+                    lambda data: ready.append(data.cell),
+                    lambda _cell: None,
+                    max_per_frame=6,
+                    time_budget_ms=100.0,
+                )
+                time.sleep(0.01)
+            assert all_loaded.is_set()
         assert len(world._workers) > 1
         assert len(world._workers) <= 5
         assert "Streaming worker target resolved to 5 worker(s)" in caplog.text
@@ -277,7 +298,9 @@ def test_streaming_residency_budget_uses_available_ram_snapshot(monkeypatch):
         workers=1,
     )
     try:
-        assert world.config.max_loaded_chunks == 4
+        assert world.config.max_loaded_chunks == 3
+        assert world._ready_backlog.capacity == 1
+        assert world.config.max_loaded_chunks + world._ready_backlog.capacity == 4
     finally:
         world.shutdown()
 
@@ -743,3 +766,76 @@ def test_shutdown_clears_pending_and_ready_cpu_payloads():
 
     assert world._pending == set()
     assert world._ready_backlog.qsize() == 0
+
+
+def test_shutdown_does_not_block_on_full_work_queue():
+    world = _world_with_ready_chunks((1, 0, 0))
+    world._stop_event = threading.Event()
+    world._work_queue = queue.Queue(maxsize=1)
+    world._work_queue.put_nowait((99, 0, 0))
+    worker_started = threading.Event()
+
+    def worker_loop():
+        worker_started.set()
+        while not world._stop_event.is_set():
+            time.sleep(0.01)
+
+    worker = threading.Thread(target=worker_loop, name="test-stream-worker")
+    worker.start()
+    assert worker_started.wait(timeout=1.0)
+    world._workers = [worker]
+
+    world.shutdown()
+
+    assert not worker.is_alive()
+    assert world._pending == set()
+
+
+def test_worker_pause_requeue_does_not_block_if_queue_refills():
+    cell = (1, 0, 0)
+    filler_cell = (2, 0, 0)
+    world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
+    world.cache_dir = "unused"
+    world.on_decode_textures = None
+    world.prepack_smooth_shading = None
+    world._stop_event = threading.Event()
+    world._paused_event = threading.Event()
+    world._ready_backlog = streaming_scheduler.BoundedReadyBacklog(capacity=1)
+    world._lock = threading.Lock()
+    world._pending = {cell}
+    world._last_wanted_cells = {cell}
+
+    class RefillingQueue(queue.Queue):
+        def get(self, *args, **kwargs):
+            item = super().get(*args, **kwargs)
+            world._paused_event.set()
+            super().put_nowait(filler_cell)
+            world._stop_event.set()
+            return item
+
+    world._work_queue = RefillingQueue(maxsize=1)
+    world._work_queue.put_nowait(cell)
+
+    worker = threading.Thread(target=world._worker_loop)
+    worker.start()
+    worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert cell not in world._pending
+
+
+def test_stats_reads_mutable_streaming_sets_under_lock():
+    cell = (1, 0, 0)
+    pending_cell = (2, 0, 0)
+    world = _world_with_ready_chunks(cell)
+    lock = threading.Lock()
+    world._lock = lock
+    world.loaded_cells = _LockCheckingSet(lock, {cell})
+    world._pending = _LockCheckingSet(lock, {pending_cell})
+    world._last_wanted_cells = _LockCheckingSet(lock, {cell, pending_cell})
+
+    stats = world.stats()
+
+    assert stats["loaded"] == 1
+    assert stats["pending"] == 1
+    assert stats["wanted"] == 2
