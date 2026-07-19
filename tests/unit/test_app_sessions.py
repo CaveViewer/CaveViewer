@@ -270,6 +270,27 @@ def test_main_applies_update_branch_and_opens_cli_map(monkeypatch):
     assert "Using update branch override: feature/updates" in recorder.info_messages
 
 
+def test_main_consumes_cli_map_path_before_viewer_launch(monkeypatch):
+    _recorder, _configured = _prepare_main(monkeypatch)
+    opened = []
+    monkeypatch.setattr(
+        app.sys,
+        "argv",
+        ["caveviewer", "/maps/cave", "--backend", "glfw"],
+    )
+    monkeypatch.setattr(
+        app,
+        "_run_map_session",
+        lambda path: opened.append((path, list(app.sys.argv))),
+    )
+
+    app.main()
+
+    assert opened == [
+        ("/maps/cave", ["caveviewer", "--backend", "glfw"]),
+    ]
+
+
 def test_main_rejects_invalid_update_branch_argument(monkeypatch, capsys):
     recorder, _configured = _prepare_main(monkeypatch)
     monkeypatch.setattr(app.sys, "argv", ["caveviewer", "--update-branch"])
