@@ -91,6 +91,42 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Verify Intel runtime architecture
+        run: |
+          test "$(uname -m)" = "x86_64"
+          python -c 'import platform; assert platform.machine() == "x86_64", platform.machine()'
+
+      - name: Install Intel test dependencies
+        run: |
+          python -m pip install --upgrade pip -r requirements.txt -r requirements-dev.txt
+          python -m pip install --no-deps -e .
+
+      - name: Run complete Intel test suite
+        run: python -m pytest -p no:cacheprovider -q
+
+      - name: Run Intel CLI smoke checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+
+          for command in (
+              [sys.executable, "-m", "caveviewer", "--update-branch"],
+              ["caveviewer", "--update-branch"],
+          ):
+              result = subprocess.run(command, capture_output=True, text=True)
+              if result.returncode != 2 or "Error:" not in result.stderr:
+                  raise SystemExit(
+                      f"Intel CLI smoke failed for {command!r}: "
+                      f"exit={result.returncode}\n{result.stdout}\n{result.stderr}"
+                  )
+          PY
 
       - name: Build macOS x86_64 DMG
         env:
@@ -103,6 +139,11 @@ jobs:
             --notes="$RELEASE_NOTES" \
             --action=package \
             --skip-tests
+
+      - name: Smoke-test macOS x86_64 DMG
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: ./scripts/macos/smoke_dmg.sh --arch=x86_64 --version="$RELEASE_VERSION"
 
       - name: Upload macOS x86_64 DMG for testing
         uses: actions/upload-artifact@v7
