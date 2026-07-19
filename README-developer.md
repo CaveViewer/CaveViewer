@@ -164,18 +164,19 @@ the application version or creating artifacts. It uses
 select another prepared Python 3.12 interpreter. The interpreter must have
 `requirements.txt` and `requirements-dev.txt` installed.
 
-GitHub also runs separate Linux and macOS ARM64 package smoke workflows for
+GitHub also runs separate Linux, macOS ARM64, and macOS Intel package smoke workflows for
 pull requests and pushes to `main` or `release/**` when packaging, release
 scripts, runtime source, or dependency files change. They also run weekly and
 can be dispatched manually. The Linux workflow builds the x86_64 AppImage
 through the Docker release path, validates AppImage desktop install/uninstall
 behavior in a temporary home directory, and validates the installed
-desktop/AppStream metadata. The macOS workflow builds the ARM64 DMG through the
-release path, validates the package metadata against the actual DMG hash and
-size, mounts the DMG, and checks the packaged `CaveViewer.app` bundle identity,
-version, architecture, and bundled support documents. These workflows upload
-short-lived workflow artifacts for inspection; they do not publish releases or
-write repository contents.
+desktop/AppStream metadata. Both macOS workflows build a native DMG through the
+release path and use the same validator for package metadata, the actual DMG
+hash and size, bundle identity and version, bundled Mach-O architectures,
+runner-local library references, support documents, and packaged CLI behavior.
+The Intel workflow also runs the complete test suite and source CLI smoke checks
+on `macos-15-intel`. These workflows upload short-lived workflow artifacts for
+inspection; they do not publish releases or write repository contents.
 
 GitHub platform jobs pass `--skip-tests` because the application source has
 already passed an essential test gate with coverage. Individually dispatched
