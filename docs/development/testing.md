@@ -89,6 +89,12 @@ selected branch. That push can start the normal branch CI configured for `main`
 and `release/**`; such runs are separate from the single gate within the
 all-platform release. See [releases.md](releases.md) for the complete sequence.
 
+The normal macOS matrix runs on ARM64. Intel-specific coverage is provided by
+`macos-x86_64-package-smoke.yml`, which runs the complete suite and CLI smoke
+checks natively on `macos-15-intel`, builds the x86_64 DMG, and validates the
+mounted package. The manually dispatched Intel release workflow repeats those
+native checks before uploading or publishing its artifact.
+
 ## Before handoff
 
 1. Run the most focused relevant tests.

@@ -10,6 +10,7 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = REPOSITORY_ROOT / ".github" / "workflows"
 RELEASE_SCRIPT = REPOSITORY_ROOT / "scripts" / "release.sh"
+MACOS_DMG_SMOKE_SCRIPT = REPOSITORY_ROOT / "scripts" / "macos" / "smoke_dmg.sh"
 requires_executable_shell_scripts = pytest.mark.skipif(
     os.name == "nt",
     reason="release shell scripts are executed by Unix CI jobs",
@@ -44,6 +45,21 @@ def test_macos_release_workflows_use_architecture_specific_contracts():
         assert (
             f"dist/macos/metadata/CaveViewer-${{{{ inputs.version }}}}-{target}.json"
         ) in workflow
+
+    intel_workflow = (WORKFLOWS_DIR / "macos-x86_64-release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "cache: pip" in intel_workflow
+    assert "requirements-dev.txt" in intel_workflow
+    assert "Verify Intel runtime architecture" in intel_workflow
+    assert 'test "$(uname -m)" = "x86_64"' in intel_workflow
+    assert "Run complete Intel test suite" in intel_workflow
+    assert "python -m pytest -p no:cacheprovider -q" in intel_workflow
+    assert "Run Intel CLI smoke checks" in intel_workflow
+    assert "./scripts/macos/smoke_dmg.sh" in intel_workflow
+    assert intel_workflow.index("./scripts/macos/smoke_dmg.sh") < intel_workflow.index(
+        "Upload macOS x86_64 DMG for testing"
+    )
 
 
 def test_platform_release_workflows_package_immutable_source_before_finalizing():
@@ -140,6 +156,14 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
             "--target=macos-arm64",
             "Smoke-test macOS ARM64 DMG",
         ),
+        (
+            "macos-x86_64-package-smoke.yml",
+            "macOS x86_64 Package Smoke",
+            "macos-15-intel",
+            "macos-x86_64.dmg",
+            "--target=macos-x86_64",
+            "Smoke-test macOS x86_64 DMG",
+        ),
     )
 
     for (
@@ -166,14 +190,53 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
         assert smoke_marker in workflow
         assert artifact_label in workflow
 
-    macos_workflow = (WORKFLOWS_DIR / "macos-arm64-package-smoke.yml").read_text(
-        encoding="utf-8"
+    for workflow_name in (
+        "macos-arm64-package-smoke.yml",
+        "macos-x86_64-package-smoke.yml",
+    ):
+        macos_workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+        assert "./scripts/macos/smoke_dmg.sh" in macos_workflow
+        assert macos_workflow.index("./scripts/macos/smoke_dmg.sh") < macos_workflow.index(
+            "Upload macOS"
+        )
+
+    intel_workflow = (
+        WORKFLOWS_DIR / "macos-x86_64-package-smoke.yml"
+    ).read_text(encoding="utf-8")
+    assert "cache: pip" in intel_workflow
+    assert "requirements-dev.txt" in intel_workflow
+    assert "Verify Intel runtime architecture" in intel_workflow
+    assert 'test "$(uname -m)" = "x86_64"' in intel_workflow
+    assert "Run complete Intel test suite" in intel_workflow
+    assert "python -m pytest -p no:cacheprovider -q" in intel_workflow
+    assert "Run Intel CLI smoke checks" in intel_workflow
+
+
+@requires_executable_shell_scripts
+def test_macos_dmg_smoke_script_exposes_bounded_architecture_interface():
+    assert MACOS_DMG_SMOKE_SCRIPT.is_file()
+    assert os.access(MACOS_DMG_SMOKE_SCRIPT, os.X_OK)
+
+    help_result = subprocess.run(
+        [str(MACOS_DMG_SMOKE_SCRIPT), "--help"],
+        capture_output=True,
+        text=True,
     )
-    assert "hdiutil attach" in macos_workflow
-    assert "PlistBuddy" in macos_workflow
-    assert "lipo -archs" in macos_workflow
-    assert '"architecture": "arm64"' in macos_workflow
-    assert "CFBundleShortVersionString" in macos_workflow
+    assert help_result.returncode == 0
+    assert "--arch=<arm64|x86_64>" in help_result.stdout
+    assert "--version=<version>" in help_result.stdout
+
+    invalid_arch = subprocess.run(
+        [
+            str(MACOS_DMG_SMOKE_SCRIPT),
+            "--arch=unsupported",
+            "--version=1.0.67",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert invalid_arch.returncode == 1
+    assert "unsupported macOS architecture" in invalid_arch.stderr
 
 
 def test_pages_workflow_deploys_docs_independently_from_releases():

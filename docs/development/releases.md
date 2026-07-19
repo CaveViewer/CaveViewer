@@ -144,6 +144,25 @@ The repository secret `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the
 Ed25519 private key used for update manifests. Only the finalizer receives this
 secret. Package-only runs do not require it.
 
+## macOS package validation
+
+The ARM64 and Intel package-smoke workflows run on native GitHub-hosted runners
+and call `scripts/macos/smoke_dmg.sh`. The validator checks package metadata and
+digest, mounts the DMG read-only, verifies bundle identity and version, checks
+every bundled Mach-O file for the requested architecture and runner-local
+library references, and exercises a controlled packaged CLI error path. The
+Intel smoke and release workflows also run the complete pytest suite and source
+CLI checks on `macos-15-intel` before building.
+
+Run the same package validation locally after creating a native DMG:
+
+```bash
+./scripts/macos/smoke_dmg.sh --arch=arm64 --version=1.0.64
+```
+
+Use `--arch=x86_64` from a native Intel process. The script rejects a process
+whose architecture does not match the package target.
+
 ## GitHub Pages
 
 GitHub Pages deployment is independent from application releases. The
@@ -227,6 +246,8 @@ Publishing also requires an authenticated GitHub CLI and
   has no unexpected generated files.
 - Confirm the Essential Tests gate passed and inspect any separate push-triggered
   CI runs.
+- Confirm both native macOS package-smoke workflows passed for macOS packaging,
+  dependency, or release-script changes.
 - For stable releases, verify the GitHub release is not marked prerelease and
   that the “latest release” link resolves to the new tag.
 - Smoke-test install, launch, map import, background update download, and manual
