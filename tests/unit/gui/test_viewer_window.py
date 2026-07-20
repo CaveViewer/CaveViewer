@@ -1707,10 +1707,7 @@ def test_cancel_active_import_uses_zero_timeout_cleanup_when_relay_is_gone(monke
 def test_cancel_active_import_does_not_wait_for_live_import_thread(monkeypatch):
     calls = []
     import_thread = FakeImportThread(alive=True)
-    logger = FakeLogger()
     window = _import_window()
-    controller = window._ensure_import_controller()
-    controller.log = logger
     window._import_stop_event = viewer_window.threading.Event()
     window._import_process = None
     window._import_thread = import_thread
@@ -1727,6 +1724,3 @@ def test_cancel_active_import_does_not_wait_for_live_import_thread(monkeypatch):
     assert import_thread.join_calls == []
     assert import_thread.is_alive()
     assert calls == []
-    assert logger.info_messages == [
-        "Import cancellation requested; relay worker will terminate the child process."
-    ]

@@ -1,3 +1,5 @@
+"""Tests for platform-aware Tk shortcut binding helpers."""
+
 from __future__ import annotations
 
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut, primary_modifier_event_sequence

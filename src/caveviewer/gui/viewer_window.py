@@ -997,7 +997,14 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _recording_is_armed(self) -> bool:
         return self._recording_countdown_until is not None or self._recording_process is not None
 
+    def _ensure_recording_stop_state(self) -> None:
+        if not hasattr(self, "_recording_stop_results"):
+            self._recording_stop_results = queue.Queue()
+        if not hasattr(self, "_recording_stop_thread"):
+            self._recording_stop_thread = None
+
     def _recording_stop_in_progress(self) -> bool:
+        self._ensure_recording_stop_state()
         return self._recording_stop_thread is not None
 
     def _recording_hides_hud(self) -> bool:
@@ -1305,6 +1312,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_status_until = time.perf_counter() + duration
 
     def _stop_recording(self, *, show_message: bool = False) -> None:
+        self._ensure_recording_stop_state()
         self._drain_recording_stop_results()
         if self._recording_stop_in_progress():
             return
@@ -1390,6 +1398,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         stderr_text = self._recording_stderr_text()
         writer_error = writer_error or self._recording_writer_error
         dropped_frames = self._recording_dropped_frames
+        self._ensure_recording_stop_state()
         self._recording_stop_results.put(
             _RecordingStopResult(
                 output_path=work.output_path,
@@ -1402,6 +1411,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _drain_recording_stop_results(self) -> None:
+        self._ensure_recording_stop_state()
         while True:
             try:
                 result = self._recording_stop_results.get_nowait()

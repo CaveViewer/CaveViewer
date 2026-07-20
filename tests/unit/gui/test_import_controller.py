@@ -1,3 +1,5 @@
+"""Tests for map import controller lifecycle behavior."""
+
 from __future__ import annotations
 
 import threading
