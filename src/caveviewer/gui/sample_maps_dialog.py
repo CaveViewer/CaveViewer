@@ -16,6 +16,7 @@ and the glue that drives the other one.
 from __future__ import annotations
 
 import os
+import queue
 import threading
 import time
 
@@ -323,6 +324,7 @@ def show_sample_maps_dialog(
 
     selected_folder = [None]
     dialog_closed = [False]
+    catalog_load_done = [None]
 
     dialog = tk.Toplevel(parent)
     dialog.withdraw()
@@ -333,6 +335,12 @@ def show_sample_maps_dialog(
 
     def _close_dialog():
         dialog_closed[0] = True
+        done_var = catalog_load_done[0]
+        if done_var is not None:
+            try:
+                done_var.set(True)
+            except tk.TclError:
+                pass
         try:
             dialog.destroy()
         except tk.TclError:
@@ -443,34 +451,95 @@ def show_sample_maps_dialog(
 
     # Fetch the catalog on a background thread so the loading indicator can
     # actually animate. fetch_sample_map_catalog() makes a network request
-    # that can take several seconds; running it inline would freeze the UI
-    # and leave the "Loading..." text static with no sign of progress.
-    fetch_holder = {}
+    # that can take several seconds; running it inline would freeze the UI.
+    # The worker only publishes to a thread-safe queue; Tk state is read and
+    # mutated by the after() poller on the Tk thread.
+    fetch_queue = queue.Queue(maxsize=1)
+    catalog_result = {"catalog": None, "error": None}
+    catalog_ready = tk.BooleanVar(dialog, value=False)
+    catalog_load_done[0] = catalog_ready
 
     def _fetch_worker():
-        fetch_holder["result"] = fetch_sample_map_catalog()
+        try:
+            result = fetch_sample_map_catalog()
+        except Exception as exc:
+            result = ([], f"Couldn't load the sample map list: {exc}")
+        fetch_queue.put(result)
 
-    threading.Thread(target=_fetch_worker, daemon=True).start()
+    threading.Thread(
+        target=_fetch_worker,
+        name="CaveViewer-sample-map-catalog",
+        daemon=True,
+    ).start()
 
     _spinner_frames = "|/-\\"
-    _spinner_i = 0
-    # Keep the indicator up for a short minimum so a fast (cached) fetch does
-    # not flash the loading screen for a fraction of a second before the list
-    # appears -- a brief, steady spinner reads better than a flicker.
-    _min_spinner_seconds = 0.6
+    _spinner_i = [0]
     _spinner_start = time.perf_counter()
-    while ("result" not in fetch_holder
-           or (time.perf_counter() - _spinner_start) < _min_spinner_seconds):
-        if not dialog.winfo_exists():
-            return selected_folder[0]
-        status_label.config(
-            text=f"Loading available maps  {_spinner_frames[_spinner_i % len(_spinner_frames)]}"
-        )
-        _spinner_i += 1
-        dialog.update()
-        time.sleep(0.12)
+    _min_spinner_seconds = 0.6
+    _pending_fetch_result = [None]
 
-    catalog, error = fetch_holder["result"]
+    def _dialog_alive() -> bool:
+        if dialog_closed[0]:
+            return False
+        try:
+            return bool(dialog.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _poll_catalog_fetch() -> None:
+        if not _dialog_alive():
+            catalog_ready.set(True)
+            return
+
+        if _pending_fetch_result[0] is None:
+            try:
+                _pending_fetch_result[0] = fetch_queue.get_nowait()
+            except queue.Empty:
+                pass
+
+        elapsed = time.perf_counter() - _spinner_start
+        if _pending_fetch_result[0] is None or elapsed < _min_spinner_seconds:
+            try:
+                status_label.config(
+                    text=(
+                        "Loading available maps  "
+                        f"{_spinner_frames[_spinner_i[0] % len(_spinner_frames)]}"
+                    )
+                )
+            except tk.TclError:
+                catalog_ready.set(True)
+                return
+            _spinner_i[0] += 1
+            delay_ms = 120
+            if _pending_fetch_result[0] is not None:
+                delay_ms = max(
+                    1,
+                    min(
+                        delay_ms,
+                        int(round((_min_spinner_seconds - elapsed) * 1000)),
+                    ),
+                )
+            dialog.after(delay_ms, _poll_catalog_fetch)
+            return
+
+        catalog, error = _pending_fetch_result[0]
+        catalog_result["catalog"] = catalog
+        catalog_result["error"] = error
+        catalog_ready.set(True)
+
+    dialog.after(0, _poll_catalog_fetch)
+    try:
+        dialog.wait_variable(catalog_ready)
+    except tk.TclError:
+        return selected_folder[0]
+    finally:
+        catalog_load_done[0] = None
+
+    if not _dialog_alive() or catalog_result["catalog"] is None:
+        return selected_folder[0]
+
+    catalog = catalog_result["catalog"]
+    error = catalog_result["error"]
 
     status_label.destroy()
 
