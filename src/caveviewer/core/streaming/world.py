@@ -187,13 +187,17 @@ class StreamingWorld:
         `drain_ready_chunks()` on the owner thread. Internal loaded/unloaded
         state is committed only after those callbacks reach their documented
         transaction point.
-      - `on_decode_textures` and `prepack_smooth_shading` run in worker
-        threads and must remain CPU-only.
+      - `on_decode_textures` runs in worker threads and must be a stable,
+        CPU-only, worker-safe callable.
+      - Smooth-shading prepack policy is not read through a callback. The
+        owner thread publishes that immutable boolean state with
+        `set_prepack_smooth_shading()`, and workers read the latest published
+        value.
     """
 
     def __init__(self, cache_dir: str, config: StreamingConfig,
                  on_decode_textures: Optional[Callable[[ChunkData], None]] = None,
-                 prepack_smooth_shading: Optional[Callable[[], bool]] = None,
+                 prepack_smooth_shading: bool | None = None,
                  gpu_vendor: str | None = None,
                  textures_dir: str | None = None,
                  total_gpu_memory_bytes: int | None = None,
@@ -202,19 +206,20 @@ class StreamingWorld:
         """
         on_decode_textures, if given, is called from a background worker
         thread right after a chunk's geometry finishes loading, with the
-        ChunkData as the argument. This is the hook used to pre-decode each
-        chunk's textures (JPEG decode, pure CPU work, safe off-thread) so
-        that by the time the chunk reaches the main thread for GPU upload,
-        only the fast/predictable upload step remains there. Keeping this
-        as an injected callback rather than importing TextureManager
-        directly here preserves this module's GPU-API-agnostic design and
-        keeps it unit-testable without any texture/GPU machinery at all.
+        ChunkData as the argument. The callable must be CPU-only, worker-safe,
+        and stable for this StreamingWorld instance; it must not read GUI,
+        OpenGL, camera, scene, or other render-thread-owned mutable state.
+        This hook lets the GUI pre-decode textures without importing
+        TextureManager here, preserving core's GPU-API-agnostic design.
 
-        prepack_smooth_shading, if given, is called from the same background
-        worker to decide which shade mode's interleaved vertex bytes should be
-        packed before the chunk reaches the render thread. If the user toggles
-        SHADE after this point, the renderer can still compute the other mode
-        from the retained source arrays.
+        prepack_smooth_shading, if not None, is a published owner-thread
+        snapshot of which shade mode's interleaved vertex bytes workers should
+        pack before the chunk reaches the render thread. It is deliberately a
+        bool instead of a callback so workers never query GUI/render state
+        directly. The owner thread may update it later with
+        set_prepack_smooth_shading(). If the user toggles SHADE after a chunk is
+        prepacked, the renderer can still compute the other mode from retained
+        source arrays.
 
         gpu_vendor is the active OpenGL context's GL_VENDOR string when the
         caller has one. It prevents a secondary adapter from supplying the
@@ -230,8 +235,11 @@ class StreamingWorld:
         """
         self.cache_dir = cache_dir
         self.config = config
-        self.on_decode_textures = on_decode_textures
-        self.prepack_smooth_shading = prepack_smooth_shading
+        self._on_decode_textures = on_decode_textures
+        self._prepack_smooth_shading_lock = threading.Lock()
+        self._prepack_smooth_shading = self._normalize_prepack_smooth_shading(
+            prepack_smooth_shading
+        )
         manifest = chunker.load_manifest(cache_dir) or {"chunks": {}}
         manifest_max_upload_group_mb = chunker.manifest_max_upload_group_mb(manifest)
         self._chunk_file_max_group_bytes = (
@@ -347,6 +355,33 @@ class StreamingWorld:
         self._last_camera_cell: Optional[tuple[int, int, int]] = None
         self._last_load_radius: Optional[int] = None
         self._last_cell_priority_key: CellPriorityKey | None = None
+
+    @staticmethod
+    def _normalize_prepack_smooth_shading(value: bool | None) -> bool | None:
+        if value is None:
+            return None
+        if callable(value):
+            raise TypeError(
+                "prepack_smooth_shading must be a bool or None, not a callback; "
+                "publish owner-thread state with set_prepack_smooth_shading()"
+            )
+        return bool(value)
+
+    def set_prepack_smooth_shading(self, smooth_shading: bool | None) -> None:
+        """Publish owner-thread shading state for worker CPU prepack.
+
+        ``None`` disables worker prepack. ``True`` and ``False`` ask workers to
+        prepack the corresponding CPU-side vertex-byte layout. Workers read this
+        value through StreamingWorld's synchronization boundary and never call
+        back into GUI/render-owned state.
+        """
+        normalized = self._normalize_prepack_smooth_shading(smooth_shading)
+        with self._prepack_smooth_shading_lock:
+            self._prepack_smooth_shading = normalized
+
+    def _prepack_smooth_shading_snapshot(self) -> bool | None:
+        with self._prepack_smooth_shading_lock:
+            return self._prepack_smooth_shading
 
     def _estimate_chunk_ram_bytes(self, chunk_keys: list[str]) -> int:
         """Estimate in-RAM cost per loaded chunk from cache chunk file sizes."""
@@ -873,15 +908,13 @@ class StreamingWorld:
                 chunker.prepare_chunk_upload_groups(data)
                 if self._stop_event.is_set() or not self._cell_is_wanted(cell):
                     continue
-                prepack_smooth_shading = getattr(
-                    self, "prepack_smooth_shading", None
-                )
+                prepack_smooth_shading = self._prepack_smooth_shading_snapshot()
                 if prepack_smooth_shading is not None:
                     try:
                         stage = "prepack_chunk_vertex_bytes"
                         chunker.prepack_chunk_vertex_bytes(
                             data,
-                            smooth_shading=bool(prepack_smooth_shading()),
+                            smooth_shading=prepack_smooth_shading,
                         )
                     except Exception as e:
                         # Prepacking is an optimization. If it fails, keep the
@@ -895,10 +928,11 @@ class StreamingWorld:
                         )
                 if self._stop_event.is_set() or not self._cell_is_wanted(cell):
                     continue
-                if self.on_decode_textures is not None:
+                on_decode_textures = getattr(self, "_on_decode_textures", None)
+                if on_decode_textures is not None:
                     try:
                         stage = "on_decode_textures"
-                        self.on_decode_textures(data)
+                        on_decode_textures(data)
                     except Exception as e:
                         # texture pre-decode is a best-effort optimization;
                         # a failure here should not block the chunk from

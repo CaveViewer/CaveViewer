@@ -802,7 +802,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.cache_dir,
             config,
             on_decode_textures=predecode_textures_for_chunk,
-            prepack_smooth_shading=lambda: bool(
+            prepack_smooth_shading=bool(
                 self.render_mode_buttons.smooth_shading_enabled
             ),
             gpu_vendor=gpu_vendor,
@@ -1431,11 +1431,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         _LOG.info(f"  Estimated atlas needed  : {atlas_side}x{atlas_side} px "
               f"({atlas_side*atlas_side*3/1024/1024:.0f} MB)")
 
-    def _teardown_current_map(self) -> None:
+    def _teardown_current_map(self, *, final_shutdown: bool = False) -> None:
         """
         Cleanly releases everything specific to the CURRENTLY loaded map
         before _load_map() builds a new one -- stops StreamingWorld's
-        background threads and waits for them to actually exit, then
+        background threads, then
         releases every currently-resident chunk's GPU buffers/VAOs and
         decrements the texture manager's reference counts via the exact
         same _on_chunk_unload() path used during normal streaming (so
@@ -1450,12 +1450,17 @@ class CaveViewerWindow(mglw.WindowConfig):
         -- there's nothing to tear down in that case, so this just
         returns immediately rather than crashing on self.world not
         existing yet.
+
+        During final window/application shutdown, final_shutdown=True waits
+        until every non-daemon streaming worker has joined before continuing.
+        Map switching keeps the bounded shutdown path so one stuck worker does
+        not freeze the UI while opening another map.
         """
         if not self._has_map_loaded:
             return
 
         self._stop_recording()
-        self.world.shutdown()
+        self.world.shutdown(timeout=None if final_shutdown else 2.0)
 
         for cell in list(getattr(self, "_chunk_upload_states", {}).keys()):
             self._on_chunk_unload(cell)
@@ -3061,6 +3066,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         rebuilt only when the user toggles shading so loaded chunks do not
         retain both smooth and flat byte streams in RAM.
         """
+        world = getattr(self, "world", None)
+        if world is not None and hasattr(world, "set_prepack_smooth_shading"):
+            world.set_prepack_smooth_shading(
+                bool(self.render_mode_buttons.smooth_shading_enabled)
+            )
         for cell in list(self._chunk_gpu_objects.keys()):
             self._apply_shading_toggle_to_cell(cell)
 
@@ -5127,7 +5137,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._cancel_active_import()
 
         if self._has_map_loaded:
-            self._teardown_current_map()
+            self._teardown_current_map(final_shutdown=True)
         self._release_window_resources()
 
         # Ensure the backend window loop receives an explicit close request.

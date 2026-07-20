@@ -1258,6 +1258,46 @@ def test_mouse_motion_after_color_picker_release_is_noop():
     window.on_mouse_position_event(10, 20, 1, -1)
 
 
+def test_map_switch_teardown_uses_bounded_streaming_shutdown():
+    timeouts = []
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+    window._stop_recording = lambda: None
+    window.world = SimpleNamespace(
+        shutdown=lambda *, timeout=None: timeouts.append(timeout)
+    )
+    window._chunk_upload_states = {}
+    window._chunk_gpu_objects = {}
+    window._chunk_normal_cache = {}
+    window._chunk_aabbs = {}
+    window.texture_manager = None
+    window.minimap = None
+
+    window._teardown_current_map()
+
+    assert timeouts == [2.0]
+
+
+def test_final_teardown_joins_streaming_workers_without_timeout():
+    timeouts = []
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+    window._stop_recording = lambda: None
+    window.world = SimpleNamespace(
+        shutdown=lambda *, timeout=None: timeouts.append(timeout)
+    )
+    window._chunk_upload_states = {}
+    window._chunk_gpu_objects = {}
+    window._chunk_normal_cache = {}
+    window._chunk_aabbs = {}
+    window.texture_manager = None
+    window.minimap = None
+
+    window._teardown_current_map(final_shutdown=True)
+
+    assert timeouts == [None]
+
+
 def test_request_import_pause_sends_child_command(monkeypatch):
     logger = FakeLogger()
     commands = queue.Queue()

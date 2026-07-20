@@ -69,6 +69,21 @@ def _drain(world, ready, *, max_per_frame=4, time_budget_ms=100.0):
     )
 
 
+def _configure_worker_preprocess(
+    world,
+    *,
+    on_decode_textures=None,
+    prepack_smooth_shading: bool | None = None,
+) -> None:
+    world._on_decode_textures = on_decode_textures
+    world._prepack_smooth_shading_lock = threading.Lock()
+    world._prepack_smooth_shading = (
+        streaming_world.StreamingWorld._normalize_prepack_smooth_shading(
+            prepack_smooth_shading
+        )
+    )
+
+
 def _streaming_world_with_cells(
     monkeypatch,
     cells,
@@ -137,6 +152,29 @@ def test_ready_backlog_remains_bounded_until_an_item_is_consumed():
     assert backlog.get_closest_nowait().cell == (0, 0, 0)
     backlog.put(_chunk((2, 0, 0)), timeout=0.0)
     assert backlog.qsize() == 2
+
+
+def test_streaming_world_rejects_prepack_callback_policy():
+    with pytest.raises(TypeError, match="not a callback"):
+        streaming_world.StreamingWorld(
+            "unused",
+            streaming_world.StreamingConfig(chunk_size=1.0),
+            prepack_smooth_shading=lambda: True,
+        )
+
+
+def test_prepack_policy_setter_publishes_bool_snapshot():
+    world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
+    _configure_worker_preprocess(world)
+
+    world.set_prepack_smooth_shading(True)
+    assert world._prepack_smooth_shading_snapshot() is True
+
+    world.set_prepack_smooth_shading(False)
+    assert world._prepack_smooth_shading_snapshot() is False
+
+    world.set_prepack_smooth_shading(None)
+    assert world._prepack_smooth_shading_snapshot() is None
 
 
 def test_ready_backlog_selector_callbacks_run_outside_internal_lock():
@@ -419,7 +457,7 @@ def test_worker_load_failure_does_not_stop_later_ready_work(monkeypatch):
     ready_cell = (2, 0, 0)
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world.cache_dir = "unused"
-    world.on_decode_textures = None
+    _configure_worker_preprocess(world)
     world._stop_event = threading.Event()
     world._paused_event = threading.Event()
     world._work_queue = queue.Queue()
@@ -463,10 +501,12 @@ def test_nonfatal_decode_callback_failure_is_reported_without_failed_cell(
     cell = (2, 0, 0)
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world.cache_dir = "unused"
-    world.on_decode_textures = lambda _data: (_ for _ in ()).throw(
-        RuntimeError("decode failed")
+    _configure_worker_preprocess(
+        world,
+        on_decode_textures=lambda _data: (_ for _ in ()).throw(
+            RuntimeError("decode failed")
+        ),
     )
-    world.prepack_smooth_shading = None
     world._stop_event = threading.Event()
     world._paused_event = threading.Event()
     world._work_queue = queue.Queue()
@@ -505,8 +545,7 @@ def test_worker_prepacks_vertex_bytes_before_ready_handoff(monkeypatch):
     prepacked = []
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world.cache_dir = "unused"
-    world.on_decode_textures = None
-    world.prepack_smooth_shading = lambda: True
+    _configure_worker_preprocess(world, prepack_smooth_shading=True)
     world._stop_event = threading.Event()
     world._paused_event = threading.Event()
     world._work_queue = queue.Queue()
@@ -1072,7 +1111,7 @@ def test_worker_skips_stale_queued_chunk_before_disk_io(monkeypatch):
     stale_cell = (1, 0, 0)
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world.cache_dir = "unused"
-    world.on_decode_textures = None
+    _configure_worker_preprocess(world)
     world._stop_event = threading.Event()
     world._paused_event = threading.Event()
     world._work_queue = queue.Queue()
@@ -1215,8 +1254,7 @@ def test_worker_does_not_start_queued_cell_after_shutdown_race(monkeypatch):
     cell = (1, 0, 0)
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world.cache_dir = "unused"
-    world.on_decode_textures = None
-    world.prepack_smooth_shading = None
+    _configure_worker_preprocess(world)
     world._stop_event = threading.Event()
     world._paused_event = threading.Event()
     world._ready_backlog = streaming_scheduler.BoundedReadyBacklog(capacity=1)
@@ -1252,11 +1290,12 @@ def test_worker_skips_preprocess_callbacks_when_shutdown_follows_chunk_load(
     cell = (1, 0, 0)
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world.cache_dir = "unused"
-    world.on_decode_textures = lambda _data: pytest.fail(
-        "texture predecode callback must not run after shutdown"
-    )
-    world.prepack_smooth_shading = lambda: pytest.fail(
-        "prepack callback must not run after shutdown"
+    _configure_worker_preprocess(
+        world,
+        on_decode_textures=lambda _data: pytest.fail(
+            "texture predecode callback must not run after shutdown"
+        ),
+        prepack_smooth_shading=True,
     )
     world._stop_event = threading.Event()
     world._paused_event = threading.Event()
@@ -1289,8 +1328,7 @@ def test_worker_pause_requeue_does_not_block_if_queue_refills():
     filler_cell = (2, 0, 0)
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world.cache_dir = "unused"
-    world.on_decode_textures = None
-    world.prepack_smooth_shading = None
+    _configure_worker_preprocess(world)
     world._stop_event = threading.Event()
     world._paused_event = threading.Event()
     world._ready_backlog = streaming_scheduler.BoundedReadyBacklog(capacity=1)
