@@ -146,6 +146,8 @@ def _recording_window():
     window._recording_dropped_frames = 0
     window._recording_stderr_lock = viewer_window.threading.Lock()
     window._recording_stderr_parts = []
+    window._recording_stop_results = queue.Queue()
+    window._recording_stop_thread = None
     window._recording_status_message = None
     window._recording_status_detail = None
     window._recording_status_kind = None
@@ -311,6 +313,12 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
 
     window._stop_recording(show_message=True)
 
+    assert window._recording_status_message == "Finishing recording"
+    assert window._recording_stop_thread is not None
+    window._recording_stop_thread.join(timeout=1.0)
+    assert not window._recording_stop_thread.is_alive()
+    window._drain_recording_stop_results()
+
     assert process.killed is True
     assert process.wait_calls == [8.0, None]
     assert window._recording_process is None
@@ -319,6 +327,7 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     assert window._recording_status_message == "Recording failed"
     assert window._recording_status_detail == "Disk may be full"
     assert window._recording_status_kind == "error"
+    assert window._recording_stop_thread is None
     assert any("Recording encoder exited with code -9" in message for message in logger.warning_messages)
 
 
@@ -1674,7 +1683,7 @@ def test_uncached_import_releases_desktop_inhibitor_after_failure(monkeypatch):
     ]
 
 
-def test_cancel_active_import_passes_cache_dir_to_termination(monkeypatch):
+def test_cancel_active_import_uses_zero_timeout_cleanup_when_relay_is_gone(monkeypatch):
     calls = []
     process = object()
     window = _import_window()
@@ -1692,13 +1701,16 @@ def test_cancel_active_import_passes_cache_dir_to_termination(monkeypatch):
     window._cancel_active_import()
 
     assert window._import_stop_event.is_set()
-    assert calls == [(process, {"cache_dir": "/cache/cave"})]
+    assert calls == [(process, {"timeout": 0.0, "cache_dir": "/cache/cave"})]
 
 
-def test_cancel_active_import_waits_for_live_import_thread(monkeypatch):
+def test_cancel_active_import_does_not_wait_for_live_import_thread(monkeypatch):
     calls = []
     import_thread = FakeImportThread(alive=True)
+    logger = FakeLogger()
     window = _import_window()
+    controller = window._ensure_import_controller()
+    controller.log = logger
     window._import_stop_event = viewer_window.threading.Event()
     window._import_process = None
     window._import_thread = import_thread
@@ -1712,6 +1724,9 @@ def test_cancel_active_import_waits_for_live_import_thread(monkeypatch):
     window._cancel_active_import()
 
     assert window._import_stop_event.is_set()
-    assert import_thread.join_calls == [2.0]
-    assert not import_thread.is_alive()
+    assert import_thread.join_calls == []
+    assert import_thread.is_alive()
     assert calls == []
+    assert logger.info_messages == [
+        "Import cancellation requested; relay worker will terminate the child process."
+    ]
