@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
-from caveviewer.core.hardware_memory import RamSnapshot
+from caveviewer.core.hardware.system_memory import RamSnapshot
 
 
 MIN_WORKERS = 1

@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.resources import release_public_key_path
 
 

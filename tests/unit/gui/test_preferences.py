@@ -1,4 +1,4 @@
-"""Cover advanced-settings schema, validation, persistence, and environment use."""
+"""Cover preferences schema, validation, persistence, and environment use."""
 
 from __future__ import annotations
 
@@ -67,17 +67,17 @@ from caveviewer.gui import preferences as settings
     ],
 )
 def test_invalid_setting_reports_field(
-    valid_advanced_settings, key, value, message_fragment
+    valid_preferences, key, value, message_fragment
 ):
-    valid_advanced_settings[key] = value
+    valid_preferences[key] = value
     field = next(
-        field for field in settings.ADVANCED_SETTING_FIELDS if field.key == key
+        field for field in settings.PREFERENCE_FIELDS if field.key == key
     )
 
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+    result = settings.validate_preferences(
+        valid_preferences
     )
-    field_result = settings.validate_advanced_setting(
+    field_result = settings.validate_preference(
         field, value
     )
 
@@ -122,17 +122,17 @@ def test_invalid_setting_reports_field(
     ],
 )
 def test_setting_boundaries_are_accepted(
-    valid_advanced_settings, key, value, normalized_value
+    valid_preferences, key, value, normalized_value
 ):
-    valid_advanced_settings[key] = value
+    valid_preferences[key] = value
     field = next(
-        field for field in settings.ADVANCED_SETTING_FIELDS if field.key == key
+        field for field in settings.PREFERENCE_FIELDS if field.key == key
     )
 
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+    result = settings.validate_preferences(
+        valid_preferences
     )
-    field_result = settings.validate_advanced_setting(
+    field_result = settings.validate_preference(
         field, value
     )
 
@@ -146,32 +146,32 @@ def test_setting_boundaries_are_accepted(
 def test_single_field_validation_returns_canonical_value():
     io_workers = next(
         field
-        for field in settings.ADVANCED_SETTING_FIELDS
+        for field in settings.PREFERENCE_FIELDS
         if field.key == "io_workers"
     )
 
-    assert settings.validate_advanced_setting(
+    assert settings.validate_preference(
         io_workers, "006"
-    ) == settings.FieldValidationResult(True, None, "6")
+    ) == settings.PreferenceFieldValidationResult(True, None, "6")
 
 
 def test_schema_is_typed_and_has_unique_runtime_mappings():
-    fields = settings.ADVANCED_SETTING_FIELDS
+    fields = settings.PREFERENCE_FIELDS
 
-    assert all(isinstance(field, settings.SettingSpec) for field in fields)
-    assert all(isinstance(field.value_type, settings.ValueType) for field in fields)
+    assert all(isinstance(field, settings.PreferenceSpec) for field in fields)
+    assert all(isinstance(field.value_type, settings.PreferenceValueType) for field in fields)
     assert len({field.key for field in fields}) == len(fields)
     assert len({field.env_var for field in fields}) == len(fields)
-    assert set(settings.advanced_setting_defaults()) == {
+    assert set(settings.preference_defaults()) == {
         field.key for field in fields
     }
-    assert settings.advanced_setting_defaults()["chunk_size_meters"] == "50"
-    assert settings.advanced_setting_defaults()["max_upload_group_mb"] == "16"
-    assert settings.advanced_setting_defaults()["obj_import_batch_thousands"] == "200"
+    assert settings.preference_defaults()["chunk_size_meters"] == "50"
+    assert settings.preference_defaults()["max_upload_group_mb"] == "16"
+    assert settings.preference_defaults()["obj_import_batch_thousands"] == "200"
 
 
 def test_setting_spec_is_immutable():
-    field = settings.ADVANCED_SETTING_FIELDS[0]
+    field = settings.PREFERENCE_FIELDS[0]
 
     with pytest.raises(FrozenInstanceError):
         field.minimum = 0
@@ -179,33 +179,33 @@ def test_setting_spec_is_immutable():
 
 @pytest.mark.parametrize("key", ["io_workers", "chunk_build_workers"])
 def test_high_worker_counts_are_valid_advisory_caps_without_warning(
-    valid_advanced_settings, key
+    valid_preferences, key
 ):
-    valid_advanced_settings[key] = "32"
+    valid_preferences[key] = "32"
 
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+    result = settings.validate_preferences(
+        valid_preferences
     )
 
     assert result.is_valid, result.message
     assert result.error_key is None
 
 
-def test_invalid_worker_thread_value_defers_to_validation(valid_advanced_settings):
-    valid_advanced_settings["io_workers"] = "many"
+def test_invalid_worker_thread_value_defers_to_validation(valid_preferences):
+    valid_preferences["io_workers"] = "many"
 
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+    result = settings.validate_preferences(
+        valid_preferences
     )
     assert not result.is_valid
     assert result.error_key == "io_workers"
     assert "whole number" in (result.message or "")
 
 
-def test_optional_gpu_override_can_be_blank(valid_advanced_settings):
-    valid_advanced_settings["gpu_memory_gb"] = ""
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+def test_optional_gpu_override_can_be_blank(valid_preferences):
+    valid_preferences["gpu_memory_gb"] = ""
+    result = settings.validate_preferences(
+        valid_preferences
     )
     assert result.is_valid, result.message
     assert result.error_key is None
@@ -213,18 +213,18 @@ def test_optional_gpu_override_can_be_blank(valid_advanced_settings):
 
 
 def test_normalization_strips_values_and_ignores_unknown_keys():
-    normalized = settings.normalize_advanced_settings(
+    normalized = settings.normalize_preferences(
         {"io_workers": " 4 ", "unknown_future_setting": "unsafe"}
     )
     assert normalized["io_workers"] == "4"
     assert "unknown_future_setting" not in normalized
-    assert set(normalized) == {field.key for field in settings.ADVANCED_SETTING_FIELDS}
+    assert set(normalized) == {field.key for field in settings.PREFERENCE_FIELDS}
 
 
-def test_recording_path_expands_home(valid_advanced_settings):
-    valid_advanced_settings["recording_dir"] = "~/recordings"
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+def test_recording_path_expands_home(valid_preferences):
+    valid_preferences["recording_dir"] = "~/recordings"
+    result = settings.validate_preferences(
+        valid_preferences
     )
     assert result.is_valid, result.message
     assert result.normalized_values["recording_dir"] == os.path.join(
@@ -232,12 +232,12 @@ def test_recording_path_expands_home(valid_advanced_settings):
     )
 
 
-def test_recording_path_rejects_existing_file(valid_advanced_settings, tmp_path):
+def test_recording_path_rejects_existing_file(valid_preferences, tmp_path):
     target = tmp_path / "movie.mp4"
     target.write_bytes(b"not a directory")
-    valid_advanced_settings["recording_dir"] = str(target)
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+    valid_preferences["recording_dir"] = str(target)
+    result = settings.validate_preferences(
+        valid_preferences
     )
     assert not result.is_valid
     assert result.error_key == "recording_dir"
@@ -245,14 +245,14 @@ def test_recording_path_rejects_existing_file(valid_advanced_settings, tmp_path)
 
 
 def test_recording_path_rejects_unwritable_directory(
-    valid_advanced_settings, tmp_path, monkeypatch
+    valid_preferences, tmp_path, monkeypatch
 ):
     target = tmp_path / "recordings"
     target.mkdir()
-    valid_advanced_settings["recording_dir"] = str(target)
+    valid_preferences["recording_dir"] = str(target)
     monkeypatch.setattr(settings.os, "access", lambda path, mode: False)
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+    result = settings.validate_preferences(
+        valid_preferences
     )
     assert not result.is_valid
     assert result.error_key == "recording_dir"
@@ -260,14 +260,14 @@ def test_recording_path_rejects_unwritable_directory(
 
 
 def test_recording_path_rejects_creation_under_unwritable_parent(
-    valid_advanced_settings, tmp_path, monkeypatch
+    valid_preferences, tmp_path, monkeypatch
 ):
     target = tmp_path / "parent" / "new" / "recordings"
     target.parent.parent.mkdir()
-    valid_advanced_settings["recording_dir"] = str(target)
+    valid_preferences["recording_dir"] = str(target)
     monkeypatch.setattr(settings.os, "access", lambda path, mode: False)
-    result = settings.validate_advanced_settings(
-        valid_advanced_settings
+    result = settings.validate_preferences(
+        valid_preferences
     )
     assert not result.is_valid
     assert result.error_key == "recording_dir"
@@ -275,16 +275,16 @@ def test_recording_path_rejects_creation_under_unwritable_parent(
 
 
 def test_load_missing_settings_returns_validated_defaults(tmp_path):
-    loaded = settings.load_advanced_settings(tmp_path / "missing.json")
-    assert isinstance(loaded, settings.AdvancedSettings)
-    assert loaded == settings.advanced_setting_defaults()
+    loaded = settings.load_preferences(tmp_path / "missing.json")
+    assert isinstance(loaded, settings.Preferences)
+    assert loaded == settings.preference_defaults()
 
 
 @pytest.mark.parametrize("content", ["{broken", "[]", "null", '"text"'])
 def test_load_malformed_or_non_object_settings_returns_defaults(tmp_path, content):
     path = tmp_path / "advanced_settings.json"
     path.write_text(content, encoding="utf-8")
-    assert settings.load_advanced_settings(path) == settings.advanced_setting_defaults()
+    assert settings.load_preferences(path) == settings.preference_defaults()
 
 
 def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
@@ -300,7 +300,7 @@ def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
     )
 
     with caplog.at_level(logging.WARNING, logger="caveviewer"):
-        loaded = settings.load_advanced_settings(path)
+        loaded = settings.load_preferences(path)
 
     assert loaded["io_workers"] == "2"
     assert loaded["upload_chunks_per_frame"] == "3"
@@ -308,7 +308,7 @@ def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
 
 
 def test_loaded_settings_snapshot_is_immutable(tmp_path):
-    loaded = settings.load_advanced_settings(tmp_path / "missing.json")
+    loaded = settings.load_preferences(tmp_path / "missing.json")
     mutable_copy = loaded.as_dict()
 
     with pytest.raises(TypeError):
@@ -319,44 +319,44 @@ def test_loaded_settings_snapshot_is_immutable(tmp_path):
 
 
 def test_snapshot_constructor_rejects_values_outside_the_schema_boundary(
-    valid_advanced_settings
+    valid_preferences
 ):
-    valid_advanced_settings["io_workers"] = "999"
+    valid_preferences["io_workers"] = "999"
 
     with pytest.raises(ValueError, match="no more than 32"):
-        settings.AdvancedSettings(valid_advanced_settings)
+        settings.Preferences(valid_preferences)
 
-    valid_advanced_settings["io_workers"] = "2"
-    del valid_advanced_settings["upload_time_budget_ms"]
+    valid_preferences["io_workers"] = "2"
+    del valid_preferences["upload_time_budget_ms"]
     with pytest.raises(ValueError, match="exactly the declared schema keys"):
-        settings.AdvancedSettings(valid_advanced_settings)
+        settings.Preferences(valid_preferences)
 
 
-def test_settings_save_and_load_round_trip(valid_advanced_settings, tmp_path):
+def test_settings_save_and_load_round_trip(valid_preferences, tmp_path):
     path = tmp_path / "advanced_settings.json"
-    valid_advanced_settings["io_workers"] = " 7 "
-    snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
-    settings.save_advanced_settings(snapshot, path)
-    loaded = settings.load_advanced_settings(path)
+    valid_preferences["io_workers"] = " 7 "
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    settings.save_preferences(snapshot, path)
+    loaded = settings.load_preferences(path)
     assert loaded["io_workers"] == "7"
     assert json.loads(path.read_text(encoding="utf-8"))["io_workers"] == "7"
 
 
 def test_default_settings_path_uses_xdg_config_not_state(
-    valid_advanced_settings, tmp_path, monkeypatch
+    valid_preferences, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(sys, "platform", "linux")
     config_home = tmp_path / "config"
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
-    snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
-    settings.save_advanced_settings(snapshot)
-    path = Path(settings.advanced_settings_file())
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    settings.save_preferences(snapshot)
+    path = Path(settings.preferences_file())
     assert path == config_home / "caveviewer" / "advanced_settings.json"
     assert not (state_home / "caveviewer" / "advanced_settings.json").exists()
     assert path.is_file()
-    assert settings.load_advanced_settings()["io_workers"] == valid_advanced_settings[
+    assert settings.load_preferences()["io_workers"] == valid_preferences[
         "io_workers"
     ]
 
@@ -365,35 +365,35 @@ def test_legacy_settings_file_is_migrated_into_preferences_directory():
     legacy = Path(os.path.expanduser("~")) / ".caveviewer_advanced_settings.json"
     legacy.write_text('{"io_workers": "6"}', encoding="utf-8")
 
-    migrated = Path(settings.advanced_settings_file())
+    migrated = Path(settings.preferences_file())
 
     assert migrated.is_file()
-    assert settings.load_advanced_settings(migrated)["io_workers"] == "6"
+    assert settings.load_preferences(migrated)["io_workers"] == "6"
 
 
-def test_settings_save_failure_is_reported(valid_advanced_settings, tmp_path, caplog):
+def test_settings_save_failure_is_reported(valid_preferences, tmp_path, caplog):
     path = tmp_path / "missing-parent" / "advanced_settings.json"
-    snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
+    snapshot = settings.require_validated_preferences(valid_preferences)
     with caplog.at_level(logging.WARNING, logger="caveviewer"):
-        with pytest.raises(settings.AdvancedSettingsSaveError):
-            settings.save_advanced_settings(snapshot, path)
-    assert "Could not save advanced settings" in caplog.text
+        with pytest.raises(settings.PreferencesSaveError):
+            settings.save_preferences(snapshot, path)
+    assert "Could not save preferences" in caplog.text
 
 
 def test_atomic_save_preserves_existing_file_when_replace_fails(
-    valid_advanced_settings, tmp_path, monkeypatch
+    valid_preferences, tmp_path, monkeypatch
 ):
     path = tmp_path / "advanced_settings.json"
     path.write_text('{"io_workers": "2"}', encoding="utf-8")
-    snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
+    snapshot = settings.require_validated_preferences(valid_preferences)
 
     def fail_replace(*_args):
         raise OSError("failed")
 
     monkeypatch.setattr(settings.os, "replace", fail_replace)
 
-    with pytest.raises(settings.AdvancedSettingsSaveError):
-        settings.save_advanced_settings(snapshot, path)
+    with pytest.raises(settings.PreferencesSaveError):
+        settings.save_preferences(snapshot, path)
 
     assert path.read_text(encoding="utf-8") == '{"io_workers": "2"}'
     assert list(tmp_path.glob("*.tmp")) == []
@@ -404,7 +404,7 @@ def test_environment_overrides_are_used_as_defaults(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "3")
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", "4")
     monkeypatch.setenv("CAVEVIEWER_OBJ_IMPORT_BATCH_FACES", "300000")
-    defaults = settings.advanced_setting_defaults()
+    defaults = settings.preference_defaults()
     assert defaults["io_workers"] == "9"
     assert defaults["upload_chunks_per_frame"] == "3"
     assert defaults["upload_groups_per_frame"] == "4"
@@ -415,30 +415,30 @@ def test_invalid_environment_override_falls_back_to_built_in(monkeypatch, caplog
     monkeypatch.setenv("CAVEVIEWER_IO_WORKERS", "999")
 
     with caplog.at_level(logging.WARNING, logger="caveviewer"):
-        defaults = settings.advanced_setting_defaults()
+        defaults = settings.preference_defaults()
 
     assert defaults["io_workers"] == "2"
     assert "Ignoring invalid CAVEVIEWER_IO_WORKERS" in caplog.text
 
 
-def test_invalid_values_cannot_cross_validated_boundary(valid_advanced_settings):
-    valid_advanced_settings["io_workers"] = "999"
+def test_invalid_values_cannot_cross_validated_boundary(valid_preferences):
+    valid_preferences["io_workers"] = "999"
 
-    with pytest.raises(settings.AdvancedSettingsValidationError) as exc_info:
-        settings.require_validated_advanced_settings(valid_advanced_settings)
+    with pytest.raises(settings.PreferencesValidationError) as exc_info:
+        settings.require_validated_preferences(valid_preferences)
 
     assert exc_info.value.result.error_key == "io_workers"
 
 
 def test_runtime_consumers_reject_unvalidated_mappings(
-    valid_advanced_settings, tmp_path
+    valid_preferences, tmp_path
 ):
-    with pytest.raises(TypeError, match="AdvancedSettings snapshot"):
-        settings.save_advanced_settings(
-            valid_advanced_settings, tmp_path / "advanced_settings.json"
+    with pytest.raises(TypeError, match="Preferences snapshot"):
+        settings.save_preferences(
+            valid_preferences, tmp_path / "advanced_settings.json"
         )
-    with pytest.raises(TypeError, match="AdvancedSettings snapshot"):
-        settings.apply_advanced_settings_to_env(valid_advanced_settings)
+    with pytest.raises(TypeError, match="Preferences snapshot"):
+        settings.apply_preferences_to_env(valid_preferences)
 
 
 def test_every_numeric_setting_has_a_display_range():
@@ -449,7 +449,7 @@ def test_every_numeric_setting_has_a_display_range():
         "io_workers": "1-32 workers",
         "io_reserved_cpus": "2-32 logical CPUs",
         "upload_chunks_per_frame": "1-16 chunks",
-        "upload_groups_per_frame": "1-64 groups",
+        "upload_groups_per_frame": "1-64 operations",
         "upload_time_budget_ms": "0.5-50 ms",
         "chunk_size_meters": "0.01-512",
         "max_upload_group_mb": "1-512 MB",
@@ -461,12 +461,12 @@ def test_every_numeric_setting_has_a_display_range():
 
     numeric_fields = {
         field.key: field
-        for field in settings.ADVANCED_SETTING_FIELDS
-        if field.value_type in {settings.ValueType.INT, settings.ValueType.FLOAT}
+        for field in settings.PREFERENCE_FIELDS
+        if field.value_type in {settings.PreferenceValueType.INT, settings.PreferenceValueType.FLOAT}
     }
     assert set(numeric_fields) == set(expected_ranges)
     assert {
-        key: settings.advanced_setting_range_text(field)
+        key: settings.preference_range_text(field)
         for key, field in numeric_fields.items()
     } == expected_ranges
 
@@ -474,11 +474,11 @@ def test_every_numeric_setting_has_a_display_range():
 def test_every_numeric_setting_has_an_in_field_placeholder():
     numeric_fields = [
         field
-        for field in settings.ADVANCED_SETTING_FIELDS
-        if field.value_type in {settings.ValueType.INT, settings.ValueType.FLOAT}
+        for field in settings.PREFERENCE_FIELDS
+        if field.value_type in {settings.PreferenceValueType.INT, settings.PreferenceValueType.FLOAT}
     ]
     placeholders = {
-        field.key: settings.advanced_setting_placeholder_text(field)
+        field.key: settings.preference_placeholder_text(field)
         for field in numeric_fields
     }
     assert placeholders == {
@@ -502,8 +502,8 @@ def test_every_numeric_setting_has_an_in_field_placeholder():
 def test_every_numeric_setting_has_finite_bounds():
     numeric_fields = [
         field
-        for field in settings.ADVANCED_SETTING_FIELDS
-        if field.value_type in {settings.ValueType.INT, settings.ValueType.FLOAT}
+        for field in settings.PREFERENCE_FIELDS
+        if field.value_type in {settings.PreferenceValueType.INT, settings.PreferenceValueType.FLOAT}
     ]
 
     assert all(field.minimum is not None for field in numeric_fields)
@@ -511,11 +511,11 @@ def test_every_numeric_setting_has_finite_bounds():
 
 
 def test_required_numeric_settings_open_with_defaults():
-    defaults = settings.advanced_setting_defaults()
+    defaults = settings.preference_defaults()
     required_numeric_keys = {
         field.key
-        for field in settings.ADVANCED_SETTING_FIELDS
-        if field.value_type in {settings.ValueType.INT, settings.ValueType.FLOAT}
+        for field in settings.PREFERENCE_FIELDS
+        if field.value_type in {settings.PreferenceValueType.INT, settings.PreferenceValueType.FLOAT}
         and not field.optional
     }
     assert all(defaults[key] for key in required_numeric_keys)
@@ -524,97 +524,97 @@ def test_required_numeric_settings_open_with_defaults():
 def test_non_numeric_setting_has_no_display_range():
     recording_dir = next(
         field
-        for field in settings.ADVANCED_SETTING_FIELDS
+        for field in settings.PREFERENCE_FIELDS
         if field.key == "recording_dir"
     )
-    assert settings.advanced_setting_range_text(recording_dir) is None
-    assert settings.advanced_setting_placeholder_text(recording_dir) is None
+    assert settings.preference_range_text(recording_dir) is None
+    assert settings.preference_placeholder_text(recording_dir) is None
 
 
 def test_apply_maps_every_setting_to_its_declared_environment_variable(
-    valid_advanced_settings
+    valid_preferences
 ):
-    for index, field in enumerate(settings.ADVANCED_SETTING_FIELDS, start=1):
+    for index, field in enumerate(settings.PREFERENCE_FIELDS, start=1):
         key = field.key
-        if field.value_type is settings.ValueType.PATH_CREATE:
+        if field.value_type is settings.PreferenceValueType.PATH_CREATE:
             continue
-        if field.value_type is settings.ValueType.INT:
+        if field.value_type is settings.PreferenceValueType.INT:
             minimum = int(field.minimum or 0)
             maximum = field.maximum
             value = max(minimum, index)
             if maximum is not None:
                 value = min(value, int(maximum))
-            valid_advanced_settings[key] = str(value)
+            valid_preferences[key] = str(value)
 
-    expected = settings.require_validated_advanced_settings(valid_advanced_settings)
-    settings.apply_advanced_settings_to_env(expected)
+    expected = settings.require_validated_preferences(valid_preferences)
+    settings.apply_preferences_to_env(expected)
 
-    for field in settings.ADVANCED_SETTING_FIELDS:
+    for field in settings.PREFERENCE_FIELDS:
         assert os.environ[field.env_var] == field.value_to_env(expected[field.key])
 
 
 def test_obj_import_batch_preference_maps_thousands_to_faces_env(
-    valid_advanced_settings,
+    valid_preferences,
 ):
-    valid_advanced_settings["obj_import_batch_thousands"] = "250"
+    valid_preferences["obj_import_batch_thousands"] = "250"
 
-    snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
-    settings.apply_advanced_settings_to_env(snapshot)
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    settings.apply_preferences_to_env(snapshot)
 
     assert snapshot["obj_import_batch_thousands"] == "250"
     assert os.environ["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
 
 
-def test_advanced_settings_dialog_uses_extracted_settings_logic():
-    from caveviewer.gui import advanced_settings_dialog, advanced_settings_form, splash_screen
+def test_preferences_dialog_uses_extracted_settings_logic():
+    from caveviewer.gui import preferences_dialog, preferences_form, splash_screen
 
-    assert advanced_settings_dialog._NUMERIC_ENTRY_WIDTH == 8
-    assert advanced_settings_dialog.ADVANCED_SETTING_FIELDS is settings.ADVANCED_SETTING_FIELDS
+    assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 8
+    assert preferences_dialog.PREFERENCE_FIELDS is settings.PREFERENCE_FIELDS
     assert (
-        advanced_settings_dialog.advanced_setting_placeholder_text
-        is settings.advanced_setting_placeholder_text
+        preferences_dialog.preference_placeholder_text
+        is settings.preference_placeholder_text
     )
-    assert advanced_settings_dialog.save_advanced_settings is settings.save_advanced_settings
+    assert preferences_dialog.save_preferences is settings.save_preferences
     assert (
-        advanced_settings_dialog.AdvancedSettingsFormController
-        is advanced_settings_form.AdvancedSettingsFormController
+        preferences_dialog.PreferencesFormController
+        is preferences_form.PreferencesFormController
     )
     assert (
-        splash_screen._show_advanced_settings_dialog
-        is advanced_settings_dialog.show_advanced_settings_dialog
+        splash_screen._show_preferences_dialog
+        is preferences_dialog.show_preferences_dialog
     )
 
 
-def test_advanced_settings_dialog_uses_compact_tabbed_pages():
-    from caveviewer.gui import advanced_settings_dialog
+def test_preferences_dialog_uses_compact_tabbed_pages():
+    from caveviewer.gui import preferences_dialog
 
-    source = inspect.getsource(advanced_settings_dialog.AdvancedSettingsDialog._build)
-    module_source = inspect.getsource(advanced_settings_dialog)
+    source = inspect.getsource(preferences_dialog.PreferencesDialog._build)
+    module_source = inspect.getsource(preferences_dialog)
     settings_source = inspect.getsource(settings)
     show_page_source = inspect.getsource(
-        advanced_settings_dialog.AdvancedSettingsDialog._show_page
+        preferences_dialog.PreferencesDialog._show_page
     )
     render_field_source = inspect.getsource(
-        advanced_settings_dialog.AdvancedSettingsDialog._render_field
+        preferences_dialog.PreferencesDialog._render_field
     )
-    page_keys = [page[0] for page in advanced_settings_dialog._PREFERENCE_PAGES]
-    page_labels = [page[1] for page in advanced_settings_dialog._PREFERENCE_PAGES]
+    page_keys = [page[0] for page in preferences_dialog._PREFERENCE_PAGES]
+    page_labels = [page[1] for page in preferences_dialog._PREFERENCE_PAGES]
     field_sections = {
-        field.section for field in advanced_settings_dialog.ADVANCED_SETTING_FIELDS
+        field.section for field in preferences_dialog.PREFERENCE_FIELDS
     }
     fields_by_key = {
-        field.key: field for field in advanced_settings_dialog.ADVANCED_SETTING_FIELDS
+        field.key: field for field in preferences_dialog.PREFERENCE_FIELDS
     }
 
     assert page_keys == ["streaming", "parsing", "storage"]
     assert page_labels == ["Streaming", "Import", "Storage"]
-    assert all(len(page) == 2 for page in advanced_settings_dialog._PREFERENCE_PAGES)
+    assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
     assert set(page_keys) == field_sections
-    assert advanced_settings_dialog._WINDOWS_LAYOUT == (
-        advanced_settings_dialog.sys.platform == "win32"
+    assert preferences_dialog._WINDOWS_LAYOUT == (
+        preferences_dialog.sys.platform == "win32"
     )
-    assert advanced_settings_dialog._MACOS_LAYOUT == (
-        advanced_settings_dialog.sys.platform == "darwin"
+    assert preferences_dialog._MACOS_LAYOUT == (
+        preferences_dialog.sys.platform == "darwin"
     )
     assert fields_by_key["io_workers"].label == "Loading worker limit"
     assert (
@@ -640,7 +640,7 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     )
     assert (
         fields_by_key["upload_groups_per_frame"].hint
-        == "Max material groups uploaded from one ready chunk"
+        == "Max render-thread upload slices from one ready chunk."
     )
     assert (
         fields_by_key["obj_import_batch_thousands"].hint
@@ -651,36 +651,36 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
         == "Maximum VBO payload size for dense chunk groups, in MB."
     )
     if (
-        advanced_settings_dialog._LINUX_LAYOUT
-        or advanced_settings_dialog.sys.platform == "win32"
+        preferences_dialog._LINUX_LAYOUT
+        or preferences_dialog.sys.platform == "win32"
     ):
-        assert advanced_settings_dialog._MIN_WIDTH >= 860
-    elif advanced_settings_dialog._MACOS_LAYOUT:
-        assert advanced_settings_dialog._BODY_PAD_X == 12
-        assert advanced_settings_dialog._MIN_WIDTH == 430
-        assert advanced_settings_dialog._TEXT_ENTRY_WIDTH == 24
-        assert advanced_settings_dialog._ROW_PAD_X == 14
-        assert advanced_settings_dialog._ROW_PAD_Y == 5
-        assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 5
-        assert advanced_settings_dialog._TAB_PAD_X == 10
-        assert advanced_settings_dialog._TAB_PAD_Y == 6
-        assert advanced_settings_dialog._TAB_HIGHLIGHT_THICKNESS == 0
-        assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 8
-        assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 8
-        assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 390
+        assert preferences_dialog._MIN_WIDTH >= 860
+    elif preferences_dialog._MACOS_LAYOUT:
+        assert preferences_dialog._BODY_PAD_X == 12
+        assert preferences_dialog._MIN_WIDTH == 430
+        assert preferences_dialog._TEXT_ENTRY_WIDTH == 24
+        assert preferences_dialog._ROW_PAD_X == 14
+        assert preferences_dialog._ROW_PAD_Y == 5
+        assert preferences_dialog._CONTROL_ROW_TOP_PAD_Y == 5
+        assert preferences_dialog._TAB_PAD_X == 10
+        assert preferences_dialog._TAB_PAD_Y == 6
+        assert preferences_dialog._TAB_HIGHLIGHT_THICKNESS == 0
+        assert preferences_dialog._TAB_BOTTOM_PAD_Y == 8
+        assert preferences_dialog._BUTTON_ROW_TOP_PAD_Y == 8
+        assert preferences_dialog._NOTICE_WRAP_LENGTH == 390
     else:
-        assert advanced_settings_dialog._MIN_WIDTH >= 760
-    if not advanced_settings_dialog._MACOS_LAYOUT:
-        assert advanced_settings_dialog._ROW_PAD_X == 18
-    if not advanced_settings_dialog._MACOS_LAYOUT:
-        assert advanced_settings_dialog._ROW_PAD_Y == 12
-        assert advanced_settings_dialog._CONTROL_ROW_TOP_PAD_Y == 14
-        assert advanced_settings_dialog._TAB_PAD_X == 14
-        assert advanced_settings_dialog._TAB_PAD_Y == 7
-        assert advanced_settings_dialog._TAB_HIGHLIGHT_THICKNESS == 1
-        assert advanced_settings_dialog._TAB_BOTTOM_PAD_Y == 18
-        assert advanced_settings_dialog._BUTTON_ROW_TOP_PAD_Y == 18
-        assert advanced_settings_dialog._NOTICE_WRAP_LENGTH == 720
+        assert preferences_dialog._MIN_WIDTH >= 760
+    if not preferences_dialog._MACOS_LAYOUT:
+        assert preferences_dialog._ROW_PAD_X == 18
+    if not preferences_dialog._MACOS_LAYOUT:
+        assert preferences_dialog._ROW_PAD_Y == 12
+        assert preferences_dialog._CONTROL_ROW_TOP_PAD_Y == 14
+        assert preferences_dialog._TAB_PAD_X == 14
+        assert preferences_dialog._TAB_PAD_Y == 7
+        assert preferences_dialog._TAB_HIGHLIGHT_THICKNESS == 1
+        assert preferences_dialog._TAB_BOTTOM_PAD_Y == 18
+        assert preferences_dialog._BUTTON_ROW_TOP_PAD_Y == 18
+        assert preferences_dialog._NOTICE_WRAP_LENGTH == 720
     assert fields_by_key["recording_dir"].label == "Recordings folder"
     assert fields_by_key["recording_dir"].hint == "Where saved recordings are stored."
     assert "compact_path = key == \"recording_dir\"" in render_field_source
@@ -734,14 +734,14 @@ def test_advanced_settings_dialog_uses_compact_tabbed_pages():
     assert "class _LabelButton" not in module_source
 
 
-def test_advanced_settings_invalid_field_switches_to_containing_page():
-    from caveviewer.gui import advanced_settings_dialog
+def test_preferences_invalid_field_switches_to_containing_page():
+    from caveviewer.gui import preferences_dialog
 
     shown_pages = []
     focused = []
 
-    dialog = advanced_settings_dialog.AdvancedSettingsDialog.__new__(
-        advanced_settings_dialog.AdvancedSettingsDialog
+    dialog = preferences_dialog.PreferencesDialog.__new__(
+        preferences_dialog.PreferencesDialog
     )
     dialog.field_page_keys = {"chunk_size_meters": "parsing"}
     dialog.field_entries = {
@@ -763,18 +763,18 @@ def test_advanced_settings_invalid_field_switches_to_containing_page():
 
 
 def test_dialog_stays_open_and_reports_atomic_save_failure(
-    valid_advanced_settings, monkeypatch
+    valid_preferences, monkeypatch
 ):
-    from caveviewer.gui import advanced_settings_dialog
-    from caveviewer.gui.advanced_settings_form import MessageKind
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_form import MessageKind
 
-    snapshot = settings.require_validated_advanced_settings(valid_advanced_settings)
-    original_settings = settings.load_advanced_settings()
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    original_preferences = settings.load_preferences()
     destroyed = []
     feedback = []
     applied = []
-    dialog = advanced_settings_dialog.AdvancedSettingsDialog.__new__(
-        advanced_settings_dialog.AdvancedSettingsDialog
+    dialog = preferences_dialog.PreferencesDialog.__new__(
+        preferences_dialog.PreferencesDialog
     )
     dialog.form = SimpleNamespace(
         attempt_apply=lambda: (SimpleNamespace(), snapshot)
@@ -783,21 +783,21 @@ def test_dialog_stays_open_and_reports_atomic_save_failure(
     dialog.numeric_entry_states = {}
     dialog._set_feedback = lambda message, kind: feedback.append((message, kind))
     dialog.dialog = SimpleNamespace(destroy=lambda: destroyed.append(True))
-    dialog.settings = original_settings
+    dialog.preferences = original_preferences
 
     def fail_save(_settings):
-        raise settings.AdvancedSettingsSaveError("Could not save settings.")
+        raise settings.PreferencesSaveError("Could not save settings.")
 
-    monkeypatch.setattr(advanced_settings_dialog, "save_advanced_settings", fail_save)
+    monkeypatch.setattr(preferences_dialog, "save_preferences", fail_save)
     monkeypatch.setattr(
-        advanced_settings_dialog,
-        "apply_advanced_settings_to_env",
+        preferences_dialog,
+        "apply_preferences_to_env",
         lambda value: applied.append(value),
     )
 
     dialog.apply()
 
     assert feedback == [("Could not save settings.", MessageKind.ERROR)]
-    assert dialog.settings is original_settings
+    assert dialog.preferences is original_preferences
     assert applied == []
     assert destroyed == []

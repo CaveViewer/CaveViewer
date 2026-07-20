@@ -32,7 +32,7 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Optional
 
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.update_checker import (
     DownloadCancelled,
     download_update,

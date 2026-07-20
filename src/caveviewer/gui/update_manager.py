@@ -16,7 +16,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable
 
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui import update_checker
 from caveviewer.gui.platform import get_desktop_services, get_platform_adapter
 from caveviewer.gui.platform.base import SplashPlatformAdapter

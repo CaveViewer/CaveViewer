@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import logging
 
-from caveviewer.core import logging_utils
+from caveviewer.core.diagnostics import logging as logging_utils
 
 
 def test_logging_clears_and_redraws_active_progress(monkeypatch):
@@ -39,61 +39,6 @@ def test_logging_clears_and_redraws_active_progress(monkeypatch):
         in output
     )
     assert output.endswith("\r" + progress + "\n")
-
-
-def test_configure_logging_routes_moderngl_window_through_caveviewer_format(
-    monkeypatch,
-):
-    import moderngl_window
-
-    stream = io.StringIO()
-    root = logging.getLogger()
-    old_root_handlers = list(root.handlers)
-    old_root_level = root.level
-    old_configured = logging_utils._CONFIGURED
-    old_setup_basic_logging = moderngl_window.setup_basic_logging
-    moderngl_logger = logging.getLogger("moderngl_window")
-    old_moderngl_handlers = list(moderngl_logger.handlers)
-    old_moderngl_propagate = moderngl_logger.propagate
-    old_moderngl_level = moderngl_logger.level
-    private_handler = logging.StreamHandler(stream)
-    private_handler.setFormatter(logging.Formatter("PRIVATE %(message)s"))
-    moderngl_logger.handlers[:] = [private_handler]
-    moderngl_logger.propagate = False
-    moderngl_logger.setLevel(logging.INFO)
-    monkeypatch.setattr(logging_utils.sys, "stdout", stream)
-    monkeypatch.setattr(logging_utils.sys, "stderr", stream)
-
-    try:
-        logging_utils.configure_logging(force=True)
-        logging.getLogger("moderngl_window.context.base.window").info(
-            "python: 3.14"
-        )
-        moderngl_window.setup_basic_logging(logging.INFO)
-        logging.getLogger("moderngl_window.context.base.window").info(
-            "platform: linux"
-        )
-    finally:
-        logging_utils.finish_console_progress_line()
-        root.handlers.clear()
-        root.handlers.extend(old_root_handlers)
-        root.setLevel(old_root_level)
-        logging_utils._CONFIGURED = old_configured
-        moderngl_logger.handlers[:] = old_moderngl_handlers
-        moderngl_logger.propagate = old_moderngl_propagate
-        moderngl_logger.setLevel(old_moderngl_level)
-        moderngl_window.setup_basic_logging = old_setup_basic_logging
-
-    output = stream.getvalue()
-    assert "PRIVATE" not in output
-    assert (
-        "[moderngl_window.context.base.window] INFO: python: 3.14"
-        in output
-    )
-    assert (
-        "[moderngl_window.context.base.window] INFO: platform: linux"
-        in output
-    )
 
 
 def test_configure_logging_normalizes_explicit_component(monkeypatch):

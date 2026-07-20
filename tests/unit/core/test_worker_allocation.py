@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from caveviewer.core.worker_config import (
+from caveviewer.core.workers.allocation import (
     WorkerAllocation,
     describe_worker_target,
     resolve_worker_allocation,
@@ -71,7 +71,7 @@ def test_invalid_values_use_defaults():
     ) == 4
 
 
-def test_runtime_values_are_bounded_even_outside_advanced_settings():
+def test_runtime_values_are_bounded_even_outside_preferences():
     assert resolve_worker_count(
         "999",
         "0",
@@ -82,7 +82,7 @@ def test_runtime_values_are_bounded_even_outside_advanced_settings():
 
 
 def test_unknown_cpu_count_keeps_bounded_requested_worker_count(monkeypatch):
-    monkeypatch.setattr("caveviewer.core.worker_config.os.cpu_count", lambda: None)
+    monkeypatch.setattr("caveviewer.core.workers.allocation.os.cpu_count", lambda: None)
 
     assert resolve_worker_count(
         "7",

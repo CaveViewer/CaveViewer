@@ -108,12 +108,16 @@ height by default so they play back smoothly on normal video players.
 
 ## Importing and Streaming Preferences
 
-The Preferences panel in the startup window acts as the advanced installer/preferences surface for import and streaming behavior. Open it from the splash screen with Preferences.
+The Preferences panel in the startup window controls import and streaming behavior. Open it from the splash screen with Preferences.
 
-These values are validated in the UI, applied to environment variables for the current launch, and saved to a local settings file so they are reused next time.
+These values are validated in the UI, applied to environment variables for the current launch, and saved to a local preferences file so they are reused next time.
 
-- Linux settings file: `~/.config/caveviewer/advanced_settings.json` by default
-- macOS/Windows settings file: `~/.caveviewer/advanced_settings.json`
+- Linux preferences file: `~/.config/caveviewer/advanced_settings.json` by default
+- macOS/Windows preferences file: `~/.caveviewer/advanced_settings.json`
+
+The stored preferences file keeps the legacy-compatible `advanced_settings.json`
+filename; the UI and source APIs use Preferences terminology.
+
 - Streaming section controls runtime chunk loading and upload behavior.
 - Import section controls cache-build/import behavior.
 - Storage section controls folders used when saving recordings and other app data.

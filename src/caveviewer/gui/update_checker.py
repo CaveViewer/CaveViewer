@@ -24,7 +24,7 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.platform import get_platform_adapter
 from caveviewer.gui.update_signature import (
     SignatureVerificationError,

@@ -7,12 +7,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from caveviewer.core.logging_utils import (
+from caveviewer.core.diagnostics.logging import (
     configure_logging,
     finish_console_progress_line,
     set_console_progress,
 )
-from caveviewer.core.map_compiler import (
+from caveviewer.core.map.compiler import (
     CompileOptions,
     MapCompileConfigurationError,
     MapCompileError,
@@ -33,7 +33,7 @@ Required options:
 
 Options:
   --cache-root=<path>                Root folder where compiled map caches are stored
-  --settings-file=<path>             Advanced settings JSON to use
+  --settings-file=<path>             Preferences JSON to use
   --chunk-size=<value>               Import chunk size for new/rebuilt caches
   --max-upload-group-mb=<value>      Maximum VBO payload size for dense chunk groups in MB
   --obj-scan-throttle-ms=<value>     Milliseconds paused while scanning OBJ files

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer import app
-from caveviewer.core import chunker
+from caveviewer.core.chunking import builder as chunker
 from caveviewer.gui import import_process
 
 

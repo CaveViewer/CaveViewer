@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from caveviewer.gui.advanced_settings_form import (
-    AdvancedSettingsFormController,
+from caveviewer.gui.preferences_form import (
+    PreferencesFormController,
     MessageKind,
 )
 
 
-def test_valid_form_starts_unlocked_with_apply_enabled(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_valid_form_starts_unlocked_with_apply_enabled(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
 
     assert controller.state.invalid_key is None
     assert controller.state.message_kind is MessageKind.NONE
@@ -17,10 +17,10 @@ def test_valid_form_starts_unlocked_with_apply_enabled(valid_advanced_settings):
     assert not controller.state.form_locked
 
 
-def test_invalid_initial_values_start_locked(valid_advanced_settings):
-    valid_advanced_settings["io_workers"] = ""
+def test_invalid_initial_values_start_locked(valid_preferences):
+    valid_preferences["io_workers"] = ""
 
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+    controller = PreferencesFormController(valid_preferences)
     state = controller.blur("io_workers")
 
     assert state.invalid_key == "io_workers"
@@ -29,8 +29,8 @@ def test_invalid_initial_values_start_locked(valid_advanced_settings):
     assert state.form_locked
 
 
-def test_focused_required_field_can_be_temporarily_empty(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_focused_required_field_can_be_temporarily_empty(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("io_workers")
 
     state = controller.change("io_workers", "")
@@ -43,8 +43,8 @@ def test_focused_required_field_can_be_temporarily_empty(valid_advanced_settings
     assert not state.form_locked
 
 
-def test_empty_required_field_locks_form_after_focus_leaves(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_empty_required_field_locks_form_after_focus_leaves(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("io_workers")
     controller.change("io_workers", "")
 
@@ -58,8 +58,8 @@ def test_empty_required_field_locks_form_after_focus_leaves(valid_advanced_setti
     assert state.form_locked
 
 
-def test_correcting_locked_field_unlocks_form(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_correcting_locked_field_unlocks_form(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("io_workers")
     controller.change("io_workers", "")
     controller.blur("io_workers")
@@ -73,9 +73,9 @@ def test_correcting_locked_field_unlocks_form(valid_advanced_settings):
 
 
 def test_nonempty_out_of_range_value_is_rejected_immediately(
-    valid_advanced_settings,
+    valid_preferences,
 ):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("io_workers")
 
     state = controller.change("io_workers", "33")
@@ -86,8 +86,8 @@ def test_nonempty_out_of_range_value_is_rejected_immediately(
     assert state.form_locked
 
 
-def test_high_worker_count_is_valid_without_bottom_warning(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_high_worker_count_is_valid_without_bottom_warning(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("io_workers")
 
     state = controller.change("io_workers", "6")
@@ -99,8 +99,8 @@ def test_high_worker_count_is_valid_without_bottom_warning(valid_advanced_settin
     assert not state.form_locked
 
 
-def test_focus_loss_normalizes_valid_value(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_focus_loss_normalizes_valid_value(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("io_workers")
     controller.change("io_workers", "006")
 
@@ -110,8 +110,8 @@ def test_focus_loss_normalizes_valid_value(valid_advanced_settings):
     assert state.message_kind is MessageKind.NONE
 
 
-def test_optional_blank_value_keeps_apply_enabled(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_optional_blank_value_keeps_apply_enabled(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("gpu_memory_gb")
 
     state = controller.change("gpu_memory_gb", "")
@@ -120,8 +120,8 @@ def test_optional_blank_value_keeps_apply_enabled(valid_advanced_settings):
     assert not state.form_locked
 
 
-def test_apply_returns_normalized_values(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_apply_returns_normalized_values(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("io_workers")
     controller.change("io_workers", "006")
 
@@ -133,9 +133,9 @@ def test_apply_returns_normalized_values(valid_advanced_settings):
 
 
 def test_apply_rejects_missing_required_value_even_before_blur(
-    valid_advanced_settings,
+    valid_preferences,
 ):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+    controller = PreferencesFormController(valid_preferences)
     controller.focus("io_workers")
     controller.change("io_workers", "")
 
@@ -147,12 +147,12 @@ def test_apply_rejects_missing_required_value_even_before_blur(
     assert state.form_locked
 
 
-def test_unknown_field_is_rejected(valid_advanced_settings):
-    controller = AdvancedSettingsFormController(valid_advanced_settings)
+def test_unknown_field_is_rejected(valid_preferences):
+    controller = PreferencesFormController(valid_preferences)
 
     try:
         controller.change("not_a_setting", "1")
     except KeyError as exc:
-        assert "Unknown Advanced Settings field" in str(exc)
+        assert "Unknown Preferences field" in str(exc)
     else:
         raise AssertionError("Unknown field should have raised KeyError")
