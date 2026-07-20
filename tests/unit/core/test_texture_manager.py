@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from types import SimpleNamespace
 
 from PIL import Image
 
@@ -26,10 +25,28 @@ def _materials(count: int) -> dict[str, str]:
 class FakeTextureContext:
     def __init__(self):
         self.uploads = []
+        self.textures = []
 
     def texture(self, size, components, data):
         self.uploads.append((size, components, len(data)))
-        return SimpleNamespace(build_mipmaps=lambda: None)
+        texture = FakeTexture(size=size, components=components, byte_count=len(data))
+        self.textures.append(texture)
+        return texture
+
+
+class FakeTexture:
+    def __init__(self, *, size, components, byte_count):
+        self.size = size
+        self.components = components
+        self.byte_count = byte_count
+        self.mipmaps_built = False
+        self.released = False
+
+    def build_mipmaps(self):
+        self.mipmaps_built = True
+
+    def release(self):
+        self.released = True
 
 
 def test_recommend_texture_dimension_caps_large_texture_set_for_low_gpu_budget(
@@ -84,6 +101,13 @@ def test_recommend_texture_dimension_allows_16k_for_large_gpu_budget(monkeypatch
         gpu_memory_bytes=24 * GIB,
         gpu_target_fraction=0.70,
     ) == 16384
+
+
+def test_recommend_resident_texture_cache_uses_texture_budget_slice():
+    assert TextureManager.recommend_resident_texture_cache_bytes(
+        gpu_memory_bytes=10 * GIB,
+        gpu_target_fraction=0.50,
+    ) == 4 * GIB
 
 
 def test_manager_logs_maximum_configured_limit_without_cap_warning(caplog):
@@ -204,6 +228,69 @@ def test_acquire_with_timing_reports_predecoded_upload(tmp_path):
     assert timing["mipmap_ms"] >= 0.0
     assert timing["total_ms"] >= 0.0
     assert context.uploads == [((16, 8), 3, 16 * 8 * 3)]
+
+
+def test_release_keeps_texture_idle_for_lru_reuse(tmp_path):
+    Image.new("RGB", (4, 4), color=(10, 20, 30)).save(tmp_path / "tile.png")
+    context = FakeTextureContext()
+    manager = TextureManager(
+        context,
+        str(tmp_path),
+        {"mat": "tile.png"},
+        max_resident_texture_bytes=4096,
+    )
+
+    first_texture = manager.acquire("mat")
+    manager.release("mat")
+
+    assert manager.stats()["unique_materials_loaded"] == 0
+    assert manager.stats()["unique_files_resident"] == 1
+    assert manager.stats()["idle_files_resident"] == 1
+    assert context.textures[0].released is False
+
+    second_texture, timing = manager.acquire_with_timing("mat")
+
+    assert second_texture is first_texture
+    assert timing["file_cache_hit"] is True
+    assert timing["texture_ms"] == 0.0
+    assert len(context.uploads) == 1
+    assert manager.stats()["unique_materials_loaded"] == 1
+    assert manager.stats()["idle_files_resident"] == 0
+
+
+def test_idle_texture_lru_evicts_oldest_when_budget_needs_room(tmp_path):
+    for name, color in (
+        ("a.png", (10, 20, 30)),
+        ("b.png", (40, 50, 60)),
+        ("c.png", (70, 80, 90)),
+    ):
+        Image.new("RGB", (4, 4), color=color).save(tmp_path / name)
+    context = FakeTextureContext()
+    manager = TextureManager(
+        context,
+        str(tmp_path),
+        {"a": "a.png", "b": "b.png", "c": "c.png"},
+        max_resident_texture_bytes=200,
+    )
+
+    manager.acquire("a")
+    manager.release("a")
+    manager.acquire("b")
+    manager.release("b")
+
+    assert manager.stats()["unique_files_resident"] == 2
+    assert manager.stats()["idle_files_resident"] == 2
+    assert context.textures[0].released is False
+    assert context.textures[1].released is False
+
+    manager.acquire("c")
+
+    assert len(context.uploads) == 3
+    assert context.textures[0].released is True
+    assert context.textures[1].released is False
+    assert context.textures[2].released is False
+    assert manager.stats()["unique_files_resident"] == 2
+    assert manager.stats()["idle_files_resident"] == 1
 
 
 def test_predecode_waits_for_shared_texture_already_inflight(tmp_path, monkeypatch):

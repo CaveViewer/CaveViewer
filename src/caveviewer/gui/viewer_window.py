@@ -707,12 +707,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         max_decoded_cache_bytes = TextureManager.recommend_decoded_cache_bytes(
             ram_snapshot.available_bytes if ram_snapshot is not None else None
         )
+        max_resident_texture_bytes = (
+            TextureManager.recommend_resident_texture_cache_bytes(
+                gpu_memory_bytes,
+                gpu_target_fraction,
+            )
+        )
         self.texture_manager = TextureManager(
             self.ctx,
             self.textures_dir,
             self.manifest["mtl_materials"],
             max_texture_dimension=max_texture_dimension,
             max_decoded_cache_bytes=max_decoded_cache_bytes,
+            max_resident_texture_bytes=max_resident_texture_bytes,
         )
         self.texture_manager.validate_textures()
 

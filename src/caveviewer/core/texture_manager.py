@@ -8,9 +8,11 @@ even though geometry chunks reference materials, we don't want to upload
 every texture tile in the whole cave map upfront -- only the tiles actually
 touched by currently-loaded chunks.
 
-Reference-counted: a texture is only evicted once no currently-loaded chunk
-still references it. This is necessary because multiple chunks can (and do)
-share a texture tile.
+Reference-counted with an idle LRU: active chunks hold texture references, but
+when the last chunk drops a texture we keep that GPU object resident until the
+resident texture budget requires evicting idle entries. This avoids paying a
+fresh GPU upload when navigation briefly crosses a chunk boundary and then
+returns to the same texture tile.
 
 Decode vs upload are deliberately split into two separate steps:
   - decode_from_disk() does JPEG decoding (Pillow) and pixel manipulation
@@ -37,6 +39,7 @@ import math
 import os
 import threading
 import time
+from collections import OrderedDict
 from io import BytesIO
 from dataclasses import dataclass
 from typing import Optional
@@ -71,6 +74,8 @@ _DEFAULT_DECODE_CACHE_BYTES = 256 * 1024 ** 2
 _MIN_DECODE_CACHE_BYTES = 32 * 1024 ** 2
 _MAX_DECODE_CACHE_BYTES = 512 * 1024 ** 2
 _DECODE_CACHE_AVAILABLE_RAM_FRACTION = 0.05
+_DEFAULT_RESIDENT_TEXTURE_CACHE_BYTES = 512 * 1024 ** 2
+_MIN_RESIDENT_TEXTURE_CACHE_BYTES = 16 * 1024 ** 2
 
 
 @dataclass
@@ -123,6 +128,7 @@ class TextureManager:
         material_to_file: dict,
         max_texture_dimension: int | None = None,
         max_decoded_cache_bytes: int | None = None,
+        max_resident_texture_bytes: int | None = None,
     ):
         """
         gl_context: a moderngl.Context (or any object exposing .texture(size, components, data))
@@ -151,6 +157,9 @@ class TextureManager:
         self.max_decoded_cache_bytes = self._normalize_decoded_cache_limit(
             max_decoded_cache_bytes
         )
+        self.max_resident_texture_bytes = self._normalize_resident_texture_limit(
+            max_resident_texture_bytes
+        )
         self._texture_downscale_logged = False
         self._decode_cache_limit_logged = False
         self._loaded: dict[str, LoadedTexture] = {}  # keyed by material name
@@ -158,6 +167,9 @@ class TextureManager:
         # cheap to dedupe so we don't decode the same file twice) -- or,
         # for embedded textures, the same raw bytes object/value
         self._file_cache: dict[object, object] = {}  # filename-or-bytes -> moderngl.Texture
+        self._file_cache_bytes: dict[object, int] = {}
+        self._file_cache_total_bytes = 0
+        self._idle_file_lru: OrderedDict[object, None] = OrderedDict()
 
         # Decoded-but-not-yet-uploaded images, populated by background
         # worker threads via decode_from_disk(), consumed on the main
@@ -173,6 +185,11 @@ class TextureManager:
             "Texture predecode cache cap active: %.1f MB. Oversized or "
             "over-budget textures will decode on demand at original resolution.",
             self.max_decoded_cache_bytes / (1024 ** 2),
+        )
+        _LOG.info(
+            "Texture resident GPU LRU cache cap active: %.1f MB. Released "
+            "textures remain resident while idle until this budget needs room.",
+            self.max_resident_texture_bytes / (1024 ** 2),
         )
         if self.max_texture_dimension is not None:
             if self.max_texture_dimension >= _MAX_TEXTURE_DIMENSION_LIMIT:
@@ -297,6 +314,26 @@ class TextureManager:
         return _MIN_TEXTURE_DIMENSION_LIMIT
 
     @staticmethod
+    def recommend_resident_texture_cache_bytes(
+        gpu_memory_bytes: int | None,
+        gpu_target_fraction: float,
+    ) -> int:
+        """Choose the resident GPU texture cache budget.
+
+        This is the same texture-side slice used by the automatic texture-size
+        selector. It bounds active plus idle GPU textures; active textures are
+        never evicted, while idle textures are released oldest-first when this
+        budget is exceeded.
+        """
+        if gpu_memory_bytes is None or gpu_memory_bytes <= 0:
+            return _DEFAULT_RESIDENT_TEXTURE_CACHE_BYTES
+        target_fraction = max(0.01, min(0.80, float(gpu_target_fraction)))
+        return max(
+            _MIN_RESIDENT_TEXTURE_CACHE_BYTES,
+            int(gpu_memory_bytes * target_fraction * _TEXTURE_BUDGET_SHARE),
+        )
+
+    @staticmethod
     def recommend_decoded_cache_bytes(available_ram_bytes: int | None) -> int:
         """Choose a CPU-side texture predecode cache cap from available RAM.
 
@@ -323,6 +360,18 @@ class TextureManager:
             value = int(max_decoded_cache_bytes)
         except (TypeError, ValueError):
             return _DEFAULT_DECODE_CACHE_BYTES
+        return max(1, value)
+
+    @staticmethod
+    def _normalize_resident_texture_limit(
+        max_resident_texture_bytes: int | None,
+    ) -> int:
+        if max_resident_texture_bytes is None:
+            return _DEFAULT_RESIDENT_TEXTURE_CACHE_BYTES
+        try:
+            value = int(max_resident_texture_bytes)
+        except (TypeError, ValueError):
+            return _DEFAULT_RESIDENT_TEXTURE_CACHE_BYTES
         return max(1, value)
 
     def _placeholder_texture(self):
@@ -558,8 +607,12 @@ class TextureManager:
         file_or_bytes = self.material_to_file.get(material_name)
         if file_or_bytes and file_or_bytes in self._file_cache:
             tex = self._file_cache[file_or_bytes]
+            self._reactivate_cached_texture(file_or_bytes)
             timing["file_cache_hit"] = True
         else:
+            if file_or_bytes:
+                incoming_bytes = self._estimate_resident_bytes_for_file(file_or_bytes)
+                self._evict_idle_textures_if_needed(incoming_bytes=incoming_bytes)
             tex = self._upload_for_material(
                 material_name,
                 file_or_bytes,
@@ -567,10 +620,87 @@ class TextureManager:
             )
             if file_or_bytes:
                 self._file_cache[file_or_bytes] = tex
+                self._record_resident_texture_bytes(
+                    file_or_bytes,
+                    self._resident_bytes_from_upload_timing(
+                        timing,
+                        fallback_file_or_bytes=file_or_bytes,
+                    ),
+                )
+                self._evict_idle_textures_if_needed()
 
         self._loaded[material_name] = LoadedTexture(moderngl_texture=tex, ref_count=1)
         timing["total_ms"] = (time.perf_counter() - start) * 1000.0
         return tex, timing
+
+    @staticmethod
+    def _estimate_gpu_texture_bytes(size: tuple[int, int] | None) -> int:
+        if size is None:
+            return 4
+        width, height = size
+        return max(
+            4,
+            int(math.ceil(width * height * _TEXTURE_BYTES_PER_PIXEL_WITH_MIPS)),
+        )
+
+    def _estimate_resident_bytes_for_file(self, file_or_bytes) -> int | None:
+        size = self._inspect_texture_size(file_or_bytes)
+        if size is None:
+            return None
+        return self._estimate_gpu_texture_bytes(self._size_after_texture_limit(size))
+
+    def _resident_bytes_from_upload_timing(
+        self,
+        timing: dict | None,
+        *,
+        fallback_file_or_bytes,
+    ) -> int:
+        if timing is not None:
+            image_size = timing.get("image_size")
+            if image_size is not None:
+                return self._estimate_gpu_texture_bytes(image_size)
+            if timing.get("placeholder"):
+                return 4
+        estimated_bytes = self._estimate_resident_bytes_for_file(fallback_file_or_bytes)
+        if estimated_bytes is not None:
+            return estimated_bytes
+        return 4
+
+    def _record_resident_texture_bytes(self, file_or_bytes, byte_count: int) -> None:
+        previous = self._file_cache_bytes.get(file_or_bytes, 0)
+        byte_count = max(1, int(byte_count))
+        self._file_cache_bytes[file_or_bytes] = byte_count
+        self._file_cache_total_bytes += byte_count - previous
+
+    def _reactivate_cached_texture(self, file_or_bytes) -> None:
+        self._idle_file_lru.pop(file_or_bytes, None)
+
+    def _mark_cached_texture_idle(self, file_or_bytes) -> None:
+        if file_or_bytes not in self._file_cache:
+            return
+        self._idle_file_lru[file_or_bytes] = None
+        self._idle_file_lru.move_to_end(file_or_bytes)
+
+    def _release_cached_texture(self, file_or_bytes) -> None:
+        self._idle_file_lru.pop(file_or_bytes, None)
+        tex = self._file_cache.pop(file_or_bytes, None)
+        self._file_cache_total_bytes = max(
+            0,
+            self._file_cache_total_bytes - self._file_cache_bytes.pop(file_or_bytes, 0),
+        )
+        if tex is not None and hasattr(tex, "release"):
+            tex.release()
+
+    def _evict_idle_textures_if_needed(self, incoming_bytes: int | None = None) -> None:
+        projected_bytes = self._file_cache_total_bytes + max(0, incoming_bytes or 0)
+        while (
+            projected_bytes > self.max_resident_texture_bytes
+            and self._idle_file_lru
+        ):
+            file_or_bytes, _ = self._idle_file_lru.popitem(last=False)
+            released_bytes = self._file_cache_bytes.get(file_or_bytes, 0)
+            self._release_cached_texture(file_or_bytes)
+            projected_bytes = max(0, projected_bytes - released_bytes)
 
     def _upload_for_material(self, material_name: str, file_or_bytes,
                              *, timing: dict | None = None) -> object:
@@ -623,7 +753,7 @@ class TextureManager:
         return tex
 
     def release(self, material_name: str) -> None:
-        """Decrement refcount; free the GPU texture once it hits zero."""
+        """Decrement refcount and move unused real textures into the idle LRU."""
         entry = self._loaded.get(material_name)
         if entry is None:
             return
@@ -643,9 +773,8 @@ class TextureManager:
                 for m in self._loaded
             )
             if filename and not still_used and filename in self._file_cache:
-                tex = self._file_cache.pop(filename)
-                if hasattr(tex, "release"):
-                    tex.release()
+                self._mark_cached_texture_idle(filename)
+                self._evict_idle_textures_if_needed()
 
     def shutdown(self) -> None:
         """Best-effort full cleanup for window shutdown / map teardown."""
@@ -655,11 +784,14 @@ class TextureManager:
             self._loaded[mat_name].ref_count = 1
             self.release(mat_name)
 
-        # Release any remaining deduplicated file-cache textures.
-        for tex in list(self._file_cache.values()):
-            if hasattr(tex, "release"):
-                tex.release()
+        # Release any remaining deduplicated file-cache textures, including
+        # idle LRU entries that normal release() intentionally kept resident.
+        for file_or_bytes in list(self._file_cache.keys()):
+            self._release_cached_texture(file_or_bytes)
         self._file_cache.clear()
+        self._file_cache_bytes.clear()
+        self._file_cache_total_bytes = 0
+        self._idle_file_lru.clear()
 
         # Drop decoded-but-not-uploaded CPU images.
         with self._decode_cache_lock:
@@ -806,6 +938,9 @@ class TextureManager:
         return {
             "unique_materials_loaded": len(self._loaded),
             "unique_files_resident": len(self._file_cache),
+            "idle_files_resident": len(self._idle_file_lru),
+            "resident_texture_bytes": self._file_cache_total_bytes,
+            "resident_texture_budget_bytes": self.max_resident_texture_bytes,
             "decoded_waiting_for_upload": n_decoded_waiting,
             "decoded_waiting_bytes": decoded_waiting_bytes,
         }
