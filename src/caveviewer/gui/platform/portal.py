@@ -14,7 +14,7 @@ from types import TracebackType
 from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
 
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.platform.desktop_services import (
     DesktopInhibitor,
     DesktopServiceError,

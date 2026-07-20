@@ -1,4 +1,4 @@
-"""Tk presentation adapter for the Advanced Settings form controller."""
+"""Tk presentation adapter for the Preferences form controller."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ import tkinter as tk
 from typing import Callable
 
 from caveviewer.gui.preferences import (
-    ADVANCED_SETTING_FIELDS,
-    AdvancedSettingsSaveError,
-    SettingSpec,
-    ValueType,
-    advanced_setting_placeholder_text,
-    apply_advanced_settings_to_env,
-    load_advanced_settings,
-    save_advanced_settings,
+    PREFERENCE_FIELDS,
+    PreferencesSaveError,
+    PreferenceSpec,
+    PreferenceValueType,
+    preference_placeholder_text,
+    apply_preferences_to_env,
+    load_preferences,
+    save_preferences,
 )
-from caveviewer.gui.advanced_settings_form import (
-    AdvancedSettingsFormController,
-    AdvancedSettingsFormState,
+from caveviewer.gui.preferences_form import (
+    PreferencesFormController,
+    PreferencesFormState,
     MessageKind,
 )
 from caveviewer.gui.dialog_style import (
@@ -85,8 +85,8 @@ _PREFERENCE_PAGES = (
 )
 
 
-class AdvancedSettingsDialog:
-    """Render Advanced Settings state and forward Tk events to the controller."""
+class PreferencesDialog:
+    """Render Preferences state and forward Tk events to the controller."""
 
     def __init__(
         self,
@@ -98,9 +98,9 @@ class AdvancedSettingsDialog:
         self.parent = parent
         self.ui_font_family = ui_font_family
         self.desktop_services = desktop_services or get_desktop_services()
-        self.settings = load_advanced_settings()
-        apply_advanced_settings_to_env(self.settings)
-        self.form = AdvancedSettingsFormController(self.settings)
+        self.preferences = load_preferences()
+        apply_preferences_to_env(self.preferences)
+        self.form = PreferencesFormController(self.preferences)
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.withdraw()
@@ -153,7 +153,7 @@ class AdvancedSettingsDialog:
         self.field_page_keys: dict[str, str] = {}
         self.active_page_key: str | None = None
         self.feedback_frame = None
-        self.rendered_state: AdvancedSettingsFormState | None = None
+        self.rendered_state: PreferencesFormState | None = None
         self.button_row = None
         self.error_label = None
 
@@ -296,13 +296,13 @@ class AdvancedSettingsDialog:
 
         fields = [
             field
-            for field in ADVANCED_SETTING_FIELDS
+            for field in PREFERENCE_FIELDS
             if field.section == section_key
         ]
         for index, field in enumerate(fields):
             self._render_field(group, field, last=index == len(fields) - 1)
 
-    def _render_field(self, section, field: SettingSpec, *, last: bool) -> None:
+    def _render_field(self, section, field: PreferenceSpec, *, last: bool) -> None:
         key = field.key
         self.field_page_keys[key] = field.section
         compact_path = key == "recording_dir"
@@ -335,11 +335,11 @@ class AdvancedSettingsDialog:
         value_type = field.value_type
         entry_width = (
             _NUMERIC_ENTRY_WIDTH
-            if value_type in {ValueType.INT, ValueType.FLOAT}
+            if value_type in {PreferenceValueType.INT, PreferenceValueType.FLOAT}
             else _TEXT_ENTRY_WIDTH
         )
         entry_var = var
-        placeholder_text = advanced_setting_placeholder_text(field)
+        placeholder_text = preference_placeholder_text(field)
         if placeholder_text:
             entry_var = tk.StringVar(master=self.dialog, value=var.get())
             if not var.get():
@@ -443,7 +443,7 @@ class AdvancedSettingsDialog:
         else:
             entry.pack(side="left")
 
-        if value_type in {ValueType.PATH, ValueType.PATH_CREATE}:
+        if value_type in {PreferenceValueType.PATH, PreferenceValueType.PATH_CREATE}:
             browse_button = self._new_dialog_button(
                 entry_parent,
                 "Browse",
@@ -917,7 +917,7 @@ class AdvancedSettingsDialog:
 
     def _render_form_state(
         self,
-        state: AdvancedSettingsFormState,
+        state: PreferencesFormState,
         *,
         preferred_key: str | None = None,
         focus_invalid: bool = False,
@@ -977,20 +977,20 @@ class AdvancedSettingsDialog:
         self._render_form_state(state, preferred_key=key)
 
     def apply(self) -> None:
-        state, settings = self.form.attempt_apply()
+        state, preferences = self.form.attempt_apply()
         self._render_form_state(state, focus_invalid=True)
-        if settings is None:
+        if preferences is None:
             return
 
         for key in self.numeric_entry_states:
             self._show_numeric_placeholder(key)
         try:
-            save_advanced_settings(settings)
-        except AdvancedSettingsSaveError as exc:
+            save_preferences(preferences)
+        except PreferencesSaveError as exc:
             self._set_feedback(str(exc), MessageKind.ERROR)
             return
-        self.settings = settings
-        apply_advanced_settings_to_env(settings)
+        self.preferences = preferences
+        apply_preferences_to_env(preferences)
         self.dialog.destroy()
 
     def cancel(self) -> None:
@@ -1057,14 +1057,14 @@ class AdvancedSettingsDialog:
             self.apply_button.focus_set()
 
 
-def show_advanced_settings_dialog(
+def show_preferences_dialog(
     parent,
     *,
     ui_font_family: str,
     desktop_services: DesktopServices | None = None,
 ) -> None:
-    """Create and display a non-blocking modal Advanced Settings dialog."""
-    AdvancedSettingsDialog(
+    """Create and display a non-blocking modal Preferences dialog."""
+    PreferencesDialog(
         parent,
         ui_font_family=ui_font_family,
         desktop_services=desktop_services,

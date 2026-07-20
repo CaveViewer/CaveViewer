@@ -886,7 +886,7 @@ def _center_over_parent(window, parent, width, height):
     screen_w = parent.winfo_screenwidth()
     screen_h = parent.winfo_screenheight()
 
-    # Match the advanced settings dialog behavior: keep the child near
+    # Match the preferences dialog behavior: keep the child near
     # the parent's upper-right corner, but let it protrude past the
     # parent's right edge so the overlap is visually obvious.
     protrusion_x = 72

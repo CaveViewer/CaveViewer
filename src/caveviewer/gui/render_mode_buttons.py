@@ -101,7 +101,7 @@ class RenderModeButtons:
         self.texture_enabled = texture_enabled
         self.wireframe_enabled = wireframe_enabled
         # ON = smooth (averaged) normals, OFF = flat (per-triangle)
-        # normals. Defaults to True to match caveviewer.core.chunker's "smooth"
+        # normals. Defaults to True to match caveviewer.core.chunking.builder's "smooth"
         # default import shading -- so a freshly imported map's button
         # state reflects how it was actually imported.
         self.smooth_shading_enabled = smooth_shading_enabled

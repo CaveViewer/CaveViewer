@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 
 from caveviewer import app as caveviewer
-from caveviewer.core import chunker, obj_parser
+from caveviewer.core.mesh import obj as obj_parser
+from caveviewer.core.chunking import capacity as chunk_capacity
+from caveviewer.core.chunking import builder as chunker
 
 
 def _mesh_with_cells(cell_count: int = 2) -> obj_parser.RawMesh:
@@ -41,7 +43,7 @@ def _mesh_with_cells(cell_count: int = 2) -> obj_parser.RawMesh:
 
 def _set_available_space(monkeypatch, free_bytes: int) -> None:
     monkeypatch.setattr(
-        chunker.shutil,
+        chunk_capacity.shutil,
         "disk_usage",
         lambda _path: SimpleNamespace(total=free_bytes, used=0, free=free_bytes),
     )
@@ -87,7 +89,7 @@ def test_space_check_uses_managed_cache_filesystem(tmp_path, monkeypatch):
     source.write_bytes(b"x" * 100)
     observed = []
     monkeypatch.setattr(
-        chunker.shutil,
+        chunk_capacity.shutil,
         "disk_usage",
         lambda path: observed.append(path)
         or SimpleNamespace(total=1_000, used=0, free=1_000),
@@ -184,7 +186,7 @@ def test_disk_full_mid_build_removes_every_partial_cache_file(
     original_write = chunker._write_chunk_file
     writes = 0
 
-    def write_until_disk_full(chunks_dir, cell_str, mesh, groups):
+    def write_until_disk_full(chunks_dir, cell_str, mesh, groups, **_kwargs):
         nonlocal writes
         writes += 1
         if writes == 1:

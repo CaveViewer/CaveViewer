@@ -515,35 +515,38 @@ unapplied edits. Valid worker counts are treated as advisory caps and do not
 show a bottom warning.
 
 The Preferences implementation is split by responsibility:
-`src/caveviewer/gui/preferences.py` owns the typed `SettingSpec` schema,
-validation, persistence, and environment mapping;
+`src/caveviewer/core/preferences/schema.py` owns the typed `PreferenceSpec` schema,
+validation, defaults, and environment mapping;
+`src/caveviewer/gui/preferences.py` owns preferences persistence and legacy
+migration while re-exporting the core preferences API for GUI callers;
 `src/caveviewer/gui/preference_paths.py` owns preference/state file locations,
 legacy migration, and atomic text writes;
-`src/caveviewer/gui/advanced_settings_form.py` owns focus/change/blur/apply
-state transitions; `src/caveviewer/gui/advanced_settings_dialog.py` only
+`src/caveviewer/gui/preferences_form.py` owns focus/change/blur/apply
+state transitions; `src/caveviewer/gui/preferences_dialog.py` only
 renders that state into Tk widgets; and
-`src/caveviewer/core/worker_config.py` resolves the effective streaming/import
+`src/caveviewer/core/workers/allocation.py` resolves the effective streaming/import
 worker counts while honoring reserved logical CPUs and owns the shared RAM
 admission cutoff. Both pools start with one worker and admit at most one more
 after completed work has been measured; they stay at their current concurrency
 when system RAM utilization reaches 80% or current availability cannot be
 measured. Only immutable, validated
-`AdvancedSettings` snapshots may cross into
+`Preferences` snapshots may cross into
 persistence or the runtime environment. Invalid saved or environment values
 fall back independently to that field's valid default, so one stale value does
-not discard the rest of the configuration. Settings are saved through an
+not discard the rest of the configuration. Preferences are saved through an
 atomic temporary-file replacement; a write failure remains visible in the
-dialog and does not close it or alter the previous settings file.
+dialog and does not close it or alter the previous preferences file.
 
 First-time map imports are isolated from the viewer event loop by
 `src/caveviewer/gui/import_process.py`. The viewer process keeps OpenGL/window
 events and progress rendering responsive while a spawned child process runs the
-existing `import_and_cache_any()` path. The child sends progress, completion,
-heartbeat, and traceback-bearing failure events back to the viewer; closing
-the viewer terminates an active child import process and removes abandoned
-private staging directories for that map cache. The child also lowers its
-desktop scheduling priority and caps common native compute libraries to one
-thread unless the user has already set those library-specific variables.
+core `map.importer.import_and_cache_any()` path through app-level compatibility
+wrappers. The child sends progress, completion, heartbeat, and traceback-bearing
+failure events back to the viewer; closing the viewer terminates an active child
+import process and removes abandoned private staging directories for that map
+cache. The child also lowers its desktop scheduling priority and caps common
+native compute libraries to one thread unless the user has already set those
+library-specific variables.
 
 The splash screen, Preferences, and Sample Maps dialogs share their Tk
 color and control tokens through `src/caveviewer/gui/tk_theme.py`. Map-folder
@@ -552,14 +555,17 @@ map-selection dialogs to reuse it without importing private splash-screen
 implementation details.
 
 Runtime chunk streaming is also split by policy boundary:
-`src/caveviewer/core/hardware_memory.py` detects total and currently available
-system RAM on Windows, macOS, and Linux; detects or estimates the active GPU
-memory budget; and parses target fractions;
-`src/caveviewer/core/streaming_budget.py` contains pure
+`src/caveviewer/core/hardware/system_memory.py` detects total and currently
+available system RAM on Windows, macOS, and Linux;
+`src/caveviewer/core/hardware/gpu_memory.py` detects or estimates the active GPU
+memory budget;
+`src/caveviewer/core/hardware/memory_targets.py` parses RAM and GPU utilization
+targets;
+`src/caveviewer/core/streaming/budget.py` contains pure
 chunk-size estimation and residency-cap calculation;
-`src/caveviewer/core/streaming_scheduler.py` owns the bounded ready backlog,
+`src/caveviewer/core/streaming/scheduler.py` owns the bounded ready backlog,
 spatial selection, and eviction policy; and
-`src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
+`src/caveviewer/core/streaming/world.py` coordinates worker lifecycle and
 render-thread callbacks. Map imports now write only the cache artifacts used by
 runtime streaming and the minimap. Caches and their texture assets are
 atomically published under the managed map-cache root selected by
@@ -576,7 +582,7 @@ Unless overridden, CaveViewer stores files in these locations:
 
 | Kind | Linux default | macOS/Windows default |
 |---|---|---|
-| Advanced settings | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback) | `~/.caveviewer/advanced_settings.json` |
+| Preferences | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback; legacy-compatible filename) | `~/.caveviewer/advanced_settings.json` |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
 | Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) | `~/.caveviewer/maps/` |
 

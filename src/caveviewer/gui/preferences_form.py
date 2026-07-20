@@ -1,4 +1,4 @@
-"""Tk-free interaction state for the Advanced Settings form."""
+"""Tk-free interaction state for the Preferences form."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from enum import Enum
 from typing import Mapping
 
 from caveviewer.gui.preferences import (
-    ADVANCED_SETTING_FIELDS,
-    AdvancedSettings,
-    SettingSpec,
-    normalize_advanced_settings,
-    validate_advanced_setting,
-    validate_advanced_settings,
+    PREFERENCE_FIELDS,
+    Preferences,
+    PreferenceSpec,
+    normalize_preferences,
+    validate_preference,
+    validate_preferences,
 )
 
 
@@ -23,7 +23,7 @@ class MessageKind(str, Enum):
 
 
 @dataclass(frozen=True)
-class AdvancedSettingsFormState:
+class PreferencesFormState:
     values: Mapping[str, str]
     focused_key: str | None
     invalid_key: str | None
@@ -33,22 +33,22 @@ class AdvancedSettingsFormState:
     form_locked: bool
 
 
-class AdvancedSettingsFormController:
+class PreferencesFormController:
     """Process form events and expose the resulting render state."""
 
     def __init__(self, values: Mapping[str, str]) -> None:
         self._field_specs = {
-            field.key: field for field in ADVANCED_SETTING_FIELDS
+            field.key: field for field in PREFERENCE_FIELDS
         }
-        self._values = normalize_advanced_settings(dict(values))
+        self._values = normalize_preferences(dict(values))
         self._focused_key: str | None = None
         self._state = self._validate()
 
     @property
-    def state(self) -> AdvancedSettingsFormState:
+    def state(self) -> PreferencesFormState:
         return self._state
 
-    def focus(self, key: str) -> AdvancedSettingsFormState:
+    def focus(self, key: str) -> PreferencesFormState:
         self._require_key(key)
         self._focused_key = key
         self._state = replace(
@@ -58,7 +58,7 @@ class AdvancedSettingsFormController:
         )
         return self._state
 
-    def change(self, key: str, raw_value: object) -> AdvancedSettingsFormState:
+    def change(self, key: str, raw_value: object) -> PreferencesFormState:
         field = self._require_key(key)
         value = str(raw_value) if raw_value is not None else ""
         self._values[key] = value
@@ -73,12 +73,12 @@ class AdvancedSettingsFormController:
             self._state = self._validate(preferred_key=key)
         return self._state
 
-    def blur(self, key: str) -> AdvancedSettingsFormState:
+    def blur(self, key: str) -> PreferencesFormState:
         field = self._require_key(key)
         if self._focused_key == key:
             self._focused_key = None
 
-        result = validate_advanced_setting(field, self._values[key])
+        result = validate_preference(field, self._values[key])
         if result.is_valid:
             self._values[key] = result.normalized_value
         self._state = self._validate(preferred_key=key)
@@ -86,33 +86,33 @@ class AdvancedSettingsFormController:
 
     def attempt_apply(
         self,
-    ) -> tuple[AdvancedSettingsFormState, AdvancedSettings | None]:
-        result = validate_advanced_settings(self._values)
-        if not result.is_valid or result.settings is None:
+    ) -> tuple[PreferencesFormState, Preferences | None]:
+        result = validate_preferences(self._values)
+        if not result.is_valid or result.preferences is None:
             self._state = self._error_state(
-                result.error_key, result.message or "Invalid advanced settings."
+                result.error_key, result.message or "Invalid preferences."
             )
             return self._state, None
 
-        self._values = result.settings.as_dict()
+        self._values = result.preferences.as_dict()
         self._state = self._advisory_state()
-        return self._state, result.settings
+        return self._state, result.preferences
 
-    def _require_key(self, key: str) -> SettingSpec:
+    def _require_key(self, key: str) -> PreferenceSpec:
         try:
             return self._field_specs[key]
         except KeyError as exc:
-            raise KeyError(f"Unknown Advanced Settings field: {key}") from exc
+            raise KeyError(f"Unknown Preferences field: {key}") from exc
 
     def _has_missing_required_value(self) -> bool:
         return any(
             not field.optional
             and not self._values[field.key].strip()
-            for field in ADVANCED_SETTING_FIELDS
+            for field in PREFERENCE_FIELDS
         )
 
-    def _advisory_state(self) -> AdvancedSettingsFormState:
-        return AdvancedSettingsFormState(
+    def _advisory_state(self) -> PreferencesFormState:
+        return PreferencesFormState(
             values=dict(self._values),
             focused_key=self._focused_key,
             invalid_key=None,
@@ -124,8 +124,8 @@ class AdvancedSettingsFormController:
 
     def _error_state(
         self, invalid_key: str | None, message: str
-    ) -> AdvancedSettingsFormState:
-        return AdvancedSettingsFormState(
+    ) -> PreferencesFormState:
+        return PreferencesFormState(
             values=dict(self._values),
             focused_key=self._focused_key,
             invalid_key=invalid_key,
@@ -137,20 +137,20 @@ class AdvancedSettingsFormController:
 
     def _validate(
         self, preferred_key: str | None = None
-    ) -> AdvancedSettingsFormState:
+    ) -> PreferencesFormState:
         if preferred_key is not None:
             field = self._require_key(preferred_key)
-            result = validate_advanced_setting(field, self._values[preferred_key])
+            result = validate_preference(field, self._values[preferred_key])
             if not result.is_valid:
                 return self._error_state(
                     preferred_key,
-                    result.message or "Invalid advanced settings.",
+                    result.message or "Invalid preferences.",
                 )
 
-        result = validate_advanced_settings(self._values)
+        result = validate_preferences(self._values)
         if not result.is_valid:
             return self._error_state(
                 result.error_key,
-                result.message or "Invalid advanced settings.",
+                result.message or "Invalid preferences.",
             )
         return self._advisory_state()

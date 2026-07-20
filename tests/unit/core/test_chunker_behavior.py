@@ -11,8 +11,58 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from caveviewer.core import chunker, hardware_memory, obj_parser
-from caveviewer.core.worker_config import WorkerAllocation
+from caveviewer.core.mesh import obj as obj_parser
+from caveviewer.core.chunking import buckets
+from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.chunking import capacity as chunk_capacity
+from caveviewer.core.chunking import staging as chunk_staging
+from caveviewer.core.chunking import upload
+from caveviewer.core.hardware import system_memory
+from caveviewer.core.workers.allocation import WorkerAllocation
+
+
+def test_deserialize_bucket_parts_rejects_paths_outside_resume_root(tmp_path):
+    payload = [
+        {
+            "cell": [0, 0, 0],
+            "material": "rock",
+            "paths": ["../outside.bin"],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Unsafe resume bucket path"):
+        chunk_staging._deserialize_bucket_parts(payload, str(tmp_path))
+
+
+def test_read_resume_checkpoint_rejects_oversized_json(tmp_path, monkeypatch):
+    checkpoint_path = tmp_path / chunker.IMPORT_RESUME_MANIFEST_NAME
+    checkpoint_path.write_text('{"version": 1}', encoding="utf-8")
+    monkeypatch.setattr(chunk_staging, "MAX_IMPORT_RESUME_CHECKPOINT_BYTES", 4)
+
+    assert chunk_staging._read_incremental_obj_resume_checkpoint(
+        str(checkpoint_path)
+    ) is None
+
+
+def test_source_file_read_memory_preflight_rejects_oversized_container(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "map.glb"
+    source.write_bytes(b"x" * 100)
+    monkeypatch.setattr(
+        chunk_capacity.system_memory,
+        "detect_ram_snapshot",
+        lambda: system_memory.RamSnapshot(total_bytes=100, available_bytes=100),
+    )
+
+    with pytest.raises(chunk_capacity.InsufficientImportMemoryError):
+        chunk_capacity.ensure_sufficient_source_file_read_memory(str(source))
+
+
+def test_source_file_read_memory_estimate_includes_fixed_overhead():
+    assert chunk_capacity.estimate_source_file_read_memory_bytes(0) == (
+        chunk_capacity.IMPORT_MEMORY_FIXED_OVERHEAD_BYTES
+    )
 
 
 def _attributed_mesh() -> obj_parser.RawMesh:
@@ -190,6 +240,12 @@ def test_configured_obj_bucket_workers_clamps_and_defaults(caplog):
         )
         == chunker._MAX_OBJ_BUCKET_WORKERS
     )
+    assert (
+        chunker._configured_obj_bucket_workers(
+            {chunker.OBJ_BUCKET_WORKERS_ENV_VAR: "0"}
+        )
+        == chunker._DEFAULT_OBJ_BUCKET_WORKERS
+    )
 
     caplog.set_level(logging.WARNING, logger="caveviewer")
     assert (
@@ -201,13 +257,179 @@ def test_configured_obj_bucket_workers_clamps_and_defaults(caplog):
     assert chunker.OBJ_BUCKET_WORKERS_ENV_VAR in caplog.text
 
 
+def test_cache_asset_requires_exactly_one_payload(tmp_path):
+    source = tmp_path / "asset.bin"
+    source.write_bytes(b"asset")
+
+    with pytest.raises(ValueError, match="exactly one source_path or data"):
+        chunker.CacheAsset(relative_path="asset.bin")
+
+    with pytest.raises(ValueError, match="exactly one source_path or data"):
+        chunker.CacheAsset(
+            relative_path="asset.bin",
+            source_path=str(source),
+            data=b"asset",
+        )
+
+
+def test_max_upload_group_configuration_defaults_clamps_and_warns(caplog):
+    assert (
+        chunker.configured_max_upload_group_mb({})
+        == chunker._DEFAULT_MAX_UPLOAD_GROUP_MB
+    )
+    assert (
+        chunker.configured_max_upload_group_mb(
+            {chunker.MAX_UPLOAD_GROUP_MB_ENV_VAR: "0.25"}
+        )
+        == chunker._MIN_MAX_UPLOAD_GROUP_MB
+    )
+    assert (
+        chunker.configured_max_upload_group_mb(
+            {chunker.MAX_UPLOAD_GROUP_MB_ENV_VAR: "9999"}
+        )
+        == chunker._MAX_MAX_UPLOAD_GROUP_MB
+    )
+
+    caplog.set_level(logging.WARNING, logger="caveviewer")
+    assert (
+        chunker.configured_max_upload_group_mb(
+            {chunker.MAX_UPLOAD_GROUP_MB_ENV_VAR: "bad"}
+        )
+        == chunker._DEFAULT_MAX_UPLOAD_GROUP_MB
+    )
+    assert chunker.MAX_UPLOAD_GROUP_MB_ENV_VAR in caplog.text
+
+
+def test_obj_import_batch_faces_configuration_defaults_clamps_and_warns(caplog):
+    assert (
+        chunker._configured_obj_import_batch_faces({})
+        == chunker._DEFAULT_OBJ_IMPORT_BATCH_FACES
+    )
+    assert (
+        chunker._configured_obj_import_batch_faces(
+            {chunker.OBJ_IMPORT_BATCH_FACES_ENV_VAR: "5"}
+        )
+        == 1_000
+    )
+    assert (
+        chunker._configured_obj_import_batch_faces(
+            {chunker.OBJ_IMPORT_BATCH_FACES_ENV_VAR: "9999999"}
+        )
+        == 2_000_000
+    )
+
+    caplog.set_level(logging.WARNING, logger="caveviewer")
+    assert (
+        chunker._configured_obj_import_batch_faces(
+            {chunker.OBJ_IMPORT_BATCH_FACES_ENV_VAR: "bad"}
+        )
+        == chunker._DEFAULT_OBJ_IMPORT_BATCH_FACES
+    )
+    assert chunker.OBJ_IMPORT_BATCH_FACES_ENV_VAR in caplog.text
+
+
+def test_incremental_import_memory_preflight_skips_when_ram_is_unavailable(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        chunk_capacity.system_memory,
+        "detect_ram_snapshot",
+        lambda: None,
+    )
+    caplog.set_level(logging.WARNING, logger="caveviewer")
+
+    chunker.ensure_sufficient_incremental_import_memory(
+        1_000_000,
+        1_000_000,
+        1_000_000,
+        20_000_000,
+        source_path="/maps/huge.obj",
+    )
+
+    assert "Could not measure available system RAM" in caplog.text
+
+
+def test_incremental_import_memory_preflight_rejects_physical_overcommit(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        chunk_capacity.system_memory,
+        "detect_ram_snapshot",
+        lambda: system_memory.RamSnapshot(
+            total_bytes=1 * 1024 ** 3,
+            available_bytes=1 * 1024 ** 3,
+        ),
+    )
+
+    with pytest.raises(chunker.InsufficientImportMemoryError) as raised:
+        chunker.ensure_sufficient_incremental_import_memory(
+            100_000_000,
+            100_000_000,
+            100_000_000,
+            200_000_000,
+            source_path="/maps/huge.obj",
+            face_batch_size=2_000_000,
+            bucket_workers=32,
+        )
+
+    assert raised.value.physical_limit_bytes is not None
+    assert raised.value.required_bytes > raised.value.physical_limit_bytes
+
+
+def test_incremental_import_memory_preflight_warns_when_headroom_is_low(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        chunk_capacity.system_memory,
+        "detect_ram_snapshot",
+        lambda: system_memory.RamSnapshot(
+            total_bytes=16 * 1024 ** 3,
+            available_bytes=1 * 1024 ** 3,
+        ),
+    )
+    caplog.set_level(logging.WARNING, logger="caveviewer")
+
+    chunker.ensure_sufficient_incremental_import_memory(
+        20_000_000,
+        20_000_000,
+        20_000_000,
+        20_000_000,
+        source_path="/maps/huge.obj",
+        face_batch_size=100_000,
+        bucket_workers=2,
+    )
+
+    assert "Incremental import RAM preflight warning for huge.obj" in caplog.text
+
+
+def test_import_memory_preflight_skips_when_ram_is_unavailable(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        chunk_capacity.system_memory,
+        "detect_ram_snapshot",
+        lambda: None,
+    )
+    caplog.set_level(logging.WARNING, logger="caveviewer")
+
+    chunker.ensure_sufficient_import_memory(
+        1_000_000,
+        1_000_000,
+        1_000_000,
+        20_000_000,
+        source_path="/maps/huge.obj",
+    )
+
+    assert "Could not measure available system RAM" in caplog.text
+
+
 def test_import_memory_preflight_warns_when_current_available_ram_is_low(
     monkeypatch, caplog
 ):
     monkeypatch.setattr(
-        chunker.hardware_memory,
+        chunk_capacity.system_memory,
         "detect_ram_snapshot",
-        lambda: hardware_memory.RamSnapshot(
+        lambda: system_memory.RamSnapshot(
             total_bytes=8 * 1024 ** 3,
             available_bytes=1 * 1024 ** 3,
         ),
@@ -230,9 +452,9 @@ def test_import_memory_preflight_rejects_when_estimate_exceeds_physical_limit(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        chunker.hardware_memory,
+        chunk_capacity.system_memory,
         "detect_ram_snapshot",
-        lambda: hardware_memory.RamSnapshot(
+        lambda: system_memory.RamSnapshot(
             total_bytes=8 * 1024 ** 3,
             available_bytes=7 * 1024 ** 3,
         ),
@@ -257,9 +479,9 @@ def test_import_memory_preflight_allows_import_when_ram_headroom_is_available(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        chunker.hardware_memory,
+        chunk_capacity.system_memory,
         "detect_ram_snapshot",
-        lambda: hardware_memory.RamSnapshot(
+        lambda: system_memory.RamSnapshot(
             total_bytes=16 * 1024 ** 3,
             available_bytes=8 * 1024 ** 3,
         ),
@@ -337,9 +559,9 @@ def test_incremental_obj_cache_build_writes_standard_chunks(tmp_path, monkeypatc
     )
     cache_dir = tmp_path / "managed" / "map-key"
     monkeypatch.setattr(
-        chunker.hardware_memory,
+        chunk_capacity.system_memory,
         "detect_ram_snapshot",
-        lambda: hardware_memory.RamSnapshot(
+        lambda: system_memory.RamSnapshot(
             total_bytes=64 * 1024**3,
             available_bytes=48 * 1024**3,
         ),
@@ -422,9 +644,9 @@ def test_incremental_bucket_writer_uses_bounded_record_slices(tmp_path, monkeypa
         return original_empty(shape, *args, **kwargs)
 
     with monkeypatch.context() as patch:
-        patch.setattr(chunker, "_OBJ_BUCKET_RECORD_SLICE_FACES", 1)
-        patch.setattr(chunker.np, "empty", guarded_empty)
-        face_count, bucket_paths = chunker._write_obj_face_batch_bucket_parts(
+        patch.setattr(buckets, "_OBJ_BUCKET_RECORD_SLICE_FACES", 1)
+        patch.setattr(buckets.np, "empty", guarded_empty)
+        face_count, bucket_paths = buckets._write_obj_face_batch_bucket_parts(
             vertex_data,
             batch,
             str(tmp_path / "buckets"),
@@ -472,9 +694,9 @@ def test_incremental_bucket_finalizer_streams_parts_without_concatenate(
         raise AssertionError("bucket finalizer concatenated bucket parts")
 
     with monkeypatch.context() as patch:
-        patch.setattr(chunker.np, "concatenate", fail_concatenate)
+        patch.setattr(buckets.np, "concatenate", fail_concatenate)
         bounds_min, bounds_max, used_materials = (
-            chunker._write_chunk_file_from_buckets(
+            buckets._write_chunk_file_from_buckets(
                 str(chunks_dir),
                 "0_0_0",
                 [("rock", [str(bucket_a), str(bucket_b)])],
@@ -537,8 +759,15 @@ def test_incremental_obj_cache_progress_never_regresses(tmp_path, monkeypatch):
         checkpoint_cb=None,
         initial_manifest_chunks=None,
         total_cell_count=None,
+        max_group_bytes=None,
     ):
-        del pause_requested, checkpoint_cb, initial_manifest_chunks, total_cell_count
+        del (
+            pause_requested,
+            checkpoint_cb,
+            initial_manifest_chunks,
+            total_cell_count,
+            max_group_bytes,
+        )
         if progress_cb:
             progress_cb("writing chunk files", 0.66)
         return {
@@ -599,9 +828,9 @@ def test_incremental_obj_import_pauses_and_resumes_from_checkpoint(
     )
     cache_dir = tmp_path / "managed" / "map-key"
     monkeypatch.setattr(
-        chunker.hardware_memory,
+        chunk_capacity.system_memory,
         "detect_ram_snapshot",
-        lambda: hardware_memory.RamSnapshot(
+        lambda: system_memory.RamSnapshot(
             total_bytes=64 * 1024**3,
             available_bytes=48 * 1024**3,
         ),
@@ -669,17 +898,17 @@ def test_publish_failure_restores_previous_cache(tmp_path, monkeypatch):
     cache.mkdir()
     (staging / "new").write_text("new", encoding="utf-8")
     (cache / "old").write_text("old", encoding="utf-8")
-    real_replace = chunker.os.replace
+    real_replace = chunk_staging.os.replace
 
     def fail_new_cache_publish(source, destination):
         if Path(source) == staging:
             raise OSError("publish failed")
         real_replace(source, destination)
 
-    monkeypatch.setattr(chunker.os, "replace", fail_new_cache_publish)
+    monkeypatch.setattr(chunk_staging.os, "replace", fail_new_cache_publish)
 
     with pytest.raises(OSError, match="publish failed"):
-        chunker._publish_cache_directory(str(staging), str(cache))
+        chunk_staging._publish_cache_directory(str(staging), str(cache))
 
     assert (cache / "old").read_text(encoding="utf-8") == "old"
     assert (staging / "new").read_text(encoding="utf-8") == "new"
@@ -697,10 +926,10 @@ def test_first_publish_failure_leaves_staging_available_for_outer_cleanup(
     def fail_replace(_source, _destination):
         raise OSError("first publish failed")
 
-    monkeypatch.setattr(chunker.os, "replace", fail_replace)
+    monkeypatch.setattr(chunk_staging.os, "replace", fail_replace)
 
     with pytest.raises(OSError, match="first publish failed"):
-        chunker._publish_cache_directory(str(staging), str(cache))
+        chunk_staging._publish_cache_directory(str(staging), str(cache))
 
     assert (staging / "new").read_text(encoding="utf-8") == "new"
     assert not cache.exists()
@@ -714,7 +943,7 @@ def test_publish_logs_when_previous_cache_cannot_be_restored(
     staging.mkdir()
     cache.mkdir()
     (cache / "old").write_text("old", encoding="utf-8")
-    real_replace = chunker.os.replace
+    real_replace = chunk_staging.os.replace
 
     def fail_publish_and_restore(source, destination):
         source_path = Path(source)
@@ -722,13 +951,13 @@ def test_publish_logs_when_previous_cache_cannot_be_restored(
             raise OSError("replace failed")
         real_replace(source, destination)
 
-    monkeypatch.setattr(chunker.os, "replace", fail_publish_and_restore)
+    monkeypatch.setattr(chunk_staging.os, "replace", fail_publish_and_restore)
 
     with (
         caplog.at_level(logging.ERROR),
         pytest.raises(OSError, match="replace failed"),
     ):
-        chunker._publish_cache_directory(str(staging), str(cache))
+        chunk_staging._publish_cache_directory(str(staging), str(cache))
 
     assert "Could not restore previous cache" in caplog.text
     assert Path(f"{staging}.previous").is_dir()
@@ -745,17 +974,17 @@ def test_publish_keeps_new_cache_when_backup_cleanup_fails(
     (staging / "new").write_text("new", encoding="utf-8")
     (cache / "old").write_text("old", encoding="utf-8")
     backup = Path(f"{staging}.previous")
-    real_rmtree = chunker.shutil.rmtree
+    real_rmtree = chunk_staging.shutil.rmtree
 
     def fail_backup_cleanup(path, *args, **kwargs):
         if Path(path) == backup:
             raise OSError("cleanup failed")
         return real_rmtree(path, *args, **kwargs)
 
-    monkeypatch.setattr(chunker.shutil, "rmtree", fail_backup_cleanup)
+    monkeypatch.setattr(chunk_staging.shutil, "rmtree", fail_backup_cleanup)
 
     with caplog.at_level(logging.WARNING):
-        chunker._publish_cache_directory(str(staging), str(cache))
+        chunk_staging._publish_cache_directory(str(staging), str(cache))
 
     assert (cache / "new").read_text(encoding="utf-8") == "new"
     assert (backup / "old").read_text(encoding="utf-8") == "old"
@@ -779,7 +1008,7 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
         release_slow_write.set()
         return real_cancel(future)
 
-    def fail_one_write(_chunks_dir, cell_str, _mesh, _groups):
+    def fail_one_write(_chunks_dir, cell_str, _mesh, _groups, **_kwargs):
         if cell_str == "1_0_0":
             assert slow_write_started.wait(timeout=2.0)
             raise OSError("chunk write failed")
@@ -798,9 +1027,9 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
         lambda *_args, **_kwargs: WorkerAllocation(2, 2, 8, 2),
     )
     monkeypatch.setattr(
-        chunker.hardware_memory,
+        chunker.system_memory,
         "detect_ram_snapshot",
-        lambda: hardware_memory.RamSnapshot(100, 100),
+        lambda: system_memory.RamSnapshot(100, 100),
     )
     monkeypatch.setattr(chunker, "_write_chunk_file", fail_one_write)
 
@@ -822,7 +1051,7 @@ def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
     written_cells = []
     probe_write_counts = []
 
-    def write_cell(_chunks_dir, cell_str, _mesh, _groups):
+    def write_cell(_chunks_dir, cell_str, _mesh, _groups, **_kwargs):
         worker_threads.append(threading.get_ident())
         written_cells.append(cell_str)
         bounds = np.zeros(3, dtype=np.float32)
@@ -830,7 +1059,7 @@ def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
 
     def probe_ram():
         probe_write_counts.append(len(written_cells))
-        return hardware_memory.RamSnapshot(100, 20)
+        return system_memory.RamSnapshot(100, 20)
 
     monkeypatch.setattr(
         chunker,
@@ -838,7 +1067,7 @@ def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
         lambda *_args, **_kwargs: WorkerAllocation(8, 2, 10, 8),
     )
     monkeypatch.setattr(
-        chunker.hardware_memory, "detect_ram_snapshot", probe_ram
+        chunker.system_memory, "detect_ram_snapshot", probe_ram
     )
     monkeypatch.setattr(chunker, "_write_chunk_file", write_cell)
 
@@ -863,7 +1092,7 @@ def test_cache_build_logs_successful_ram_based_worker_admission(
     source.write_text("map", encoding="utf-8")
     cache_dir = tmp_path / "staging-cache"
 
-    def write_cell(_chunks_dir, _cell_str, _mesh, _groups):
+    def write_cell(_chunks_dir, _cell_str, _mesh, _groups, **_kwargs):
         bounds = np.zeros(3, dtype=np.float32)
         return bounds, bounds.copy(), ["rock"]
 
@@ -873,9 +1102,9 @@ def test_cache_build_logs_successful_ram_based_worker_admission(
         lambda *_args, **_kwargs: WorkerAllocation(2, 2, 8, 2),
     )
     monkeypatch.setattr(
-        chunker.hardware_memory,
+        chunker.system_memory,
         "detect_ram_snapshot",
-        lambda: hardware_memory.RamSnapshot(100, 100),
+        lambda: system_memory.RamSnapshot(100, 100),
     )
     monkeypatch.setattr(chunker, "_write_chunk_file", write_cell)
 
@@ -994,7 +1223,7 @@ def test_prepare_chunk_upload_groups_defers_flat_payload(monkeypatch):
         calls.append(len(flat_pos))
         return smooth_normals.copy()
 
-    monkeypatch.setattr(chunker, "compute_flat_normals", fake_flat_normals)
+    monkeypatch.setattr(upload, "compute_flat_normals", fake_flat_normals)
     data = chunker.ChunkData(
         cell=(0, 0, 0),
         groups={
@@ -1060,7 +1289,7 @@ def test_prepack_chunk_vertex_bytes_reuses_requested_payload(monkeypatch):
         calls.append(len(flat_pos))
         return smooth_normals.copy()
 
-    monkeypatch.setattr(chunker, "compute_flat_normals", fake_flat_normals)
+    monkeypatch.setattr(upload, "compute_flat_normals", fake_flat_normals)
     data = chunker.ChunkData(
         cell=(0, 0, 0),
         groups={
@@ -1116,6 +1345,63 @@ def test_load_chunk_file_preserves_repeated_material_groups(tmp_path):
     np.testing.assert_array_equal(data.groups["rock#2"].positions, positions[1])
 
 
+def test_load_chunk_file_rejects_file_above_runtime_safety_limit(
+    tmp_path,
+    monkeypatch,
+):
+    chunks_dir = tmp_path / chunker.CHUNKS_DIRNAME
+    chunks_dir.mkdir()
+    path = chunks_dir / "0_0_0.bin"
+    path.write_bytes(b"0" * 32)
+    monkeypatch.setattr(chunker, "_MAX_CHUNK_FILE_BYTES", 16)
+
+    with pytest.raises(ValueError, match="runtime safety limit"):
+        chunker.load_chunk_file(str(tmp_path), (0, 0, 0))
+
+
+def test_load_chunk_file_rejects_oversized_material_name_before_payload_read(
+    tmp_path,
+):
+    chunks_dir = tmp_path / chunker.CHUNKS_DIRNAME
+    chunks_dir.mkdir()
+    path = chunks_dir / "0_0_0.bin"
+    path.write_bytes(
+        chunker._MAGIC
+        + chunker._VERSION.to_bytes(4, "little")
+        + (1).to_bytes(4, "little")
+        + (chunker._MAX_CHUNK_MATERIAL_NAME_BYTES + 1).to_bytes(4, "little")
+        + (0).to_bytes(4, "little")
+    )
+
+    with pytest.raises(ValueError, match="material name.*runtime safety limit"):
+        chunker.load_chunk_file(str(tmp_path), (0, 0, 0))
+
+
+def test_load_chunk_file_rejects_group_above_payload_limit_before_array_read(
+    tmp_path,
+):
+    chunks_dir = tmp_path / chunker.CHUNKS_DIRNAME
+    chunks_dir.mkdir()
+    path = chunks_dir / "0_0_0.bin"
+    name = b"rock"
+    path.write_bytes(
+        chunker._MAGIC
+        + chunker._VERSION.to_bytes(4, "little")
+        + (1).to_bytes(4, "little")
+        + len(name).to_bytes(4, "little")
+        + name
+        + (6).to_bytes(4, "little")
+    )
+    max_group_bytes = 3 * chunker._UPLOAD_VERTEX_BYTES
+
+    with pytest.raises(ValueError, match="above the 3 vertex runtime safety limit"):
+        chunker.load_chunk_file(
+            str(tmp_path),
+            (0, 0, 0),
+            max_group_bytes=max_group_bytes,
+        )
+
+
 def test_write_chunk_file_splits_material_groups_by_payload_size(tmp_path):
     chunks_dir = tmp_path / "chunks"
     chunks_dir.mkdir()
@@ -1157,7 +1443,7 @@ def test_write_chunk_file_from_buckets_splits_material_groups_by_payload_size(
     records.tofile(bucket_path)
     max_group_bytes = 6 * 8 * np.dtype(np.float32).itemsize
 
-    _bounds_min, _bounds_max, materials = chunker._write_chunk_file_from_buckets(
+    _bounds_min, _bounds_max, materials = buckets._write_chunk_file_from_buckets(
         str(chunks_dir),
         "0_0_0",
         [("rock", [str(bucket_path)])],

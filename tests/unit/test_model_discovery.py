@@ -9,7 +9,7 @@ import pytest
 
 from caveviewer import app
 from caveviewer.app import find_input_files, find_model_file
-from caveviewer.core.glb_parser import parse_glb
+from caveviewer.core.mesh.glb import parse_glb
 
 
 def test_find_model_rejects_missing_directory(tmp_path):
@@ -57,6 +57,16 @@ def test_find_input_files_falls_back_to_available_mtl(tmp_path):
     obj.write_text("mtllib missing.mtl\nv 0 0 0\n", encoding="utf-8")
     fallback.write_text("newmtl rock\n", encoding="utf-8")
     assert find_input_files(str(tmp_path)) == (str(obj), str(fallback))
+
+
+def test_find_input_files_rejects_unsafe_referenced_mtl_path(tmp_path):
+    (tmp_path / "cave.obj").write_text(
+        "mtllib ../outside.mtl\nv 0 0 0\n", encoding="utf-8"
+    )
+    (tmp_path / "fallback.mtl").write_text("newmtl fallback\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsafe OBJ material path"):
+        find_input_files(str(tmp_path))
 
 
 def test_find_input_files_reports_multiple_obj_candidates(tmp_path, monkeypatch):
@@ -204,8 +214,136 @@ def test_glb_parser_reads_minimal_real_file(tmp_path):
     path = tmp_path / "minimal.glb"
     gltf.save_binary(str(path))
 
-    mesh, embedded_images = parse_glb(str(path))
+    preflight_counts = []
+    mesh, embedded_images = parse_glb(
+        str(path),
+        preflight_cb=lambda *counts: preflight_counts.append(counts),
+    )
 
+    assert preflight_counts == [(3, 3, 3, 1)]
     np.testing.assert_array_equal(mesh.positions, positions)
     np.testing.assert_array_equal(mesh.face_pos_idx, [[0, 1, 2]])
     assert embedded_images == {}
+
+
+def test_glb_parser_rejects_accessor_range_outside_buffer_view(tmp_path):
+    from pygltflib import (
+        Accessor,
+        Asset,
+        Attributes,
+        Buffer,
+        BufferView,
+        GLTF2,
+        Mesh,
+        Node,
+        Primitive,
+        Scene,
+    )
+
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    gltf = GLTF2(
+        asset=Asset(version="2.0"),
+        scenes=[Scene(nodes=[0])],
+        scene=0,
+        nodes=[Node(mesh=0)],
+        meshes=[Mesh(primitives=[Primitive(attributes=Attributes(POSITION=0))])],
+        buffers=[Buffer(byteLength=positions.nbytes)],
+        bufferViews=[
+            BufferView(
+                buffer=0,
+                byteOffset=0,
+                byteLength=positions.nbytes - 4,
+                target=34962,
+            )
+        ],
+        accessors=[
+            Accessor(
+                bufferView=0,
+                byteOffset=0,
+                componentType=5126,
+                count=3,
+                type="VEC3",
+            )
+        ],
+    )
+    gltf.set_binary_blob(positions.tobytes())
+    path = tmp_path / "invalid-range.glb"
+    gltf.save_binary(str(path))
+
+    with pytest.raises(ValueError, match="accessor range exceeds bufferView"):
+        parse_glb(str(path))
+
+
+def test_glb_parser_rejects_indices_outside_position_count(tmp_path):
+    from pygltflib import (
+        Accessor,
+        Asset,
+        Attributes,
+        Buffer,
+        BufferView,
+        GLTF2,
+        Mesh,
+        Node,
+        Primitive,
+        Scene,
+    )
+
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    indices = np.array([0, 1, 3], dtype=np.uint16)
+    blob = positions.tobytes() + indices.tobytes()
+    gltf = GLTF2(
+        asset=Asset(version="2.0"),
+        scenes=[Scene(nodes=[0])],
+        scene=0,
+        nodes=[Node(mesh=0)],
+        meshes=[
+            Mesh(
+                primitives=[
+                    Primitive(attributes=Attributes(POSITION=0), indices=1)
+                ]
+            )
+        ],
+        buffers=[Buffer(byteLength=len(blob))],
+        bufferViews=[
+            BufferView(
+                buffer=0,
+                byteOffset=0,
+                byteLength=positions.nbytes,
+                target=34962,
+            ),
+            BufferView(
+                buffer=0,
+                byteOffset=positions.nbytes,
+                byteLength=indices.nbytes,
+                target=34963,
+            ),
+        ],
+        accessors=[
+            Accessor(
+                bufferView=0,
+                byteOffset=0,
+                componentType=5126,
+                count=3,
+                type="VEC3",
+            ),
+            Accessor(
+                bufferView=1,
+                byteOffset=0,
+                componentType=5123,
+                count=3,
+                type="SCALAR",
+            ),
+        ],
+    )
+    gltf.set_binary_blob(blob)
+    path = tmp_path / "bad-index.glb"
+    gltf.save_binary(str(path))
+
+    with pytest.raises(ValueError, match="outside POSITION count"):
+        parse_glb(str(path))

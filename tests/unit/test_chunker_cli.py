@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 
 from caveviewer import chunker as chunker_cli
-from caveviewer.core.chunk_size_advisor import (
+from caveviewer.core.map.chunk_size_advisor import (
     ChunkSizeCandidate,
     ChunkSizeRecommendation,
 )
-from caveviewer.core.map_compiler import CompileResult
+from caveviewer.core.map.compiler import CompileResult
 
 
 def _result(status: str = "planned") -> CompileResult:

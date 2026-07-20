@@ -1,7 +1,7 @@
 # GUI instructions
 
-These rules supplement the repository-level `AGENTS.md` for files under
-`src/caveviewer/gui/`.
+These rules supplement the repository-level and source-level `AGENTS.md` files
+for files under `src/caveviewer/gui/`.
 
 - Tk widget mutations and OpenGL resource operations run only on their owning
   main thread. Background workers may perform disk I/O, parsing, image decode,

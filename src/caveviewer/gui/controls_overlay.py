@@ -28,7 +28,7 @@ import numpy as np
 
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.platform.factory import get_platform_adapter
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 
 
 _LOG = get_logger("ControlsOverlay")
@@ -327,31 +327,44 @@ class ControlsOverlay:
         """
         if not self._active:
             return
-        loaded = streaming_stats.get("loaded", 0)
+        loaded = streaming_stats.get(
+            "loaded_wanted",
+            streaming_stats.get("loaded", 0),
+        )
         pending = streaming_stats.get("pending", 0)
         ready  = streaming_stats.get("ready",   0)
+        failed = streaming_stats.get("failed_wanted", 0)
         wanted = max(1, int(streaming_stats.get("wanted", self.MIN_CHUNKS_TO_DISMISS)))
-        chunks_needed = min(self.MIN_CHUNKS_TO_DISMISS, wanted)
+        total_available = max(1, int(streaming_stats.get("total_available", wanted)))
+        if self._awaiting_begin:
+            # During startup the viewer clamps streaming to the immediate
+            # spawn neighborhood. Wait for that whole current wanted set
+            # before allowing Space so the first visible frame is populated.
+            chunks_needed = min(wanted, total_available)
+        else:
+            chunks_needed = min(self.MIN_CHUNKS_TO_DISMISS, wanted)
+        settled = loaded + failed
         # Include ready (decoded-but-not-yet-uploaded) in the denominator so
         # the ring reflects all in-flight work.  Without this, when pending
         # briefly hits 0 while ready > 0, total becomes 0 and the ring
         # freezes -- noticeable on slower machines where decode is the
         # bottleneck and chunks pile up in the ready queue between frames.
-        total = max(0, loaded + pending + ready)
+        total = max(0, loaded + pending + ready + failed)
         if total > 0:
             # Give partial credit so the ring moves as soon as background
             # decode starts (pending), not only once GPU uploads finish:
             #   pending  0.25  decode in progress
             #   ready    0.75  decode done, upload queued
             #   loaded   1.00  fully on GPU
+            #   failed   1.00  terminally settled; render continues with a hole
             frac = max(0.0, min(1.0,
-                (loaded + 0.75 * ready + 0.25 * pending) / float(total)
+                (settled + 0.75 * ready + 0.25 * pending) / float(total)
             ))
             # Keep progress monotonic so the bar doesn't jump backward
             # when pending work is reprioritized across frames.
             self._progress_fraction = max(self._progress_fraction, frac)
 
-        if self._awaiting_begin and loaded >= chunks_needed:
+        if self._awaiting_begin and settled >= chunks_needed:
             self._ready_to_begin = True
 
         if self._manual_mode or self._awaiting_begin:
@@ -362,7 +375,7 @@ class ControlsOverlay:
         min_display = self.MIN_DISPLAY_SECONDS_FULLSCREEN if self._fullscreen else self.MIN_DISPLAY_SECONDS_PANEL
 
         if self._fullscreen:
-            enough_loaded = loaded >= chunks_needed and pending == 0
+            enough_loaded = settled >= chunks_needed and pending == 0
         else:
             # For the teleport panel, also wait for the GPU upload queue to
             # drain (ready == 0) before starting the linger countdown.
@@ -372,7 +385,7 @@ class ControlsOverlay:
             # yet -- starting the fade while that queue has items produces a
             # brief "untextured geometry" flash as the overlay reveals the view.
             if (self._panel_loaded_time is None
-                    and loaded >= self.MIN_CHUNKS_TO_DISMISS_PANEL
+                    and settled >= self.MIN_CHUNKS_TO_DISMISS_PANEL
                     and pending == 0
                     and ready == 0):
                 self._panel_loaded_time = now

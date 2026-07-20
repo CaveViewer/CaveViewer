@@ -128,9 +128,14 @@ jobs:
         run: >-
           python -m pytest
           --cov=caveviewer.app
-          --cov=caveviewer.core.chunker
+          --cov=caveviewer.core.chunking.builder
+          --cov=caveviewer.core.preferences.schema
+          --cov=caveviewer.core.map.importer
+          --cov=caveviewer.core.map.source_model
+          --cov=caveviewer.core.textures.decoding
           --cov=caveviewer.gui.preferences
           --cov=caveviewer.gui.sample_maps
+          --cov=caveviewer.gui.texture_manager
           --cov=caveviewer.gui.update_checker
           --cov=caveviewer.gui.update_manager
           --cov-branch
@@ -159,7 +164,7 @@ jobs:
       - name: Enforce chunker coverage floor
         run: >-
           python -m coverage report
-          --include=src/caveviewer/core/chunker.py
+          --include=src/caveviewer/core/chunking/builder.py
           --fail-under=90
 
       - name: Enforce update-checker coverage floor

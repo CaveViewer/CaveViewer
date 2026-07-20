@@ -132,5 +132,5 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "def _invoke_and_break(callback):" in source
     assert "def _bind_activation(widget, callback) -> None:" in source
     assert "_bind_activation(browse_button, on_open_map_folder)" in source
-    assert "_bind_activation(advanced_link, _on_advanced_settings_click)" in source
+    assert "_bind_activation(preferences_link, _on_preferences_click)" in source
     assert "_bind_activation(sample_maps_link, _on_example_maps_click)" in source

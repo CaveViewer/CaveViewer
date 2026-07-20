@@ -1,47 +1,52 @@
 """Command-line map compilation orchestration.
 
-This module sits above :mod:`caveviewer.core.chunker`: it resolves source
-models, applies the same import settings exposed by Preferences, selects the
+This module sits above :mod:`caveviewer.core.chunking.builder`: it resolves source
+models, applies the same parsing preferences exposed by Preferences, selects the
 managed cache root, and delegates the actual OBJ/GLB cache build to the
-existing app import pipeline.
+core import pipeline.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-import json
 import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from caveviewer.core.cache_paths import MANAGED_CACHE_ENV_VAR, MapCacheLocator
-from caveviewer.gui.preferences import (
-    ADVANCED_SETTING_FIELDS,
-    AdvancedSettings,
-    require_validated_advanced_settings,
-    validate_advanced_setting,
+from caveviewer.core.preferences.schema import (
+    PREFERENCE_FIELDS,
+    Preferences,
+    require_validated_preferences,
+    validate_preference,
 )
+from caveviewer.core.diagnostics.logging import (
+    finish_console_progress_line,
+    set_console_progress,
+)
+from caveviewer.core.json_io import load_bounded_json
+from caveviewer.core.map.cache_paths import MANAGED_CACHE_ENV_VAR, MapCacheLocator
+from caveviewer.core.map.importer import import_and_cache_any
+from caveviewer.core.map.source_model import find_model_file
 
 
 if TYPE_CHECKING:
-    from caveviewer.core.chunk_size_advisor import ChunkSizeRecommendation
+    from caveviewer.core.map.chunk_size_advisor import ChunkSizeRecommendation
 
 
-PARSING_SETTING_FIELDS = tuple(
-    field for field in ADVANCED_SETTING_FIELDS if field.section == "parsing"
+PARSING_PREFERENCE_FIELDS = tuple(
+    field for field in PREFERENCE_FIELDS if field.section == "parsing"
 )
-PARSING_SETTING_KEYS = frozenset(field.key for field in PARSING_SETTING_FIELDS)
-ADVANCED_SETTING_KEYS = frozenset(field.key for field in ADVANCED_SETTING_FIELDS)
+PARSING_PREFERENCE_KEYS = frozenset(field.key for field in PARSING_PREFERENCE_FIELDS)
+PREFERENCE_KEYS = frozenset(field.key for field in PREFERENCE_FIELDS)
 DEFAULT_OBJ_BUCKET_WORKERS = 2
 MIN_OBJ_BUCKET_WORKERS = 1
 MAX_OBJ_BUCKET_WORKERS = 32
-OBJ_BUCKET_WORKERS_ENV_VAR = "CAVEVIEWER_OBJ_BUCKET_WORKERS"
 DEFAULT_ANALYZE_WORKERS = 2
 MIN_ANALYZE_WORKERS = 1
 MAX_ANALYZE_WORKERS = 32
+MAX_SETTINGS_FILE_BYTES = 1 * 1024 * 1024
 ProgressCallback = Callable[[str, float], None]
 
 
@@ -113,26 +118,21 @@ def compile_map(options: CompileOptions) -> CompileResult:
 
     source_argument = _require_non_empty_path(options.source, "--source")
     cache_root = _normalize_cache_root(options.cache_root)
-    settings = _resolve_settings(options.settings_file, options.parsing_overrides)
-    chunk_size = _float_setting(settings, "chunk_size_meters")
-    max_upload_group_mb = _float_setting(settings, "max_upload_group_mb")
+    preferences = _resolve_preferences(options.settings_file, options.parsing_overrides)
+    chunk_size = _float_preference(preferences, "chunk_size_meters")
+    max_upload_group_mb = _float_preference(preferences, "max_upload_group_mb")
     obj_bucket_workers = _resolve_obj_bucket_workers(options.obj_bucket_workers)
+    face_batch_size = _obj_face_batch_size(preferences)
 
-    env_updates = {
-        field.env_var: field.value_to_env(settings[field.key])
-        for field in PARSING_SETTING_FIELDS
-    }
-    env_updates[OBJ_BUCKET_WORKERS_ENV_VAR] = str(obj_bucket_workers)
-    if cache_root is not None:
-        env_updates[MANAGED_CACHE_ENV_VAR] = cache_root
-
-    with _temporary_environ(env_updates):
-        return _compile_with_environment(
-            options,
-            source_argument=source_argument,
-            chunk_size=chunk_size,
-            max_upload_group_mb=max_upload_group_mb,
-        )
+    return _compile_with_configuration(
+        options,
+        source_argument=source_argument,
+        cache_root=cache_root,
+        chunk_size=chunk_size,
+        max_upload_group_mb=max_upload_group_mb,
+        obj_import_batch_faces=face_batch_size,
+        obj_bucket_workers=obj_bucket_workers,
+    )
 
 
 def analyze_chunk_sizes(
@@ -146,62 +146,57 @@ def analyze_chunk_sizes(
 
     source_argument = _require_non_empty_path(options.source, "--source")
     cache_root = _normalize_cache_root(options.cache_root)
-    settings = _resolve_settings(options.settings_file, options.parsing_overrides)
-    requested_chunk_size = _float_setting(settings, "chunk_size_meters")
+    preferences = _resolve_preferences(options.settings_file, options.parsing_overrides)
+    requested_chunk_size = _float_preference(preferences, "chunk_size_meters")
     obj_bucket_workers = _resolve_obj_bucket_workers(options.obj_bucket_workers)
-    face_batch_size = _obj_face_batch_size(settings)
+    face_batch_size = _obj_face_batch_size(preferences)
     analyze_workers = _resolve_analyze_workers(options.analyze_workers)
 
-    env_updates = {
-        field.env_var: field.value_to_env(settings[field.key])
-        for field in PARSING_SETTING_FIELDS
-    }
-    env_updates[OBJ_BUCKET_WORKERS_ENV_VAR] = str(obj_bucket_workers)
-    if cache_root is not None:
-        env_updates[MANAGED_CACHE_ENV_VAR] = cache_root
-
-    with _temporary_environ(env_updates):
-        return _analyze_with_environment(
-            source_argument=source_argument,
-            requested_chunk_size=requested_chunk_size,
-            face_batch_size=face_batch_size,
-            worker_count=analyze_workers,
-            progress_cb=progress_cb,
-        )
+    del obj_bucket_workers
+    return _analyze_with_configuration(
+        source_argument=source_argument,
+        cache_root=cache_root,
+        requested_chunk_size=requested_chunk_size,
+        face_batch_size=face_batch_size,
+        worker_count=analyze_workers,
+        progress_cb=progress_cb,
+    )
 
 
-def _compile_with_environment(
+def _compile_with_configuration(
     options: CompileOptions,
     *,
     source_argument: str,
+    cache_root: str | None,
     chunk_size: float,
     max_upload_group_mb: float,
+    obj_import_batch_faces: int,
+    obj_bucket_workers: int,
 ) -> CompileResult:
-    from caveviewer import app
-    from caveviewer.core import chunker
-    from caveviewer.core.cache_paths import map_cache_build_dir
+    from caveviewer.core.chunking import builder as chunker
 
     selected_path = os.path.abspath(os.path.expanduser(source_argument))
     selected_is_file = os.path.isfile(selected_path)
     textures_dir = os.path.dirname(selected_path) if selected_is_file else selected_path
 
     try:
-        model_descriptor = app.find_model_file(selected_path)
+        model_descriptor = find_model_file(selected_path)
     except FileNotFoundError as exc:
         raise MapCompileConfigurationError(str(exc)) from exc
 
     source_path = str(model_descriptor.get("obj_path") or model_descriptor.get("glb_path"))
     source_format = str(model_descriptor.get("format") or "")
-    cache_dir = os.path.abspath(map_cache_build_dir(source_path))
     try:
-        effective_cache_root = str(MapCacheLocator().managed_root)
+        locator = _map_cache_locator(cache_root)
+        cache_dir = os.path.abspath(str(locator.build_cache_dir(source_path)))
+        effective_cache_root = str(locator.managed_root)
     except Exception as exc:
         raise MapCompileConfigurationError(str(exc)) from exc
 
     manifest = chunker.load_manifest(cache_dir)
     cached_chunk_size = chunker.manifest_chunk_size(manifest)
     cached_max_upload_group_mb = chunker.manifest_max_upload_group_mb(manifest)
-    cache_valid = chunker.cache_is_valid(source_path)
+    cache_valid = chunker.cache_dir_is_valid(cache_dir, source_path)
     chunk_size_mismatch = (
         cache_valid
         and cached_chunk_size is not None
@@ -214,7 +209,7 @@ def _compile_with_environment(
         and cached_max_upload_group_mb is not None
         and abs(cached_max_upload_group_mb - max_upload_group_mb) > 1e-6
     )
-    rebuild_for_import_settings = (
+    rebuild_for_preferences = (
         rebuild_for_chunk_size
         or max_upload_group_mismatch
     )
@@ -234,7 +229,7 @@ def _compile_with_environment(
             rebuilt_for_chunk_size=rebuild_for_chunk_size,
         )
 
-    if cache_valid and not options.force_rebuild and not rebuild_for_import_settings:
+    if cache_valid and not options.force_rebuild and not rebuild_for_preferences:
         return _result_from_manifest(
             status="skipped",
             options=options,
@@ -250,13 +245,22 @@ def _compile_with_environment(
         )
 
     build_started_at = time.perf_counter()
-    built_cache_dir = app.import_and_cache_any(
-        model_descriptor,
-        textures_dir,
-        force_rebuild=bool(options.force_rebuild or rebuild_for_import_settings),
-        console_progress=not options.json_output,
-        chunk_size=chunk_size,
-    )
+    progress_cb = None if options.json_output else set_console_progress
+    try:
+        built_cache_dir = import_and_cache_any(
+            model_descriptor,
+            textures_dir,
+            force_rebuild=bool(options.force_rebuild or rebuild_for_preferences),
+            progress_cb=progress_cb,
+            chunk_size=chunk_size,
+            cache_dir=cache_dir,
+            max_upload_group_mb=max_upload_group_mb,
+            obj_import_batch_faces=obj_import_batch_faces,
+            obj_bucket_workers=obj_bucket_workers,
+        )
+    finally:
+        if progress_cb is not None:
+            finish_console_progress_line()
     elapsed_seconds = time.perf_counter() - build_started_at
     built_manifest = chunker.load_manifest(built_cache_dir)
     return _result_from_manifest(
@@ -275,25 +279,32 @@ def _compile_with_environment(
     )
 
 
-def _analyze_with_environment(
+def _analyze_with_configuration(
     *,
     source_argument: str,
+    cache_root: str | None,
     requested_chunk_size: float,
     face_batch_size: int,
     worker_count: int,
     progress_cb: ProgressCallback | None = None,
 ) -> "ChunkSizeRecommendation":
-    from caveviewer import app
-    from caveviewer.core.chunk_size_advisor import (
+    from caveviewer.core.map.chunk_size_advisor import (
         DEFAULT_CANDIDATE_SIZES,
         recommend_chunk_size_for_descriptor,
     )
 
     selected_path = os.path.abspath(os.path.expanduser(source_argument))
+    if cache_root is not None:
+        # Validate the same cache-root input as compile mode without mutating
+        # process-global environment. Analysis does not currently need the path.
+        try:
+            _map_cache_locator(cache_root).managed_root
+        except Exception as exc:
+            raise MapCompileConfigurationError(str(exc)) from exc
     if progress_cb is not None:
         progress_cb("locating source", 0.0)
     try:
-        model_descriptor = app.find_model_file(selected_path)
+        model_descriptor = find_model_file(selected_path)
     except FileNotFoundError as exc:
         raise MapCompileConfigurationError(str(exc)) from exc
 
@@ -351,38 +362,41 @@ def _result_from_manifest(
     )
 
 
-def _resolve_settings(
+def _resolve_preferences(
     settings_file: str | None,
     parsing_overrides: Mapping[str, str] | None,
-) -> AdvancedSettings:
-    settings = (
-        _built_in_settings()
+) -> Preferences:
+    preferences = (
+        _built_in_preferences()
         if settings_file is None
-        else _load_explicit_settings(settings_file)
+        else _load_explicit_preferences(settings_file)
     )
-    values = settings.as_dict()
+    values = preferences.as_dict()
     for key, value in dict(parsing_overrides or {}).items():
-        if key not in PARSING_SETTING_KEYS:
+        if key not in PARSING_PREFERENCE_KEYS:
             raise MapCompileConfigurationError(
-                f"Unsupported import setting override: {key}"
+                f"Unsupported parsing preference override: {key}"
             )
         values[key] = str(value)
 
     try:
-        return require_validated_advanced_settings(values)
+        return require_validated_preferences(values)
     except Exception as exc:
         raise MapCompileConfigurationError(str(exc)) from exc
 
 
-def _load_explicit_settings(settings_file: str) -> AdvancedSettings:
+def _load_explicit_preferences(settings_file: str) -> Preferences:
     path = Path(settings_file).expanduser()
     if not path.exists():
         raise MapCompileConfigurationError(
             f"--settings-file does not exist: {settings_file}"
         )
     try:
-        with path.open("r", encoding="utf-8") as file_obj:
-            payload = json.load(file_obj)
+        payload = load_bounded_json(
+            path,
+            max_bytes=MAX_SETTINGS_FILE_BYTES,
+            description="settings file",
+        )
     except Exception as exc:
         raise MapCompileConfigurationError(
             f"Could not load --settings-file {path}: {exc}"
@@ -391,45 +405,45 @@ def _load_explicit_settings(settings_file: str) -> AdvancedSettings:
         raise MapCompileConfigurationError(
             f"--settings-file must contain a JSON object: {path}"
         )
-    values = _built_in_settings().as_dict()
+    values = _built_in_preferences().as_dict()
     for key, value in payload.items():
         key = str(key)
-        if key not in ADVANCED_SETTING_KEYS:
+        if key not in PREFERENCE_KEYS:
             raise MapCompileConfigurationError(
-                f"--settings-file contains an unknown setting: {key}"
+                f"--settings-file contains an unknown preference: {key}"
             )
         values[key] = str(value).strip() if value is not None else ""
     try:
-        return require_validated_advanced_settings(values)
+        return require_validated_preferences(values)
     except Exception as exc:
         raise MapCompileConfigurationError(str(exc)) from exc
 
 
-def _built_in_settings() -> AdvancedSettings:
+def _built_in_preferences() -> Preferences:
     values: dict[str, str] = {}
-    for field in ADVANCED_SETTING_FIELDS:
-        result = validate_advanced_setting(field, field.built_in_default())
+    for field in PREFERENCE_FIELDS:
+        result = validate_preference(field, field.built_in_default())
         if not result.is_valid:
             raise MapCompileConfigurationError(
                 f"Invalid built-in default for {field.key}: {result.message}"
             )
         values[field.key] = result.normalized_value
-    return AdvancedSettings(values)
+    return Preferences(values)
 
 
-def _float_setting(settings: AdvancedSettings, key: str) -> float:
+def _float_preference(preferences: Preferences, key: str) -> float:
     try:
-        return float(settings[key])
+        return float(preferences[key])
     except Exception as exc:
-        raise MapCompileConfigurationError(f"Invalid numeric setting: {key}") from exc
+        raise MapCompileConfigurationError(f"Invalid numeric preference: {key}") from exc
 
 
-def _obj_face_batch_size(settings: AdvancedSettings) -> int:
+def _obj_face_batch_size(preferences: Preferences) -> int:
     try:
-        return int(settings["obj_import_batch_thousands"]) * 1000
+        return int(preferences["obj_import_batch_thousands"]) * 1000
     except Exception as exc:
         raise MapCompileConfigurationError(
-            "Invalid numeric setting: obj_import_batch_thousands"
+            "Invalid numeric preference: obj_import_batch_thousands"
         ) from exc
 
 
@@ -510,17 +524,7 @@ def _normalize_cache_root(cache_root: str | None) -> str | None:
     return normalized
 
 
-@contextmanager
-def _temporary_environ(updates: Mapping[str, str]) -> Iterator[None]:
-    previous: dict[str, str | None] = {}
-    for key, value in updates.items():
-        previous[key] = os.environ.get(key)
-        os.environ[key] = str(value)
-    try:
-        yield
-    finally:
-        for key, old_value in previous.items():
-            if old_value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = old_value
+def _map_cache_locator(cache_root: str | None) -> MapCacheLocator:
+    if cache_root is None:
+        return MapCacheLocator()
+    return MapCacheLocator(environ={MANAGED_CACHE_ENV_VAR: cache_root})

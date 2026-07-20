@@ -35,13 +35,13 @@ import sys
 from dataclasses import dataclass
 
 from caveviewer.version import APP_NAME, APP_VERSION
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.preferences import (
-    apply_advanced_settings_to_env as _apply_advanced_settings_to_env,
-    load_advanced_settings as _load_advanced_settings,
+    apply_preferences_to_env as _apply_preferences_to_env,
+    load_preferences as _load_preferences,
 )
-from caveviewer.gui.advanced_settings_dialog import (
-    show_advanced_settings_dialog as _show_advanced_settings_dialog,
+from caveviewer.gui.preferences_dialog import (
+    show_preferences_dialog as _show_preferences_dialog,
 )
 from caveviewer.gui.dpi_utils import (
     apply_tk_scaling,
@@ -294,7 +294,7 @@ def show_splash_screen(
 
     selected_folder: list[str | None] = [None]
     desktop_services = desktop_services or get_desktop_services()
-    _apply_advanced_settings_to_env(_load_advanced_settings())
+    _apply_preferences_to_env(_load_preferences())
 
     configure_process_dpi_awareness()
     root = tk.Tk(**tk_root_options())
@@ -555,8 +555,8 @@ def show_splash_screen(
     )
     instruction_label.pack(pady=(0, _INSTRUCTION_BOTTOM_GAP))
 
-    def _on_advanced_settings_click():
-        _show_advanced_settings_dialog(
+    def _on_preferences_click():
+        _show_preferences_dialog(
             root,
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
@@ -579,7 +579,7 @@ def show_splash_screen(
     secondary_link_row = tk.Frame(root, bg=_BG_COLOR)
     secondary_link_row.pack(pady=(_SECONDARY_LINK_ROW_TOP_GAP, _SECONDARY_LINK_ROW_BOTTOM_GAP))
 
-    advanced_link = tk.Label(
+    preferences_link = tk.Label(
         secondary_link_row,
         text="Preferences",
         font=_SMALL_FONT,
@@ -591,8 +591,8 @@ def show_splash_screen(
         highlightbackground=_BG_COLOR,
         highlightcolor=_BUTTON_BG,
     )
-    _bind_activation(advanced_link, _on_advanced_settings_click)
-    advanced_link.pack(side="left")
+    _bind_activation(preferences_link, _on_preferences_click)
+    preferences_link.pack(side="left")
 
     secondary_separator = tk.Label(
         secondary_link_row,

@@ -46,7 +46,8 @@ Chunk size is the most important import-time rendering choice:
 
 Dense material groups can also be split during import with the max upload group
 size. This limits a single VBO payload, which matters for frame pacing during
-runtime upload.
+runtime upload. The renderer also slices oversized VBO uploads at runtime, so
+existing caches get bounded upload units even before they are rebuilt.
 
 ## Streaming model
 
@@ -58,12 +59,42 @@ The render thread owns OpenGL resources, so VBOs, VAOs, and textures must still
 be created there. CaveViewer limits that work in two layers:
 
 - chunk upload throttling: how many ready chunks may advance per frame;
-- material-group upload throttling: how much of one heavy chunk may upload per
-  frame.
+- render-upload operation throttling: how many resumable upload slices from one
+  ready chunk may advance per frame.
 
-A chunk is not drawn until all of its groups have finished uploading. Partial
-GPU resources are tracked separately and released if the chunk becomes stale
-before completion.
+Texture uploads are resumable: workers decode images into CPU bytes, then the
+render thread first allocates the OpenGL texture, uploads row bands across
+multiple frames, and builds mipmaps only after the final row band. Dense
+geometry uploads are also split into triangle-aligned VBO slices, with buffer
+storage reservation and data writes advanced as separate operations where the
+OpenGL context supports it. These operation-level upload queues preserve final
+texture quality while avoiding one large `ctx.texture(...)` or
+`ctx.buffer(...)` call monopolizing a frame.
+
+Upload slice sizes are self-adjusting at runtime. CaveViewer starts with
+conservative 512 KiB texture and VBO upload slices and can shrink future slices
+down to 256 KiB when a measured OpenGL upload operation exceeds the active
+frame upload budget. This keeps normal quality settings usable on drivers where
+even a 1 MiB upload can occasionally stall the render thread without degrading
+into tiny fragment uploads after one bad frame.
+
+Startup uses a separate pacing rule. While the fullscreen loading/controls
+overlay is still hiding the map, the viewer advances more render-thread upload
+operations per frame and waits for the current render-distance wanted set to be
+GPU-ready before enabling the "Press Space to begin" prompt. After the user
+begins, streaming normally returns to conservative per-frame limits. If the
+current Distance wanted set is incomplete and decoded chunks are ready, the
+viewer temporarily enters a catch-up upload mode so nearby visible chunks fill
+in coherent sections instead of crawling one small slice per frame.
+
+The Distance control defines the current visual wanted set. Memory-derived
+residency limits do not silently shrink that set; instead, bounded worker queues
+and ready backlogs limit how much work can accumulate while eviction prefers
+cells outside the requested Distance range.
+
+Completed upload slices become drawable before the entire chunk finishes.
+Partial GPU resources are tracked separately and released if the chunk becomes
+stale before completion.
 
 Texture handling is intentionally separate from geometry residency. If a map has
 too many large texture tiles for the GPU budget, CaveViewer downsizes oversized
@@ -197,13 +228,13 @@ $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
 |---|---:|---|---|
 | `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of available system RAM targeted for loaded chunk data. |
 | `CAVEVIEWER_GPU_MEMORY_GB` | auto | 0.5-50 GB | Optional GPU memory ceiling. If active-GPU detection finds a smaller budget, the detected value wins. |
-| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory targeted for streaming residency. |
+| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory targeted for combined texture and geometry streaming residency. |
 | `CAVEVIEWER_MAX_TEXTURE_SIZE` | auto | 512-16384 px | Optional maximum decoded texture dimension. Automatic sizing usually gives better balance. |
 | `CAVEVIEWER_IO_WORKERS` | `2` | 1-32 workers | Requested maximum background chunk-loading workers. Runtime starts conservatively and grows only when RAM allows. |
 | `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | 2-32 logical CPUs | Logical CPUs kept out of the loading pool. |
-| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 chunks | Maximum ready chunks advanced by the render thread per frame. |
-| `CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME` | `1` | 1-64 groups | Maximum material groups uploaded from one ready chunk per frame. |
-| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5-50 ms | Soft per-frame target for render-thread upload work. |
+| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 chunks | Base maximum ready chunks advanced by the render thread per frame. Startup and catch-up modes can temporarily raise this. |
+| `CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME` | `1` | 1-64 operations | Base maximum render-thread upload slices advanced from one ready chunk per frame. Startup and catch-up modes can temporarily raise this. |
+| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5-50 ms | Base soft per-frame target for render-thread upload work. Startup and catch-up modes can temporarily raise this. |
 | `CAVEVIEWER_GPU_DRAW_TIMER` | `0` | 0 or 1 | Enable same-frame OpenGL GPU draw timer queries in frame diagnostics. This can block on some drivers, so leave it disabled during normal viewing. |
 | `CAVEVIEWER_VSYNC` | `1` | 0 or 1 | Disable with `0` when virtual display drivers block swap buffers. |
 | `LIBGL_ALWAYS_SOFTWARE` | unset | `1` on Linux/Mesa | Force software OpenGL rendering when GPU/VM drivers are unstable. |
@@ -247,7 +278,7 @@ caveviewer-chunker --source="C:\Maps\DevilsEye.obj" --chunk-size=64
 |---|---|
 | `--source=<path>` | Required. OBJ file, GLB file, or folder containing a map. |
 | `--cache-root=<path>` | Root folder where compiled map caches are stored. Defaults to the same managed cache root used by the GUI. |
-| `--settings-file=<path>` | Advanced settings JSON to use for import defaults. Saved GUI Preferences are not loaded by default. |
+| `--settings-file=<path>` | Preferences JSON to use for import defaults. Saved GUI Preferences are not loaded by default. |
 | `--chunk-size=<value>` | Import chunk size for new or rebuilt caches. |
 | `--max-upload-group-mb=<value>` | Maximum VBO payload size for dense chunk groups, in MB. |
 | `--obj-scan-throttle-ms=<value>` | Milliseconds paused while scanning OBJ files. |

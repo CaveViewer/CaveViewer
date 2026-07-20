@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from caveviewer.core.streaming_budget import (
+from caveviewer.core.streaming.budget import (
     calculate_residency_budget,
     estimate_chunk_bytes,
 )
@@ -49,7 +49,26 @@ def test_gpu_budget_limits_ram_budget():
 
     assert budget.ram_budget_chunks == 5
     assert budget.gpu_budget_chunks == 2
+    assert budget.gpu_budget_bytes == 200
     assert budget.max_loaded_chunks == 2
+
+
+def test_explicit_gpu_budget_bytes_override_full_gpu_target():
+    budget = calculate_residency_budget(
+        available_cell_count=100,
+        total_ram_bytes=10_000,
+        ram_target_fraction=0.5,
+        estimated_chunk_ram_bytes=100,
+        total_gpu_memory_bytes=10_000,
+        gpu_target_fraction=0.5,
+        estimated_chunk_gpu_bytes=100,
+        gpu_budget_bytes=800,
+    )
+
+    assert budget.ram_budget_chunks == 50
+    assert budget.gpu_budget_chunks == 8
+    assert budget.gpu_budget_bytes == 800
+    assert budget.max_loaded_chunks == 8
 
 
 def test_available_cells_cap_ram_only_budget():
@@ -80,7 +99,27 @@ def test_ram_budget_uses_current_available_ram_when_lower():
     )
 
     assert budget.ram_budget_chunks == 5
-    assert budget.max_loaded_chunks == 5
+    assert budget.ready_backlog_chunks == 1
+    assert budget.max_loaded_chunks == 4
+    assert budget.max_loaded_chunks + budget.ready_backlog_chunks == 5
+
+
+def test_ready_backlog_chunks_are_reserved_from_ram_budget():
+    budget = calculate_residency_budget(
+        available_cell_count=100,
+        total_ram_bytes=3_200,
+        ram_target_fraction=1.0,
+        estimated_chunk_ram_bytes=100,
+        total_gpu_memory_bytes=None,
+        gpu_target_fraction=0.7,
+        estimated_chunk_gpu_bytes=100,
+        ready_backlog_target_chunks=4,
+    )
+
+    assert budget.ram_budget_chunks == 32
+    assert budget.ready_backlog_chunks == 4
+    assert budget.max_loaded_chunks == 28
+    assert budget.max_loaded_chunks + budget.ready_backlog_chunks == 32
 
 
 def test_budget_rejects_non_positive_ram_estimate():

@@ -45,19 +45,23 @@ class BoundedReadyBacklog(Generic[ReadyItem]):
         self,
         distance_key: Callable[[ReadyItem], int] | None = None,
     ) -> ReadyItem:
-        with self._condition:
-            if not self._items:
-                raise queue.Empty
-            if distance_key is None:
-                item_index = 0
-            else:
-                item_index = min(
-                    range(len(self._items)),
-                    key=lambda index: distance_key(self._items[index]),
-                )
-            data = self._items.pop(item_index)
-            self._condition.notify_all()
-            return data
+        while True:
+            with self._condition:
+                if not self._items:
+                    raise queue.Empty
+                if distance_key is None:
+                    data = self._items.pop(0)
+                    self._condition.notify_all()
+                    return data
+                snapshot = tuple(self._items)
+
+            selected = min(snapshot, key=distance_key)
+            with self._condition:
+                for item_index, data in enumerate(self._items):
+                    if data is selected:
+                        self._items.pop(item_index)
+                        self._condition.notify_all()
+                        return data
 
     def qsize(self) -> int:
         with self._condition:
@@ -67,10 +71,20 @@ class BoundedReadyBacklog(Generic[ReadyItem]):
         self, predicate: Callable[[ReadyItem], bool]
     ) -> list[ReadyItem]:
         with self._condition:
+            snapshot = tuple(self._items)
+        discard_ids = {
+            id(data)
+            for data in snapshot
+            if predicate(data)
+        }
+        if not discard_ids:
+            return []
+
+        with self._condition:
             discarded: list[ReadyItem] = []
             retained: list[ReadyItem] = []
             for data in self._items:
-                if predicate(data):
+                if id(data) in discard_ids:
                     discarded.append(data)
                 else:
                     retained.append(data)
@@ -105,6 +119,14 @@ def select_wanted_cells(
     radius: int,
     max_loaded_chunks: int,
 ) -> set[Cell]:
+    """Return all available cells inside the requested render-distance cube.
+
+    ``max_loaded_chunks`` is retained for API compatibility with older call
+    sites, but it does not trim the wanted set. The render-distance control is
+    an explicit user request for visual coverage; residency limits are enforced
+    by eviction policy for cells outside the wanted set and by bounded worker
+    queues/backlogs.
+    """
     cx, cy, cz = center
     wanted: set[Cell] = set()
     for dx in range(-radius, radius + 1):
@@ -114,10 +136,7 @@ def select_wanted_cells(
                 if cell in available_cells:
                     wanted.add(cell)
 
-    if len(wanted) <= max_loaded_chunks:
-        return wanted
-    ordered = sorted(wanted, key=lambda cell: cell_distance_sq(cell, center))
-    return set(ordered[:max(1, max_loaded_chunks)])
+    return wanted
 
 
 def cells_outside_cube_radius(

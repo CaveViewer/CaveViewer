@@ -1,3 +1,5 @@
+"""Runtime logging and console-progress helpers."""
+
 from __future__ import annotations
 
 import logging
@@ -13,7 +15,6 @@ _PROGRESS_LOCK = threading.RLock()
 _ACTIVE_PROGRESS_LINE: str | None = None
 _ACTIVE_PROGRESS_WIDTH = 0
 _ACTIVE_PROGRESS_STREAM = None
-_ADOPTED_EXTERNAL_LOGGERS = ("moderngl_window",)
 
 
 def _normalize_component_name(component: object) -> str:
@@ -162,44 +163,6 @@ def _resolve_level(explicit_level: Optional[int | str] = None) -> int:
     return logging.INFO
 
 
-def _adopt_external_logger(name: str) -> None:
-    """Route an external package logger through CaveViewer's root handlers."""
-    logger = logging.getLogger(name)
-    logger.handlers.clear()
-    logger.propagate = True
-    logger.setLevel(logging.NOTSET)
-
-
-def _patch_moderngl_window_logging() -> None:
-    """
-    Prevent moderngl-window from installing its own timestamp/name formatter.
-
-    moderngl_window.setup_basic_logging() normally attaches a private handler
-    and sets propagate=False during create_window_config_instance().  Replace it
-    with a small adapter that keeps the package logger routed through
-    CaveViewer's root handlers even when moderngl-window calls it later.
-    """
-    try:
-        import moderngl_window
-    except Exception:
-        return
-
-    def _setup_basic_logging(_level: int | None) -> None:
-        _adopt_external_logger("moderngl_window")
-
-    try:
-        moderngl_window.setup_basic_logging = _setup_basic_logging
-    except Exception:
-        pass
-    _adopt_external_logger("moderngl_window")
-
-
-def _adopt_external_loggers() -> None:
-    for logger_name in _ADOPTED_EXTERNAL_LOGGERS:
-        _adopt_external_logger(logger_name)
-    _patch_moderngl_window_logging()
-
-
 def configure_logging(
     level: Optional[int | str] = None,
     *,
@@ -241,7 +204,6 @@ def configure_logging(
     root.handlers.clear()
     for handler in handlers:
         root.addHandler(handler)
-    _adopt_external_loggers()
 
     _CONFIGURED = True
 
