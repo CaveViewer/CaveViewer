@@ -34,9 +34,14 @@ dirty source tree:
 COVERAGE_FILE=/tmp/caveviewer.coverage \
   .venv-dev/bin/python -m pytest -p no:cacheprovider \
   --cov=caveviewer.app \
-  --cov=caveviewer.core.chunker \
+  --cov=caveviewer.core.chunking.builder \
+  --cov=caveviewer.core.preferences.schema \
+  --cov=caveviewer.core.map.importer \
+  --cov=caveviewer.core.map.source_model \
+  --cov=caveviewer.core.textures.decoding \
   --cov=caveviewer.gui.preferences \
   --cov=caveviewer.gui.sample_maps \
+  --cov=caveviewer.gui.texture_manager \
   --cov=caveviewer.gui.update_checker \
   --cov=caveviewer.gui.update_manager \
   --cov-branch
@@ -64,7 +69,7 @@ The current CI workflow enforces:
 - 60% across its essential measured modules.
 - 90% for `src/caveviewer/app.py`.
 - 85% for `src/caveviewer/gui/sample_maps.py`.
-- 90% for `src/caveviewer/core/chunker.py`.
+- 90% for `src/caveviewer/core/chunking/builder.py`.
 - 90% for `src/caveviewer/gui/update_checker.py`.
 
 The update manager's transition, retry, cancellation, cleanup, and

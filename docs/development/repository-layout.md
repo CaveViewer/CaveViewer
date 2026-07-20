@@ -9,12 +9,49 @@ been removed rather than kept as compatibility copies.
 ## Current stable paths
 
 ```text
-src/caveviewer/app.py                         startup and import workflow
+src/caveviewer/app.py                         startup, session loop, UI adapters
 src/caveviewer/version.py                     release identity
 src/caveviewer/storage_paths.py               XDG/portable application roots
-src/caveviewer/core/                          parsing, cache, and streaming policy
-src/caveviewer/core/cache_paths.py             map-cache location policy
+src/caveviewer/core/                          parsing, cache, streaming, and non-UI policy
+src/caveviewer/core/json_io.py                 bounded JSON loading for core inputs
+src/caveviewer/core/map/                      map discovery, cache, and import workflow
+src/caveviewer/core/map/cache_paths.py         map-cache location policy
+src/caveviewer/core/map/source_model.py        supported source-model discovery
+src/caveviewer/core/map/importer.py            model import and cache-build workflow
+src/caveviewer/core/map/compiler.py            CLI map compilation orchestration
+src/caveviewer/core/map/chunk_size_advisor.py  chunk-size analysis and recommendations
+src/caveviewer/core/chunking/                 chunk cache construction and I/O
+src/caveviewer/core/chunking/buckets.py        incremental bucket files and finalization
+src/caveviewer/core/chunking/builder.py        chunk cache construction orchestration
+src/caveviewer/core/chunking/capacity.py       import capacity and preflight policy
+src/caveviewer/core/chunking/io.py             chunk binary file format read/write helpers
+src/caveviewer/core/chunking/metadata.py       chunk manifest metadata helpers
+src/caveviewer/core/chunking/staging.py        cache staging and import resume checkpoints
+src/caveviewer/core/chunking/upload.py         CPU upload preparation and vertex packing
+src/caveviewer/core/diagnostics/              diagnostics and logging policy
+src/caveviewer/core/diagnostics/logging.py     runtime logging and console progress
+src/caveviewer/core/hardware/                 hardware capability and memory policy
+src/caveviewer/core/hardware/gpu_memory.py     active-GPU memory detection and fallbacks
+src/caveviewer/core/hardware/memory_targets.py RAM/GPU utilization target parsing
+src/caveviewer/core/hardware/system_memory.py  system RAM detection
+src/caveviewer/core/streaming/                 runtime chunk streaming policy
+src/caveviewer/core/streaming/world.py         worker lifecycle and render callbacks
+src/caveviewer/core/streaming/scheduler.py     backlog, selection, and eviction policy
+src/caveviewer/core/streaming/budget.py        residency budget calculation
+src/caveviewer/core/workers/                  worker allocation policy
+src/caveviewer/core/workers/allocation.py      CPU caps and RAM admission policy
+src/caveviewer/core/preferences/               preference schema and validation policy
+src/caveviewer/core/preferences/schema.py       preference field schema and env mapping
+src/caveviewer/core/mesh/                      mesh format parsing
+src/caveviewer/core/mesh/obj.py                Wavefront OBJ and MTL parsing
+src/caveviewer/core/mesh/glb.py                GLB/glTF parsing
+src/caveviewer/core/textures/                  worker-safe texture CPU policy
+src/caveviewer/core/textures/decoding.py       texture decode, inspection, and budgets
 src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
+src/caveviewer/gui/preferences.py             preference persistence facade
+src/caveviewer/gui/preferences_form.py        Tk-free preference form state
+src/caveviewer/gui/preferences_dialog.py      Tk preference dialog presentation
+src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
 src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
 src/caveviewer/resources/                     shaders, images, and public key
 tests/                                        unit and integration tests
@@ -43,6 +80,15 @@ CaveViewer/
 │       ├── app.py
 │       ├── storage_paths.py
 │       ├── core/
+│       │   ├── chunking/
+│       │   ├── diagnostics/
+│       │   ├── hardware/
+│       │   ├── map/
+│       │   ├── mesh/
+│       │   ├── preferences/
+│       │   ├── streaming/
+│       │   ├── textures/
+│       │   └── workers/
 │       ├── gui/
 │       │   └── platform/
 │       └── resources/
@@ -65,9 +111,9 @@ CaveViewer/
     └── workflows/
 ```
 
-The package move intentionally preserved the existing module grouping. A future
-split of `core` into narrower importer, cache, and streaming packages is a
-separate architectural change and requires its own tests and review.
+The current `core` package is intentionally split by domain and component.
+Further structural changes remain architectural changes and require their own
+tests and review.
 
 ## Paths that remain stable
 
