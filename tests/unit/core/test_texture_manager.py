@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 
 from PIL import Image
 
+from caveviewer.core import texture_manager as texture_manager_module
 from caveviewer.core.texture_manager import (
     DecodedImage,
     TEXTURE_MAX_SIZE_ENV_VAR,
@@ -47,6 +49,31 @@ class FakeTexture:
 
     def release(self):
         self.released = True
+
+
+class _LockProbe:
+    def __init__(self):
+        self._depth = 0
+
+    @property
+    def locked(self) -> bool:
+        return self._depth > 0
+
+    def __enter__(self):
+        self._depth += 1
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        self._depth -= 1
+
+
+class _LockCheckedFalse:
+    def __init__(self, lock: _LockProbe):
+        self._lock = lock
+
+    def __bool__(self):
+        assert self._lock.locked
+        return False
 
 
 def test_recommend_texture_dimension_caps_large_texture_set_for_low_gpu_budget(
@@ -169,6 +196,24 @@ def test_decode_downscales_oversized_texture(tmp_path):
     assert len(decoded.data) == 512 * 256 * 3
 
 
+def test_downscale_log_flag_is_checked_under_state_lock():
+    context = FakeTextureContext()
+    manager = TextureManager(
+        context,
+        "",
+        {},
+        max_texture_dimension=512,
+    )
+    lock = _LockProbe()
+    manager._state_lock = lock
+    manager._texture_downscale_logged = _LockCheckedFalse(lock)
+
+    image = Image.new("RGB", (1024, 1024))
+    manager._apply_texture_dimension_limit(image, "oversized.png")
+
+    assert manager._texture_downscale_logged is True
+
+
 def test_predecode_skips_texture_that_exceeds_decode_cache_cap(tmp_path):
     Image.new("RGB", (64, 64), color=(10, 20, 30)).save(tmp_path / "large.png")
     manager = TextureManager(
@@ -258,6 +303,27 @@ def test_release_keeps_texture_idle_for_lru_reuse(tmp_path):
     assert manager.stats()["idle_files_resident"] == 0
 
 
+def test_shared_texture_file_counts_once_in_resident_budget(tmp_path):
+    Image.new("RGB", (4, 4), color=(10, 20, 30)).save(tmp_path / "shared.png")
+    context = FakeTextureContext()
+    manager = TextureManager(
+        context,
+        str(tmp_path),
+        {"a": "shared.png", "b": "shared.png"},
+        max_resident_texture_bytes=4096,
+    )
+
+    manager.acquire("a")
+    _texture, timing = manager.acquire_with_timing("b")
+
+    stats = manager.stats()
+    assert len(context.uploads) == 1
+    assert timing["file_cache_hit"] is True
+    assert stats["unique_materials_loaded"] == 2
+    assert stats["unique_files_resident"] == 1
+    assert stats["resident_texture_bytes"] == math.ceil(4 * 4 * 4 * (4.0 / 3.0))
+
+
 def test_idle_texture_lru_evicts_oldest_when_budget_needs_room(tmp_path):
     for name, color in (
         ("a.png", (10, 20, 30)),
@@ -343,6 +409,56 @@ def test_predecode_waits_for_shared_texture_already_inflight(tmp_path, monkeypat
     assert context.uploads == [((4, 4), 3, 4 * 4 * 3)]
 
 
+def test_shutdown_unblocks_predecode_waiting_on_inflight_texture(tmp_path):
+    context = FakeTextureContext()
+    manager = TextureManager(
+        context,
+        str(tmp_path),
+        {"mat": "shared.png"},
+        max_decoded_cache_bytes=4096,
+    )
+    file_key = "shared.png"
+
+    with manager._decode_cache_lock:
+        manager._decode_inflight.add(file_key)
+
+    waiter = threading.Thread(
+        target=manager.decode_for_material,
+        args=("mat",),
+        daemon=True,
+    )
+    waiter.start()
+    time.sleep(0.05)
+
+    assert waiter.is_alive()
+
+    manager.shutdown()
+    waiter.join(timeout=1.0)
+
+    assert not waiter.is_alive()
+    assert manager.stats()["decoded_waiting_for_upload"] == 0
+
+
+def test_decode_inflight_reservation_is_not_reported_as_waiting_bytes(tmp_path):
+    manager = TextureManager(
+        object(),
+        str(tmp_path),
+        {"mat": "shared.png"},
+        max_decoded_cache_bytes=4096,
+    )
+    file_key = "shared.png"
+
+    with manager._decode_cache_lock:
+        manager._decode_inflight.add(file_key)
+        manager._decode_inflight_reserved_bytes = 512
+
+    stats = manager.stats()
+
+    assert stats["decoded_waiting_for_upload"] == 0
+    assert stats["decoded_waiting_bytes"] == 0
+    assert stats["decode_inflight_reserved_bytes"] == 512
+
+
 def test_validate_textures_logs_when_no_downscale_will_be_applied(
     tmp_path, caplog
 ):
@@ -363,6 +479,35 @@ def test_validate_textures_logs_when_no_downscale_will_be_applied(
     assert "GPU resources allow all 2 inspected texture(s)" in log_text
     assert "largest source texture 'a.png' is 512x256" in log_text
     assert "selected limit 1024 px" in log_text
+
+
+def test_validate_textures_populates_size_cache_for_later_estimates(
+    tmp_path, monkeypatch
+):
+    Image.new("RGB", (512, 256), color=(10, 20, 30)).save(tmp_path / "tile.png")
+    manager = TextureManager(
+        object(),
+        str(tmp_path),
+        {"mat": "tile.png"},
+        max_texture_dimension=512,
+    )
+    original_open = texture_manager_module.Image.open
+    open_count = 0
+
+    def counting_open(*args, **kwargs):
+        nonlocal open_count
+        open_count += 1
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr(texture_manager_module.Image, "open", counting_open)
+
+    manager.validate_textures()
+    assert open_count == 1
+
+    assert manager._estimate_resident_bytes_for_file("tile.png") == math.ceil(
+        512 * 256 * 4 * (4.0 / 3.0)
+    )
+    assert open_count == 1
 
 
 def test_validate_textures_logs_when_downscale_is_expected(tmp_path, caplog):

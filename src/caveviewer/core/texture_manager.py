@@ -162,6 +162,8 @@ class TextureManager:
         )
         self._texture_downscale_logged = False
         self._decode_cache_limit_logged = False
+        self._state_lock = threading.RLock()
+        self._shutdown = False
         self._loaded: dict[str, LoadedTexture] = {}  # keyed by material name
         # multiple materials can point at the same physical jpg (rare, but
         # cheap to dedupe so we don't decode the same file twice) -- or,
@@ -170,6 +172,7 @@ class TextureManager:
         self._file_cache_bytes: dict[object, int] = {}
         self._file_cache_total_bytes = 0
         self._idle_file_lru: OrderedDict[object, None] = OrderedDict()
+        self._texture_size_cache: dict[object, tuple[int, int] | None] = {}
 
         # Decoded-but-not-yet-uploaded images, populated by background
         # worker threads via decode_from_disk(), consumed on the main
@@ -179,8 +182,9 @@ class TextureManager:
         # handing their chunk to the render thread.
         self._decode_cache: dict[object, DecodedImage] = {}
         self._decode_cache_bytes = 0
+        self._decode_inflight_reserved_bytes = 0
         self._decode_inflight: set[object] = set()
-        self._decode_cache_lock = threading.Condition()
+        self._decode_cache_lock = threading.Condition(self._state_lock)
         _LOG.info(
             "Texture predecode cache cap active: %.1f MB. Oversized or "
             "over-budget textures will decode on demand at original resolution.",
@@ -390,7 +394,11 @@ class TextureManager:
         original_size = image.size
         resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
         image.thumbnail((limit, limit), resampling)
-        if not self._texture_downscale_logged:
+        with self._state_lock:
+            should_log_downscale = not self._texture_downscale_logged
+            if should_log_downscale:
+                self._texture_downscale_logged = True
+        if should_log_downscale:
             _LOG.info(
                 "Downscaling oversized textures to fit GPU budget; first resize "
                 "%r: %dx%d -> %dx%d.",
@@ -400,7 +408,6 @@ class TextureManager:
                 image.size[0],
                 image.size[1],
             )
-            self._texture_downscale_logged = True
         return image
 
     # -- background-thread-safe decode step ----------------------------------
@@ -418,11 +425,16 @@ class TextureManager:
         file_or_bytes = self.material_to_file.get(material_name)
         if not file_or_bytes:
             return  # no texture for this material; placeholder path handles it on upload
-        if file_or_bytes in self._file_cache:
-            return  # already GPU-resident
+        with self._state_lock:
+            if self._shutdown:
+                return
+            if file_or_bytes in self._file_cache:
+                return  # already GPU-resident
         estimated_bytes = self._estimate_decoded_image_bytes(file_or_bytes)
         while True:
             with self._decode_cache_lock:
+                if self._shutdown:
+                    return
                 if file_or_bytes in self._decode_cache:
                     return  # already decoded, waiting for main-thread upload
                 if file_or_bytes in self._decode_inflight:
@@ -437,22 +449,27 @@ class TextureManager:
                     return  # already GPU-resident
                 if estimated_bytes is None:
                     estimated_bytes = self.max_decoded_cache_bytes
+                committed_decode_bytes = (
+                    self._decode_cache_bytes
+                    + self._decode_inflight_reserved_bytes
+                )
                 if (
                     estimated_bytes > self.max_decoded_cache_bytes
-                    or self._decode_cache_bytes + estimated_bytes > self.max_decoded_cache_bytes
+                    or committed_decode_bytes + estimated_bytes
+                    > self.max_decoded_cache_bytes
                 ):
                     self._log_decode_cache_skip(file_or_bytes, estimated_bytes)
                     return
-                self._decode_cache_bytes += estimated_bytes
+                self._decode_inflight_reserved_bytes += estimated_bytes
                 self._decode_inflight.add(file_or_bytes)
                 break
 
         decoded = self._decode_image(file_or_bytes)
         with self._decode_cache_lock:
             self._decode_inflight.discard(file_or_bytes)
-            self._decode_cache_bytes = max(
+            self._decode_inflight_reserved_bytes = max(
                 0,
-                self._decode_cache_bytes - estimated_bytes,
+                self._decode_inflight_reserved_bytes - estimated_bytes,
             )
             if decoded is None:
                 self._decode_cache_lock.notify_all()
@@ -466,16 +483,30 @@ class TextureManager:
             if (
                 file_or_bytes not in self._decode_cache
                 and file_or_bytes not in self._file_cache
+                and not self._shutdown
                 and actual_bytes <= self.max_decoded_cache_bytes
-                and self._decode_cache_bytes + actual_bytes <= self.max_decoded_cache_bytes
+                and (
+                    self._decode_cache_bytes
+                    + self._decode_inflight_reserved_bytes
+                    + actual_bytes
+                    <= self.max_decoded_cache_bytes
+                )
             ):
                 self._decode_cache[file_or_bytes] = decoded
                 self._decode_cache_bytes += actual_bytes
             self._decode_cache_lock.notify_all()
 
     def _log_decode_cache_skip(self, file_or_bytes, estimated_bytes: int) -> None:
-        if self._decode_cache_limit_logged:
-            return
+        with self._state_lock:
+            if self._decode_cache_limit_logged:
+                return
+            available_cache_bytes = max(
+                0,
+                self.max_decoded_cache_bytes
+                - self._decode_cache_bytes
+                - self._decode_inflight_reserved_bytes,
+            )
+            self._decode_cache_limit_logged = True
         label = (
             "<embedded texture>"
             if isinstance(file_or_bytes, bytes)
@@ -487,10 +518,8 @@ class TextureManager:
             "predecode cache. It will decode on demand at upload time.",
             label,
             estimated_bytes / (1024 ** 2),
-            max(0, self.max_decoded_cache_bytes - self._decode_cache_bytes)
-            / (1024 ** 2),
+            available_cache_bytes / (1024 ** 2),
         )
-        self._decode_cache_limit_logged = True
 
     def _estimate_decoded_image_bytes(self, file_or_bytes) -> int | None:
         size = self._inspect_texture_size(file_or_bytes)
@@ -597,41 +626,74 @@ class TextureManager:
             "image_size": None,
         }
         start = time.perf_counter()
-        if material_name in self._loaded:
-            entry = self._loaded[material_name]
-            entry.ref_count += 1
-            timing["material_cache_hit"] = True
-            timing["total_ms"] = (time.perf_counter() - start) * 1000.0
-            return entry.moderngl_texture, timing
-
         file_or_bytes = self.material_to_file.get(material_name)
-        if file_or_bytes and file_or_bytes in self._file_cache:
-            tex = self._file_cache[file_or_bytes]
-            self._reactivate_cached_texture(file_or_bytes)
-            timing["file_cache_hit"] = True
-        else:
-            if file_or_bytes:
-                incoming_bytes = self._estimate_resident_bytes_for_file(file_or_bytes)
-                self._evict_idle_textures_if_needed(incoming_bytes=incoming_bytes)
-            tex = self._upload_for_material(
-                material_name,
-                file_or_bytes,
-                timing=timing,
-            )
-            if file_or_bytes:
-                self._file_cache[file_or_bytes] = tex
-                self._record_resident_texture_bytes(
-                    file_or_bytes,
-                    self._resident_bytes_from_upload_timing(
-                        timing,
-                        fallback_file_or_bytes=file_or_bytes,
-                    ),
-                )
-                self._evict_idle_textures_if_needed()
+        with self._state_lock:
+            if material_name in self._loaded:
+                entry = self._loaded[material_name]
+                entry.ref_count += 1
+                timing["material_cache_hit"] = True
+                timing["total_ms"] = (time.perf_counter() - start) * 1000.0
+                return entry.moderngl_texture, timing
 
-        self._loaded[material_name] = LoadedTexture(moderngl_texture=tex, ref_count=1)
-        timing["total_ms"] = (time.perf_counter() - start) * 1000.0
-        return tex, timing
+            if file_or_bytes and file_or_bytes in self._file_cache:
+                tex = self._file_cache[file_or_bytes]
+                self._reactivate_cached_texture(file_or_bytes)
+                self._loaded[material_name] = LoadedTexture(
+                    moderngl_texture=tex,
+                    ref_count=1,
+                )
+                timing["file_cache_hit"] = True
+                timing["total_ms"] = (time.perf_counter() - start) * 1000.0
+                return tex, timing
+
+        if file_or_bytes:
+            incoming_bytes = self._estimate_resident_bytes_for_file(file_or_bytes)
+            with self._state_lock:
+                if material_name in self._loaded:
+                    entry = self._loaded[material_name]
+                    entry.ref_count += 1
+                    timing["material_cache_hit"] = True
+                    timing["total_ms"] = (time.perf_counter() - start) * 1000.0
+                    return entry.moderngl_texture, timing
+                if file_or_bytes in self._file_cache:
+                    tex = self._file_cache[file_or_bytes]
+                    self._reactivate_cached_texture(file_or_bytes)
+                    self._loaded[material_name] = LoadedTexture(
+                        moderngl_texture=tex,
+                        ref_count=1,
+                    )
+                    timing["file_cache_hit"] = True
+                    timing["total_ms"] = (time.perf_counter() - start) * 1000.0
+                    return tex, timing
+                self._evict_idle_textures_if_needed(incoming_bytes=incoming_bytes)
+
+        tex = self._upload_for_material(
+            material_name,
+            file_or_bytes,
+            timing=timing,
+        )
+        with self._state_lock:
+            if file_or_bytes:
+                self._file_cache.setdefault(file_or_bytes, tex)
+                cached_tex = self._file_cache[file_or_bytes]
+                if cached_tex is tex:
+                    self._record_resident_texture_bytes(
+                        file_or_bytes,
+                        self._resident_bytes_from_upload_timing(
+                            timing,
+                            fallback_file_or_bytes=file_or_bytes,
+                        ),
+                    )
+                    self._evict_idle_textures_if_needed()
+                else:
+                    if hasattr(tex, "release"):
+                        tex.release()
+                    tex = cached_tex
+                    self._reactivate_cached_texture(file_or_bytes)
+
+            self._loaded[material_name] = LoadedTexture(moderngl_texture=tex, ref_count=1)
+            timing["total_ms"] = (time.perf_counter() - start) * 1000.0
+            return tex, timing
 
     @staticmethod
     def _estimate_gpu_texture_bytes(size: tuple[int, int] | None) -> int:
@@ -667,40 +729,45 @@ class TextureManager:
         return 4
 
     def _record_resident_texture_bytes(self, file_or_bytes, byte_count: int) -> None:
-        previous = self._file_cache_bytes.get(file_or_bytes, 0)
-        byte_count = max(1, int(byte_count))
-        self._file_cache_bytes[file_or_bytes] = byte_count
-        self._file_cache_total_bytes += byte_count - previous
+        with self._state_lock:
+            previous = self._file_cache_bytes.get(file_or_bytes, 0)
+            byte_count = max(1, int(byte_count))
+            self._file_cache_bytes[file_or_bytes] = byte_count
+            self._file_cache_total_bytes += byte_count - previous
 
     def _reactivate_cached_texture(self, file_or_bytes) -> None:
-        self._idle_file_lru.pop(file_or_bytes, None)
+        with self._state_lock:
+            self._idle_file_lru.pop(file_or_bytes, None)
 
     def _mark_cached_texture_idle(self, file_or_bytes) -> None:
-        if file_or_bytes not in self._file_cache:
-            return
-        self._idle_file_lru[file_or_bytes] = None
-        self._idle_file_lru.move_to_end(file_or_bytes)
+        with self._state_lock:
+            if file_or_bytes not in self._file_cache:
+                return
+            self._idle_file_lru[file_or_bytes] = None
+            self._idle_file_lru.move_to_end(file_or_bytes)
 
     def _release_cached_texture(self, file_or_bytes) -> None:
-        self._idle_file_lru.pop(file_or_bytes, None)
-        tex = self._file_cache.pop(file_or_bytes, None)
-        self._file_cache_total_bytes = max(
-            0,
-            self._file_cache_total_bytes - self._file_cache_bytes.pop(file_or_bytes, 0),
-        )
-        if tex is not None and hasattr(tex, "release"):
-            tex.release()
+        with self._state_lock:
+            self._idle_file_lru.pop(file_or_bytes, None)
+            tex = self._file_cache.pop(file_or_bytes, None)
+            self._file_cache_total_bytes = max(
+                0,
+                self._file_cache_total_bytes - self._file_cache_bytes.pop(file_or_bytes, 0),
+            )
+            if tex is not None and hasattr(tex, "release"):
+                tex.release()
 
     def _evict_idle_textures_if_needed(self, incoming_bytes: int | None = None) -> None:
-        projected_bytes = self._file_cache_total_bytes + max(0, incoming_bytes or 0)
-        while (
-            projected_bytes > self.max_resident_texture_bytes
-            and self._idle_file_lru
-        ):
-            file_or_bytes, _ = self._idle_file_lru.popitem(last=False)
-            released_bytes = self._file_cache_bytes.get(file_or_bytes, 0)
-            self._release_cached_texture(file_or_bytes)
-            projected_bytes = max(0, projected_bytes - released_bytes)
+        with self._state_lock:
+            projected_bytes = self._file_cache_total_bytes + max(0, incoming_bytes or 0)
+            while (
+                projected_bytes > self.max_resident_texture_bytes
+                and self._idle_file_lru
+            ):
+                file_or_bytes, _ = self._idle_file_lru.popitem(last=False)
+                released_bytes = self._file_cache_bytes.get(file_or_bytes, 0)
+                self._release_cached_texture(file_or_bytes)
+                projected_bytes = max(0, projected_bytes - released_bytes)
 
     def _upload_for_material(self, material_name: str, file_or_bytes,
                              *, timing: dict | None = None) -> object:
@@ -754,49 +821,60 @@ class TextureManager:
 
     def release(self, material_name: str) -> None:
         """Decrement refcount and move unused real textures into the idle LRU."""
-        entry = self._loaded.get(material_name)
-        if entry is None:
-            return
-        entry.ref_count -= 1
-        if entry.ref_count <= 0:
-            del self._loaded[material_name]
-            # only release the underlying GPU texture if no other material
-            # alias still points at the same file
-            filename = self.material_to_file.get(material_name)
-            if not filename:
-                tex = entry.moderngl_texture
-                if hasattr(tex, "release"):
-                    tex.release()
+        with self._state_lock:
+            entry = self._loaded.get(material_name)
+            if entry is None:
                 return
-            still_used = any(
-                self.material_to_file.get(m) == filename
-                for m in self._loaded
-            )
-            if filename and not still_used and filename in self._file_cache:
-                self._mark_cached_texture_idle(filename)
-                self._evict_idle_textures_if_needed()
+            entry.ref_count -= 1
+            if entry.ref_count <= 0:
+                del self._loaded[material_name]
+                # only release the underlying GPU texture if no other material
+                # alias still points at the same file
+                filename = self.material_to_file.get(material_name)
+                if not filename:
+                    tex = entry.moderngl_texture
+                    if hasattr(tex, "release"):
+                        tex.release()
+                    return
+                still_used = any(
+                    self.material_to_file.get(m) == filename
+                    for m in self._loaded
+                )
+                if filename and not still_used and filename in self._file_cache:
+                    self._mark_cached_texture_idle(filename)
+                    self._evict_idle_textures_if_needed()
 
     def shutdown(self) -> None:
         """Best-effort full cleanup for window shutdown / map teardown."""
+        with self._state_lock:
+            self._shutdown = True
+            loaded_materials = list(self._loaded.keys())
+
         # Release textures tracked by material refcounts.
-        for mat_name in list(self._loaded.keys()):
+        for mat_name in loaded_materials:
             # Force release regardless of current count so shutdown is deterministic.
-            self._loaded[mat_name].ref_count = 1
+            with self._state_lock:
+                if mat_name in self._loaded:
+                    self._loaded[mat_name].ref_count = 1
             self.release(mat_name)
 
         # Release any remaining deduplicated file-cache textures, including
         # idle LRU entries that normal release() intentionally kept resident.
-        for file_or_bytes in list(self._file_cache.keys()):
+        with self._state_lock:
+            resident_textures = list(self._file_cache.keys())
+        for file_or_bytes in resident_textures:
             self._release_cached_texture(file_or_bytes)
-        self._file_cache.clear()
-        self._file_cache_bytes.clear()
-        self._file_cache_total_bytes = 0
-        self._idle_file_lru.clear()
+        with self._state_lock:
+            self._file_cache.clear()
+            self._file_cache_bytes.clear()
+            self._file_cache_total_bytes = 0
+            self._idle_file_lru.clear()
 
         # Drop decoded-but-not-uploaded CPU images.
         with self._decode_cache_lock:
             self._decode_cache.clear()
             self._decode_cache_bytes = 0
+            self._decode_inflight_reserved_bytes = 0
             self._decode_inflight.clear()
             self._decode_cache_lock.notify_all()
 
@@ -860,22 +938,33 @@ class TextureManager:
 
     def _inspect_texture_size(self, file_or_bytes) -> tuple[int, int] | None:
         """Read image dimensions without performing a full decode."""
+        texture_key = _texture_cache_key(file_or_bytes)
+        with self._state_lock:
+            if texture_key is not None and texture_key in self._texture_size_cache:
+                return self._texture_size_cache[texture_key]
+
+        size: tuple[int, int] | None = None
         try:
             if isinstance(file_or_bytes, bytes):
                 with Image.open(BytesIO(file_or_bytes)) as image:
-                    return image.size
-            path = os.path.join(self.textures_dir, file_or_bytes)
-            if not os.path.exists(path):
-                return None
-            with Image.open(path) as image:
-                return image.size
+                    size = image.size
+            else:
+                path = os.path.join(self.textures_dir, file_or_bytes)
+                if os.path.exists(path):
+                    with Image.open(path) as image:
+                        size = image.size
         except Exception as exc:
             _LOG.warning(
                 "VALIDATE: unable to inspect texture dimensions for %r: %s",
                 file_or_bytes if not isinstance(file_or_bytes, bytes) else "<embedded texture>",
                 exc,
             )
-            return None
+        with self._state_lock:
+            if texture_key is None:
+                return size
+            if texture_key not in self._texture_size_cache:
+                self._texture_size_cache[texture_key] = size
+            return self._texture_size_cache[texture_key]
 
     def _log_texture_downscale_expectation(
         self,
@@ -929,18 +1018,21 @@ class TextureManager:
         )
 
     def loaded_count(self) -> int:
-        return len(self._file_cache)
+        with self._state_lock:
+            return len(self._file_cache)
 
     def stats(self) -> dict:
         with self._decode_cache_lock:
             n_decoded_waiting = len(self._decode_cache)
             decoded_waiting_bytes = self._decode_cache_bytes
-        return {
-            "unique_materials_loaded": len(self._loaded),
-            "unique_files_resident": len(self._file_cache),
-            "idle_files_resident": len(self._idle_file_lru),
-            "resident_texture_bytes": self._file_cache_total_bytes,
-            "resident_texture_budget_bytes": self.max_resident_texture_bytes,
-            "decoded_waiting_for_upload": n_decoded_waiting,
-            "decoded_waiting_bytes": decoded_waiting_bytes,
-        }
+            decode_inflight_reserved_bytes = self._decode_inflight_reserved_bytes
+            return {
+                "unique_materials_loaded": len(self._loaded),
+                "unique_files_resident": len(self._file_cache),
+                "idle_files_resident": len(self._idle_file_lru),
+                "resident_texture_bytes": self._file_cache_total_bytes,
+                "resident_texture_budget_bytes": self.max_resident_texture_bytes,
+                "decoded_waiting_for_upload": n_decoded_waiting,
+                "decoded_waiting_bytes": decoded_waiting_bytes,
+                "decode_inflight_reserved_bytes": decode_inflight_reserved_bytes,
+            }

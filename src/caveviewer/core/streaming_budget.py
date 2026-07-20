@@ -10,7 +10,9 @@ from dataclasses import dataclass
 class ResidencyBudget:
     max_loaded_chunks: int
     ram_budget_chunks: int
+    ready_backlog_chunks: int
     gpu_budget_chunks: int | None
+    gpu_budget_bytes: int | None
 
 
 def estimate_chunk_bytes(
@@ -53,6 +55,8 @@ def calculate_residency_budget(
     total_gpu_memory_bytes: int | None,
     gpu_target_fraction: float,
     estimated_chunk_gpu_bytes: int,
+    gpu_budget_bytes: int | None = None,
+    ready_backlog_target_chunks: int = 16,
 ) -> ResidencyBudget:
     """Calculate RAM/GPU chunk caps without mutating runtime configuration."""
     if estimated_chunk_ram_bytes <= 0:
@@ -63,21 +67,69 @@ def calculate_residency_budget(
         ram_base_bytes = min(total_ram_bytes, available_ram_bytes)
     ram_budget_bytes = int(ram_base_bytes * ram_target_fraction)
     ram_budget_chunks = max(1, ram_budget_bytes // estimated_chunk_ram_bytes)
-    max_loaded_chunks = ram_budget_chunks
+    ready_backlog_chunks = _calculate_ready_backlog_chunks(
+        ram_budget_chunks,
+        ready_backlog_target_chunks,
+    )
+    ram_loaded_chunks = _loaded_chunks_after_ready_reservation(
+        ram_budget_chunks,
+        ready_backlog_chunks,
+    )
+    max_loaded_chunks = ram_loaded_chunks
 
     gpu_budget_chunks = None
-    if total_gpu_memory_bytes is not None and estimated_chunk_gpu_bytes > 0:
-        gpu_budget_bytes = int(total_gpu_memory_bytes * gpu_target_fraction)
-        gpu_budget_chunks = max(
-            1, gpu_budget_bytes // estimated_chunk_gpu_bytes
-        )
+    resolved_gpu_budget_bytes = gpu_budget_bytes
+    if (
+        resolved_gpu_budget_bytes is None
+        and total_gpu_memory_bytes is not None
+        and estimated_chunk_gpu_bytes > 0
+    ):
+        resolved_gpu_budget_bytes = int(total_gpu_memory_bytes * gpu_target_fraction)
+    if resolved_gpu_budget_bytes is not None and estimated_chunk_gpu_bytes > 0:
+        gpu_budget_chunks = max(1, resolved_gpu_budget_bytes // estimated_chunk_gpu_bytes)
         max_loaded_chunks = min(max_loaded_chunks, gpu_budget_chunks)
 
     max_loaded_chunks = min(max_loaded_chunks, max(0, available_cell_count))
     return ResidencyBudget(
         max_loaded_chunks=int(max_loaded_chunks),
         ram_budget_chunks=int(ram_budget_chunks),
+        ready_backlog_chunks=int(ready_backlog_chunks),
         gpu_budget_chunks=(
             int(gpu_budget_chunks) if gpu_budget_chunks is not None else None
         ),
+        gpu_budget_bytes=(
+            int(resolved_gpu_budget_bytes)
+            if resolved_gpu_budget_bytes is not None
+            else None
+        ),
     )
+
+
+def _calculate_ready_backlog_chunks(
+    ram_budget_chunks: int,
+    ready_backlog_target_chunks: int,
+) -> int:
+    """Reserve RAM-budgeted chunk slots for decoded worker-to-render handoff."""
+    ram_budget_chunks = max(1, int(ram_budget_chunks))
+    if ram_budget_chunks <= 1:
+        return 1
+    ready_target = max(1, int(ready_backlog_target_chunks))
+    return min(
+        ready_target,
+        max(1, ram_budget_chunks // 8),
+        ram_budget_chunks - 1,
+    )
+
+
+def _loaded_chunks_after_ready_reservation(
+    ram_budget_chunks: int,
+    ready_backlog_chunks: int,
+) -> int:
+    """Keep loaded residency and ready backlog from double-using RAM slots."""
+    ram_budget_chunks = max(1, int(ram_budget_chunks))
+    ready_backlog_chunks = max(0, int(ready_backlog_chunks))
+    if ram_budget_chunks <= 1:
+        # One visible chunk and one staging slot is the irreducible streaming
+        # minimum.  Larger budgets reserve the staging slot from the RAM cap.
+        return 1
+    return max(1, ram_budget_chunks - ready_backlog_chunks)

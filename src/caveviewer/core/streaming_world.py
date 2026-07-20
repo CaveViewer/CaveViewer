@@ -50,6 +50,9 @@ from caveviewer.core.streaming_scheduler import (
 
 
 _LOG = get_logger("StreamingWorld")
+_SHUTDOWN_WORKER_JOIN_POLL_SECONDS = 0.25
+_SHUTDOWN_WORKER_JOIN_LOG_SECONDS = 5.0
+_READY_BACKLOG_TARGET_CHUNKS = 16
 
 # Compatibility hooks for existing diagnostics/tests that patch these names
 # through core.streaming_world rather than core.hardware_memory.
@@ -155,7 +158,9 @@ class StreamingWorld:
                  prepack_smooth_shading: Optional[Callable[[], bool]] = None,
                  gpu_vendor: str | None = None,
                  textures_dir: str | None = None,
-                 total_gpu_memory_bytes: int | None = None):
+                 total_gpu_memory_bytes: int | None = None,
+                 texture_gpu_budget_bytes: int | None = None,
+                 gpu_geometry_budget_bytes: int | None = None):
         """
         on_decode_textures, if given, is called from a background worker
         thread right after a chunk's geometry finishes loading, with the
@@ -180,6 +185,10 @@ class StreamingWorld:
         total_gpu_memory_bytes may be supplied by a caller that already ran
         active-GPU detection for related setup, such as texture resolution
         selection.  When omitted, this class detects it itself.
+
+        texture_gpu_budget_bytes and gpu_geometry_budget_bytes let the caller
+        split one detected GPU target between texture and geometry residency.
+        When omitted, geometry falls back to the legacy full-GPU-target cap.
         """
         self.cache_dir = cache_dir
         self.config = config
@@ -212,8 +221,18 @@ class StreamingWorld:
             if total_gpu_memory_bytes is not None
             else _detect_total_gpu_memory_bytes(gpu_vendor)
         )
+        self._texture_gpu_budget_bytes = (
+            max(0, int(texture_gpu_budget_bytes))
+            if texture_gpu_budget_bytes is not None
+            else None
+        )
+        self._gpu_geometry_budget_bytes = (
+            max(0, int(gpu_geometry_budget_bytes))
+            if gpu_geometry_budget_bytes is not None
+            else None
+        )
         self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes(sampled_chunk_keys)
-        self._gpu_residency_budget_bytes: int | None = None
+        self._total_gpu_residency_budget_bytes: int | None = None
         self._texture_gpu_bytes: dict[object, int] = {}
         self._configure_texture_gpu_estimates(manifest, textures_dir)
         self._configure_chunk_budget_from_memory_targets()
@@ -231,7 +250,16 @@ class StreamingWorld:
         # Cap how many fully-decoded chunk payloads can wait in RAM.
         # This bounds worst-case worker-ahead memory spikes when the
         # render thread is temporarily slower than background decoding.
-        ready_backlog_capacity = max(16, min(256, self.config.max_loaded_chunks))
+        ready_backlog_capacity = max(
+            1,
+            int(
+                getattr(
+                    self,
+                    "_ready_backlog_capacity",
+                    min(_READY_BACKLOG_TARGET_CHUNKS, max(1, self.config.max_loaded_chunks)),
+                )
+            ),
+        )
         self._ready_backlog = _BoundedReadyBacklog(ready_backlog_capacity)
         self._lock = threading.Lock()
         worker_allocation = resolve_worker_allocation(
@@ -290,9 +318,11 @@ class StreamingWorld:
         if self._total_gpu_memory_bytes is None:
             return
 
-        self._gpu_residency_budget_bytes = int(
+        self._total_gpu_residency_budget_bytes = int(
             self._total_gpu_memory_bytes * self._gpu_target_fraction
         )
+        if self._texture_gpu_budget_bytes is None:
+            self._texture_gpu_budget_bytes = self._total_gpu_residency_budget_bytes
         material_textures = manifest.get("mtl_materials", {})
         texture_root = textures_dir or self.cache_dir
 
@@ -311,7 +341,7 @@ class StreamingWorld:
                 "across %d unique texture(s); texture upload target is %.1f MB.",
                 estimated_texture_bytes / (1024 ** 2),
                 len(self._texture_gpu_bytes),
-                self._gpu_residency_budget_bytes / (1024 ** 2),
+                self._texture_gpu_budget_bytes / (1024 ** 2),
             )
 
     @staticmethod
@@ -368,28 +398,43 @@ class StreamingWorld:
             total_gpu_memory_bytes=self._total_gpu_memory_bytes,
             gpu_target_fraction=self._gpu_target_fraction,
             estimated_chunk_gpu_bytes=self._estimated_chunk_gpu_bytes,
+            gpu_budget_bytes=self._gpu_geometry_budget_bytes,
+            ready_backlog_target_chunks=_READY_BACKLOG_TARGET_CHUNKS,
         )
 
         # Apply the memory-derived budget directly so env tuning can both
         # raise and lower residency as intended.
         self.config.max_loaded_chunks = budget.max_loaded_chunks
+        self._ready_backlog_capacity = max(1, int(budget.ready_backlog_chunks))
         _LOG.info(
             "Memory target %.0f%% of %.1f GB currently available "
-            "(%.1f GB total) => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
+            "(%.1f GB total) => max_loaded_chunks=%d, ready_backlog=%d "
+            "(estimated %.1f MB/chunk)",
             self._memory_target_fraction * 100.0,
             self._available_ram_bytes / (1024 ** 3),
             self._total_ram_bytes / (1024 ** 3),
-            budget.ram_budget_chunks,
+            budget.max_loaded_chunks,
+            budget.ready_backlog_chunks,
             self._estimated_chunk_ram_bytes / (1024 ** 2),
         )
         if budget.gpu_budget_chunks is not None:
-            _LOG.info(
-                "GPU memory target %.0f%% of %.1f GB => max_loaded_chunks=%d (estimated %.1f MB/chunk)",
-                self._gpu_target_fraction * 100.0,
-                self._total_gpu_memory_bytes / (1024 ** 3),
-                budget.gpu_budget_chunks,
-                self._estimated_chunk_gpu_bytes / (1024 ** 2),
-            )
+            if self._gpu_geometry_budget_bytes is not None:
+                _LOG.info(
+                    "GPU geometry residency budget %.1f MB from shared GPU split "
+                    "=> max_loaded_chunks=%d (estimated %.1f MB/chunk)",
+                    budget.gpu_budget_bytes / (1024 ** 2),
+                    budget.gpu_budget_chunks,
+                    self._estimated_chunk_gpu_bytes / (1024 ** 2),
+                )
+            else:
+                _LOG.info(
+                    "GPU memory target %.0f%% of %.1f GB => max_loaded_chunks=%d "
+                    "(estimated %.1f MB/chunk)",
+                    self._gpu_target_fraction * 100.0,
+                    self._total_gpu_memory_bytes / (1024 ** 3),
+                    budget.gpu_budget_chunks,
+                    self._estimated_chunk_gpu_bytes / (1024 ** 2),
+                )
             _LOG.info("Effective max_loaded_chunks=%d after RAM/GPU limits.", self.config.max_loaded_chunks)
         else:
             _LOG.info(
@@ -476,9 +521,29 @@ class StreamingWorld:
             with worker_start_lock:
                 workers = list(self._workers)
         for _ in workers:
-            self._work_queue.put(None)  # sentinel to unblock get()
+            try:
+                self._work_queue.put_nowait(None)  # sentinel to unblock get()
+            except queue.Full:
+                # stop_event is already set. A full queue means workers will
+                # notice shutdown when they finish their current item or when
+                # their queue.get timeout wakes. Blocking here could deadlock
+                # teardown before we reach the join barrier below.
+                pass
+        wait_started_at = time.perf_counter()
+        last_wait_log_at = wait_started_at
         for w in workers:
-            w.join(timeout=2.0)
+            while w.is_alive():
+                w.join(timeout=_SHUTDOWN_WORKER_JOIN_POLL_SECONDS)
+                if not w.is_alive():
+                    break
+                now = time.perf_counter()
+                if now - last_wait_log_at >= _SHUTDOWN_WORKER_JOIN_LOG_SECONDS:
+                    _LOG.info(
+                        "Waiting for streaming worker %s to stop during shutdown (%.1fs).",
+                        getattr(w, "name", "<unnamed>"),
+                        now - wait_started_at,
+                    )
+                    last_wait_log_at = now
         self._ready_backlog.clear()
         partial_ready = getattr(self, "_partial_ready", None)
         if partial_ready is not None:
@@ -519,7 +584,13 @@ class StreamingWorld:
             # in queue.get(); put the item back so minimize mode really
             # stops disk/cache work.
             if self._paused_event.is_set():
-                self._work_queue.put(cell)
+                try:
+                    self._work_queue.put_nowait(cell)
+                except queue.Full:
+                    # Another thread filled the queue after this worker took
+                    # the item.  Do not block while paused/shutting down; make
+                    # the cell schedulable again when update() reconciles.
+                    self._clear_pending_cell(cell)
                 time.sleep(0.1)
                 continue
 
@@ -900,14 +971,20 @@ class StreamingWorld:
         self._queue_cells_for_unload(evicted_cells)
 
     def stats(self) -> dict:
-        return {
-            "loaded": len(self.loaded_cells),
-            "pending": len(self._pending),
-            "ready": (
+        with self._lock:
+            loaded_count = len(self.loaded_cells)
+            pending_count = len(self._pending)
+            ready_count = (
                 self._ready_backlog.qsize()
                 + len(getattr(self, "_partial_ready", []))
-            ),
-            "unload_pending": len(getattr(self, "_unload_backlog", [])),
-            "wanted": len(self._last_wanted_cells),
+            )
+            unload_pending_count = len(getattr(self, "_unload_backlog", []))
+            wanted_count = len(self._last_wanted_cells)
+        return {
+            "loaded": loaded_count,
+            "pending": pending_count,
+            "ready": ready_count,
+            "unload_pending": unload_pending_count,
+            "wanted": wanted_count,
             "total_available": len(self.available_cells),
         }

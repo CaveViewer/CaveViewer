@@ -197,7 +197,7 @@ $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
 |---|---:|---|---|
 | `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of available system RAM targeted for loaded chunk data. |
 | `CAVEVIEWER_GPU_MEMORY_GB` | auto | 0.5-50 GB | Optional GPU memory ceiling. If active-GPU detection finds a smaller budget, the detected value wins. |
-| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory targeted for streaming residency. |
+| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory targeted for combined texture and geometry streaming residency. |
 | `CAVEVIEWER_MAX_TEXTURE_SIZE` | auto | 512-16384 px | Optional maximum decoded texture dimension. Automatic sizing usually gives better balance. |
 | `CAVEVIEWER_IO_WORKERS` | `2` | 1-32 workers | Requested maximum background chunk-loading workers. Runtime starts conservatively and grows only when RAM allows. |
 | `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | 2-32 logical CPUs | Logical CPUs kept out of the loading pool. |

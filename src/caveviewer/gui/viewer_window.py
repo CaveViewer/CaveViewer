@@ -67,6 +67,7 @@ _VIEWER_UI_SCALE_MAX = 1.45
 _IMPORT_EVENT_POLL_SECONDS = 0.25
 _IMPORT_HEARTBEAT_LOG_SECONDS = 30.0
 _IMPORT_STALE_LOG_SECONDS = 30.0
+_GPU_RESIDENCY_SAFETY_SHARE = 0.05
 
 
 def _desktop_relative_window_size() -> tuple[int, int]:
@@ -713,6 +714,35 @@ class CaveViewerWindow(mglw.WindowConfig):
                 gpu_target_fraction,
             )
         )
+        gpu_geometry_budget_bytes = None
+        if gpu_memory_bytes is not None and gpu_memory_bytes > 0:
+            total_gpu_residency_budget_bytes = int(
+                gpu_memory_bytes * gpu_target_fraction
+            )
+            max_resident_texture_bytes = min(
+                max_resident_texture_bytes,
+                total_gpu_residency_budget_bytes,
+            )
+            gpu_residency_safety_bytes = min(
+                max(0, total_gpu_residency_budget_bytes - max_resident_texture_bytes),
+                int(total_gpu_residency_budget_bytes * _GPU_RESIDENCY_SAFETY_SHARE),
+            )
+            gpu_geometry_budget_bytes = max(
+                0,
+                total_gpu_residency_budget_bytes
+                - max_resident_texture_bytes
+                - gpu_residency_safety_bytes,
+            )
+            _LOG.info(
+                "GPU residency budget split: target %.1f MB (%.0f%% of %.1f GB); "
+                "textures %.1f MB, geometry %.1f MB, safety %.1f MB.",
+                total_gpu_residency_budget_bytes / (1024 ** 2),
+                gpu_target_fraction * 100.0,
+                gpu_memory_bytes / (1024 ** 3),
+                max_resident_texture_bytes / (1024 ** 2),
+                gpu_geometry_budget_bytes / (1024 ** 2),
+                gpu_residency_safety_bytes / (1024 ** 2),
+            )
         self.texture_manager = TextureManager(
             self.ctx,
             self.textures_dir,
@@ -761,6 +791,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             gpu_vendor=gpu_vendor,
             textures_dir=self.textures_dir,
             total_gpu_memory_bytes=gpu_memory_bytes,
+            texture_gpu_budget_bytes=max_resident_texture_bytes,
+            gpu_geometry_budget_bytes=gpu_geometry_budget_bytes,
         )
 
         # pick a sane starting position: center of the first available chunk,
