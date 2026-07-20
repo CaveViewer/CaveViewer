@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from caveviewer.core.streaming_scheduler import (
+from caveviewer.core.streaming.scheduler import (
     cell_in_cube_radius,
     cells_outside_cube_radius,
     select_evictions,
@@ -10,7 +10,7 @@ from caveviewer.core.streaming_scheduler import (
 )
 
 
-def test_wanted_cells_are_limited_to_nearest_available_cells():
+def test_wanted_cells_follow_requested_render_distance():
     available = {(distance, 0, 0) for distance in range(1, 6)}
 
     wanted = select_wanted_cells(
@@ -20,7 +20,7 @@ def test_wanted_cells_are_limited_to_nearest_available_cells():
         max_loaded_chunks=2,
     )
 
-    assert wanted == {(1, 0, 0), (2, 0, 0)}
+    assert wanted == available
 
 
 def test_cube_radius_and_outside_selection_share_one_policy():

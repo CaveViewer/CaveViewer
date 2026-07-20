@@ -33,7 +33,7 @@ def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():
     assert overlay.is_ready_to_begin is True
 
 
-def test_fullscreen_begin_prompt_does_not_wait_for_all_pending_chunks():
+def test_fullscreen_begin_prompt_counts_failed_wanted_chunks():
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     overlay._active = True
     overlay._awaiting_begin = True
@@ -41,7 +41,48 @@ def test_fullscreen_begin_prompt_does_not_wait_for_all_pending_chunks():
     overlay._manual_mode = False
     overlay._progress_fraction = 0.0
 
-    overlay.update({"loaded": 6, "pending": 128, "ready": 0, "wanted": 134})
+    overlay.update(
+        {
+            "loaded": 2,
+            "failed_wanted": 1,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 3,
+        }
+    )
+
+    assert overlay.is_ready_to_begin is True
+
+
+def test_fullscreen_begin_prompt_waits_for_current_wanted_cells():
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._active = True
+    overlay._awaiting_begin = True
+    overlay._ready_to_begin = False
+    overlay._manual_mode = False
+    overlay._progress_fraction = 0.0
+
+    overlay.update(
+        {
+            "loaded_wanted": 6,
+            "pending": 21,
+            "ready": 0,
+            "wanted": 27,
+            "total_available": 1655,
+        }
+    )
+
+    assert overlay.is_ready_to_begin is False
+
+    overlay.update(
+        {
+            "loaded_wanted": 27,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 27,
+            "total_available": 1655,
+        }
+    )
 
     assert overlay.is_ready_to_begin is True
 

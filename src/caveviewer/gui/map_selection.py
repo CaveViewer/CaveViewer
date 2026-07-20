@@ -8,7 +8,7 @@ import os
 
 def has_precompiled_cache(folder: str) -> bool:
     try:
-        from caveviewer.core import chunker
+        from caveviewer.core.chunking import builder as chunker
     except Exception:
         return False
 

@@ -11,6 +11,11 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
+from caveviewer.core.chunking.capacity import (
+    ensure_sufficient_import_memory,
+    ensure_sufficient_source_file_read_memory,
+)
+
 
 DEFAULT_CANDIDATE_SIZES = (24.0, 32.0, 40.0, 50.0, 64.0, 80.0, 100.0, 128.0)
 MAX_DIRECTION_SAMPLES = 50_000
@@ -284,7 +289,7 @@ def recommend_chunk_size_for_obj(
     progress_cb: ProgressCallback | None = None,
 ) -> ChunkSizeRecommendation:
     """Analyze an OBJ source without retaining whole-model face arrays."""
-    from caveviewer.core.obj_parser import iter_obj_face_batches, parse_obj_vertices
+    from caveviewer.core.mesh.obj import iter_obj_face_batches, parse_obj_vertices
 
     progress_cb = _monotonic_progress(progress_cb)
     _emit_progress(progress_cb, "reading vertices", 0.0)
@@ -331,10 +336,26 @@ def recommend_chunk_size_for_glb(
     progress_cb: ProgressCallback | None = None,
 ) -> ChunkSizeRecommendation:
     """Analyze a GLB source using its parsed mesh."""
-    from caveviewer.core.glb_parser import parse_glb
+    from caveviewer.core.mesh.glb import parse_glb
 
     progress_cb = _monotonic_progress(progress_cb)
     _emit_progress(progress_cb, "reading GLB", 0.0)
+    ensure_sufficient_source_file_read_memory(glb_path)
+
+    def glb_preflight(
+        vertex_count: int,
+        uv_count: int,
+        normal_count: int,
+        face_count: int,
+    ) -> None:
+        ensure_sufficient_import_memory(
+            vertex_count,
+            uv_count,
+            normal_count,
+            face_count,
+            source_path=glb_path,
+        )
+
     mesh, _embedded_textures = parse_glb(
         glb_path,
         progress_cb=_scaled_progress(
@@ -343,6 +364,7 @@ def recommend_chunk_size_for_glb(
             0.55,
             stage_override="reading GLB",
         ),
+        preflight_cb=glb_preflight,
     )
     face_indices = mesh.face_pos_idx
     face_count = len(face_indices)
@@ -374,7 +396,7 @@ def recommend_chunk_size_for_descriptor(
     worker_count: int = 1,
     progress_cb: ProgressCallback | None = None,
 ) -> ChunkSizeRecommendation:
-    """Analyze a model descriptor returned by caveviewer.app.find_model_file."""
+    """Analyze a model descriptor returned by core.map.source_model.find_model_file."""
     fmt = model_descriptor.get("format")
     if fmt == "obj":
         return recommend_chunk_size_for_obj(

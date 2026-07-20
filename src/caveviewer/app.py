@@ -19,11 +19,12 @@ Workflow:
 [magic_mr_v] $ _
 """
 
+import logging
 import os
 import sys
-import glob
 from caveviewer.version import APP_NAME, APP_VERSION
-from caveviewer.core.logging_utils import (
+from caveviewer.core.map import source_model
+from caveviewer.core.diagnostics.logging import (
     configure_logging,
     finish_console_progress_line,
     get_logger,
@@ -45,6 +46,35 @@ except Exception:
     pass  # non-fatal: falls back to Python's bundled CA bundle
 
 _LOG = get_logger("CaveViewer")
+
+
+def _route_moderngl_window_logging() -> None:
+    """
+    Keep moderngl-window logs on CaveViewer's configured root handlers.
+
+    This is intentionally in the application layer, not ``caveviewer.core``:
+    moderngl-window is part of the viewer/presentation stack, while core
+    logging must remain independent of GUI/OpenGL-adjacent libraries.
+    """
+    try:
+        import moderngl_window
+    except Exception:
+        return
+
+    def adopt_logger() -> None:
+        logger = logging.getLogger("moderngl_window")
+        logger.handlers.clear()
+        logger.propagate = True
+        logger.setLevel(logging.NOTSET)
+
+    def setup_basic_logging(_level: int | None) -> None:
+        adopt_logger()
+
+    try:
+        moderngl_window.setup_basic_logging = setup_basic_logging
+    except Exception:
+        pass
+    adopt_logger()
 
 _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_APP_ICON",
@@ -102,6 +132,25 @@ def _console_write(text: str) -> None:
 def _console_newline() -> None:
     if not finish_console_progress_line():
         _console_write("\n")
+
+
+def _make_import_progress_callback(extra_progress_cb=None, *, console_progress: bool = True):
+    progress_was_rendered = False
+
+    def _emit_progress(stage: str, frac: float) -> None:
+        nonlocal progress_was_rendered
+        frac = max(0.0, min(1.0, float(frac)))
+        progress_was_rendered = True
+        if console_progress:
+            set_console_progress(stage, frac)
+        if extra_progress_cb:
+            extra_progress_cb(stage, frac)
+
+    def _finish_progress() -> None:
+        if console_progress and progress_was_rendered:
+            _console_newline()
+
+    return _emit_progress, _finish_progress
 
 
 def _default_io_workers() -> str:
@@ -202,62 +251,12 @@ def find_input_files(folder: str) -> tuple[str, str]:
     """Locate the .obj and its .mtl inside `folder`. Returns (obj_path, mtl_path).
     Raises a clear error if the folder doesn't contain what we expect, since
     a confusing stack trace here would be a bad first impression of the tool."""
-    obj_candidates = glob.glob(os.path.join(folder, "*.obj"))
-    if not obj_candidates:
-        raise FileNotFoundError(
-            f"No .obj file found in:\n  {folder}\n\n"
-            f"Make sure you selected the folder that contains the exported "
-            f".obj, .mtl, and .jpg texture tiles from Agisoft."
-        )
-    if len(obj_candidates) > 1:
-        _LOG.info(f"Note: multiple .obj files found, using the first one: {obj_candidates[0]}")
-    obj_path = obj_candidates[0]
-
-    return obj_path, _find_material_file_for_obj(obj_path)
+    return source_model.find_input_files(folder, logger=_LOG)
 
 
 def _find_material_file_for_obj(obj_path: str) -> str:
     """Return the material file referenced by or adjacent to one OBJ file."""
-    folder = os.path.dirname(os.path.abspath(obj_path))
-
-    # peek at just the mtllib line rather than a full parse, to find the mtl
-    # filename quickly even on a multi-GB obj
-    mtl_name = None
-    with open(obj_path, "r", errors="replace") as f:
-        for line in f:
-            if line.startswith("mtllib "):
-                mtl_name = line.split(maxsplit=1)[1].strip()
-                break
-
-    if mtl_name:
-        mtl_path = os.path.join(folder, mtl_name)
-        if os.path.exists(mtl_path):
-            return mtl_path
-
-    mtl_candidates = glob.glob(os.path.join(folder, "*.mtl"))
-    if not mtl_candidates:
-        raise FileNotFoundError(
-            f"Found {os.path.basename(obj_path)} but no matching .mtl file in:\n  {folder}"
-        )
-    return mtl_candidates[0]
-
-
-# Supported model file extensions, checked in this priority order when a
-# folder contains more than one kind (OBJ first, since it's the original
-# and most-tested format here; GLB after). A folder genuinely
-# containing multiple different model formats at once is an unusual case
-# this doesn't try to be clever about -- it just picks by this fixed
-# priority and proceeds, the same "use the first one found" philosophy
-# find_input_files already uses for multiple .obj files.
-#
-# NOTE: .ply support was removed -- a PLY parser was built and
-# integrated but caused crashes in practice (its core API calls were
-# only ever tested against hand-built fakes matching `plyfile`'s
-# documented shape, never against a real install of that library, since
-# the development environment had no internet access to install it).
-# If PLY support is revisited later, it needs real testing against an
-# actual install of `plyfile` before being wired back in here.
-_SUPPORTED_EXTENSIONS = [".obj", ".glb"]
+    return source_model.find_material_file_for_obj(obj_path)
 
 
 def find_model_file(folder: str) -> dict:
@@ -278,42 +277,7 @@ def find_model_file(folder: str) -> dict:
     with the same kind of clear, actionable message find_input_files
     already gives for the OBJ-specific case.
     """
-    selected_path = os.path.abspath(folder)
-    if os.path.isfile(selected_path):
-        ext = os.path.splitext(selected_path)[1].lower()
-        if ext == ".obj":
-            return {
-                "format": "obj",
-                "obj_path": selected_path,
-                "mtl_path": _find_material_file_for_obj(selected_path),
-            }
-        if ext == ".glb":
-            return {"format": "glb", "glb_path": selected_path}
-        raise FileNotFoundError(
-            f"No supported model file found at:\n  {selected_path}\n\n"
-            f"CaveViewer supports .obj (with a matching .mtl) and .glb files."
-        )
-
-    folder = selected_path
-    for ext in _SUPPORTED_EXTENSIONS:
-        candidates = glob.glob(os.path.join(folder, f"*{ext}"))
-        if not candidates:
-            continue
-        if len(candidates) > 1:
-            _LOG.info(f"Note: multiple {ext} files found, using the first one: {candidates[0]}")
-        model_path = candidates[0]
-
-        if ext == ".obj":
-            obj_path, mtl_path = find_input_files(folder)
-            return {"format": "obj", "obj_path": obj_path, "mtl_path": mtl_path}
-        elif ext == ".glb":
-            return {"format": "glb", "glb_path": model_path}
-
-    raise FileNotFoundError(
-        f"No supported model file found in:\n  {folder}\n\n"
-        f"CaveViewer supports .obj (with a matching .mtl) and .glb files. "
-        f"Make sure you selected the folder containing your exported map."
-    )
+    return source_model.find_model_file(folder, logger=_LOG)
 
 
 def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
@@ -330,60 +294,23 @@ def import_and_cache(obj_path: str, mtl_path: str, force_rebuild: bool = False,
     (caveviewer.gui.import_progress_panel) hooks into the same import process
     without needing its own separate copy of this function or changing
     the console output anyone running from a terminal already sees."""
-    from caveviewer.core import chunker
-    from caveviewer.core.cache_paths import map_cache_build_dir
-    from caveviewer.core.obj_parser import parse_mtl
+    progress_cb, finish_progress = _make_import_progress_callback(
+        extra_progress_cb,
+        console_progress=console_progress,
+    )
+    try:
+        from caveviewer.core.map import importer
 
-    if not force_rebuild and chunker.cache_is_valid(obj_path):
-        cache_dir = chunker.get_cache_dir(obj_path)
-        _LOG.info(
-            "Using an existing chunk cache; remove the reported cache directory "
-            "to force a rebuild."
+        return importer.import_and_cache(
+            obj_path,
+            mtl_path,
+            force_rebuild=force_rebuild,
+            progress_cb=progress_cb,
+            pause_requested=pause_requested,
+            chunk_size=chunk_size,
         )
-        _LOG.info(f"Found cache in: {cache_dir}")
-        return cache_dir
-
-    materials = parse_mtl(mtl_path)
-    texture_assets = _file_texture_assets(
-        materials, os.path.dirname(os.path.abspath(mtl_path))
-    )
-
-    # Reject imports that lack cache-disk headroom before parsing a potentially
-    # multi-gigabyte source. The incremental builder repeats this check as a
-    # safety net for direct callers and for free-space changes during parsing.
-    target_cache_dir = map_cache_build_dir(obj_path)
-    chunker.ensure_sufficient_disk_space(
-        obj_path,
-        target_cache_dir,
-        staged_asset_bytes=chunker.cache_assets_size(texture_assets),
-    )
-
-    active_chunk_size = (
-        float(chunk_size)
-        if chunk_size is not None
-        else chunker.configured_chunk_size()
-    )
-
-    def _emit_progress(stage: str, frac: float):
-        frac = max(0.0, min(1.0, frac))
-        if console_progress:
-            set_console_progress(stage, frac)
-        if extra_progress_cb:
-            extra_progress_cb(stage, frac)
-
-    cache_dir = chunker.build_cache_incremental_obj(
-        obj_path,
-        materials,
-        progress_cb=_emit_progress,
-        cache_dir=target_cache_dir,
-        assets=texture_assets,
-        pause_requested=pause_requested,
-        chunk_size=active_chunk_size,
-    )
-    if console_progress:
-        _console_newline()
-
-    return cache_dir
+    finally:
+        finish_progress()
 
 
 def import_and_cache_any(
@@ -401,17 +328,13 @@ def import_and_cache_any(
     model_descriptor["format"] (see find_model_file()) to the right
     parser/cache path. OBJ uses the incremental disk-bucket builder so it does
     not retain whole-model face arrays; GLB still feeds its parsed RawMesh into
-    chunker.build_cache() because GLB parsing already materializes that mesh.
+    chunking builder because GLB parsing already materializes that mesh.
 
     GLB's embedded texture bytes are named here and handed to the cache
     builder as staged assets. Once the complete cache is published, every
     downstream consumer sees ordinary files beside the manifest without the
     source folder ever needing to be writable.
     """
-    from caveviewer.core import chunker
-    from caveviewer.core.cache_paths import map_cache_build_dir
-    from caveviewer.core.obj_parser import Material
-
     fmt = model_descriptor["format"]
 
     if fmt == "obj":
@@ -423,136 +346,37 @@ def import_and_cache_any(
             pause_requested=pause_requested,
             chunk_size=chunk_size,
         )
+    progress_cb, finish_progress = _make_import_progress_callback(
+        extra_progress_cb,
+        console_progress=console_progress,
+    )
+    try:
+        from caveviewer.core.map import importer
 
-    source_path = model_descriptor["glb_path"]
-
-    if not force_rebuild and chunker.cache_is_valid(source_path):
-        cache_dir = chunker.get_cache_dir(source_path)
-        _LOG.info(
-            "Using an existing chunk cache; remove the reported cache directory "
-            "to force a rebuild."
+        return importer.import_and_cache_any(
+            model_descriptor,
+            textures_dir,
+            force_rebuild=force_rebuild,
+            progress_cb=progress_cb,
+            pause_requested=pause_requested,
+            chunk_size=chunk_size,
         )
-        _LOG.info(f"Found cache in: {cache_dir}")
-        return cache_dir
-
-    target_cache_dir = map_cache_build_dir(source_path)
-    chunker.ensure_sufficient_disk_space(source_path, target_cache_dir)
-
-    active_chunk_size = (
-        float(chunk_size)
-        if chunk_size is not None
-        else chunker.configured_chunk_size()
-    )
-
-    parse_weight = 0.5
-
-    def _emit_progress(stage: str, frac: float):
-        frac = max(0.0, min(1.0, frac))
-        if console_progress:
-            set_console_progress(stage, frac)
-        if extra_progress_cb:
-            extra_progress_cb(stage, frac)
-
-    def parse_progress(stage: str, frac: float):
-        _emit_progress(stage, parse_weight * frac)
-
-    def cache_progress(stage: str, frac: float):
-        _emit_progress(stage, parse_weight + (1.0 - parse_weight) * frac)
-
-    if fmt == "glb":
-        from caveviewer.core.glb_parser import parse_glb
-        mesh, embedded_textures = parse_glb(source_path, progress_cb=parse_progress)
-        chunker.ensure_sufficient_import_memory(
-            len(getattr(mesh, "positions", ())),
-            len(getattr(mesh, "uvs", ())),
-            len(getattr(mesh, "normals", ())),
-            len(getattr(mesh, "face_pos_idx", ())),
-            source_path=source_path,
-        )
-
-        # Embedded images become ordinary named cache assets. They remain in
-        # the private staging tree until the chunks and manifest are complete,
-        # so read-only portal source folders are supported without exposing a
-        # manifest whose textures have not been published yet.
-        materials = {}
-        texture_assets = []
-        staged_texture_names = set()
-        for mat_range in mesh.material_ranges:
-            mat_name = mat_range.material_name
-            if mat_name in embedded_textures:
-                image_bytes = embedded_textures[mat_name]
-                image_filename = _embedded_texture_filename(
-                    image_bytes, mat_name
-                )
-                materials[mat_name] = Material(name=mat_name, diffuse_texture=image_filename)
-                if image_filename not in staged_texture_names:
-                    texture_assets.append(
-                        chunker.CacheAsset(
-                            relative_path=image_filename, data=image_bytes
-                        )
-                    )
-                    staged_texture_names.add(image_filename)
-            else:
-                # no embedded texture found for this material under this
-                # name -- leave it untextured (the placeholder-texture
-                # path in TextureManager handles this the same as an
-                # OBJ material with no map_Kd line)
-                materials[mat_name] = Material(name=mat_name, diffuse_texture=None)
-
-    else:
-        raise ValueError(f"Unknown model format: {fmt!r}")
-
-    if console_progress:
-        _console_newline()  # newline after the parse progress bar
-
-    chunker.ensure_sufficient_disk_space(
-        source_path,
-        target_cache_dir,
-        staged_asset_bytes=chunker.cache_assets_size(texture_assets),
-    )
-    cache_dir = chunker.build_cache(
-        source_path,
-        mesh,
-        materials,
-        progress_cb=cache_progress,
-        cache_dir=target_cache_dir,
-        assets=texture_assets,
-        chunk_size=active_chunk_size,
-    )
-    if console_progress:
-        _console_newline()
-
-    return cache_dir
+    finally:
+        finish_progress()
 
 
 def _file_texture_assets(materials: dict, textures_dir: str):
     """Return unique on-disk textures for atomic cache publication."""
-    from caveviewer.core.chunker import CacheAsset
+    from caveviewer.core.map import importer
 
-    assets = []
-    seen_paths = set()
-    for material in materials.values():
-        relative_path = material.diffuse_texture
-        if not relative_path or relative_path in seen_paths:
-            continue
-        source_path = os.path.join(textures_dir, relative_path)
-        if os.path.isfile(source_path):
-            assets.append(
-                CacheAsset(relative_path=relative_path, source_path=source_path)
-            )
-            seen_paths.add(relative_path)
-    return assets
+    return importer.file_texture_assets(materials, textures_dir)
 
 
 def _embedded_texture_filename(image_bytes: bytes, material_name: str) -> str:
     """Choose a deterministic extension for an embedded GLB texture."""
-    if image_bytes[:2] == b"\xff\xd8":
-        ext = ".jpg"
-    elif image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
-        ext = ".png"
-    else:
-        ext = ".img"
-    return f"{material_name}{ext}"
+    from caveviewer.core.map import importer
+
+    return importer.embedded_texture_filename(image_bytes, material_name)
 
 
 def _hidden_tk_root():
@@ -591,7 +415,7 @@ def _print_viewer_controls() -> None:
 
 def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> None:
     """Log the chunk size recorded in an existing cache manifest."""
-    from caveviewer.core import chunker
+    from caveviewer.core.chunking import builder as chunker
 
     cache_chunk_size = chunker.cache_chunk_size(cache_dir)
     configured_chunk_size = chunker.configured_chunk_size()
@@ -624,7 +448,7 @@ def _run_map_session(folder: str) -> None:
         if selected_is_file:
             _LOG.error(f"Error: {e}")
             sys.exit(1)
-        from caveviewer.core import chunker as _ck
+        from caveviewer.core.chunking import builder as _ck
         _textures_dir = folder
         _prebuilt_cache = folder
         if os.path.exists(os.path.join(_prebuilt_cache, _ck.MANIFEST_NAME)):
@@ -656,7 +480,7 @@ def _run_map_session(folder: str) -> None:
 
     _print_viewer_controls()
 
-    from caveviewer.core import chunker
+    from caveviewer.core.chunking import builder as chunker
 
     if chunker.cache_is_valid(source_path):
         # Fast path, unchanged: a cache already exists, so there's no
@@ -667,7 +491,7 @@ def _run_map_session(folder: str) -> None:
             "to force a rebuild."
         )
         cache_dir = chunker.get_cache_dir(source_path)
-        from caveviewer.core.cache_paths import map_texture_dir
+        from caveviewer.core.map.cache_paths import map_texture_dir
         cache_textures_dir = map_texture_dir(source_path, cache_dir, folder)
         _LOG.info(f"Using cache directory: {cache_dir}")
         _log_cache_chunk_size(cache_dir, context="Existing chunk cache")
@@ -699,6 +523,7 @@ def _run_map_session(folder: str) -> None:
 
 def main():
     configure_logging()
+    _route_moderngl_window_logging()
     if os.name == "nt":
         try:
             from caveviewer.gui.dpi_utils import configure_process_dpi_awareness

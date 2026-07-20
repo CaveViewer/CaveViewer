@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from caveviewer.core import cache_paths
+from caveviewer.core.map import cache_paths
 from caveviewer.gui import viewer_window
 from caveviewer.gui.platform.app_identity import tk_root_options
 
@@ -450,6 +450,116 @@ def test_initial_chunk_readiness_respects_budget_limited_wanted_count():
     ) is False
 
 
+def test_initial_chunk_readiness_waits_for_startup_wanted_cells():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(config=SimpleNamespace(max_loaded_chunks=100))
+
+    assert window._initial_chunk_load_is_ready(
+        {
+            "loaded_wanted": 6,
+            "total_available": 1655,
+            "wanted": 27,
+        }
+    ) is False
+    assert window._initial_chunk_load_is_ready(
+        {
+            "loaded_wanted": 27,
+            "total_available": 1655,
+            "wanted": 27,
+        }
+    ) is True
+
+
+def test_initial_chunk_readiness_counts_failed_wanted_chunks():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(config=SimpleNamespace(max_loaded_chunks=100))
+
+    assert window._initial_chunk_load_is_ready(
+        {
+            "loaded_wanted": 2,
+            "failed_wanted": 1,
+            "total_available": 1655,
+            "wanted": 3,
+        }
+    ) is True
+
+
+def test_startup_upload_limits_are_boosted_until_initial_load_is_ready():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._upload_chunks_per_frame = 1
+    window._upload_groups_per_frame = 1
+    window._upload_time_budget_ms = 3.0
+    window._initial_chunks_loaded = False
+    window.controls_overlay = SimpleNamespace(is_waiting_for_begin=True)
+
+    chunks, operations, budget_ms = window._streaming_upload_limits()
+
+    assert chunks >= 4
+    assert operations >= 8
+    assert budget_ms >= 12.0
+
+    window._initial_chunks_loaded = True
+
+    assert window._streaming_upload_limits() == (1, 1, 3.0)
+
+
+def test_upload_limits_boost_while_current_wanted_set_is_incomplete():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._upload_chunks_per_frame = 1
+    window._upload_groups_per_frame = 1
+    window._upload_time_budget_ms = 3.0
+    window._initial_chunks_loaded = True
+    window.controls_overlay = SimpleNamespace(is_waiting_for_begin=False)
+
+    chunks, operations, budget_ms = window._streaming_upload_limits(
+        {
+            "ready": 2,
+            "wanted": 10,
+            "loaded_wanted": 4,
+            "failed_wanted": 0,
+        }
+    )
+
+    assert chunks >= 2
+    assert operations >= 8
+    assert budget_ms >= 8.0
+
+    assert window._streaming_upload_limits(
+        {
+            "ready": 0,
+            "wanted": 10,
+            "loaded_wanted": 4,
+            "failed_wanted": 0,
+        }
+    ) == (1, 1, 3.0)
+
+
+def test_drain_streaming_worker_failures_logs_bounded_batch(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._STREAMING_FAILURES_PER_FRAME = 1
+    failure = SimpleNamespace(
+        fatal=True,
+        cell=(1, 0, 0),
+        stage="load_chunk_file",
+        thread_name="test-worker",
+        error_type="ValueError",
+        message="bad chunk",
+    )
+    world = SimpleNamespace(
+        drain_worker_failures=lambda *, max_items: [failure][:max_items]
+    )
+    window.world = world
+
+    window._drain_streaming_worker_failures()
+
+    assert logger.error_messages == [
+        "Streaming worker failed for chunk (1, 0, 0) during "
+        "load_chunk_file on test-worker: ValueError: bad chunk"
+    ]
+
+
 def test_initial_compilation_completion_is_logged_once(monkeypatch):
     logger = FakeLogger()
     monkeypatch.setattr(viewer_window, "_LOG", logger)
@@ -468,13 +578,13 @@ def test_initial_compilation_completion_is_logged_once(monkeypatch):
     ]
 
 
-def test_startup_streaming_radius_is_capped_until_begin_screen_is_dismissed():
+def test_startup_streaming_radius_matches_revealed_render_distance():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.render_distance_stepper = SimpleNamespace(value=6)
     window.controls_overlay = SimpleNamespace(is_waiting_for_begin=True)
-    window._initial_chunks_loaded = True
+    window._initial_chunks_loaded = False
 
-    assert window._target_streaming_load_radius() == 1
+    assert window._target_streaming_load_radius() == 6
 
 
 def test_streaming_radius_uses_stepper_after_begin_screen_is_dismissed():
@@ -486,25 +596,75 @@ def test_streaming_radius_uses_stepper_after_begin_screen_is_dismissed():
     assert window._target_streaming_load_radius() == 6
 
 
+def test_streaming_cell_priority_prefers_camera_forward_cells():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(config=SimpleNamespace(chunk_size=1.0))
+    window.wnd = SimpleNamespace(size=(1600, 1000))
+    window.camera = SimpleNamespace(
+        position=np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        fov_deg=75.0,
+        forward=lambda: np.array([1.0, 0.0, 0.0], dtype=np.float64),
+    )
+
+    priority = window._streaming_cell_priority_key()
+
+    assert priority((5, 0, 0)) < priority((0, 5, 0))
+    assert priority((5, 0, 0)) < priority((-5, 0, 0))
+
+
 class _FakeGpuResource:
+    def __init__(self, context=None):
+        self._context = context
+        self.writes = []
+        self.released = False
+
+    def write(self, data):
+        byte_count = len(data)
+        self.writes.append(byte_count)
+        if self._context is not None:
+            self._context.buffer_write_sizes.append(byte_count)
+
     def release(self):
-        pass
+        self.released = True
 
 
 class _FakeViewerContext:
-    def buffer(self, _data):
-        return _FakeGpuResource()
+    def __init__(self):
+        self.buffer_sizes = []
+        self.buffer_reserves = []
+        self.buffer_write_sizes = []
+
+    def buffer(self, data=None, *, reserve=None):
+        resource = _FakeGpuResource(self)
+        if reserve is not None:
+            self.buffer_reserves.append(reserve)
+            return resource
+        self.buffer_sizes.append(len(data))
+        resource.write(data)
+        return resource
 
     def vertex_array(self, *_args):
         return _FakeGpuResource()
 
 
 class _FakeTextureManager:
+    def __init__(self):
+        self.acquires = []
+        self.releases = []
+
     def acquire(self, _material_name):
+        self.acquires.append(_material_name)
         return _FakeGpuResource()
 
     def release(self, _material_name):
-        pass
+        self.releases.append(_material_name)
+
+
+def _drain_chunk_ready(window, chunk_data, *, max_calls=32):
+    for _ in range(max_calls):
+        if window._on_chunk_ready(chunk_data):
+            return True
+    return False
 
 
 def test_chunk_aabbs_are_tracked_only_for_loaded_chunks():
@@ -513,7 +673,11 @@ def test_chunk_aabbs_are_tracked_only_for_loaded_chunks():
     window.program = object()
     window.texture_manager = _FakeTextureManager()
     window.render_mode_buttons = SimpleNamespace(smooth_shading_enabled=True)
+    window._upload_groups_per_frame = 1
+    window._upload_time_budget_ms = 100.0
+    window._streaming_frame_timing = None
     window._chunk_gpu_objects = {}
+    window._chunk_upload_states = {}
     window._chunk_normal_cache = {}
     window._chunk_aabbs = {}
     cell = (1, 2, 3)
@@ -534,7 +698,7 @@ def test_chunk_aabbs_are_tracked_only_for_loaded_chunks():
         ],
     )
 
-    window._on_chunk_ready(chunk_data)
+    assert _drain_chunk_ready(window, chunk_data)
 
     assert set(window._chunk_aabbs) == {cell}
     assert window._chunk_aabbs[cell][0].dtype == np.float32
@@ -586,11 +750,200 @@ def test_chunk_upload_can_be_split_across_group_frames():
     assert cell not in window._chunk_gpu_objects
     assert cell in window._chunk_upload_states
 
+    assert window._on_chunk_ready(chunk_data) is False
+    assert len(window._chunk_gpu_objects[cell]) == 1
+    assert len(window._chunk_normal_cache[cell]) == 1
+    assert window._chunk_aabbs[cell][0].dtype == np.float32
+
+    assert window._on_chunk_ready(chunk_data) is False
     assert window._on_chunk_ready(chunk_data) is True
 
     assert cell not in window._chunk_upload_states
     assert len(window._chunk_gpu_objects[cell]) == 2
     assert window._chunk_aabbs[cell][0].dtype == np.float32
+
+
+def test_partial_chunk_upload_unloads_published_slices_once():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    texture_manager = _FakeTextureManager()
+    window.ctx = _FakeViewerContext()
+    window.program = object()
+    window.texture_manager = texture_manager
+    window.render_mode_buttons = SimpleNamespace(smooth_shading_enabled=True)
+    window._upload_groups_per_frame = 1
+    window._upload_time_budget_ms = 100.0
+    window._streaming_frame_timing = None
+    window._chunk_gpu_objects = {}
+    window._chunk_upload_states = {}
+    window._chunk_normal_cache = {}
+    window._chunk_aabbs = {}
+    cell = (1, 2, 3)
+    positions = np.zeros((3, 3), dtype=np.float32)
+    uvs = np.zeros((3, 2), dtype=np.float32)
+    normals = np.tile(np.array([[0.0, 1.0, 0.0]], dtype=np.float32), (3, 1))
+    chunk_data = SimpleNamespace(
+        cell=cell,
+        bounds_min=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        bounds_max=np.array([4.0, 5.0, 6.0], dtype=np.float64),
+        upload_groups=[
+            viewer_window.chunker.ChunkUploadGroup(
+                material_name="mat_a",
+                positions=positions,
+                uvs=uvs,
+                smooth_normals=normals,
+            ),
+            viewer_window.chunker.ChunkUploadGroup(
+                material_name="mat_b",
+                positions=positions,
+                uvs=uvs,
+                smooth_normals=normals,
+            ),
+        ],
+    )
+
+    assert window._on_chunk_ready(chunk_data) is False
+    assert window._on_chunk_ready(chunk_data) is False
+    assert len(window._chunk_gpu_objects[cell]) == 1
+
+    window._on_chunk_unload(cell)
+
+    assert cell not in window._chunk_upload_states
+    assert cell not in window._chunk_gpu_objects
+    assert cell not in window._chunk_normal_cache
+    assert cell not in window._chunk_aabbs
+    assert texture_manager.releases == ["mat_a"]
+
+
+def test_large_group_upload_is_sliced_into_small_vbos():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    context = _FakeViewerContext()
+    texture_manager = _FakeTextureManager()
+    window.ctx = context
+    window.program = object()
+    window.texture_manager = texture_manager
+    window.render_mode_buttons = SimpleNamespace(smooth_shading_enabled=True)
+    window._upload_groups_per_frame = 1
+    window._upload_time_budget_ms = 100.0
+    window._vbo_upload_slice_bytes = 3 * 8 * np.dtype(np.float32).itemsize
+    window._texture_upload_slice_bytes = 1024
+    window._streaming_frame_timing = None
+    window._chunk_gpu_objects = {}
+    window._chunk_upload_states = {}
+    window._chunk_normal_cache = {}
+    window._chunk_aabbs = {}
+    cell = (1, 2, 3)
+    positions = np.zeros((9, 3), dtype=np.float32)
+    uvs = np.zeros((9, 2), dtype=np.float32)
+    normals = np.tile(np.array([[0.0, 1.0, 0.0]], dtype=np.float32), (9, 1))
+    chunk_data = SimpleNamespace(
+        cell=cell,
+        bounds_min=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        bounds_max=np.array([4.0, 5.0, 6.0], dtype=np.float64),
+        upload_groups=[
+            viewer_window.chunker.ChunkUploadGroup(
+                material_name="mat",
+                positions=positions,
+                uvs=uvs,
+                smooth_normals=normals,
+            )
+        ],
+    )
+
+    assert window._on_chunk_ready(chunk_data) is False
+    assert cell not in window._chunk_gpu_objects
+    assert window._on_chunk_ready(chunk_data) is False
+    assert len(window._chunk_gpu_objects[cell]) == 1
+    for _ in range(3):
+        assert window._on_chunk_ready(chunk_data) is False
+    assert window._on_chunk_ready(chunk_data) is True
+
+    assert context.buffer_sizes == []
+    assert context.buffer_reserves == [96, 96, 96]
+    assert context.buffer_write_sizes == [96, 96, 96]
+    assert len(window._chunk_gpu_objects[cell]) == 3
+    assert texture_manager.acquires == ["mat", "mat", "mat"]
+
+    window._on_chunk_unload(cell)
+
+    assert texture_manager.releases == ["mat", "mat", "mat"]
+
+
+def test_upload_slice_size_shrinks_after_measured_stall():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._upload_time_budget_ms = 3.0
+    window._vbo_upload_slice_bytes = 1024 * 1024
+    window._texture_upload_slice_bytes = 1024 * 1024
+    timing = viewer_window.CaveViewerWindow._new_streaming_frame_timing()
+
+    window._adapt_upload_slice_size(
+        kind="texture",
+        elapsed_ms=30.0,
+        byte_count=1024 * 1024,
+        timing=timing,
+    )
+    window._adapt_upload_slice_size(
+        kind="vbo",
+        elapsed_ms=30.0,
+        byte_count=1024 * 1024,
+        timing=timing,
+    )
+
+    assert window._texture_upload_slice_bytes < 1024 * 1024
+    assert window._vbo_upload_slice_bytes < 1024 * 1024
+    assert timing["upload_stalls"] == 2
+    assert timing["texture_upload_slice_bytes"] == window._texture_upload_slice_bytes
+    assert timing["vbo_upload_slice_bytes"] == window._vbo_upload_slice_bytes
+
+
+def test_upload_slice_size_uses_current_boosted_time_budget():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._upload_time_budget_ms = 3.0
+    window._current_upload_time_budget_ms = 8.0
+    window._vbo_upload_slice_bytes = 1024 * 1024
+    timing = viewer_window.CaveViewerWindow._new_streaming_frame_timing()
+
+    window._adapt_upload_slice_size(
+        kind="vbo",
+        elapsed_ms=5.0,
+        byte_count=1024 * 1024,
+        timing=timing,
+    )
+
+    assert window._vbo_upload_slice_bytes == 1024 * 1024
+    assert timing["upload_stalls"] == 0
+
+
+def test_streaming_timing_format_splits_drain_and_upload_details():
+    timing = viewer_window.CaveViewerWindow._new_streaming_frame_timing()
+    timing.update(
+        {
+            "drain_ms": 12.0,
+            "ready_drain_ms": 9.0,
+            "chunk_ready_ms": 5.0,
+            "unload_ms": 1.0,
+            "failure_drain_ms": 2.0,
+            "buffer_alloc_ms": 1.5,
+            "buffer_write_ms": 2.5,
+            "texture_alloc_ms": 0.5,
+            "texture_upload_ms": 3.5,
+            "vbo_upload_slice_bytes": 256 * 1024,
+            "texture_upload_slice_bytes": 128 * 1024,
+            "upload_stalls": 1,
+        }
+    )
+
+    detail = viewer_window.CaveViewerWindow._format_streaming_frame_timing(timing)
+
+    assert "ready_drain=9.0ms" in detail
+    assert "ready_other=3.0ms" in detail
+    assert "failures=2.0ms" in detail
+    assert "drain_other=1.0ms" in detail
+    assert "buffer_alloc=1.5ms" in detail
+    assert "buffer_write=2.5ms" in detail
+    assert "tex_alloc=0.5ms" in detail
+    assert "tex_upload=3.5ms" in detail
+    assert "slices=vbo:256KB/tex:128KB" in detail
+    assert "stalls=1" in detail
 
 
 def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(

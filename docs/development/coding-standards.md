@@ -42,7 +42,7 @@
 - Catch broad exceptions only at process, worker, cleanup, or best-effort
   boundaries where continuing is intentional. Log the failure or document why
   it is safe to suppress.
-- Use `caveviewer.core.logging_utils` rather than `print` for runtime diagnostics. Never
+- Use `caveviewer.core.diagnostics.logging` rather than `print` for runtime diagnostics. Never
   log secrets or dump the complete environment.
 
 ## Filesystem and data safety

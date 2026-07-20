@@ -1,5 +1,5 @@
 """
-caveviewer.core.obj_parser
+caveviewer.core.mesh.obj
 
 Streaming parser for large Wavefront OBJ files produced by Agisoft Metashape.
 
@@ -153,10 +153,16 @@ def _resolve_index(raw: int, count_so_far: int) -> int:
     """OBJ indices are 1-based; negative indices count back from the most
     recently defined element. Convert both to a normal 0-based index."""
     if raw > 0:
-        return raw - 1
-    if raw < 0:
-        return count_so_far + raw
-    raise ValueError("OBJ index of 0 is invalid")
+        resolved = raw - 1
+    elif raw < 0:
+        resolved = count_so_far + raw
+    else:
+        raise ValueError("OBJ index of 0 is invalid")
+    if resolved < 0 or resolved >= count_so_far:
+        raise ValueError(
+            f"OBJ index {raw} is out of range for {count_so_far} parsed values"
+        )
+    return resolved
 
 
 def _parse_face_vertices(
@@ -166,11 +172,18 @@ def _parse_face_vertices(
     uv_count: int,
     normal_count: int,
 ) -> list[tuple[int, int, int]]:
+    if len(tokens) < 3:
+        raise ValueError(
+            f"Malformed OBJ face: expected at least 3 vertices, got {len(tokens)}"
+        )
+
     verts = []
     for tok in tokens:
-        m = _FACE_VERT_RE.match(tok)
+        if tok.endswith("/"):
+            raise ValueError(f"Malformed OBJ face token: {tok!r}")
+        m = _FACE_VERT_RE.fullmatch(tok)
         if not m:
-            continue
+            raise ValueError(f"Malformed OBJ face token: {tok!r}")
         p_raw = int(m.group(1))
         p_idx = _resolve_index(p_raw, vertex_count)
         uv_idx = -1

@@ -20,7 +20,12 @@ from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import Any
 
-from caveviewer.core.logging_utils import configure_logging, get_logger
+from caveviewer.core.chunking.capacity import (
+    InsufficientDiskSpaceError,
+    InsufficientImportMemoryError,
+)
+from caveviewer.core.chunking.staging import ImportPaused
+from caveviewer.core.diagnostics.logging import configure_logging, get_logger
 
 
 _LOG = get_logger("ImportProcess")
@@ -81,7 +86,7 @@ def source_path_from_descriptor(model_descriptor: dict) -> str:
 
 def cache_dir_for_descriptor(model_descriptor: dict) -> str:
     """Return the managed cache directory that an import will publish into."""
-    from caveviewer.core.cache_paths import map_cache_build_dir
+    from caveviewer.core.map.cache_paths import map_cache_build_dir
 
     return map_cache_build_dir(source_path_from_descriptor(model_descriptor))
 
@@ -290,14 +295,14 @@ def _start_heartbeat_thread(
     """Emit periodic liveness/RAM snapshots while the import child is running."""
 
     def loop() -> None:
-        from caveviewer.core import hardware_memory
+        from caveviewer.core.hardware import system_memory
 
         while not stop_event.wait(interval_seconds):
             with state_lock:
                 stage = str(state["stage"])
                 fraction = float(state["fraction"])
                 elapsed = time.monotonic() - float(state["started_at"])
-            snapshot = hardware_memory.detect_ram_snapshot()
+            snapshot = system_memory.detect_ram_snapshot()
             available_bytes = snapshot.available_bytes if snapshot else None
             total_bytes = snapshot.total_bytes if snapshot else None
             _put_event(
@@ -345,11 +350,7 @@ def _start_command_thread(
 
 def _actionable_import_failure(exc: BaseException) -> tuple[str, str] | None:
     """Return a user-actionable message/suggestion for expected import failures."""
-    exc_type = type(exc)
-    if exc_type.__module__ != "caveviewer.core.chunker":
-        return None
-
-    if exc_type.__name__ == "InsufficientImportMemoryError":
+    if isinstance(exc, InsufficientImportMemoryError):
         return (
             str(exc),
             "Close memory-heavy applications and retry, or import this map on a "
@@ -357,7 +358,7 @@ def _actionable_import_failure(exc: BaseException) -> tuple[str, str] | None:
             "can also lower the peak memory requirement.",
         )
 
-    if exc_type.__name__ == "InsufficientDiskSpaceError":
+    if isinstance(exc, InsufficientDiskSpaceError):
         return (
             str(exc),
             "Free space on the cache drive and retry, or move CaveViewer's map "
@@ -428,11 +429,7 @@ def _run_import_process(
         _LOG.info("Import process interrupted by user.")
         _put_event(events, ("cancelled",))
     except BaseException as exc:
-        exc_type = type(exc)
-        if (
-            exc_type.__module__ == "caveviewer.core.chunker"
-            and exc_type.__name__ == "ImportPaused"
-        ):
+        if isinstance(exc, ImportPaused):
             resume_dir = getattr(exc, "resume_dir", None)
             _LOG.info("Import paused; resume checkpoint saved in %s.", resume_dir)
             _put_event(events, ("paused", resume_dir or ""))

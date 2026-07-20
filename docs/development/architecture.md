@@ -8,24 +8,27 @@ contract is documented in [repository-layout.md](repository-layout.md).
 ```text
 caveviewer.app
     ├── caveviewer.storage_paths XDG and portable storage roots
-    ├── caveviewer.core       parsing, cache construction, streaming policy
+    ├── caveviewer.core       preferences, discovery, import/cache, streaming policy
     └── caveviewer.gui        dialogs, rendering, platform integration
           └── caveviewer.core
 ```
 
-`caveviewer.core` must not import `caveviewer.gui`. GUI code may call core
-services, but concrete Tk and OpenGL work stays in the GUI layer. Platform
-behavior is selected through `caveviewer.gui.platform` adapters.
+`caveviewer.core` must not import `caveviewer.gui` or `caveviewer.app`. GUI and
+application entry-point code may call core services, but concrete Tk and OpenGL
+work stays in the GUI layer. Platform behavior is selected through
+`caveviewer.gui.platform` adapters.
 
 ## Startup and map import
 
-The application entry point discovers a supported model and dispatches it to
-the OBJ or GLB parser. Parsers produce CPU-side mesh and material data.
-`src/caveviewer/core/chunker.py` partitions that data and builds a cache in a
-private staging directory. Cache locations are selected through
-`core.cache_paths` under the managed cache root; old adjacent `_cache` and
-`.caveviewer_cache` directories are not auto-discovered. Chunks, the manifest,
-and referenced texture assets are published in one atomic directory
+Core import services discover supported models and dispatch them to the OBJ or
+GLB parser. `core.map.source_model` owns source selection,
+`core.map.importer` owns parse/cache orchestration, and app/GUI/CLI code adapts
+those services to console or Tk progress displays. Parsers produce CPU-side
+mesh and material data. `src/caveviewer/core/chunking/builder.py` partitions
+that data and builds a cache in a private staging directory. Cache locations are
+selected through `core.map.cache_paths` under the managed cache root; old
+adjacent `_cache` and `.caveviewer_cache` directories are not auto-discovered.
+Chunks, the manifest, and referenced texture assets are published in one atomic directory
 transaction. Failures must remove staging output and preserve any previously
 valid managed cache.
 
@@ -65,14 +68,21 @@ imports write only the active cache artifacts.
 
 ## Runtime streaming
 
-`src/caveviewer/core/streaming_world.py` coordinates worker lifecycle and
-render-thread callbacks. Supporting modules own focused policy:
+`src/caveviewer/core/streaming/world.py` coordinates worker lifecycle and
+render-thread callbacks. Runtime streaming depends on focused core policy
+modules:
 
-- `caveviewer.core.hardware_memory`: total/current RAM and GPU detection plus
-  target parsing.
-- `caveviewer.core.worker_config`: CPU caps and shared worker RAM admission.
-- `caveviewer.core.streaming_budget`: chunk-size estimation and residency limits.
-- `caveviewer.core.streaming_scheduler`: backlog, selection, and eviction.
+- `caveviewer.core.hardware.system_memory`: total/current system RAM detection.
+- `caveviewer.core.hardware.gpu_memory`: active-GPU memory detection and
+  fallback budgets.
+- `caveviewer.core.hardware.memory_targets`: RAM and GPU utilization target
+  parsing.
+- `caveviewer.core.workers.allocation`: CPU caps and shared worker RAM admission.
+- `caveviewer.core.streaming.budget`: chunk-size estimation and residency
+  limits.
+- `caveviewer.core.streaming.scheduler`: backlog, selection, and eviction.
+- `caveviewer.core.textures.decoding`: worker-safe CPU texture decode,
+  inspection, and texture budget selection.
 
 Workers load and prepare CPU payloads. The viewer performs OpenGL uploads and
 unloads on the render thread. Internal residency state and external GPU state
@@ -85,17 +95,26 @@ later falls.
 
 Geometry visibility is not limited by full-resolution texture residency.
 `StreamingWorld` selects chunks using spatial distance and chunk residency
-budgets; oversized texture sets are handled in `TextureManager` by deriving a
-decode-time maximum texture dimension from detected GPU memory, target
-percentage, and unique texture count. This keeps the visible cave geometry from
-collapsing to only the few chunks whose original texture tiles fit in VRAM,
-while still preventing obviously oversized texture uploads. GPU memory
-detection is platform-specific: NVIDIA uses `nvidia-smi` when available, Linux
-AMD uses DRM sysfs, low-VRAM AMD integrated GPUs add 50% of reported GTT/shared
-memory capped at 2 GB, Windows AMD/Intel currently use an 8 GB fallback budget,
-and macOS currently uses a conservative 1 GB fallback when no override is set.
-Texture cap selection logs the budget inputs and the selected common dimension
-before the first oversized texture is resized.
+budgets; oversized texture sets are handled by splitting CPU texture decode
+from OpenGL texture ownership. `core.textures.decoding` derives a decode-time
+maximum texture dimension from detected GPU memory, target percentage, and
+unique texture count, then workers decode Pillow image data into CPU bytes.
+`gui.texture_manager` consumes those decoded payloads on the render thread,
+creates/reuses/releases OpenGL textures, and enforces render-thread ownership
+for GPU work. Runtime uploads advance through render-thread operation queues:
+texture allocation is separated from row-band writes, and dense material groups
+are split into triangle-aligned VBO slices whose storage reservation and data
+writes advance separately where the OpenGL context supports it. Texture and VBO
+slice sizes start conservatively and shrink automatically after measured upload
+stalls. This keeps the visible cave geometry from collapsing to only the few
+chunks whose original texture tiles fit in VRAM, while still preventing
+obviously oversized texture uploads. GPU memory detection is platform-specific:
+NVIDIA uses `nvidia-smi` when available, Linux AMD uses DRM sysfs, low-VRAM AMD
+integrated GPUs add 50% of reported GTT/shared memory capped at 2 GB, Windows
+AMD/Intel currently use an 8 GB fallback budget, and macOS currently uses a
+conservative 1 GB fallback when no override is set. Texture cap selection logs
+the budget inputs and the selected common dimension before the first oversized
+texture is resized.
 
 ## UI and platform boundaries
 
@@ -152,7 +171,7 @@ objects.
 `caveviewer.storage_paths` is the platform-neutral path boundary. Linux uses
 the XDG configuration, data, cache, state, and runtime roots; macOS, Windows,
 and unsupported platforms currently preserve the historical `~/.caveviewer/`
-root until their storage conventions are migrated separately. Advanced settings
+root until their storage conventions are migrated separately. Preferences
 are configuration; remembered chooser locations are state; generated map
 caches are rebuildable cache data. `CAVEVIEWER_HOME` creates isolated
 `config/`, `data/`, `cache/`, `state/`, and `runtime/` children for portable or
@@ -179,7 +198,7 @@ any non-SHUTDOWN state -> SHUTDOWN
 
 Network, verification, and staging-file work runs in manager-owned workers.
 The splash polls immutable snapshots and performs widget updates on the Tk
-thread. The viewer and `core.streaming_world` have no update dependency, so
+thread. The viewer and `core.streaming.world` have no update dependency, so
 opening a map neither cancels a download nor introduces update UI into the
 viewer. Only process shutdown cancels an unfinished download and waits for its
 temporary files to be removed.

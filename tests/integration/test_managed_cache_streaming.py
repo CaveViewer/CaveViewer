@@ -7,7 +7,9 @@ import time
 import numpy as np
 import pytest
 
-from caveviewer.core import chunker, obj_parser, streaming_world
+from caveviewer.core.mesh import obj as obj_parser
+from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.streaming import world as streaming_world
 
 
 @pytest.mark.integration

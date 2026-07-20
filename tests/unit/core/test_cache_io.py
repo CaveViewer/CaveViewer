@@ -8,7 +8,8 @@ import struct
 import numpy as np
 import pytest
 
-from caveviewer.core import chunker
+from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.chunking import metadata as chunk_metadata
 
 
 CELL = (1, -2, 3)
@@ -61,6 +62,17 @@ def test_load_manifest_reads_valid_object(tmp_path):
     )
     assert chunker.load_manifest(str(tmp_path)) == expected
     assert chunker.cache_chunk_size(str(tmp_path)) == 8.0
+
+
+def test_load_manifest_rejects_oversized_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(chunk_metadata, "MAX_CACHE_MANIFEST_BYTES", 8)
+    (tmp_path / chunker.MANIFEST_NAME).write_text(
+        json.dumps({"chunk_size": 8.0, "chunks": {}}),
+        encoding="utf-8",
+    )
+
+    assert chunker.load_manifest(str(tmp_path)) is None
+    assert chunker.cache_chunk_size(str(tmp_path)) is None
 
 
 def test_load_chunk_rejects_missing_file(tmp_path):

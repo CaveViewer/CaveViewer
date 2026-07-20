@@ -1,5 +1,5 @@
 """
-caveviewer.core.streaming_world
+caveviewer.core.streaming.world
 
 Runtime chunk streaming: watches the camera's world position and keeps
 only a radius of chunks around it loaded into GPU memory, uploading newly
@@ -26,80 +26,86 @@ from typing import Callable, Iterable, Optional
 
 import numpy as np
 
-from caveviewer.core import chunker, hardware_memory
-from caveviewer.core.worker_config import (
+from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
+from caveviewer.core.workers.allocation import (
     MAX_WORKER_RAM_UTILIZATION,
     can_start_additional_worker,
     describe_worker_target,
     resolve_worker_allocation,
 )
-from caveviewer.core.chunker import ChunkData
-from caveviewer.core.logging_utils import get_logger
-from caveviewer.core.streaming_budget import (
+from caveviewer.core.chunking.io import ChunkData
+from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.streaming.budget import (
     calculate_residency_budget,
     estimate_chunk_bytes,
 )
-from caveviewer.core.streaming_scheduler import (
+from caveviewer.core.streaming.scheduler import (
     BoundedReadyBacklog,
+    Cell,
     cell_distance_sq,
     cell_in_cube_radius,
     cells_outside_cube_radius,
     select_evictions,
     select_wanted_cells,
 )
+from caveviewer.core.textures.decoding import resolve_texture_path
 
 
 _LOG = get_logger("StreamingWorld")
 _SHUTDOWN_WORKER_JOIN_POLL_SECONDS = 0.25
+_SHUTDOWN_WORKER_JOIN_TIMEOUT_SECONDS = 2.0
 _SHUTDOWN_WORKER_JOIN_LOG_SECONDS = 5.0
 _READY_BACKLOG_TARGET_CHUNKS = 16
+_WORKER_FAILURE_BACKLOG_CAPACITY = 256
+CellPriorityKey = Callable[[Cell], object]
 
 # Compatibility hooks for existing diagnostics/tests that patch these names
-# through core.streaming_world rather than core.hardware_memory.
-subprocess = hardware_memory.subprocess
-sys = hardware_memory.sys
+# through core.streaming.world rather than the lower-level memory modules.
+subprocess = gpu_memory.subprocess
+sys = gpu_memory.sys
 
-_AMD_PCI_VENDOR_ID = hardware_memory.AMD_PCI_VENDOR_ID
-_LINUX_DRM_ROOT = hardware_memory.LINUX_DRM_ROOT
+_AMD_PCI_VENDOR_ID = gpu_memory.AMD_PCI_VENDOR_ID
+_LINUX_DRM_ROOT = gpu_memory.LINUX_DRM_ROOT
 
 
 def _detect_total_ram_bytes() -> int:
-    return hardware_memory.detect_total_ram_bytes()
+    return system_memory.detect_total_ram_bytes()
 
 
-def _detect_ram_snapshot() -> hardware_memory.RamSnapshot | None:
-    return hardware_memory.detect_ram_snapshot()
+def _detect_ram_snapshot() -> system_memory.RamSnapshot | None:
+    return system_memory.detect_ram_snapshot()
 
 
 def _parse_target_fraction(raw_value: str | None, conservative_default: float) -> float:
-    return hardware_memory.parse_target_fraction(
+    return memory_targets.parse_target_fraction(
         raw_value, conservative_default
     )
 
 
 def _parse_memory_target_fraction(raw_value: str | None) -> float:
-    return hardware_memory.parse_memory_target_fraction(raw_value)
+    return memory_targets.parse_memory_target_fraction(raw_value)
 
 
 def _parse_gpu_target_fraction(raw_value: str | None) -> float:
-    return hardware_memory.parse_gpu_target_fraction(raw_value)
+    return memory_targets.parse_gpu_target_fraction(raw_value)
 
 
-_read_positive_sysfs_int = hardware_memory.read_positive_sysfs_int
+_read_positive_sysfs_int = gpu_memory.read_positive_sysfs_int
 
 
 def _detect_linux_amd_gpu_memory_bytes(
     drm_root: str | os.PathLike[str] = _LINUX_DRM_ROOT,
 ) -> int | None:
-    return hardware_memory.detect_linux_amd_gpu_memory_bytes(drm_root)
+    return gpu_memory.detect_linux_amd_gpu_memory_bytes(drm_root)
 
 
 def _detect_nvidia_gpu_memory_bytes() -> int | None:
-    return hardware_memory.detect_nvidia_gpu_memory_bytes()
+    return gpu_memory.detect_nvidia_gpu_memory_bytes()
 
 
 def _detect_total_gpu_memory_bytes(gpu_vendor: str | None = None) -> int | None:
-    return hardware_memory.detect_total_gpu_memory_bytes(
+    return gpu_memory.detect_total_gpu_memory_bytes(
         gpu_vendor,
         nvidia_detector=_detect_nvidia_gpu_memory_bytes,
         amd_detector=_detect_linux_amd_gpu_memory_bytes,
@@ -136,6 +142,25 @@ class StreamingConfig:
         return self.load_radius_cells + self.unload_radius_margin
 
 
+@dataclass(frozen=True)
+class StreamingWorkerFailure:
+    """Structured notification for a background streaming worker exception.
+
+    Workers publish these records to a bounded queue so the owning
+    application/render thread can drain and report failures without polling
+    worker internals.  Fatal failures also move the cell into
+    StreamingWorld's failed-cell state; non-fatal failures report failed
+    best-effort preprocessing while still allowing the chunk to become ready.
+    """
+
+    cell: tuple[int, int, int]
+    stage: str
+    error_type: str
+    message: str
+    thread_name: str
+    fatal: bool
+
+
 _BoundedReadyBacklog = BoundedReadyBacklog
 
 
@@ -151,6 +176,19 @@ class StreamingWorld:
         `drain_ready_chunks()`, which you call once per frame) for any
         chunks that finished loading
       - call `on_chunk_unload(cell)` for chunks that should be evicted
+
+    Thread ownership:
+      - The owning application/render thread calls lifecycle and frame methods
+        such as `update()`, `drain_ready_chunks()`, `pause()`, `resume()`,
+        `stats()`, `drain_worker_failures()`, and `shutdown()`.
+      - Streaming worker threads are owned by this object and do only CPU-side
+        chunk loading/preparation work. They never issue OpenGL commands.
+      - `on_chunk_ready` and `on_chunk_unload` run synchronously inside
+        `drain_ready_chunks()` on the owner thread. Internal loaded/unloaded
+        state is committed only after those callbacks reach their documented
+        transaction point.
+      - `on_decode_textures` and `prepack_smooth_shading` run in worker
+        threads and must remain CPU-only.
     """
 
     def __init__(self, cache_dir: str, config: StreamingConfig,
@@ -195,6 +233,12 @@ class StreamingWorld:
         self.on_decode_textures = on_decode_textures
         self.prepack_smooth_shading = prepack_smooth_shading
         manifest = chunker.load_manifest(cache_dir) or {"chunks": {}}
+        manifest_max_upload_group_mb = chunker.manifest_max_upload_group_mb(manifest)
+        self._chunk_file_max_group_bytes = (
+            int(manifest_max_upload_group_mb * 1024 ** 2)
+            if manifest_max_upload_group_mb is not None
+            else None
+        )
         chunks = manifest.get("chunks", {})
         sampled_chunk_keys: list[str] = []
         self.available_cells: set[tuple[int, int, int]] = set()
@@ -239,6 +283,7 @@ class StreamingWorld:
 
         self.loaded_cells: set[tuple[int, int, int]] = set()
         self._pending: set[tuple[int, int, int]] = set()
+        self._failed_cells: dict[tuple[int, int, int], StreamingWorkerFailure] = {}
         self._partial_ready: list[ChunkData] = []
         # Cells leave loaded_cells only when their caller-provided unload
         # callback actually runs.  Evictions are queued here first so the
@@ -272,18 +317,27 @@ class StreamingWorld:
         _LOG.info(describe_worker_target("Streaming", worker_allocation))
         self._stop_event = threading.Event()
         self._paused_event = threading.Event()
+        self._worker_wakeup_event = threading.Event()
         # Keep queued-but-not-yet-decoded work bounded.  The ready backlog
         # already caps decoded payloads; this caps the earlier scheduling
         # stage so a dense start cell or high render radius cannot enqueue the
         # whole desired view at once and force the startup overlay to wait for
         # a large pending set before the user can begin.
         self._work_queue_capacity = max(16, min(512, self.config.max_loaded_chunks * 2))
-        self._work_queue: "queue.Queue[tuple[int,int,int]]" = queue.Queue(
+        self._work_queue: "queue.Queue[tuple[int, int, int] | None]" = queue.Queue(
             maxsize=self._work_queue_capacity
+        )
+        # Failure notifications are bounded so a broken cache cannot let
+        # workers accumulate unbounded diagnostic records.  The persistent
+        # failed-cell map remains authoritative even if old notifications are
+        # dropped before the render thread drains them.
+        self._worker_failure_queue: "queue.Queue[StreamingWorkerFailure]" = (
+            queue.Queue(maxsize=_WORKER_FAILURE_BACKLOG_CAPACITY)
         )
         self._worker_start_lock = threading.Lock()
         self._worker_admission_blocked = False
         self._workers: list[threading.Thread] = []
+        self._shutdown_unjoined_workers: list[threading.Thread] = []
         # The configured count is a maximum. Start one worker unconditionally;
         # completed chunk work will make memory cost observable before each
         # additional worker is admitted.
@@ -292,6 +346,7 @@ class StreamingWorld:
 
         self._last_camera_cell: Optional[tuple[int, int, int]] = None
         self._last_load_radius: Optional[int] = None
+        self._last_cell_priority_key: CellPriorityKey | None = None
 
     def _estimate_chunk_ram_bytes(self, chunk_keys: list[str]) -> int:
         """Estimate in-RAM cost per loaded chunk from cache chunk file sizes."""
@@ -365,7 +420,9 @@ class StreamingWorld:
 
                 image_context = Image.open(io.BytesIO(file_or_bytes))
             else:
-                image_context = Image.open(os.path.join(textures_dir, str(file_or_bytes)))
+                image_context = Image.open(
+                    resolve_texture_path(textures_dir, str(file_or_bytes))
+                )
             with image_context as image:
                 width, height = image.size
         except Exception as exc:
@@ -448,7 +505,7 @@ class StreamingWorld:
         worker = threading.Thread(
             target=self._worker_loop,
             name=f"CaveViewer-stream-{worker_number}",
-            daemon=True,
+            daemon=False,
         )
         self._workers.append(worker)
         try:
@@ -463,6 +520,7 @@ class StreamingWorld:
         if worker_start_lock is None:
             return False
 
+        log_event = None
         with worker_start_lock:
             if (
                 self._stop_event.is_set()
@@ -476,26 +534,59 @@ class StreamingWorld:
             if not can_start_additional_worker(snapshot):
                 if not self._worker_admission_blocked:
                     if snapshot is None:
-                        _LOG.warning(
-                            "Could not measure available system RAM; keeping "
-                            "streaming at %d worker(s).",
-                            len(self._workers),
-                        )
+                        log_event = ("missing_snapshot", len(self._workers))
                     else:
-                        _LOG.warning(
-                            "System RAM utilization is %.1f%%; keeping streaming "
-                            "at %d worker(s) because the limit is %.0f%%.",
-                            snapshot.utilization_fraction * 100.0,
+                        log_event = (
+                            "ram_pressure",
+                            snapshot.utilization_fraction,
                             len(self._workers),
-                            MAX_WORKER_RAM_UTILIZATION * 100.0,
                         )
                 self._worker_admission_blocked = True
-                return False
+                started = False
+            else:
+                self._start_worker_locked()
+                log_event = (
+                    "started",
+                    self._worker_admission_blocked,
+                    snapshot.available_bytes,
+                    snapshot.total_bytes,
+                    snapshot.utilization_fraction,
+                    len(self._workers),
+                    self._worker_pool_size,
+                )
+                self._worker_admission_blocked = False
+                started = True
 
-            self._start_worker_locked()
+        if log_event is None:
+            return started
+        if log_event[0] == "missing_snapshot":
+            _LOG.warning(
+                "Could not measure available system RAM; keeping "
+                "streaming at %d worker(s).",
+                log_event[1],
+            )
+        elif log_event[0] == "ram_pressure":
+            _event, utilization_fraction, worker_count = log_event
+            _LOG.warning(
+                "System RAM utilization is %.1f%%; keeping streaming "
+                "at %d worker(s) because the limit is %.0f%%.",
+                utilization_fraction * 100.0,
+                worker_count,
+                MAX_WORKER_RAM_UTILIZATION * 100.0,
+            )
+        else:
+            (
+                _event,
+                was_admission_blocked,
+                available_bytes,
+                total_bytes,
+                utilization_fraction,
+                worker_count,
+                worker_pool_size,
+            ) = log_event
             pressure_note = (
                 "System RAM pressure eased; "
-                if self._worker_admission_blocked
+                if was_admission_blocked
                 else ""
             )
             _LOG.info(
@@ -503,17 +594,38 @@ class StreamingWorld:
                 "available of %.1f GB (%.1f%% used); increasing workers "
                 "to %d of %d.",
                 pressure_note,
-                snapshot.available_bytes / (1024 ** 3),
-                snapshot.total_bytes / (1024 ** 3),
-                snapshot.utilization_fraction * 100.0,
-                len(self._workers),
-                self._worker_pool_size,
+                available_bytes / (1024 ** 3),
+                total_bytes / (1024 ** 3),
+                utilization_fraction * 100.0,
+                worker_count,
+                worker_pool_size,
             )
-            self._worker_admission_blocked = False
-            return True
+        return started
 
-    def shutdown(self):
+    def _drain_work_queue(self) -> None:
+        while True:
+            try:
+                self._work_queue.get_nowait()
+            except queue.Empty:
+                return
+
+    def shutdown(
+        self,
+        *,
+        timeout: float | None = _SHUTDOWN_WORKER_JOIN_TIMEOUT_SECONDS,
+    ):
+        """Request worker shutdown, wake blocked workers, and join them.
+
+        A finite ``timeout`` returns control to the owner if a worker is stuck
+        in external I/O or callback code; unjoined non-daemon workers remain in
+        ``_shutdown_unjoined_workers`` so the owner can report or retry before
+        interpreter termination. Passing ``timeout=None`` waits until every
+        worker has joined.
+        """
+        if timeout is not None and timeout < 0.0:
+            raise ValueError("shutdown timeout must be non-negative")
         self._stop_event.set()
+        self._wake_workers()
         worker_start_lock = getattr(self, "_worker_start_lock", None)
         if worker_start_lock is None:
             workers = list(self._workers)
@@ -531,9 +643,17 @@ class StreamingWorld:
                 pass
         wait_started_at = time.perf_counter()
         last_wait_log_at = wait_started_at
+        deadline = None if timeout is None else wait_started_at + timeout
+        unjoined_workers: list[threading.Thread] = []
         for w in workers:
             while w.is_alive():
-                w.join(timeout=_SHUTDOWN_WORKER_JOIN_POLL_SECONDS)
+                join_timeout = _SHUTDOWN_WORKER_JOIN_POLL_SECONDS
+                if deadline is not None:
+                    remaining = deadline - time.perf_counter()
+                    if remaining <= 0.0:
+                        break
+                    join_timeout = min(join_timeout, remaining)
+                w.join(timeout=join_timeout)
                 if not w.is_alive():
                     break
                 now = time.perf_counter()
@@ -544,6 +664,28 @@ class StreamingWorld:
                         now - wait_started_at,
                     )
                     last_wait_log_at = now
+            if w.is_alive():
+                unjoined_workers.append(w)
+        elapsed = time.perf_counter() - wait_started_at
+        if unjoined_workers:
+            names = ", ".join(
+                getattr(worker, "name", "<unnamed>")
+                for worker in unjoined_workers
+            )
+            _LOG.warning(
+                "Streaming worker shutdown timed out after %.2fs; "
+                "%d worker(s) still running: %s",
+                elapsed,
+                len(unjoined_workers),
+                names,
+            )
+        self._drain_work_queue()
+        if worker_start_lock is None:
+            self._workers = unjoined_workers
+        else:
+            with worker_start_lock:
+                self._workers = unjoined_workers
+        self._shutdown_unjoined_workers = unjoined_workers
         self._ready_backlog.clear()
         partial_ready = getattr(self, "_partial_ready", None)
         if partial_ready is not None:
@@ -553,9 +695,11 @@ class StreamingWorld:
 
     def pause(self):
         self._paused_event.set()
+        self._wake_workers()
 
     def resume(self):
         self._paused_event.clear()
+        self._wake_workers()
 
     def is_paused(self) -> bool:
         return self._paused_event.is_set()
@@ -568,16 +712,127 @@ class StreamingWorld:
         with self._lock:
             self._pending.discard(cell)
 
+    def _wake_workers(self) -> None:
+        worker_wakeup_event = getattr(self, "_worker_wakeup_event", None)
+        if worker_wakeup_event is not None:
+            worker_wakeup_event.set()
+
+    def _wait_while_paused(self) -> None:
+        worker_wakeup_event = getattr(self, "_worker_wakeup_event", None)
+        while self._paused_event.is_set() and not self._stop_event.is_set():
+            if worker_wakeup_event is None:
+                self._stop_event.wait(timeout=0.1)
+                continue
+            worker_wakeup_event.clear()
+            if not self._paused_event.is_set() or self._stop_event.is_set():
+                return
+            worker_wakeup_event.wait()
+
+    def _ensure_worker_failure_queue(self) -> "queue.Queue[StreamingWorkerFailure]":
+        if not hasattr(self, "_worker_failure_queue"):
+            self._worker_failure_queue = queue.Queue(
+                maxsize=_WORKER_FAILURE_BACKLOG_CAPACITY
+            )
+        return self._worker_failure_queue
+
+    def _publish_worker_failure(self, failure: StreamingWorkerFailure) -> None:
+        failure_queue = self._ensure_worker_failure_queue()
+        try:
+            failure_queue.put_nowait(failure)
+            return
+        except queue.Full:
+            pass
+
+        # The failed-cell map keeps authoritative state.  If the notification
+        # queue is full, keep the newest event and drop the oldest undrained
+        # notification rather than blocking a worker during error handling.
+        try:
+            failure_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            failure_queue.put_nowait(failure)
+        except queue.Full:
+            _LOG.warning(
+                "Streaming worker failure queue is full; dropped failure "
+                "notification for %s during %s.",
+                failure.cell,
+                failure.stage,
+            )
+
+    def _record_worker_failure(
+        self,
+        cell: tuple[int, int, int],
+        stage: str,
+        exc: Exception,
+        *,
+        fatal: bool,
+    ) -> StreamingWorkerFailure:
+        failure = StreamingWorkerFailure(
+            cell=cell,
+            stage=stage,
+            error_type=type(exc).__name__,
+            message=str(exc) or repr(exc),
+            thread_name=threading.current_thread().name,
+            fatal=fatal,
+        )
+        if fatal:
+            with self._lock:
+                if not hasattr(self, "_failed_cells"):
+                    self._failed_cells = {}
+                self._failed_cells[cell] = failure
+                self._pending.discard(cell)
+        self._publish_worker_failure(failure)
+        _LOG.warning(
+            "Streaming worker %s failure for cell %s during %s on %s: %s: %s",
+            "fatal" if fatal else "non-fatal",
+            cell,
+            stage,
+            failure.thread_name,
+            failure.error_type,
+            failure.message,
+        )
+        return failure
+
+    def drain_worker_failures(
+        self,
+        max_items: int | None = None,
+    ) -> list[StreamingWorkerFailure]:
+        """Return worker failure notifications without blocking.
+
+        This is the owner-thread propagation point.  Draining notifications
+        does not clear failed-cell state; fatal failed cells remain suppressed
+        from future load scheduling so a bad chunk cannot churn forever.
+        """
+        if max_items is not None and max_items < 0:
+            raise ValueError("max_items must be non-negative")
+        failure_queue = self._ensure_worker_failure_queue()
+        failures: list[StreamingWorkerFailure] = []
+        while max_items is None or len(failures) < max_items:
+            try:
+                failures.append(failure_queue.get_nowait())
+            except queue.Empty:
+                break
+        return failures
+
+    def failed_cells(self) -> dict[tuple[int, int, int], StreamingWorkerFailure]:
+        """Return a snapshot of cells that hit fatal worker failures."""
+        with self._lock:
+            return dict(getattr(self, "_failed_cells", {}))
+
     def _worker_loop(self):
         while not self._stop_event.is_set():
             if self._paused_event.is_set():
-                time.sleep(0.1)
+                self._wait_while_paused()
                 continue
             try:
                 cell = self._work_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
             if cell is None:
+                break
+            if self._stop_event.is_set():
+                self._clear_pending_cell(cell)
                 break
 
             # Pause may have been requested while this worker was blocked
@@ -591,20 +846,39 @@ class StreamingWorld:
                     # the item.  Do not block while paused/shutting down; make
                     # the cell schedulable again when update() reconciles.
                     self._clear_pending_cell(cell)
-                time.sleep(0.1)
+                self._wait_while_paused()
                 continue
 
             handed_off = False
+            stage = "load_chunk_file"
             try:
                 if not self._cell_is_wanted(cell):
                     continue
-                data = chunker.load_chunk_file(self.cache_dir, cell)
+                chunk_file_max_group_bytes = getattr(
+                    self,
+                    "_chunk_file_max_group_bytes",
+                    None,
+                )
+                if chunk_file_max_group_bytes is None:
+                    data = chunker.load_chunk_file(self.cache_dir, cell)
+                else:
+                    data = chunker.load_chunk_file(
+                        self.cache_dir,
+                        cell,
+                        max_group_bytes=chunk_file_max_group_bytes,
+                    )
+                if self._stop_event.is_set() or not self._cell_is_wanted(cell):
+                    continue
+                stage = "prepare_chunk_upload_groups"
                 chunker.prepare_chunk_upload_groups(data)
+                if self._stop_event.is_set() or not self._cell_is_wanted(cell):
+                    continue
                 prepack_smooth_shading = getattr(
                     self, "prepack_smooth_shading", None
                 )
                 if prepack_smooth_shading is not None:
                     try:
+                        stage = "prepack_chunk_vertex_bytes"
                         chunker.prepack_chunk_vertex_bytes(
                             data,
                             smooth_shading=bool(prepack_smooth_shading()),
@@ -613,18 +887,30 @@ class StreamingWorld:
                         # Prepacking is an optimization. If it fails, keep the
                         # chunk stream correct and let the render thread fall
                         # back to the existing on-demand pack path.
-                        _LOG.warning(
-                            "vertex-byte prepack failed for %s: %s", cell, e
+                        self._record_worker_failure(
+                            cell,
+                            "prepack_chunk_vertex_bytes",
+                            e,
+                            fatal=False,
                         )
+                if self._stop_event.is_set() or not self._cell_is_wanted(cell):
+                    continue
                 if self.on_decode_textures is not None:
                     try:
+                        stage = "on_decode_textures"
                         self.on_decode_textures(data)
                     except Exception as e:
                         # texture pre-decode is a best-effort optimization;
                         # a failure here should not block the chunk from
                         # becoming ready -- worst case, acquire() falls back
                         # to a synchronous decode on the main thread later.
-                        _LOG.warning(f"texture pre-decode failed for {cell}: {e}")
+                        self._record_worker_failure(
+                            cell,
+                            "on_decode_textures",
+                            e,
+                            fatal=False,
+                        )
+                stage = "ready_backlog"
                 while (
                     not self._stop_event.is_set()
                     and self._cell_is_wanted(cell)
@@ -635,13 +921,12 @@ class StreamingWorld:
                         break
                     except queue.Full:
                         continue
-            except FileNotFoundError:
-                # cell vanished from manifest expectations; ignore safely
-                pass
+            except FileNotFoundError as e:
+                self._record_worker_failure(cell, stage, e, fatal=True)
             except Exception as e:
                 # don't crash the worker thread on a single bad chunk file;
-                # surface via print so it's visible without killing render
-                _LOG.warning(f"failed to load chunk {cell}: {e}")
+                # publish a structured failure and mark the cell terminal.
+                self._record_worker_failure(cell, stage, e, fatal=True)
             finally:
                 if not handed_off:
                     self._clear_pending_cell(cell)
@@ -653,15 +938,87 @@ class StreamingWorld:
     def cell_for_position(self, position: np.ndarray) -> tuple[int, int, int]:
         return chunker.world_to_cell(position, self.config.chunk_size)
 
-    def update(self, camera_position: np.ndarray) -> None:
+    def _reprioritize_queued_work(
+        self,
+        priority_key: CellPriorityKey,
+        wanted: set[Cell],
+    ) -> None:
+        """Reorder queued, not-yet-started worker cells by current priority.
+
+        Pending cells include both queue-resident work and work a worker thread
+        has already taken.  Only queue-resident work can be reprioritized safely;
+        in-flight work is left alone.
+        """
+        work_queue = getattr(self, "_work_queue", None)
+        if work_queue is None:
+            return
+
+        queued: list[Cell] = []
+        stale: list[Cell] = []
+        sentinels = 0
+        while True:
+            try:
+                cell = work_queue.get_nowait()
+            except queue.Empty:
+                break
+            if cell is None:
+                sentinels += 1
+            elif cell in wanted:
+                queued.append(cell)
+            else:
+                stale.append(cell)
+
+        if not queued and not stale and sentinels == 0:
+            return
+
+        requeued: set[Cell] = set()
+        for cell in sorted(queued, key=priority_key):
+            try:
+                work_queue.put_nowait(cell)
+            except queue.Full:
+                break
+            requeued.add(cell)
+
+        dropped = set(stale) | (set(queued) - requeued)
+        if dropped:
+            with self._lock:
+                self._pending.difference_update(dropped)
+
+        for _ in range(sentinels):
+            try:
+                work_queue.put_nowait(None)
+            except queue.Full:
+                break
+
+    def update(
+        self,
+        camera_position: np.ndarray,
+        cell_priority_key: CellPriorityKey | None = None,
+    ) -> None:
         """Call once per frame. Cheap if camera hasn't crossed a cell
         boundary AND the load radius hasn't changed since the last call
-        (early-outs immediately in that case)."""
+        (early-outs immediately in that case).
+
+        `cell_priority_key`, when supplied by the owner/render thread, ranks
+        candidate cells for dispatch and ready uploads.  This keeps the core
+        scheduler independent of camera/rendering APIs while allowing the GUI
+        to prioritize cells in the current view over cells that are merely
+        closer to the camera but off-screen or behind it.
+        """
         if self._paused_event.is_set():
             return
 
         cam_cell = self.cell_for_position(camera_position)
         current_radius = self.config.load_radius_cells
+        priority_key = (
+            cell_priority_key
+            if cell_priority_key is not None
+            else lambda cell: self._cell_distance_sq(cell, cam_cell)
+        )
+        # Store this before the stationary-view early-out so turning the
+        # camera without crossing a cell still changes which ready/deferred
+        # chunks get uploaded first.
+        self._last_cell_priority_key = priority_key
 
         # Recompute if the camera moved to a new cell OR the radius itself
         # changed (e.g. the person just dragged a render-distance slider
@@ -675,15 +1032,19 @@ class StreamingWorld:
         )
         if same_view:
             # Worker failures and stale-result cleanup can remove a pending
-            # cell asynchronously while the camera remains stationary. Only
-            # early-out when every wanted cell is still loaded or in flight;
-            # otherwise reconcile the same view and enqueue the missing work.
+            # cell asynchronously while the camera remains stationary.
+            # Fatal failures are terminal for this StreamingWorld instance,
+            # so they count as resolved for scheduling: keeping them outside
+            # pending prevents a bad chunk file from being retried every frame.
             with self._lock:
+                wanted_snapshot = set(self._last_wanted_cells)
                 unresolved = (
-                    self._last_wanted_cells
+                    wanted_snapshot
                     - self.loaded_cells
                     - self._pending
+                    - set(getattr(self, "_failed_cells", {}))
                 )
+            self._reprioritize_queued_work(priority_key, wanted_snapshot)
             if not unresolved:
                 return
         self._last_camera_cell = cam_cell
@@ -699,24 +1060,32 @@ class StreamingWorld:
         self._cancel_queued_unloads(wanted)
         with self._lock:
             self._last_wanted_cells = wanted
-            to_request = wanted - self.loaded_cells - self._pending
-            # Dispatch closest-to-camera first. Without this, chunks load in
-            # whatever arbitrary order set-iteration and thread scheduling
-            # happen to produce -- so a chunk directly ahead of a fast-moving
-            # camera (which causes a visible hole if it's late) can finish
-            # loading AFTER a chunk behind the camera that doesn't matter yet.
-            # Sorting by distance means the chunks the camera will reach
-            # soonest are always the ones uploaded soonest.
-            ordered = sorted(
-                to_request,
-                key=lambda cell: self._cell_distance_sq(cell, cam_cell),
+            to_request = tuple(
+                wanted
+                - self.loaded_cells
+                - self._pending
+                - set(getattr(self, "_failed_cells", {}))
             )
+        # Sort outside StreamingWorld's internal lock.  The priority key is
+        # supplied by the owner layer and must not run while internal state is
+        # locked.
+        ordered = sorted(to_request, key=priority_key)
+        with self._lock:
             for cell in ordered:
+                if cell not in self._last_wanted_cells:
+                    continue
+                if (
+                    cell in self.loaded_cells
+                    or cell in self._pending
+                    or cell in getattr(self, "_failed_cells", {})
+                ):
+                    continue
                 try:
                     self._work_queue.put_nowait(cell)
                 except queue.Full:
                     break
                 self._pending.add(cell)
+        self._reprioritize_queued_work(priority_key, wanted)
 
         stale_ready = self._ready_backlog.discard_if(
             lambda data: data.cell not in wanted
@@ -848,8 +1217,11 @@ class StreamingWorld:
                 if cell in self.loaded_cells and cell in self._last_wanted_cells:
                     backlog_cells.discard(cell)
                     continue
-                self.loaded_cells.discard(cell)
+                was_loaded = cell in self.loaded_cells
             on_chunk_unload(cell)
+            if was_loaded:
+                with self._lock:
+                    self.loaded_cells.discard(cell)
             backlog_cells.discard(cell)
             released += 1
         backlog[:] = retained
@@ -891,10 +1263,11 @@ class StreamingWorld:
             if several expensive chunks land in the same frame. The time
             budget catches that case; the count cap is just a backstop.
 
-        Each chunk is selected by distance to the camera's last known cell,
-        so if multiple chunks are ready, the one most likely to cause a visible
-        hole if delayed is uploaded first. Deferred chunks remain in the same
-        bounded backlog for a later frame.
+        Each chunk is selected by the latest owner-supplied cell priority when
+        available, falling back to distance from the camera's last known cell.
+        This lets the render owner upload camera-visible chunks before
+        off-screen chunks without putting camera or OpenGL policy in core.
+        Deferred chunks remain in the same bounded backlog for a later frame.
 
         `on_chunk_ready` may return False when it performed only a partial
         render-thread upload. In that case the chunk remains pending and is
@@ -905,10 +1278,16 @@ class StreamingWorld:
         if not hasattr(self, "_partial_ready"):
             self._partial_ready = []
 
-        cam_cell = getattr(self, "_last_cam_cell_for_priority", None)
-        distance_key = None
-        if cam_cell is not None:
-            distance_key = lambda data: self._cell_distance_sq(data.cell, cam_cell)
+        cell_priority_key = getattr(self, "_last_cell_priority_key", None)
+        if cell_priority_key is None:
+            cam_cell = getattr(self, "_last_cam_cell_for_priority", None)
+            if cam_cell is not None:
+                cell_priority_key = lambda cell: self._cell_distance_sq(cell, cam_cell)
+        ready_priority_key = (
+            None
+            if cell_priority_key is None
+            else lambda data: cell_priority_key(data.cell)
+        )
 
         start = time.perf_counter()
         n = 0
@@ -924,17 +1303,17 @@ class StreamingWorld:
                 break
             partial_ready = getattr(self, "_partial_ready", [])
             if partial_ready:
-                if distance_key is None:
+                if ready_priority_key is None:
                     data = partial_ready.pop(0)
                 else:
                     item_index = min(
                         range(len(partial_ready)),
-                        key=lambda index: distance_key(partial_ready[index]),
+                        key=lambda index: ready_priority_key(partial_ready[index]),
                     )
                     data = partial_ready.pop(item_index)
             else:
                 try:
-                    data = self._ready_backlog.get_closest_nowait(distance_key)
+                    data = self._ready_backlog.get_closest_nowait(ready_priority_key)
                 except queue.Empty:
                     break
             with self._lock:
@@ -973,6 +1352,7 @@ class StreamingWorld:
     def stats(self) -> dict:
         with self._lock:
             loaded_count = len(self.loaded_cells)
+            loaded_wanted_count = len(self.loaded_cells & self._last_wanted_cells)
             pending_count = len(self._pending)
             ready_count = (
                 self._ready_backlog.qsize()
@@ -980,11 +1360,17 @@ class StreamingWorld:
             )
             unload_pending_count = len(getattr(self, "_unload_backlog", []))
             wanted_count = len(self._last_wanted_cells)
+            failed_cells = getattr(self, "_failed_cells", {})
+            failed_count = len(failed_cells)
+            failed_wanted_count = len(self._last_wanted_cells & set(failed_cells))
         return {
             "loaded": loaded_count,
+            "loaded_wanted": loaded_wanted_count,
             "pending": pending_count,
             "ready": ready_count,
             "unload_pending": unload_pending_count,
             "wanted": wanted_count,
+            "failed": failed_count,
+            "failed_wanted": failed_wanted_count,
             "total_available": len(self.available_cells),
         }
