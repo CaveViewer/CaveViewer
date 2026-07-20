@@ -177,6 +177,31 @@ def test_portal_state_machine_rejects_invalid_transition():
         machine.transition(PortalRequestState.COMPLETED)
 
 
+def test_portal_state_machine_accepts_terminal_lifecycle_paths():
+    completed = PortalRequestStateMachine()
+    completed.transition(PortalRequestState.REQUESTING)
+    completed.transition(PortalRequestState.WAITING)
+    completed.transition(PortalRequestState.COMPLETED)
+    assert completed.state is PortalRequestState.COMPLETED
+
+    cancelled = PortalRequestStateMachine()
+    cancelled.transition(PortalRequestState.REQUESTING)
+    cancelled.transition(PortalRequestState.WAITING)
+    cancelled.transition(PortalRequestState.CANCELLED)
+    assert cancelled.state is PortalRequestState.CANCELLED
+
+    request_failure = PortalRequestStateMachine()
+    request_failure.transition(PortalRequestState.REQUESTING)
+    request_failure.transition(PortalRequestState.FAILED)
+    assert request_failure.state is PortalRequestState.FAILED
+
+    wait_failure = PortalRequestStateMachine()
+    wait_failure.transition(PortalRequestState.REQUESTING)
+    wait_failure.transition(PortalRequestState.WAITING)
+    wait_failure.transition(PortalRequestState.FAILED)
+    assert wait_failure.state is PortalRequestState.FAILED
+
+
 def test_desktop_service_factory_prefers_portals_on_linux(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
 
@@ -330,6 +355,39 @@ def test_linux_file_chooser_failure_uses_tk_fallback():
             "choose_file",
             {"title": "Open map", "initial_dir": "/maps", "parent": "owner"},
         )
+    ]
+
+
+def test_linux_open_uri_failure_uses_fallback_for_remote_uri():
+    transport = FakeTransport(error=DesktopServiceError("session bus missing"))
+    fallback = FakeFallback()
+    services = LinuxPortalDesktopServices(
+        portal=XdgPortalClient(transport), fallback=fallback
+    )
+
+    services.open_uri("https://example.invalid/map", parent="owner")
+
+    assert fallback.calls == [
+        ("open_uri", "https://example.invalid/map", "owner")
+    ]
+
+
+def test_linux_notify_withdraw_and_inhibit_failures_use_fallback():
+    transport = FakeTransport(error=DesktopServiceError("session bus missing"))
+    fallback = FakeFallback()
+    services = LinuxPortalDesktopServices(
+        portal=XdgPortalClient(transport), fallback=fallback
+    )
+
+    services.notify("sample", "Ready", "Downloaded", priority="normal")
+    services.withdraw_notification("sample")
+    inhibitor = services.inhibit_idle_suspend("Downloading map", parent="owner")
+    inhibitor.close()
+
+    assert fallback.calls == [
+        ("notify", "sample", "Ready", "Downloaded", "normal"),
+        ("withdraw_notification", "sample"),
+        ("inhibit", "Downloading map", "owner"),
     ]
 
 
