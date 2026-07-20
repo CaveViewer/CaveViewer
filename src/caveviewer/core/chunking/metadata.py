@@ -149,26 +149,30 @@ def cache_chunk_size(cache_dir: str) -> float | None:
         return None
 
 
+def cache_dir_is_valid(cache_dir: str, source_path: str | None = None) -> bool:
+    """Return whether one explicit cache directory is current and usable."""
+    manifest_path = os.path.join(cache_dir, MANIFEST_NAME)
+    if not os.path.exists(manifest_path):
+        return False
+    if source_path is not None and os.path.getmtime(manifest_path) < os.path.getmtime(source_path):
+        return False
+    try:
+        manifest = load_bounded_json(
+            manifest_path,
+            max_bytes=MAX_CACHE_MANIFEST_BYTES,
+            description="cache manifest",
+        )
+    except Exception:
+        return False
+    return _has_current_chunk_cache(cache_dir, manifest)
+
+
 def cache_is_valid(obj_path: str) -> bool:
     """Return whether a source OBJ has a current, non-stale chunk cache."""
-    for cache_dir in map_cache_candidates(obj_path):
-        manifest_path = os.path.join(cache_dir, MANIFEST_NAME)
-        if not os.path.exists(manifest_path):
-            continue
-        if os.path.getmtime(manifest_path) < os.path.getmtime(obj_path):
-            continue
-        try:
-            manifest = load_bounded_json(
-                manifest_path,
-                max_bytes=MAX_CACHE_MANIFEST_BYTES,
-                description="cache manifest",
-            )
-        except Exception:
-            continue
-        if not _has_current_chunk_cache(cache_dir, manifest):
-            continue
-        return True
-    return False
+    return any(
+        cache_dir_is_valid(cache_dir, obj_path)
+        for cache_dir in map_cache_candidates(obj_path)
+    )
 
 
 def _has_current_chunk_cache(cache_dir: str, manifest: dict) -> bool:

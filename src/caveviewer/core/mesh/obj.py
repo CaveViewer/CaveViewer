@@ -36,6 +36,82 @@ _SCAN_THROTTLE_INTERVAL_BYTES = 8 * 1024 * 1024
 _SCAN_PROGRESS_WEIGHT = 0.20
 
 
+def _iter_text_lines(path: str, *, kind: str, buffering: int = 1024 * 1024):
+    try:
+        with open(
+            path,
+            "r",
+            buffering=buffering,
+            encoding="utf-8",
+            errors="strict",
+        ) as fh:
+            for line_number, line in enumerate(fh, start=1):
+                yield line_number, line
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"{kind} file {path} is not valid UTF-8 near byte {exc.start}"
+        ) from exc
+
+
+def _line_error(kind: str, path: str, line_number: int, message: str) -> ValueError:
+    return ValueError(f"Malformed {kind} file {path}:{line_number}: {message}")
+
+
+def _is_directive(line: str, directive: str) -> bool:
+    return line == directive or line.startswith(directive + " ")
+
+
+def _obj_line_error(path: str, line_number: int, message: str) -> ValueError:
+    return _line_error("OBJ", path, line_number, message)
+
+
+def _mtl_line_error(path: str, line_number: int, message: str) -> ValueError:
+    return _line_error("MTL", path, line_number, message)
+
+
+def _directive_argument(
+    line: str,
+    directive: str,
+    *,
+    kind: str,
+    path: str,
+    line_number: int,
+) -> str:
+    parts = line.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        raise _line_error(
+            kind,
+            path,
+            line_number,
+            f"{directive} requires an argument",
+        )
+    return parts[1].strip()
+
+
+def _parse_float_fields(
+    parts: list[str],
+    *,
+    expected: int,
+    directive: str,
+    path: str,
+    line_number: int,
+) -> tuple[float, ...]:
+    if len(parts) < expected + 1:
+        raise _obj_line_error(
+            path,
+            line_number,
+            f"{directive} requires at least {expected} numeric value(s)",
+        )
+    try:
+        return tuple(float(parts[index]) for index in range(1, expected + 1))
+    except ValueError as exc:
+        raise _obj_line_error(
+            path,
+            line_number,
+            f"{directive} contains a non-numeric value",
+        ) from exc
+
+
 def _obj_scan_throttle_seconds() -> float:
     raw = os.getenv(OBJ_SCAN_THROTTLE_ENV_VAR, "").strip()
     if raw:
@@ -111,39 +187,43 @@ def _count_prepass(obj_path: str, progress_cb=None) -> tuple[int, int, int, int]
     next_throttle_at = _SCAN_THROTTLE_INTERVAL_BYTES
     throttle_seconds = _obj_scan_throttle_seconds()
 
-    with open(obj_path, "r", buffering=1024 * 1024, errors="replace") as fh:
-        for line in fh:
-            bytes_read += len(line)
-            if progress_cb and file_size:
-                now = time.perf_counter()
-                fraction = max(0.0, min(1.0, bytes_read / file_size))
-                if (
-                    fraction >= 1.0
-                    or fraction - last_reported_fraction >= 0.01
-                    or now - last_report_time >= _SCAN_PROGRESS_MIN_INTERVAL_SECONDS
-                ):
-                    progress_cb("scanning file", fraction)
-                    last_reported_fraction = fraction
-                    last_report_time = now
+    for line_number, line in _iter_text_lines(obj_path, kind="OBJ"):
+        bytes_read += len(line)
+        if progress_cb and file_size:
+            now = time.perf_counter()
+            fraction = max(0.0, min(1.0, bytes_read / file_size))
+            if (
+                fraction >= 1.0
+                or fraction - last_reported_fraction >= 0.01
+                or now - last_report_time >= _SCAN_PROGRESS_MIN_INTERVAL_SECONDS
+            ):
+                progress_cb("scanning file", fraction)
+                last_reported_fraction = fraction
+                last_report_time = now
 
-            if throttle_seconds > 0.0 and bytes_read >= next_throttle_at:
-                time.sleep(throttle_seconds)
-                while next_throttle_at <= bytes_read:
-                    next_throttle_at += _SCAN_THROTTLE_INTERVAL_BYTES
+        if throttle_seconds > 0.0 and bytes_read >= next_throttle_at:
+            time.sleep(throttle_seconds)
+            while next_throttle_at <= bytes_read:
+                next_throttle_at += _SCAN_THROTTLE_INTERVAL_BYTES
 
-            if not line:
-                continue
-            prefix = line[:2]
-            if prefix == "v ":
-                n_v += 1
-            elif prefix == "vt":
-                n_vt += 1
-            elif prefix == "vn":
-                n_vn += 1
-            elif prefix == "f ":
-                n_tokens = len(line.split()) - 1
-                if n_tokens >= 3:
-                    n_f += n_tokens - 2
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if _is_directive(stripped, "v"):
+            n_v += 1
+        elif _is_directive(stripped, "vt"):
+            n_vt += 1
+        elif _is_directive(stripped, "vn"):
+            n_vn += 1
+        elif _is_directive(stripped, "f"):
+            n_tokens = len(stripped.split()) - 1
+            if n_tokens < 3:
+                raise _obj_line_error(
+                    obj_path,
+                    line_number,
+                    f"OBJ face expected at least 3 vertices, got {n_tokens}",
+                )
+            n_f += n_tokens - 2
     if progress_cb:
         progress_cb("scanning file", 1.0)
     return n_v, n_vt, n_vn, n_f
@@ -171,27 +251,40 @@ def _parse_face_vertices(
     vertex_count: int,
     uv_count: int,
     normal_count: int,
+    path: str | None = None,
+    line_number: int | None = None,
 ) -> list[tuple[int, int, int]]:
+    def malformed(message: str) -> ValueError:
+        if path is not None and line_number is not None:
+            return _obj_line_error(path, line_number, message)
+        return ValueError(message)
+
     if len(tokens) < 3:
-        raise ValueError(
-            f"Malformed OBJ face: expected at least 3 vertices, got {len(tokens)}"
+        raise malformed(
+            f"OBJ face expected at least 3 vertices, got {len(tokens)}"
         )
 
     verts = []
     for tok in tokens:
         if tok.endswith("/"):
-            raise ValueError(f"Malformed OBJ face token: {tok!r}")
+            raise malformed(f"Malformed OBJ face token: {tok!r}")
         m = _FACE_VERT_RE.fullmatch(tok)
         if not m:
-            raise ValueError(f"Malformed OBJ face token: {tok!r}")
-        p_raw = int(m.group(1))
-        p_idx = _resolve_index(p_raw, vertex_count)
+            raise malformed(f"Malformed OBJ face token: {tok!r}")
+        try:
+            p_raw = int(m.group(1))
+            p_idx = _resolve_index(p_raw, vertex_count)
+        except ValueError as exc:
+            raise malformed(str(exc)) from exc
         uv_idx = -1
         nrm_idx = -1
-        if m.group(2):
-            uv_idx = _resolve_index(int(m.group(2)), uv_count)
-        if m.group(3):
-            nrm_idx = _resolve_index(int(m.group(3)), normal_count)
+        try:
+            if m.group(2):
+                uv_idx = _resolve_index(int(m.group(2)), uv_count)
+            if m.group(3):
+                nrm_idx = _resolve_index(int(m.group(3)), normal_count)
+        except ValueError as exc:
+            raise malformed(str(exc)) from exc
         verts.append((p_idx, uv_idx, nrm_idx))
     return verts
 
@@ -225,43 +318,70 @@ def parse_obj_vertices(obj_path: str, progress_cb=None, preflight_cb=None) -> Ob
     bytes_read = 0
     last_reported = 0.0
 
-    with open(obj_path, "r", buffering=1024 * 1024, errors="replace") as fh:
-        for line in fh:
-            bytes_read += len(line)
-            if progress_cb and file_size:
-                frac = bytes_read / file_size
-                if frac - last_reported > 0.01:
-                    progress_cb(
-                        "parsing vertices",
-                        _SCAN_PROGRESS_WEIGHT + (1.0 - _SCAN_PROGRESS_WEIGHT) * frac,
-                    )
-                    last_reported = frac
+    for line_number, line in _iter_text_lines(obj_path, kind="OBJ"):
+        bytes_read += len(line)
+        if progress_cb and file_size:
+            frac = bytes_read / file_size
+            if frac - last_reported > 0.01:
+                progress_cb(
+                    "parsing vertices",
+                    _SCAN_PROGRESS_WEIGHT + (1.0 - _SCAN_PROGRESS_WEIGHT) * frac,
+                )
+                last_reported = frac
 
-            if not line or line[0] == "#":
-                continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
 
-            if line[:2] == "v ":
-                parts = line.split()
-                positions[vi, 0] = float(parts[1])
-                positions[vi, 1] = float(parts[2])
-                positions[vi, 2] = float(parts[3])
-                vi += 1
+        if _is_directive(stripped, "v"):
+            parts = stripped.split()
+            x, y, z = _parse_float_fields(
+                parts,
+                expected=3,
+                directive="v",
+                path=obj_path,
+                line_number=line_number,
+            )
+            positions[vi, 0] = x
+            positions[vi, 1] = y
+            positions[vi, 2] = z
+            vi += 1
 
-            elif line[:3] == "vt ":
-                parts = line.split()
-                uvs[vti, 0] = float(parts[1])
-                uvs[vti, 1] = float(parts[2])
-                vti += 1
+        elif _is_directive(stripped, "vt"):
+            parts = stripped.split()
+            u, v = _parse_float_fields(
+                parts,
+                expected=2,
+                directive="vt",
+                path=obj_path,
+                line_number=line_number,
+            )
+            uvs[vti, 0] = u
+            uvs[vti, 1] = v
+            vti += 1
 
-            elif line[:3] == "vn ":
-                parts = line.split()
-                normals[vni, 0] = float(parts[1])
-                normals[vni, 1] = float(parts[2])
-                normals[vni, 2] = float(parts[3])
-                vni += 1
+        elif _is_directive(stripped, "vn"):
+            parts = stripped.split()
+            x, y, z = _parse_float_fields(
+                parts,
+                expected=3,
+                directive="vn",
+                path=obj_path,
+                line_number=line_number,
+            )
+            normals[vni, 0] = x
+            normals[vni, 1] = y
+            normals[vni, 2] = z
+            vni += 1
 
-            elif line[:7] == "mtllib ":
-                mtl_file = line.split(maxsplit=1)[1].strip()
+        elif _is_directive(stripped, "mtllib"):
+            mtl_file = _directive_argument(
+                stripped,
+                "mtllib",
+                kind="OBJ",
+                path=obj_path,
+                line_number=line_number,
+            )
 
     if progress_cb:
         progress_cb("parsing vertices", 1.0)
@@ -312,44 +432,52 @@ def iter_obj_face_batches(
         fi = 0
         return batch
 
-    with open(obj_path, "r", buffering=1024 * 1024, errors="replace") as fh:
-        for line in fh:
-            bytes_read += len(line)
-            if progress_cb and file_size:
-                frac = bytes_read / file_size
-                if frac - last_reported > 0.01:
-                    progress_cb("bucketing faces", frac)
-                    last_reported = frac
+    for line_number, line in _iter_text_lines(obj_path, kind="OBJ"):
+        bytes_read += len(line)
+        if progress_cb and file_size:
+            frac = bytes_read / file_size
+            if frac - last_reported > 0.01:
+                progress_cb("bucketing faces", frac)
+                last_reported = frac
 
-            if not line or line[0] == "#":
-                continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
 
-            if line[:2] == "v ":
-                vi += 1
-            elif line[:3] == "vt ":
-                vti += 1
-            elif line[:3] == "vn ":
-                vni += 1
-            elif line[:7] == "usemtl ":
-                current_material = line.split(maxsplit=1)[1].strip()
-            elif line[:2] == "f ":
-                verts = _parse_face_vertices(
-                    line.split()[1:],
-                    vertex_count=vi,
-                    uv_count=vti,
-                    normal_count=vni,
-                )
-                for k in range(1, len(verts) - 1):
-                    a, b, c = verts[0], verts[k], verts[k + 1]
-                    face_pos_idx[fi] = (a[0], b[0], c[0])
-                    face_uv_idx[fi] = (a[1], b[1], c[1])
-                    face_nrm_idx[fi] = (a[2], b[2], c[2])
-                    material_names[fi] = current_material
-                    fi += 1
-                    if fi >= batch_size:
-                        batch = emit_batch()
-                        if batch is not None:
-                            yield batch
+        if _is_directive(stripped, "v"):
+            vi += 1
+        elif _is_directive(stripped, "vt"):
+            vti += 1
+        elif _is_directive(stripped, "vn"):
+            vni += 1
+        elif _is_directive(stripped, "usemtl"):
+            current_material = _directive_argument(
+                stripped,
+                "usemtl",
+                kind="OBJ",
+                path=obj_path,
+                line_number=line_number,
+            )
+        elif _is_directive(stripped, "f"):
+            verts = _parse_face_vertices(
+                stripped.split()[1:],
+                vertex_count=vi,
+                uv_count=vti,
+                normal_count=vni,
+                path=obj_path,
+                line_number=line_number,
+            )
+            for k in range(1, len(verts) - 1):
+                a, b, c = verts[0], verts[k], verts[k + 1]
+                face_pos_idx[fi] = (a[0], b[0], c[0])
+                face_uv_idx[fi] = (a[1], b[1], c[1])
+                face_nrm_idx[fi] = (a[2], b[2], c[2])
+                material_names[fi] = current_material
+                fi += 1
+                if fi >= batch_size:
+                    batch = emit_batch()
+                    if batch is not None:
+                        yield batch
 
     batch = emit_batch()
     if batch is not None:
@@ -402,67 +530,102 @@ def parse_obj(obj_path: str, progress_cb=None, preflight_cb=None) -> RawMesh:
     bytes_read = 0
     last_reported = 0.0
 
-    with open(obj_path, "r", buffering=1024 * 1024, errors="replace") as fh:
-        for line in fh:
-            bytes_read += len(line)
-            if progress_cb and file_size:
-                frac = bytes_read / file_size
-                if frac - last_reported > 0.01:
-                    progress_cb(
-                        "parsing geometry",
-                        _SCAN_PROGRESS_WEIGHT + (1.0 - _SCAN_PROGRESS_WEIGHT) * frac,
-                    )
-                    last_reported = frac
-
-            if not line or line[0] == "#":
-                continue
-
-            if line[:2] == "v ":
-                parts = line.split()
-                positions[vi, 0] = float(parts[1])
-                positions[vi, 1] = float(parts[2])
-                positions[vi, 2] = float(parts[3])
-                vi += 1
-
-            elif line[:3] == "vt ":
-                parts = line.split()
-                uvs[vti, 0] = float(parts[1])
-                uvs[vti, 1] = float(parts[2])
-                vti += 1
-
-            elif line[:3] == "vn ":
-                parts = line.split()
-                normals[vni, 0] = float(parts[1])
-                normals[vni, 1] = float(parts[2])
-                normals[vni, 2] = float(parts[3])
-                vni += 1
-
-            elif line[:2] == "f ":
-                verts = _parse_face_vertices(
-                    line.split()[1:],
-                    vertex_count=vi,
-                    uv_count=vti,
-                    normal_count=vni,
+    for line_number, line in _iter_text_lines(obj_path, kind="OBJ"):
+        bytes_read += len(line)
+        if progress_cb and file_size:
+            frac = bytes_read / file_size
+            if frac - last_reported > 0.01:
+                progress_cb(
+                    "parsing geometry",
+                    _SCAN_PROGRESS_WEIGHT + (1.0 - _SCAN_PROGRESS_WEIGHT) * frac,
                 )
+                last_reported = frac
 
-                # fan-triangulate (handles tris natively, n-gons defensively)
-                for k in range(1, len(verts) - 1):
-                    a, b, c = verts[0], verts[k], verts[k + 1]
-                    face_pos_idx[fi] = (a[0], b[0], c[0])
-                    face_uv_idx[fi] = (a[1], b[1], c[1])
-                    face_nrm_idx[fi] = (a[2], b[2], c[2])
-                    fi += 1
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
 
-            elif line[:7] == "usemtl ":
-                name = line.split(maxsplit=1)[1].strip()
-                if current_material is not None and fi > current_material_start_face:
-                    material_ranges.append(MaterialRange(
-                        current_material, current_material_start_face, fi))
-                current_material = name
-                current_material_start_face = fi
+        if _is_directive(stripped, "v"):
+            parts = stripped.split()
+            x, y, z = _parse_float_fields(
+                parts,
+                expected=3,
+                directive="v",
+                path=obj_path,
+                line_number=line_number,
+            )
+            positions[vi, 0] = x
+            positions[vi, 1] = y
+            positions[vi, 2] = z
+            vi += 1
 
-            elif line[:7] == "mtllib ":
-                mtl_file = line.split(maxsplit=1)[1].strip()
+        elif _is_directive(stripped, "vt"):
+            parts = stripped.split()
+            u, v = _parse_float_fields(
+                parts,
+                expected=2,
+                directive="vt",
+                path=obj_path,
+                line_number=line_number,
+            )
+            uvs[vti, 0] = u
+            uvs[vti, 1] = v
+            vti += 1
+
+        elif _is_directive(stripped, "vn"):
+            parts = stripped.split()
+            x, y, z = _parse_float_fields(
+                parts,
+                expected=3,
+                directive="vn",
+                path=obj_path,
+                line_number=line_number,
+            )
+            normals[vni, 0] = x
+            normals[vni, 1] = y
+            normals[vni, 2] = z
+            vni += 1
+
+        elif _is_directive(stripped, "f"):
+            verts = _parse_face_vertices(
+                stripped.split()[1:],
+                vertex_count=vi,
+                uv_count=vti,
+                normal_count=vni,
+                path=obj_path,
+                line_number=line_number,
+            )
+
+            # fan-triangulate (handles tris natively, n-gons defensively)
+            for k in range(1, len(verts) - 1):
+                a, b, c = verts[0], verts[k], verts[k + 1]
+                face_pos_idx[fi] = (a[0], b[0], c[0])
+                face_uv_idx[fi] = (a[1], b[1], c[1])
+                face_nrm_idx[fi] = (a[2], b[2], c[2])
+                fi += 1
+
+        elif _is_directive(stripped, "usemtl"):
+            name = _directive_argument(
+                stripped,
+                "usemtl",
+                kind="OBJ",
+                path=obj_path,
+                line_number=line_number,
+            )
+            if current_material is not None and fi > current_material_start_face:
+                material_ranges.append(MaterialRange(
+                    current_material, current_material_start_face, fi))
+            current_material = name
+            current_material_start_face = fi
+
+        elif _is_directive(stripped, "mtllib"):
+            mtl_file = _directive_argument(
+                stripped,
+                "mtllib",
+                kind="OBJ",
+                path=obj_path,
+                line_number=line_number,
+            )
 
     if current_material is not None and fi > current_material_start_face:
         material_ranges.append(MaterialRange(
@@ -495,25 +658,42 @@ def parse_mtl(mtl_path: str) -> dict[str, Material]:
     current_name = None
     current_tex = None
 
-    with open(mtl_path, "r", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("newmtl "):
-                if current_name is not None:
-                    materials[current_name] = Material(current_name, current_tex)
-                current_name = line.split(maxsplit=1)[1].strip()
-                current_tex = None
-            elif line.startswith("map_Kd "):
-                # Support quoted and unquoted filenames. Strip enclosing double
-                # quotes only if they are the first and last characters.
-                # This handles names with spaces like: map_Kd "My Texture.jpg"
-                path = line.split(maxsplit=1)[1].strip()
-                if len(path) > 1 and path.startswith('"') and path.endswith('"'):
-                    current_tex = path[1:-1]
-                else:
-                    current_tex = path
+    for line_number, line in _iter_text_lines(mtl_path, kind="MTL"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if _is_directive(line, "newmtl"):
+            if current_name is not None:
+                materials[current_name] = Material(current_name, current_tex)
+            current_name = _directive_argument(
+                line,
+                "newmtl",
+                kind="MTL",
+                path=mtl_path,
+                line_number=line_number,
+            )
+            current_tex = None
+        elif _is_directive(line, "map_Kd"):
+            if current_name is None:
+                raise _mtl_line_error(
+                    mtl_path,
+                    line_number,
+                    "map_Kd appears before newmtl",
+                )
+            # Support quoted and unquoted filenames. Strip enclosing double
+            # quotes only if they are the first and last characters.
+            # This handles names with spaces like: map_Kd "My Texture.jpg"
+            path = _directive_argument(
+                line,
+                "map_Kd",
+                kind="MTL",
+                path=mtl_path,
+                line_number=line_number,
+            )
+            if len(path) > 1 and path.startswith('"') and path.endswith('"'):
+                current_tex = path[1:-1]
+            else:
+                current_tex = path
 
     if current_name is not None:
         materials[current_name] = Material(current_name, current_tex)

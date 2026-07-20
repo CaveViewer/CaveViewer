@@ -190,6 +190,7 @@ def _finalize_incremental_buckets(
     ] | None = None,
     initial_manifest_chunks: dict | None = None,
     total_cell_count: int | None = None,
+    max_group_bytes: int | None = None,
 ) -> dict:
     per_cell_groups: dict[tuple[int, int, int], list[tuple[str, list[str]]]] = {}
     for (cell, material_name), paths in bucket_parts.items():
@@ -218,6 +219,7 @@ def _finalize_incremental_buckets(
             chunks_dir,
             cell_str,
             sorted(groups, key=lambda item: item[0]),
+            max_group_bytes=max_group_bytes,
         )
         manifest_chunks[cell_str] = {
             "materials": used_materials,

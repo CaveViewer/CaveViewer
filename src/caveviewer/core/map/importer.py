@@ -42,9 +42,22 @@ def import_and_cache(
     progress_cb: ProgressCallback | None = None,
     pause_requested: PauseCallback | None = None,
     chunk_size: float | None = None,
+    cache_dir: str | None = None,
+    max_upload_group_mb: float | None = None,
+    obj_import_batch_faces: int | None = None,
+    obj_bucket_workers: int | None = None,
 ) -> str:
     """Parse and cache one OBJ source, reusing an existing valid cache."""
-    if not force_rebuild and chunker.cache_is_valid(obj_path):
+    target_cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
+    if not force_rebuild and cache_dir is not None:
+        if chunker.cache_dir_is_valid(target_cache_dir, obj_path):
+            _LOG.info(
+                "Using an existing chunk cache; remove the reported cache directory "
+                "to force a rebuild."
+            )
+            _LOG.info("Found cache in: %s", target_cache_dir)
+            return target_cache_dir
+    elif not force_rebuild and chunker.cache_is_valid(obj_path):
         cache_dir = chunker.get_cache_dir(obj_path)
         _LOG.info(
             "Using an existing chunk cache; remove the reported cache directory "
@@ -61,7 +74,6 @@ def import_and_cache(
     # Reject imports that lack cache-disk headroom before parsing a potentially
     # multi-gigabyte source. The incremental builder repeats this check as a
     # safety net for direct callers and for free-space changes during parsing.
-    target_cache_dir = map_cache_build_dir(obj_path)
     chunker.ensure_sufficient_disk_space(
         obj_path,
         target_cache_dir,
@@ -82,6 +94,9 @@ def import_and_cache(
         assets=texture_assets,
         pause_requested=pause_requested,
         chunk_size=active_chunk_size,
+        face_batch_size=obj_import_batch_faces,
+        bucket_workers=obj_bucket_workers,
+        max_upload_group_mb=max_upload_group_mb,
     )
 
 
@@ -93,6 +108,10 @@ def import_and_cache_any(
     progress_cb: ProgressCallback | None = None,
     pause_requested: PauseCallback | None = None,
     chunk_size: float | None = None,
+    cache_dir: str | None = None,
+    max_upload_group_mb: float | None = None,
+    obj_import_batch_faces: int | None = None,
+    obj_bucket_workers: int | None = None,
 ) -> str:
     """Dispatch a model descriptor to the correct parser/cache path."""
     fmt = model_descriptor["format"]
@@ -105,13 +124,26 @@ def import_and_cache_any(
             progress_cb=progress_cb,
             pause_requested=pause_requested,
             chunk_size=chunk_size,
+            cache_dir=cache_dir,
+            max_upload_group_mb=max_upload_group_mb,
+            obj_import_batch_faces=obj_import_batch_faces,
+            obj_bucket_workers=obj_bucket_workers,
         )
 
     source_path = model_descriptor.get("glb_path") or model_descriptor.get("obj_path")
     if not source_path:
         raise ValueError(f"Unknown model format: {fmt!r}")
 
-    if not force_rebuild and chunker.cache_is_valid(source_path):
+    target_cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(source_path))
+    if not force_rebuild and cache_dir is not None:
+        if chunker.cache_dir_is_valid(target_cache_dir, source_path):
+            _LOG.info(
+                "Using an existing chunk cache; remove the reported cache directory "
+                "to force a rebuild."
+            )
+            _LOG.info("Found cache in: %s", target_cache_dir)
+            return target_cache_dir
+    elif not force_rebuild and chunker.cache_is_valid(source_path):
         cache_dir = chunker.get_cache_dir(source_path)
         _LOG.info(
             "Using an existing chunk cache; remove the reported cache directory "
@@ -120,7 +152,6 @@ def import_and_cache_any(
         _LOG.info("Found cache in: %s", cache_dir)
         return cache_dir
 
-    target_cache_dir = map_cache_build_dir(source_path)
     chunker.ensure_sufficient_disk_space(source_path, target_cache_dir)
 
     active_chunk_size = (
@@ -204,6 +235,7 @@ def import_and_cache_any(
         cache_dir=target_cache_dir,
         assets=texture_assets,
         chunk_size=active_chunk_size,
+        max_upload_group_mb=max_upload_group_mb,
     )
 
 

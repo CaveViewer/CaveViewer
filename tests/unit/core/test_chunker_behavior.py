@@ -759,8 +759,15 @@ def test_incremental_obj_cache_progress_never_regresses(tmp_path, monkeypatch):
         checkpoint_cb=None,
         initial_manifest_chunks=None,
         total_cell_count=None,
+        max_group_bytes=None,
     ):
-        del pause_requested, checkpoint_cb, initial_manifest_chunks, total_cell_count
+        del (
+            pause_requested,
+            checkpoint_cb,
+            initial_manifest_chunks,
+            total_cell_count,
+            max_group_bytes,
+        )
         if progress_cb:
             progress_cb("writing chunk files", 0.66)
         return {
@@ -1001,7 +1008,7 @@ def test_parallel_write_failure_cancels_other_active_chunk_work(
         release_slow_write.set()
         return real_cancel(future)
 
-    def fail_one_write(_chunks_dir, cell_str, _mesh, _groups):
+    def fail_one_write(_chunks_dir, cell_str, _mesh, _groups, **_kwargs):
         if cell_str == "1_0_0":
             assert slow_write_started.wait(timeout=2.0)
             raise OSError("chunk write failed")
@@ -1044,7 +1051,7 @@ def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
     written_cells = []
     probe_write_counts = []
 
-    def write_cell(_chunks_dir, cell_str, _mesh, _groups):
+    def write_cell(_chunks_dir, cell_str, _mesh, _groups, **_kwargs):
         worker_threads.append(threading.get_ident())
         written_cells.append(cell_str)
         bounds = np.zeros(3, dtype=np.float32)
@@ -1085,7 +1092,7 @@ def test_cache_build_logs_successful_ram_based_worker_admission(
     source.write_text("map", encoding="utf-8")
     cache_dir = tmp_path / "staging-cache"
 
-    def write_cell(_chunks_dir, _cell_str, _mesh, _groups):
+    def write_cell(_chunks_dir, _cell_str, _mesh, _groups, **_kwargs):
         bounds = np.zeros(3, dtype=np.float32)
         return bounds, bounds.copy(), ["rock"]
 

@@ -94,6 +94,7 @@ from caveviewer.core.chunking.metadata import (
     _has_current_chunk_cache,
     _resolve_default_chunk_size,
     cache_chunk_size,
+    cache_dir_is_valid,
     cache_is_valid,
     configured_chunk_size,
     find_landing_position,
@@ -167,6 +168,18 @@ from caveviewer.core.map.cache_paths import (
 _LOG = get_logger("chunker")
 
 
+def _resolve_max_upload_group_mb(value: float | None) -> float:
+    if value is None:
+        return configured_max_upload_group_mb()
+    return configured_max_upload_group_mb({
+        MAX_UPLOAD_GROUP_MB_ENV_VAR: str(value),
+    })
+
+
+def _max_upload_group_bytes_from_mb(value: float) -> int:
+    return max(1, int(float(value) * 1024 ** 2))
+
+
 def build_cache(
     obj_path: str,
     mesh: RawMesh,
@@ -176,6 +189,7 @@ def build_cache(
     *,
     cache_dir: str | None = None,
     assets: tuple[CacheAsset, ...] | list[CacheAsset] = (),
+    max_upload_group_mb: float | None = None,
 ) -> str:
     """
     Partition `mesh` into spatial chunks and atomically publish the cache.
@@ -189,6 +203,10 @@ def build_cache(
     cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
     cache_parent = os.path.dirname(cache_dir)
     assets = tuple(assets)
+    resolved_max_upload_group_mb = _resolve_max_upload_group_mb(max_upload_group_mb)
+    resolved_max_upload_group_bytes = _max_upload_group_bytes_from_mb(
+        resolved_max_upload_group_mb
+    )
     ensure_sufficient_disk_space(
         obj_path,
         cache_dir,
@@ -209,6 +227,8 @@ def build_cache(
             staging_dir,
             chunk_size=chunk_size,
             progress_cb=progress_cb,
+            max_upload_group_mb=resolved_max_upload_group_mb,
+            max_upload_group_bytes=resolved_max_upload_group_bytes,
         )
         _publish_cache_directory(staging_dir, cache_dir)
     except BaseException:
@@ -234,6 +254,7 @@ def build_cache_incremental_obj(
     assets: tuple[CacheAsset, ...] | list[CacheAsset] = (),
     face_batch_size: int | None = None,
     bucket_workers: int | None = None,
+    max_upload_group_mb: float | None = None,
     pause_requested: Callable[[], bool] | None = None,
 ) -> str:
     """
@@ -256,6 +277,10 @@ def build_cache_incremental_obj(
         _configured_obj_bucket_workers()
         if bucket_workers is None
         else max(1, min(_MAX_OBJ_BUCKET_WORKERS, int(bucket_workers)))
+    )
+    resolved_max_upload_group_mb = _resolve_max_upload_group_mb(max_upload_group_mb)
+    resolved_max_upload_group_bytes = _max_upload_group_bytes_from_mb(
+        resolved_max_upload_group_mb
     )
     ensure_sufficient_disk_space(
         obj_path,
@@ -305,6 +330,8 @@ def build_cache_incremental_obj(
             progress_cb=progress_cb,
             face_batch_size=resolved_face_batch_size,
             bucket_workers=resolved_bucket_workers,
+            max_upload_group_mb=resolved_max_upload_group_mb,
+            max_upload_group_bytes=resolved_max_upload_group_bytes,
             pause_requested=pause_requested,
             resume_checkpoint=resume_checkpoint,
         )
@@ -334,6 +361,8 @@ def _build_incremental_obj_cache_in_directory(
     progress_cb=None,
     face_batch_size: int | None = None,
     bucket_workers: int | None = None,
+    max_upload_group_mb: float | None = None,
+    max_upload_group_bytes: int | None = None,
     pause_requested: Callable[[], bool] | None = None,
     resume_checkpoint: dict | None = None,
 ) -> str:
@@ -352,6 +381,12 @@ def _build_incremental_obj_cache_in_directory(
         _configured_obj_bucket_workers()
         if bucket_workers is None
         else max(1, min(_MAX_OBJ_BUCKET_WORKERS, int(bucket_workers)))
+    )
+    max_upload_group_mb = _resolve_max_upload_group_mb(max_upload_group_mb)
+    max_upload_group_bytes = (
+        _max_upload_group_bytes_from_mb(max_upload_group_mb)
+        if max_upload_group_bytes is None
+        else max(1, int(max_upload_group_bytes))
     )
     checkpoint = resume_checkpoint or {}
     checkpoint_stage = checkpoint.get("stage")
@@ -571,6 +606,7 @@ def _build_incremental_obj_cache_in_directory(
         checkpoint_cb=checkpoint_finalization,
         initial_manifest_chunks=completed_manifest_chunks,
         total_cell_count=total_cell_count,
+        max_group_bytes=max_upload_group_bytes,
     )
     shutil.rmtree(bucket_root, ignore_errors=True)
 
@@ -582,7 +618,7 @@ def _build_incremental_obj_cache_in_directory(
     manifest = {
         "version": _VERSION,
         "chunk_size": chunk_size,
-        "max_upload_group_mb": configured_max_upload_group_mb(),
+        "max_upload_group_mb": max_upload_group_mb,
         "source_obj": os.path.basename(obj_path),
         "mtl_materials": {
             name: mat.diffuse_texture for name, mat in materials.items()
@@ -602,10 +638,19 @@ def _build_incremental_obj_cache_in_directory(
 def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
                               cache_dir: str,
                               chunk_size: float = DEFAULT_CHUNK_SIZE,
-                              progress_cb=None) -> str:
+                              progress_cb=None,
+                              *,
+                              max_upload_group_mb: float | None = None,
+                              max_upload_group_bytes: int | None = None) -> str:
     """Build all cache artifacts inside an unpublished staging directory."""
     chunks_dir = os.path.join(cache_dir, CHUNKS_DIRNAME)
     os.makedirs(chunks_dir, exist_ok=True)
+    max_upload_group_mb = _resolve_max_upload_group_mb(max_upload_group_mb)
+    max_upload_group_bytes = (
+        _max_upload_group_bytes_from_mb(max_upload_group_mb)
+        if max_upload_group_bytes is None
+        else max(1, int(max_upload_group_bytes))
+    )
 
     if progress_cb:
         progress_cb("computing face centroids", 0.0)
@@ -721,7 +766,11 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
     def _write_one_cell(cell_coord: tuple[int, int, int], groups: list[tuple[str, np.ndarray]]):
         cell_str = f"{cell_coord[0]}_{cell_coord[1]}_{cell_coord[2]}"
         bounds_min, bounds_max, used_materials = _write_chunk_file(
-            chunks_dir, cell_str, mesh, groups
+            chunks_dir,
+            cell_str,
+            mesh,
+            groups,
+            max_group_bytes=max_upload_group_bytes,
         )
         return cell_str, bounds_min, bounds_max, used_materials
 
@@ -840,7 +889,7 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
     manifest = {
         "version": _VERSION,
         "chunk_size": chunk_size,
-        "max_upload_group_mb": configured_max_upload_group_mb(),
+        "max_upload_group_mb": max_upload_group_mb,
         "source_obj": os.path.basename(obj_path),
         "mtl_materials": {
             name: mat.diffuse_texture for name, mat in materials.items()

@@ -186,7 +186,7 @@ def test_disk_full_mid_build_removes_every_partial_cache_file(
     original_write = chunker._write_chunk_file
     writes = 0
 
-    def write_until_disk_full(chunks_dir, cell_str, mesh, groups):
+    def write_until_disk_full(chunks_dir, cell_str, mesh, groups, **_kwargs):
         nonlocal writes
         writes += 1
         if writes == 1:

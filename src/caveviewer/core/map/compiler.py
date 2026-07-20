@@ -8,8 +8,7 @@ core import pipeline.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import os
 import time
@@ -19,7 +18,6 @@ from typing import TYPE_CHECKING, Literal
 from caveviewer.core.preferences.schema import (
     PREFERENCE_FIELDS,
     Preferences,
-    preference_env_updates,
     require_validated_preferences,
     validate_preference,
 )
@@ -45,7 +43,6 @@ PREFERENCE_KEYS = frozenset(field.key for field in PREFERENCE_FIELDS)
 DEFAULT_OBJ_BUCKET_WORKERS = 2
 MIN_OBJ_BUCKET_WORKERS = 1
 MAX_OBJ_BUCKET_WORKERS = 32
-OBJ_BUCKET_WORKERS_ENV_VAR = "CAVEVIEWER_OBJ_BUCKET_WORKERS"
 DEFAULT_ANALYZE_WORKERS = 2
 MIN_ANALYZE_WORKERS = 1
 MAX_ANALYZE_WORKERS = 32
@@ -125,19 +122,17 @@ def compile_map(options: CompileOptions) -> CompileResult:
     chunk_size = _float_preference(preferences, "chunk_size_meters")
     max_upload_group_mb = _float_preference(preferences, "max_upload_group_mb")
     obj_bucket_workers = _resolve_obj_bucket_workers(options.obj_bucket_workers)
+    face_batch_size = _obj_face_batch_size(preferences)
 
-    env_updates = preference_env_updates(preferences, PARSING_PREFERENCE_FIELDS)
-    env_updates[OBJ_BUCKET_WORKERS_ENV_VAR] = str(obj_bucket_workers)
-    if cache_root is not None:
-        env_updates[MANAGED_CACHE_ENV_VAR] = cache_root
-
-    with _temporary_environ(env_updates):
-        return _compile_with_environment(
-            options,
-            source_argument=source_argument,
-            chunk_size=chunk_size,
-            max_upload_group_mb=max_upload_group_mb,
-        )
+    return _compile_with_configuration(
+        options,
+        source_argument=source_argument,
+        cache_root=cache_root,
+        chunk_size=chunk_size,
+        max_upload_group_mb=max_upload_group_mb,
+        obj_import_batch_faces=face_batch_size,
+        obj_bucket_workers=obj_bucket_workers,
+    )
 
 
 def analyze_chunk_sizes(
@@ -157,30 +152,28 @@ def analyze_chunk_sizes(
     face_batch_size = _obj_face_batch_size(preferences)
     analyze_workers = _resolve_analyze_workers(options.analyze_workers)
 
-    env_updates = preference_env_updates(preferences, PARSING_PREFERENCE_FIELDS)
-    env_updates[OBJ_BUCKET_WORKERS_ENV_VAR] = str(obj_bucket_workers)
-    if cache_root is not None:
-        env_updates[MANAGED_CACHE_ENV_VAR] = cache_root
-
-    with _temporary_environ(env_updates):
-        return _analyze_with_environment(
-            source_argument=source_argument,
-            requested_chunk_size=requested_chunk_size,
-            face_batch_size=face_batch_size,
-            worker_count=analyze_workers,
-            progress_cb=progress_cb,
-        )
+    del obj_bucket_workers
+    return _analyze_with_configuration(
+        source_argument=source_argument,
+        cache_root=cache_root,
+        requested_chunk_size=requested_chunk_size,
+        face_batch_size=face_batch_size,
+        worker_count=analyze_workers,
+        progress_cb=progress_cb,
+    )
 
 
-def _compile_with_environment(
+def _compile_with_configuration(
     options: CompileOptions,
     *,
     source_argument: str,
+    cache_root: str | None,
     chunk_size: float,
     max_upload_group_mb: float,
+    obj_import_batch_faces: int,
+    obj_bucket_workers: int,
 ) -> CompileResult:
     from caveviewer.core.chunking import builder as chunker
-    from caveviewer.core.map.cache_paths import map_cache_build_dir
 
     selected_path = os.path.abspath(os.path.expanduser(source_argument))
     selected_is_file = os.path.isfile(selected_path)
@@ -193,16 +186,17 @@ def _compile_with_environment(
 
     source_path = str(model_descriptor.get("obj_path") or model_descriptor.get("glb_path"))
     source_format = str(model_descriptor.get("format") or "")
-    cache_dir = os.path.abspath(map_cache_build_dir(source_path))
     try:
-        effective_cache_root = str(MapCacheLocator().managed_root)
+        locator = _map_cache_locator(cache_root)
+        cache_dir = os.path.abspath(str(locator.build_cache_dir(source_path)))
+        effective_cache_root = str(locator.managed_root)
     except Exception as exc:
         raise MapCompileConfigurationError(str(exc)) from exc
 
     manifest = chunker.load_manifest(cache_dir)
     cached_chunk_size = chunker.manifest_chunk_size(manifest)
     cached_max_upload_group_mb = chunker.manifest_max_upload_group_mb(manifest)
-    cache_valid = chunker.cache_is_valid(source_path)
+    cache_valid = chunker.cache_dir_is_valid(cache_dir, source_path)
     chunk_size_mismatch = (
         cache_valid
         and cached_chunk_size is not None
@@ -259,6 +253,10 @@ def _compile_with_environment(
             force_rebuild=bool(options.force_rebuild or rebuild_for_preferences),
             progress_cb=progress_cb,
             chunk_size=chunk_size,
+            cache_dir=cache_dir,
+            max_upload_group_mb=max_upload_group_mb,
+            obj_import_batch_faces=obj_import_batch_faces,
+            obj_bucket_workers=obj_bucket_workers,
         )
     finally:
         if progress_cb is not None:
@@ -281,9 +279,10 @@ def _compile_with_environment(
     )
 
 
-def _analyze_with_environment(
+def _analyze_with_configuration(
     *,
     source_argument: str,
+    cache_root: str | None,
     requested_chunk_size: float,
     face_batch_size: int,
     worker_count: int,
@@ -295,6 +294,13 @@ def _analyze_with_environment(
     )
 
     selected_path = os.path.abspath(os.path.expanduser(source_argument))
+    if cache_root is not None:
+        # Validate the same cache-root input as compile mode without mutating
+        # process-global environment. Analysis does not currently need the path.
+        try:
+            _map_cache_locator(cache_root).managed_root
+        except Exception as exc:
+            raise MapCompileConfigurationError(str(exc)) from exc
     if progress_cb is not None:
         progress_cb("locating source", 0.0)
     try:
@@ -518,17 +524,7 @@ def _normalize_cache_root(cache_root: str | None) -> str | None:
     return normalized
 
 
-@contextmanager
-def _temporary_environ(updates: Mapping[str, str]) -> Iterator[None]:
-    previous: dict[str, str | None] = {}
-    for key, value in updates.items():
-        previous[key] = os.environ.get(key)
-        os.environ[key] = str(value)
-    try:
-        yield
-    finally:
-        for key, old_value in previous.items():
-            if old_value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = old_value
+def _map_cache_locator(cache_root: str | None) -> MapCacheLocator:
+    if cache_root is None:
+        return MapCacheLocator()
+    return MapCacheLocator(environ={MANAGED_CACHE_ENV_VAR: cache_root})
