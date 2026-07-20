@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from caveviewer.core.cache_paths import (
+from caveviewer.core.map.cache_paths import (
     MapCacheLocator,
     map_texture_dir,
 )

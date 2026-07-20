@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer import app
-from caveviewer.core import chunker, glb_parser, obj_parser
+from caveviewer.core.mesh import glb as glb_parser
+from caveviewer.core.mesh import obj as obj_parser
+from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.map import importer as map_importer
 from caveviewer.storage_paths import resolve_application_paths
 
 
@@ -99,6 +102,15 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
     assert "Using import chunk size" not in caplog.text
     assert "No reusable cache found" not in caplog.text
     assert "Import complete" not in caplog.text
+
+
+def test_file_texture_assets_rejects_unsafe_texture_paths(tmp_path):
+    materials = {
+        "unsafe": SimpleNamespace(diffuse_texture="../outside.png"),
+    }
+
+    with pytest.raises(ValueError, match="Unsafe texture path"):
+        map_importer.file_texture_assets(materials, str(tmp_path))
 
 
 @pytest.mark.parametrize("size_behavior", ["large", "error"])
@@ -204,10 +216,17 @@ def test_glb_import_stages_embedded_texture_without_writing_source_directory(
     monkeypatch.setattr(
         chunker, "ensure_sufficient_import_memory", lambda *_args, **_kwargs: None
     )
+    monkeypatch.setattr(
+        chunker,
+        "ensure_sufficient_source_file_read_memory",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(app.os.path, "getsize", lambda _path: 11 * 1024**3)
 
-    def parse_glb(_path, progress_cb):
+    def parse_glb(_path, progress_cb, preflight_cb=None):
+        if preflight_cb is not None:
+            preflight_cb(3, 3, 3, 1)
         progress_cb("parse", 0.5)
         return mesh, {"embedded": b"\x89PNG\r\n\x1a\npixels"}
 
@@ -236,6 +255,32 @@ def test_glb_import_stages_embedded_texture_without_writing_source_directory(
     ]
     assert build_options["assets"][0].data == b"\x89PNG\r\n\x1a\npixels"
     assert progress == [("parse", 0.25), ("cache", 0.75)]
+
+
+def test_glb_import_checks_source_read_memory_before_parsing(tmp_path, monkeypatch):
+    source = tmp_path / "map.glb"
+    source.write_bytes(b"glTF")
+
+    monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
+    monkeypatch.setattr(
+        chunker, "ensure_sufficient_disk_space", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        chunker,
+        "ensure_sufficient_source_file_read_memory",
+        lambda _path: (_ for _ in ()).throw(MemoryError("source too large")),
+    )
+    monkeypatch.setattr(
+        glb_parser,
+        "parse_glb",
+        lambda *_args, **_kwargs: pytest.fail("GLB parsing must not start"),
+    )
+
+    with pytest.raises(MemoryError, match="source too large"):
+        app.import_and_cache_any(
+            {"format": "glb", "glb_path": str(source)},
+            str(tmp_path),
+        )
 
 
 def test_glb_import_rejects_unknown_model_format_after_capacity_check(monkeypatch):
