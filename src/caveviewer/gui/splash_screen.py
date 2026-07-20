@@ -55,6 +55,7 @@ from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import DesktopServices, get_desktop_services, tk_root_options
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
 from caveviewer.gui.tk_feedback import show_feedback
+from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.update_manager import (
     UpdateManager,
@@ -654,7 +655,7 @@ def show_splash_screen(
     root.after(350, update_manager.check_for_updates)
     root.bind("<Return>", lambda _event: on_open_map_folder())
     root.bind("<Escape>", on_close)
-    root.bind("<Control-w>", on_close)
+    bind_primary_shortcut(root, "w", on_close)
     root.protocol("WM_DELETE_WINDOW", on_close)
 
     update_manager.set_foreground_update_surface_active(True)

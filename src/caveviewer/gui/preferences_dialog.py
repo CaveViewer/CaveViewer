@@ -30,6 +30,7 @@ from caveviewer.gui.dialog_style import (
     set_dialog_action_button,
 )
 from caveviewer.gui.platform import DesktopServices, get_desktop_services
+from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
 
 
@@ -854,7 +855,7 @@ class PreferencesDialog:
 
         self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
         self.dialog.bind("<Escape>", lambda _event: self.cancel())
-        self.dialog.bind("<Control-w>", lambda _event: self.cancel())
+        bind_primary_shortcut(self.dialog, "w", lambda _event: self.cancel())
         self.dialog.bind("<Return>", lambda _event: self.apply())
 
     def _set_feedback(self, message: str, message_kind: MessageKind) -> None:

@@ -39,6 +39,7 @@ from caveviewer.gui.platform import (
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
 from caveviewer.gui.tk_feedback import FeedbackKind, show_feedback
+from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
 
 
@@ -339,7 +340,7 @@ def show_sample_maps_dialog(
 
     dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
     dialog.bind("<Escape>", lambda _event: _close_dialog())
-    dialog.bind("<Control-w>", lambda _event: _close_dialog())
+    bind_primary_shortcut(dialog, "w", lambda _event: _close_dialog())
 
     def _present_dialog(initial_focus=None) -> None:
         try:
