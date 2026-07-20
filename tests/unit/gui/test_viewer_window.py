@@ -75,6 +75,19 @@ class FakeLogger:
         self.debug_messages.append(self._format(message, args))
 
 
+class FakeImportThread:
+    def __init__(self, alive=True):
+        self._alive = alive
+        self.join_calls = []
+
+    def is_alive(self):
+        return self._alive
+
+    def join(self, timeout=None):
+        self.join_calls.append(timeout)
+        self._alive = False
+
+
 def _import_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._import_active = False
@@ -115,6 +128,29 @@ def _queued_import_messages(window):
     while not window._import_queue.empty():
         messages.append(window._import_queue.get_nowait())
     return messages
+
+
+def _recording_window():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._recording_countdown_started_at = None
+    window._recording_countdown_until = None
+    window._recording_process = None
+    window._recording_output_path = None
+    window._recording_size = None
+    window._recording_viewport = None
+    window._recording_next_frame_time = None
+    window._recording_frame_queue = None
+    window._recording_writer_thread = None
+    window._recording_stderr_thread = None
+    window._recording_writer_error = None
+    window._recording_dropped_frames = 0
+    window._recording_stderr_lock = viewer_window.threading.Lock()
+    window._recording_stderr_parts = []
+    window._recording_status_message = None
+    window._recording_status_detail = None
+    window._recording_status_kind = None
+    window._recording_status_until = None
+    return window
 
 
 def test_desktop_relative_window_size_uses_eighty_percent_per_axis(monkeypatch):
@@ -179,6 +215,111 @@ def test_viewer_ui_scale_env_override_is_developer_only_escape_hatch():
 def test_optional_ms_formatter_reports_disabled_timer():
     assert viewer_window.CaveViewerWindow._format_optional_ms(None) == "n/a"
     assert viewer_window.CaveViewerWindow._format_optional_ms(9.34) == "9.3ms"
+
+
+def test_recording_countdown_hides_picker_and_manual_help(monkeypatch):
+    calls = []
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 40.0)
+    window = _recording_window()
+    window._has_map_loaded = True
+    window._resolve_ffmpeg_path = lambda: "/usr/bin/ffmpeg"
+    window.color_picker = SimpleNamespace(hide=lambda: calls.append("hide_picker"))
+    window.controls_overlay = SimpleNamespace(
+        is_manual_mode=True,
+        hide_help=lambda: calls.append("hide_help"),
+    )
+
+    window._start_recording_countdown()
+
+    assert calls == ["hide_picker", "hide_help"]
+    assert window._recording_countdown_started_at == 40.0
+    assert window._recording_countdown_until == 44.0
+
+
+def test_recording_toggle_cancels_existing_countdown(monkeypatch):
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+    window = _recording_window()
+    window._recording_countdown_started_at = 7.0
+    window._recording_countdown_until = 11.0
+
+    window._toggle_recording()
+
+    assert window._recording_countdown_started_at is None
+    assert window._recording_countdown_until is None
+    assert window._recording_status_message == "Recording canceled"
+    assert window._recording_status_kind == "cancel"
+    assert window._recording_status_until == pytest.approx(12.8)
+
+
+def test_recording_signal_writer_stop_replaces_full_frame_with_sentinel():
+    window = _recording_window()
+    frame_queue = queue.Queue(maxsize=1)
+    frame_queue.put_nowait(b"old-frame")
+
+    window._recording_signal_writer_stop(frame_queue)
+
+    assert frame_queue.get_nowait() is None
+
+
+def test_recording_enqueue_frame_reports_encoder_backpressure_once(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    window = _recording_window()
+    window._recording_frame_queue = queue.Queue(maxsize=1)
+    window._recording_frame_queue.put_nowait(b"queued-frame")
+
+    assert window._recording_enqueue_frame(b"new-frame", frames_due=2) is True
+    assert window._recording_enqueue_frame(b"newer-frame", frames_due=1) is True
+
+    assert window._recording_dropped_frames == 2
+    assert logger.warning_messages == [
+        "Recording encoder is falling behind; dropping video frames."
+    ]
+
+
+def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 20.0)
+
+    class TimeoutProcess:
+        stdin = None
+        returncode = None
+
+        def __init__(self):
+            self.killed = False
+            self.wait_calls = []
+
+        def wait(self, timeout=None):
+            self.wait_calls.append(timeout)
+            if len(self.wait_calls) == 1:
+                raise viewer_window.subprocess.TimeoutExpired("ffmpeg", timeout)
+            self.returncode = -9
+
+        def kill(self):
+            self.killed = True
+
+    process = TimeoutProcess()
+    window = _recording_window()
+    window._recording_process = process
+    window._recording_output_path = "/recordings/cave.mp4"
+    window._recording_size = (640, 480)
+    window._recording_viewport = (0, 0, 640, 480)
+    window._recording_next_frame_time = 20.0
+    window._recording_frame_queue = queue.Queue(maxsize=1)
+    window._recording_stderr_parts = ["No space left on device"]
+
+    window._stop_recording(show_message=True)
+
+    assert process.killed is True
+    assert process.wait_calls == [8.0, None]
+    assert window._recording_process is None
+    assert window._recording_output_path is None
+    assert window._recording_frame_queue is None
+    assert window._recording_status_message == "Recording failed"
+    assert window._recording_status_detail == "Disk may be full"
+    assert window._recording_status_kind == "error"
+    assert any("Recording encoder exited with code -9" in message for message in logger.warning_messages)
 
 
 def test_window_shortcut_closes_viewer_on_control_w(monkeypatch):
@@ -1552,3 +1693,25 @@ def test_cancel_active_import_passes_cache_dir_to_termination(monkeypatch):
 
     assert window._import_stop_event.is_set()
     assert calls == [(process, {"cache_dir": "/cache/cave"})]
+
+
+def test_cancel_active_import_waits_for_live_import_thread(monkeypatch):
+    calls = []
+    import_thread = FakeImportThread(alive=True)
+    window = _import_window()
+    window._import_stop_event = viewer_window.threading.Event()
+    window._import_process = None
+    window._import_thread = import_thread
+
+    monkeypatch.setattr(
+        viewer_window,
+        "terminate_import_process",
+        lambda *_args, **_kwargs: calls.append("terminate"),
+    )
+
+    window._cancel_active_import()
+
+    assert window._import_stop_event.is_set()
+    assert import_thread.join_calls == [2.0]
+    assert not import_thread.is_alive()
+    assert calls == []
