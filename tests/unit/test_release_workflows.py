@@ -471,7 +471,6 @@ def test_essential_workflow_enforces_module_coverage_floors():
     workflow = (WORKFLOWS_DIR / "tests.yml").read_text(encoding="utf-8")
 
     assert "--cov=caveviewer.gui.preferences" in workflow
-    assert "--cov=caveviewer.gui.advanced_settings" not in workflow
     assert (
         "--include=src/caveviewer/gui/preferences.py\n"
         "          --fail-under=85"
@@ -481,7 +480,7 @@ def test_essential_workflow_enforces_module_coverage_floors():
         "          --fail-under=90"
     ) in workflow
     assert (
-        "--include=src/caveviewer/core/chunker.py\n"
+        "--include=src/caveviewer/core/chunking/builder.py\n"
         "          --fail-under=90"
     ) in workflow
     assert (

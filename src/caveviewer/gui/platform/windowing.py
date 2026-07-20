@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable, Mapping
 
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.platform.app_identity import LINUX_WINDOW_INSTANCE_NAME
 from caveviewer.version import APPLICATION_ID
 

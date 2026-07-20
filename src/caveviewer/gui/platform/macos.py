@@ -8,7 +8,7 @@ import plistlib
 import shutil
 import subprocess
 
-from caveviewer.core.logging_utils import get_logger
+from caveviewer.core.diagnostics.logging import get_logger
 from .default import DefaultSplashPlatformAdapter
 
 # Keep a strong reference to the Tk root used for the About handler so that

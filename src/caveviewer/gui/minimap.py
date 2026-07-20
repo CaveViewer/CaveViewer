@@ -66,7 +66,7 @@ class Minimap:
 
     def __init__(self, ctx: moderngl.Context, manifest: dict):
         """
-        manifest: the same chunk manifest produced by caveviewer.core.chunker
+        manifest: the same chunk manifest produced by caveviewer.core.chunking.builder
         (build_cache) / loaded via chunker.load_manifest(). Used once here
         to compute the overall footprint outline -- this does not require
         any chunks to be loaded into memory, since bounding boxes are
