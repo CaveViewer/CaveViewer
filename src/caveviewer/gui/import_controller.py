@@ -518,15 +518,19 @@ class MapImportController:
         )
 
     def cancel_active_import(self) -> None:
-        """Stop a child import process when the viewer is closing."""
+        """Signal a running import to stop without blocking the GUI thread."""
         if self.stop_event is not None:
             self.stop_event.set()
 
-        if self.process is not None:
+        thread_alive = self.thread is not None and self.thread.is_alive()
+        if self.process is not None and not thread_alive:
             self._terminate_import_process()(
                 self.process,
+                timeout=0.0,
                 cache_dir=self.cache_dir,
             )
-
-        if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=2.0)
+        elif thread_alive:
+            self.log.info(
+                "Import cancellation requested; relay worker will terminate "
+                "the child process."
+            )

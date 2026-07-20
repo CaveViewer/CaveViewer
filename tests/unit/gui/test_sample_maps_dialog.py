@@ -141,6 +141,15 @@ def test_sample_maps_dialog_keeps_curated_list_out_of_scroll_container():
     assert "yscrollcommand" not in source
 
 
+def test_sample_maps_dialog_catalog_load_uses_after_polling():
+    source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
+
+    assert "queue.Queue" in source
+    assert "dialog.after(0, _poll_catalog_fetch)" in source
+    assert "dialog.update()" not in source
+    assert "time.sleep(" not in source
+
+
 def test_sample_maps_dialog_is_modal_and_has_initial_focus_policy():
     source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
 

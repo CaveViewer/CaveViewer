@@ -15,6 +15,7 @@ simple lookup-and-release.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 import json
 import logging
 import math
@@ -75,6 +76,26 @@ _CATCHUP_UPLOAD_TIME_BUDGET_MS = 8.0
 _STARTUP_UPLOAD_CHUNKS_PER_FRAME = 4
 _STARTUP_UPLOAD_OPERATIONS_PER_CHUNK = 8
 _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
+
+
+@dataclass(frozen=True)
+class _RecordingStopWork:
+    process: subprocess.Popen
+    output_path: str | None
+    frame_queue: queue.Queue | None
+    writer_thread: threading.Thread | None
+    stderr_thread: threading.Thread | None
+    show_message: bool
+
+
+@dataclass(frozen=True)
+class _RecordingStopResult:
+    output_path: str | None
+    returncode: int | None
+    stderr_text: str
+    writer_error: Exception | None
+    dropped_frames: int
+    show_message: bool
 
 
 def _import_controller_property(attribute_name: str):
@@ -501,6 +522,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_stderr_thread: threading.Thread | None = None
         self._recording_stderr_parts: list[str] = []
         self._recording_stderr_lock = threading.Lock()
+        self._recording_stop_results: queue.Queue[_RecordingStopResult] = queue.Queue()
+        self._recording_stop_thread: threading.Thread | None = None
         self._recording_status_message: str | None = None
         self._recording_status_detail: str | None = None
         self._recording_status_kind = "info"
@@ -974,10 +997,30 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _recording_is_armed(self) -> bool:
         return self._recording_countdown_until is not None or self._recording_process is not None
 
+    def _ensure_recording_stop_state(self) -> None:
+        if not hasattr(self, "_recording_stop_results"):
+            self._recording_stop_results = queue.Queue()
+        if not hasattr(self, "_recording_stop_thread"):
+            self._recording_stop_thread = None
+
+    def _recording_stop_in_progress(self) -> bool:
+        self._ensure_recording_stop_state()
+        return self._recording_stop_thread is not None
+
     def _recording_hides_hud(self) -> bool:
         return self._recording_is_armed()
 
     def _toggle_recording(self) -> None:
+        self._drain_recording_stop_results()
+        if self._recording_stop_in_progress():
+            self._show_recording_status(
+                "Finishing recording",
+                "Video is still being finalized.",
+                kind="info",
+                duration=2.0,
+            )
+            return
+
         if self._recording_process is not None:
             self._stop_recording(show_message=True)
             return
@@ -1269,6 +1312,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_status_until = time.perf_counter() + duration
 
     def _stop_recording(self, *, show_message: bool = False) -> None:
+        self._ensure_recording_stop_state()
+        self._drain_recording_stop_results()
+        if self._recording_stop_in_progress():
+            return
+
         process = self._recording_process
         output_path = self._recording_output_path
         frame_queue = self._recording_frame_queue
@@ -1290,58 +1338,117 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         self._recording_signal_writer_stop(frame_queue)
-        if writer_thread is not None:
-            writer_thread.join(timeout=2.0)
-            if writer_thread.is_alive():
-                _LOG.warning("Recording writer did not finish promptly; forcing encoder shutdown.")
-                try:
-                    if process.stdin:
-                        process.stdin.close()
-                except OSError:
-                    pass
-
+        work = _RecordingStopWork(
+            process=process,
+            output_path=output_path,
+            frame_queue=frame_queue,
+            writer_thread=writer_thread,
+            stderr_thread=stderr_thread,
+            show_message=show_message,
+        )
+        stop_thread = threading.Thread(
+            target=self._recording_finalize_stop_worker,
+            args=(work,),
+            name="CaveViewer-recording-finalizer",
+            daemon=False,
+        )
+        self._recording_stop_thread = stop_thread
         try:
-            process.wait(timeout=8.0)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-        if writer_thread is not None and writer_thread.is_alive():
-            writer_thread.join(timeout=1.0)
+            stop_thread.start()
+        except RuntimeError as exc:
+            self._recording_stop_thread = None
+            _LOG.warning("Could not start recording finalizer thread: %s", exc)
+            self._recording_finalize_stop_worker(work)
+        if show_message:
+            self._show_recording_status(
+                "Finishing recording",
+                self._recording_display_path(output_path),
+                kind="info",
+                duration=2.0,
+            )
 
-        if stderr_thread is not None:
-            stderr_thread.join(timeout=1.0)
+    def _recording_finalize_stop_worker(self, work: _RecordingStopWork) -> None:
+        process = work.process
+        writer_error: Exception | None = None
+        try:
+            if work.writer_thread is not None:
+                work.writer_thread.join(timeout=2.0)
+                if work.writer_thread.is_alive():
+                    _LOG.warning("Recording writer did not finish promptly; forcing encoder shutdown.")
+                    try:
+                        if process.stdin:
+                            process.stdin.close()
+                    except OSError:
+                        pass
+
+            try:
+                process.wait(timeout=8.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            if work.writer_thread is not None and work.writer_thread.is_alive():
+                work.writer_thread.join(timeout=1.0)
+
+            if work.stderr_thread is not None:
+                work.stderr_thread.join(timeout=1.0)
+        except Exception as exc:
+            writer_error = exc
+            _LOG.warning("Recording finalizer failed: %s", exc)
 
         stderr_text = self._recording_stderr_text()
-        writer_error = self._recording_writer_error
+        writer_error = writer_error or self._recording_writer_error
         dropped_frames = self._recording_dropped_frames
+        self._ensure_recording_stop_state()
+        self._recording_stop_results.put(
+            _RecordingStopResult(
+                output_path=work.output_path,
+                returncode=process.returncode,
+                stderr_text=stderr_text,
+                writer_error=writer_error,
+                dropped_frames=dropped_frames,
+                show_message=work.show_message,
+            )
+        )
+
+    def _drain_recording_stop_results(self) -> None:
+        self._ensure_recording_stop_state()
+        while True:
+            try:
+                result = self._recording_stop_results.get_nowait()
+            except queue.Empty:
+                break
+            self._apply_recording_stop_result(result)
+            self._recording_stop_thread = None
+
+    def _apply_recording_stop_result(self, result: _RecordingStopResult) -> None:
         self._recording_writer_error = None
         self._recording_dropped_frames = 0
 
-        if process.returncode == 0:
-            _LOG.info(f"Recording saved: {output_path}")
-            if dropped_frames:
-                _LOG.warning(f"Recording saved after dropping {dropped_frames} frame(s).")
-            if show_message:
+        if result.returncode == 0:
+            _LOG.info(f"Recording saved: {result.output_path}")
+            if result.dropped_frames:
+                _LOG.warning(f"Recording saved after dropping {result.dropped_frames} frame(s).")
+            if result.show_message:
                 self._show_recording_status(
                     "Recording saved",
-                    self._recording_display_path(output_path),
+                    self._recording_display_path(result.output_path),
                     kind="success",
                     duration=3.2,
                 )
         else:
-            if stderr_text and writer_error:
-                detail = f": {stderr_text}; writer_error={writer_error}"
-            elif stderr_text:
-                detail = f": {stderr_text}"
-            elif writer_error:
-                detail = f": writer_error={writer_error}"
+            if result.stderr_text and result.writer_error:
+                detail = f": {result.stderr_text}; writer_error={result.writer_error}"
+            elif result.stderr_text:
+                detail = f": {result.stderr_text}"
+            elif result.writer_error:
+                detail = f": writer_error={result.writer_error}"
             else:
                 detail = ""
-            _LOG.warning(f"Recording encoder exited with code {process.returncode}{detail}")
-            if show_message:
+            _LOG.warning(f"Recording encoder exited with code {result.returncode}{detail}")
+            if result.show_message:
                 self._show_recording_status(
                     "Recording failed",
-                    self._recording_failure_detail(stderr_text),
+                    self._recording_failure_detail(result.stderr_text),
                     kind="error",
                     duration=3.4,
                 )
@@ -3480,6 +3587,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Keep render-mode button effects synced to loading state even
         # on frames that early-return before normal HUD interaction.
         self._sync_render_mode_loading_policy()
+        self._drain_recording_stop_results()
 
         if self._startup_focus_enabled:
             self._request_startup_focus_once()
