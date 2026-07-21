@@ -76,6 +76,9 @@ _CATCHUP_UPLOAD_TIME_BUDGET_MS = 8.0
 _STARTUP_UPLOAD_CHUNKS_PER_FRAME = 4
 _STARTUP_UPLOAD_OPERATIONS_PER_CHUNK = 8
 _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
+_ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
+_IMPORT_PROGRESS_RENDER_INTERVAL_S = 1.0 / 30.0
+_IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
 
 
 @dataclass(frozen=True)
@@ -496,6 +499,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._layout_cache_result: dict | None = None
         self._is_iconified = False
         self._is_background_paused = False
+        self._render_throttle_due_at: dict[str, float] = {}
         self._closing_requested = False
         self._startup_focus_requested = False
         self._upload_chunks_per_frame = _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
@@ -3836,11 +3840,60 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
+    def _render_throttle_due(self, key: str, interval_s: float) -> bool:
+        """
+        Return true when a low-value render state should draw this callback.
+
+        Some early-return states, such as a minimized window or an import
+        progress panel, do not need full-speed rendering.  Use timestamp gates
+        rather than sleeping in the render callback so the backend/UI thread
+        remains available for window events and queued task results.
+        """
+        due_at = getattr(self, "_render_throttle_due_at", None)
+        if due_at is None:
+            due_at = {}
+            self._render_throttle_due_at = due_at
+
+        now = time.perf_counter()
+        if now < due_at.get(key, 0.0):
+            return False
+
+        due_at[key] = now + max(0.0, interval_s)
+        return True
+
+    def _reset_render_throttle(self, *keys: str) -> None:
+        """Forget throttle deadlines for states that are no longer active."""
+        due_at = getattr(self, "_render_throttle_due_at", None)
+        if not due_at:
+            return
+        if not keys:
+            due_at.clear()
+            return
+        for key in keys:
+            due_at.pop(key, None)
+
     def on_render(self, current_time: float, frame_time: float):
         if not getattr(self, "_window_setup_complete", False):
             return
         if self._closing_requested:
             return
+
+        # Backends can miss iconify callbacks on Dock minimize; poll a
+        # few common window flags each frame as a safety net.
+        runtime_iconified = self._query_runtime_iconified_state()
+        self._set_background_pause(runtime_iconified, "runtime window state")
+
+        if self._is_iconified:
+            # Keep minimize mode cheap: no streaming updates/uploads while
+            # iconified.  Poll low-frequency completion state without blocking
+            # the render/window callback.
+            if self._render_throttle_due(
+                "iconified", _ICONIFIED_RENDER_POLL_INTERVAL_S
+            ):
+                self._drain_recording_stop_results()
+            return
+        self._reset_render_throttle("iconified")
+
         bitmap_font.set_raster_scale(_window_pixel_ratio(self.wnd))
 
         # Keep render-mode button effects synced to loading state even
@@ -3851,50 +3904,45 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self._startup_focus_enabled:
             self._request_startup_focus_once()
 
-        # Backends can miss iconify callbacks on Dock minimize; poll a
-        # few common window flags each frame as a safety net.
-        runtime_iconified = self._query_runtime_iconified_state()
-        self._set_background_pause(runtime_iconified, "runtime window state")
-
-        if self._is_iconified:
-            # Keep minimize mode cheap: no streaming updates/uploads while
-            # iconified, and gently throttle callback spin to keep CPU low.
-            time.sleep(0.12)
-            return
-
-        # Background import in flight: render the progress panel every frame
-        # so the ring animates smoothly and the window stays fully responsive
-        # to resize, move, and repaint events.
+        # Background import in flight: drain worker results on every callback,
+        # but redraw the progress panel at a capped rate so the window remains
+        # responsive without blocking the render/window callback.
         if self._import_active:
-            self.ctx.clear(0.02, 0.02, 0.03)
             self._drain_import_queue()
-            if self._import_active:   # still running after draining
-                fraction = self._import_progress_fraction
-                # When the real fraction is near zero (numpy is crunching
-                # faces and can't report sub-step progress), pulse the ring
-                # gently between 0 and 2 % so it looks alive.  The pulse is
-                # capped below the first real progress step (3 %) so the
-                # max() inside import_progress_panel takes over cleanly once
-                # measurable progress begins.
-                if fraction < 0.021:
-                    t = time.perf_counter()
-                    fraction = abs(math.sin(t * 1.2)) * 0.02
-                self.import_progress_panel.render(
-                    self.wnd.size, self._import_map_name,
-                    self._import_progress_stage, fraction,
-                    title=self._import_progress_title,
-                    note=self._import_progress_note,
-                )
-            # 30 fps cap: the progress ring doesn't need more, and without
-            # this the render loop spins at hundreds of fps during import,
-            # consuming 50-70% CPU for no visual benefit -- especially
-            # noticeable on VMs where vsync may not throttle reliably.
-            time.sleep(1.0 / 30.0)
+            if not self._import_active:
+                return
+            if not self._render_throttle_due(
+                "import_progress", _IMPORT_PROGRESS_RENDER_INTERVAL_S
+            ):
+                return
+            self.ctx.clear(0.02, 0.02, 0.03)
+            fraction = self._import_progress_fraction
+            # When the real fraction is near zero (numpy is crunching
+            # faces and can't report sub-step progress), pulse the ring
+            # gently between 0 and 2 % so it looks alive.  The pulse is
+            # capped below the first real progress step (3 %) so the
+            # max() inside import_progress_panel takes over cleanly once
+            # measurable progress begins.
+            if fraction < 0.021:
+                t = time.perf_counter()
+                fraction = abs(math.sin(t * 1.2)) * 0.02
+            self.import_progress_panel.render(
+                self.wnd.size, self._import_map_name,
+                self._import_progress_stage, fraction,
+                title=self._import_progress_title,
+                note=self._import_progress_note,
+            )
             return
+        self._reset_render_throttle("import_progress")
 
         if not self._has_map_loaded:
-            if self._render_import_pause_notice_if_active():
-                time.sleep(1.0 / 30.0)
+            if self._render_throttle_due(
+                "import_pause_notice", _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S
+            ):
+                if self._render_import_pause_notice_if_active():
+                    return
+                self._reset_render_throttle("import_pause_notice")
+            elif getattr(self, "_import_pause_notice_until", None) is not None:
                 return
             # First frame with no map loaded yet: draw the loading panel
             # immediately so the user sees the logo instead of a blank window.

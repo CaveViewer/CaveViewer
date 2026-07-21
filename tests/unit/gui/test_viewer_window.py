@@ -686,6 +686,13 @@ def test_frame_spike_log_reports_recording_read_time():
     assert "recording_drain=" in source
 
 
+def test_render_loop_uses_nonblocking_throttle_instead_of_sleep():
+    source = inspect.getsource(viewer_window.CaveViewerWindow.on_render)
+
+    assert "time.sleep(" not in source
+    assert "_render_throttle_due(" in source
+
+
 def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypatch):
     logger = FakeLogger()
     monkeypatch.setattr(viewer_window, "_LOG", logger)
@@ -1810,6 +1817,135 @@ def test_startup_render_starts_import_when_splash_was_already_presented():
 
     assert calls == ["splash", "start import"]
     assert window._pending_import_started is True
+
+
+def test_iconified_render_throttles_polling_without_sleep(monkeypatch):
+    ticks = iter([10.0, 10.01, 10.13])
+    drains = []
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(
+        viewer_window.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(
+            AssertionError("on_render must not sleep")
+        ),
+    )
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window._closing_requested = False
+    window._is_iconified = False
+    window._render_throttle_due_at = {}
+    window._query_runtime_iconified_state = lambda: True
+    window._set_background_pause = (
+        lambda should_pause, _reason: setattr(window, "_is_iconified", should_pause)
+    )
+    window._drain_recording_stop_results = lambda: drains.append("drain")
+
+    window.on_render(0.0, 0.0)
+    window.on_render(0.0, 0.0)
+    window.on_render(0.0, 0.0)
+
+    assert drains == ["drain", "drain"]
+
+
+def test_import_progress_render_is_throttled_without_sleep(monkeypatch):
+    ticks = iter([20.0, 20.01, 20.04])
+    clear_calls = []
+    drain_calls = []
+    render_calls = []
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(
+        viewer_window.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(
+            AssertionError("on_render must not sleep")
+        ),
+    )
+    monkeypatch.setattr(viewer_window.bitmap_font, "set_raster_scale", lambda _scale: None)
+
+    class FakeProgressPanel:
+        def render(self, window_size, map_name, stage, fraction, *, title, note):
+            render_calls.append((window_size, map_name, stage, fraction, title, note))
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window._closing_requested = False
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(800, 600))
+    window.ctx = SimpleNamespace(clear=lambda *color: clear_calls.append(color))
+    window.import_progress_panel = FakeProgressPanel()
+    window._startup_focus_enabled = False
+    window._is_iconified = False
+    window._render_throttle_due_at = {}
+    window._query_runtime_iconified_state = lambda: False
+    window._set_background_pause = (
+        lambda should_pause, _reason: setattr(window, "_is_iconified", should_pause)
+    )
+    window._sync_render_mode_loading_policy = lambda: None
+    window._drain_recording_stop_results = lambda: None
+    window._drain_import_queue = lambda: drain_calls.append("drain")
+    window._import_active = True
+    window._import_progress_fraction = 0.5
+    window._import_map_name = "cave.obj"
+    window._import_progress_stage = "building cache"
+    window._import_progress_title = ""
+    window._import_progress_note = ""
+
+    window.on_render(0.0, 0.0)
+    window.on_render(0.0, 0.0)
+    window.on_render(0.0, 0.0)
+
+    assert drain_calls == ["drain", "drain", "drain"]
+    assert clear_calls == [(0.02, 0.02, 0.03), (0.02, 0.02, 0.03)]
+    assert render_calls == [
+        ((800, 600), "cave.obj", "building cache", 0.5, "", ""),
+        ((800, 600), "cave.obj", "building cache", 0.5, "", ""),
+    ]
+
+
+def test_import_pause_notice_render_is_throttled_without_sleep(monkeypatch):
+    ticks = iter([30.0, 30.01, 30.04])
+    notice_calls = []
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(
+        viewer_window.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(
+            AssertionError("on_render must not sleep")
+        ),
+    )
+    monkeypatch.setattr(viewer_window.bitmap_font, "set_raster_scale", lambda _scale: None)
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window._closing_requested = False
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(800, 600))
+    window._startup_focus_enabled = False
+    window._is_iconified = False
+    window._has_map_loaded = False
+    window._import_active = False
+    window._pending_import_started = False
+    window._pending_import_splash_rendered = False
+    window._import_pause_notice_until = 999.0
+    window._render_throttle_due_at = {}
+    window._query_runtime_iconified_state = lambda: False
+    window._set_background_pause = (
+        lambda should_pause, _reason: setattr(window, "_is_iconified", should_pause)
+    )
+    window._sync_render_mode_loading_policy = lambda: None
+    window._drain_recording_stop_results = lambda: None
+    window._render_import_pause_notice_if_active = (
+        lambda: notice_calls.append("notice") or True
+    )
+    window._render_pending_import_splash = lambda: (_ for _ in ()).throw(
+        AssertionError("pause notice should keep startup splash path inactive")
+    )
+
+    window.on_render(0.0, 0.0)
+    window.on_render(0.0, 0.0)
+    window.on_render(0.0, 0.0)
+
+    assert notice_calls == ["notice", "notice"]
 
 
 def test_render_during_window_setup_returns_before_full_state_exists():

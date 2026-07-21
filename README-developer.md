@@ -554,6 +554,11 @@ validation lives in `src/caveviewer/gui/map_selection.py`, allowing both
 map-selection dialogs to reuse it without importing private splash-screen
 implementation details.
 
+The OpenGL viewer render callback must return promptly. Low-activity states
+such as minimized windows, startup import progress, and startup import pause
+notices use timestamp-based redraw gates instead of `time.sleep()` so queued
+window, input, and background-task events are not blocked on the render thread.
+
 Runtime chunk streaming is also split by policy boundary:
 `src/caveviewer/core/hardware/system_memory.py` detects total and currently
 available system RAM on Windows, macOS, and Linux;
