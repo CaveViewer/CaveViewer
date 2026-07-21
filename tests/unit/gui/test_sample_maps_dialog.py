@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from caveviewer.gui import sample_maps_dialog
+from caveviewer.gui import sample_map_download, sample_maps_dialog
 from caveviewer.gui.platform import DirectorySelection
 
 
@@ -192,13 +192,13 @@ def test_sample_download_worker_queues_progress_and_success(monkeypatch, tmp_pat
         return "/downloaded/devils-eye"
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_download_and_extract_to_selected_directory",
+        sample_map_download,
+        "download_and_extract_to_selected_directory",
         fake_download,
     )
 
     save_dir = DirectorySelection.from_path(str(tmp_path))
-    sample_maps_dialog._run_sample_download_worker(
+    sample_map_download.run_sample_download_worker(
         save_dir,
         sample,
         cancel_event,
@@ -208,10 +208,10 @@ def test_sample_download_worker_queues_progress_and_success(monkeypatch, tmp_pat
     assert calls == [
         (save_dir, sample, {"progress_cb", "cancel_cb"}),
     ]
-    assert result_queue.get_nowait() == sample_maps_dialog._SampleDownloadProgress(
+    assert result_queue.get_nowait() == sample_map_download.SampleDownloadProgress(
         5, 10
     )
-    assert result_queue.get_nowait() == sample_maps_dialog._SampleDownloadSucceeded(
+    assert result_queue.get_nowait() == sample_map_download.SampleDownloadSucceeded(
         "/downloaded/devils-eye"
     )
     with pytest.raises(queue.Empty):
@@ -227,12 +227,12 @@ def test_sample_download_worker_queues_failure(monkeypatch, tmp_path):
         raise RuntimeError("network failed")
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_download_and_extract_to_selected_directory",
+        sample_map_download,
+        "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    sample_maps_dialog._run_sample_download_worker(
+    sample_map_download.run_sample_download_worker(
         DirectorySelection.from_path(str(tmp_path)),
         sample,
         cancel_event,
@@ -240,7 +240,7 @@ def test_sample_download_worker_queues_failure(monkeypatch, tmp_path):
     )
 
     message = result_queue.get_nowait()
-    assert isinstance(message, sample_maps_dialog._SampleDownloadFailed)
+    assert isinstance(message, sample_map_download.SampleDownloadFailed)
     assert str(message.error) == "network failed"
     with pytest.raises(queue.Empty):
         result_queue.get_nowait()
@@ -258,12 +258,12 @@ def test_sample_download_worker_progress_observes_cancel(monkeypatch, tmp_path):
         options["progress_cb"](5, 10)
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_download_and_extract_to_selected_directory",
+        sample_map_download,
+        "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    sample_maps_dialog._run_sample_download_worker(
+    sample_map_download.run_sample_download_worker(
         DirectorySelection.from_path(str(tmp_path)),
         sample,
         cancel_event,
@@ -271,7 +271,7 @@ def test_sample_download_worker_progress_observes_cancel(monkeypatch, tmp_path):
     )
 
     message = result_queue.get_nowait()
-    assert isinstance(message, sample_maps_dialog._SampleDownloadFailed)
+    assert isinstance(message, sample_map_download.SampleDownloadFailed)
     assert isinstance(message.error, DownloadCancelled)
     with pytest.raises(queue.Empty):
         result_queue.get_nowait()
@@ -294,12 +294,12 @@ def test_start_sample_download_worker_uses_owned_non_daemon_thread(
         done.set()
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_run_sample_download_worker",
+        sample_map_download,
+        "run_sample_download_worker",
         fake_run,
     )
 
-    worker = sample_maps_dialog._start_sample_download_worker(
+    worker = sample_map_download.start_sample_download_worker(
         save_dir,
         sample,
         cancel_event,
@@ -384,7 +384,7 @@ def test_download_uses_selected_directory_path(monkeypatch, tmp_path):
         sample_maps, "download_and_extract_sample_map", fake_download
     )
 
-    result = sample_maps_dialog._download_and_extract_to_selected_directory(
+    result = sample_map_download.download_and_extract_to_selected_directory(
         DirectorySelection.from_path(str(tmp_path)),
         sample,
         progress_cb=progress_cb,
@@ -416,12 +416,12 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
         return "/downloaded/devils-eye"
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_download_and_extract_to_selected_directory",
+        sample_map_download,
+        "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    result = sample_maps_dialog._download_sample_with_desktop_activity(
+    result = sample_map_download.download_sample_with_desktop_activity(
         services,
         parent,
         DirectorySelection.from_path(str(tmp_path)),
@@ -430,7 +430,7 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
         cancel_cb=cancel_cb,
     )
 
-    notification_id = sample_maps_dialog._sample_download_notification_id(sample)
+    notification_id = sample_map_download.sample_download_notification_id(sample)
     assert result == "/downloaded/devils-eye"
     assert download_calls == [
         (
@@ -470,12 +470,12 @@ def test_sample_download_can_use_foreground_dialog_without_desktop_notifications
         return "/downloaded/devils-eye"
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_download_and_extract_to_selected_directory",
+        sample_map_download,
+        "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    result = sample_maps_dialog._download_sample_with_desktop_activity(
+    result = sample_map_download.download_sample_with_desktop_activity(
         services,
         parent,
         DirectorySelection.from_path(str(tmp_path)),
@@ -502,20 +502,20 @@ def test_sample_download_withdraws_notification_on_cancel(
         raise DownloadCancelled("cancelled")
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_download_and_extract_to_selected_directory",
+        sample_map_download,
+        "download_and_extract_to_selected_directory",
         fake_download,
     )
 
     with pytest.raises(DownloadCancelled):
-        sample_maps_dialog._download_sample_with_desktop_activity(
+        sample_map_download.download_sample_with_desktop_activity(
             services,
             object(),
             DirectorySelection.from_path(str(tmp_path)),
             sample,
         )
 
-    notification_id = sample_maps_dialog._sample_download_notification_id(sample)
+    notification_id = sample_map_download.sample_download_notification_id(sample)
     assert ("close_inhibitor",) in services.calls
     assert ("withdraw_notification", notification_id) in services.calls
     assert not any(
@@ -534,20 +534,20 @@ def test_sample_download_reports_failure_to_desktop(
         raise RuntimeError("network failed")
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_download_and_extract_to_selected_directory",
+        sample_map_download,
+        "download_and_extract_to_selected_directory",
         fake_download,
     )
 
     with pytest.raises(RuntimeError, match="network failed"):
-        sample_maps_dialog._download_sample_with_desktop_activity(
+        sample_map_download.download_sample_with_desktop_activity(
             services,
             object(),
             DirectorySelection.from_path(str(tmp_path)),
             sample,
         )
 
-    notification_id = sample_maps_dialog._sample_download_notification_id(sample)
+    notification_id = sample_map_download.sample_download_notification_id(sample)
     assert ("close_inhibitor",) in services.calls
     assert (
         "notify",
@@ -570,12 +570,12 @@ def test_sample_download_continues_when_desktop_activity_is_unavailable(
         return "/downloaded/devils-eye"
 
     monkeypatch.setattr(
-        sample_maps_dialog,
-        "_download_and_extract_to_selected_directory",
+        sample_map_download,
+        "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    result = sample_maps_dialog._download_sample_with_desktop_activity(
+    result = sample_map_download.download_sample_with_desktop_activity(
         services,
         object(),
         DirectorySelection.from_path(str(tmp_path)),

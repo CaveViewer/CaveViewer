@@ -19,7 +19,6 @@ import os
 import queue
 import threading
 import time
-from dataclasses import dataclass
 
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_X,
@@ -40,6 +39,14 @@ from caveviewer.gui.platform import (
     get_splash_platform_adapter,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
+from caveviewer.gui.sample_map_download import (
+    SampleDownloadFailed as _SampleDownloadFailed,
+    SampleDownloadProgress as _SampleDownloadProgress,
+    SampleDownloadSucceeded as _SampleDownloadSucceeded,
+    close_desktop_inhibitor as _close_desktop_inhibitor,
+    safe_desktop_inhibit as _safe_desktop_inhibit,
+    start_sample_download_worker as _start_sample_download_worker,
+)
 from caveviewer.gui.tk_feedback import FeedbackKind, show_feedback
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -52,29 +59,6 @@ _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
-_SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX = "caveviewer.sample-map-download"
-
-
-@dataclass(frozen=True)
-class _SampleDownloadProgress:
-    """Worker-to-UI progress message for a sample-map download."""
-
-    downloaded_bytes: int
-    total_bytes: int | None
-
-
-@dataclass(frozen=True)
-class _SampleDownloadSucceeded:
-    """Worker-to-UI completion message for a sample-map download."""
-
-    result_path: str
-
-
-@dataclass(frozen=True)
-class _SampleDownloadFailed:
-    """Worker-to-UI failure message for a sample-map download."""
-
-    error: Exception
 
 
 def _last_sample_maps_dir_file() -> str:
@@ -125,202 +109,6 @@ def _ask_directory_in_front(
                 owner.focus_force()
         except Exception:
             pass
-
-
-def _download_and_extract_to_selected_directory(
-    save_dir: DirectorySelection, sample, *, progress_cb=None, cancel_cb=None
-) -> str:
-    """Download a sample map into the local path selected by DesktopServices."""
-    from caveviewer.gui.sample_maps import download_and_extract_sample_map
-
-    return download_and_extract_sample_map(
-        save_dir.path,
-        sample,
-        progress_cb=progress_cb,
-        cancel_cb=cancel_cb,
-    )
-
-
-def _run_sample_download_worker(
-    save_dir: DirectorySelection,
-    sample,
-    cancel_event: threading.Event,
-    result_queue,
-) -> None:
-    """
-    Download/extract a sample map without touching Tk state.
-
-    The worker communicates only through `result_queue`. UI code owns all Tk
-    widget updates by polling that queue with `after()`.
-    """
-    from caveviewer.gui.sample_maps import DownloadCancelled
-
-    def on_progress(downloaded_bytes, total_bytes) -> None:
-        if cancel_event.is_set():
-            raise DownloadCancelled("Sample map download cancelled")
-        result_queue.put(
-            _SampleDownloadProgress(
-                max(0, int(downloaded_bytes)),
-                None if total_bytes is None else max(0, int(total_bytes)),
-            )
-        )
-        if cancel_event.is_set():
-            raise DownloadCancelled("Sample map download cancelled")
-
-    try:
-        result_path = _download_and_extract_to_selected_directory(
-            save_dir,
-            sample,
-            progress_cb=on_progress,
-            cancel_cb=cancel_event.is_set,
-        )
-    except Exception as exc:
-        result_queue.put(_SampleDownloadFailed(exc))
-    else:
-        result_queue.put(_SampleDownloadSucceeded(result_path))
-
-
-def _start_sample_download_worker(
-    save_dir: DirectorySelection,
-    sample,
-    cancel_event: threading.Event,
-    result_queue,
-) -> threading.Thread:
-    """Start the owned worker thread for a sample-map download."""
-    worker = threading.Thread(
-        target=_run_sample_download_worker,
-        args=(save_dir, sample, cancel_event, result_queue),
-        name="CaveViewer-sample-map-download",
-        # Partial zip/extraction cleanup must reach its finally blocks.
-        daemon=False,
-    )
-    worker.start()
-    return worker
-
-
-def _sample_download_notification_id(sample) -> str:
-    """Return a stable per-sample desktop notification ID."""
-    raw_key = (
-        getattr(sample, "asset_name", "")
-        or getattr(sample, "display_name", "")
-        or "sample"
-    )
-    safe_key = "".join(
-        character.lower() if character.isalnum() else "-"
-        for character in str(raw_key)
-    ).strip("-")
-    return f"{_SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX}.{safe_key or 'sample'}"
-
-
-def _safe_desktop_notify(
-    desktop_services: DesktopServices,
-    notification_id: str,
-    title: str,
-    body: str,
-    *,
-    priority: str = "normal",
-) -> None:
-    """Send a best-effort desktop notification without affecting workflow."""
-    try:
-        desktop_services.notify(
-            notification_id, title, body, priority=priority
-        )
-    except Exception:
-        # Notification failures must never break a download. Linux portals
-        # already fall back internally, but tests and unusual desktop sessions
-        # may provide smaller DesktopServices implementations.
-        pass
-
-
-def _safe_desktop_withdraw(
-    desktop_services: DesktopServices, notification_id: str
-) -> None:
-    """Withdraw a best-effort desktop notification without affecting workflow."""
-    try:
-        desktop_services.withdraw_notification(notification_id)
-    except Exception:
-        pass
-
-
-def _safe_desktop_inhibit(
-    desktop_services: DesktopServices, reason: str, *, parent
-):
-    """Keep the desktop awake during long work when the host supports it."""
-    try:
-        return desktop_services.inhibit_idle_suspend(reason, parent=parent)
-    except Exception:
-        return None
-
-
-def _close_desktop_inhibitor(inhibitor) -> None:
-    """Release a desktop inhibitor returned by DesktopServices."""
-    if inhibitor is None:
-        return
-    try:
-        inhibitor.close()
-    except Exception:
-        pass
-
-
-def _download_sample_with_desktop_activity(
-    desktop_services: DesktopServices,
-    parent,
-    save_dir: DirectorySelection,
-    sample,
-    *,
-    progress_cb=None,
-    cancel_cb=None,
-    notify_desktop: bool = True,
-) -> str:
-    """Download a sample map while using native desktop activity affordances."""
-    from caveviewer.gui.sample_maps import DownloadCancelled
-
-    display_name = getattr(sample, "display_name", "sample map")
-    notification_id = _sample_download_notification_id(sample)
-    if notify_desktop:
-        _safe_desktop_notify(
-            desktop_services,
-            notification_id,
-            "Sample Map Download Started",
-            f"Downloading {display_name}",
-        )
-    inhibitor = _safe_desktop_inhibit(
-        desktop_services,
-        f"Downloading {display_name}",
-        parent=parent,
-    )
-
-    try:
-        result_path = _download_and_extract_to_selected_directory(
-            save_dir,
-            sample,
-            progress_cb=progress_cb,
-            cancel_cb=cancel_cb,
-        )
-    except Exception as exc:
-        _close_desktop_inhibitor(inhibitor)
-        if isinstance(exc, DownloadCancelled):
-            if notify_desktop:
-                _safe_desktop_withdraw(desktop_services, notification_id)
-        elif notify_desktop:
-            _safe_desktop_notify(
-                desktop_services,
-                notification_id,
-                "Sample Map Download Failed",
-                f"Couldn’t download {display_name}",
-                priority="high",
-            )
-        raise
-
-    _close_desktop_inhibitor(inhibitor)
-    if notify_desktop:
-        _safe_desktop_notify(
-            desktop_services,
-            notification_id,
-            "Sample Map Ready",
-            f"{display_name} finished downloading",
-        )
-    return result_path
 
 
 def _format_sample_size(size_bytes) -> str:

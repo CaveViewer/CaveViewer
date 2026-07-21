@@ -254,7 +254,8 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "_bind_activation(browse_button, on_open_map_folder)" in source
     assert "_bind_activation(preferences_link, _on_preferences_click)" in source
     assert "_on_sample_map_action(sample)" in source
-    assert "show_sample_maps_dialog(" in source
+    assert "start_sample_download_worker(" in source
+    assert "show_sample_maps_dialog(" not in source
     assert "Download sample maps" not in source
 
 
@@ -272,7 +273,7 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert 'content_scrollbar.pack(side="right", fill="y")' in source
     assert "_bind_library_mousewheel(rows_frame)" in source
     assert "recent_map_paths = _load_library_recent_map_paths()" in source
-    assert "size_text=_sample_map_splash_size_text(sample)" in source
+    assert "detail=_sample_map_status_text(sample, downloaded=downloaded)" in source
     assert "highlightthickness=0" in source
     assert "highlightbackground=_LIBRARY_PANEL_BORDER_COLOR" in source
     assert "font=_LIBRARY_METADATA_FONT" in source
@@ -280,6 +281,11 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "width=_LIBRARY_ACTION_BUTTON_WIDTH" in source
     assert "padx=px(_LIBRARY_ACTION_BUTTON_PAD_X)" in source
     assert "pady=px(_LIBRARY_ACTION_BUTTON_PAD_Y)" in source
+    assert "progress_bar_canvas = tk.Canvas(" in source
+    assert "_poll_library_download_queue" in source
+    assert "_cancel_active_library_download_for_close()" in source
+    assert "DirectorySelection.from_path(sample_maps_root_dir)" in source
+    assert "_start_sample_catalog_fetch()" in source
 
 
 def test_sample_map_splash_actions_are_compact():
