@@ -214,7 +214,78 @@ def test_successful_sample_download_extracts_expected_layout(
     assert result == str(destination)
     assert (destination / "map.obj").read_text(encoding="utf-8") == "new mesh"
     assert not (destination / "obsolete.txt").exists()
+    assert not list(destination.parent.glob(".Test-Cave.tmp-*"))
+    assert not list(destination.parent.glob(".Test-Cave.tmp-*.previous"))
     assert progress == [(1, 1)]
+
+
+def test_sample_publish_copy_failure_preserves_existing_install_and_cleans_staging(
+    tmp_path, monkeypatch
+):
+    sample = sample_maps.SampleMapInfo(
+        "Test Cave", "test.zip", "https://example.invalid/test.zip", None
+    )
+    destination = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave"
+    destination.mkdir(parents=True)
+    marker = destination / "map.obj"
+    marker.write_text("existing map", encoding="utf-8")
+
+    def create_zip(_url, _size, zip_path, progress_cb=None, cancel_cb=None):
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr("map.obj", "new mesh")
+            archive.writestr("map.mtl", "newmtl rock")
+
+    def fail_copytree(_source, dest, *args, **kwargs):
+        del args, kwargs
+        Path(dest, "partial.obj").write_text("partial", encoding="utf-8")
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(sample_maps, "download_update", create_zip)
+    monkeypatch.setattr(sample_maps.shutil, "copytree", fail_copytree)
+
+    with pytest.raises(OSError, match="copy failed"):
+        sample_maps.download_and_extract_sample_map(str(tmp_path), sample)
+
+    assert marker.read_text(encoding="utf-8") == "existing map"
+    assert not list(destination.parent.glob(".Test-Cave.tmp-*"))
+
+
+def test_sample_publish_failure_restores_existing_install_and_cleans_staging(
+    tmp_path, monkeypatch
+):
+    sample = sample_maps.SampleMapInfo(
+        "Test Cave", "test.zip", "https://example.invalid/test.zip", None
+    )
+    destination = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave"
+    destination.mkdir(parents=True)
+    marker = destination / "map.obj"
+    marker.write_text("existing map", encoding="utf-8")
+
+    def create_zip(_url, _size, zip_path, progress_cb=None, cancel_cb=None):
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr("map.obj", "new mesh")
+            archive.writestr("map.mtl", "newmtl rock")
+
+    real_replace = sample_maps.os.replace
+
+    def fail_new_publish(source, dest):
+        if (
+            Path(source).name.startswith(".Test-Cave.tmp-")
+            and not Path(source).name.endswith(".previous")
+            and Path(dest) == destination
+        ):
+            raise OSError("publish failed")
+        real_replace(source, dest)
+
+    monkeypatch.setattr(sample_maps, "download_update", create_zip)
+    monkeypatch.setattr(sample_maps.os, "replace", fail_new_publish)
+
+    with pytest.raises(OSError, match="publish failed"):
+        sample_maps.download_and_extract_sample_map(str(tmp_path), sample)
+
+    assert marker.read_text(encoding="utf-8") == "existing map"
+    assert not list(destination.parent.glob(".Test-Cave.tmp-*"))
+    assert not list(destination.parent.glob(".Test-Cave.tmp-*.previous"))
 
 
 def test_sample_download_accepts_portal_directory_selection(tmp_path, monkeypatch):

@@ -30,7 +30,7 @@ import tempfile
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.update_checker import (
@@ -305,6 +305,84 @@ def _legacy_nested_sample_map_path(install_dir: str, sample: SampleMapInfo) -> s
     return os.path.join(normalized, SAMPLE_MAPS_DIRNAME, sample.display_name)
 
 
+def _sample_map_publish_staging_prefix(dest_dir: str) -> str:
+    name = os.path.basename(os.path.normpath(dest_dir)) or "sample-map"
+    safe_name = "".join(
+        char if char.isalnum() or char in "._-" else "-"
+        for char in name
+    ).strip(".-")
+    return f".{safe_name or 'sample-map'}.tmp-"
+
+
+def _remove_replaced_sample_map_backup(backup_dir: str) -> None:
+    if os.path.isdir(backup_dir) and not os.path.islink(backup_dir):
+        shutil.rmtree(backup_dir)
+    else:
+        os.remove(backup_dir)
+
+
+def _publish_sample_map_directory(staging_dir: str, dest_dir: str) -> None:
+    """Publish a completed sample-map tree while preserving an old install."""
+    backup_dir = f"{staging_dir}.previous"
+    moved_existing_install = False
+
+    try:
+        if os.path.lexists(dest_dir):
+            os.replace(dest_dir, backup_dir)
+            moved_existing_install = True
+        os.replace(staging_dir, dest_dir)
+    except BaseException:
+        if moved_existing_install:
+            try:
+                os.replace(backup_dir, dest_dir)
+            except OSError as restore_error:
+                _LOG.error(
+                    "Could not restore previous sample map %s after publish failure: %s",
+                    dest_dir,
+                    restore_error,
+                )
+        raise
+
+    if moved_existing_install:
+        try:
+            _remove_replaced_sample_map_backup(backup_dir)
+        except OSError as cleanup_error:
+            _LOG.warning(
+                "Could not remove replaced sample map backup %s: %s",
+                backup_dir,
+                cleanup_error,
+            )
+
+
+def _copy_and_publish_sample_map(
+    source_root: str,
+    dest_dir: str,
+    raise_if_cancelled: Callable[[], None],
+) -> None:
+    """
+    Copy an extracted sample map to private sibling staging, then publish it.
+
+    The sibling staging directory keeps the final rename on the destination
+    filesystem. If copying or publishing fails, the old installed sample map is
+    left in place and the unpublished staging tree is removed.
+    """
+    publish_dest_dir = os.path.abspath(dest_dir)
+    parent_dir = os.path.dirname(publish_dest_dir)
+    os.makedirs(parent_dir, exist_ok=True)
+    publish_staging_dir = tempfile.mkdtemp(
+        prefix=_sample_map_publish_staging_prefix(dest_dir),
+        dir=parent_dir,
+    )
+    try:
+        shutil.copytree(source_root, publish_staging_dir, dirs_exist_ok=True)
+        raise_if_cancelled()
+        _publish_sample_map_directory(publish_staging_dir, publish_dest_dir)
+        publish_staging_dir = ""
+    finally:
+        if publish_staging_dir:
+            shutil.rmtree(publish_staging_dir, ignore_errors=True)
+
+
 def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo,
                                     progress_cb=None, cancel_cb=None) -> str:
     """
@@ -364,9 +442,7 @@ def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo,
             source_root = staging_dir
 
         raise_if_cancelled()
-        if os.path.isdir(dest_dir):
-            shutil.rmtree(dest_dir)
-        shutil.copytree(source_root, dest_dir)
+        _copy_and_publish_sample_map(source_root, dest_dir, raise_if_cancelled)
 
     _LOG.info("Sample map extracted: %s", dest_dir)
     return dest_dir
