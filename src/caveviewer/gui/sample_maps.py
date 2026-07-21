@@ -80,6 +80,14 @@ class SampleMapInfo:
     size_bytes: Optional[int] = None
 
 
+@dataclass(frozen=True)
+class SampleMapRemovalResult:
+    """Result of removing app-managed downloaded files for one sample map."""
+
+    removed_paths: tuple[str, ...]
+    error: str | None = None
+
+
 KNOWN_SAMPLE_MAPS = [
     SampleMapInfo(
         display_name="Boh Yai Mine I (Low Res)",
@@ -389,6 +397,34 @@ def existing_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
     return path
 
 
+def remove_downloaded_sample_map(
+    install_dir: str | os.PathLike[str],
+    sample: SampleMapInfo,
+) -> SampleMapRemovalResult:
+    """Remove app-managed downloaded files for one Standard Library map."""
+    removed_paths: list[str] = []
+    errors: list[str] = []
+
+    for candidate in _sample_map_removal_candidates(install_dir, sample):
+        try:
+            if not os.path.lexists(candidate):
+                continue
+            if os.path.islink(candidate) or not os.path.isdir(candidate):
+                errors.append(f"{candidate} is not a removable directory")
+                continue
+            shutil.rmtree(candidate)
+            removed_paths.append(candidate)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            errors.append(f"{candidate}: {exc}")
+
+    return SampleMapRemovalResult(
+        removed_paths=tuple(removed_paths),
+        error="; ".join(errors) if errors else None,
+    )
+
+
 def is_app_supplied_sample_map_path(
     path: str | os.PathLike[str], install_dir: str | os.PathLike[str] | None = None
 ) -> bool:
@@ -409,6 +445,25 @@ def is_app_supplied_sample_map_path(
         if candidate_normalized is not None and normalized == candidate_normalized:
             return True
     return False
+
+
+def _sample_map_removal_candidates(
+    install_dir: str | os.PathLike[str],
+    sample: SampleMapInfo,
+) -> list[str]:
+    raw_candidates = [
+        local_sample_map_path(os.fspath(install_dir), sample),
+        *_legacy_sample_map_paths(os.fspath(install_dir), sample),
+    ]
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for candidate in raw_candidates:
+        normalized = _normalized_path_for_compare(candidate)
+        if normalized is None or normalized in seen:
+            continue
+        candidates.append(candidate)
+        seen.add(normalized)
+    return candidates
 
 
 def _folder_has_contents(path: str) -> bool:

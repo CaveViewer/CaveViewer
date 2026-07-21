@@ -301,6 +301,7 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
 
     assert "Remove from this list" in source
     assert "Remove cache" in source
+    assert "Remove downloaded files" in source
     assert "Remove from Recent" not in source
     assert "_create_library_overflow_button" in source
     assert "_create_recent_overflow_button" not in source
@@ -310,6 +311,9 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "remove_recent_map_path(path)" in source
     assert "has_managed_map_cache(path)" in source
     assert "remove_managed_map_cache(path)" in source
+    assert "remove_downloaded_sample_map(sample_maps_root_dir, sample)" in source
+    assert "_remove_standard_library_download_from_splash" in source
+    assert "has_managed_map_cache(sample_path)" not in source
     assert "recent_container = tk.Frame(rows_frame" in source
     assert "recent_rows_container[0] = recent_container" in source
     assert "recent_empty_note[0] = _create_map_library_empty_note" in source

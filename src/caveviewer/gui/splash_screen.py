@@ -737,6 +737,7 @@ def show_splash_screen(
         existing_sample_map_path,
         fetch_sample_map_catalog,
         is_sample_map_already_downloaded,
+        remove_downloaded_sample_map,
     )
 
     sample_maps_root_dir = default_sample_maps_install_dir()
@@ -900,6 +901,75 @@ def show_splash_screen(
 
         if row_widgets is not None and _widget_exists(row_widgets.leading_widget):
             _refresh_library_overflow_button(row_widgets.leading_widget)
+
+    def _refresh_available_sample_row(sample) -> None:
+        sample_key = _sample_map_key(sample)
+        downloaded = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
+        result_path = existing_sample_map_path(sample_maps_root_dir, sample)
+        if downloaded:
+            downloaded_sample_paths[sample_key] = result_path
+        else:
+            downloaded_sample_paths.pop(sample_key, None)
+        resolved_sample = _resolve_sample_catalog_entry(sample)
+        _set_library_row_metadata(
+            sample,
+            _sample_map_status_text(resolved_sample, downloaded=downloaded),
+        )
+        _set_available_sample_action(
+            sample,
+            downloaded=downloaded,
+            result_path=result_path if downloaded else None,
+        )
+
+    def _remove_standard_library_download_from_splash(
+        sample,
+        sample_path: str,
+        row_widgets: _MapLibraryRowWidgets | None,
+    ) -> None:
+        cache_result = remove_managed_map_cache(sample_path)
+        if cache_result.error:
+            show_feedback(
+                root,
+                f"Unable to remove downloaded files for {sample.display_name}: "
+                f"{cache_result.error}",
+                kind="error",
+                duration_ms=9000,
+                font=_BODY_FONT,
+            )
+            if row_widgets is not None and _widget_exists(row_widgets.leading_widget):
+                _refresh_library_overflow_button(row_widgets.leading_widget)
+            return
+
+        removal_result = remove_downloaded_sample_map(sample_maps_root_dir, sample)
+        _refresh_available_sample_row(sample)
+        if removal_result.error:
+            show_feedback(
+                root,
+                f"Unable to remove downloaded files for {sample.display_name}: "
+                f"{removal_result.error}",
+                kind="error",
+                duration_ms=9000,
+                font=_BODY_FONT,
+            )
+            return
+
+        if removal_result.removed_paths or cache_result.removed:
+            show_feedback(
+                root,
+                f"Removed downloaded files for {sample.display_name}.",
+                kind="info",
+                duration_ms=5000,
+                font=_BODY_FONT,
+            )
+            return
+
+        show_feedback(
+            root,
+            f"No downloaded files were found for {sample.display_name}.",
+            kind="info",
+            duration_ms=5000,
+            font=_BODY_FONT,
+        )
 
     def _remove_recent_map_from_splash(path: str) -> None:
         remove_recent_map_path(path)
@@ -1758,15 +1828,15 @@ def show_splash_screen(
 
         def menu_actions(sample=sample):
             sample_path = _downloaded_sample_map_path(sample)
-            if sample_path is None or not has_managed_map_cache(sample_path):
+            if sample_path is None:
                 return ()
             return (
                 (
-                    "Remove cache",
+                    "Remove downloaded files",
                     lambda sample_path=sample_path, sample=sample: (
-                        _remove_map_cache_from_splash(
+                        _remove_standard_library_download_from_splash(
+                            sample,
                             sample_path,
-                            sample.display_name,
                             row_widgets,
                         )
                     ),

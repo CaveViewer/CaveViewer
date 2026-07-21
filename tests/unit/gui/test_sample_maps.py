@@ -276,6 +276,38 @@ def test_existing_path_supports_legacy_sibling_location(tmp_path):
     assert sample_maps.existing_sample_map_path(str(tmp_path), sample) == str(legacy)
 
 
+def test_remove_downloaded_sample_map_removes_current_and_legacy_files(tmp_path):
+    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+    current = tmp_path / sample_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    legacy = tmp_path / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME / "Test Cave"
+    unrelated = tmp_path / sample_maps.MAP_LIBRARY_DIRNAME / "Other Cave"
+
+    for folder in (current, legacy, unrelated):
+        folder.mkdir(parents=True)
+        (folder / "map.obj").write_text("mesh", encoding="utf-8")
+
+    result = sample_maps.remove_downloaded_sample_map(str(tmp_path), sample)
+
+    assert set(result.removed_paths) == {str(current), str(legacy)}
+    assert result.error is None
+    assert not current.exists()
+    assert not legacy.exists()
+    assert unrelated.exists()
+
+
+def test_remove_downloaded_sample_map_rejects_non_directory_conflict(tmp_path):
+    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+    current = tmp_path / sample_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    current.parent.mkdir(parents=True)
+    current.write_text("not a directory", encoding="utf-8")
+
+    result = sample_maps.remove_downloaded_sample_map(str(tmp_path), sample)
+
+    assert result.removed_paths == ()
+    assert result.error == f"{current} is not a removable directory"
+    assert current.exists()
+
+
 def test_app_supplied_sample_map_path_matches_managed_library_only(
     tmp_path, monkeypatch
 ):
