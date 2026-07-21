@@ -9,11 +9,15 @@
 - [Testing](testing.md): test placement, commands, markers, and coverage policy.
 - [Releases](releases.md): platform matrix, GitHub workflow, channels,
   signing, resume behavior, and post-release verification.
+- [Rendering](rendering.md): import/chunking model, runtime streaming, tuning,
+  and cache compilation options.
 - [AI-assisted development](ai-assistance.md): canonical instructions,
   tool-specific adapters, and safe maintenance rules.
-- [README-developer.md](../../README-developer.md): source setup, runtime
-  configuration, and detailed environment variables.
+- [Documentation](documentation.md): documentation placement, inheritance,
+  override, and naming rules.
+- [Source setup](source-setup.md): source setup, runtime configuration, and
+  detailed environment variables.
 
 The focused documents in this directory are canonical for their subjects.
-`README-developer.md` continues to hold operational details that have not yet
-been split out.
+`source-setup.md` holds operational details that remain too detailed for the
+root project README.

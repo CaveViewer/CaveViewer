@@ -78,4 +78,4 @@
 - Keep docstrings accurate when behavior changes. Update architecture and
   configuration documentation in the same change that invalidates it.
 - Separate mechanical file moves from edits so history remains traceable.
-- Shell code under `scripts/` also follows `scripts/STANDARDS.md`.
+- Shell code under `scripts/` also follows `scripts/standards.md`.

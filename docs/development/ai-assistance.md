@@ -14,7 +14,9 @@ the standards.
    `gui`, or `tests`.
 4. The focused documents in this directory provide detailed architecture,
    layout, coding, and testing standards.
-5. Tool-specific files are thin adapters that direct the tool to the canonical
+5. `docs/development/documentation.md` defines placement, inheritance,
+   override, and naming rules for documentation and instruction files.
+6. Tool-specific files are thin adapters that direct the tool to the canonical
    instructions and repeat only the few constraints needed in every session.
 
 If instructions conflict, stop and resolve the conflict rather than choosing
@@ -23,8 +25,8 @@ the most convenient rule.
 ## Repository files
 
 - `/AGENTS.md`: canonical repository-wide agent entry point.
-- `/src/caveviewer/core/AGENTS.md`, `/src/caveviewer/gui/AGENTS.md`, and
-  `/tests/AGENTS.md`: scoped constraints.
+- `/src/AGENTS.md`, `/src/caveviewer/core/AGENTS.md`,
+  `/src/caveviewer/gui/AGENTS.md`, and `/tests/AGENTS.md`: scoped constraints.
 - `/.github/copilot-instructions.md`: GitHub Copilot repository adapter.
 - `/.aiignore`: reduces accidental JetBrains AI Assistant access to generated
   output and likely secret files. It is defense in depth, not a security
@@ -63,6 +65,7 @@ development documents.
 ## Maintaining the rules
 
 Update the canonical document first. Change tool-specific adapters only when a
-tool needs distinct syntax or a small always-on summary. During review, reject
-duplicated blocks that could drift and remove obsolete rules when architecture
-or commands change.
+tool needs distinct syntax or a small always-on summary. Follow
+`docs/development/documentation.md` when adding or moving policy. During review,
+reject duplicated blocks that could drift and remove obsolete rules when
+architecture or commands change.

@@ -82,7 +82,6 @@ for item in \
   requirements.txt \
   requirements-dev.txt \
   README.md \
-  README-developer.md \
   LICENSE \
   THIRD_PARTY_NOTICES.md \
   CHANGELOG.md \

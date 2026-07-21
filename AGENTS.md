@@ -5,6 +5,8 @@ inside a subdirectory supplements these rules for that area.
 
 ## Sources of truth
 
+- `docs/development/documentation.md` defines documentation placement,
+  inheritance, override, and naming rules.
 - `docs/development/architecture.md` defines component boundaries and
   dependency direction.
 - `docs/development/repository-layout.md` defines the current package layout and
@@ -14,8 +16,8 @@ inside a subdirectory supplements these rules for that area.
   `docs/development/testing.md` define implementation and verification rules.
 - `docs/development/releases.md` defines release targets, workflow sequencing,
   channels, signing, and verification.
-- `README-developer.md` remains the detailed source setup, packaging-variable,
-  and runtime-configuration reference.
+- `docs/development/source-setup.md` remains the detailed source setup,
+  packaging-variable, and runtime-configuration reference.
 
 ## Working agreement
 
@@ -29,22 +31,14 @@ inside a subdirectory supplements these rules for that area.
 - Never commit generated caches, virtual environments, coverage output, build
   artifacts, downloaded maps, or private signing keys.
 
-## Architecture constraints
+## Architecture and compatibility
 
-- `caveviewer.core` contains parsing, cache, streaming, and other non-UI
-  policies. It must not import `caveviewer.gui`.
-- `caveviewer.gui` owns Tk and OpenGL presentation and may depend on core. OpenGL and Tk
-  operations stay on their owning main thread; background workers may prepare
-  CPU data only.
-- Platform-specific behavior belongs behind `caveviewer.gui.platform` adapters rather
-  than scattered `sys.platform` branches.
-- Failed imports must not publish partial caches. Preserve staging-directory
-  cleanup and atomic publication semantics.
-- Changes to shared cache data must test both cache construction and runtime
-  chunk streaming.
-- Files in `updates/` and the location of `docs/index.html` are externally
-  consumed paths. Leave them stable unless the migration explicitly updates
-  their consumers.
+- Follow the boundaries and dependency direction in
+  `docs/development/architecture.md`.
+- Follow the stable path contracts in `docs/development/repository-layout.md`.
+- Do not add a new dependency, change a public cache/update format, alter a
+  release path, or move an externally consumed file without documenting the
+  compatibility impact and updating validation in the same change.
 
 ## Common commands
 

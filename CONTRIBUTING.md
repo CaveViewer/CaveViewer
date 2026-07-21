@@ -6,7 +6,8 @@ than system memory.
 
 ## Start here
 
-1. Follow the setup instructions in [README-developer.md](README-developer.md).
+1. Follow the setup instructions in
+   [source-setup.md](docs/development/source-setup.md).
 2. Read the [architecture](docs/development/architecture.md) and
    [repository-layout](docs/development/repository-layout.md) documents before
    moving modules or changing component boundaries.

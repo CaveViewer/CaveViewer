@@ -3,7 +3,7 @@
 This document is the canonical release checklist for CaveViewer. Script CLI
 details remain in [`scripts/README.md`](../../scripts/README.md), while update
 configuration and local packaging variables remain in
-[`README-developer.md`](../../README-developer.md).
+[`source-setup.md`](source-setup.md).
 
 ## Release matrix
 
