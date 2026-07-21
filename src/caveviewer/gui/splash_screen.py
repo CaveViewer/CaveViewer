@@ -747,7 +747,7 @@ def show_splash_screen(
 
         intro_label = tk.Label(
             panel,
-            text="Start with a known-good cave map before opening your own scan.",
+            text="Try a sample cave map.",
             font=_SMALL_FONT,
             fg=_INSTRUCTION_COLOR,
             bg=_PANEL_COLOR,

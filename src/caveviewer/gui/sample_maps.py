@@ -30,6 +30,7 @@ import tempfile
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from caveviewer.core.diagnostics.logging import get_logger
@@ -105,30 +106,11 @@ def default_sample_maps_install_dir() -> str:
     map_library_dir = data_dir / MAP_LIBRARY_DIRNAME
     legacy_sample_maps_dir = data_dir / _LEGACY_SAMPLE_MAPS_DIRNAME
 
-    if legacy_sample_maps_dir.is_dir() and not map_library_dir.exists():
-        try:
-            data_dir.mkdir(parents=True, exist_ok=True)
-            legacy_sample_maps_dir.rename(map_library_dir)
-            _LOG.info(
-                "Moved legacy sample map directory %s to %s",
-                legacy_sample_maps_dir,
-                map_library_dir,
-            )
-        except OSError as exc:
-            _LOG.warning(
-                "Could not move legacy sample map directory %s to %s: %s",
-                legacy_sample_maps_dir,
-                map_library_dir,
-                exc,
-            )
-            return str(legacy_sample_maps_dir)
-    elif legacy_sample_maps_dir.is_dir() and map_library_dir.is_dir():
-        _LOG.warning(
-            "Legacy sample map directory %s still exists; using map library %s",
-            legacy_sample_maps_dir,
-            map_library_dir,
-        )
-    elif legacy_sample_maps_dir.is_dir() and map_library_dir.exists():
+    if (
+        legacy_sample_maps_dir.is_dir()
+        and map_library_dir.exists()
+        and not map_library_dir.is_dir()
+    ):
         _LOG.warning(
             "Could not use map library path %s because it is not a directory; "
             "using legacy sample map directory %s",
@@ -146,6 +128,7 @@ def default_sample_maps_install_dir() -> str:
             exc,
         )
     if map_library_dir.is_dir():
+        _move_legacy_sample_maps_contents(legacy_sample_maps_dir, map_library_dir)
         return str(map_library_dir)
 
     # If a conflicting file or permissions problem blocks the dedicated
@@ -156,6 +139,77 @@ def default_sample_maps_install_dir() -> str:
     except OSError:
         pass
     return str(data_dir)
+
+
+def _move_legacy_sample_maps_contents(legacy_dir: Path, map_library_dir: Path) -> None:
+    """Move legacy app-managed sample_maps contents into map_library."""
+    if not legacy_dir.is_dir() or legacy_dir == map_library_dir:
+        return
+
+    try:
+        entries = list(legacy_dir.iterdir())
+    except OSError as exc:
+        _LOG.warning(
+            "Could not inspect legacy sample map directory %s: %s",
+            legacy_dir,
+            exc,
+        )
+        return
+
+    for entry in entries:
+        _move_legacy_sample_map_entry(entry, map_library_dir / entry.name)
+
+    try:
+        legacy_dir.rmdir()
+        _LOG.info("Removed empty legacy sample map directory %s", legacy_dir)
+    except OSError:
+        _LOG.warning(
+            "Legacy sample map directory %s still contains items that were not moved",
+            legacy_dir,
+        )
+
+
+def _move_legacy_sample_map_entry(source: Path, destination: Path) -> None:
+    if not destination.exists():
+        try:
+            source.rename(destination)
+            _LOG.info("Moved legacy sample map item %s to %s", source, destination)
+        except OSError as exc:
+            _LOG.warning("Could not move legacy sample map item %s: %s", source, exc)
+        return
+
+    if source.is_dir() and destination.is_dir() and not source.is_symlink():
+        _merge_legacy_sample_map_directory(source, destination)
+        return
+
+    _LOG.warning(
+        "Keeping legacy sample map item %s because %s already exists",
+        source,
+        destination,
+    )
+
+
+def _merge_legacy_sample_map_directory(source: Path, destination: Path) -> None:
+    try:
+        entries = list(source.iterdir())
+    except OSError as exc:
+        _LOG.warning(
+            "Could not inspect legacy sample map directory %s: %s",
+            source,
+            exc,
+        )
+        return
+
+    for entry in entries:
+        _move_legacy_sample_map_entry(entry, destination / entry.name)
+
+    try:
+        source.rmdir()
+    except OSError:
+        _LOG.warning(
+            "Keeping legacy sample map directory %s because it still contains conflicts",
+            source,
+        )
 
 
 def _known_maps_with_no_download_info():

@@ -174,7 +174,7 @@ def test_default_sample_maps_install_dir_migrates_legacy_sample_maps_dir(
     assert (install_dir / "marker.txt").read_text(encoding="utf-8") == "legacy map"
 
 
-def test_default_sample_maps_install_dir_prefers_existing_map_library(
+def test_default_sample_maps_install_dir_merges_legacy_into_existing_map_library(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(sys, "platform", "linux")
@@ -183,12 +183,49 @@ def test_default_sample_maps_install_dir_prefers_existing_map_library(
     library_dir = data_home / "caveviewer" / sample_maps.MAP_LIBRARY_DIRNAME
     legacy_dir = data_home / "caveviewer" / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
     library_dir.mkdir(parents=True)
-    legacy_dir.mkdir(parents=True)
+    legacy_map = legacy_dir / "Test Cave"
+    legacy_map.mkdir(parents=True)
+    (legacy_map / "map.obj").write_text("legacy map", encoding="utf-8")
 
     install_dir = Path(sample_maps.default_sample_maps_install_dir())
 
     assert install_dir == library_dir
-    assert legacy_dir.is_dir()
+    assert not legacy_dir.exists()
+    assert (library_dir / "Test Cave" / "map.obj").read_text(
+        encoding="utf-8"
+    ) == "legacy map"
+
+
+def test_default_sample_maps_install_dir_does_not_overwrite_library_conflicts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    library_map = (
+        data_home
+        / "caveviewer"
+        / sample_maps.MAP_LIBRARY_DIRNAME
+        / "Test Cave"
+    )
+    legacy_map = (
+        data_home
+        / "caveviewer"
+        / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+        / "Test Cave"
+    )
+    library_map.mkdir(parents=True)
+    legacy_map.mkdir(parents=True)
+    (library_map / "map.obj").write_text("library map", encoding="utf-8")
+    (legacy_map / "map.obj").write_text("legacy map", encoding="utf-8")
+    (legacy_map / "texture.png").write_text("texture", encoding="utf-8")
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == library_map.parent
+    assert (library_map / "map.obj").read_text(encoding="utf-8") == "library map"
+    assert (library_map / "texture.png").read_text(encoding="utf-8") == "texture"
+    assert (legacy_map / "map.obj").read_text(encoding="utf-8") == "legacy map"
 
 
 def test_default_sample_maps_install_dir_uses_legacy_when_map_library_is_file(
