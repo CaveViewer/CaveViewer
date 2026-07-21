@@ -231,4 +231,19 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "def _bind_activation(widget, callback) -> None:" in source
     assert "_bind_activation(browse_button, on_open_map_folder)" in source
     assert "_bind_activation(preferences_link, _on_preferences_click)" in source
-    assert "_bind_activation(sample_maps_link, _on_example_maps_click)" in source
+    assert "_on_sample_map_action(sample)" in source
+    assert "show_sample_maps_dialog(" in source
+    assert "Download sample maps" not in source
+
+
+def test_sample_map_splash_actions_are_compact():
+    assert splash_screen._sample_map_splash_action_text(downloaded=True) == "Open"
+    assert splash_screen._sample_map_splash_action_text(downloaded=False) == "Get"
+    assert (
+        splash_screen._sample_map_splash_detail_text(downloaded=True)
+        == "Installed locally"
+    )
+    assert (
+        splash_screen._sample_map_splash_detail_text(downloaded=False)
+        == "Available to download"
+    )

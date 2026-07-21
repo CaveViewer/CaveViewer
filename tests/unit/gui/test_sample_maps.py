@@ -39,6 +39,11 @@ def test_known_sample_maps_include_current_public_release_assets():
     assert [sample.asset_name for sample in sample_maps.KNOWN_SAMPLE_MAPS] == expected_assets
 
 
+def test_sample_maps_dirname_points_to_map_library():
+    assert sample_maps.MAP_LIBRARY_DIRNAME == "map_library"
+    assert sample_maps.SAMPLE_MAPS_DIRNAME == sample_maps.MAP_LIBRARY_DIRNAME
+
+
 def test_catalog_populates_known_assets_and_keeps_missing_entries(monkeypatch):
     known = sample_maps.KNOWN_SAMPLE_MAPS[0]
     payload = {
@@ -152,6 +157,58 @@ def test_default_sample_maps_install_dir_uses_xdg_data_home(tmp_path, monkeypatc
     ) == str(install_dir / "Test Cave")
 
 
+def test_default_sample_maps_install_dir_migrates_legacy_sample_maps_dir(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    legacy_dir = data_home / "caveviewer" / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "marker.txt").write_text("legacy map", encoding="utf-8")
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == data_home / "caveviewer" / sample_maps.MAP_LIBRARY_DIRNAME
+    assert not legacy_dir.exists()
+    assert (install_dir / "marker.txt").read_text(encoding="utf-8") == "legacy map"
+
+
+def test_default_sample_maps_install_dir_prefers_existing_map_library(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    library_dir = data_home / "caveviewer" / sample_maps.MAP_LIBRARY_DIRNAME
+    legacy_dir = data_home / "caveviewer" / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+    library_dir.mkdir(parents=True)
+    legacy_dir.mkdir(parents=True)
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == library_dir
+    assert legacy_dir.is_dir()
+
+
+def test_default_sample_maps_install_dir_uses_legacy_when_map_library_is_file(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    app_data_dir = data_home / "caveviewer"
+    legacy_dir = app_data_dir / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+    legacy_dir.mkdir(parents=True)
+    (app_data_dir / sample_maps.MAP_LIBRARY_DIRNAME).write_text(
+        "blocked", encoding="utf-8"
+    )
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == legacy_dir
+
+
 def test_downloaded_state_and_existing_path_use_normal_location(tmp_path):
     sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
     expected = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave"
@@ -164,13 +221,22 @@ def test_downloaded_state_and_existing_path_use_normal_location(tmp_path):
 
 
 def test_existing_path_supports_legacy_nested_location(tmp_path):
-    container = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME
+    container = tmp_path / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
     sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
-    legacy = container / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave"
+    legacy = container / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME / "Test Cave"
     legacy.mkdir(parents=True)
     (legacy / "map.obj").write_text("mesh", encoding="utf-8")
     assert sample_maps.is_sample_map_already_downloaded(str(container), sample)
     assert sample_maps.existing_sample_map_path(str(container), sample) == str(legacy)
+
+
+def test_existing_path_supports_legacy_sibling_location(tmp_path):
+    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+    legacy = tmp_path / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME / "Test Cave"
+    legacy.mkdir(parents=True)
+    (legacy / "map.obj").write_text("mesh", encoding="utf-8")
+    assert sample_maps.is_sample_map_already_downloaded(str(tmp_path), sample)
+    assert sample_maps.existing_sample_map_path(str(tmp_path), sample) == str(legacy)
 
 
 def test_folder_contents_handles_directory_read_error(tmp_path, monkeypatch):

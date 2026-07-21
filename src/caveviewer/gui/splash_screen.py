@@ -152,6 +152,7 @@ _INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FON
 _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
+_SPLASH_WINDOW_WIDTH = 940
 _SPLASH_WINDOW_MIN_HEIGHT = 480 if sys.platform == "darwin" else 560
 _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = 24 if sys.platform == "darwin" else 0
 _SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 36
@@ -313,6 +314,14 @@ def _update_presentation(
     return _UpdatePresentation()
 
 
+def _sample_map_splash_action_text(downloaded: bool) -> str:
+    return "Open" if downloaded else "Get"
+
+
+def _sample_map_splash_detail_text(downloaded: bool) -> str:
+    return "Installed locally" if downloaded else "Available to download"
+
+
 def show_splash_screen(
     program_name: str = APP_NAME,
     version: str = APP_VERSION,
@@ -359,7 +368,7 @@ def show_splash_screen(
 
     _PLATFORM_ADAPTER.install_about_handler(root, program_name, version)
 
-    window_w, window_h = px(500), px(_SPLASH_WINDOW_MIN_HEIGHT)
+    window_w, window_h = px(_SPLASH_WINDOW_WIDTH), px(_SPLASH_WINDOW_MIN_HEIGHT)
 
     # Center the window on screen rather than letting the OS place it
     # arbitrarily -- a first-launch splash screen appearing somewhere
@@ -370,6 +379,18 @@ def show_splash_screen(
     pos_x = (screen_w - window_w) // 2
     pos_y = (screen_h - window_h) // 3  # slightly above true vertical center, reads better
     root.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
+
+    content_frame = tk.Frame(root, bg=_BG_COLOR)
+    content_frame.pack(fill="both", expand=True, padx=px(22))
+
+    left_frame = tk.Frame(content_frame, bg=_BG_COLOR)
+    left_frame.pack(side="left", fill="both", expand=True)
+
+    divider = tk.Frame(content_frame, bg=_BORDER_COLOR, width=1)
+    divider.pack(side="left", fill="y", padx=(px(18), px(18)), pady=px(26))
+
+    right_frame = tk.Frame(content_frame, bg=_BG_COLOR)
+    right_frame.pack(side="left", fill="both", expand=True)
 
     # -- logo image, centered near the top --------------------------------------
     logo_photo = None
@@ -392,19 +413,19 @@ def show_splash_screen(
         _LOG.warning("splash screen logo asset not found; continuing without it.")
 
     if logo_photo is not None:
-        logo_label = tk.Label(root, image=logo_photo, bg=_BG_COLOR, borderwidth=0)
+        logo_label = tk.Label(left_frame, image=logo_photo, bg=_BG_COLOR, borderwidth=0)
         logo_label.image = logo_photo  # keep a reference so it isn't garbage-collected
         logo_label.pack(pady=(22, 6))
 
     # -- title + version, centered top -------------------------------------------
     title_label = tk.Label(
-        root, text=program_name, font=_TITLE_FONT,
+        left_frame, text=program_name, font=_TITLE_FONT,
         fg=_TITLE_COLOR, bg=_BG_COLOR,
     )
     title_label.pack(pady=(0, 0))
 
     version_label = tk.Label(
-        root, text=f"Version {version}", font=_VERSION_FONT,
+        left_frame, text=f"Version {version}", font=_VERSION_FONT,
         fg=_SUBTITLE_COLOR, bg=_BG_COLOR,
     )
     version_label.pack(pady=(0, 8))
@@ -415,7 +436,7 @@ def show_splash_screen(
     # Status and action labels stay packed even when empty. State changes never
     # resize the splash, and keyboard focus is enabled only for active actions.
     update_label = tk.Label(
-        root,
+        left_frame,
         text="",
         font=_SMALL_FONT,
         fg=_INSTRUCTION_COLOR,
@@ -429,7 +450,7 @@ def show_splash_screen(
     update_label.pack(pady=(0, 2))
 
     update_action_label = tk.Label(
-        root,
+        left_frame,
         text="",
         font=_SMALL_FONT,
         fg=_BUTTON_BG,
@@ -445,7 +466,7 @@ def show_splash_screen(
     # Progress bar — always packed, always 4 px tall.  Initially its background
     # matches the window so it is invisible; becomes visible during a download.
     update_progress_canvas = tk.Canvas(
-        root,
+        left_frame,
         width=300,
         height=4,
         bg=_BG_COLOR,
@@ -564,7 +585,7 @@ def show_splash_screen(
             )
 
     browse_button = tk.Label(
-        root,
+        left_frame,
         text="Open Map Folder…",
         font=_BUTTON_FONT,
         bg=_BUTTON_BG,
@@ -583,7 +604,7 @@ def show_splash_screen(
     browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
 
     instruction_label = tk.Label(
-        root,
+        left_frame,
         text="Choose the folder that contains your cave map files:\n"
              ".glb, or .obj with its matching .mtl and textures.",
         font=_INSTRUCTION_FONT,
@@ -599,13 +620,20 @@ def show_splash_screen(
             desktop_services=desktop_services,
         )
 
-    # Example maps link - opens the sample maps dialog
+    from caveviewer.gui.sample_maps import (
+        KNOWN_SAMPLE_MAPS,
+        default_sample_maps_install_dir,
+        existing_sample_map_path,
+        is_sample_map_already_downloaded,
+    )
+    from caveviewer.gui.sample_maps_dialog import show_sample_maps_dialog
+
+    sample_maps_root_dir = default_sample_maps_install_dir()
+
     def _on_example_maps_click():
-        from caveviewer.gui.sample_maps import default_sample_maps_install_dir
-        from caveviewer.gui.sample_maps_dialog import show_sample_maps_dialog
         result = show_sample_maps_dialog(
             root,
-            default_sample_maps_install_dir(),
+            sample_maps_root_dir,
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
         )
@@ -613,7 +641,128 @@ def show_splash_screen(
             selected_folder[0] = result
             _leave_splash()
 
-    secondary_link_row = tk.Frame(root, bg=_BG_COLOR)
+    def _open_sample_map_from_splash(sample) -> None:
+        sample_path = existing_sample_map_path(sample_maps_root_dir, sample)
+        is_valid, error_message = _validate_selected_map_folder(sample_path)
+        if not is_valid:
+            _show_invalid_map_feedback(error_message)
+            return
+
+        selected_folder[0] = sample_path
+        _leave_splash()
+
+    def _on_sample_map_action(sample) -> None:
+        if is_sample_map_already_downloaded(sample_maps_root_dir, sample):
+            _open_sample_map_from_splash(sample)
+            return
+        _on_example_maps_click()
+
+    def _configure_sample_button_hover(button) -> None:
+        button.bind("<Enter>", lambda _event: button.config(bg=_BUTTON_HOVER_BG))
+        button.bind("<Leave>", lambda _event: button.config(bg=_BUTTON_BG))
+
+    def _create_sample_map_row(parent, sample) -> None:
+        downloaded = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
+        row = tk.Frame(
+            parent,
+            bg=_PANEL_COLOR,
+            highlightthickness=1,
+            highlightbackground=_BORDER_COLOR,
+            highlightcolor=_BORDER_COLOR,
+        )
+        row.pack(fill="x", pady=(0, px(8)))
+
+        text_column = tk.Frame(row, bg=_PANEL_COLOR)
+        text_column.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=(px(12), px(8)),
+            pady=px(10),
+        )
+
+        name_label = tk.Label(
+            text_column,
+            text=sample.display_name,
+            font=_SMALL_FONT,
+            fg=_TITLE_COLOR,
+            bg=_PANEL_COLOR,
+            anchor="w",
+            justify="left",
+            wraplength=px(250),
+        )
+        name_label.pack(anchor="w", fill="x")
+
+        detail_label = tk.Label(
+            text_column,
+            text=_sample_map_splash_detail_text(downloaded),
+            font=_SMALL_FONT,
+            fg=_INSTRUCTION_COLOR,
+            bg=_PANEL_COLOR,
+            anchor="w",
+            justify="left",
+        )
+        detail_label.pack(anchor="w", fill="x", pady=(px(2), 0))
+
+        action_button = tk.Label(
+            row,
+            text=_sample_map_splash_action_text(downloaded),
+            font=_SMALL_FONT,
+            bg=_BUTTON_BG,
+            fg=_BUTTON_FG,
+            padx=px(12),
+            pady=px(6),
+            cursor="hand2",
+            takefocus=True,
+            highlightthickness=1,
+            highlightbackground=_BUTTON_BORDER_COLOR,
+            highlightcolor=_BUTTON_BORDER_COLOR,
+        )
+        _bind_activation(
+            action_button,
+            lambda sample=sample: _on_sample_map_action(sample),
+        )
+        _configure_sample_button_hover(action_button)
+        action_button.pack(side="right", padx=(0, px(12)), pady=px(10))
+
+    def _create_sample_map_panel(parent) -> None:
+        panel = tk.Frame(
+            parent,
+            bg=_PANEL_COLOR,
+            highlightthickness=1,
+            highlightbackground=_BORDER_COLOR,
+            highlightcolor=_BORDER_COLOR,
+        )
+        panel.pack(fill="both", expand=True, pady=(px(34), px(24)))
+
+        header_label = tk.Label(
+            panel,
+            text="Explore sample maps",
+            font=_BODY_FONT,
+            fg=_TITLE_COLOR,
+            bg=_PANEL_COLOR,
+            anchor="w",
+        )
+        header_label.pack(anchor="w", fill="x", padx=px(16), pady=(px(16), px(4)))
+
+        intro_label = tk.Label(
+            panel,
+            text="Start with a known-good cave map before opening your own scan.",
+            font=_SMALL_FONT,
+            fg=_INSTRUCTION_COLOR,
+            bg=_PANEL_COLOR,
+            anchor="w",
+            justify="left",
+            wraplength=px(310),
+        )
+        intro_label.pack(anchor="w", fill="x", padx=px(16), pady=(0, px(14)))
+
+        rows_frame = tk.Frame(panel, bg=_PANEL_COLOR)
+        rows_frame.pack(fill="x", padx=px(12))
+        for sample in KNOWN_SAMPLE_MAPS:
+            _create_sample_map_row(rows_frame, sample)
+
+    secondary_link_row = tk.Frame(left_frame, bg=_BG_COLOR)
     secondary_link_row.pack(pady=(_SECONDARY_LINK_ROW_TOP_GAP, _SECONDARY_LINK_ROW_BOTTOM_GAP))
 
     preferences_link = tk.Label(
@@ -631,32 +780,8 @@ def show_splash_screen(
     _bind_activation(preferences_link, _on_preferences_click)
     preferences_link.pack(side="left")
 
-    secondary_separator = tk.Label(
-        secondary_link_row,
-        text="   |   ",
-        font=_SMALL_FONT,
-        fg="#3f4a5c",
-        bg=_BG_COLOR,
-    )
-    secondary_separator.pack(side="left")
-
-    sample_maps_link = tk.Label(
-        secondary_link_row,
-        text="Download sample maps",
-        font=_SMALL_FONT,
-        fg=_BUTTON_BG,
-        bg=_BG_COLOR,
-        cursor="hand2",
-        takefocus=True,
-        highlightthickness=1,
-        highlightbackground=_BG_COLOR,
-        highlightcolor=_BUTTON_BG,
-    )
-    _bind_activation(sample_maps_link, _on_example_maps_click)
-    sample_maps_link.pack(side="left")
-
     credit_label = tk.Label(
-        root,
+        left_frame,
         text=_CREDITS_TEXT,
         font=_FOOTER_FONT,
         fg="#5f606b",
@@ -664,6 +789,8 @@ def show_splash_screen(
         justify="center",
     )
     credit_label.pack(pady=(0, _FOOTER_CREDITS_BOTTOM_PAD))
+
+    _create_sample_map_panel(right_frame)
 
     # -- footer note ----------------------------------------------------------------
 
