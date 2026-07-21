@@ -20,13 +20,13 @@ main mesh rendering pipeline.
 
 from __future__ import annotations
 
-import sys
 import time
 
 import moderngl
 import numpy as np
 
 from caveviewer.gui import bitmap_font
+from caveviewer.gui.platform.base import SplashPlatformAdapter
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.core.diagnostics.logging import get_logger
 
@@ -86,10 +86,24 @@ def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
     return max(1.0, min(_FULLSCREEN_LAYOUT_SCALE_MAX, size_scale))
 
 
-def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
+def _modifier_display_label(modifier_name: str) -> str:
+    """Return the label used for modifier names in OpenGL help text."""
+    normalized = str(modifier_name or "").strip().lower()
+    if normalized == "command":
+        return "Cmd"
+    if normalized == "control":
+        return "Ctrl"
+    return modifier_name
+
+
+def _get_platform_control_sections(
+    adapter: SplashPlatformAdapter | None = None,
+) -> list[tuple[str, list[tuple[str, str]]]]:
     """Generate platform-specific control sections for display."""
-    adapter = get_platform_adapter()
+    adapter = adapter or get_platform_adapter()
     bookmark_modifier = adapter.bookmark_save_modifier()
+    bookmark_modifier_label = _modifier_display_label(bookmark_modifier)
+    primary_shortcut_label = adapter.primary_shortcut_modifier_label()
     look_button = adapter.mouse_look_button_name()
 
     movement = [
@@ -110,27 +124,21 @@ def _get_platform_control_sections() -> list[tuple[str, list[tuple[str, str]]]]:
     look.extend([
         ("J L I K", "Look around"),
         ("Z X", "Barrel roll"),
+        (f"{primary_shortcut_label} + 0", "Reset view (level horizon)"),
     ])
-    if sys.platform == "darwin":
-        look.append(("Cmd + 0", "Reset view (level horizon)"))
-    else:  # Windows/Linux
-        look.append(("Ctrl + 0", "Reset view (level horizon)"))
 
     navigation = []
-    if bookmark_modifier == "command":
-        navigation.append(("Cmd + 1..9", "Save camera bookmark slot"))
-    else:  # control
-        navigation.append(("Ctrl + 1..9", "Save camera bookmark slot"))
-
-    window_shortcut = "Cmd" if sys.platform == "darwin" else "Ctrl"
+    navigation.append(
+        (f"{bookmark_modifier_label} + 1..9", "Save camera bookmark slot")
+    )
 
     navigation.extend([
         ("1..9", "Recall camera bookmark slot"),
         ("Del + 1..9", "Delete bookmark slot"),
         ("Minimap click", "Jump to that spot"),
-        (f"{window_shortcut} + O", "Switch to a different map"),
+        (f"{primary_shortcut_label} + O", "Switch to a different map"),
         ("Open button", "Switch to a different map"),
-        (f"{window_shortcut} + W", "Close window"),
+        (f"{primary_shortcut_label} + W", "Close window"),
         ("Esc", "Quit"),
     ])
 
@@ -211,7 +219,11 @@ class ControlsOverlay:
         self._logo_renderer = None  # set via set_logo_renderer() after construction
         
         # Generate platform-specific control rows.
-        self._control_sections = _get_platform_control_sections()
+        self._platform_adapter = get_platform_adapter()
+        self._compact_manual_controls_layout = (
+            self._platform_adapter.compact_manual_controls_layout()
+        )
+        self._control_sections = _get_platform_control_sections(self._platform_adapter)
         self._control_rows = [
             row for _, section_rows in self._control_sections for row in section_rows
         ]
@@ -615,7 +627,9 @@ class ControlsOverlay:
         key_pad_y = 4.0 * layout_scale
         key_desc_gap = 20.0 * layout_scale
 
-        if self._manual_mode and sys.platform != "darwin":
+        if self._manual_mode and getattr(
+            self, "_compact_manual_controls_layout", True
+        ):
             heading_size = 1.55 * layout_scale
             key_size = 1.62 * layout_scale
             desc_size = 1.66 * layout_scale

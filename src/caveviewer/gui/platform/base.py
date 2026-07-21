@@ -49,8 +49,16 @@ class SplashPlatformAdapter(Protocol):
         """Return the modifier key name for saving bookmarks (e.g., 'command' for macOS, 'control' for Windows/Linux)."""
         ...
 
+    def primary_shortcut_modifier_label(self) -> str:
+        """Return the display label for primary app shortcuts, such as 'Cmd' or 'Ctrl'."""
+        ...
+
     def mouse_look_button_name(self) -> str:
         """Return the primary mouse button name for camera look ('left' or 'right'). macOS uses 'right' and Option+left; Windows/Linux use 'left'."""
+        ...
+
+    def compact_manual_controls_layout(self) -> bool:
+        """Return whether the manual controls overlay should use the compact layout."""
         ...
 
     def channel_sha256_keys(self, channel: str) -> tuple[str, ...]:

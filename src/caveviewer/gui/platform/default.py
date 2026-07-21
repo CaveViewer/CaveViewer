@@ -106,9 +106,17 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
         """Return the modifier key name for saving bookmarks (default: 'control' for non-macOS)."""
         return "control"
 
+    def primary_shortcut_modifier_label(self) -> str:
+        """Return the primary shortcut label shown in controls/help UI."""
+        return "Ctrl"
+
     def mouse_look_button_name(self) -> str:
         """Return the primary mouse button name for camera look (Windows/Linux use left-click)."""
         return "left"
+
+    def compact_manual_controls_layout(self) -> bool:
+        """Use the denser manual controls layout on non-macOS platforms."""
+        return True
 
     def font_candidates(self) -> list[str]:
         """Return fallback font file paths (mostly Linux fonts)."""
