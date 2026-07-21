@@ -313,6 +313,14 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "remove_managed_map_cache(path)" in source
     assert "remove_downloaded_sample_map(sample_maps_root_dir, sample)" in source
     assert "_remove_standard_library_download_from_splash" in source
+    assert "_show_library_row_status" in source
+    assert "Cache removed" in source
+    assert "Couldn’t remove cache" in source
+    assert "Couldn’t remove files" in source
+    assert "_cv_base_text" in source
+    assert "_cv_status_after_id" in source
+    assert "Removed downloaded files for" not in source
+    assert "Removed cache for" not in source
     assert "has_managed_map_cache(sample_path)" not in source
     assert "recent_container = tk.Frame(rows_frame" in source
     assert "recent_rows_container[0] = recent_container" in source

@@ -194,7 +194,10 @@ _LIBRARY_SCROLL_THUMB_COLOR = DARK_THEME.secondary_button_border
 _LIBRARY_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
 _LIBRARY_PANEL_BORDER_COLOR = "#252832"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
+_LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
 _LIBRARY_METADATA_ERROR_COLOR = DARK_THEME.error_text
+_LIBRARY_METADATA_STATUS_DURATION_MS = 2500
+_LIBRARY_METADATA_ERROR_DURATION_MS = 7000
 _LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
 _LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button
 _LIBRARY_PROGRESS_HEIGHT = 4
@@ -794,20 +797,69 @@ def show_splash_screen(
             return "Downloaded"
         return _sample_map_splash_size_text(_resolve_sample_catalog_entry(sample))
 
+    def _cancel_library_row_status(metadata_label) -> None:
+        after_id = getattr(metadata_label, "_cv_status_after_id", None)
+        if after_id is None:
+            return
+        metadata_label._cv_status_after_id = None
+        try:
+            root.after_cancel(after_id)
+        except tk.TclError:
+            pass
+
+    def _set_metadata_label_base(metadata_label, text: str, *, error: bool = False) -> None:
+        _cancel_library_row_status(metadata_label)
+        fg = _LIBRARY_METADATA_ERROR_COLOR if error else _LIBRARY_METADATA_COLOR
+        metadata_label._cv_base_text = text
+        metadata_label._cv_base_fg = fg
+        metadata_label.config(text=text, fg=fg)
+
     def _set_library_row_metadata(
         sample, text: str, *, error: bool = False
     ) -> None:
         widgets = sample_map_rows.get(_sample_map_key(sample))
         if widgets is None or not _widget_exists(widgets.metadata_label):
             return
-        widgets.metadata_label.config(
+        _set_metadata_label_base(widgets.metadata_label, text, error=error)
+
+    def _show_library_row_status(
+        row_widgets: _MapLibraryRowWidgets | None,
+        text: str,
+        *,
+        error: bool = False,
+    ) -> bool:
+        if row_widgets is None or not _widget_exists(row_widgets.metadata_label):
+            return False
+
+        label = row_widgets.metadata_label
+        _cancel_library_row_status(label)
+        label.config(
             text=text,
             fg=(
                 _LIBRARY_METADATA_ERROR_COLOR
                 if error
-                else _LIBRARY_METADATA_COLOR
+                else _LIBRARY_METADATA_STATUS_COLOR
             ),
         )
+
+        def restore_metadata() -> None:
+            label._cv_status_after_id = None
+            if not _widget_exists(label):
+                return
+            label.config(
+                text=getattr(label, "_cv_base_text", ""),
+                fg=getattr(label, "_cv_base_fg", _LIBRARY_METADATA_COLOR),
+            )
+
+        label._cv_status_after_id = root.after(
+            (
+                _LIBRARY_METADATA_ERROR_DURATION_MS
+                if error
+                else _LIBRARY_METADATA_STATUS_DURATION_MS
+            ),
+            restore_metadata,
+        )
+        return True
 
     def _set_library_action_button(
         button, text: str, command, *, enabled: bool = True
@@ -875,29 +927,23 @@ def show_splash_screen(
     ) -> None:
         result = remove_managed_map_cache(path)
         if result.error:
-            show_feedback(
-                root,
-                f"Unable to remove cache for {title}: {result.error}",
-                kind="error",
-                duration_ms=9000,
-                font=_BODY_FONT,
-            )
+            _LOG.warning("Unable to remove cache for %s: %s", title, result.error)
+            if not _show_library_row_status(
+                row_widgets,
+                "Couldn’t remove cache",
+                error=True,
+            ):
+                show_feedback(
+                    root,
+                    f"Unable to remove cache for {title}: {result.error}",
+                    kind="error",
+                    duration_ms=9000,
+                    font=_BODY_FONT,
+                )
         elif result.removed:
-            show_feedback(
-                root,
-                f"Removed cache for {title}.",
-                kind="info",
-                duration_ms=5000,
-                font=_BODY_FONT,
-            )
+            _show_library_row_status(row_widgets, "Cache removed")
         else:
-            show_feedback(
-                root,
-                f"No generated cache was found for {title}.",
-                kind="info",
-                duration_ms=5000,
-                font=_BODY_FONT,
-            )
+            _show_library_row_status(row_widgets, "No cache found")
 
         if row_widgets is not None and _widget_exists(row_widgets.leading_widget):
             _refresh_library_overflow_button(row_widgets.leading_widget)
@@ -928,14 +974,24 @@ def show_splash_screen(
     ) -> None:
         cache_result = remove_managed_map_cache(sample_path)
         if cache_result.error:
-            show_feedback(
-                root,
-                f"Unable to remove downloaded files for {sample.display_name}: "
-                f"{cache_result.error}",
-                kind="error",
-                duration_ms=9000,
-                font=_BODY_FONT,
+            _LOG.warning(
+                "Unable to remove downloaded files for %s: %s",
+                sample.display_name,
+                cache_result.error,
             )
+            if not _show_library_row_status(
+                row_widgets,
+                "Couldn’t remove files",
+                error=True,
+            ):
+                show_feedback(
+                    root,
+                    f"Unable to remove downloaded files for {sample.display_name}: "
+                    f"{cache_result.error}",
+                    kind="error",
+                    duration_ms=9000,
+                    font=_BODY_FONT,
+                )
             if row_widgets is not None and _widget_exists(row_widgets.leading_widget):
                 _refresh_library_overflow_button(row_widgets.leading_widget)
             return
@@ -943,33 +999,31 @@ def show_splash_screen(
         removal_result = remove_downloaded_sample_map(sample_maps_root_dir, sample)
         _refresh_available_sample_row(sample)
         if removal_result.error:
-            show_feedback(
-                root,
-                f"Unable to remove downloaded files for {sample.display_name}: "
-                f"{removal_result.error}",
-                kind="error",
-                duration_ms=9000,
-                font=_BODY_FONT,
+            _LOG.warning(
+                "Unable to remove downloaded files for %s: %s",
+                sample.display_name,
+                removal_result.error,
             )
+            if not _show_library_row_status(
+                row_widgets,
+                "Couldn’t remove files",
+                error=True,
+            ):
+                show_feedback(
+                    root,
+                    f"Unable to remove downloaded files for {sample.display_name}: "
+                    f"{removal_result.error}",
+                    kind="error",
+                    duration_ms=9000,
+                    font=_BODY_FONT,
+                )
             return
 
         if removal_result.removed_paths or cache_result.removed:
-            show_feedback(
-                root,
-                f"Removed downloaded files for {sample.display_name}.",
-                kind="info",
-                duration_ms=5000,
-                font=_BODY_FONT,
-            )
+            _show_library_row_status(row_widgets, "Removed")
             return
 
-        show_feedback(
-            root,
-            f"No downloaded files were found for {sample.display_name}.",
-            kind="info",
-            duration_ms=5000,
-            font=_BODY_FONT,
-        )
+        _show_library_row_status(row_widgets, "No files found")
 
     def _remove_recent_map_from_splash(path: str) -> None:
         remove_recent_map_path(path)
@@ -1728,6 +1782,9 @@ def show_splash_screen(
                 justify="left",
             )
             metadata_label.pack(anchor="w", fill="x", pady=(px(2), 0))
+            metadata_label._cv_base_text = metadata_text
+            metadata_label._cv_base_fg = _LIBRARY_METADATA_COLOR
+            metadata_label._cv_status_after_id = None
 
         action_button = tk.Label(
             row_content,
