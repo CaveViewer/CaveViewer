@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import enum
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
 
@@ -166,6 +165,37 @@ _CREDITS_TEXT = (
     "BottomLine Projects Scientific Dive Team.\n"
     "Engineering and design by magic mr_v.\n\n"
     "Licensed under the GNU General Public License v3.0.\n")
+_LINUX_TK_SANS_FAMILIES = (
+    "Adwaita Sans",
+    "Cantarell",
+    "Ubuntu Sans",
+    "Ubuntu",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "sans-serif",
+    "Sans",
+)
+
+
+def _select_tk_font_family(
+    available: dict[str, str],
+    default_family: str,
+    preferred: list[str],
+    *,
+    linux_layout: bool,
+) -> str:
+    """Choose a Tk-visible font family without spawning platform helpers."""
+    for family in preferred:
+        if not family:
+            continue
+        resolved_family = available.get(family.lower())
+        if resolved_family:
+            return resolved_family
+
+    if linux_layout and str(default_family).lower() == "nimbus sans l":
+        return "sans-serif"
+    return default_family
 
 
 def _configure_runtime_tk_fonts(root) -> None:
@@ -179,35 +209,17 @@ def _configure_runtime_tk_fonts(root) -> None:
         available = {family.lower(): family for family in tkfont.families(root)}
         preferred = [_PLATFORM_ADAPTER.ui_font_family()]
         if _LINUX_SPLASH_LAYOUT:
-            fc_family = _fontconfig_sans_family()
-            if fc_family:
-                preferred.insert(0, fc_family)
-            preferred.extend([
-                "Adwaita Sans",
-                "Cantarell",
-                "Ubuntu Sans",
-                "Ubuntu",
-                "Noto Sans",
-                "DejaVu Sans",
-                "Liberation Sans",
-                "sans-serif",
-                "Sans",
-            ])
+            # Keep splash startup on the Tk path free of subprocess waits.
+            # Prefer families Tk already knows instead of asking fontconfig.
+            preferred.extend(_LINUX_TK_SANS_FAMILIES)
 
-        resolved_family = None
-        for family in preferred:
-            if not family:
-                continue
-            resolved_family = available.get(family.lower())
-            if resolved_family:
-                break
-
-        if not resolved_family:
-            fallback_family = tkfont.nametofont("TkDefaultFont").actual("family")
-            if _LINUX_SPLASH_LAYOUT and str(fallback_family).lower() == "nimbus sans l":
-                resolved_family = "sans-serif"
-            else:
-                resolved_family = fallback_family
+        fallback_family = tkfont.nametofont("TkDefaultFont").actual("family")
+        resolved_family = _select_tk_font_family(
+            available,
+            fallback_family,
+            preferred,
+            linux_layout=_LINUX_SPLASH_LAYOUT,
+        )
 
         if resolved_family:
             _UI_FONT_FAMILY = resolved_family
@@ -224,21 +236,6 @@ def _configure_runtime_tk_fonts(root) -> None:
     _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
     _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
     _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-
-
-def _fontconfig_sans_family() -> str | None:
-    """Return fontconfig's preferred Linux sans-serif family."""
-    try:
-        result = subprocess.run(
-            ["fc-match", "--format=%{family[0]}", "sans-serif:style=Regular"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        family = result.stdout.strip()
-        return family or None
-    except Exception:
-        return None
 
 
 def _set_tk_window_icon(window) -> None:

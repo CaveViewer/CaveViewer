@@ -191,6 +191,35 @@ def test_splash_root_does_not_reuse_default_root_off_macos(monkeypatch):
     assert created == [splash_screen.tk_root_options()]
 
 
+def test_splash_font_selection_prefers_tk_visible_linux_family():
+    selected = splash_screen._select_tk_font_family(
+        {"noto sans": "Noto Sans"},
+        "TkDefaultFont",
+        ["Missing Family", *splash_screen._LINUX_TK_SANS_FAMILIES],
+        linux_layout=True,
+    )
+
+    assert selected == "Noto Sans"
+
+
+def test_splash_font_selection_avoids_nimbus_sans_linux_fallback():
+    selected = splash_screen._select_tk_font_family(
+        {},
+        "Nimbus Sans L",
+        ["Missing Family"],
+        linux_layout=True,
+    )
+
+    assert selected == "sans-serif"
+
+
+def test_splash_font_configuration_does_not_wait_on_fontconfig():
+    source = inspect.getsource(splash_screen)
+
+    assert "subprocess.run" not in source
+    assert "_fontconfig_sans_family" not in source
+
+
 def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
