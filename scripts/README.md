@@ -2,7 +2,7 @@
 
 This directory contains build, packaging, and release scripts.
 
-For script CLI conventions and naming rules, see `STANDARDS.md`.
+For script CLI conventions and naming rules, see `standards.md`.
 For the canonical release sequence, channel behavior, resume procedure, and
 post-release checklist, see `../docs/development/releases.md`.
 

@@ -68,10 +68,10 @@ Defines `SplashPlatformAdapter`, a Protocol that specifies all platform-aware me
 class SplashPlatformAdapter(Protocol):
     def bookmark_save_modifier(self) -> str:
         """Return 'command' (macOS) or 'control' (Windows/Linux)"""
-    
+
     def mouse_look_button_name(self) -> str:
         """Return 'right' (macOS) or 'left' (Windows/Linux)"""
-    
+
     # ... other methods for update metadata, package reveal, UI fonts, etc.
 ```
 
@@ -105,13 +105,13 @@ Extends `DefaultSplashPlatformAdapter` with macOS-specific overrides:
 class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def ui_font_family(self) -> str:
         return "Helvetica Neue"
-    
+
     def bookmark_save_modifier(self) -> str:
         return "command"
-    
+
     def mouse_look_button_name(self) -> str:
         return "right"
-    
+
     def install_channel(self) -> str:
         return "macos_app"  # DMG distribution channel
 ```
@@ -124,10 +124,10 @@ Similarly extend `DefaultSplashPlatformAdapter` with Windows/Linux specific beha
 class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def bookmark_save_modifier(self) -> str:
         return "control"
-    
+
     def mouse_look_button_name(self) -> str:
         return "left"
-    
+
     def install_channel(self) -> str:
         return "windows_app"  # ZIP distribution channel
 ```
@@ -140,7 +140,7 @@ Provides safe defaults for methods that should work on all platforms:
 class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
     def ui_font_family(self) -> str:
         return "Segoe UI"  # Generic, widely available
-    
+
     def install_channel(self) -> str:
         return "unsupported"  # Safe default for unknown platforms
 ```
@@ -175,7 +175,7 @@ Define the method contract with documentation:
 ```python
 def my_new_feature(self) -> str:
     """Return platform-specific value for my_new_feature.
-    
+
     macOS example: 'value_for_mac'
     Windows/Linux example: 'value_for_others'
     """
@@ -257,7 +257,7 @@ from typing import Protocol
 class MockAdapter:
     def bookmark_save_modifier(self) -> str:
         return "command"  # Simulate macOS
-    
+
     def mouse_look_button_name(self) -> str:
         return "right"
 

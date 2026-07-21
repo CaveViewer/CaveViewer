@@ -131,7 +131,7 @@ re-importing the map.
 
 For the full rendering philosophy, low-memory recommendations, runtime
 environment variables, and `caveviewer-chunker` CLI options, see
-[`README-rendering.md`](README-rendering.md).
+[`docs/development/rendering.md`](docs/development/rendering.md).
 
 ### Recordings
 

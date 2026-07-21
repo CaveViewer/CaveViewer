@@ -109,7 +109,7 @@ pathspecs = [
 		"pyproject.toml",
 		"requirements.txt",
 		"README.md",
-		"README-developer.md",
+		"docs/development/source-setup.md",
 		"LICENSE",
 		"THIRD_PARTY_NOTICES.md",
 		"src",

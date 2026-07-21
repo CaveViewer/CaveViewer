@@ -1,5 +1,9 @@
 # Testing
 
+This file is the canonical testing policy and command reference. Local
+`AGENTS.md` files may add narrower requirements, but should not repeat this
+file's commands, marker definitions, or coverage thresholds.
+
 ## Test layout
 
 - `tests/unit/core/`: parsing, cache, scheduling, memory, and other core policy.

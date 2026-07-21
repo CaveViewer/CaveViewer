@@ -7,11 +7,11 @@ Scope:
 - This document is intentionally focused on source-based development and local runs.
 
 Contributor workflow, architecture, repository layout, coding, testing, and
-AI-assistant guidance are indexed in
-[`docs/development/`](docs/development/README.md). See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) before preparing a change.
+AI-assistant guidance are indexed in the
+[development documentation](README.md). See
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md) before preparing a change.
 The canonical platform release sequence and verification checklist are in
-[`docs/development/releases.md`](docs/development/releases.md).
+[`releases.md`](releases.md).
 
 ## Get Source Files
 
@@ -260,7 +260,7 @@ On Windows (PowerShell):
 
 Rendering/import strategy, low-memory tuning, VM launch settings, and
 `caveviewer-chunker` cache-compilation options are documented in
-[`README-rendering.md`](README-rendering.md).
+[`rendering.md`](rendering.md).
 
 ---
 
@@ -307,7 +307,7 @@ the app verifies the manifest signature before offering the download. Missing or
 invalid signatures are logged as errors and do not change the splash interface.
 The release finalizer creates every requested companion `.sig` file before
 committing the manifests together. See
-[`docs/development/releases.md`](docs/development/releases.md) for the full
+[`releases.md`](releases.md) for the full
 release contract.
 
 `caveviewer.app` owns one `UpdateManager` for the full GUI process. Its explicit
@@ -585,7 +585,7 @@ and `.caveviewer_cache` directories are not auto-discovered.
 
 Runtime rendering variables, import tuning variables, low-memory launch
 examples, and `caveviewer-chunker` CLI options are listed in
-[`README-rendering.md`](README-rendering.md).
+[`rendering.md`](rendering.md).
 
 ### Application storage locations
 

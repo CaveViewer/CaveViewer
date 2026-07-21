@@ -43,7 +43,7 @@ def test_development_build_and_release_scripts_validate_python_312():
 
 
 def test_developer_docs_require_python_312():
-    developer_readme = _read("README-developer.md")
+    developer_readme = _read("docs/development/source-setup.md")
     scripts_readme = _read("scripts/README.md")
 
     assert "- Python 3.12" in developer_readme
