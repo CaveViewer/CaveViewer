@@ -542,11 +542,12 @@ First-time map imports are isolated from the viewer event loop by
 events and progress rendering responsive while a spawned child process runs the
 core `map.importer.import_and_cache_any()` path through app-level compatibility
 wrappers. The child sends progress, completion, heartbeat, and traceback-bearing
-failure events back to the viewer; closing the viewer terminates an active child
-import process and removes abandoned private staging directories for that map
-cache. The child also lowers its desktop scheduling priority and caps common
-native compute libraries to one thread unless the user has already set those
-library-specific variables.
+failure events back to the viewer. Closing the viewer requests import
+shutdown, briefly joins the parent-side relay worker, terminates any reachable
+active child import process, and removes abandoned private staging directories
+for that map cache when termination completes. The child also lowers its
+desktop scheduling priority and caps common native compute libraries to one
+thread unless the user has already set those library-specific variables.
 
 The splash screen, Preferences, and Sample Maps dialogs share their Tk
 color and control tokens through `src/caveviewer/gui/tk_theme.py`. Map-folder
