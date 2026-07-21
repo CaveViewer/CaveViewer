@@ -194,6 +194,7 @@ _LIBRARY_METADATA_ERROR_COLOR = DARK_THEME.error_text
 _LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
 _LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button
 _LIBRARY_PROGRESS_HEIGHT = 4
+_LIBRARY_PROGRESS_BOTTOM_PAD = 5
 _LIBRARY_ACTION_BUTTON_WIDTH = 8
 _LIBRARY_ACTION_BUTTON_PAD_X = 10
 _LIBRARY_ACTION_BUTTON_PAD_Y = 5
@@ -314,8 +315,8 @@ class _MapLibraryRowWidgets:
 
     action_button: object
     metadata_label: object | None
-    progress_bar_canvas: object
-    progress_bar: object
+    progress_bar_canvas: object | None = None
+    progress_bar: object | None = None
 
 
 def _display_version(version: str | None) -> str:
@@ -888,7 +889,7 @@ def show_splash_screen(
         widgets = sample_map_rows.get(_sample_map_key(sample))
         if widgets is None or not _widget_exists(widgets.progress_bar_canvas):
             return
-        widgets.progress_bar_canvas.pack_forget()
+        widgets.progress_bar_canvas.config(bg=_PANEL_COLOR)
         widgets.progress_bar_canvas.coords(
             widgets.progress_bar,
             0,
@@ -901,10 +902,13 @@ def show_splash_screen(
         widgets = sample_map_rows.get(_sample_map_key(sample))
         if widgets is None or not _widget_exists(widgets.progress_bar_canvas):
             return
-        widgets.progress_bar_canvas.pack(
-            fill="x",
-            padx=px(12),
-            pady=(0, px(5)),
+        widgets.progress_bar_canvas.config(bg=_LIBRARY_PROGRESS_TRACK_COLOR)
+        widgets.progress_bar_canvas.coords(
+            widgets.progress_bar,
+            0,
+            0,
+            0,
+            px(_LIBRARY_PROGRESS_HEIGHT),
         )
         root.update_idletasks()
 
@@ -1329,6 +1333,7 @@ def show_splash_screen(
         action_text: str,
         action,
         reserve_metadata: bool = False,
+        reserve_progress: bool = False,
     ) -> _MapLibraryRowWidgets:
         row_shell = tk.Frame(
             parent,
@@ -1398,20 +1403,31 @@ def show_splash_screen(
         action_button.pack(side="right", padx=(0, px(12)), pady=px(5))
         action_button._cv_enabled = True
 
-        progress_bar_canvas = tk.Canvas(
-            row_shell,
-            height=px(_LIBRARY_PROGRESS_HEIGHT),
-            bg=_LIBRARY_PROGRESS_TRACK_COLOR,
-            highlightthickness=0,
-        )
-        progress_bar = progress_bar_canvas.create_rectangle(
-            0,
-            0,
-            0,
-            px(_LIBRARY_PROGRESS_HEIGHT),
-            fill=_LIBRARY_PROGRESS_FILL_COLOR,
-            width=0,
-        )
+        progress_bar_canvas = None
+        progress_bar = None
+        if reserve_progress:
+            # Reserve the progress strip during initial layout. Starting a
+            # download only redraws this already-packed canvas, so rows below
+            # the active map do not shift when the download begins.
+            progress_bar_canvas = tk.Canvas(
+                row_shell,
+                height=px(_LIBRARY_PROGRESS_HEIGHT),
+                bg=_PANEL_COLOR,
+                highlightthickness=0,
+            )
+            progress_bar_canvas.pack(
+                fill="x",
+                padx=px(12),
+                pady=(0, px(_LIBRARY_PROGRESS_BOTTOM_PAD)),
+            )
+            progress_bar = progress_bar_canvas.create_rectangle(
+                0,
+                0,
+                0,
+                px(_LIBRARY_PROGRESS_HEIGHT),
+                fill=_LIBRARY_PROGRESS_FILL_COLOR,
+                width=0,
+            )
         return _MapLibraryRowWidgets(
             action_button=action_button,
             metadata_label=metadata_label,
@@ -1439,6 +1455,7 @@ def show_splash_screen(
             action_text=_sample_map_splash_action_text(downloaded),
             action=lambda sample=sample: _on_sample_map_action(sample),
             reserve_metadata=True,
+            reserve_progress=True,
         )
         sample_map_rows[_sample_map_key(sample)] = row_widgets
 
