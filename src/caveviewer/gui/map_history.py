@@ -17,24 +17,32 @@ def _normalized_existing_directory(path: str) -> str | None:
     try:
         if not path:
             return None
-        normalized = _normalized_path(path)
-        if normalized is None:
+        absolute = _absolute_path(path)
+        if absolute is None:
             return None
-        if os.path.isdir(normalized):
-            return normalized
+        if os.path.isdir(absolute):
+            return absolute
     except (OSError, TypeError):
         return None
     return None
 
 
-def _normalized_path(path: str) -> str | None:
+def _absolute_path(path: str) -> str | None:
     try:
         if not path:
             return None
-        return os.path.normcase(
-            os.path.abspath(os.path.expanduser(os.fspath(path)))
-        )
+        return os.path.abspath(os.path.expanduser(os.fspath(path)))
     except (OSError, TypeError, ValueError):
+        return None
+
+
+def _normalized_path(path: str) -> str | None:
+    absolute = _absolute_path(path)
+    if absolute is None:
+        return None
+    try:
+        return os.path.normcase(absolute)
+    except (OSError, ValueError):
         return None
 
 
@@ -53,30 +61,38 @@ def load_recent_map_paths() -> list[str]:
     for raw_path in payload:
         if not isinstance(raw_path, str):
             continue
-        normalized = _normalized_existing_directory(raw_path)
+        path = _normalized_existing_directory(raw_path)
+        if path is None:
+            continue
+        normalized = _normalized_path(path)
         if (
             normalized is None
             or normalized in seen
-            or is_app_supplied_sample_map_path(normalized)
+            or is_app_supplied_sample_map_path(path)
         ):
             continue
-        paths.append(normalized)
+        paths.append(path)
         seen.add(normalized)
     return paths
 
 
 def remember_recent_map_path(path: str) -> None:
     """Persist a successfully opened map folder as the newest recent map."""
-    normalized = _normalized_existing_directory(path)
-    if normalized is None or is_app_supplied_sample_map_path(normalized):
+    recent_path = _normalized_existing_directory(path)
+    normalized = _normalized_path(recent_path) if recent_path is not None else None
+    if (
+        recent_path is None
+        or normalized is None
+        or is_app_supplied_sample_map_path(recent_path)
+    ):
         return
 
     paths = [
-        normalized,
+        recent_path,
         *[
             recent_path
             for recent_path in load_recent_map_paths()
-            if recent_path != normalized
+            if _normalized_path(recent_path) != normalized
         ],
     ]
     try:

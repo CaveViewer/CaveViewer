@@ -117,6 +117,25 @@ def test_recent_map_history_can_remove_and_readd_user_map(
     assert map_history.load_recent_map_paths() == [str(first), str(second)]
 
 
+def test_recent_map_history_preserves_path_casing_for_display(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    mixed_case_map = tmp_path / "Mixed-Case-Map"
+    mixed_case_map.mkdir()
+    monkeypatch.setattr(map_history.os.path, "normcase", lambda path: path.lower())
+
+    map_history.remember_recent_map_path(str(mixed_case_map))
+
+    state_file = state_home / "caveviewer" / "recent_map_paths"
+    assert json.loads(state_file.read_text(encoding="utf-8")) == [
+        str(mixed_case_map)
+    ]
+    assert map_history.load_recent_map_paths() == [str(mixed_case_map)]
+
+
 def test_recent_map_history_ignores_malformed_state(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     state_home = tmp_path / "state"
