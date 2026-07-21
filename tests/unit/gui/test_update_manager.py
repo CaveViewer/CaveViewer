@@ -5,7 +5,10 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+import pytest
+
 from caveviewer.gui.update_checker import DownloadCancelled, UpdateCheckResult
+from caveviewer.gui import update_manager
 from caveviewer.gui.update_manager import UpdateManager, UpdateState
 
 
@@ -65,6 +68,22 @@ class FakeDesktopServices:
         if self.fail_inhibit:
             raise RuntimeError("inhibit service unavailable")
         return FakeDesktopInhibitor(self.calls)
+
+
+class FakeLogger:
+    def __init__(self):
+        self.info_messages = []
+        self.warning_messages = []
+
+    @staticmethod
+    def _format(message, args):
+        return message % args if args else str(message)
+
+    def info(self, message, *args):
+        self.info_messages.append(self._format(message, args))
+
+    def warning(self, message, *args):
+        self.warning_messages.append(self._format(message, args))
 
 
 def _available_result():
@@ -390,6 +409,69 @@ def test_shutdown_waits_for_download_cancellation_and_partial_cleanup(tmp_path):
     assert not list(tmp_path.glob("caveviewer_update_*"))
     assert ("withdraw", "caveviewer.update-download") in desktop_services.calls
     assert ("close_inhibitor",) in desktop_services.calls
+
+
+def test_shutdown_timeout_returns_while_download_cleanup_is_blocked(
+    monkeypatch,
+    tmp_path,
+):
+    download_started = threading.Event()
+    release_download = threading.Event()
+    fake_log = FakeLogger()
+    monkeypatch.setattr(update_manager, "_LOG", fake_log)
+
+    def download_update(
+        _url,
+        _expected_size,
+        destination,
+        *,
+        cancel_cb,
+        **_kwargs,
+    ):
+        Path(destination).write_bytes(b"partial")
+        download_started.set()
+        assert release_download.wait(1)
+        if cancel_cb():
+            raise DownloadCancelled("cancelled")
+        raise AssertionError("shutdown should request cancellation")
+
+    desktop_services = FakeDesktopServices()
+    manager, _adapter = _checked_manager(
+        tmp_path, download_update, desktop_services=desktop_services
+    )
+    assert manager.start_download()
+    assert download_started.wait(1)
+    cancel_event = manager._cancel_event
+    assert cancel_event is not None
+
+    manager.shutdown(timeout=0.0)
+
+    assert cancel_event.is_set()
+    assert manager.snapshot().state == UpdateState.SHUTDOWN
+    assert any(
+        message.startswith("Update download shutdown timed out after 0.0s")
+        for message in fake_log.warning_messages
+    )
+    assert list(tmp_path.glob("caveviewer_update_*"))
+
+    release_download.set()
+    assert manager.wait_for_background_task(1)
+
+    assert not list(tmp_path.glob("caveviewer_update_*"))
+    assert ("withdraw", "caveviewer.update-download") in desktop_services.calls
+    assert ("close_inhibitor",) in desktop_services.calls
+
+
+def test_shutdown_rejects_negative_timeout(tmp_path):
+    manager = UpdateManager(
+        "1.0.63",
+        platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
+        desktop_services=FakeDesktopServices(),
+        temp_root=str(tmp_path),
+    )
+
+    with pytest.raises(ValueError, match="shutdown timeout must be non-negative"):
+        manager.shutdown(timeout=-0.1)
 
 
 def test_non_actionable_states_reject_download_and_reveal(tmp_path):

@@ -30,6 +30,7 @@ from caveviewer.version import APP_NAME
 
 _LOG = get_logger("UpdateManager")
 _UPDATE_DOWNLOAD_NOTIFICATION_ID = "caveviewer.update-download"
+_UPDATE_DOWNLOAD_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 
 class UpdateState(enum.Enum):
@@ -466,8 +467,16 @@ class UpdateManager:
             done_event = self._task_done
         return done_event.wait(timeout)
 
-    def shutdown(self, *, wait: bool = True) -> None:
-        """Cancel an active download and optionally wait for temp cleanup."""
+    def shutdown(
+        self,
+        *,
+        wait: bool = True,
+        timeout: float | None = _UPDATE_DOWNLOAD_SHUTDOWN_TIMEOUT_SECONDS,
+    ) -> None:
+        """Cancel an active download and optionally wait briefly for temp cleanup."""
+        if timeout is not None and timeout < 0.0:
+            raise ValueError("shutdown timeout must be non-negative")
+
         with self._lock:
             if self._state != UpdateState.SHUTDOWN:
                 self._transition_locked(UpdateState.SHUTDOWN)
@@ -481,4 +490,10 @@ class UpdateManager:
             and worker.is_alive()
             and worker is not threading.current_thread()
         ):
-            worker.join()
+            worker.join(timeout=timeout)
+            if worker.is_alive():
+                _LOG.warning(
+                    "Update download shutdown timed out after %.1fs; "
+                    "download cleanup will continue in the background.",
+                    0.0 if timeout is None else timeout,
+                )
