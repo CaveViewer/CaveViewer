@@ -17,12 +17,25 @@ def _normalized_existing_directory(path: str) -> str | None:
     try:
         if not path:
             return None
-        normalized = os.path.abspath(os.path.expanduser(os.fspath(path)))
+        normalized = _normalized_path(path)
+        if normalized is None:
+            return None
         if os.path.isdir(normalized):
             return normalized
     except (OSError, TypeError):
         return None
     return None
+
+
+def _normalized_path(path: str) -> str | None:
+    try:
+        if not path:
+            return None
+        return os.path.normcase(
+            os.path.abspath(os.path.expanduser(os.fspath(path)))
+        )
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 def load_recent_map_paths() -> list[str]:
@@ -65,6 +78,23 @@ def remember_recent_map_path(path: str) -> None:
             for recent_path in load_recent_map_paths()
             if recent_path != normalized
         ],
+    ]
+    try:
+        write_text_atomic(_recent_map_paths_file(), json.dumps(paths, indent=2) + "\n")
+    except Exception:
+        pass
+
+
+def remove_recent_map_path(path: str) -> None:
+    """Remove a map folder from recent history without deleting any files."""
+    normalized = _normalized_path(path)
+    if normalized is None:
+        return
+
+    paths = [
+        recent_path
+        for recent_path in load_recent_map_paths()
+        if _normalized_path(recent_path) != normalized
     ]
     try:
         write_text_atomic(_recent_map_paths_file(), json.dumps(paths, indent=2) + "\n")

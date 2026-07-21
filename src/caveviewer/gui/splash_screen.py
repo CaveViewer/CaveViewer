@@ -52,7 +52,7 @@ from caveviewer.gui.dpi_utils import (
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
-from caveviewer.gui.map_history import load_recent_map_paths
+from caveviewer.gui.map_history import load_recent_map_paths, remove_recent_map_path
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import (
     DesktopServices,
@@ -198,6 +198,15 @@ _LIBRARY_PROGRESS_BOTTOM_PAD = 5
 _LIBRARY_ACTION_BUTTON_WIDTH = 8
 _LIBRARY_ACTION_BUTTON_PAD_X = 10
 _LIBRARY_ACTION_BUTTON_PAD_Y = 5
+_LIBRARY_OVERFLOW_TEXT = "⋮"
+_LIBRARY_OVERFLOW_FONT = (_UI_FONT_FAMILY, 14, "bold")
+_LIBRARY_OVERFLOW_FG = "#606370"
+_LIBRARY_OVERFLOW_HOVER_FG = _INSTRUCTION_COLOR
+_LIBRARY_OVERFLOW_HOVER_BG = DARK_THEME.secondary_button
+_LIBRARY_MENU_BG = DARK_THEME.entry_background
+_LIBRARY_MENU_BORDER = DARK_THEME.secondary_button_border
+_LIBRARY_MENU_HOVER_BG = DARK_THEME.secondary_button_hover
+_LIBRARY_MENU_TEXT = DARK_THEME.body_text
 _SAMPLE_MAP_SIZE_LABELS = {
     "Boh.Yai.Mine.I.Low.Res.zip": "57 MB",
     "Boh.Yai.Mine.II.Low.Res.zip": "62 MB",
@@ -241,7 +250,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
     global _UI_FONT_FAMILY, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
     global _SMALL_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
-    global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT
+    global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT, _LIBRARY_OVERFLOW_FONT
 
     try:
         import tkinter.font as tkfont
@@ -277,6 +286,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
     _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
     _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
+    _LIBRARY_OVERFLOW_FONT = (_UI_FONT_FAMILY, 14, "bold")
 
 
 def _set_tk_window_icon(window) -> None:
@@ -313,6 +323,7 @@ class _UpdatePresentation:
 class _MapLibraryRowWidgets:
     """Tk widgets owned by one map-library row on the splash thread."""
 
+    row_shell: object
     action_button: object
     metadata_label: object | None
     progress_bar_canvas: object | None = None
@@ -631,6 +642,7 @@ def show_splash_screen(
         root.after(100, _refresh_update_presentation)
 
     def _leave_splash() -> None:
+        _close_active_recent_menu()
         _cancel_active_library_download_for_close()
         splash_state["closing"] = True
         root.withdraw()
@@ -732,6 +744,12 @@ def show_splash_screen(
     # this surface, preserving the same cleanup-safe installer path as the
     # original Sample Maps dialog.
     sample_map_rows: dict[str, _MapLibraryRowWidgets] = {}
+    recent_map_rows: dict[str, _MapLibraryRowWidgets] = {}
+    recent_rows_container = [None]
+    recent_empty_note = [None]
+    active_recent_menu = {"window": None}
+    library_scroll_sync = {"callback": None}
+    library_mousewheel_bind = {"callback": None}
     downloaded_sample_paths: dict[str, str] = {}
     active_library_download = {
         "cancel_event": None,
@@ -818,6 +836,155 @@ def show_splash_screen(
         selected_folder[0] = path
         _save_last_browse_dir(path)
         _leave_splash()
+
+    def _recent_map_key(path: str) -> str:
+        try:
+            return os.path.normcase(os.path.abspath(os.path.expanduser(path)))
+        except (OSError, TypeError, ValueError):
+            return str(path)
+
+    def _close_active_recent_menu() -> None:
+        menu = active_recent_menu.get("window")
+        active_recent_menu["window"] = None
+        if _widget_exists(menu):
+            try:
+                menu.destroy()
+            except tk.TclError:
+                pass
+
+    def _sync_library_scroll_after_row_change() -> None:
+        callback = library_scroll_sync.get("callback")
+        if callback is not None and _splash_exists():
+            root.after_idle(callback)
+
+    def _bind_library_mousewheel_if_ready(widget) -> None:
+        callback = library_mousewheel_bind.get("callback")
+        if callback is not None and _widget_exists(widget):
+            callback(widget)
+
+    def _remove_recent_map_from_splash(path: str) -> None:
+        remove_recent_map_path(path)
+        normalized = _recent_map_key(path)
+        recent_map_paths[:] = [
+            recent_path
+            for recent_path in recent_map_paths
+            if _recent_map_key(recent_path) != normalized
+        ]
+        row_widgets = recent_map_rows.pop(normalized, None)
+        if row_widgets is not None and _widget_exists(row_widgets.row_shell):
+            row_widgets.row_shell.destroy()
+
+        container = recent_rows_container[0]
+        if not recent_map_rows and _widget_exists(container):
+            if not _widget_exists(recent_empty_note[0]):
+                recent_empty_note[0] = _create_map_library_empty_note(
+                    container,
+                    "No recent maps yet.",
+                )
+                _bind_library_mousewheel_if_ready(recent_empty_note[0])
+        _sync_library_scroll_after_row_change()
+
+    def _show_recent_map_menu(path: str, button) -> None:
+        _close_active_recent_menu()
+        if not _widget_exists(button):
+            return
+
+        menu = tk.Toplevel(root)
+        active_recent_menu["window"] = menu
+        menu.withdraw()
+        menu.overrideredirect(True)
+        menu.transient(root)
+        menu.configure(bg=_LIBRARY_MENU_BORDER)
+
+        frame = tk.Frame(
+            menu,
+            bg=_LIBRARY_MENU_BG,
+            highlightthickness=1,
+            highlightbackground=_LIBRARY_MENU_BORDER,
+            highlightcolor=_LIBRARY_MENU_BORDER,
+        )
+        frame.pack()
+
+        def remove_and_close() -> None:
+            _close_active_recent_menu()
+            _remove_recent_map_from_splash(path)
+
+        item = tk.Label(
+            frame,
+            text="Remove from Recent",
+            font=_SMALL_FONT,
+            bg=_LIBRARY_MENU_BG,
+            fg=_LIBRARY_MENU_TEXT,
+            padx=px(12),
+            pady=px(7),
+            cursor="hand2",
+            takefocus=True,
+            anchor="w",
+        )
+        _bind_activation(item, remove_and_close)
+        item.bind(
+            "<Enter>",
+            lambda _event: item.config(bg=_LIBRARY_MENU_HOVER_BG),
+        )
+        item.bind(
+            "<Leave>",
+            lambda _event: item.config(bg=_LIBRARY_MENU_BG),
+        )
+        item.pack(fill="x")
+
+        try:
+            x = button.winfo_rootx()
+            y = button.winfo_rooty() + button.winfo_height() + px(4)
+            menu.geometry(f"+{x}+{y}")
+            menu.deiconify()
+            menu.lift()
+            item.focus_set()
+        except tk.TclError:
+            _close_active_recent_menu()
+            return
+
+        menu.bind("<Escape>", lambda _event: _close_active_recent_menu())
+        menu.bind(
+            "<FocusOut>",
+            lambda _event: root.after(80, _close_active_recent_menu),
+        )
+
+    def _create_recent_overflow_button(parent, path: str):
+        button = tk.Label(
+            parent,
+            text=_LIBRARY_OVERFLOW_TEXT,
+            font=_LIBRARY_OVERFLOW_FONT,
+            bg=_PANEL_COLOR,
+            fg=_LIBRARY_OVERFLOW_FG,
+            width=2,
+            padx=0,
+            pady=0,
+            cursor="hand2",
+            takefocus=True,
+            highlightthickness=1,
+            highlightbackground=_PANEL_COLOR,
+            highlightcolor=_BUTTON_BORDER_COLOR,
+        )
+
+        def show_hover(_event=None) -> None:
+            button.config(
+                bg=_LIBRARY_OVERFLOW_HOVER_BG,
+                fg=_LIBRARY_OVERFLOW_HOVER_FG,
+                highlightbackground=_LIBRARY_MENU_BORDER,
+            )
+
+        def clear_hover(_event=None) -> None:
+            button.config(
+                bg=_PANEL_COLOR,
+                fg=_LIBRARY_OVERFLOW_FG,
+                highlightbackground=_PANEL_COLOR,
+            )
+
+        _bind_activation(button, lambda: _show_recent_map_menu(path, button))
+        button.bind("<Enter>", show_hover)
+        button.bind("<Leave>", clear_hover)
+        button.pack(side="left", padx=(px(6), 0), pady=px(5))
+        return button
 
     def _open_sample_map_from_splash(sample) -> None:
         sample_path = (
@@ -1323,6 +1490,7 @@ def show_splash_screen(
             justify="left",
         )
         label.pack(anchor="w", fill="x", pady=(0, px(8)))
+        return label
 
     def _create_map_library_row(
         parent,
@@ -1334,6 +1502,7 @@ def show_splash_screen(
         action,
         reserve_metadata: bool = False,
         reserve_progress: bool = False,
+        leading_widget_factory=None,
     ) -> _MapLibraryRowWidgets:
         row_shell = tk.Frame(
             parent,
@@ -1344,6 +1513,9 @@ def show_splash_screen(
 
         row_content = tk.Frame(row_shell, bg=_PANEL_COLOR)
         row_content.pack(fill="x")
+
+        if leading_widget_factory is not None:
+            leading_widget_factory(row_content)
 
         text_column = tk.Frame(row_content, bg=_PANEL_COLOR)
         text_column.pack(
@@ -1429,6 +1601,7 @@ def show_splash_screen(
                 width=0,
             )
         return _MapLibraryRowWidgets(
+            row_shell=row_shell,
             action_button=action_button,
             metadata_label=metadata_label,
             progress_bar_canvas=progress_bar_canvas,
@@ -1436,14 +1609,22 @@ def show_splash_screen(
         )
 
     def _create_recent_map_row(parent, path: str) -> None:
-        _create_map_library_row(
+        normalized = _recent_map_key(path)
+        row_widgets = _create_map_library_row(
             parent,
             title=_map_library_recent_title(path),
             detail=_map_library_recent_detail_text(path),
             size_text="",
             action_text="Open",
             action=lambda path=path: _open_library_map_from_splash(path),
+            leading_widget_factory=(
+                lambda row_parent, path=path: _create_recent_overflow_button(
+                    row_parent,
+                    path,
+                )
+            ),
         )
+        recent_map_rows[normalized] = row_widgets
 
     def _create_available_map_row(parent, sample) -> None:
         downloaded = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
@@ -1639,6 +1820,9 @@ def show_splash_screen(
             for child in widget.winfo_children():
                 _bind_library_mousewheel(child)
 
+        library_scroll_sync["callback"] = _sync_library_scrollbar
+        library_mousewheel_bind["callback"] = _bind_library_mousewheel
+
         content_canvas.bind("<Configure>", _resize_library_canvas_window, add="+")
         content_canvas.bind("<MouseWheel>", _scroll_library_content, add="+")
         content_canvas.bind("<Button-4>", _scroll_library_content, add="+")
@@ -1661,11 +1845,17 @@ def show_splash_screen(
         )
 
         _create_map_library_section(rows_frame, "Recent Maps")
+        recent_container = tk.Frame(rows_frame, bg=_PANEL_COLOR)
+        recent_container.pack(fill="x")
+        recent_rows_container[0] = recent_container
         if recent_map_paths:
             for recent_path in recent_map_paths:
-                _create_recent_map_row(rows_frame, recent_path)
+                _create_recent_map_row(recent_container, recent_path)
         else:
-            _create_map_library_empty_note(rows_frame, "No recent maps yet.")
+            recent_empty_note[0] = _create_map_library_empty_note(
+                recent_container,
+                "No recent maps yet.",
+            )
 
         _create_map_library_section(rows_frame, "Available Maps")
         for sample in KNOWN_SAMPLE_MAPS:

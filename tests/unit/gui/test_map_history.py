@@ -95,6 +95,28 @@ def test_recent_map_history_filters_existing_sample_entries_on_load(
     assert map_history.load_recent_map_paths() == [str(user_map)]
 
 
+def test_recent_map_history_can_remove_and_readd_user_map(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    first = tmp_path / "first-map"
+    second = tmp_path / "second-map"
+    first.mkdir()
+    second.mkdir()
+
+    map_history.remember_recent_map_path(str(first))
+    map_history.remember_recent_map_path(str(second))
+    map_history.remove_recent_map_path(str(first))
+
+    assert map_history.load_recent_map_paths() == [str(second)]
+
+    map_history.remember_recent_map_path(str(first))
+
+    assert map_history.load_recent_map_paths() == [str(first), str(second)]
+
+
 def test_recent_map_history_ignores_malformed_state(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     state_home = tmp_path / "state"

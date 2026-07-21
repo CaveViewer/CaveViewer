@@ -288,6 +288,20 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "_start_sample_catalog_fetch()" in source
 
 
+def test_recent_map_rows_use_subtle_overflow_menu_for_removal():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert "Remove from Recent" in source
+    assert "_create_recent_overflow_button" in source
+    assert "leading_widget_factory=" in source
+    assert "remove_recent_map_path(path)" in source
+    assert "recent_container = tk.Frame(rows_frame" in source
+    assert "recent_rows_container[0] = recent_container" in source
+    assert "recent_empty_note[0] = _create_map_library_empty_note" in source
+    assert "_LIBRARY_OVERFLOW_TEXT" in source
+    assert "Open" in source
+
+
 def test_sample_map_splash_actions_are_compact():
     assert splash_screen._sample_map_splash_action_text(downloaded=True) == "Open"
     assert splash_screen._sample_map_splash_action_text(downloaded=False) == "Get"
