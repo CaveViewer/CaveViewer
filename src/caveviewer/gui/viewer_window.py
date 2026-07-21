@@ -98,6 +98,12 @@ class _RecordingStopResult:
     show_message: bool
 
 
+@dataclass
+class _RecordingReadbackSlot:
+    buffer: moderngl.Buffer
+    in_flight: bool = False
+
+
 def _import_controller_property(attribute_name: str):
     def getter(self):
         return getattr(self._ensure_import_controller(), attribute_name)
@@ -353,6 +359,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
     RIGHT_COLUMN_PANEL_BORDER_PX = 1.5
     RECORDING_COUNTDOWN_START_NUMBER = 3
+    RECORDING_READBACK_BUFFER_COUNT = 3
+    RECORDING_READBACK_COMPONENTS = 3
+    RECORDING_RAW_PIX_FMT = "rgb24"
 
     # Startup focus forcing can make bundled macOS app windows appear in a
     # corner first and then jump as the window manager re-places them.
@@ -513,6 +522,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_output_path: str | None = None
         self._recording_size: tuple[int, int] | None = None
         self._recording_viewport: tuple[int, int, int, int] | None = None
+        self._recording_readback_framebuffer: moderngl.Framebuffer | None = None
+        self._recording_readback_slots: list[_RecordingReadbackSlot] = []
+        self._recording_readback_pending: list[_RecordingReadbackSlot] = []
+        self._recording_readback_byte_count = 0
+        self._recording_last_stage_ms = 0.0
+        self._recording_last_drain_ms = 0.0
         self._recording_next_frame_time: float | None = None
         self._recording_frame_interval = 1.0 / float(self._recording_fps)
         self._recording_frame_queue: queue.Queue | None = None
@@ -1103,6 +1118,75 @@ class CaveViewerWindow(mglw.WindowConfig):
         output_width = (output_width // 2) * 2
         return output_width, output_height
 
+    def _release_recording_readback_framebuffer(self) -> None:
+        framebuffer = getattr(self, "_recording_readback_framebuffer", None)
+        self._recording_readback_framebuffer = None
+        if framebuffer is None:
+            return
+        try:
+            framebuffer.release()
+        except Exception:
+            pass
+
+    def _discard_recording_staged_frames(self) -> int:
+        pending = getattr(self, "_recording_readback_pending", [])
+        dropped = len(pending)
+        for slot in pending:
+            slot.in_flight = False
+        pending.clear()
+        return dropped
+
+    def _release_recording_readback_buffers(self) -> None:
+        self._discard_recording_staged_frames()
+        slots = getattr(self, "_recording_readback_slots", [])
+        self._recording_readback_slots = []
+        self._recording_readback_pending = []
+        self._recording_readback_byte_count = 0
+        self._recording_last_stage_ms = 0.0
+        self._recording_last_drain_ms = 0.0
+        for slot in slots:
+            try:
+                slot.buffer.release()
+            except Exception:
+                pass
+
+    def _create_recording_readback_framebuffer(
+        self,
+        capture_size: tuple[int, int],
+        output_size: tuple[int, int],
+    ) -> moderngl.Framebuffer | None:
+        self._release_recording_readback_framebuffer()
+        if output_size == capture_size:
+            return None
+
+        # Downscale on the GPU before readback. Reading the full high-DPI
+        # window framebuffer can block the render loop for tens of
+        # milliseconds per recorded frame; reading the output-sized buffer
+        # keeps the synchronized transfer much smaller.
+        framebuffer = self.ctx.simple_framebuffer(output_size, components=4)
+        framebuffer.viewport = (0, 0, output_size[0], output_size[1])
+        self._recording_readback_framebuffer = framebuffer
+        return framebuffer
+
+    def _create_recording_readback_buffers(self, output_size: tuple[int, int]) -> None:
+        self._release_recording_readback_buffers()
+        width, height = output_size
+        byte_count = width * height * self.RECORDING_READBACK_COMPONENTS
+        slots = []
+        try:
+            for _ in range(self.RECORDING_READBACK_BUFFER_COUNT):
+                slots.append(_RecordingReadbackSlot(self.ctx.buffer(reserve=byte_count)))
+        except Exception:
+            for slot in slots:
+                try:
+                    slot.buffer.release()
+                except Exception:
+                    pass
+            raise
+        self._recording_readback_slots = slots
+        self._recording_readback_pending = []
+        self._recording_readback_byte_count = byte_count
+
     def _start_recording_encoder(self) -> bool:
         ffmpeg_path = self._resolve_ffmpeg_path()
         if ffmpeg_path is None:
@@ -1135,19 +1219,39 @@ class CaveViewerWindow(mglw.WindowConfig):
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         output_path = os.path.join(self._recording_output_dir, f"CaveViewerDive-{timestamp}.mp4")
         output_width, output_height = self._recording_output_size(width, height)
-        vf = f"vflip,scale={output_width}:{output_height}"
+        output_size = (output_width, output_height)
+        try:
+            readback_framebuffer = self._create_recording_readback_framebuffer(
+                (width, height),
+                output_size,
+            )
+            self._create_recording_readback_buffers(output_size)
+        except Exception as exc:
+            self._release_recording_readback_framebuffer()
+            self._release_recording_readback_buffers()
+            _LOG.warning(f"Cannot start recording: failed to create recording readback resources: {exc}")
+            self._recording_countdown_until = None
+            self._recording_countdown_started_at = None
+            self._show_recording_status(
+                "Recording unavailable",
+                "Could not prepare the recording framebuffer.",
+                kind="error",
+                duration=3.4,
+            )
+            return False
+
         cmd = [
             ffmpeg_path,
             "-hide_banner",
             "-loglevel", "error",
             "-y",
             "-f", "rawvideo",
-            "-pix_fmt", "rgb24",
-            "-s", f"{width}x{height}",
+            "-pix_fmt", self.RECORDING_RAW_PIX_FMT,
+            "-s", f"{output_width}x{output_height}",
             "-r", str(self._recording_fps),
             "-i", "-",
             "-an",
-            "-vf", vf,
+            "-vf", "vflip",
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-crf", str(self._recording_crf),
@@ -1172,6 +1276,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             process = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as exc:
             _LOG.warning(f"Cannot start recording: {exc}")
+            self._release_recording_readback_framebuffer()
+            self._release_recording_readback_buffers()
             self._recording_countdown_until = None
             self._recording_countdown_started_at = None
             return False
@@ -1197,15 +1303,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_stderr_thread.start()
 
         self._recording_output_path = output_path
-        self._recording_size = (width, height)
+        self._recording_size = output_size
         self._recording_viewport = viewport
+        self._recording_readback_framebuffer = readback_framebuffer
         now = time.perf_counter()
         self._recording_next_frame_time = now
         self._recording_countdown_until = None
         self._recording_countdown_started_at = None
         _LOG.info(
             f"Recording started: {output_path} "
-            f"capture_viewport={viewport} output_size={output_width}x{output_height}"
+            f"capture_viewport={viewport} readback_size={output_width}x{output_height} "
+            f"output_size={output_width}x{output_height} "
+            f"raw_pix_fmt={self.RECORDING_RAW_PIX_FMT} "
+            f"readback_buffers={len(self._recording_readback_slots)}"
         )
         return True
 
@@ -1270,20 +1380,31 @@ class CaveViewerWindow(mglw.WindowConfig):
         except queue.Full:
             pass
 
-    def _recording_enqueue_frame(self, frame: bytes, frames_due: int) -> bool:
+    def _recording_drop_frames(self, count: int = 1) -> None:
+        if count <= 0:
+            return
+        previous = self._recording_dropped_frames
+        self._recording_dropped_frames += count
+        if previous == 0:
+            _LOG.warning("Recording encoder is falling behind; dropping video frames.")
+
+    def _recording_due_frame_slots(self, now: float, next_frame_time: float | None) -> int:
+        if next_frame_time is None:
+            return 1
+        late_by = max(0.0, now - next_frame_time)
+        return 1 + int(late_by / self._recording_frame_interval)
+
+    def _recording_enqueue_frame(self, frame: bytes) -> bool:
         frame_queue = self._recording_frame_queue
         if frame_queue is None:
             self._stop_recording()
             return False
 
-        for _ in range(frames_due):
-            try:
-                frame_queue.put_nowait(frame)
-            except queue.Full:
-                self._recording_dropped_frames += 1
-                if self._recording_dropped_frames == 1:
-                    _LOG.warning("Recording encoder is falling behind; dropping video frames.")
-                break
+        try:
+            frame_queue.put_nowait(frame)
+        except queue.Full:
+            self._recording_drop_frames()
+            return False
         return True
 
     def _recording_display_path(self, path: str | None) -> str | None:
@@ -1329,6 +1450,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_output_path = None
         self._recording_size = None
         self._recording_viewport = None
+        self._release_recording_readback_buffers()
+        self._release_recording_readback_framebuffer()
         self._recording_next_frame_time = None
         self._recording_frame_queue = None
         self._recording_writer_thread = None
@@ -1423,6 +1546,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _apply_recording_stop_result(self, result: _RecordingStopResult) -> None:
         self._recording_writer_error = None
         self._recording_dropped_frames = 0
+        self._recording_last_stage_ms = 0.0
+        self._recording_last_drain_ms = 0.0
 
         if result.returncode == 0:
             _LOG.info(f"Recording saved: {result.output_path}")
@@ -1459,58 +1584,192 @@ class CaveViewerWindow(mglw.WindowConfig):
             return "Disk may be full"
         return "Video could not be saved"
 
-    def _recording_update_after_scene(self, now: float) -> None:
+    def _recording_capture_state(self) -> tuple[tuple[int, int], tuple[int, int, int, int], int]:
+        if self._recording_size is None or self._recording_viewport is None:
+            raise OSError("recording capture state is not initialized")
+        byte_count = self._recording_readback_byte_count
+        if byte_count <= 0:
+            raise OSError("recording readback buffers are not initialized")
+        return self._recording_size, self._recording_viewport, byte_count
+
+    def _recording_free_readback_slot(self) -> _RecordingReadbackSlot | None:
+        for slot in self._recording_readback_slots:
+            if not slot.in_flight:
+                return slot
+        return None
+
+    def _recording_copy_to_readback_framebuffer(
+        self,
+        readback_framebuffer: moderngl.Framebuffer,
+        output_size: tuple[int, int],
+        capture_viewport: tuple[int, int, int, int],
+    ) -> None:
+        screen = self.ctx.screen
+        previous_screen_viewport = getattr(screen, "viewport", None)
+        previous_readback_viewport = getattr(readback_framebuffer, "viewport", None)
+        width, height = output_size
+        try:
+            screen.viewport = capture_viewport
+            readback_framebuffer.viewport = (0, 0, width, height)
+            self.ctx.copy_framebuffer(readback_framebuffer, screen)
+        finally:
+            if previous_screen_viewport is not None:
+                try:
+                    screen.viewport = previous_screen_viewport
+                except Exception:
+                    pass
+            if previous_readback_viewport is not None:
+                try:
+                    readback_framebuffer.viewport = previous_readback_viewport
+                except Exception:
+                    pass
+
+    def _recording_stage_frame(
+        self,
+        render_frame: Callable[[moderngl.Framebuffer, tuple[int, int]], None] | None = None,
+    ) -> bool:
+        output_size, capture_viewport, _byte_count = self._recording_capture_state()
+        slot = self._recording_free_readback_slot()
+        if slot is None:
+            return False
+
+        width, height = output_size
+        readback_framebuffer = self._recording_readback_framebuffer
+        if readback_framebuffer is None:
+            self.ctx.screen.read_into(
+                slot.buffer,
+                viewport=capture_viewport,
+                components=self.RECORDING_READBACK_COMPONENTS,
+                alignment=1,
+            )
+        else:
+            if render_frame is None:
+                self._recording_copy_to_readback_framebuffer(
+                    readback_framebuffer,
+                    output_size,
+                    capture_viewport,
+                )
+            else:
+                render_frame(readback_framebuffer, output_size)
+            readback_framebuffer.read_into(
+                slot.buffer,
+                viewport=(0, 0, width, height),
+                components=self.RECORDING_READBACK_COMPONENTS,
+                alignment=1,
+            )
+
+        slot.in_flight = True
+        self._recording_readback_pending.append(slot)
+        return True
+
+    def _recording_drain_staged_frames(self) -> float:
+        pending = self._recording_readback_pending
+        slots = self._recording_readback_slots
+        frame_queue = self._recording_frame_queue
+        if (
+            not pending
+            or not slots
+            or len(pending) < len(slots)
+            or frame_queue is None
+            or frame_queue.full()
+        ):
+            return 0.0
+
+        _output_size, _capture_viewport, byte_count = self._recording_capture_state()
+        slot = pending.pop(0)
+        frame = None
+        t_read = time.perf_counter()
+        try:
+            frame = slot.buffer.read(size=byte_count)
+            read_ms = (time.perf_counter() - t_read) * 1000.0
+            if len(frame) != byte_count:
+                _LOG.warning(
+                    "Recording stopped because framebuffer byte size changed: "
+                    f"actual={len(frame)} expected={byte_count}."
+                )
+                self._stop_recording()
+                return read_ms
+            self._recording_enqueue_frame(frame)
+            return read_ms
+        finally:
+            slot.in_flight = False
+            frame = None
+
+    def _recording_update_after_scene(
+        self,
+        now: float,
+        *,
+        render_frame: Callable[[moderngl.Framebuffer, tuple[int, int]], None] | None = None,
+    ) -> float:
+        self._recording_last_stage_ms = 0.0
+        self._recording_last_drain_ms = 0.0
+
         if self._recording_countdown_until is not None:
             if now < self._recording_countdown_until:
-                return
+                return 0.0
             if not self._start_recording_encoder():
-                return
+                return 0.0
 
         if self._recording_process is None:
-            return
+            return 0.0
 
         if self._recording_writer_error is not None or self._recording_process.poll() is not None:
             _LOG.warning("Recording encoder stopped before recording was finalized.")
             self._stop_recording(show_message=True)
-            return
+            return 0.0
 
         if self._recording_viewport != self._recording_capture_viewport():
             _LOG.warning("Recording stopped because the window size changed.")
             self._stop_recording()
-            return
+            return 0.0
+
+        read_ms = 0.0
+        try:
+            drain_ms = self._recording_drain_staged_frames()
+            self._recording_last_drain_ms = drain_ms
+            read_ms += drain_ms
+        except (OSError, moderngl.Error) as exc:
+            _LOG.warning(f"Recording stopped because frame capture failed: {exc}")
+            self._stop_recording(show_message=True)
+            return read_ms
+        if self._recording_process is None:
+            return read_ms
 
         next_frame_time = self._recording_next_frame_time
         if next_frame_time is not None and now < next_frame_time:
-            return
+            return read_ms
+
+        frame_slots = self._recording_due_frame_slots(now, next_frame_time)
+        frame_queue = self._recording_frame_queue
+        if frame_queue is None:
+            self._stop_recording(show_message=True)
+            return read_ms
+
+        if frame_queue.full():
+            staged_frames = self._discard_recording_staged_frames()
+            self._recording_drop_frames(frame_slots + staged_frames)
+            self._recording_next_frame_time = (
+                (next_frame_time or now) + frame_slots * self._recording_frame_interval
+            )
+            return read_ms
 
         try:
-            frame = self.ctx.screen.read(
-                viewport=self._recording_viewport,
-                components=3,
-                alignment=1,
+            self._recording_drop_frames(frame_slots - 1)
+
+            t_stage = time.perf_counter()
+            if not self._recording_stage_frame(render_frame=render_frame):
+                self._recording_drop_frames()
+            stage_ms = (time.perf_counter() - t_stage) * 1000.0
+            self._recording_last_stage_ms = stage_ms
+            read_ms += stage_ms
+            self._recording_next_frame_time = (
+                (next_frame_time or now) + frame_slots * self._recording_frame_interval
             )
-            expected_bytes = self._recording_size[0] * self._recording_size[1] * 3
-            if len(frame) != expected_bytes:
-                _LOG.warning(
-                    "Recording stopped because framebuffer byte size changed: "
-                    f"actual={len(frame)} expected={expected_bytes}."
-                )
-                self._stop_recording()
-                return
-
-            frames_due = 1
-            if next_frame_time is not None:
-                late_by = max(0.0, now - next_frame_time)
-                frames_due = min(5, 1 + int(late_by / self._recording_frame_interval))
-
-            if not self._recording_enqueue_frame(frame, frames_due):
-                return
-            self._recording_next_frame_time = (next_frame_time or now) + frames_due * self._recording_frame_interval
-        except OSError as exc:
+            return read_ms
+        except (OSError, moderngl.Error) as exc:
             _LOG.warning(f"Recording stopped because frame capture failed: {exc}")
             self._stop_recording(show_message=True)
-        finally:
-            frame = None
+            return read_ms
 
     def _recording_countdown_display(self, now: float) -> tuple[int, float]:
         if self._recording_countdown_until is None:
@@ -3854,6 +4113,52 @@ class CaveViewerWindow(mglw.WindowConfig):
             mesh_submit_ms = (time.perf_counter() - t_submit) * 1000.0
         mesh_draw_ms = (time.perf_counter() - t0) * 1000.0
 
+        def _render_recording_frame(
+            framebuffer: moderngl.Framebuffer,
+            output_size: tuple[int, int],
+        ) -> None:
+            output_width, output_height = output_size
+            previous_fbo = getattr(self.ctx, "fbo", None)
+            previous_screen_viewport = getattr(self.ctx.screen, "viewport", None)
+            previous_framebuffer_viewport = getattr(framebuffer, "viewport", None)
+            recording_proj = self.camera.projection_matrix(
+                output_width / max(output_height, 1)
+            )
+            try:
+                framebuffer.use()
+                framebuffer.viewport = (0, 0, output_width, output_height)
+                self.ctx.clear(*self.color_picker.color)
+                self.program["u_projection"].write(recording_proj.T.tobytes())
+                self.program["u_view"].write(view.T.tobytes())
+                _draw_visible_mesh()
+            finally:
+                try:
+                    if previous_fbo is not None:
+                        previous_fbo.use()
+                    else:
+                        self.ctx.screen.use()
+                except Exception:
+                    try:
+                        self.ctx.screen.use()
+                    except Exception:
+                        pass
+                if previous_screen_viewport is not None:
+                    try:
+                        self.ctx.screen.viewport = previous_screen_viewport
+                    except Exception:
+                        pass
+                if previous_framebuffer_viewport is not None:
+                    try:
+                        framebuffer.viewport = previous_framebuffer_viewport
+                    except Exception:
+                        pass
+                self.ctx.wireframe = False
+                self.program["u_projection"].write(proj.T.tobytes())
+                self.program["u_view"].write(view.T.tobytes())
+
+        recording_read_ms = 0.0
+        recording_stage_ms = 0.0
+        recording_drain_ms = 0.0
         if self._recording_hides_hud():
             now = time.perf_counter()
             if self._recording_countdown_until is not None and now < self._recording_countdown_until:
@@ -3868,7 +4173,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                     fixed_text_scale=self.UI_TEXT_SCALE,
                 )
             else:
-                self._recording_update_after_scene(now)
+                recording_read_ms = self._recording_update_after_scene(
+                    now,
+                    render_frame=_render_recording_frame,
+                )
+                recording_stage_ms = self._recording_last_stage_ms
+                recording_drain_ms = self._recording_last_drain_ms
             overlay_ms = 0.0
         else:
             # Overlay HUD elements draw last, on top of the 3D scene, each with
@@ -3939,6 +4249,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 - streaming_ms
                 - scene_setup_ms
                 - mesh_draw_ms
+                - recording_read_ms
                 - overlay_ms,
             )
             _LOG.warning(f"FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
@@ -3948,6 +4259,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                          f"mesh_submit={mesh_submit_ms:.1f}ms "
                          f"gpu_query_wait={mesh_gpu_query_wait_ms:.1f}ms "
                          f"gpu_draw={gpu_draw_text} "
+                         f"recording_read={recording_read_ms:.1f}ms "
+                         f"recording_stage={recording_stage_ms:.1f}ms "
+                         f"recording_drain={recording_drain_ms:.1f}ms "
                          f"overlay={overlay_ms:.1f}ms other={other_ms:.1f}ms | "
                          f"drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
                          f"loaded={stats['loaded']} pending={stats['pending']} "
@@ -3980,6 +4294,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                            f"| mesh_cull={mesh_cull_ms:.1f}ms "
                            f"mesh_submit={mesh_submit_ms:.1f}ms "
                            f"gpu_query_wait={mesh_gpu_query_wait_ms:.1f}ms "
+                           f"recording_read={recording_read_ms:.1f}ms "
+                           f"recording_stage={recording_stage_ms:.1f}ms "
+                           f"recording_drain={recording_drain_ms:.1f}ms "
                            f"gpu_draw={gpu_draw_text}")
             self._frame_count = 0
             self._frame_active_time_s = 0.0

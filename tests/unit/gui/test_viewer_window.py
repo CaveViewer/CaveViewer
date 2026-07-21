@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
-import sys
 import queue
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -138,7 +139,14 @@ def _recording_window():
     window._recording_output_path = None
     window._recording_size = None
     window._recording_viewport = None
+    window._recording_readback_framebuffer = None
+    window._recording_readback_slots = []
+    window._recording_readback_pending = []
+    window._recording_readback_byte_count = 0
+    window._recording_last_stage_ms = 0.0
+    window._recording_last_drain_ms = 0.0
     window._recording_next_frame_time = None
+    window._recording_frame_interval = 1.0 / 30.0
     window._recording_frame_queue = None
     window._recording_writer_thread = None
     window._recording_stderr_thread = None
@@ -270,13 +278,412 @@ def test_recording_enqueue_frame_reports_encoder_backpressure_once(monkeypatch):
     window._recording_frame_queue = queue.Queue(maxsize=1)
     window._recording_frame_queue.put_nowait(b"queued-frame")
 
-    assert window._recording_enqueue_frame(b"new-frame", frames_due=2) is True
-    assert window._recording_enqueue_frame(b"newer-frame", frames_due=1) is True
+    assert window._recording_enqueue_frame(b"new-frame") is False
+    assert window._recording_enqueue_frame(b"newer-frame") is False
 
     assert window._recording_dropped_frames == 2
     assert logger.warning_messages == [
         "Recording encoder is falling behind; dropping video frames."
     ]
+
+
+def test_start_recording_encoder_sends_output_size_to_ffmpeg_without_scale_filter(
+    monkeypatch,
+    tmp_path,
+):
+    popen_calls = []
+    created_threads = []
+
+    class FakeProcess:
+        stdin = SimpleNamespace(write=lambda _frame: None, close=lambda: None)
+        stderr = SimpleNamespace(readline=lambda: b"")
+        returncode = None
+
+    class FakeBuffer:
+        def release(self):
+            pass
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, name=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+            self.name = name
+            self.started = False
+            created_threads.append(self)
+
+        def start(self):
+            self.started = True
+
+    class FakeCtx:
+        viewport = (0, 0, 1280, 720)
+        screen = SimpleNamespace(viewport=(0, 0, 1280, 720), size=(1280, 720))
+
+        def simple_framebuffer(self, *_args, **_kwargs):
+            raise AssertionError("direct-size recording should not allocate a readback framebuffer")
+
+        def __init__(self):
+            self.buffer_reserves = []
+
+        def buffer(self, *, reserve):
+            self.buffer_reserves.append(reserve)
+            return FakeBuffer()
+
+    monkeypatch.setattr(
+        viewer_window.subprocess,
+        "Popen",
+        lambda cmd, **kwargs: popen_calls.append((cmd, kwargs)) or FakeProcess(),
+    )
+    monkeypatch.setattr(viewer_window.threading, "Thread", FakeThread)
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 100.0)
+
+    window = _recording_window()
+    ctx = FakeCtx()
+    window.ctx = ctx
+    window._recording_output_dir = str(tmp_path)
+    window._recording_max_height = 1080
+    window._recording_fps = 30
+    window._recording_crf = 23
+    window._resolve_ffmpeg_path = lambda: "/usr/bin/ffmpeg"
+
+    assert window._start_recording_encoder() is True
+
+    cmd, popen_kwargs = popen_calls[0]
+    assert cmd[cmd.index("-s") + 1] == "1280x720"
+    assert cmd[cmd.index("-pix_fmt") + 1] == "rgb24"
+    assert cmd[cmd.index("-vf") + 1] == "vflip"
+    assert not any("scale=" in part for part in cmd)
+    assert popen_kwargs["stdin"] is viewer_window.subprocess.PIPE
+    assert window._recording_size == (1280, 720)
+    assert window._recording_readback_framebuffer is None
+    assert ctx.buffer_reserves == [1280 * 720 * 3] * 3
+    assert len(window._recording_readback_slots) == 3
+    assert window._recording_readback_byte_count == 1280 * 720 * 3
+    assert [thread.started for thread in created_threads] == [True, True]
+
+
+def test_start_recording_encoder_allocates_output_sized_readback_framebuffer(
+    monkeypatch,
+    tmp_path,
+):
+    popen_calls = []
+
+    class FakeFramebuffer:
+        def __init__(self, size):
+            self.size = size
+            self.viewport = None
+
+        def release(self):
+            raise AssertionError("new recording framebuffer should stay owned after start")
+
+    class FakeBuffer:
+        def release(self):
+            pass
+
+    class FakeProcess:
+        stdin = SimpleNamespace(write=lambda _frame: None, close=lambda: None)
+        stderr = SimpleNamespace(readline=lambda: b"")
+        returncode = None
+
+    class FakeThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    class FakeCtx:
+        viewport = (0, 0, 4000, 2000)
+        screen = SimpleNamespace(viewport=(0, 0, 4000, 2000), size=(4000, 2000))
+
+        def __init__(self):
+            self.simple_framebuffer_calls = []
+            self.buffer_reserves = []
+            self.framebuffer = FakeFramebuffer((2000, 1000))
+
+        def simple_framebuffer(self, size, components=4):
+            self.simple_framebuffer_calls.append((size, components))
+            return self.framebuffer
+
+        def buffer(self, *, reserve):
+            self.buffer_reserves.append(reserve)
+            return FakeBuffer()
+
+    monkeypatch.setattr(
+        viewer_window.subprocess,
+        "Popen",
+        lambda cmd, **kwargs: popen_calls.append((cmd, kwargs)) or FakeProcess(),
+    )
+    monkeypatch.setattr(viewer_window.threading, "Thread", FakeThread)
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 100.0)
+
+    ctx = FakeCtx()
+    window = _recording_window()
+    window.ctx = ctx
+    window._recording_output_dir = str(tmp_path)
+    window._recording_max_height = 1000
+    window._recording_fps = 30
+    window._recording_crf = 23
+    window._resolve_ffmpeg_path = lambda: "/usr/bin/ffmpeg"
+
+    assert window._start_recording_encoder() is True
+
+    cmd, _popen_kwargs = popen_calls[0]
+    assert ctx.simple_framebuffer_calls == [((2000, 1000), 4)]
+    assert ctx.buffer_reserves == [2000 * 1000 * 3] * 3
+    assert ctx.framebuffer.viewport == (0, 0, 2000, 1000)
+    assert cmd[cmd.index("-s") + 1] == "2000x1000"
+    assert cmd[cmd.index("-pix_fmt") + 1] == "rgb24"
+    assert cmd[cmd.index("-vf") + 1] == "vflip"
+    assert not any("scale=" in part for part in cmd)
+    assert window._recording_size == (2000, 1000)
+    assert window._recording_viewport == (0, 0, 4000, 2000)
+    assert window._recording_readback_framebuffer is ctx.framebuffer
+    assert len(window._recording_readback_slots) == 3
+    assert window._recording_readback_byte_count == 2000 * 1000 * 3
+
+
+def test_recording_skips_framebuffer_read_when_writer_queue_is_full(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+
+    class FakeScreen:
+        def __init__(self):
+            self.read_calls = []
+
+        def read(self, **kwargs):
+            self.read_calls.append(kwargs)
+            return b"x" * 12
+
+    screen = FakeScreen()
+    window = _recording_window()
+    window.ctx = SimpleNamespace(viewport=(0, 0, 2, 2), screen=screen)
+    window._recording_process = SimpleNamespace(poll=lambda: None)
+    window._recording_size = (2, 2)
+    window._recording_viewport = (0, 0, 2, 2)
+    window._recording_next_frame_time = 10.0
+    window._recording_frame_interval = 1.0
+    window._recording_frame_queue = queue.Queue(maxsize=1)
+    window._recording_frame_queue.put_nowait(b"queued-frame")
+
+    read_ms = window._recording_update_after_scene(12.2)
+
+    assert read_ms == 0.0
+    assert screen.read_calls == []
+    assert window._recording_dropped_frames == 3
+    assert window._recording_next_frame_time == pytest.approx(13.0)
+    assert logger.warning_messages == [
+        "Recording encoder is falling behind; dropping video frames."
+    ]
+
+
+def test_recording_stages_scaled_framebuffer_when_output_size_differs():
+    class FakeScreen:
+        def __init__(self):
+            self.viewport = (9, 8, 7, 6)
+            self.read_into_calls = []
+
+        def read_into(self, *args, **kwargs):
+            self.read_into_calls.append((args, kwargs))
+
+    class FakeFramebuffer:
+        def __init__(self):
+            self.viewport = (1, 2, 3, 4)
+            self.read_into_calls = []
+
+        def read_into(self, *args, **kwargs):
+            self.read_into_calls.append((args, kwargs))
+
+    class FakeBuffer:
+        pass
+
+    class FakeCtx:
+        def __init__(self, screen):
+            self.screen = screen
+            self.copy_framebuffer_calls = []
+
+        def copy_framebuffer(self, dst, src):
+            self.copy_framebuffer_calls.append(
+                (dst, src, src.viewport, dst.viewport)
+            )
+
+    screen = FakeScreen()
+    readback_framebuffer = FakeFramebuffer()
+    buffer = FakeBuffer()
+    window = _recording_window()
+    window.ctx = FakeCtx(screen)
+    window._recording_size = (2, 2)
+    window._recording_viewport = (0, 0, 4, 4)
+    window._recording_readback_framebuffer = readback_framebuffer
+    window._recording_readback_slots = [
+        viewer_window._RecordingReadbackSlot(buffer)
+    ]
+    window._recording_readback_byte_count = 12
+
+    assert window._recording_stage_frame() is True
+
+    assert screen.read_into_calls == []
+    assert window.ctx.copy_framebuffer_calls == [
+        (
+            readback_framebuffer,
+            screen,
+            (0, 0, 4, 4),
+            (0, 0, 2, 2),
+        )
+    ]
+    assert readback_framebuffer.read_into_calls == [
+        (
+            (buffer,),
+            {"viewport": (0, 0, 2, 2), "components": 3, "alignment": 1},
+        )
+    ]
+    assert screen.viewport == (9, 8, 7, 6)
+    assert readback_framebuffer.viewport == (1, 2, 3, 4)
+    assert window._recording_readback_slots[0].in_flight is True
+    assert window._recording_readback_pending == window._recording_readback_slots
+
+
+def test_recording_stage_frame_uses_direct_render_callback_when_available():
+    render_calls = []
+
+    class FakeFramebuffer:
+        def __init__(self):
+            self.read_into_calls = []
+
+        def read_into(self, *args, **kwargs):
+            self.read_into_calls.append((args, kwargs))
+
+    class FakeBuffer:
+        pass
+
+    class FakeCtx:
+        screen = SimpleNamespace()
+
+        def copy_framebuffer(self, *_args):
+            raise AssertionError("direct recording render should bypass framebuffer copy")
+
+    readback_framebuffer = FakeFramebuffer()
+    buffer = FakeBuffer()
+    window = _recording_window()
+    window.ctx = FakeCtx()
+    window._recording_size = (2, 2)
+    window._recording_viewport = (0, 0, 4, 4)
+    window._recording_readback_framebuffer = readback_framebuffer
+    window._recording_readback_slots = [
+        viewer_window._RecordingReadbackSlot(buffer)
+    ]
+    window._recording_readback_byte_count = 12
+
+    assert window._recording_stage_frame(
+        render_frame=lambda framebuffer, size: render_calls.append(
+            (framebuffer, size)
+        )
+    ) is True
+
+    assert render_calls == [(readback_framebuffer, (2, 2))]
+    assert readback_framebuffer.read_into_calls == [
+        (
+            (buffer,),
+            {"viewport": (0, 0, 2, 2), "components": 3, "alignment": 1},
+        )
+    ]
+    assert window._recording_readback_slots[0].in_flight is True
+    assert window._recording_readback_pending == window._recording_readback_slots
+
+
+def test_recording_drains_oldest_staged_frame_when_ring_is_full(monkeypatch):
+    ticks = iter([70.0, 70.004])
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
+
+    class FakeBuffer:
+        def __init__(self, data):
+            self.data = data
+            self.read_calls = []
+
+        def read(self, *, size):
+            self.read_calls.append(size)
+            return self.data
+
+    buffers = [FakeBuffer(bytes((index,)) * 12) for index in range(3)]
+    slots = [
+        viewer_window._RecordingReadbackSlot(buffer, in_flight=True)
+        for buffer in buffers
+    ]
+    window = _recording_window()
+    window._recording_size = (2, 2)
+    window._recording_viewport = (0, 0, 2, 2)
+    window._recording_readback_slots = slots
+    window._recording_readback_pending = slots.copy()
+    window._recording_readback_byte_count = 12
+    window._recording_frame_queue = queue.Queue(maxsize=3)
+
+    read_ms = window._recording_drain_staged_frames()
+
+    assert read_ms == pytest.approx(4.0)
+    assert buffers[0].read_calls == [12]
+    assert window._recording_frame_queue.get_nowait() == b"\x00" * 12
+    assert slots[0].in_flight is False
+    assert window._recording_readback_pending == slots[1:]
+
+
+def test_recording_late_capture_drops_frames_instead_of_enqueuing_duplicates(
+    monkeypatch,
+):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    ticks = iter([50.0, 50.006])
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
+
+    class FakeScreen:
+        def __init__(self):
+            self.read_into_calls = []
+
+        def read_into(self, *args, **kwargs):
+            self.read_into_calls.append((args, kwargs))
+
+    class FakeBuffer:
+        pass
+
+    screen = FakeScreen()
+    buffer = FakeBuffer()
+    window = _recording_window()
+    window.ctx = SimpleNamespace(viewport=(0, 0, 2, 2), screen=screen)
+    window._recording_process = SimpleNamespace(poll=lambda: None)
+    window._recording_size = (2, 2)
+    window._recording_viewport = (0, 0, 2, 2)
+    window._recording_readback_slots = [
+        viewer_window._RecordingReadbackSlot(buffer)
+    ]
+    window._recording_readback_byte_count = 12
+    window._recording_next_frame_time = 10.0
+    window._recording_frame_interval = 1.0
+    window._recording_frame_queue = queue.Queue(maxsize=5)
+
+    read_ms = window._recording_update_after_scene(12.2)
+
+    assert read_ms == pytest.approx(6.0)
+    assert screen.read_into_calls == [
+        (
+            (buffer,),
+            {"viewport": (0, 0, 2, 2), "components": 3, "alignment": 1},
+        )
+    ]
+    assert window._recording_frame_queue.qsize() == 0
+    assert window._recording_readback_pending == window._recording_readback_slots
+    assert window._recording_readback_slots[0].in_flight is True
+    assert window._recording_dropped_frames == 2
+    assert window._recording_next_frame_time == pytest.approx(13.0)
+    assert logger.warning_messages == [
+        "Recording encoder is falling behind; dropping video frames."
+    ]
+
+
+def test_frame_spike_log_reports_recording_read_time():
+    source = inspect.getsource(viewer_window.CaveViewerWindow.on_render)
+
+    assert "recording_read=" in source
+    assert "recording_stage=" in source
+    assert "recording_drain=" in source
 
 
 def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypatch):
@@ -301,12 +708,33 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
         def kill(self):
             self.killed = True
 
+    class FakeFramebuffer:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    class FakeBuffer:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
     process = TimeoutProcess()
+    framebuffer = FakeFramebuffer()
+    buffer = FakeBuffer()
+    slot = viewer_window._RecordingReadbackSlot(buffer, in_flight=True)
     window = _recording_window()
     window._recording_process = process
     window._recording_output_path = "/recordings/cave.mp4"
     window._recording_size = (640, 480)
     window._recording_viewport = (0, 0, 640, 480)
+    window._recording_readback_framebuffer = framebuffer
+    window._recording_readback_slots = [slot]
+    window._recording_readback_pending = [slot]
+    window._recording_readback_byte_count = 640 * 480 * 3
     window._recording_next_frame_time = 20.0
     window._recording_frame_queue = queue.Queue(maxsize=1)
     window._recording_stderr_parts = ["No space left on device"]
@@ -321,8 +749,15 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
 
     assert process.killed is True
     assert process.wait_calls == [8.0, None]
+    assert framebuffer.released is True
+    assert buffer.released is True
+    assert slot.in_flight is False
     assert window._recording_process is None
     assert window._recording_output_path is None
+    assert window._recording_readback_framebuffer is None
+    assert window._recording_readback_slots == []
+    assert window._recording_readback_pending == []
+    assert window._recording_readback_byte_count == 0
     assert window._recording_frame_queue is None
     assert window._recording_status_message == "Recording failed"
     assert window._recording_status_detail == "Disk may be full"
