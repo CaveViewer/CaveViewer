@@ -28,6 +28,17 @@ class JsonResponse:
         return self._payload
 
 
+def test_known_sample_maps_include_current_public_release_assets():
+    expected_assets = [
+        "Boh.Yai.Mine.I.Low.Res.zip",
+        "Boh.Yai.Mine.II.Low.Res.zip",
+        "Devils.Eye.3D.Map.zip",
+        "Peacock.Springs.Cave.System.3D.Map.zip",
+    ]
+
+    assert [sample.asset_name for sample in sample_maps.KNOWN_SAMPLE_MAPS] == expected_assets
+
+
 def test_catalog_populates_known_assets_and_keeps_missing_entries(monkeypatch):
     known = sample_maps.KNOWN_SAMPLE_MAPS[0]
     payload = {

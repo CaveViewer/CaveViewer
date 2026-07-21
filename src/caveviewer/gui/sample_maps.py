@@ -75,8 +75,22 @@ class SampleMapInfo:
 
 
 KNOWN_SAMPLE_MAPS = [
-    SampleMapInfo(display_name="Devils Eye", asset_name="Devils.Eye.3D.Map.zip"),
-    SampleMapInfo(display_name="Peacock Springs Cave System", asset_name="Peacock.Springs.Cave.System.3D.Map.zip"),
+    SampleMapInfo(
+        display_name="Boh Yai Mine I (Low Res)",
+        asset_name="Boh.Yai.Mine.I.Low.Res.zip",
+    ),
+    SampleMapInfo(
+        display_name="Boh Yai Mine II (Low Res)",
+        asset_name="Boh.Yai.Mine.II.Low.Res.zip",
+    ),
+    SampleMapInfo(
+        display_name="Devils Eye",
+        asset_name="Devils.Eye.3D.Map.zip",
+    ),
+    SampleMapInfo(
+        display_name="Peacock Springs Cave System",
+        asset_name="Peacock.Springs.Cave.System.3D.Map.zip",
+    ),
 ]
 
 

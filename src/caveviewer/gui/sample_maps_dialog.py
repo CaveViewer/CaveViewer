@@ -597,7 +597,7 @@ def show_sample_maps_dialog(
 
     list_frame.pack(fill="x")
 
-    # The dialog intentionally supports the curated 2-3 sample maps offered
+    # The dialog intentionally supports the small curated sample-map set offered
     # here, not a large catalog.  A future larger collection belongs behind a
     # separate map-library link instead of putting a scrollbar into this small
     # chooser.
