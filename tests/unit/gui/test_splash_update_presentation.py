@@ -262,7 +262,8 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "Your Library" in source
     assert "Standard Library" in source
     assert "Open your maps or explore the standard library." not in source
-    assert "Maps you open yourself will appear here." in source
+    assert "No maps added yet." in source
+    assert "Maps you open yourself will appear here." not in source
     assert "No user-opened maps yet." not in source
     assert 'top_pad=16' in source
     assert 'bottom_pad=18' in source

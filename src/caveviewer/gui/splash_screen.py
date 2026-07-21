@@ -918,7 +918,7 @@ def show_splash_screen(
             if not _widget_exists(recent_empty_note[0]):
                 recent_empty_note[0] = _create_map_library_empty_note(
                     container,
-                    "Maps you open yourself will appear here.",
+                    "No maps added yet.",
                     bottom_pad=18,
                 )
                 _bind_library_mousewheel_if_ready(recent_empty_note[0])
@@ -1978,7 +1978,7 @@ def show_splash_screen(
         else:
             recent_empty_note[0] = _create_map_library_empty_note(
                 recent_container,
-                "Maps you open yourself will appear here.",
+                "No maps added yet.",
                 bottom_pad=18,
             )
 
