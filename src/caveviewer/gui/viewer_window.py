@@ -117,33 +117,91 @@ def _import_controller_property(attribute_name: str):
     return property(getter, setter)
 
 
-def _desktop_relative_window_size() -> tuple[int, int]:
-    """Return an 80%-of-screen fallback for non-GLFW desktop backends."""
+def _tk_root_exists(root) -> bool:
+    """Return whether a Tk root-like object is still usable."""
+    if root is None:
+        return False
+    try:
+        return bool(root.winfo_exists())
+    except Exception:
+        return False
+
+
+def _screen_size_from_tk_root(root) -> tuple[int, int] | None:
+    """Read a positive desktop size from a Tk root-like object."""
+    try:
+        desktop_width = int(root.winfo_screenwidth())
+        desktop_height = int(root.winfo_screenheight())
+    except Exception:
+        return None
+    if desktop_width <= 0 or desktop_height <= 0:
+        return None
+    return desktop_width, desktop_height
+
+
+def _window_size_from_desktop_size(desktop_size: tuple[int, int]) -> tuple[int, int]:
+    """Return CaveViewer's default viewer size for a detected desktop."""
+    desktop_width, desktop_height = desktop_size
+    if desktop_width <= 0 or desktop_height <= 0:
+        return _DEFAULT_WINDOW_SIZE
+
+    window_size = (
+        max(1, int(round(desktop_width * _DESKTOP_WINDOW_SCALE))),
+        max(1, int(round(desktop_height * _DESKTOP_WINDOW_SCALE))),
+    )
+    _LOG.info(
+        "Desktop size %dx%d; opening viewer at %dx%d.",
+        desktop_width, desktop_height, *window_size,
+    )
+    return window_size
+
+
+def _desktop_relative_window_size(screen_source=None) -> tuple[int, int]:
+    """
+    Return an 80%-of-screen fallback for non-GLFW desktop backends.
+
+    When a Tk root already exists, reuse it for screen-size measurement instead
+    of creating a second Tk application root.  This matters most on macOS,
+    where the kept-alive splash root owns process-level Tk app/menu state.
+    """
+    if screen_source is not None:
+        screen_size = _screen_size_from_tk_root(screen_source)
+        if screen_size is None:
+            _LOG.warning(
+                "Could not detect desktop size from existing Tk root; using %dx%d.",
+                *_DEFAULT_WINDOW_SIZE,
+            )
+            return _DEFAULT_WINDOW_SIZE
+        return _window_size_from_desktop_size(screen_size)
+
     root = None
+    owns_root = False
     try:
         import tkinter as tk
 
-        root = tk.Tk(**tk_root_options())
-        root.withdraw()
-        desktop_width = int(root.winfo_screenwidth())
-        desktop_height = int(root.winfo_screenheight())
-        if desktop_width <= 0 or desktop_height <= 0:
-            return _DEFAULT_WINDOW_SIZE
+        default_root = getattr(tk, "_default_root", None)
+        if _tk_root_exists(default_root):
+            screen_size = _screen_size_from_tk_root(default_root)
+            if screen_size is None:
+                _LOG.warning(
+                    "Could not detect desktop size from existing Tk root; using %dx%d.",
+                    *_DEFAULT_WINDOW_SIZE,
+                )
+                return _DEFAULT_WINDOW_SIZE
+            return _window_size_from_desktop_size(screen_size)
 
-        window_size = (
-            max(1, int(round(desktop_width * _DESKTOP_WINDOW_SCALE))),
-            max(1, int(round(desktop_height * _DESKTOP_WINDOW_SCALE))),
-        )
-        _LOG.info(
-            "Desktop size %dx%d; opening viewer at %dx%d.",
-            desktop_width, desktop_height, *window_size,
-        )
-        return window_size
+        root = tk.Tk(**tk_root_options())
+        owns_root = True
+        root.withdraw()
+        screen_size = _screen_size_from_tk_root(root)
+        if screen_size is None:
+            return _DEFAULT_WINDOW_SIZE
+        return _window_size_from_desktop_size(screen_size)
     except Exception as e:
         _LOG.warning("Could not detect desktop size (%s); using %dx%d.", e, *_DEFAULT_WINDOW_SIZE)
         return _DEFAULT_WINDOW_SIZE
     finally:
-        if root is not None:
+        if owns_root and root is not None:
             try:
                 root.destroy()
             except Exception:

@@ -554,6 +554,11 @@ validation lives in `src/caveviewer/gui/map_selection.py`, allowing both
 map-selection dialogs to reuse it without importing private splash-screen
 implementation details.
 
+CaveViewer keeps exactly one Tk root per process. On macOS the splash root is
+withdrawn, kept alive for the global app-menu callbacks, and reused on later
+splash cycles. Viewer sizing also reuses an existing Tk root for screen
+dimensions before falling back to a temporary root in non-splash launch paths.
+
 The OpenGL viewer render callback must return promptly. Low-activity states
 such as minimized windows, startup import progress, and startup import pause
 notices use timestamp-based redraw gates instead of `time.sleep()` so queued
