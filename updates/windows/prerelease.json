@@ -1,10 +1,10 @@
 {
-  "latest_version": "1.0.67",
-  "download_url": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.67/CaveViewer-1.0.67-windows.zip",
-  "download_size_bytes": 1797879,
-  "download_url_windows_zip": "https://github.com/KernalPanic/CaveViewer/releases/download/v1.0.67/CaveViewer-1.0.67-windows.zip",
-  "download_size_bytes_windows_zip": 1797879,
+  "latest_version": "1.0.68",
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.68/CaveViewer-1.0.68-windows.zip",
+  "download_size_bytes": 1864918,
+  "download_url_windows_zip": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.68/CaveViewer-1.0.68-windows.zip",
+  "download_size_bytes_windows_zip": 1864918,
   "release_notes": "CaveViewer pre-release",
-  "sha256": "b278611cda0211531ca9a13a2758fe3c7f1cf914e05b019f13f89d214e6f73c2",
-  "sha256_windows_zip": "b278611cda0211531ca9a13a2758fe3c7f1cf914e05b019f13f89d214e6f73c2"
+  "sha256": "4d81674dc293596e1886b712c43b0cb8ce8beec07b22f476522d77883f7e96f6",
+  "sha256_windows_zip": "4d81674dc293596e1886b712c43b0cb8ce8beec07b22f476522d77883f7e96f6"
 }
