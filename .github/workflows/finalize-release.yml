@@ -63,7 +63,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check "cryptography>=43.0.0"
 
       - name: Download platform packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: CaveViewer-${{ inputs.version }}-*
           path: release-artifacts
