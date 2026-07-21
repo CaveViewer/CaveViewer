@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import inspect
+import queue
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -147,7 +149,20 @@ def test_sample_maps_dialog_catalog_load_uses_after_polling():
     assert "queue.Queue" in source
     assert "dialog.after(0, _poll_catalog_fetch)" in source
     assert "dialog.update()" not in source
+    assert ".update()" not in source
     assert "time.sleep(" not in source
+
+
+def test_sample_maps_dialog_download_uses_worker_and_after_polling():
+    source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
+
+    assert "_start_sample_download_worker(" in source
+    assert "_poll_download_queue" in source
+    assert "_cancel_active_download_for_close" in source
+    assert "cancel_event.set()" in source
+    assert "\"Cancel\"" in source
+    assert "\"Cancelling…\"" in source
+    assert "progress_bar_canvas.update()" not in source
 
 
 def test_sample_maps_dialog_is_modal_and_has_initial_focus_policy():
@@ -164,26 +179,138 @@ def test_sample_maps_dialog_is_modal_and_has_initial_focus_policy():
     assert "set_dialog_action_button(" in source
 
 
-def test_download_start_reuses_action_area_as_cancel_button_without_prompt():
-    action_button = object()
-    configured_actions = []
+def test_sample_download_worker_queues_progress_and_success(monkeypatch, tmp_path):
+    sample = _sample()
+    result_queue = queue.Queue()
+    cancel_event = threading.Event()
+    calls = []
 
-    def set_action_button(button, text, command):
-        configured_actions.append((button, text, command))
+    def fake_download(save_dir, sample_arg, **options):
+        calls.append((save_dir, sample_arg, set(options)))
+        assert not options["cancel_cb"]()
+        options["progress_cb"](5, 10)
+        return "/downloaded/devils-eye"
 
-    cancel_event = sample_maps_dialog._activate_download_cancel_button(
-        action_button, set_action_button
+    monkeypatch.setattr(
+        sample_maps_dialog,
+        "_download_and_extract_to_selected_directory",
+        fake_download,
     )
 
-    assert len(configured_actions) == 1
-    configured_button, text, command = configured_actions[0]
-    assert configured_button is action_button
-    assert text == "Cancel"
-    assert not cancel_event.is_set()
+    save_dir = DirectorySelection.from_path(str(tmp_path))
+    sample_maps_dialog._run_sample_download_worker(
+        save_dir,
+        sample,
+        cancel_event,
+        result_queue,
+    )
 
-    command()
+    assert calls == [
+        (save_dir, sample, {"progress_cb", "cancel_cb"}),
+    ]
+    assert result_queue.get_nowait() == sample_maps_dialog._SampleDownloadProgress(
+        5, 10
+    )
+    assert result_queue.get_nowait() == sample_maps_dialog._SampleDownloadSucceeded(
+        "/downloaded/devils-eye"
+    )
+    with pytest.raises(queue.Empty):
+        result_queue.get_nowait()
 
-    assert cancel_event.is_set()
+
+def test_sample_download_worker_queues_failure(monkeypatch, tmp_path):
+    sample = _sample()
+    result_queue = queue.Queue()
+    cancel_event = threading.Event()
+
+    def fake_download(*_args, **_options):
+        raise RuntimeError("network failed")
+
+    monkeypatch.setattr(
+        sample_maps_dialog,
+        "_download_and_extract_to_selected_directory",
+        fake_download,
+    )
+
+    sample_maps_dialog._run_sample_download_worker(
+        DirectorySelection.from_path(str(tmp_path)),
+        sample,
+        cancel_event,
+        result_queue,
+    )
+
+    message = result_queue.get_nowait()
+    assert isinstance(message, sample_maps_dialog._SampleDownloadFailed)
+    assert str(message.error) == "network failed"
+    with pytest.raises(queue.Empty):
+        result_queue.get_nowait()
+
+
+def test_sample_download_worker_progress_observes_cancel(monkeypatch, tmp_path):
+    from caveviewer.gui.sample_maps import DownloadCancelled
+
+    sample = _sample()
+    result_queue = queue.Queue()
+    cancel_event = threading.Event()
+
+    def fake_download(_save_dir, _sample, **options):
+        cancel_event.set()
+        options["progress_cb"](5, 10)
+
+    monkeypatch.setattr(
+        sample_maps_dialog,
+        "_download_and_extract_to_selected_directory",
+        fake_download,
+    )
+
+    sample_maps_dialog._run_sample_download_worker(
+        DirectorySelection.from_path(str(tmp_path)),
+        sample,
+        cancel_event,
+        result_queue,
+    )
+
+    message = result_queue.get_nowait()
+    assert isinstance(message, sample_maps_dialog._SampleDownloadFailed)
+    assert isinstance(message.error, DownloadCancelled)
+    with pytest.raises(queue.Empty):
+        result_queue.get_nowait()
+
+
+def test_start_sample_download_worker_uses_owned_non_daemon_thread(
+    monkeypatch, tmp_path
+):
+    sample = _sample()
+    save_dir = DirectorySelection.from_path(str(tmp_path))
+    result_queue = queue.Queue()
+    cancel_event = threading.Event()
+    done = threading.Event()
+    calls = []
+
+    def fake_run(save_dir_arg, sample_arg, cancel_event_arg, result_queue_arg):
+        calls.append(
+            (save_dir_arg, sample_arg, cancel_event_arg, result_queue_arg)
+        )
+        done.set()
+
+    monkeypatch.setattr(
+        sample_maps_dialog,
+        "_run_sample_download_worker",
+        fake_run,
+    )
+
+    worker = sample_maps_dialog._start_sample_download_worker(
+        save_dir,
+        sample,
+        cancel_event,
+        result_queue,
+    )
+    worker.join(timeout=1.0)
+
+    assert worker.name == "CaveViewer-sample-map-download"
+    assert worker.daemon is False
+    assert done.is_set()
+    assert calls == [(save_dir, sample, cancel_event, result_queue)]
 
 
 def test_save_directory_chooser_is_owned_focused_and_not_left_topmost():

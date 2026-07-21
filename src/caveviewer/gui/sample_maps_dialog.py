@@ -19,6 +19,7 @@ import os
 import queue
 import threading
 import time
+from dataclasses import dataclass
 
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_X,
@@ -54,18 +55,33 @@ _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 _SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX = "caveviewer.sample-map-download"
 
 
+@dataclass(frozen=True)
+class _SampleDownloadProgress:
+    """Worker-to-UI progress message for a sample-map download."""
+
+    downloaded_bytes: int
+    total_bytes: int | None
+
+
+@dataclass(frozen=True)
+class _SampleDownloadSucceeded:
+    """Worker-to-UI completion message for a sample-map download."""
+
+    result_path: str
+
+
+@dataclass(frozen=True)
+class _SampleDownloadFailed:
+    """Worker-to-UI failure message for a sample-map download."""
+
+    error: Exception
+
+
 def _last_sample_maps_dir_file() -> str:
     """Resolve state lazily so tests and portable runs remain isolated."""
     return migrate_state_file(
         "last_sample_maps_dir", ".caveviewer_last_sample_maps_dir"
     )
-
-
-def _activate_download_cancel_button(action_button, set_action_button):
-    """Turn a row's existing action button into its cancellation control."""
-    cancel_event = threading.Event()
-    set_action_button(action_button, "Cancel", cancel_event.set)
-    return cancel_event
 
 
 def _ask_directory_in_front(
@@ -123,6 +139,63 @@ def _download_and_extract_to_selected_directory(
         progress_cb=progress_cb,
         cancel_cb=cancel_cb,
     )
+
+
+def _run_sample_download_worker(
+    save_dir: DirectorySelection,
+    sample,
+    cancel_event: threading.Event,
+    result_queue,
+) -> None:
+    """
+    Download/extract a sample map without touching Tk state.
+
+    The worker communicates only through `result_queue`. UI code owns all Tk
+    widget updates by polling that queue with `after()`.
+    """
+    from caveviewer.gui.sample_maps import DownloadCancelled
+
+    def on_progress(downloaded_bytes, total_bytes) -> None:
+        if cancel_event.is_set():
+            raise DownloadCancelled("Sample map download cancelled")
+        result_queue.put(
+            _SampleDownloadProgress(
+                max(0, int(downloaded_bytes)),
+                None if total_bytes is None else max(0, int(total_bytes)),
+            )
+        )
+        if cancel_event.is_set():
+            raise DownloadCancelled("Sample map download cancelled")
+
+    try:
+        result_path = _download_and_extract_to_selected_directory(
+            save_dir,
+            sample,
+            progress_cb=on_progress,
+            cancel_cb=cancel_event.is_set,
+        )
+    except Exception as exc:
+        result_queue.put(_SampleDownloadFailed(exc))
+    else:
+        result_queue.put(_SampleDownloadSucceeded(result_path))
+
+
+def _start_sample_download_worker(
+    save_dir: DirectorySelection,
+    sample,
+    cancel_event: threading.Event,
+    result_queue,
+) -> threading.Thread:
+    """Start the owned worker thread for a sample-map download."""
+    worker = threading.Thread(
+        target=_run_sample_download_worker,
+        args=(save_dir, sample, cancel_event, result_queue),
+        name="CaveViewer-sample-map-download",
+        # Partial zip/extraction cleanup must reach its finally blocks.
+        daemon=False,
+    )
+    worker.start()
+    return worker
 
 
 def _sample_download_notification_id(sample) -> str:
@@ -325,6 +398,13 @@ def show_sample_maps_dialog(
     selected_folder = [None]
     dialog_closed = [False]
     catalog_load_done = [None]
+    active_download = {
+        "cancel_event": None,
+        "after_id": None,
+        "inhibitor": None,
+        "sample_name": None,
+        "thread": None,
+    }
 
     dialog = tk.Toplevel(parent)
     dialog.withdraw()
@@ -333,8 +413,34 @@ def show_sample_maps_dialog(
     dialog.resizable(False, False)
     dialog.transient(parent)
 
+    def _cancel_active_download_for_close() -> None:
+        cancel_event = active_download.get("cancel_event")
+        if cancel_event is not None:
+            cancel_event.set()
+
+        after_id = active_download.get("after_id")
+        active_download["after_id"] = None
+        if after_id is not None:
+            try:
+                dialog.after_cancel(after_id)
+            except tk.TclError:
+                pass
+
+        inhibitor = active_download.get("inhibitor")
+        active_download.update(
+            {
+                "cancel_event": None,
+                "after_id": None,
+                "inhibitor": None,
+                "sample_name": None,
+                "thread": None,
+            }
+        )
+        _close_desktop_inhibitor(inhibitor)
+
     def _close_dialog():
         dialog_closed[0] = True
+        _cancel_active_download_for_close()
         done_var = catalog_load_done[0]
         if done_var is not None:
             try:
@@ -646,8 +752,197 @@ def show_sample_maps_dialog(
     sample_maps_root_dir = remembered_save_dir or install_dir
     initial_save_dir = [sample_maps_root_dir]
 
+    def _set_sample_action(
+        sample,
+        *,
+        downloaded: bool,
+        enabled: bool = True,
+        result_path: str | None = None,
+    ) -> None:
+        action_btn = action_buttons.get(sample.display_name)
+        if not _widget_exists(action_btn):
+            return
+        if downloaded:
+            open_path = (
+                result_path
+                or downloaded_paths.get(sample.display_name)
+                or existing_sample_map_path(sample_maps_root_dir, sample)
+            )
+            _set_action_button(
+                action_btn,
+                "Open Map",
+                lambda s=sample, rp=open_path: on_open_map(s, rp),
+                enabled=enabled,
+            )
+            return
+        _set_action_button(
+            action_btn,
+            _sample_action_text(sample, downloaded=False),
+            lambda s=sample: _download_flow(s),
+            enabled=enabled and _sample_action_enabled(sample, downloaded=False),
+        )
+
+    def _set_non_active_sample_actions_enabled(active_sample, enabled: bool) -> None:
+        active_name = active_sample.display_name
+        for row_sample in catalog:
+            if row_sample.display_name == active_name:
+                continue
+            row_result_path = downloaded_paths.get(row_sample.display_name)
+            row_downloaded = bool(row_result_path) or is_sample_map_already_downloaded(
+                sample_maps_root_dir, row_sample
+            )
+            _set_sample_action(
+                row_sample,
+                downloaded=row_downloaded,
+                enabled=enabled,
+                result_path=(
+                    row_result_path
+                    or existing_sample_map_path(sample_maps_root_dir, row_sample)
+                ),
+            )
+
+    def _reset_progress_bar(sample) -> None:
+        progress_parts = progress_bars.get(sample.display_name)
+        if progress_parts is None:
+            return
+        _progress_bar_container, progress_bar_canvas, progress_bar = progress_parts
+        if not _widget_exists(progress_bar_canvas):
+            return
+        progress_bar_canvas.pack_forget()
+        progress_bar_canvas.coords(progress_bar, 0, 0, 0, _px(4))
+
+    def _apply_download_progress(
+        sample, progress: _SampleDownloadProgress
+    ) -> None:
+        progress_parts = progress_bars.get(sample.display_name)
+        if progress_parts is None:
+            return
+        _progress_bar_container, progress_bar_canvas, progress_bar = progress_parts
+        if not _widget_exists(progress_bar_canvas):
+            return
+        if progress.total_bytes is None or progress.total_bytes <= 0:
+            return
+        frac = min(1.0, progress.downloaded_bytes / progress.total_bytes)
+        canvas_width = progress_bar_canvas.winfo_width()
+        if canvas_width > 1:
+            progress_bar_canvas.coords(
+                progress_bar,
+                0,
+                0,
+                int(canvas_width * frac),
+                _px(4),
+            )
+
+    def _clear_active_download(sample) -> None:
+        inhibitor = active_download.get("inhibitor")
+        active_download.update(
+            {
+                "cancel_event": None,
+                "after_id": None,
+                "inhibitor": None,
+                "sample_name": None,
+                "thread": None,
+            }
+        )
+        _close_desktop_inhibitor(inhibitor)
+        if _dialog_exists():
+            _set_non_active_sample_actions_enabled(sample, True)
+
+    def _finish_download_success(sample, result_path: str) -> None:
+        if not _dialog_exists():
+            _clear_active_download(sample)
+            return
+        _reset_progress_bar(sample)
+        downloaded_paths[sample.display_name] = result_path
+        detail_label = detail_labels.get(sample.display_name)
+        if detail_label is not None:
+            detail_label.config(text=_sample_detail_text(sample, downloaded=True))
+        _set_sample_action(
+            sample,
+            downloaded=True,
+            result_path=result_path,
+        )
+        _clear_active_download(sample)
+
+    def _finish_download_failure(sample, error: Exception) -> None:
+        if not _dialog_exists():
+            _clear_active_download(sample)
+            return
+        _reset_progress_bar(sample)
+        _set_sample_action(sample, downloaded=False)
+        _clear_active_download(sample)
+        if isinstance(error, DownloadCancelled):
+            return
+        _show_inline_feedback(
+            f"Couldn't download {sample.display_name}: {error}",
+            kind="error",
+        )
+
+    def _schedule_download_poll(sample, message_queue, cancel_event) -> None:
+        if active_download.get("cancel_event") is not cancel_event:
+            return
+        if not _dialog_exists():
+            cancel_event.set()
+            _clear_active_download(sample)
+            return
+        active_download["after_id"] = dialog.after(
+            80,
+            lambda s=sample, q=message_queue, c=cancel_event: _poll_download_queue(
+                s, q, c
+            ),
+        )
+
+    def _poll_download_queue(sample, message_queue, cancel_event) -> None:
+        if active_download.get("cancel_event") is not cancel_event:
+            return
+        active_download["after_id"] = None
+        if not _dialog_exists():
+            cancel_event.set()
+            _clear_active_download(sample)
+            return
+
+        latest_progress = None
+        terminal_message = None
+        while True:
+            try:
+                message = message_queue.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(message, _SampleDownloadProgress):
+                latest_progress = message
+            else:
+                terminal_message = message
+                break
+
+        if latest_progress is not None:
+            try:
+                _apply_download_progress(sample, latest_progress)
+            except tk.TclError:
+                cancel_event.set()
+                _clear_active_download(sample)
+                return
+
+        if isinstance(terminal_message, _SampleDownloadSucceeded):
+            _finish_download_success(sample, terminal_message.result_path)
+            return
+        if isinstance(terminal_message, _SampleDownloadFailed):
+            _finish_download_failure(sample, terminal_message.error)
+            return
+
+        try:
+            _schedule_download_poll(sample, message_queue, cancel_event)
+        except tk.TclError:
+            cancel_event.set()
+            _clear_active_download(sample)
+
     def _download_flow(sample):
         nonlocal sample_maps_root_dir
+        if active_download.get("cancel_event") is not None:
+            _show_inline_feedback(
+                "Finish or cancel the current sample-map download before starting another.",
+                kind="info",
+            )
+            return
         if sample.download_url is None:
             _show_inline_feedback(
                 f"{sample.display_name} isn't available for download right now "
@@ -681,103 +976,66 @@ def show_sample_maps_dialog(
         action_btn = action_buttons[sample.display_name]
         if not _widget_exists(action_btn):
             return
-        progress_bar_container, progress_bar_canvas, progress_bar = progress_bars[sample.display_name]
+        progress_parts = progress_bars[sample.display_name]
+        _progress_bar_container, progress_bar_canvas, _progress_bar = progress_parts
         if not _widget_exists(progress_bar_canvas):
             return
-        cancel_event = _activate_download_cancel_button(
-            action_btn, _set_action_button
-        )
         try:
             progress_bar_canvas.pack(fill="x", padx=_px(14), pady=(_px(6), 0))
-            # Force layout update to get accurate canvas width
+            # Force layout update to get an initial canvas width; subsequent
+            # progress updates are handled by the Tk event loop, not update().
             dialog.update_idletasks()
         except tk.TclError:
             return
 
-        def on_progress(downloaded, total):
-            if cancel_event.is_set():
-                raise DownloadCancelled("Sample map download cancelled")
-            if not _dialog_exists() or not _widget_exists(progress_bar_canvas):
-                cancel_event.set()
-                raise DownloadCancelled("Sample map download cancelled")
-            if total > 0:
-                try:
-                    frac = min(1.0, downloaded / total)
-                    # Get the current width of the canvas (it fills the parent)
-                    canvas_width = progress_bar_canvas.winfo_width()
-                    if canvas_width > 1:  # winfo_width() returns 1 before widget is displayed
-                        progress_bar_canvas.coords(
-                            progress_bar,
-                            0,
-                            0,
-                            int(canvas_width * frac),
-                            _px(4),
-                        )
-                    progress_bar_canvas.update()
-                    if cancel_event.is_set() or not _dialog_exists():
-                        cancel_event.set()
-                        raise DownloadCancelled("Sample map download cancelled")
-                except tk.TclError:
-                    cancel_event.set()
-                    raise DownloadCancelled("Sample map download cancelled")
+        cancel_event = threading.Event()
+        message_queue = queue.Queue()
+
+        def request_cancel() -> None:
+            cancel_event.set()
+            if _widget_exists(action_btn):
+                _set_action_button(
+                    action_btn,
+                    "Cancelling…",
+                    lambda: None,
+                    enabled=False,
+                )
+
+        _set_action_button(action_btn, "Cancel", request_cancel)
+        _set_non_active_sample_actions_enabled(sample, False)
+        active_download.update(
+            {
+                "cancel_event": cancel_event,
+                "after_id": None,
+                "inhibitor": _safe_desktop_inhibit(
+                    desktop_services,
+                    f"Downloading {sample.display_name}",
+                    parent=dialog,
+                ),
+                "sample_name": sample.display_name,
+                "thread": None,
+            }
+        )
 
         try:
-            result_path = _download_sample_with_desktop_activity(
-                desktop_services,
-                dialog,
+            worker = _start_sample_download_worker(
                 save_dir,
                 sample,
-                progress_cb=on_progress,
-                cancel_cb=cancel_event.is_set,
-                notify_desktop=False,
+                cancel_event,
+                message_queue,
             )
-        except Exception as e:
-            if not _dialog_exists():
-                return
-            try:
-                if _widget_exists(progress_bar_canvas):
-                    progress_bar_canvas.pack_forget()
-                    progress_bar_canvas.coords(progress_bar, 0, 0, 0, _px(4))
-                action_btn = action_buttons.get(sample.display_name)
-                if _widget_exists(action_btn):
-                    _set_action_button(
-                        action_btn,
-                        _sample_action_text(sample, downloaded=False),
-                        lambda s=sample: _download_flow(s),
-                        enabled=_sample_action_enabled(sample, downloaded=False),
-                    )
-            except tk.TclError:
-                return
-            if isinstance(e, DownloadCancelled):
-                return
+        except RuntimeError as exc:
+            _reset_progress_bar(sample)
+            _set_sample_action(sample, downloaded=False)
+            _clear_active_download(sample)
             _show_inline_feedback(
-                f"Couldn't download {sample.display_name}: {e}",
+                f"Couldn't start the {sample.display_name} download: {exc}",
                 kind="error",
             )
             return
 
-        if not _dialog_exists():
-            return
-
-        # Download succeeded - hide progress bar and show "Open Map" button
-        try:
-            if _widget_exists(progress_bar_canvas):
-                progress_bar_canvas.pack_forget()
-        except tk.TclError:
-            return
-        downloaded_paths[sample.display_name] = result_path
-        detail_label = detail_labels.get(sample.display_name)
-        if detail_label is not None:
-            detail_label.config(text=_sample_detail_text(sample, downloaded=True))
-
-        # Update the same action-area button to Open Map.
-        action_btn = action_buttons[sample.display_name]
-        if not _widget_exists(action_btn):
-            return
-        _set_action_button(
-            action_btn, "Open Map",
-            lambda s=sample, rp=result_path: on_open_map(s, rp),
-        )
+        active_download["thread"] = worker
+        _schedule_download_poll(sample, message_queue, cancel_event)
 
     def on_open_map(sample, result_path):
         is_valid, error_message = _validate_selected_map_folder(result_path)
