@@ -49,10 +49,14 @@ from caveviewer.gui.dpi_utils import (
     configure_process_dpi_awareness,
     tk_display_scale,
 )
+from caveviewer.gui.map_cache_management import (
+    has_managed_map_cache,
+    remove_managed_map_cache,
+)
+from caveviewer.gui.map_history import load_recent_map_paths, remove_recent_map_path
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
-from caveviewer.gui.map_history import load_recent_map_paths, remove_recent_map_path
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import (
     DesktopServices,
@@ -324,6 +328,7 @@ class _MapLibraryRowWidgets:
     """Tk widgets owned by one map-library row on the splash thread."""
 
     row_shell: object
+    leading_widget: object
     action_button: object
     metadata_label: object | None
     progress_bar_canvas: object | None = None
@@ -642,7 +647,7 @@ def show_splash_screen(
         root.after(100, _refresh_update_presentation)
 
     def _leave_splash() -> None:
-        _close_active_recent_menu()
+        _close_active_library_menu()
         _cancel_active_library_download_for_close()
         splash_state["closing"] = True
         root.withdraw()
@@ -747,7 +752,7 @@ def show_splash_screen(
     recent_map_rows: dict[str, _MapLibraryRowWidgets] = {}
     recent_rows_container = [None]
     recent_empty_note = [None]
-    active_recent_menu = {"window": None}
+    active_library_menu = {"window": None}
     library_scroll_sync = {"callback": None}
     library_mousewheel_bind = {"callback": None}
     downloaded_sample_paths: dict[str, str] = {}
@@ -843,9 +848,9 @@ def show_splash_screen(
         except (OSError, TypeError, ValueError):
             return str(path)
 
-    def _close_active_recent_menu() -> None:
-        menu = active_recent_menu.get("window")
-        active_recent_menu["window"] = None
+    def _close_active_library_menu() -> None:
+        menu = active_library_menu.get("window")
+        active_library_menu["window"] = None
         if _widget_exists(menu):
             try:
                 menu.destroy()
@@ -861,6 +866,40 @@ def show_splash_screen(
         callback = library_mousewheel_bind.get("callback")
         if callback is not None and _widget_exists(widget):
             callback(widget)
+
+    def _remove_map_cache_from_splash(
+        path: str,
+        title: str,
+        row_widgets: _MapLibraryRowWidgets | None,
+    ) -> None:
+        result = remove_managed_map_cache(path)
+        if result.error:
+            show_feedback(
+                root,
+                f"Unable to remove cache for {title}: {result.error}",
+                kind="error",
+                duration_ms=9000,
+                font=_BODY_FONT,
+            )
+        elif result.removed:
+            show_feedback(
+                root,
+                f"Removed cache for {title}.",
+                kind="info",
+                duration_ms=5000,
+                font=_BODY_FONT,
+            )
+        else:
+            show_feedback(
+                root,
+                f"No generated cache was found for {title}.",
+                kind="info",
+                duration_ms=5000,
+                font=_BODY_FONT,
+            )
+
+        if row_widgets is not None and _widget_exists(row_widgets.leading_widget):
+            _refresh_library_overflow_button(row_widgets.leading_widget)
 
     def _remove_recent_map_from_splash(path: str) -> None:
         remove_recent_map_path(path)
@@ -885,13 +924,40 @@ def show_splash_screen(
                 _bind_library_mousewheel_if_ready(recent_empty_note[0])
         _sync_library_scroll_after_row_change()
 
-    def _show_recent_map_menu(path: str, button) -> None:
-        _close_active_recent_menu()
+    def _library_row_menu_actions(button) -> tuple[tuple[str, object], ...]:
+        factory = getattr(button, "_cv_menu_actions_factory", None)
+        if factory is None:
+            return ()
+        try:
+            return tuple(factory() or ())
+        except Exception as exc:
+            _LOG.warning("could not build map-library row menu: %s", exc)
+            return ()
+
+    def _refresh_library_overflow_button(button) -> None:
+        has_actions = bool(_library_row_menu_actions(button))
+        button._cv_has_menu_actions = has_actions
+        button.config(
+            text=_LIBRARY_OVERFLOW_TEXT if has_actions else "",
+            fg=_LIBRARY_OVERFLOW_FG if has_actions else _PANEL_COLOR,
+            cursor="hand2" if has_actions else "arrow",
+            takefocus=has_actions,
+            highlightbackground=_PANEL_COLOR,
+            highlightcolor=_BUTTON_BORDER_COLOR if has_actions else _PANEL_COLOR,
+        )
+
+    def _show_library_row_menu(button) -> None:
+        _close_active_library_menu()
         if not _widget_exists(button):
             return
 
+        actions = _library_row_menu_actions(button)
+        if not actions:
+            _refresh_library_overflow_button(button)
+            return
+
         menu = tk.Toplevel(root)
-        active_recent_menu["window"] = menu
+        active_library_menu["window"] = menu
         menu.withdraw()
         menu.overrideredirect(True)
         menu.transient(root)
@@ -906,32 +972,39 @@ def show_splash_screen(
         )
         frame.pack()
 
-        def remove_and_close() -> None:
-            _close_active_recent_menu()
-            _remove_recent_map_from_splash(path)
+        first_item = [None]
+        for item_text, item_action in actions:
 
-        item = tk.Label(
-            frame,
-            text="Remove from Recent",
-            font=_SMALL_FONT,
-            bg=_LIBRARY_MENU_BG,
-            fg=_LIBRARY_MENU_TEXT,
-            padx=px(12),
-            pady=px(7),
-            cursor="hand2",
-            takefocus=True,
-            anchor="w",
-        )
-        _bind_activation(item, remove_and_close)
-        item.bind(
-            "<Enter>",
-            lambda _event: item.config(bg=_LIBRARY_MENU_HOVER_BG),
-        )
-        item.bind(
-            "<Leave>",
-            lambda _event: item.config(bg=_LIBRARY_MENU_BG),
-        )
-        item.pack(fill="x")
+            def invoke_and_close(action=item_action) -> None:
+                _close_active_library_menu()
+                action()
+
+            item = tk.Label(
+                frame,
+                text=item_text,
+                font=_SMALL_FONT,
+                bg=_LIBRARY_MENU_BG,
+                fg=_LIBRARY_MENU_TEXT,
+                padx=px(12),
+                pady=px(7),
+                cursor="hand2",
+                takefocus=True,
+                anchor="w",
+            )
+            _bind_activation(item, invoke_and_close)
+            item.bind(
+                "<Enter>",
+                lambda _event, target=item: target.config(
+                    bg=_LIBRARY_MENU_HOVER_BG
+                ),
+            )
+            item.bind(
+                "<Leave>",
+                lambda _event, target=item: target.config(bg=_LIBRARY_MENU_BG),
+            )
+            item.pack(fill="x")
+            if first_item[0] is None:
+                first_item[0] = item
 
         try:
             x = button.winfo_rootx()
@@ -939,35 +1012,40 @@ def show_splash_screen(
             menu.geometry(f"+{x}+{y}")
             menu.deiconify()
             menu.lift()
-            item.focus_set()
+            if first_item[0] is not None:
+                first_item[0].focus_set()
         except tk.TclError:
-            _close_active_recent_menu()
+            _close_active_library_menu()
             return
 
-        menu.bind("<Escape>", lambda _event: _close_active_recent_menu())
+        menu.bind("<Escape>", lambda _event: _close_active_library_menu())
         menu.bind(
             "<FocusOut>",
-            lambda _event: root.after(80, _close_active_recent_menu),
+            lambda _event: root.after(80, _close_active_library_menu),
         )
 
-    def _create_recent_overflow_button(parent, path: str):
+    def _create_library_overflow_button(parent, menu_actions_factory=None):
         button = tk.Label(
             parent,
-            text=_LIBRARY_OVERFLOW_TEXT,
+            text="",
             font=_LIBRARY_OVERFLOW_FONT,
             bg=_PANEL_COLOR,
-            fg=_LIBRARY_OVERFLOW_FG,
+            fg=_PANEL_COLOR,
             width=2,
             padx=0,
             pady=0,
-            cursor="hand2",
-            takefocus=True,
+            cursor="arrow",
+            takefocus=False,
             highlightthickness=1,
             highlightbackground=_PANEL_COLOR,
-            highlightcolor=_BUTTON_BORDER_COLOR,
+            highlightcolor=_PANEL_COLOR,
         )
+        button._cv_menu_actions_factory = menu_actions_factory
+        button._cv_has_menu_actions = False
 
         def show_hover(_event=None) -> None:
+            if not getattr(button, "_cv_has_menu_actions", False):
+                return
             button.config(
                 bg=_LIBRARY_OVERFLOW_HOVER_BG,
                 fg=_LIBRARY_OVERFLOW_HOVER_FG,
@@ -975,24 +1053,41 @@ def show_splash_screen(
             )
 
         def clear_hover(_event=None) -> None:
+            if not getattr(button, "_cv_has_menu_actions", False):
+                button.config(
+                    bg=_PANEL_COLOR,
+                    fg=_PANEL_COLOR,
+                    highlightbackground=_PANEL_COLOR,
+                )
+                return
             button.config(
                 bg=_PANEL_COLOR,
                 fg=_LIBRARY_OVERFLOW_FG,
                 highlightbackground=_PANEL_COLOR,
             )
 
-        _bind_activation(button, lambda: _show_recent_map_menu(path, button))
+        _bind_activation(button, lambda: _show_library_row_menu(button))
         button.bind("<Enter>", show_hover)
         button.bind("<Leave>", clear_hover)
         button.pack(side="left", padx=(px(6), 0), pady=px(5))
+        _refresh_library_overflow_button(button)
         return button
 
     def _open_sample_map_from_splash(sample) -> None:
         sample_path = (
-            downloaded_sample_paths.get(_sample_map_key(sample))
+            _downloaded_sample_map_path(sample)
             or existing_sample_map_path(sample_maps_root_dir, sample)
         )
         _open_library_map_from_splash(sample_path)
+
+    def _downloaded_sample_map_path(sample) -> str | None:
+        sample_key = _sample_map_key(sample)
+        result_path = downloaded_sample_paths.get(sample_key)
+        if result_path:
+            return result_path
+        if is_sample_map_already_downloaded(sample_maps_root_dir, sample):
+            return existing_sample_map_path(sample_maps_root_dir, sample)
+        return None
 
     def _set_available_sample_action(
         sample,
@@ -1017,6 +1112,8 @@ def show_splash_screen(
             _set_library_row_metadata(
                 sample, _sample_map_status_text(sample, downloaded=True)
             )
+            if _widget_exists(widgets.leading_widget):
+                _refresh_library_overflow_button(widgets.leading_widget)
             return
         _set_library_action_button(
             widgets.action_button,
@@ -1024,6 +1121,8 @@ def show_splash_screen(
             lambda s=sample: _on_sample_map_action(s),
             enabled=enabled,
         )
+        if _widget_exists(widgets.leading_widget):
+            _refresh_library_overflow_button(widgets.leading_widget)
 
     def _set_non_active_sample_actions_enabled(
         active_sample, enabled: bool
@@ -1508,7 +1607,7 @@ def show_splash_screen(
         action,
         reserve_metadata: bool = False,
         reserve_progress: bool = False,
-        leading_widget_factory=None,
+        menu_actions_factory=None,
     ) -> _MapLibraryRowWidgets:
         row_shell = tk.Frame(
             parent,
@@ -1520,8 +1619,10 @@ def show_splash_screen(
         row_content = tk.Frame(row_shell, bg=_PANEL_COLOR)
         row_content.pack(fill="x")
 
-        if leading_widget_factory is not None:
-            leading_widget_factory(row_content)
+        leading_widget = _create_library_overflow_button(
+            row_content,
+            menu_actions_factory,
+        )
 
         text_column = tk.Frame(row_content, bg=_PANEL_COLOR)
         text_column.pack(
@@ -1608,6 +1709,7 @@ def show_splash_screen(
             )
         return _MapLibraryRowWidgets(
             row_shell=row_shell,
+            leading_widget=leading_widget,
             action_button=action_button,
             metadata_label=metadata_label,
             progress_bar_canvas=progress_bar_canvas,
@@ -1616,24 +1718,61 @@ def show_splash_screen(
 
     def _create_recent_map_row(parent, path: str) -> None:
         normalized = _recent_map_key(path)
+        row_widgets = None
+        title = _map_library_recent_title(path)
+
+        def menu_actions(path=path, title=title):
+            actions = [
+                (
+                    "Remove from this list",
+                    lambda path=path: _remove_recent_map_from_splash(path),
+                )
+            ]
+            if has_managed_map_cache(path):
+                actions.append(
+                    (
+                        "Remove cache",
+                        lambda path=path, title=title: _remove_map_cache_from_splash(
+                            path,
+                            title,
+                            row_widgets,
+                        ),
+                    )
+                )
+            return tuple(actions)
+
         row_widgets = _create_map_library_row(
             parent,
-            title=_map_library_recent_title(path),
+            title=title,
             detail=_map_library_recent_detail_text(path),
             size_text="",
             action_text="Open",
             action=lambda path=path: _open_library_map_from_splash(path),
-            leading_widget_factory=(
-                lambda row_parent, path=path: _create_recent_overflow_button(
-                    row_parent,
-                    path,
-                )
-            ),
+            menu_actions_factory=menu_actions,
         )
         recent_map_rows[normalized] = row_widgets
 
     def _create_available_map_row(parent, sample) -> None:
         downloaded = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
+        row_widgets = None
+
+        def menu_actions(sample=sample):
+            sample_path = _downloaded_sample_map_path(sample)
+            if sample_path is None or not has_managed_map_cache(sample_path):
+                return ()
+            return (
+                (
+                    "Remove cache",
+                    lambda sample_path=sample_path, sample=sample: (
+                        _remove_map_cache_from_splash(
+                            sample_path,
+                            sample.display_name,
+                            row_widgets,
+                        )
+                    ),
+                ),
+            )
+
         row_widgets = _create_map_library_row(
             parent,
             title=sample.display_name,
@@ -1643,6 +1782,7 @@ def show_splash_screen(
             action=lambda sample=sample: _on_sample_map_action(sample),
             reserve_metadata=True,
             reserve_progress=True,
+            menu_actions_factory=menu_actions,
         )
         sample_map_rows[_sample_map_key(sample)] = row_widgets
 

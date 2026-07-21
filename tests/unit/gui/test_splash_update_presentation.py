@@ -295,13 +295,20 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "_start_sample_catalog_fetch()" in source
 
 
-def test_recent_map_rows_use_subtle_overflow_menu_for_removal():
+def test_map_library_rows_use_subtle_overflow_menu_for_management():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
-    assert "Remove from Recent" in source
-    assert "_create_recent_overflow_button" in source
-    assert "leading_widget_factory=" in source
+    assert "Remove from this list" in source
+    assert "Remove cache" in source
+    assert "Remove from Recent" not in source
+    assert "_create_library_overflow_button" in source
+    assert "_create_recent_overflow_button" not in source
+    assert "menu_actions_factory=" in source
+    assert "leading_widget_factory=" not in source
+    assert "leading_widget=leading_widget" in source
     assert "remove_recent_map_path(path)" in source
+    assert "has_managed_map_cache(path)" in source
+    assert "remove_managed_map_cache(path)" in source
     assert "recent_container = tk.Frame(rows_frame" in source
     assert "recent_rows_container[0] = recent_container" in source
     assert "recent_empty_note[0] = _create_map_library_empty_note" in source
