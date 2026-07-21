@@ -77,7 +77,6 @@ _STARTUP_UPLOAD_CHUNKS_PER_FRAME = 4
 _STARTUP_UPLOAD_OPERATIONS_PER_CHUNK = 8
 _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
 _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
-_IMPORT_PROGRESS_RENDER_INTERVAL_S = 1.0 / 30.0
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
 
 
@@ -3901,10 +3900,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         """
         Return true when a low-value render state should draw this callback.
 
-        Some early-return states, such as a minimized window or an import
-        progress panel, do not need full-speed rendering.  Use timestamp gates
-        rather than sleeping in the render callback so the backend/UI thread
-        remains available for window events and queued task results.
+        Some early-return states, such as a minimized window, do not need
+        full-speed work. Use timestamp gates rather than sleeping in the render
+        callback so the backend/UI thread remains available for window events
+        and queued task results.
         """
         due_at = getattr(self, "_render_throttle_due_at", None)
         if due_at is None:
@@ -3961,16 +3960,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self._startup_focus_enabled:
             self._request_startup_focus_once()
 
-        # Background import in flight: drain worker results on every callback,
-        # but redraw the progress panel at a capped rate so the window remains
-        # responsive without blocking the render/window callback.
+        # Background import in flight: drain worker results on every callback
+        # and redraw the progress panel every callback. Window backends may
+        # still present/swap after this method returns, so skipping draws here
+        # can expose stale back buffers as visible flicker during first-time
+        # imports.
         if self._import_active:
             self._drain_import_queue()
             if not self._import_active:
-                return
-            if not self._render_throttle_due(
-                "import_progress", _IMPORT_PROGRESS_RENDER_INTERVAL_S
-            ):
                 return
             self.ctx.clear(0.02, 0.02, 0.03)
             fraction = self._import_progress_fraction

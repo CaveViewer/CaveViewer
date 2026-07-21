@@ -1918,12 +1918,10 @@ def test_iconified_render_throttles_polling_without_sleep(monkeypatch):
     assert drains == ["drain", "drain"]
 
 
-def test_import_progress_render_is_throttled_without_sleep(monkeypatch):
-    ticks = iter([20.0, 20.01, 20.04])
+def test_import_progress_render_draws_every_callback_without_sleep(monkeypatch):
     clear_calls = []
     drain_calls = []
     render_calls = []
-    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
     monkeypatch.setattr(
         viewer_window.time,
         "sleep",
@@ -1965,8 +1963,13 @@ def test_import_progress_render_is_throttled_without_sleep(monkeypatch):
     window.on_render(0.0, 0.0)
 
     assert drain_calls == ["drain", "drain", "drain"]
-    assert clear_calls == [(0.02, 0.02, 0.03), (0.02, 0.02, 0.03)]
+    assert clear_calls == [
+        (0.02, 0.02, 0.03),
+        (0.02, 0.02, 0.03),
+        (0.02, 0.02, 0.03),
+    ]
     assert render_calls == [
+        ((800, 600), "cave.obj", "building cache", 0.5, "", ""),
         ((800, 600), "cave.obj", "building cache", 0.5, "", ""),
         ((800, 600), "cave.obj", "building cache", 0.5, "", ""),
     ]
