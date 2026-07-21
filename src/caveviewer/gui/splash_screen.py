@@ -29,16 +29,12 @@ manual handling only when a splash is visible.
 from __future__ import annotations
 
 import enum
-import json
 import os
 import queue
-import re
 import sys
 import threading
 from dataclasses import dataclass
 
-from caveviewer.core.chunking.staging import MANIFEST_NAME as _CACHE_MANIFEST_NAME
-from caveviewer.core.map.source_model import find_model_file as _find_model_file
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.preferences import (
@@ -58,6 +54,7 @@ from caveviewer.gui.map_cache_management import (
     remove_managed_map_cache,
 )
 from caveviewer.gui.map_history import load_recent_map_paths, remove_recent_map_path
+from caveviewer.gui.map_library import recent_map_entry, recent_map_key
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
@@ -210,10 +207,6 @@ _LIBRARY_PROGRESS_TOP_PAD = 5
 _LIBRARY_ACTION_BUTTON_WIDTH = 8
 _LIBRARY_ACTION_BUTTON_PAD_X = 10
 _LIBRARY_ACTION_BUTTON_PAD_Y = 5
-_LIBRARY_RECENT_TITLE_MANIFEST_SCAN_BYTES = 64 * 1024
-_LIBRARY_RECENT_SOURCE_OBJ_PATTERN = re.compile(
-    r'"source_obj"\s*:\s*"((?:\\.|[^"\\])*)"'
-)
 _LIBRARY_OVERFLOW_TEXT = "⋮"
 _LIBRARY_OVERFLOW_FONT = (_UI_FONT_FAMILY, 14, "bold")
 _LIBRARY_OVERFLOW_FG = "#606370"
@@ -401,102 +394,6 @@ def _sample_map_splash_size_text(sample) -> str:
     if size_bytes:
         return f"{size_bytes / (1024 * 1024):.0f} MB"
     return _SAMPLE_MAP_SIZE_LABELS.get(getattr(sample, "asset_name", ""), "")
-
-
-def _map_library_recent_detail_text(path: str) -> str:
-    del path
-    return ""
-
-
-def _map_library_recent_title(path: str) -> str:
-    source_title = _map_library_recent_source_title(path)
-    if source_title:
-        return source_title
-    normalized = os.path.normpath(os.path.abspath(path))
-    return os.path.basename(normalized) or normalized
-
-
-def _map_library_recent_source_title(path: str) -> str | None:
-    """
-    Return a user-facing source model title for a recent-map entry.
-
-    Normal recent entries point at the original selected map folder. Older
-    builds could accidentally persist the managed cache directory instead; for
-    those stale entries, recover the original source filename from the cache
-    manifest without reading the full potentially-large manifest.
-    """
-    source_path = _map_library_recent_source_path(path)
-    if source_path:
-        title = _title_from_source_name(source_path)
-        if title:
-            return title
-    return _map_library_recent_cache_manifest_title(path)
-
-
-def _map_library_recent_source_path(path: str) -> str | None:
-    try:
-        descriptor = _find_model_file(path)
-    except (FileNotFoundError, OSError, TypeError, ValueError):
-        return None
-    source_path = descriptor.get("obj_path") or descriptor.get("glb_path")
-    return source_path if isinstance(source_path, str) else None
-
-
-def _map_library_recent_cache_manifest_title(path: str) -> str | None:
-    try:
-        manifest_path = os.path.join(
-            os.path.abspath(os.path.expanduser(path)),
-            _CACHE_MANIFEST_NAME,
-        )
-        if not os.path.isfile(manifest_path):
-            return None
-        with open(manifest_path, "rb") as file_obj:
-            payload = file_obj.read(_LIBRARY_RECENT_TITLE_MANIFEST_SCAN_BYTES)
-        text = payload.decode("utf-8", errors="replace")
-        match = _LIBRARY_RECENT_SOURCE_OBJ_PATTERN.search(text)
-        if not match:
-            return None
-        source_name = json.loads(f'"{match.group(1)}"')
-    except Exception:
-        return None
-    if not isinstance(source_name, str):
-        return None
-    return _title_from_source_name(source_name)
-
-
-def _title_from_source_name(source_name: str) -> str:
-    basename = os.path.basename(source_name.strip())
-    stem, _extension = os.path.splitext(basename)
-    return (stem or basename).strip()
-
-
-def _compact_map_library_path(path: str, *, max_chars: int = 44) -> str:
-    expanded = os.path.abspath(os.path.expanduser(path.strip() or "~"))
-    home = os.path.abspath(os.path.expanduser("~"))
-    if expanded == home:
-        display = "~"
-    elif expanded.startswith(home + os.sep):
-        display = "~" + expanded[len(home):]
-    else:
-        display = expanded
-    if len(display) <= max_chars:
-        return display
-
-    drive, tail = os.path.splitdrive(display)
-    parts = [part for part in tail.split(os.sep) if part]
-    if len(parts) >= 2:
-        suffix = os.sep.join(parts[-2:])
-        prefix = (
-            "~"
-            if display.startswith("~" + os.sep)
-            else drive + os.sep
-            if drive
-            else os.sep
-        )
-        compact = prefix + "…" + os.sep + suffix
-        if len(compact) <= max_chars:
-            return compact
-    return "…" + display[-(max_chars - 1):]
 
 
 def show_splash_screen(
@@ -961,12 +858,6 @@ def show_splash_screen(
         _save_last_browse_dir(path)
         _leave_splash()
 
-    def _recent_map_key(path: str) -> str:
-        try:
-            return os.path.normcase(os.path.abspath(os.path.expanduser(path)))
-        except (OSError, TypeError, ValueError):
-            return str(path)
-
     def _close_active_library_menu() -> None:
         menu = active_library_menu.get("window")
         active_library_menu["window"] = None
@@ -1093,11 +984,11 @@ def show_splash_screen(
 
     def _remove_recent_map_from_splash(path: str) -> None:
         remove_recent_map_path(path)
-        normalized = _recent_map_key(path)
+        normalized = recent_map_key(path)
         recent_map_paths[:] = [
             recent_path
             for recent_path in recent_map_paths
-            if _recent_map_key(recent_path) != normalized
+            if recent_map_key(recent_path) != normalized
         ]
         row_widgets = recent_map_rows.pop(normalized, None)
         if row_widgets is not None and _widget_exists(row_widgets.row_shell):
@@ -1910,9 +1801,10 @@ def show_splash_screen(
         )
 
     def _create_recent_map_row(parent, path: str) -> None:
-        normalized = _recent_map_key(path)
+        entry = recent_map_entry(path)
+        normalized = entry.key
         row_widgets = None
-        title = _map_library_recent_title(path)
+        title = entry.title
 
         def menu_actions(path=path, title=title):
             actions = [
@@ -1937,7 +1829,7 @@ def show_splash_screen(
         row_widgets = _create_map_library_row(
             parent,
             title=title,
-            detail=_map_library_recent_detail_text(path),
+            detail=entry.detail,
             size_text="",
             action_text="Open",
             action=lambda path=path: _open_library_map_from_splash(path),

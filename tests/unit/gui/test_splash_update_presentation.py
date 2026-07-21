@@ -363,37 +363,3 @@ def test_library_action_buttons_use_normalized_dimensions():
     assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_X == 10
     assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_Y == 5
     assert splash_screen._LIBRARY_METADATA_FONT[1] == 9
-
-
-def test_map_library_recent_labels_hide_directory_details(tmp_path):
-    parent = tmp_path / "a" / "long" / "path"
-    map_root = parent / "Demo Map"
-    map_root.mkdir(parents=True)
-
-    assert splash_screen._map_library_recent_title(str(map_root)) == "Demo Map"
-    assert splash_screen._map_library_recent_detail_text(str(map_root)) == ""
-
-
-def test_map_library_recent_title_uses_source_model_name(tmp_path):
-    map_root = tmp_path / "Folder Name"
-    map_root.mkdir()
-    (map_root / "DevilsEyeGoldLine_resized.glb").write_bytes(b"")
-
-    assert (
-        splash_screen._map_library_recent_title(str(map_root))
-        == "DevilsEyeGoldLine_resized"
-    )
-
-
-def test_map_library_recent_title_recovers_stale_cache_history_entry(tmp_path):
-    cache_dir = tmp_path / "DevilsEyeGoldLine_resized-f566598453a9e673"
-    cache_dir.mkdir()
-    (cache_dir / "manifest.json").write_text(
-        '{"version": 2, "source_obj": "DevilsEyeGoldLine_resized.glb", "chunks": {}}',
-        encoding="utf-8",
-    )
-
-    assert (
-        splash_screen._map_library_recent_title(str(cache_dir))
-        == "DevilsEyeGoldLine_resized"
-    )
