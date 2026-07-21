@@ -276,6 +276,36 @@ def test_existing_path_supports_legacy_sibling_location(tmp_path):
     assert sample_maps.existing_sample_map_path(str(tmp_path), sample) == str(legacy)
 
 
+def test_app_supplied_sample_map_path_matches_managed_library_only(
+    tmp_path, monkeypatch
+):
+    caveviewer_home = tmp_path / "caveviewer-home"
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(caveviewer_home))
+    sample = sample_maps.KNOWN_SAMPLE_MAPS[0]
+    managed_library_path = (
+        caveviewer_home
+        / "data"
+        / sample_maps.MAP_LIBRARY_DIRNAME
+        / sample.display_name
+    )
+    legacy_sample_path = (
+        caveviewer_home
+        / "data"
+        / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+        / sample.display_name
+    )
+    unrelated_user_path = (
+        tmp_path
+        / "user-maps"
+        / sample_maps.MAP_LIBRARY_DIRNAME
+        / sample.display_name
+    )
+
+    assert sample_maps.is_app_supplied_sample_map_path(managed_library_path)
+    assert sample_maps.is_app_supplied_sample_map_path(legacy_sample_path)
+    assert not sample_maps.is_app_supplied_sample_map_path(unrelated_user_path)
+
+
 def test_folder_contents_handles_directory_read_error(tmp_path, monkeypatch):
     folder = tmp_path / "map"
     folder.mkdir()

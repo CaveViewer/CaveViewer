@@ -389,11 +389,66 @@ def existing_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
     return path
 
 
+def is_app_supplied_sample_map_path(
+    path: str | os.PathLike[str], install_dir: str | os.PathLike[str] | None = None
+) -> bool:
+    """
+    Return whether `path` is one of CaveViewer's known app-library sample maps.
+
+    Recent maps should reflect user-opened maps, not the curated sample maps
+    already listed in the Map Library's Available Maps section.  Compare exact
+    managed-library and legacy sample-map folder locations so similarly named
+    user maps elsewhere on disk still remain eligible for history.
+    """
+    normalized = _normalized_path_for_compare(path)
+    if normalized is None:
+        return False
+
+    for candidate in _app_supplied_sample_map_path_candidates(install_dir):
+        candidate_normalized = _normalized_path_for_compare(candidate)
+        if candidate_normalized is not None and normalized == candidate_normalized:
+            return True
+    return False
+
+
 def _folder_has_contents(path: str) -> bool:
     try:
         return os.path.isdir(path) and len(os.listdir(path)) > 0
     except OSError:
         return False
+
+
+def _app_supplied_sample_map_path_candidates(
+    install_dir: str | os.PathLike[str] | None = None,
+) -> list[str]:
+    if install_dir is None:
+        data_dir = resolve_application_paths().data_dir
+        roots = (
+            data_dir,
+            data_dir / MAP_LIBRARY_DIRNAME,
+            data_dir / _LEGACY_SAMPLE_MAPS_DIRNAME,
+        )
+    else:
+        roots = (Path(_install_dir_path(install_dir)),)
+
+    candidates: list[str] = []
+    for root in roots:
+        root_path = os.fspath(root)
+        for sample in KNOWN_SAMPLE_MAPS:
+            candidates.append(local_sample_map_path(root_path, sample))
+            candidates.extend(_legacy_sample_map_paths(root_path, sample))
+    return candidates
+
+
+def _normalized_path_for_compare(path: str | os.PathLike[str]) -> str | None:
+    try:
+        if not path:
+            return None
+        return os.path.normcase(
+            os.path.abspath(os.path.expanduser(os.fspath(path)))
+        )
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 def _legacy_sample_map_paths(install_dir: str, sample: SampleMapInfo) -> list[str]:

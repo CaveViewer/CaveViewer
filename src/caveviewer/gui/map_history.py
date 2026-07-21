@@ -6,6 +6,7 @@ import json
 import os
 
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
+from caveviewer.gui.sample_maps import is_app_supplied_sample_map_path
 
 
 def _recent_map_paths_file() -> str:
@@ -40,7 +41,11 @@ def load_recent_map_paths() -> list[str]:
         if not isinstance(raw_path, str):
             continue
         normalized = _normalized_existing_directory(raw_path)
-        if normalized is None or normalized in seen:
+        if (
+            normalized is None
+            or normalized in seen
+            or is_app_supplied_sample_map_path(normalized)
+        ):
             continue
         paths.append(normalized)
         seen.add(normalized)
@@ -50,7 +55,7 @@ def load_recent_map_paths() -> list[str]:
 def remember_recent_map_path(path: str) -> None:
     """Persist a successfully opened map folder as the newest recent map."""
     normalized = _normalized_existing_directory(path)
-    if normalized is None:
+    if normalized is None or is_app_supplied_sample_map_path(normalized):
         return
 
     paths = [

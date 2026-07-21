@@ -123,7 +123,7 @@ def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):
     assert splash_screen._load_last_browse_dir() == str(map_root)
 
 
-def test_library_recent_maps_merge_last_browse_and_recent_history(
+def test_library_recent_maps_use_open_history_not_last_browse(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(sys, "platform", "linux")
@@ -136,12 +136,8 @@ def test_library_recent_maps_merge_last_browse_and_recent_history(
 
     splash_screen._save_last_browse_dir(str(last_map))
     map_history.remember_recent_map_path(str(recent_map))
-    map_history.remember_recent_map_path(str(last_map))
 
-    assert splash_screen._load_library_recent_map_paths() == [
-        str(last_map),
-        str(recent_map),
-    ]
+    assert splash_screen._load_library_recent_map_paths() == [str(recent_map)]
 
 
 def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):

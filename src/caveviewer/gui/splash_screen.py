@@ -1781,7 +1781,7 @@ def _save_last_browse_dir(path: str) -> None:
 def _load_library_recent_map_paths() -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
-    for path in [_load_last_browse_dir(), *load_recent_map_paths()]:
+    for path in load_recent_map_paths():
         if not path:
             continue
         try:
