@@ -229,9 +229,17 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         """On macOS, use Command key for bookmark saving."""
         return "command"
 
+    def primary_shortcut_modifier_label(self) -> str:
+        """Show macOS app shortcuts with the platform-native Command label."""
+        return "Cmd"
+
     def mouse_look_button_name(self) -> str:
         """On macOS, use right-click for camera look (Option+left-click is also available)."""
         return "right"
+
+    def compact_manual_controls_layout(self) -> bool:
+        """Keep the macOS manual controls overlay at the roomier layout."""
+        return False
 
     def font_candidates(self) -> list[str]:
         """Return macOS-specific font file paths in priority order.
