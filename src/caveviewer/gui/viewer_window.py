@@ -1981,10 +1981,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._mouse_look_left_option_active = False
         self._last_mouse_pos = None
 
-        # Drop any in-flight import state so the worker thread's queue
-        # and manifest don't stay referenced after the window closes.
-        # The worker thread is daemon=True so it is killed on process exit;
-        # dropping these refs ensures they are GC'd promptly.
+        # on_close() asks the import controller to stop any active import before
+        # resource teardown. Drop remaining refs here so detached fallback
+        # messages cannot be applied after the window closes.
         self._import_active = False
         self._import_queue = None
         self._import_thread = None
@@ -5283,6 +5282,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _cancel_active_import(self) -> None:
         self._ensure_import_controller().cancel_active_import()
 
+    def _shutdown_active_import(self) -> None:
+        self._ensure_import_controller().shutdown()
+
     def on_close(self):
         if self._closing_requested:
             return
@@ -5295,7 +5297,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 pass
 
         if getattr(self, "_import_active", False):
-            self._cancel_active_import()
+            self._shutdown_active_import()
 
         if self._has_map_loaded:
             self._teardown_current_map(final_shutdown=True)

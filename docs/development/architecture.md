@@ -39,11 +39,15 @@ child process owns parsing, cache construction, texture staging, and cache
 publication. Progress, completion, and traceback-bearing failure events cross
 back to the viewer through a process queue. This keeps desktop event loops
 responsive during CPU-heavy imports and isolates import crashes from the UI
-process. The child emits heartbeat events with the current stage and RAM
-snapshot while it is working, runs at reduced desktop priority, and caps common
-native compute-library thread counts before importing NumPy-heavy modules.
-Parent-side cancellation or abnormal child exit cleans abandoned private
-staging directories for the target cache.
+process. Viewer shutdown asks the parent-side relay worker to stop, waits for a
+short bounded interval, terminates any reachable active child process, and then
+ignores late import messages so closed windows cannot apply stale completion
+events. The child emits heartbeat events with the current stage and RAM snapshot
+while it is working, runs at reduced desktop priority, and caps common native
+compute-library thread counts before importing NumPy-heavy modules.
+Parent-side cancellation, shutdown, or abnormal child exit cleans abandoned
+private staging directories for the target cache when the child is no longer
+alive.
 
 Import preflight is intentionally early. OBJ imports count vertices, UVs,
 normals, and triangulated faces before allocating large arrays; that count is

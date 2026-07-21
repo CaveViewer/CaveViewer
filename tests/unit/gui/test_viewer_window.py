@@ -2364,3 +2364,28 @@ def test_cancel_active_import_does_not_wait_for_live_import_thread(monkeypatch):
     assert import_thread.join_calls == []
     assert import_thread.is_alive()
     assert calls == []
+
+
+def test_on_close_shutdowns_active_import_before_releasing_resources():
+    calls = []
+
+    class FakeImportController:
+        active = True
+
+        def shutdown(self):
+            calls.append("shutdown_import")
+            self.active = False
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.__dict__["_import_controller"] = FakeImportController()
+    window._closing_requested = False
+    window._has_map_loaded = False
+    window._release_window_resources = lambda: calls.append("release_resources")
+    window.wnd = SimpleNamespace(
+        mouse_exclusivity=True,
+        close=lambda: calls.append("close_window"),
+    )
+
+    window.on_close()
+
+    assert calls == ["shutdown_import", "release_resources", "close_window"]

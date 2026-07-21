@@ -24,6 +24,7 @@ from caveviewer.core.map import cache_paths
 
 _IMPORT_EVENT_POLL_SECONDS = 0.25
 _IMPORT_HEARTBEAT_LOG_SECONDS = 30.0
+_IMPORT_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _IMPORT_STALE_LOG_SECONDS = 30.0
 
 
@@ -75,6 +76,7 @@ class MapImportController:
         self.pause_notice_title: str = "Import paused"
         self.pause_notice_stage: str = "resume point saved"
         self.pause_notice_note: str = ""
+        self._shutdown_requested: bool = False
 
     @property
     def log(self):
@@ -201,6 +203,7 @@ class MapImportController:
             self.log.warning("Import already in progress; ignoring duplicate start request.")
             return
         self.active = True
+        self._shutdown_requested = False
         self.is_startup = is_startup
         self.map_name = map_name
         self.progress_stage = "starting import"
@@ -261,7 +264,11 @@ class MapImportController:
                 finish_console_progress_line()
                 event_queue.put(("error", str(exc), ""))
 
-        self.thread = threading.Thread(target=worker, daemon=True)
+        self.thread = threading.Thread(
+            target=worker,
+            name="CaveViewer-import-relay",
+            daemon=True,
+        )
         self.thread.start()
 
     def _relay_child_import_events(
@@ -392,6 +399,10 @@ class MapImportController:
         """Drain import worker messages on the render thread."""
         if self.event_queue is None:
             return
+        if self._shutdown_requested:
+            self._discard_queued_events()
+            self._clear_active_references()
+            return
         while True:
             try:
                 msg = self.event_queue.get_nowait()
@@ -488,6 +499,16 @@ class MapImportController:
         self.model_format = None
         self.resuming_from_checkpoint = False
 
+    def _discard_queued_events(self) -> None:
+        event_queue = self.event_queue
+        if event_queue is None:
+            return
+        while True:
+            try:
+                event_queue.get_nowait()
+            except queue_module.Empty:
+                return
+
     def _close_window_if_possible(self) -> None:
         window = getattr(self._owner, "wnd", None)
         if hasattr(window, "close"):
@@ -519,6 +540,48 @@ class MapImportController:
 
     def cancel_active_import(self) -> None:
         """Signal a running import to stop without blocking the GUI thread."""
+        self._request_import_stop(process_timeout=0.0, log_live_relay=True)
+
+    def shutdown(
+        self,
+        *,
+        wait: bool = True,
+        timeout: float = _IMPORT_SHUTDOWN_TIMEOUT_SECONDS,
+    ) -> None:
+        """Stop any active import and optionally wait briefly for relay cleanup."""
+        self._shutdown_requested = True
+        process_timeout = timeout if wait else 0.0
+        self._request_import_stop(
+            process_timeout=process_timeout,
+            log_live_relay=False,
+        )
+
+        thread = self.thread
+        if wait and thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                process = self.process
+                if process is not None:
+                    self._terminate_import_process()(
+                        process,
+                        timeout=0.0,
+                        cache_dir=self.cache_dir,
+                    )
+                self.log.warning(
+                    "Import shutdown timed out after %.1fs; relay worker will "
+                    "remain detached while the application exits.",
+                    timeout,
+                )
+
+        self._discard_queued_events()
+        self._clear_active_references()
+
+    def _request_import_stop(
+        self,
+        *,
+        process_timeout: float,
+        log_live_relay: bool,
+    ) -> None:
         if self.stop_event is not None:
             self.stop_event.set()
 
@@ -526,10 +589,10 @@ class MapImportController:
         if self.process is not None and not thread_alive:
             self._terminate_import_process()(
                 self.process,
-                timeout=0.0,
+                timeout=process_timeout,
                 cache_dir=self.cache_dir,
             )
-        elif thread_alive:
+        elif thread_alive and log_live_relay:
             self.log.info(
                 "Import cancellation requested; relay worker will terminate "
                 "the child process."
