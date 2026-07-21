@@ -5,6 +5,8 @@ from __future__ import annotations
 import glob
 import os
 
+from caveviewer.core.map import source_model
+
 
 def has_precompiled_cache(folder: str) -> bool:
     try:
@@ -25,17 +27,14 @@ def validate_selected_map_folder(folder: str) -> tuple[bool, str]:
     obj_candidates = glob.glob(os.path.join(folder, "*.obj"))
     if obj_candidates:
         obj_path = obj_candidates[0]
-        mtl_name = None
         try:
-            with open(obj_path, "r", errors="replace") as file_obj:
-                for line in file_obj:
-                    if line.startswith("mtllib "):
-                        mtl_name = line.split(maxsplit=1)[1].strip()
-                        break
-        except Exception:
-            pass
+            mtl_path = source_model.find_declared_material_file_for_obj(obj_path)
+        except ValueError as exc:
+            return False, f"{exc}\n\nSelect a map folder with materials inside it."
+        except OSError:
+            mtl_path = None
 
-        if mtl_name and os.path.exists(os.path.join(folder, mtl_name)):
+        if mtl_path:
             return True, ""
         if glob.glob(os.path.join(folder, "*.mtl")):
             return True, ""
