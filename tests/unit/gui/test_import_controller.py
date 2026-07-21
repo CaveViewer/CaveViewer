@@ -186,3 +186,31 @@ def test_drain_queue_ignores_late_messages_after_shutdown():
     assert loaded == []
     assert controller.active is False
     assert controller.event_queue is None
+
+
+def test_done_message_loads_map_with_original_source_dir():
+    manifest = {"chunks": {}}
+    loaded = []
+    owner = SimpleNamespace(
+        load_new_map=lambda *args, **kwargs: loaded.append((args, kwargs))
+    )
+    controller, _logger, _calls = _controller()
+    controller._owner = owner
+    controller._chunker = lambda: SimpleNamespace(
+        load_manifest=lambda _cache_dir: manifest
+    )
+    controller.active = True
+    controller.source_dir = "/maps/Original Cave"
+    controller.event_queue = queue.Queue()
+    controller.event_queue.put(("done", "/cache/cave", "/cache/cave"))
+
+    controller.drain_queue()
+
+    assert loaded == [
+        (
+            ("/cache/cave", "/cache/cave", manifest),
+            {"source_dir": "/maps/Original Cave"},
+        )
+    ]
+    assert controller.active is False
+    assert controller.source_dir is None

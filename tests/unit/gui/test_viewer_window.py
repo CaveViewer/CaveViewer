@@ -2211,20 +2211,67 @@ def test_drain_import_queue_loads_manifest_once_on_render_thread(monkeypatch):
     window._import_thread = object()
     window._import_process = object()
     window._import_cache_dir = "/cache/cave"
+    window._import_controller.source_dir = "/maps/cave"
     window._import_stop_event = viewer_window.threading.Event()
-    window.load_new_map = lambda cache_dir, textures_dir, loaded_manifest: loaded.append(
-        ("load", cache_dir, textures_dir, loaded_manifest)
-    )
+
+    def load_new_map(cache_dir, textures_dir, loaded_manifest, **kwargs):
+        loaded.append(("load", cache_dir, textures_dir, loaded_manifest, kwargs))
+
+    window.load_new_map = load_new_map
     window._import_queue.put(("done", "/cache/cave", "/textures/cave"))
 
     window._drain_import_queue()
 
     assert loaded == [
         ("manifest", "/cache/cave"),
-        ("load", "/cache/cave", "/textures/cave", manifest),
+        (
+            "load",
+            "/cache/cave",
+            "/textures/cave",
+            manifest,
+            {"source_dir": "/maps/cave"},
+        ),
     ]
     assert window._import_active is False
     assert window._import_queue is None
+
+
+def test_load_new_map_remembers_source_dir_instead_of_cache_dir(monkeypatch):
+    remembered = []
+    calls = []
+
+    from caveviewer.gui import map_history
+
+    monkeypatch.setattr(
+        map_history,
+        "remember_recent_map_path",
+        lambda path: remembered.append(path),
+    )
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._teardown_current_map = lambda: calls.append("teardown")
+    window._load_map = lambda cache_dir, textures_dir, manifest: calls.append(
+        ("load", cache_dir, textures_dir, manifest)
+    )
+
+    window.load_new_map(
+        "/cache/Generated-f566598453a9e673",
+        "/cache/Generated-f566598453a9e673",
+        {"chunks": {}},
+        source_dir="/maps/DevilsEyeGoldLine_resized",
+    )
+
+    assert calls == [
+        "teardown",
+        (
+            "load",
+            "/cache/Generated-f566598453a9e673",
+            "/cache/Generated-f566598453a9e673",
+            {"chunks": {}},
+        ),
+    ]
+    assert window._has_map_loaded is True
+    assert remembered == ["/maps/DevilsEyeGoldLine_resized"]
 
 
 def test_drain_import_queue_logs_actionable_error_without_traceback(monkeypatch):
