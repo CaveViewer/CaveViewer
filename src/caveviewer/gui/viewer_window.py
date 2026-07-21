@@ -2061,6 +2061,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._teardown_current_map()
         self._load_map(cache_dir, textures_dir, manifest)
         self._has_map_loaded = True
+        try:
+            from caveviewer.gui.map_history import remember_recent_map_path
+
+            remember_recent_map_path(textures_dir)
+        except Exception:
+            pass
 
     def _handle_open_button_click(self) -> None:
         """

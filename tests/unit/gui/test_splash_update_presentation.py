@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from caveviewer.gui import splash_screen
+from caveviewer.gui import map_history, splash_screen
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
 
@@ -120,6 +120,27 @@ def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):
     state_file = state_home / "caveviewer" / "last_browse_path"
     assert state_file.read_text(encoding="utf-8") == str(map_root)
     assert splash_screen._load_last_browse_dir() == str(map_root)
+
+
+def test_library_recent_maps_merge_last_browse_and_recent_history(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    state_home = tmp_path / "state"
+    last_map = tmp_path / "last-map"
+    recent_map = tmp_path / "recent-map"
+    last_map.mkdir()
+    recent_map.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    splash_screen._save_last_browse_dir(str(last_map))
+    map_history.remember_recent_map_path(str(recent_map))
+    map_history.remember_recent_map_path(str(last_map))
+
+    assert splash_screen._load_library_recent_map_paths() == [
+        str(last_map),
+        str(recent_map),
+    ]
 
 
 def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
@@ -236,6 +257,21 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "Download sample maps" not in source
 
 
+def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert "Map Library" in source
+    assert "Recent Maps" in source
+    assert "Available Maps" in source
+    assert "Open recent or available maps." in source
+    assert "Explore sample maps" not in source
+    assert "Scrollbar(" not in source
+    assert "content_canvas.configure(yscrollcommand=_set_library_scrollbar)" in source
+    assert 'content_scrollbar.pack(side="right", fill="y")' in source
+    assert "_bind_library_mousewheel(rows_frame)" in source
+    assert "recent_map_paths = _load_library_recent_map_paths()" in source
+
+
 def test_sample_map_splash_actions_are_compact():
     assert splash_screen._sample_map_splash_action_text(downloaded=True) == "Open"
     assert splash_screen._sample_map_splash_action_text(downloaded=False) == "Get"
@@ -247,3 +283,14 @@ def test_sample_map_splash_actions_are_compact():
         splash_screen._sample_map_splash_detail_text(downloaded=False)
         == "Available to download"
     )
+
+
+def test_map_library_recent_labels_are_compact(tmp_path):
+    parent = tmp_path / "a" / "long" / "path"
+    map_root = parent / "Demo Map"
+    map_root.mkdir(parents=True)
+
+    assert splash_screen._map_library_recent_title(str(map_root)) == "Demo Map"
+    detail = splash_screen._map_library_recent_detail_text(str(map_root))
+    assert detail
+    assert len(detail) <= 44

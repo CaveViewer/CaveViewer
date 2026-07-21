@@ -50,6 +50,7 @@ from caveviewer.gui.dpi_utils import (
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
+from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import DesktopServices, get_desktop_services, tk_root_options
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
@@ -166,6 +167,11 @@ _CREDITS_TEXT = (
     "BottomLine Projects Scientific Dive Team.\n"
     "Engineering and design by magic mr_v.\n\n"
     "Licensed under the GNU General Public License v3.0.\n")
+_LIBRARY_SCROLLBAR_WIDTH = 14
+_LIBRARY_SCROLL_THUMB_WIDTH = 5
+_LIBRARY_SCROLL_THUMB_MIN_HEIGHT = 36
+_LIBRARY_SCROLL_THUMB_COLOR = DARK_THEME.secondary_button_border
+_LIBRARY_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
 _LINUX_TK_SANS_FAMILIES = (
     "Adwaita Sans",
     "Cantarell",
@@ -320,6 +326,45 @@ def _sample_map_splash_action_text(downloaded: bool) -> str:
 
 def _sample_map_splash_detail_text(downloaded: bool) -> str:
     return "Installed locally" if downloaded else "Available to download"
+
+
+def _map_library_recent_detail_text(path: str) -> str:
+    parent = os.path.dirname(os.path.abspath(path))
+    return _compact_map_library_path(parent, max_chars=44)
+
+
+def _map_library_recent_title(path: str) -> str:
+    normalized = os.path.normpath(os.path.abspath(path))
+    return os.path.basename(normalized) or normalized
+
+
+def _compact_map_library_path(path: str, *, max_chars: int = 44) -> str:
+    expanded = os.path.abspath(os.path.expanduser(path.strip() or "~"))
+    home = os.path.abspath(os.path.expanduser("~"))
+    if expanded == home:
+        display = "~"
+    elif expanded.startswith(home + os.sep):
+        display = "~" + expanded[len(home):]
+    else:
+        display = expanded
+    if len(display) <= max_chars:
+        return display
+
+    drive, tail = os.path.splitdrive(display)
+    parts = [part for part in tail.split(os.sep) if part]
+    if len(parts) >= 2:
+        suffix = os.sep.join(parts[-2:])
+        prefix = (
+            "~"
+            if display.startswith("~" + os.sep)
+            else drive + os.sep
+            if drive
+            else os.sep
+        )
+        compact = prefix + "…" + os.sep + suffix
+        if len(compact) <= max_chars:
+            return compact
+    return "…" + display[-(max_chars - 1):]
 
 
 def show_splash_screen(
@@ -629,6 +674,7 @@ def show_splash_screen(
     from caveviewer.gui.sample_maps_dialog import show_sample_maps_dialog
 
     sample_maps_root_dir = default_sample_maps_install_dir()
+    recent_map_paths = _load_library_recent_map_paths()
 
     def _on_example_maps_click():
         result = show_sample_maps_dialog(
@@ -639,17 +685,22 @@ def show_splash_screen(
         )
         if result:
             selected_folder[0] = result
+            _save_last_browse_dir(result)
             _leave_splash()
 
-    def _open_sample_map_from_splash(sample) -> None:
-        sample_path = existing_sample_map_path(sample_maps_root_dir, sample)
-        is_valid, error_message = _validate_selected_map_folder(sample_path)
+    def _open_library_map_from_splash(path: str) -> None:
+        is_valid, error_message = _validate_selected_map_folder(path)
         if not is_valid:
             _show_invalid_map_feedback(error_message)
             return
 
-        selected_folder[0] = sample_path
+        selected_folder[0] = path
+        _save_last_browse_dir(path)
         _leave_splash()
+
+    def _open_sample_map_from_splash(sample) -> None:
+        sample_path = existing_sample_map_path(sample_maps_root_dir, sample)
+        _open_library_map_from_splash(sample_path)
 
     def _on_sample_map_action(sample) -> None:
         if is_sample_map_already_downloaded(sample_maps_root_dir, sample):
@@ -661,8 +712,37 @@ def show_splash_screen(
         button.bind("<Enter>", lambda _event: button.config(bg=_BUTTON_HOVER_BG))
         button.bind("<Leave>", lambda _event: button.config(bg=_BUTTON_BG))
 
-    def _create_sample_map_row(parent, sample) -> None:
-        downloaded = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
+    def _create_map_library_section(parent, text: str) -> None:
+        label = tk.Label(
+            parent,
+            text=text,
+            font=_SMALL_FONT,
+            fg=_INSTRUCTION_COLOR,
+            bg=_PANEL_COLOR,
+            anchor="w",
+        )
+        label.pack(anchor="w", fill="x", pady=(px(10), px(6)))
+
+    def _create_map_library_empty_note(parent, text: str) -> None:
+        label = tk.Label(
+            parent,
+            text=text,
+            font=_SMALL_FONT,
+            fg="#5f606b",
+            bg=_PANEL_COLOR,
+            anchor="w",
+            justify="left",
+        )
+        label.pack(anchor="w", fill="x", pady=(0, px(8)))
+
+    def _create_map_library_row(
+        parent,
+        *,
+        title: str,
+        detail: str,
+        action_text: str,
+        action,
+    ) -> None:
         row = tk.Frame(
             parent,
             bg=_PANEL_COLOR,
@@ -683,7 +763,7 @@ def show_splash_screen(
 
         name_label = tk.Label(
             text_column,
-            text=sample.display_name,
+            text=title,
             font=_SMALL_FONT,
             fg=_TITLE_COLOR,
             bg=_PANEL_COLOR,
@@ -695,7 +775,7 @@ def show_splash_screen(
 
         detail_label = tk.Label(
             text_column,
-            text=_sample_map_splash_detail_text(downloaded),
+            text=detail,
             font=_SMALL_FONT,
             fg=_INSTRUCTION_COLOR,
             bg=_PANEL_COLOR,
@@ -706,7 +786,7 @@ def show_splash_screen(
 
         action_button = tk.Label(
             row,
-            text=_sample_map_splash_action_text(downloaded),
+            text=action_text,
             font=_SMALL_FONT,
             bg=_BUTTON_BG,
             fg=_BUTTON_FG,
@@ -720,12 +800,31 @@ def show_splash_screen(
         )
         _bind_activation(
             action_button,
-            lambda sample=sample: _on_sample_map_action(sample),
+            action,
         )
         _configure_sample_button_hover(action_button)
         action_button.pack(side="right", padx=(0, px(12)), pady=px(10))
 
-    def _create_sample_map_panel(parent) -> None:
+    def _create_recent_map_row(parent, path: str) -> None:
+        _create_map_library_row(
+            parent,
+            title=_map_library_recent_title(path),
+            detail=_map_library_recent_detail_text(path),
+            action_text="Open",
+            action=lambda path=path: _open_library_map_from_splash(path),
+        )
+
+    def _create_available_map_row(parent, sample) -> None:
+        downloaded = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
+        _create_map_library_row(
+            parent,
+            title=sample.display_name,
+            detail=_sample_map_splash_detail_text(downloaded),
+            action_text=_sample_map_splash_action_text(downloaded),
+            action=lambda sample=sample: _on_sample_map_action(sample),
+        )
+
+    def _create_map_library_panel(parent) -> None:
         panel = tk.Frame(
             parent,
             bg=_PANEL_COLOR,
@@ -737,7 +836,7 @@ def show_splash_screen(
 
         header_label = tk.Label(
             panel,
-            text="Explore sample maps",
+            text="Map Library",
             font=_BODY_FONT,
             fg=_TITLE_COLOR,
             bg=_PANEL_COLOR,
@@ -747,7 +846,7 @@ def show_splash_screen(
 
         intro_label = tk.Label(
             panel,
-            text="Try a sample cave map.",
+            text="Open recent or available maps.",
             font=_SMALL_FONT,
             fg=_INSTRUCTION_COLOR,
             bg=_PANEL_COLOR,
@@ -757,10 +856,188 @@ def show_splash_screen(
         )
         intro_label.pack(anchor="w", fill="x", padx=px(16), pady=(0, px(14)))
 
-        rows_frame = tk.Frame(panel, bg=_PANEL_COLOR)
-        rows_frame.pack(fill="x", padx=px(12))
+        scrollbar_fraction = [(0.0, 1.0)]
+        scrollbar_thumb = [None]
+        scrollbar_drag_offset = [0.0]
+
+        scroll_shell = tk.Frame(panel, bg=_PANEL_COLOR)
+        scroll_shell.pack(fill="both", expand=True, padx=px(12), pady=(0, px(12)))
+
+        content_canvas = tk.Canvas(
+            scroll_shell,
+            bg=_PANEL_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            yscrollcommand=lambda *_args: None,
+        )
+        content_scrollbar = tk.Canvas(
+            scroll_shell,
+            bg=_PANEL_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            width=_LIBRARY_SCROLLBAR_WIDTH,
+            cursor="sb_v_double_arrow",
+        )
+        content_canvas.pack(side="left", fill="both", expand=True)
+
+        rows_frame = tk.Frame(content_canvas, bg=_PANEL_COLOR)
+        rows_window = content_canvas.create_window(
+            (0, 0),
+            window=rows_frame,
+            anchor="nw",
+        )
+
+        def _draw_library_scrollbar_thumb() -> None:
+            height = max(1, content_scrollbar.winfo_height())
+            first, last = scrollbar_fraction[0]
+            visible_fraction = max(0.0, min(1.0, last - first))
+            if visible_fraction >= 1.0:
+                if scrollbar_thumb[0] is not None:
+                    content_scrollbar.delete(scrollbar_thumb[0])
+                    scrollbar_thumb[0] = None
+                return
+
+            thumb_height = max(
+                _LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
+                int(round(height * visible_fraction)),
+            )
+            travel = max(1, height - thumb_height)
+            y0 = int(round(max(0.0, min(1.0, first)) * travel))
+            y1 = min(height, y0 + thumb_height)
+            x = _LIBRARY_SCROLLBAR_WIDTH // 2
+            if scrollbar_thumb[0] is None:
+                scrollbar_thumb[0] = content_scrollbar.create_line(
+                    x,
+                    y0,
+                    x,
+                    y1,
+                    fill=_LIBRARY_SCROLL_THUMB_COLOR,
+                    width=_LIBRARY_SCROLL_THUMB_WIDTH,
+                    capstyle="round",
+                )
+            else:
+                content_scrollbar.coords(scrollbar_thumb[0], x, y0, x, y1)
+
+        def _set_library_scrollbar(first: str, last: str) -> None:
+            scrollbar_fraction[0] = (float(first), float(last))
+            _draw_library_scrollbar_thumb()
+
+        content_canvas.configure(yscrollcommand=_set_library_scrollbar)
+
+        def _sync_library_scrollbar() -> None:
+            width = max(1, content_canvas.winfo_width())
+            content_height = rows_frame.winfo_reqheight()
+            content_canvas.configure(scrollregion=(0, 0, width, content_height))
+            visible_height = content_canvas.winfo_height()
+            if content_height > visible_height + 1:
+                if not content_scrollbar.winfo_manager():
+                    content_scrollbar.pack(side="right", fill="y")
+            else:
+                if content_scrollbar.winfo_manager():
+                    content_scrollbar.pack_forget()
+                content_canvas.yview_moveto(0)
+
+        def _resize_library_canvas_window(event) -> None:
+            content_canvas.itemconfigure(rows_window, width=event.width)
+            _sync_library_scrollbar()
+
+        def _scroll_library_content(event):
+            if not content_scrollbar.winfo_manager():
+                return None
+            delta = getattr(event, "delta", 0)
+            if delta:
+                content_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+            elif getattr(event, "num", None) == 4:
+                content_canvas.yview_scroll(-1, "units")
+            elif getattr(event, "num", None) == 5:
+                content_canvas.yview_scroll(1, "units")
+            return "break"
+
+        def _start_library_scrollbar_drag(event):
+            first, last = scrollbar_fraction[0]
+            height = max(1, content_scrollbar.winfo_height())
+            visible_fraction = max(0.0, min(1.0, last - first))
+            thumb_height = max(
+                _LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
+                int(round(height * visible_fraction)),
+            )
+            travel = max(1, height - thumb_height)
+            thumb_top = int(round(first * travel))
+            thumb_bottom = thumb_top + thumb_height
+            if thumb_top <= event.y <= thumb_bottom:
+                scrollbar_drag_offset[0] = event.y - thumb_top
+            else:
+                scrollbar_drag_offset[0] = thumb_height / 2
+                _drag_library_scrollbar(event)
+            if scrollbar_thumb[0] is not None:
+                content_scrollbar.itemconfigure(
+                    scrollbar_thumb[0],
+                    fill=_LIBRARY_SCROLL_THUMB_ACTIVE_COLOR,
+                )
+            return "break"
+
+        def _drag_library_scrollbar(event):
+            first, last = scrollbar_fraction[0]
+            height = max(1, content_scrollbar.winfo_height())
+            visible_fraction = max(0.0, min(1.0, last - first))
+            thumb_height = max(
+                _LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
+                int(round(height * visible_fraction)),
+            )
+            travel = max(1, height - thumb_height)
+            thumb_top = max(0, min(travel, event.y - scrollbar_drag_offset[0]))
+            content_canvas.yview_moveto(thumb_top / travel)
+            return "break"
+
+        def _end_library_scrollbar_drag(_event):
+            if scrollbar_thumb[0] is not None:
+                content_scrollbar.itemconfigure(
+                    scrollbar_thumb[0],
+                    fill=_LIBRARY_SCROLL_THUMB_COLOR,
+                )
+            return "break"
+
+        def _bind_library_mousewheel(widget) -> None:
+            widget.bind("<MouseWheel>", _scroll_library_content, add="+")
+            widget.bind("<Button-4>", _scroll_library_content, add="+")
+            widget.bind("<Button-5>", _scroll_library_content, add="+")
+            for child in widget.winfo_children():
+                _bind_library_mousewheel(child)
+
+        content_canvas.bind("<Configure>", _resize_library_canvas_window, add="+")
+        content_canvas.bind("<MouseWheel>", _scroll_library_content, add="+")
+        content_canvas.bind("<Button-4>", _scroll_library_content, add="+")
+        content_canvas.bind("<Button-5>", _scroll_library_content, add="+")
+        content_scrollbar.bind(
+            "<Configure>",
+            lambda _event: _draw_library_scrollbar_thumb(),
+            add="+",
+        )
+        content_scrollbar.bind(
+            "<ButtonPress-1>",
+            _start_library_scrollbar_drag,
+            add="+",
+        )
+        content_scrollbar.bind("<B1-Motion>", _drag_library_scrollbar, add="+")
+        content_scrollbar.bind(
+            "<ButtonRelease-1>",
+            _end_library_scrollbar_drag,
+            add="+",
+        )
+
+        _create_map_library_section(rows_frame, "Recent Maps")
+        if recent_map_paths:
+            for recent_path in recent_map_paths:
+                _create_recent_map_row(rows_frame, recent_path)
+        else:
+            _create_map_library_empty_note(rows_frame, "No recent maps yet.")
+
+        _create_map_library_section(rows_frame, "Available Maps")
         for sample in KNOWN_SAMPLE_MAPS:
-            _create_sample_map_row(rows_frame, sample)
+            _create_available_map_row(rows_frame, sample)
+
+        _bind_library_mousewheel(rows_frame)
+        root.after_idle(_sync_library_scrollbar)
 
     secondary_link_row = tk.Frame(left_frame, bg=_BG_COLOR)
     secondary_link_row.pack(pady=(_SECONDARY_LINK_ROW_TOP_GAP, _SECONDARY_LINK_ROW_BOTTOM_GAP))
@@ -790,7 +1067,7 @@ def show_splash_screen(
     )
     credit_label.pack(pady=(0, _FOOTER_CREDITS_BOTTOM_PAD))
 
-    _create_sample_map_panel(right_frame)
+    _create_map_library_panel(right_frame)
 
     # -- footer note ----------------------------------------------------------------
 
@@ -863,3 +1140,20 @@ def _save_last_browse_dir(path: str) -> None:
         write_text_atomic(_last_browse_path_file(), directory)
     except Exception:
         pass
+
+
+def _load_library_recent_map_paths() -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for path in [_load_last_browse_dir(), *load_recent_map_paths()]:
+        if not path:
+            continue
+        try:
+            normalized = os.path.abspath(os.path.expanduser(path))
+        except (OSError, TypeError):
+            continue
+        if normalized in seen or not os.path.isdir(normalized):
+            continue
+        paths.append(normalized)
+        seen.add(normalized)
+    return paths

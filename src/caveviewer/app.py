@@ -463,6 +463,9 @@ def _run_map_session(folder: str) -> None:
             from caveviewer.gui.viewer_window import run_viewer
             try:
                 run_viewer(_prebuilt_cache, textures_dir=_textures_dir)
+                from caveviewer.gui.map_history import remember_recent_map_path
+
+                remember_recent_map_path(folder)
             except Exception as launch_err:
                 _LOG.error(f"Error starting viewer: {launch_err}")
                 import traceback
@@ -498,6 +501,9 @@ def _run_map_session(folder: str) -> None:
         from caveviewer.gui.viewer_window import run_viewer
         try:
             run_viewer(cache_dir, textures_dir=cache_textures_dir)
+            from caveviewer.gui.map_history import remember_recent_map_path
+
+            remember_recent_map_path(folder)
         except Exception as e:
             _LOG.error(f"Error starting viewer: {e}")
             import traceback
