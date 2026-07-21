@@ -200,8 +200,9 @@ _LIBRARY_METADATA_STATUS_DURATION_MS = 2500
 _LIBRARY_METADATA_ERROR_DURATION_MS = 7000
 _LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
 _LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button
-_LIBRARY_PROGRESS_HEIGHT = 4
-_LIBRARY_PROGRESS_BOTTOM_PAD = 5
+_LIBRARY_PROGRESS_HEIGHT = 3
+_LIBRARY_PROGRESS_WIDTH = 180
+_LIBRARY_PROGRESS_TOP_PAD = 5
 _LIBRARY_ACTION_BUTTON_WIDTH = 8
 _LIBRARY_ACTION_BUTTON_PAD_X = 10
 _LIBRARY_ACTION_BUTTON_PAD_Y = 5
@@ -1812,19 +1813,19 @@ def show_splash_screen(
         progress_bar_canvas = None
         progress_bar = None
         if reserve_progress:
-            # Reserve the progress strip during initial layout. Starting a
-            # download only redraws this already-packed canvas, so rows below
-            # the active map do not shift when the download begins.
+            # Reserve a compact progress strip inside the row's text column.
+            # Starting a download only redraws this already-packed canvas, so
+            # rows below the active map do not shift when the download begins.
             progress_bar_canvas = tk.Canvas(
-                row_shell,
+                text_column,
+                width=px(_LIBRARY_PROGRESS_WIDTH),
                 height=px(_LIBRARY_PROGRESS_HEIGHT),
                 bg=_PANEL_COLOR,
                 highlightthickness=0,
             )
             progress_bar_canvas.pack(
-                fill="x",
-                padx=px(12),
-                pady=(0, px(_LIBRARY_PROGRESS_BOTTOM_PAD)),
+                anchor="w",
+                pady=(px(_LIBRARY_PROGRESS_TOP_PAD), 0),
             )
             progress_bar = progress_bar_canvas.create_rectangle(
                 0,

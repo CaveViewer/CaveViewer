@@ -286,8 +286,12 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "padx=px(_LIBRARY_ACTION_BUTTON_PAD_X)" in source
     assert "pady=px(_LIBRARY_ACTION_BUTTON_PAD_Y)" in source
     assert "progress_bar_canvas = tk.Canvas(" in source
+    assert "width=px(_LIBRARY_PROGRESS_WIDTH)" in source
+    assert "height=px(_LIBRARY_PROGRESS_HEIGHT)" in source
+    assert 'progress_bar_canvas.pack(' in source
+    assert 'anchor="w"' in source
+    assert "pady=(px(_LIBRARY_PROGRESS_TOP_PAD), 0)" in source
     assert "reserve_progress=True" in source
-    assert "progress_bar_canvas.pack(" in source
     assert "widgets.progress_bar_canvas.pack(" not in source
     assert "widgets.progress_bar_canvas.pack_forget()" not in source
     assert "_poll_library_download_queue" in source
