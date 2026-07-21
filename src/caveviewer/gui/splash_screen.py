@@ -87,6 +87,45 @@ def _last_browse_path_file() -> str:
     """Resolve state lazily so environment overrides apply to this process."""
     return migrate_state_file("last_browse_path", ".caveviewer_last_browse_path")
 
+
+def _tk_root_exists(root) -> bool:
+    """Return whether a Tk root-like object is still usable."""
+    if root is None:
+        return False
+    try:
+        return bool(root.winfo_exists())
+    except Exception:
+        return False
+
+
+def _destroy_tk_children(root) -> None:
+    """Remove old splash widgets before rebuilding a reused root."""
+    try:
+        children = list(root.winfo_children())
+    except Exception:
+        return
+    for child in children:
+        try:
+            child.destroy()
+        except Exception:
+            pass
+
+
+def _create_splash_root(tk):
+    """
+    Return the process Tk root for the splash screen.
+
+    macOS keeps the root alive after a viewer launch so the global app menu
+    stays attached to a valid Tk application.  Reuse that root on the next
+    splash cycle instead of creating another Tk root in the same process.
+    """
+    if sys.platform == "darwin":
+        existing_root = getattr(tk, "_default_root", None)
+        if _tk_root_exists(existing_root):
+            _destroy_tk_children(existing_root)
+            return existing_root
+    return tk.Tk(**tk_root_options())
+
 # URL for example maps link -- empty/None means link is disabled
 _EXAMPLE_MAPS_URL = None
 _LOG = get_logger("CaveViewer")
@@ -298,7 +337,7 @@ def show_splash_screen(
     _apply_preferences_to_env(_load_preferences())
 
     configure_process_dpi_awareness()
-    root = tk.Tk(**tk_root_options())
+    root = _create_splash_root(tk)
     apply_tk_scaling(root)
     _configure_runtime_tk_fonts(root)
     splash_scale = tk_display_scale(root)
@@ -664,11 +703,12 @@ def show_splash_screen(
     finally:
         update_manager.set_foreground_update_surface_active(False)
 
-    # On macOS, keep the Tk app object alive for the process lifetime so
+    # On macOS, keep the single Tk app object alive for the process lifetime so
     # the global app-menu About callback remains bound to a valid Tk
-    # application. Destroying it here leaves a stale About callback that
-    # can trigger "application has been destroyed" errors after returning
-    # from the OpenGL viewer window.
+    # application. The next splash cycle reuses this hidden root instead of
+    # creating a second Tk root. Destroying it here leaves a stale About
+    # callback that can trigger "application has been destroyed" errors after
+    # returning from the OpenGL viewer window.
     if sys.platform != "darwin":
         try:
             root.destroy()

@@ -122,6 +122,75 @@ def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):
     assert splash_screen._load_last_browse_dir() == str(map_root)
 
 
+def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
+    monkeypatch.setattr(splash_screen.sys, "platform", "darwin")
+    destroyed_children = []
+
+    class Child:
+        def __init__(self, name):
+            self.name = name
+
+        def destroy(self):
+            destroyed_children.append(self.name)
+
+    class ExistingRoot:
+        def winfo_exists(self):
+            return True
+
+        def winfo_children(self):
+            return [Child("old-logo"), Child("old-button")]
+
+    root = ExistingRoot()
+    tk_module = type(
+        "FakeTk",
+        (),
+        {
+            "_default_root": root,
+            "Tk": lambda **_options: (_ for _ in ()).throw(
+                AssertionError("macOS splash must reuse the kept-alive root")
+            ),
+        },
+    )
+
+    assert splash_screen._create_splash_root(tk_module) is root
+    assert destroyed_children == ["old-logo", "old-button"]
+
+
+def test_splash_root_creates_new_tk_when_no_macos_root(monkeypatch):
+    monkeypatch.setattr(splash_screen.sys, "platform", "darwin")
+    created = []
+    root = object()
+    tk_module = type(
+        "FakeTk",
+        (),
+        {
+            "_default_root": None,
+            "Tk": lambda **options: created.append(options) or root,
+        },
+    )
+
+    assert splash_screen._create_splash_root(tk_module) is root
+    assert created == [splash_screen.tk_root_options()]
+
+
+def test_splash_root_does_not_reuse_default_root_off_macos(monkeypatch):
+    monkeypatch.setattr(splash_screen.sys, "platform", "linux")
+    existing_root = object()
+    created = []
+    root = object()
+    tk_module = type(
+        "FakeTk",
+        (),
+        {
+            "_default_root": existing_root,
+            "Tk": lambda **options: created.append(options) or root,
+        },
+    )
+
+    assert splash_screen._create_splash_root(tk_module) is root
+    assert created == [splash_screen.tk_root_options()]
+
+
 def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
 

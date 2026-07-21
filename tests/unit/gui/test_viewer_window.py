@@ -195,6 +195,75 @@ def test_desktop_relative_window_size_uses_eighty_percent_per_axis(monkeypatch):
     assert root.destroyed is True
 
 
+def test_desktop_relative_window_size_reuses_existing_tk_root(monkeypatch):
+    class ExistingRoot:
+        def __init__(self):
+            self.destroyed = False
+            self.withdrawn = False
+
+        def winfo_exists(self):
+            return True
+
+        def winfo_screenwidth(self):
+            return 2560
+
+        def winfo_screenheight(self):
+            return 1440
+
+        def withdraw(self):
+            self.withdrawn = True
+
+        def destroy(self):
+            self.destroyed = True
+
+    root = ExistingRoot()
+    monkeypatch.setitem(
+        sys.modules,
+        "tkinter",
+        SimpleNamespace(
+            _default_root=root,
+            Tk=lambda **_options: (_ for _ in ()).throw(
+                AssertionError("must not create a second Tk root")
+            ),
+        ),
+    )
+
+    assert viewer_window._desktop_relative_window_size() == (2048, 1152)
+    assert root.withdrawn is False
+    assert root.destroyed is False
+
+
+def test_desktop_relative_window_size_uses_default_for_bad_existing_root():
+    root = SimpleNamespace(
+        winfo_screenwidth=lambda: 0,
+        winfo_screenheight=lambda: 1440,
+    )
+
+    assert viewer_window._desktop_relative_window_size(root) == (1600, 1000)
+
+
+def test_desktop_relative_window_size_does_not_replace_bad_live_default_root(
+    monkeypatch,
+):
+    root = SimpleNamespace(
+        winfo_exists=lambda: True,
+        winfo_screenwidth=lambda: 0,
+        winfo_screenheight=lambda: 1440,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "tkinter",
+        SimpleNamespace(
+            _default_root=root,
+            Tk=lambda **_options: (_ for _ in ()).throw(
+                AssertionError("must not create a second Tk root")
+            ),
+        ),
+    )
+
+    assert viewer_window._desktop_relative_window_size() == (1600, 1000)
+
+
 def test_window_pixel_ratio_uses_framebuffer_size():
     window = SimpleNamespace(size=(1000, 700), buffer_size=(2000, 1400))
 
