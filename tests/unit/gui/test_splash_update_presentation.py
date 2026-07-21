@@ -274,6 +274,9 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "recent_map_paths = _load_library_recent_map_paths()" in source
     assert "size_text=_sample_map_splash_size_text(sample)" in source
     assert "highlightthickness=0" in source
+    assert "highlightbackground=_LIBRARY_PANEL_BORDER_COLOR" in source
+    assert "font=_LIBRARY_METADATA_FONT" in source
+    assert "fg=_LIBRARY_METADATA_COLOR" in source
     assert "width=_LIBRARY_ACTION_BUTTON_WIDTH" in source
     assert "padx=px(_LIBRARY_ACTION_BUTTON_PAD_X)" in source
     assert "pady=px(_LIBRARY_ACTION_BUTTON_PAD_Y)" in source
@@ -303,9 +306,10 @@ def test_sample_map_splash_actions_are_compact():
 
 
 def test_library_action_buttons_use_normalized_dimensions():
-    assert splash_screen._LIBRARY_ACTION_BUTTON_WIDTH == 6
+    assert splash_screen._LIBRARY_ACTION_BUTTON_WIDTH == 8
     assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_X == 10
     assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_Y == 5
+    assert splash_screen._LIBRARY_METADATA_FONT[1] == 9
 
 
 def test_map_library_recent_labels_are_compact(tmp_path):

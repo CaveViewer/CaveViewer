@@ -149,6 +149,7 @@ _TITLE_FONT = (_UI_FONT_FAMILY, 24, "bold")
 _VERSION_FONT = (_UI_FONT_FAMILY, 12)
 _BODY_FONT = (_UI_FONT_FAMILY, 12)
 _SMALL_FONT = (_UI_FONT_FAMILY, 10)
+_LIBRARY_METADATA_FONT = (_UI_FONT_FAMILY, 9)
 _INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
 _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
@@ -172,8 +173,9 @@ _LIBRARY_SCROLL_THUMB_WIDTH = 5
 _LIBRARY_SCROLL_THUMB_MIN_HEIGHT = 36
 _LIBRARY_SCROLL_THUMB_COLOR = DARK_THEME.secondary_button_border
 _LIBRARY_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
-_LIBRARY_SIZE_COLOR = "#6a6d78"
-_LIBRARY_ACTION_BUTTON_WIDTH = 6
+_LIBRARY_PANEL_BORDER_COLOR = "#252832"
+_LIBRARY_METADATA_COLOR = "#5a5d68"
+_LIBRARY_ACTION_BUTTON_WIDTH = 8
 _LIBRARY_ACTION_BUTTON_PAD_X = 10
 _LIBRARY_ACTION_BUTTON_PAD_Y = 5
 _SAMPLE_MAP_SIZE_LABELS = {
@@ -218,7 +220,8 @@ def _select_tk_font_family(
 def _configure_runtime_tk_fonts(root) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
     global _UI_FONT_FAMILY, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
-    global _SMALL_FONT, _INSTRUCTION_FONT, _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT
+    global _SMALL_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
+    global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT
 
     try:
         import tkinter.font as tkfont
@@ -249,6 +252,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     _VERSION_FONT = (_UI_FONT_FAMILY, 12)
     _BODY_FONT = (_UI_FONT_FAMILY, 12)
     _SMALL_FONT = (_UI_FONT_FAMILY, 10)
+    _LIBRARY_METADATA_FONT = (_UI_FONT_FAMILY, 9)
     _INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
     _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
     _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
@@ -773,11 +777,8 @@ def show_splash_screen(
             pady=px(5),
         )
 
-        title_row = tk.Frame(text_column, bg=_PANEL_COLOR)
-        title_row.pack(anchor="w", fill="x")
-
         name_label = tk.Label(
-            title_row,
+            text_column,
             text=title,
             font=_SMALL_FONT,
             fg=_TITLE_COLOR,
@@ -786,31 +787,20 @@ def show_splash_screen(
             justify="left",
             wraplength=px(250),
         )
-        name_label.pack(side="left", anchor="w")
+        name_label.pack(anchor="w", fill="x")
 
-        if size_text:
-            size_label = tk.Label(
-                title_row,
-                text=size_text,
-                font=_SMALL_FONT,
-                fg=_LIBRARY_SIZE_COLOR,
-                bg=_PANEL_COLOR,
-                anchor="w",
-                justify="left",
-            )
-            size_label.pack(side="left", anchor="w", padx=(px(10), 0))
-
-        if detail:
-            detail_label = tk.Label(
+        metadata_text = detail or size_text
+        if metadata_text:
+            metadata_label = tk.Label(
                 text_column,
-                text=detail,
-                font=_SMALL_FONT,
-                fg=_INSTRUCTION_COLOR,
+                text=metadata_text,
+                font=_LIBRARY_METADATA_FONT,
+                fg=_LIBRARY_METADATA_COLOR,
                 bg=_PANEL_COLOR,
                 anchor="w",
                 justify="left",
             )
-            detail_label.pack(anchor="w", fill="x", pady=(px(2), 0))
+            metadata_label.pack(anchor="w", fill="x", pady=(px(2), 0))
 
         action_button = tk.Label(
             row,
@@ -860,8 +850,8 @@ def show_splash_screen(
             parent,
             bg=_PANEL_COLOR,
             highlightthickness=1,
-            highlightbackground=_BORDER_COLOR,
-            highlightcolor=_BORDER_COLOR,
+            highlightbackground=_LIBRARY_PANEL_BORDER_COLOR,
+            highlightcolor=_LIBRARY_PANEL_BORDER_COLOR,
         )
         panel.pack(fill="both", expand=True, pady=(px(34), px(24)))
 
