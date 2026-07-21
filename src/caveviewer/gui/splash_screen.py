@@ -499,7 +499,7 @@ def show_splash_screen(
     left_frame.pack(side="left", fill="both", expand=True)
 
     divider = tk.Frame(content_frame, bg=_BORDER_COLOR, width=1)
-    divider.pack(side="left", fill="y", padx=(px(18), px(18)), pady=px(26))
+    divider.pack(side="left", fill="y", padx=(px(18), px(12)), pady=px(26))
 
     right_frame = tk.Frame(content_frame, bg=_BG_COLOR)
     right_frame.pack(side="left", fill="both", expand=True)
@@ -1922,7 +1922,7 @@ def show_splash_screen(
             highlightbackground=_LIBRARY_PANEL_BORDER_COLOR,
             highlightcolor=_LIBRARY_PANEL_BORDER_COLOR,
         )
-        panel.pack(fill="both", expand=True, pady=(px(34), px(24)))
+        panel.pack(fill="both", expand=True, pady=px(26))
 
         scrollbar_fraction = [(0.0, 1.0)]
         scrollbar_thumb = [None]

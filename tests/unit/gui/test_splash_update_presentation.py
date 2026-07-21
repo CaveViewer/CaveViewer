@@ -280,6 +280,8 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "detail=_sample_map_status_text(sample, downloaded=downloaded)" in source
     assert "highlightthickness=0" in source
     assert "highlightbackground=_LIBRARY_PANEL_BORDER_COLOR" in source
+    assert 'divider.pack(side="left", fill="y", padx=(px(18), px(12)), pady=px(26))' in source
+    assert 'panel.pack(fill="both", expand=True, pady=px(26))' in source
     assert "font=_LIBRARY_METADATA_FONT" in source
     assert "fg=_LIBRARY_METADATA_COLOR" in source
     assert "width=_LIBRARY_ACTION_BUTTON_WIDTH" in source
