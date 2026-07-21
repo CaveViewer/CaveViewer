@@ -76,6 +76,7 @@ _CATCHUP_UPLOAD_TIME_BUDGET_MS = 8.0
 _STARTUP_UPLOAD_CHUNKS_PER_FRAME = 4
 _STARTUP_UPLOAD_OPERATIONS_PER_CHUNK = 8
 _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
+_VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
 
@@ -1926,16 +1927,20 @@ class CaveViewerWindow(mglw.WindowConfig):
         returns immediately rather than crashing on self.world not
         existing yet.
 
-        During final window/application shutdown, final_shutdown=True waits
-        until every non-daemon streaming worker has joined before continuing.
-        Map switching keeps the bounded shutdown path so one stuck worker does
-        not freeze the UI while opening another map.
+        Shutdown uses a finite worker-join timeout even during final window
+        close.  Streaming workers are CPU/I/O-only and never issue OpenGL
+        commands; if one is stuck in external I/O, StreamingWorld records and
+        logs the unjoined worker instead of letting the viewer close callback
+        block forever.
         """
         if not self._has_map_loaded:
             return
 
         self._stop_recording()
-        self.world.shutdown(timeout=None if final_shutdown else 2.0)
+        # Keep this callback bounded: on_close() runs inside the window/render
+        # event path, and an unbounded join here can leave the viewer visually
+        # frozen if a streaming worker is stuck in disk or callback code.
+        self.world.shutdown(timeout=_VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS)
 
         for cell in list(getattr(self, "_chunk_upload_states", {}).keys()):
             self._on_chunk_unload(cell)

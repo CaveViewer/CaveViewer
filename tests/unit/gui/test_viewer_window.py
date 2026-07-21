@@ -2068,10 +2068,10 @@ def test_map_switch_teardown_uses_bounded_streaming_shutdown():
 
     window._teardown_current_map()
 
-    assert timeouts == [2.0]
+    assert timeouts == [viewer_window._VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS]
 
 
-def test_final_teardown_joins_streaming_workers_without_timeout():
+def test_final_teardown_uses_bounded_streaming_shutdown():
     timeouts = []
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._has_map_loaded = True
@@ -2088,7 +2088,7 @@ def test_final_teardown_joins_streaming_workers_without_timeout():
 
     window._teardown_current_map(final_shutdown=True)
 
-    assert timeouts == [None]
+    assert timeouts == [viewer_window._VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS]
 
 
 def test_request_import_pause_sends_child_command(monkeypatch):
