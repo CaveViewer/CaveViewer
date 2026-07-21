@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import builtins
+import io
 import os
 
 import numpy as np
@@ -9,6 +11,7 @@ import pytest
 
 from caveviewer import app
 from caveviewer.app import find_input_files, find_model_file
+from caveviewer.core.map import source_model
 from caveviewer.core.mesh.glb import parse_glb
 
 
@@ -49,6 +52,67 @@ def test_find_input_files_uses_referenced_mtl(tmp_path):
     obj.write_text("mtllib materials.mtl\nv 0 0 0\n", encoding="utf-8")
     mtl.write_text("newmtl rock\n", encoding="utf-8")
     assert find_input_files(str(tmp_path)) == (str(obj), str(mtl))
+
+
+def test_declared_material_lookup_uses_bounded_header_read(tmp_path, monkeypatch):
+    obj = tmp_path / "cave.obj"
+    material = tmp_path / "cave.mtl"
+    obj.write_bytes(b"placeholder")
+    material.write_text("newmtl rock\n", encoding="utf-8")
+
+    read_sizes = []
+
+    class TrackingReader(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def read(self, size=-1):
+            read_sizes.append(size)
+            if size < 0 or size > 32:
+                raise AssertionError("OBJ discovery attempted an unbounded read")
+            return super().read(size)
+
+    reader = TrackingReader(b"mtllib cave.mtl\n" + (b"v 0 0 0\n" * 100))
+    real_open = builtins.open
+
+    def fake_open(path, *args, **kwargs):
+        if os.fspath(path) == str(obj):
+            return reader
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+
+    assert (
+        source_model.find_declared_material_file_for_obj(
+            str(obj),
+            max_scan_bytes=32,
+        )
+        == str(material)
+    )
+    assert read_sizes == [32]
+
+
+def test_declared_material_lookup_ignores_directive_after_scan_limit(tmp_path):
+    obj = tmp_path / "cave.obj"
+    material_dir = tmp_path / "materials"
+    material_dir.mkdir()
+    material = material_dir / "late.mtl"
+    obj.write_text(
+        "v 0 0 0\nmtllib materials/late.mtl\n",
+        encoding="utf-8",
+    )
+    material.write_text("newmtl rock\n", encoding="utf-8")
+
+    assert (
+        source_model.find_declared_material_file_for_obj(
+            str(obj),
+            max_scan_bytes=len("v 0 0 0\n"),
+        )
+        is None
+    )
 
 
 def test_find_input_files_falls_back_to_available_mtl(tmp_path):
