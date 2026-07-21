@@ -338,7 +338,7 @@ def test_release_finalizer_is_the_single_shared_state_writer():
 
     assert "contents: write" in workflow
     assert "group: caveviewer-publish-${{ github.ref }}" in workflow
-    assert "actions/download-artifact@v4" in workflow
+    assert "actions/download-artifact@v8" in workflow
     assert "merge-multiple: true" in workflow
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
     assert "CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}" in workflow
