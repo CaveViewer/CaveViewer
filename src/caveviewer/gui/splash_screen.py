@@ -172,6 +172,16 @@ _LIBRARY_SCROLL_THUMB_WIDTH = 5
 _LIBRARY_SCROLL_THUMB_MIN_HEIGHT = 36
 _LIBRARY_SCROLL_THUMB_COLOR = DARK_THEME.secondary_button_border
 _LIBRARY_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
+_LIBRARY_SIZE_COLOR = "#6a6d78"
+_LIBRARY_ACTION_BUTTON_WIDTH = 6
+_LIBRARY_ACTION_BUTTON_PAD_X = 10
+_LIBRARY_ACTION_BUTTON_PAD_Y = 5
+_SAMPLE_MAP_SIZE_LABELS = {
+    "Boh.Yai.Mine.I.Low.Res.zip": "57 MB",
+    "Boh.Yai.Mine.II.Low.Res.zip": "62 MB",
+    "Devils.Eye.3D.Map.zip": "87 MB",
+    "Peacock.Springs.Cave.System.3D.Map.zip": "365 MB",
+}
 _LINUX_TK_SANS_FAMILIES = (
     "Adwaita Sans",
     "Cantarell",
@@ -324,8 +334,11 @@ def _sample_map_splash_action_text(downloaded: bool) -> str:
     return "Open" if downloaded else "Get"
 
 
-def _sample_map_splash_detail_text(downloaded: bool) -> str:
-    return "Installed locally" if downloaded else "Available to download"
+def _sample_map_splash_size_text(sample) -> str:
+    size_bytes = getattr(sample, "size_bytes", None)
+    if size_bytes:
+        return f"{size_bytes / (1024 * 1024):.0f} MB"
+    return _SAMPLE_MAP_SIZE_LABELS.get(getattr(sample, "asset_name", ""), "")
 
 
 def _map_library_recent_detail_text(path: str) -> str:
@@ -740,17 +753,16 @@ def show_splash_screen(
         *,
         title: str,
         detail: str,
+        size_text: str,
         action_text: str,
         action,
     ) -> None:
         row = tk.Frame(
             parent,
             bg=_PANEL_COLOR,
-            highlightthickness=1,
-            highlightbackground=_BORDER_COLOR,
-            highlightcolor=_BORDER_COLOR,
+            highlightthickness=0,
         )
-        row.pack(fill="x", pady=(0, px(8)))
+        row.pack(fill="x", pady=(0, px(12)))
 
         text_column = tk.Frame(row, bg=_PANEL_COLOR)
         text_column.pack(
@@ -758,11 +770,14 @@ def show_splash_screen(
             fill="x",
             expand=True,
             padx=(px(12), px(8)),
-            pady=px(10),
+            pady=px(5),
         )
 
+        title_row = tk.Frame(text_column, bg=_PANEL_COLOR)
+        title_row.pack(anchor="w", fill="x")
+
         name_label = tk.Label(
-            text_column,
+            title_row,
             text=title,
             font=_SMALL_FONT,
             fg=_TITLE_COLOR,
@@ -771,18 +786,31 @@ def show_splash_screen(
             justify="left",
             wraplength=px(250),
         )
-        name_label.pack(anchor="w", fill="x")
+        name_label.pack(side="left", anchor="w")
 
-        detail_label = tk.Label(
-            text_column,
-            text=detail,
-            font=_SMALL_FONT,
-            fg=_INSTRUCTION_COLOR,
-            bg=_PANEL_COLOR,
-            anchor="w",
-            justify="left",
-        )
-        detail_label.pack(anchor="w", fill="x", pady=(px(2), 0))
+        if size_text:
+            size_label = tk.Label(
+                title_row,
+                text=size_text,
+                font=_SMALL_FONT,
+                fg=_LIBRARY_SIZE_COLOR,
+                bg=_PANEL_COLOR,
+                anchor="w",
+                justify="left",
+            )
+            size_label.pack(side="left", anchor="w", padx=(px(10), 0))
+
+        if detail:
+            detail_label = tk.Label(
+                text_column,
+                text=detail,
+                font=_SMALL_FONT,
+                fg=_INSTRUCTION_COLOR,
+                bg=_PANEL_COLOR,
+                anchor="w",
+                justify="left",
+            )
+            detail_label.pack(anchor="w", fill="x", pady=(px(2), 0))
 
         action_button = tk.Label(
             row,
@@ -790,8 +818,9 @@ def show_splash_screen(
             font=_SMALL_FONT,
             bg=_BUTTON_BG,
             fg=_BUTTON_FG,
-            padx=px(12),
-            pady=px(6),
+            width=_LIBRARY_ACTION_BUTTON_WIDTH,
+            padx=px(_LIBRARY_ACTION_BUTTON_PAD_X),
+            pady=px(_LIBRARY_ACTION_BUTTON_PAD_Y),
             cursor="hand2",
             takefocus=True,
             highlightthickness=1,
@@ -803,13 +832,14 @@ def show_splash_screen(
             action,
         )
         _configure_sample_button_hover(action_button)
-        action_button.pack(side="right", padx=(0, px(12)), pady=px(10))
+        action_button.pack(side="right", padx=(0, px(12)), pady=px(5))
 
     def _create_recent_map_row(parent, path: str) -> None:
         _create_map_library_row(
             parent,
             title=_map_library_recent_title(path),
             detail=_map_library_recent_detail_text(path),
+            size_text="",
             action_text="Open",
             action=lambda path=path: _open_library_map_from_splash(path),
         )
@@ -819,7 +849,8 @@ def show_splash_screen(
         _create_map_library_row(
             parent,
             title=sample.display_name,
-            detail=_sample_map_splash_detail_text(downloaded),
+            detail="",
+            size_text=_sample_map_splash_size_text(sample),
             action_text=_sample_map_splash_action_text(downloaded),
             action=lambda sample=sample: _on_sample_map_action(sample),
         )

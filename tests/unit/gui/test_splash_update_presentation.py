@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -265,24 +266,46 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "Available Maps" in source
     assert "Open recent or available maps." in source
     assert "Explore sample maps" not in source
+    assert "Available to download" not in source
     assert "Scrollbar(" not in source
     assert "content_canvas.configure(yscrollcommand=_set_library_scrollbar)" in source
     assert 'content_scrollbar.pack(side="right", fill="y")' in source
     assert "_bind_library_mousewheel(rows_frame)" in source
     assert "recent_map_paths = _load_library_recent_map_paths()" in source
+    assert "size_text=_sample_map_splash_size_text(sample)" in source
+    assert "highlightthickness=0" in source
+    assert "width=_LIBRARY_ACTION_BUTTON_WIDTH" in source
+    assert "padx=px(_LIBRARY_ACTION_BUTTON_PAD_X)" in source
+    assert "pady=px(_LIBRARY_ACTION_BUTTON_PAD_Y)" in source
 
 
 def test_sample_map_splash_actions_are_compact():
     assert splash_screen._sample_map_splash_action_text(downloaded=True) == "Open"
     assert splash_screen._sample_map_splash_action_text(downloaded=False) == "Get"
-    assert (
-        splash_screen._sample_map_splash_detail_text(downloaded=True)
-        == "Installed locally"
-    )
-    assert (
-        splash_screen._sample_map_splash_detail_text(downloaded=False)
-        == "Available to download"
-    )
+    assert splash_screen._sample_map_splash_size_text(
+        SimpleNamespace(
+            asset_name="Boh.Yai.Mine.I.Low.Res.zip",
+            size_bytes=None,
+        )
+    ) == "57 MB"
+    assert splash_screen._sample_map_splash_size_text(
+        SimpleNamespace(
+            asset_name="custom.zip",
+            size_bytes=52 * 1024 * 1024,
+        )
+    ) == "52 MB"
+    assert splash_screen._sample_map_splash_size_text(
+        SimpleNamespace(
+            asset_name="custom.zip",
+            size_bytes=None,
+        )
+    ) == ""
+
+
+def test_library_action_buttons_use_normalized_dimensions():
+    assert splash_screen._LIBRARY_ACTION_BUTTON_WIDTH == 6
+    assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_X == 10
+    assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_Y == 5
 
 
 def test_map_library_recent_labels_are_compact(tmp_path):
