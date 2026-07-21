@@ -259,9 +259,13 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
     assert "Map Library" in source
-    assert "Recent Maps" in source
-    assert "Available Maps" in source
-    assert "Open recent or available maps." in source
+    assert "Your Library" in source
+    assert "Standard Library" in source
+    assert "Open your maps or explore the standard library." in source
+    assert "No user-opened maps yet." in source
+    assert "Recent Maps" not in source
+    assert "Available Maps" not in source
+    assert "Open recent or available maps." not in source
     assert "Explore sample maps" not in source
     assert "Available to download" not in source
     assert "Scrollbar(" not in source

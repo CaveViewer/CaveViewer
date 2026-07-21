@@ -879,7 +879,7 @@ def show_splash_screen(
             if not _widget_exists(recent_empty_note[0]):
                 recent_empty_note[0] = _create_map_library_empty_note(
                     container,
-                    "No recent maps yet.",
+                    "No user-opened maps yet.",
                 )
                 _bind_library_mousewheel_if_ready(recent_empty_note[0])
         _sync_library_scroll_after_row_change()
@@ -1662,7 +1662,7 @@ def show_splash_screen(
 
         intro_label = tk.Label(
             panel,
-            text="Open recent or available maps.",
+            text="Open your maps or explore the standard library.",
             font=_SMALL_FONT,
             fg=_INSTRUCTION_COLOR,
             bg=_PANEL_COLOR,
@@ -1844,7 +1844,7 @@ def show_splash_screen(
             add="+",
         )
 
-        _create_map_library_section(rows_frame, "Recent Maps")
+        _create_map_library_section(rows_frame, "Your Library")
         recent_container = tk.Frame(rows_frame, bg=_PANEL_COLOR)
         recent_container.pack(fill="x")
         recent_rows_container[0] = recent_container
@@ -1854,10 +1854,10 @@ def show_splash_screen(
         else:
             recent_empty_note[0] = _create_map_library_empty_note(
                 recent_container,
-                "No recent maps yet.",
+                "No user-opened maps yet.",
             )
 
-        _create_map_library_section(rows_frame, "Available Maps")
+        _create_map_library_section(rows_frame, "Standard Library")
         for sample in KNOWN_SAMPLE_MAPS:
             _create_available_map_row(rows_frame, sample)
 
