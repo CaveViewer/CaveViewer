@@ -78,12 +78,11 @@ files; a verified package remains in `~/Downloads`.
 If you want to try CaveViewer without your own scan, use the built-in sample maps.
 
 1. Start CaveViewer and open the splash screen.
-2. Click `Download sample maps` below the main map-open button.
-3. Pick one of the sample maps in the dialog.
-4. If it is not already downloaded, choose a folder to save it. The dialog stays responsive while CaveViewer downloads and extracts the map in the background, and the row button can cancel the active download.
-5. When the button changes to `Open`, click it to load the sample map.
+2. Use the `Map Library` panel to reopen a recent map or pick an available sample cave map.
+3. Click `Get` for a sample map that is not downloaded yet, then choose a folder to save it. The dialog stays responsive while CaveViewer downloads and extracts the map in the background, and the row button can cancel the active download.
+4. When a map is already downloaded, click `Open` to load it.
 
-Sample maps are a good way to confirm that CaveViewer is working before you import your own data. You can also reopen them later from the same sample maps dialog.
+Sample maps are a good way to confirm that CaveViewer is working before you import your own data. CaveViewer stores the app-managed sample map library under `map_library`; older `sample_maps` directories are moved there automatically when possible.
 
 ## Recording a Flight
 

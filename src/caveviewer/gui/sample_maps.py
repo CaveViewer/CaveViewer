@@ -30,6 +30,7 @@ import tempfile
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from caveviewer.core.diagnostics.logging import get_logger
@@ -62,7 +63,12 @@ _TAGGED_RELEASE_API_URL = _env_or_default(
 )
 _REQUEST_TIMEOUT_SECONDS = 8
 
-SAMPLE_MAPS_DIRNAME = "sample_maps"
+MAP_LIBRARY_DIRNAME = "map_library"
+_LEGACY_SAMPLE_MAPS_DIRNAME = "sample_maps"
+
+# Backward-compatible API name for existing callers. This now names the
+# app-managed map library folder, not the old sample_maps/ directory.
+SAMPLE_MAPS_DIRNAME = MAP_LIBRARY_DIRNAME
 _SAMPLE_MAPS_CONFIG_LOGGED = False
 
 
@@ -72,6 +78,14 @@ class SampleMapInfo:
     asset_name: str
     download_url: Optional[str] = None
     size_bytes: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class SampleMapRemovalResult:
+    """Result of removing app-managed downloaded files for one sample map."""
+
+    removed_paths: tuple[str, ...]
+    error: str | None = None
 
 
 KNOWN_SAMPLE_MAPS = [
@@ -97,26 +111,113 @@ KNOWN_SAMPLE_MAPS = [
 def default_sample_maps_install_dir() -> str:
     """Return the app-managed default root for first-time sample-map downloads."""
     data_dir = resolve_application_paths().data_dir
-    sample_maps_dir = data_dir / SAMPLE_MAPS_DIRNAME
+    map_library_dir = data_dir / MAP_LIBRARY_DIRNAME
+    legacy_sample_maps_dir = data_dir / _LEGACY_SAMPLE_MAPS_DIRNAME
+
+    if (
+        legacy_sample_maps_dir.is_dir()
+        and map_library_dir.exists()
+        and not map_library_dir.is_dir()
+    ):
+        _LOG.warning(
+            "Could not use map library path %s because it is not a directory; "
+            "using legacy sample map directory %s",
+            map_library_dir,
+            legacy_sample_maps_dir,
+        )
+        return str(legacy_sample_maps_dir)
+
     try:
-        sample_maps_dir.mkdir(parents=True, exist_ok=True)
+        map_library_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         _LOG.warning(
-            "Could not create default sample map directory %s: %s",
-            sample_maps_dir,
+            "Could not create default map library directory %s: %s",
+            map_library_dir,
             exc,
         )
-    if sample_maps_dir.is_dir():
-        return str(sample_maps_dir)
+    if map_library_dir.is_dir():
+        _move_legacy_sample_maps_contents(legacy_sample_maps_dir, map_library_dir)
+        return str(map_library_dir)
 
     # If a conflicting file or permissions problem blocks the dedicated
-    # sample_maps/ folder, fall back to the XDG data root. The normal
-    # download helper will still create sample_maps/<map> under this root.
+    # map_library/ folder, fall back to the XDG data root. The normal
+    # download helper will still create map_library/<map> under this root.
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
     return str(data_dir)
+
+
+def _move_legacy_sample_maps_contents(legacy_dir: Path, map_library_dir: Path) -> None:
+    """Move legacy app-managed sample_maps contents into map_library."""
+    if not legacy_dir.is_dir() or legacy_dir == map_library_dir:
+        return
+
+    try:
+        entries = list(legacy_dir.iterdir())
+    except OSError as exc:
+        _LOG.warning(
+            "Could not inspect legacy sample map directory %s: %s",
+            legacy_dir,
+            exc,
+        )
+        return
+
+    for entry in entries:
+        _move_legacy_sample_map_entry(entry, map_library_dir / entry.name)
+
+    try:
+        legacy_dir.rmdir()
+        _LOG.info("Removed empty legacy sample map directory %s", legacy_dir)
+    except OSError:
+        _LOG.warning(
+            "Legacy sample map directory %s still contains items that were not moved",
+            legacy_dir,
+        )
+
+
+def _move_legacy_sample_map_entry(source: Path, destination: Path) -> None:
+    if not destination.exists():
+        try:
+            source.rename(destination)
+            _LOG.info("Moved legacy sample map item %s to %s", source, destination)
+        except OSError as exc:
+            _LOG.warning("Could not move legacy sample map item %s: %s", source, exc)
+        return
+
+    if source.is_dir() and destination.is_dir() and not source.is_symlink():
+        _merge_legacy_sample_map_directory(source, destination)
+        return
+
+    _LOG.warning(
+        "Keeping legacy sample map item %s because %s already exists",
+        source,
+        destination,
+    )
+
+
+def _merge_legacy_sample_map_directory(source: Path, destination: Path) -> None:
+    try:
+        entries = list(source.iterdir())
+    except OSError as exc:
+        _LOG.warning(
+            "Could not inspect legacy sample map directory %s: %s",
+            source,
+            exc,
+        )
+        return
+
+    for entry in entries:
+        _move_legacy_sample_map_entry(entry, destination / entry.name)
+
+    try:
+        source.rmdir()
+    except OSError:
+        _LOG.warning(
+            "Keeping legacy sample map directory %s because it still contains conflicts",
+            source,
+        )
 
 
 def _known_maps_with_no_download_info():
@@ -248,7 +349,7 @@ def local_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
     """
     Where a given sample map would live locally once downloaded --
     one subfolder per map, named after its display name (so it reads
-    clearly in a file browser), inside the shared sample_maps folder.
+    clearly in a file browser), inside the shared map_library folder.
     """
     return os.path.join(_sample_maps_container_dir(install_dir), sample.display_name)
 
@@ -258,14 +359,17 @@ def _sample_maps_container_dir(install_dir: str) -> str:
     Return the folder that should directly contain individual sample maps.
 
     The dialog asks where to save sample maps, and CaveViewer normally creates
-    a shared sample_maps/ folder inside that selected directory. If the user
-    already chooses a folder named sample_maps, treat that folder itself as the
-    container instead of creating sample_maps/sample_maps/... .
+    a shared map_library/ folder inside that selected directory. If the user
+    already chooses a folder named map_library, treat that folder itself as the
+    container instead of creating map_library/map_library/... . Legacy
+    sample_maps selections are also treated as existing containers so older
+    custom locations remain usable.
     """
     normalized = os.path.normpath(_install_dir_path(install_dir))
-    if os.path.basename(normalized).lower() == SAMPLE_MAPS_DIRNAME.lower():
+    basename = os.path.basename(normalized).lower()
+    if basename in {MAP_LIBRARY_DIRNAME.lower(), _LEGACY_SAMPLE_MAPS_DIRNAME.lower()}:
         return normalized
-    return os.path.join(normalized, SAMPLE_MAPS_DIRNAME)
+    return os.path.join(normalized, MAP_LIBRARY_DIRNAME)
 
 
 def is_sample_map_already_downloaded(install_dir: str, sample: SampleMapInfo) -> bool:
@@ -276,7 +380,10 @@ def is_sample_map_already_downloaded(install_dir: str, sample: SampleMapInfo) ->
     re-downloading tens to hundreds of MB unnecessarily every time.
     """
     path = local_sample_map_path(install_dir, sample)
-    return _folder_has_contents(path) or _folder_has_contents(_legacy_nested_sample_map_path(install_dir, sample))
+    return _folder_has_contents(path) or any(
+        _folder_has_contents(legacy_path)
+        for legacy_path in _legacy_sample_map_paths(install_dir, sample)
+    )
 
 
 def existing_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
@@ -284,10 +391,79 @@ def existing_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
     path = local_sample_map_path(install_dir, sample)
     if _folder_has_contents(path):
         return path
-    legacy_path = _legacy_nested_sample_map_path(install_dir, sample)
-    if _folder_has_contents(legacy_path):
-        return legacy_path
+    for legacy_path in _legacy_sample_map_paths(install_dir, sample):
+        if _folder_has_contents(legacy_path):
+            return legacy_path
     return path
+
+
+def remove_downloaded_sample_map(
+    install_dir: str | os.PathLike[str],
+    sample: SampleMapInfo,
+) -> SampleMapRemovalResult:
+    """Remove app-managed downloaded files for one Standard Library map."""
+    removed_paths: list[str] = []
+    errors: list[str] = []
+
+    for candidate in _sample_map_removal_candidates(install_dir, sample):
+        try:
+            if not os.path.lexists(candidate):
+                continue
+            if os.path.islink(candidate) or not os.path.isdir(candidate):
+                errors.append(f"{candidate} is not a removable directory")
+                continue
+            shutil.rmtree(candidate)
+            removed_paths.append(candidate)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            errors.append(f"{candidate}: {exc}")
+
+    return SampleMapRemovalResult(
+        removed_paths=tuple(removed_paths),
+        error="; ".join(errors) if errors else None,
+    )
+
+
+def is_app_supplied_sample_map_path(
+    path: str | os.PathLike[str], install_dir: str | os.PathLike[str] | None = None
+) -> bool:
+    """
+    Return whether `path` is one of CaveViewer's known app-library sample maps.
+
+    Recent maps should reflect user-opened maps, not the curated sample maps
+    already listed in the Map Library's Available Maps section.  Compare exact
+    managed-library and legacy sample-map folder locations so similarly named
+    user maps elsewhere on disk still remain eligible for history.
+    """
+    normalized = _normalized_path_for_compare(path)
+    if normalized is None:
+        return False
+
+    for candidate in _app_supplied_sample_map_path_candidates(install_dir):
+        candidate_normalized = _normalized_path_for_compare(candidate)
+        if candidate_normalized is not None and normalized == candidate_normalized:
+            return True
+    return False
+
+
+def _sample_map_removal_candidates(
+    install_dir: str | os.PathLike[str],
+    sample: SampleMapInfo,
+) -> list[str]:
+    raw_candidates = [
+        local_sample_map_path(os.fspath(install_dir), sample),
+        *_legacy_sample_map_paths(os.fspath(install_dir), sample),
+    ]
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for candidate in raw_candidates:
+        normalized = _normalized_path_for_compare(candidate)
+        if normalized is None or normalized in seen:
+            continue
+        candidates.append(candidate)
+        seen.add(normalized)
+    return candidates
 
 
 def _folder_has_contents(path: str) -> bool:
@@ -297,12 +473,67 @@ def _folder_has_contents(path: str) -> bool:
         return False
 
 
-def _legacy_nested_sample_map_path(install_dir: str, sample: SampleMapInfo) -> str:
-    """Path used by older builds when users selected an existing sample_maps folder."""
+def _app_supplied_sample_map_path_candidates(
+    install_dir: str | os.PathLike[str] | None = None,
+) -> list[str]:
+    if install_dir is None:
+        data_dir = resolve_application_paths().data_dir
+        roots = (
+            data_dir,
+            data_dir / MAP_LIBRARY_DIRNAME,
+            data_dir / _LEGACY_SAMPLE_MAPS_DIRNAME,
+        )
+    else:
+        roots = (Path(_install_dir_path(install_dir)),)
+
+    candidates: list[str] = []
+    for root in roots:
+        root_path = os.fspath(root)
+        for sample in KNOWN_SAMPLE_MAPS:
+            candidates.append(local_sample_map_path(root_path, sample))
+            candidates.extend(_legacy_sample_map_paths(root_path, sample))
+    return candidates
+
+
+def _normalized_path_for_compare(path: str | os.PathLike[str]) -> str | None:
+    try:
+        if not path:
+            return None
+        return os.path.normcase(
+            os.path.abspath(os.path.expanduser(os.fspath(path)))
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _legacy_sample_map_paths(install_dir: str, sample: SampleMapInfo) -> list[str]:
+    """Paths used by older builds before the app-managed map_library folder."""
     normalized = os.path.normpath(_install_dir_path(install_dir))
-    if os.path.basename(normalized).lower() != SAMPLE_MAPS_DIRNAME.lower():
-        return ""
-    return os.path.join(normalized, SAMPLE_MAPS_DIRNAME, sample.display_name)
+    basename = os.path.basename(normalized).lower()
+    legacy_paths: list[str] = []
+
+    if basename == _LEGACY_SAMPLE_MAPS_DIRNAME.lower():
+        legacy_paths.append(os.path.join(normalized, sample.display_name))
+        legacy_paths.append(
+            os.path.join(normalized, _LEGACY_SAMPLE_MAPS_DIRNAME, sample.display_name)
+        )
+    elif basename == MAP_LIBRARY_DIRNAME.lower():
+        legacy_paths.append(
+            os.path.join(normalized, _LEGACY_SAMPLE_MAPS_DIRNAME, sample.display_name)
+        )
+        legacy_paths.append(
+            os.path.join(
+                os.path.dirname(normalized),
+                _LEGACY_SAMPLE_MAPS_DIRNAME,
+                sample.display_name,
+            )
+        )
+    else:
+        legacy_paths.append(
+            os.path.join(normalized, _LEGACY_SAMPLE_MAPS_DIRNAME, sample.display_name)
+        )
+
+    return legacy_paths
 
 
 def _sample_map_publish_staging_prefix(dest_dir: str) -> str:
@@ -387,7 +618,7 @@ def download_and_extract_sample_map(install_dir: str, sample: SampleMapInfo,
                                     progress_cb=None, cancel_cb=None) -> str:
     """
     Downloads the given sample map's zip to a temp location, verifies
-    its size, extracts it into its own folder under sample_maps/, and
+    its size, extracts it into its own folder under map_library/, and
     cleans up the temp zip. Returns the local folder path the map was
     extracted to (the same thing local_sample_map_path() would compute).
 

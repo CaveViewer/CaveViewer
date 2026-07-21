@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import inspect
 import sys
+from types import SimpleNamespace
 
 import pytest
 
-from caveviewer.gui import splash_screen
+from caveviewer.gui import map_history, splash_screen
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
 
@@ -122,6 +123,23 @@ def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):
     assert splash_screen._load_last_browse_dir() == str(map_root)
 
 
+def test_library_recent_maps_use_open_history_not_last_browse(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    state_home = tmp_path / "state"
+    last_map = tmp_path / "last-map"
+    recent_map = tmp_path / "recent-map"
+    last_map.mkdir()
+    recent_map.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    splash_screen._save_last_browse_dir(str(last_map))
+    map_history.remember_recent_map_path(str(recent_map))
+
+    assert splash_screen._load_library_recent_map_paths() == [str(recent_map)]
+
+
 def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
     monkeypatch.setattr(splash_screen.sys, "platform", "darwin")
     destroyed_children = []
@@ -231,4 +249,128 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "def _bind_activation(widget, callback) -> None:" in source
     assert "_bind_activation(browse_button, on_open_map_folder)" in source
     assert "_bind_activation(preferences_link, _on_preferences_click)" in source
-    assert "_bind_activation(sample_maps_link, _on_example_maps_click)" in source
+    assert "_on_sample_map_action(sample)" in source
+    assert "start_sample_download_worker(" in source
+    assert "show_sample_maps_dialog(" not in source
+    assert "Download sample maps" not in source
+
+
+def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert 'text="Map Library"' not in source
+    assert "Your Library" in source
+    assert "Standard Library" in source
+    assert "Open your maps or explore the standard library." not in source
+    assert "No maps added yet." in source
+    assert "Maps you open yourself will appear here." not in source
+    assert "No user-opened maps yet." not in source
+    assert 'top_pad=16' in source
+    assert 'bottom_pad=18' in source
+    assert "Recent Maps" not in source
+    assert "Available Maps" not in source
+    assert "Open recent or available maps." not in source
+    assert "Explore sample maps" not in source
+    assert "Available to download" not in source
+    assert "Scrollbar(" not in source
+    assert "content_canvas.configure(yscrollcommand=_set_library_scrollbar)" in source
+    assert 'content_scrollbar.pack(side="right", fill="y")' in source
+    assert "_bind_library_mousewheel(rows_frame)" in source
+    assert "recent_map_paths = _load_library_recent_map_paths()" in source
+    assert "detail=_sample_map_status_text(sample, downloaded=downloaded)" in source
+    assert "highlightthickness=0" in source
+    assert "highlightbackground=_LIBRARY_PANEL_BORDER_COLOR" in source
+    assert 'divider.pack(side="left", fill="y", padx=(px(18), px(12)), pady=px(26))' in source
+    assert 'panel.pack(fill="both", expand=True, pady=px(26))' in source
+    assert "font=_LIBRARY_METADATA_FONT" in source
+    assert "fg=_LIBRARY_METADATA_COLOR" in source
+    assert "width=_LIBRARY_ACTION_BUTTON_WIDTH" in source
+    assert "padx=px(_LIBRARY_ACTION_BUTTON_PAD_X)" in source
+    assert "pady=px(_LIBRARY_ACTION_BUTTON_PAD_Y)" in source
+    assert "progress_bar_canvas = tk.Canvas(" in source
+    assert "width=px(_LIBRARY_PROGRESS_WIDTH)" in source
+    assert "height=px(_LIBRARY_PROGRESS_HEIGHT)" in source
+    assert 'progress_bar_canvas.pack(' in source
+    assert 'anchor="w"' in source
+    assert "pady=(px(_LIBRARY_PROGRESS_TOP_PAD), 0)" in source
+    assert "reserve_progress=True" in source
+    assert "widgets.progress_bar_canvas.pack(" not in source
+    assert "widgets.progress_bar_canvas.pack_forget()" not in source
+    assert "_poll_library_download_queue" in source
+    assert "_cancel_active_library_download_for_close()" in source
+    assert "DirectorySelection.from_path(sample_maps_root_dir)" in source
+    assert "_start_sample_catalog_fetch()" in source
+
+
+def test_map_library_rows_use_subtle_overflow_menu_for_management():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert "Remove from this list" in source
+    assert "Remove cache" in source
+    assert "Remove downloaded files" in source
+    assert "Remove from Recent" not in source
+    assert "_create_library_overflow_button" in source
+    assert "_create_recent_overflow_button" not in source
+    assert "menu_actions_factory=" in source
+    assert "leading_widget_factory=" not in source
+    assert "leading_widget=leading_widget" in source
+    assert "remove_recent_map_path(path)" in source
+    assert "has_managed_map_cache(path)" in source
+    assert "remove_managed_map_cache(path)" in source
+    assert "remove_downloaded_sample_map(sample_maps_root_dir, sample)" in source
+    assert "_remove_standard_library_download_from_splash" in source
+    assert "_show_library_row_status" in source
+    assert "Cache removed" in source
+    assert "Couldn’t remove cache" in source
+    assert "Couldn’t remove files" in source
+    assert "_cv_base_text" in source
+    assert "_cv_status_after_id" in source
+    assert "Removed downloaded files for" not in source
+    assert "Removed cache for" not in source
+    assert "has_managed_map_cache(sample_path)" not in source
+    assert "recent_container = tk.Frame(rows_frame" in source
+    assert "recent_rows_container[0] = recent_container" in source
+    assert "recent_empty_note[0] = _create_map_library_empty_note" in source
+    assert "_LIBRARY_OVERFLOW_TEXT" in source
+    assert "Open" in source
+
+
+def test_sample_map_splash_actions_are_compact():
+    assert splash_screen._sample_map_splash_action_text(downloaded=True) == "Open"
+    assert splash_screen._sample_map_splash_action_text(downloaded=False) == "Get"
+    assert splash_screen._sample_map_splash_size_text(
+        SimpleNamespace(
+            asset_name="Boh.Yai.Mine.I.Low.Res.zip",
+            size_bytes=None,
+        )
+    ) == "57 MB"
+    assert splash_screen._sample_map_splash_size_text(
+        SimpleNamespace(
+            asset_name="custom.zip",
+            size_bytes=52 * 1024 * 1024,
+        )
+    ) == "52 MB"
+    assert splash_screen._sample_map_splash_size_text(
+        SimpleNamespace(
+            asset_name="custom.zip",
+            size_bytes=None,
+        )
+    ) == ""
+
+
+def test_library_action_buttons_use_normalized_dimensions():
+    assert splash_screen._LIBRARY_ACTION_BUTTON_WIDTH == 8
+    assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_X == 10
+    assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_Y == 5
+    assert splash_screen._LIBRARY_METADATA_FONT[1] == 9
+
+
+def test_map_library_recent_labels_are_compact(tmp_path):
+    parent = tmp_path / "a" / "long" / "path"
+    map_root = parent / "Demo Map"
+    map_root.mkdir(parents=True)
+
+    assert splash_screen._map_library_recent_title(str(map_root)) == "Demo Map"
+    detail = splash_screen._map_library_recent_detail_text(str(map_root))
+    assert detail
+    assert len(detail) <= 44

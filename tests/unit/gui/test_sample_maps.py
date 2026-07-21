@@ -39,6 +39,11 @@ def test_known_sample_maps_include_current_public_release_assets():
     assert [sample.asset_name for sample in sample_maps.KNOWN_SAMPLE_MAPS] == expected_assets
 
 
+def test_sample_maps_dirname_points_to_map_library():
+    assert sample_maps.MAP_LIBRARY_DIRNAME == "map_library"
+    assert sample_maps.SAMPLE_MAPS_DIRNAME == sample_maps.MAP_LIBRARY_DIRNAME
+
+
 def test_catalog_populates_known_assets_and_keeps_missing_entries(monkeypatch):
     known = sample_maps.KNOWN_SAMPLE_MAPS[0]
     payload = {
@@ -152,6 +157,95 @@ def test_default_sample_maps_install_dir_uses_xdg_data_home(tmp_path, monkeypatc
     ) == str(install_dir / "Test Cave")
 
 
+def test_default_sample_maps_install_dir_migrates_legacy_sample_maps_dir(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    legacy_dir = data_home / "caveviewer" / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "marker.txt").write_text("legacy map", encoding="utf-8")
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == data_home / "caveviewer" / sample_maps.MAP_LIBRARY_DIRNAME
+    assert not legacy_dir.exists()
+    assert (install_dir / "marker.txt").read_text(encoding="utf-8") == "legacy map"
+
+
+def test_default_sample_maps_install_dir_merges_legacy_into_existing_map_library(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    library_dir = data_home / "caveviewer" / sample_maps.MAP_LIBRARY_DIRNAME
+    legacy_dir = data_home / "caveviewer" / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+    library_dir.mkdir(parents=True)
+    legacy_map = legacy_dir / "Test Cave"
+    legacy_map.mkdir(parents=True)
+    (legacy_map / "map.obj").write_text("legacy map", encoding="utf-8")
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == library_dir
+    assert not legacy_dir.exists()
+    assert (library_dir / "Test Cave" / "map.obj").read_text(
+        encoding="utf-8"
+    ) == "legacy map"
+
+
+def test_default_sample_maps_install_dir_does_not_overwrite_library_conflicts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    library_map = (
+        data_home
+        / "caveviewer"
+        / sample_maps.MAP_LIBRARY_DIRNAME
+        / "Test Cave"
+    )
+    legacy_map = (
+        data_home
+        / "caveviewer"
+        / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+        / "Test Cave"
+    )
+    library_map.mkdir(parents=True)
+    legacy_map.mkdir(parents=True)
+    (library_map / "map.obj").write_text("library map", encoding="utf-8")
+    (legacy_map / "map.obj").write_text("legacy map", encoding="utf-8")
+    (legacy_map / "texture.png").write_text("texture", encoding="utf-8")
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == library_map.parent
+    assert (library_map / "map.obj").read_text(encoding="utf-8") == "library map"
+    assert (library_map / "texture.png").read_text(encoding="utf-8") == "texture"
+    assert (legacy_map / "map.obj").read_text(encoding="utf-8") == "legacy map"
+
+
+def test_default_sample_maps_install_dir_uses_legacy_when_map_library_is_file(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    app_data_dir = data_home / "caveviewer"
+    legacy_dir = app_data_dir / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+    legacy_dir.mkdir(parents=True)
+    (app_data_dir / sample_maps.MAP_LIBRARY_DIRNAME).write_text(
+        "blocked", encoding="utf-8"
+    )
+
+    install_dir = Path(sample_maps.default_sample_maps_install_dir())
+
+    assert install_dir == legacy_dir
+
+
 def test_downloaded_state_and_existing_path_use_normal_location(tmp_path):
     sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
     expected = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave"
@@ -164,13 +258,84 @@ def test_downloaded_state_and_existing_path_use_normal_location(tmp_path):
 
 
 def test_existing_path_supports_legacy_nested_location(tmp_path):
-    container = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME
+    container = tmp_path / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
     sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
-    legacy = container / sample_maps.SAMPLE_MAPS_DIRNAME / "Test Cave"
+    legacy = container / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME / "Test Cave"
     legacy.mkdir(parents=True)
     (legacy / "map.obj").write_text("mesh", encoding="utf-8")
     assert sample_maps.is_sample_map_already_downloaded(str(container), sample)
     assert sample_maps.existing_sample_map_path(str(container), sample) == str(legacy)
+
+
+def test_existing_path_supports_legacy_sibling_location(tmp_path):
+    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+    legacy = tmp_path / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME / "Test Cave"
+    legacy.mkdir(parents=True)
+    (legacy / "map.obj").write_text("mesh", encoding="utf-8")
+    assert sample_maps.is_sample_map_already_downloaded(str(tmp_path), sample)
+    assert sample_maps.existing_sample_map_path(str(tmp_path), sample) == str(legacy)
+
+
+def test_remove_downloaded_sample_map_removes_current_and_legacy_files(tmp_path):
+    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+    current = tmp_path / sample_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    legacy = tmp_path / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME / "Test Cave"
+    unrelated = tmp_path / sample_maps.MAP_LIBRARY_DIRNAME / "Other Cave"
+
+    for folder in (current, legacy, unrelated):
+        folder.mkdir(parents=True)
+        (folder / "map.obj").write_text("mesh", encoding="utf-8")
+
+    result = sample_maps.remove_downloaded_sample_map(str(tmp_path), sample)
+
+    assert set(result.removed_paths) == {str(current), str(legacy)}
+    assert result.error is None
+    assert not current.exists()
+    assert not legacy.exists()
+    assert unrelated.exists()
+
+
+def test_remove_downloaded_sample_map_rejects_non_directory_conflict(tmp_path):
+    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+    current = tmp_path / sample_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    current.parent.mkdir(parents=True)
+    current.write_text("not a directory", encoding="utf-8")
+
+    result = sample_maps.remove_downloaded_sample_map(str(tmp_path), sample)
+
+    assert result.removed_paths == ()
+    assert result.error == f"{current} is not a removable directory"
+    assert current.exists()
+
+
+def test_app_supplied_sample_map_path_matches_managed_library_only(
+    tmp_path, monkeypatch
+):
+    caveviewer_home = tmp_path / "caveviewer-home"
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(caveviewer_home))
+    sample = sample_maps.KNOWN_SAMPLE_MAPS[0]
+    managed_library_path = (
+        caveviewer_home
+        / "data"
+        / sample_maps.MAP_LIBRARY_DIRNAME
+        / sample.display_name
+    )
+    legacy_sample_path = (
+        caveviewer_home
+        / "data"
+        / sample_maps._LEGACY_SAMPLE_MAPS_DIRNAME
+        / sample.display_name
+    )
+    unrelated_user_path = (
+        tmp_path
+        / "user-maps"
+        / sample_maps.MAP_LIBRARY_DIRNAME
+        / sample.display_name
+    )
+
+    assert sample_maps.is_app_supplied_sample_map_path(managed_library_path)
+    assert sample_maps.is_app_supplied_sample_map_path(legacy_sample_path)
+    assert not sample_maps.is_app_supplied_sample_map_path(unrelated_user_path)
 
 
 def test_folder_contents_handles_directory_read_error(tmp_path, monkeypatch):
