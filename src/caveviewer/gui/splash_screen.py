@@ -879,7 +879,8 @@ def show_splash_screen(
             if not _widget_exists(recent_empty_note[0]):
                 recent_empty_note[0] = _create_map_library_empty_note(
                     container,
-                    "No user-opened maps yet.",
+                    "Maps you open yourself will appear here.",
+                    bottom_pad=18,
                 )
                 _bind_library_mousewheel_if_ready(recent_empty_note[0])
         _sync_library_scroll_after_row_change()
@@ -1468,7 +1469,7 @@ def show_splash_screen(
         button.bind("<Enter>", show_hover)
         button.bind("<Leave>", clear_hover)
 
-    def _create_map_library_section(parent, text: str) -> None:
+    def _create_map_library_section(parent, text: str, *, top_pad: int = 10) -> None:
         label = tk.Label(
             parent,
             text=text,
@@ -1477,9 +1478,14 @@ def show_splash_screen(
             bg=_PANEL_COLOR,
             anchor="w",
         )
-        label.pack(anchor="w", fill="x", pady=(px(10), px(6)))
+        label.pack(anchor="w", fill="x", pady=(px(top_pad), px(6)))
 
-    def _create_map_library_empty_note(parent, text: str) -> None:
+    def _create_map_library_empty_note(
+        parent,
+        text: str,
+        *,
+        bottom_pad: int = 8,
+    ) -> tk.Label:
         label = tk.Label(
             parent,
             text=text,
@@ -1489,7 +1495,7 @@ def show_splash_screen(
             anchor="w",
             justify="left",
         )
-        label.pack(anchor="w", fill="x", pady=(0, px(8)))
+        label.pack(anchor="w", fill="x", pady=(0, px(bottom_pad)))
         return label
 
     def _create_map_library_row(
@@ -1649,28 +1655,6 @@ def show_splash_screen(
             highlightcolor=_LIBRARY_PANEL_BORDER_COLOR,
         )
         panel.pack(fill="both", expand=True, pady=(px(34), px(24)))
-
-        header_label = tk.Label(
-            panel,
-            text="Map Library",
-            font=_BODY_FONT,
-            fg=_TITLE_COLOR,
-            bg=_PANEL_COLOR,
-            anchor="w",
-        )
-        header_label.pack(anchor="w", fill="x", padx=px(16), pady=(px(16), px(4)))
-
-        intro_label = tk.Label(
-            panel,
-            text="Open your maps or explore the standard library.",
-            font=_SMALL_FONT,
-            fg=_INSTRUCTION_COLOR,
-            bg=_PANEL_COLOR,
-            anchor="w",
-            justify="left",
-            wraplength=px(310),
-        )
-        intro_label.pack(anchor="w", fill="x", padx=px(16), pady=(0, px(14)))
 
         scrollbar_fraction = [(0.0, 1.0)]
         scrollbar_thumb = [None]
@@ -1844,7 +1828,7 @@ def show_splash_screen(
             add="+",
         )
 
-        _create_map_library_section(rows_frame, "Your Library")
+        _create_map_library_section(rows_frame, "Your Library", top_pad=16)
         recent_container = tk.Frame(rows_frame, bg=_PANEL_COLOR)
         recent_container.pack(fill="x")
         recent_rows_container[0] = recent_container
@@ -1854,7 +1838,8 @@ def show_splash_screen(
         else:
             recent_empty_note[0] = _create_map_library_empty_note(
                 recent_container,
-                "No user-opened maps yet.",
+                "Maps you open yourself will appear here.",
+                bottom_pad=18,
             )
 
         _create_map_library_section(rows_frame, "Standard Library")

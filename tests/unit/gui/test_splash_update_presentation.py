@@ -258,11 +258,14 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
 def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
-    assert "Map Library" in source
+    assert 'text="Map Library"' not in source
     assert "Your Library" in source
     assert "Standard Library" in source
-    assert "Open your maps or explore the standard library." in source
-    assert "No user-opened maps yet." in source
+    assert "Open your maps or explore the standard library." not in source
+    assert "Maps you open yourself will appear here." in source
+    assert "No user-opened maps yet." not in source
+    assert 'top_pad=16' in source
+    assert 'bottom_pad=18' in source
     assert "Recent Maps" not in source
     assert "Available Maps" not in source
     assert "Open recent or available maps." not in source
