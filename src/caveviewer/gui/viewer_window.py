@@ -2043,7 +2043,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         CaveViewerWindow.cave_manifest = None
         CaveViewerWindow.cave_pending_import = None
 
-    def load_new_map(self, cache_dir: str, textures_dir: str, manifest: dict) -> None:
+    def load_new_map(
+        self,
+        cache_dir: str,
+        textures_dir: str,
+        manifest: dict,
+        *,
+        source_dir: str | None = None,
+    ) -> None:
         """
         Switches the viewer to a different map without closing the
         window -- called by the OPEN button's click handler once a new
@@ -2064,7 +2071,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         try:
             from caveviewer.gui.map_history import remember_recent_map_path
 
-            remember_recent_map_path(textures_dir)
+            remember_recent_map_path(source_dir or textures_dir)
         except Exception:
             pass
 
@@ -2120,7 +2127,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             map_name = os.path.basename(new_manifest.get("source_obj") or folder)
             _LOG.info(f"Switching to prebuilt map: {map_name}")
             _LOG.info(f"Using cache directory: {prebuilt_cache}")
-            self.load_new_map(prebuilt_cache, textures_dir, new_manifest)
+            self.load_new_map(
+                prebuilt_cache,
+                textures_dir,
+                new_manifest,
+                source_dir=folder,
+            )
             _LOG.info(f"Now viewing: {map_name}")
             return
 

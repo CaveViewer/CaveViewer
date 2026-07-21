@@ -60,6 +60,7 @@ class MapImportController:
         self.process = None
         self.command_queue = None
         self.cache_dir: str | None = None
+        self.source_dir: str | None = None
         self.stop_event: threading.Event | None = None
         self.event_queue: queue_module.Queue | None = None
         self.pause_requested: bool = False
@@ -212,6 +213,7 @@ class MapImportController:
         self.process = None
         self.command_queue = None
         self.cache_dir = None
+        self.source_dir = textures_dir
         self.stop_event = threading.Event()
         self.pause_requested = False
         self.model_format = self.import_model_format_from_descriptor(model_descriptor)
@@ -434,6 +436,7 @@ class MapImportController:
     def _handle_done_message(self, msg: tuple) -> None:
         finish_console_progress_line()
         _, cache_dir, textures_dir = msg
+        source_dir = self.source_dir
         self._clear_active_references()
         try:
             manifest = self._chunker().load_manifest(cache_dir)
@@ -447,7 +450,12 @@ class MapImportController:
                 self.log.error("Closing -- no map to show without a valid cache manifest.")
                 self._close_window_if_possible()
             return
-        self._owner.load_new_map(cache_dir, textures_dir, manifest)
+        self._owner.load_new_map(
+            cache_dir,
+            textures_dir,
+            manifest,
+            source_dir=source_dir,
+        )
 
     def _handle_error_message(self, msg: tuple) -> None:
         finish_console_progress_line()
@@ -494,6 +502,7 @@ class MapImportController:
         self.process = None
         self.command_queue = None
         self.cache_dir = None
+        self.source_dir = None
         self.stop_event = None
         self.pause_requested = False
         self.model_format = None
