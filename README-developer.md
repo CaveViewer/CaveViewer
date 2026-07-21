@@ -602,3 +602,10 @@ is writable.
 | `CAVEVIEWER_SAMPLE_MAPS_REPO` | `CaveViewer/CaveViewer` | GitHub `owner/repo` for the sample maps release. |
 | `CAVEVIEWER_SAMPLE_DATA_TAG` | `sample-data` | Release tag to fetch sample map assets from. |
 | `CAVEVIEWER_SAMPLE_MAPS_API_URL` | _(derived from repo + tag)_ | Full GitHub release API URL. Overrides the repo/tag variables when set. |
+
+The Sample Maps dialog keeps Tk work on the Tk thread. Catalog fetches and
+sample-map download/extract work run in background workers; workers publish
+progress and terminal status through queues, and the dialog applies those
+messages from `after()` callbacks. Worker callbacks must not read or mutate Tk
+widgets directly. Closing the dialog sets the active download's cancellation
+event and cancels the pending queue poll callback.
