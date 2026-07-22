@@ -8,7 +8,6 @@ from typing import Callable
 
 from caveviewer.gui.preferences import (
     PREFERENCE_FIELDS,
-    PreferencesSaveError,
     PreferenceSpec,
     PreferenceValueType,
     preference_placeholder_text,
@@ -16,6 +15,7 @@ from caveviewer.gui.preferences import (
     load_preferences,
     save_preferences,
 )
+from caveviewer.gui.preferences_workflow import PreferencesDialogWorkflow
 from caveviewer.gui.preferences_form import (
     PreferencesFormController,
     PreferencesFormState,
@@ -94,8 +94,12 @@ class PreferencesDialog:
         self.parent = parent
         self.ui_font_family = ui_font_family
         self.desktop_services = desktop_services or get_desktop_services()
-        self.preferences = load_preferences()
-        apply_preferences_to_env(self.preferences)
+        self.workflow = PreferencesDialogWorkflow(
+            load_preferences_fn=load_preferences,
+            save_preferences_fn=save_preferences,
+            apply_preferences_to_env_fn=apply_preferences_to_env,
+        )
+        self.preferences = self.workflow.load_initial()
         self.form = PreferencesFormController(self.preferences)
 
         self.dialog = tk.Toplevel(parent)
@@ -980,13 +984,17 @@ class PreferencesDialog:
 
         for key in self.numeric_entry_states:
             self._show_numeric_placeholder(key)
-        try:
-            save_preferences(preferences)
-        except PreferencesSaveError as exc:
-            self._set_feedback(str(exc), MessageKind.ERROR)
+        workflow = getattr(self, "workflow", None)
+        if workflow is None:
+            workflow = PreferencesDialogWorkflow(
+                save_preferences_fn=save_preferences,
+                apply_preferences_to_env_fn=apply_preferences_to_env,
+            )
+        result = workflow.apply(preferences)
+        if not result.succeeded:
+            self._set_feedback(result.error or "", MessageKind.ERROR)
             return
-        self.preferences = preferences
-        apply_preferences_to_env(preferences)
+        self.preferences = result.preferences
         self.dialog.destroy()
 
     def cancel(self) -> None:
