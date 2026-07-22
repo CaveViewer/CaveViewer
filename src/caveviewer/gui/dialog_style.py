@@ -7,20 +7,19 @@ quietly drifting apart.
 
 from __future__ import annotations
 
-import sys
 import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Literal
 
+from caveviewer.gui.platform import get_platform_adapter
 from caveviewer.gui.tk_theme import DARK_THEME
 
 
 DialogButtonKind = Literal["primary", "secondary"]
 DialogNoticeKind = Literal["info", "warning", "error"]
 
-DIALOG_BODY_PAD_X = (
-    18 if sys.platform == "darwin" else (32 if sys.platform == "win32" else 24)
-)
+_DIALOG_LAYOUT = get_platform_adapter().dialog_layout_policy()
+DIALOG_BODY_PAD_X = _DIALOG_LAYOUT.body_pad_x
 DIALOG_BODY_PAD_Y = 18
 DIALOG_PANEL_BORDER = DARK_THEME.entry_border
 
@@ -198,7 +197,7 @@ def create_dialog_action_button(
     default: str | None = None,
 ):
     """Create a consistently styled action button for CaveViewer dialogs."""
-    if sys.platform == "darwin":
+    if _DIALOG_LAYOUT.use_label_action_buttons:
         return DialogActionLabel(
             parent,
             text=text,

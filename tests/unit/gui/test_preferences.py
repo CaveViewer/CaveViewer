@@ -605,17 +605,17 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     fields_by_key = {
         field.key: field for field in preferences_dialog.PREFERENCE_FIELDS
     }
+    layout_policy = preferences_dialog._LAYOUT_POLICY
 
     assert page_keys == ["streaming", "parsing", "storage"]
     assert page_labels == ["Streaming", "Import", "Storage"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
     assert set(page_keys) == field_sections
-    assert preferences_dialog._WINDOWS_LAYOUT == (
-        preferences_dialog.sys.platform == "win32"
-    )
-    assert preferences_dialog._MACOS_LAYOUT == (
-        preferences_dialog.sys.platform == "darwin"
-    )
+    assert preferences_dialog._WINDOWS_LAYOUT == layout_policy.windows_layout
+    assert preferences_dialog._MACOS_LAYOUT == layout_policy.macos_layout
+    assert preferences_dialog._LINUX_LAYOUT == layout_policy.linux_layout
+    assert preferences_dialog._WRAP_LENGTH == layout_policy.wrap_length
+    assert preferences_dialog._TEXT_ENTRY_WIDTH == layout_policy.text_entry_width
     assert fields_by_key["io_workers"].label == "Loading worker limit"
     assert (
         fields_by_key["chunk_build_workers"].label
@@ -650,10 +650,7 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
         fields_by_key["max_upload_group_mb"].hint
         == "Maximum VBO payload size for dense chunk groups, in MB."
     )
-    if (
-        preferences_dialog._LINUX_LAYOUT
-        or preferences_dialog.sys.platform == "win32"
-    ):
+    if preferences_dialog._LINUX_LAYOUT or preferences_dialog._WINDOWS_LAYOUT:
         assert preferences_dialog._MIN_WIDTH >= 860
     elif preferences_dialog._MACOS_LAYOUT:
         assert preferences_dialog._BODY_PAD_X == 12
@@ -707,7 +704,7 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     assert "create_line(" in module_source
     assert "capstyle=\"round\"" in module_source
     assert "content_canvas" not in source
-    assert "resizable(False, _WINDOWS_LAYOUT)" in module_source
+    assert "resizable(False, _LAYOUT_POLICY.resizable_vertical)" in module_source
     assert "highlightthickness=_TAB_HIGHLIGHT_THICKNESS" in module_source
     assert "self.button_row.pack(" in source
     assert "side=\"bottom\"" in source

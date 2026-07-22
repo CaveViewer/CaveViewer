@@ -1,6 +1,59 @@
+"""Protocol and value objects for GUI platform adapters."""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Protocol
+
+
+@dataclass(frozen=True)
+class SplashLayoutPolicy:
+    """Platform-specific splash-window layout decisions."""
+
+    app_icon_resource_name: str
+    reuse_existing_root: bool
+    destroy_root_on_close: bool
+    windows_layout: bool
+    linux_layout: bool
+    min_height: int
+    extra_bottom_slack: int
+    secondary_link_row_bottom_gap: int
+    footer_credits_bottom_pad: int
+    title_to_action_gap: int
+    browse_button_bottom_gap: int
+    instruction_bottom_gap: int
+    secondary_link_row_top_gap: int
+
+
+@dataclass(frozen=True)
+class PreferencesDialogLayoutPolicy:
+    """Platform-specific Preferences dialog layout decisions."""
+
+    windows_layout: bool
+    macos_layout: bool
+    linux_layout: bool
+    wrap_length: int
+    text_entry_width: int
+    body_pad_x: int
+    min_width: int
+    row_pad_x: int
+    row_pad_y: int
+    control_row_top_pad_y: int
+    tab_pad_x: int
+    tab_pad_y: int
+    tab_bottom_pad_y: int
+    button_row_top_pad_y: int
+    tab_highlight_thickness: int
+    notice_wrap_length: int
+    resizable_vertical: bool
+
+
+@dataclass(frozen=True)
+class DialogLayoutPolicy:
+    """Platform-specific shared Tk dialog presentation decisions."""
+
+    body_pad_x: int
+    use_label_action_buttons: bool
 
 
 class SplashPlatformAdapter(Protocol):
@@ -77,4 +130,49 @@ class SplashPlatformAdapter(Protocol):
         and the first one found is used. Environment variable CAVEVIEWER_UI_FONT is
         checked first and takes precedence over these platform-specific candidates.
         """
+        ...
+
+    def splash_layout_policy(self) -> SplashLayoutPolicy:
+        ...
+
+    def preferences_dialog_layout_policy(self) -> PreferencesDialogLayoutPolicy:
+        ...
+
+    def dialog_layout_policy(self) -> DialogLayoutPolicy:
+        ...
+
+    def tk_primary_modifier_name(self) -> str:
+        ...
+
+    def default_text_antialiasing_mode(self) -> str:
+        ...
+
+    def supports_tk_display_scaling(self) -> bool:
+        ...
+
+    def configure_process_dpi_awareness(self) -> None:
+        ...
+
+    def load_system_certificates(self, context: Any) -> None:
+        ...
+
+    def recording_subprocess_startup_kwargs(self) -> dict[str, Any]:
+        ...
+
+    def suppress_forced_startup_focus(self, *, is_frozen: bool, force_requested: bool) -> bool:
+        ...
+
+    def command_modifier_uses_control_fallback(self) -> bool:
+        ...
+
+    def shift_digit_bookmark_save_fallback(self) -> bool:
+        ...
+
+    def option_left_mouse_look_enabled(self) -> bool:
+        ...
+
+    def focus_viewer_window(self, window: Any) -> None:
+        ...
+
+    def viewer_uses_glfw_native_initial_size(self) -> bool:
         ...

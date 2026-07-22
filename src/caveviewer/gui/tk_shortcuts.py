@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from typing import Any
+
+from caveviewer.gui.platform import get_platform_adapter
 
 
 def primary_modifier_event_sequence(key: str, *, platform: str | None = None) -> str:
     """Return the Tk event sequence for the platform's primary shortcut key."""
-    active_platform = sys.platform if platform is None else platform
-    modifier = "Command" if active_platform == "darwin" else "Control"
+    modifier = (
+        get_platform_adapter().tk_primary_modifier_name()
+        if platform is None
+        else "Command"
+        if platform == "darwin"
+        else "Control"
+    )
     normalized_key = str(key).strip("<>")
     return f"<{modifier}-{normalized_key}>"
 

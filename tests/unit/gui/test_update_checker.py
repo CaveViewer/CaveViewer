@@ -10,6 +10,7 @@ import urllib.error
 import pytest
 
 from caveviewer.gui import update_checker
+from caveviewer.gui.platform.windows import WindowsSplashPlatformAdapter
 from caveviewer.gui.update_signature import SignatureVerificationError
 
 
@@ -120,7 +121,11 @@ def test_windows_ssl_context_loads_usable_system_certificates(monkeypatch):
             (b"bad certificate", "x509_asn", None),
         ]
 
-    monkeypatch.setattr(update_checker.sys, "platform", "win32")
+    monkeypatch.setattr(
+        update_checker,
+        "_PLATFORM_ADAPTER",
+        WindowsSplashPlatformAdapter(),
+    )
     monkeypatch.setattr(update_checker.ssl, "create_default_context", lambda: context)
     monkeypatch.setattr(
         update_checker.ssl, "enum_certificates", enum_certificates, raising=False

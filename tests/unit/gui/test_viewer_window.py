@@ -14,6 +14,8 @@ import pytest
 from caveviewer.core.map import cache_paths
 from caveviewer.gui import viewer_window
 from caveviewer.gui.platform.app_identity import tk_root_options
+from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
+from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
 
 
 class FakeImportInhibitor:
@@ -133,6 +135,7 @@ def _queued_import_messages(window):
 
 def _recording_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = DefaultSplashPlatformAdapter()
     window._recording_countdown_started_at = None
     window._recording_countdown_until = None
     window._recording_process = None
@@ -842,9 +845,9 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     assert any("Recording encoder exited with code -9" in message for message in logger.warning_messages)
 
 
-def test_window_shortcut_closes_viewer_on_control_w(monkeypatch):
-    monkeypatch.setattr(viewer_window.sys, "platform", "linux")
+def test_window_shortcut_closes_viewer_on_control_w():
     window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = DefaultSplashPlatformAdapter()
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
     window._keys_down = set()
     window._key_resolve_cache = {}
@@ -855,9 +858,9 @@ def test_window_shortcut_closes_viewer_on_control_w(monkeypatch):
     assert closed == ["closed"]
 
 
-def test_window_shortcut_opens_map_only_when_loaded(monkeypatch):
-    monkeypatch.setattr(viewer_window.sys, "platform", "linux")
+def test_window_shortcut_opens_map_only_when_loaded():
     window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = DefaultSplashPlatformAdapter()
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
     window._keys_down = set()
     window._key_resolve_cache = {}
@@ -875,9 +878,9 @@ def test_window_shortcut_opens_map_only_when_loaded(monkeypatch):
     assert calls == ["open"]
 
 
-def test_window_shortcut_uses_command_modifier_on_macos(monkeypatch):
-    monkeypatch.setattr(viewer_window.sys, "platform", "darwin")
+def test_window_shortcut_uses_command_modifier_on_macos():
     window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = MacOSSplashPlatformAdapter()
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
     window._keys_down = set()
     window._key_resolve_cache = {}
@@ -892,7 +895,11 @@ def test_window_shortcut_uses_command_modifier_on_macos(monkeypatch):
 
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     calls = []
-    monkeypatch.setattr(viewer_window.sys, "platform", "linux")
+    monkeypatch.setattr(
+        viewer_window,
+        "get_platform_adapter",
+        lambda: SimpleNamespace(viewer_uses_glfw_native_initial_size=lambda: True),
+    )
     monkeypatch.setattr(
         viewer_window,
         "_desktop_relative_window_size",

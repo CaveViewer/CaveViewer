@@ -9,6 +9,7 @@ import shutil
 import subprocess
 
 from caveviewer.core.diagnostics.logging import get_logger
+from .base import DialogLayoutPolicy, PreferencesDialogLayoutPolicy, SplashLayoutPolicy
 from .default import DefaultSplashPlatformAdapter
 
 # Keep a strong reference to the Tk root used for the About handler so that
@@ -258,6 +259,94 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             "/System/Library/Fonts/Supplemental/Arial.ttf",
             "/Library/Fonts/Arial.ttf",
         ]
+
+    def splash_layout_policy(self) -> SplashLayoutPolicy:
+        """Return macOS splash layout and Tk-root lifetime policy."""
+        return SplashLayoutPolicy(
+            app_icon_resource_name="app_icon_macos.png",
+            reuse_existing_root=True,
+            destroy_root_on_close=False,
+            windows_layout=False,
+            linux_layout=False,
+            min_height=480,
+            extra_bottom_slack=24,
+            secondary_link_row_bottom_gap=18,
+            footer_credits_bottom_pad=18,
+            title_to_action_gap=28,
+            browse_button_bottom_gap=16,
+            instruction_bottom_gap=0,
+            secondary_link_row_top_gap=16,
+        )
+
+    def preferences_dialog_layout_policy(self) -> PreferencesDialogLayoutPolicy:
+        """Return compact macOS Preferences layout values."""
+        return PreferencesDialogLayoutPolicy(
+            windows_layout=False,
+            macos_layout=True,
+            linux_layout=False,
+            wrap_length=300,
+            text_entry_width=24,
+            body_pad_x=12,
+            min_width=430,
+            row_pad_x=14,
+            row_pad_y=5,
+            control_row_top_pad_y=5,
+            tab_pad_x=10,
+            tab_pad_y=6,
+            tab_bottom_pad_y=8,
+            button_row_top_pad_y=8,
+            tab_highlight_thickness=0,
+            notice_wrap_length=390,
+            resizable_vertical=False,
+        )
+
+    def dialog_layout_policy(self) -> DialogLayoutPolicy:
+        """Return macOS shared dialog layout values."""
+        return DialogLayoutPolicy(body_pad_x=18, use_label_action_buttons=True)
+
+    def tk_primary_modifier_name(self) -> str:
+        """Return the Tk event modifier for macOS primary shortcuts."""
+        return "Command"
+
+    def default_text_antialiasing_mode(self) -> str:
+        """Return the macOS default FreeType anti-aliasing mode."""
+        return "light"
+
+    def suppress_forced_startup_focus(
+        self, *, is_frozen: bool, force_requested: bool
+    ) -> bool:
+        """Suppress aggressive startup focusing for frozen macOS app bundles."""
+        return bool(is_frozen and not force_requested)
+
+    def command_modifier_uses_control_fallback(self) -> bool:
+        """Some macOS backends report Command through Control-like flags."""
+        return True
+
+    def shift_digit_bookmark_save_fallback(self) -> bool:
+        """Shift+digit remains a macOS backend fallback for bookmark saves."""
+        return True
+
+    def option_left_mouse_look_enabled(self) -> bool:
+        """Allow Option+left-click and Option+motion as macOS mouse-look fallback."""
+        return True
+
+    def focus_viewer_window(self, window) -> None:
+        """Use the least intrusive macOS activation path for viewer startup."""
+        for target in (getattr(window, "_window", None), window):
+            if target is None:
+                continue
+            try:
+                if hasattr(target, "activate"):
+                    target.activate()
+                    break
+            except Exception:
+                pass
+            try:
+                if hasattr(target, "switch_to"):
+                    target.switch_to()
+                    break
+            except Exception:
+                pass
 
 
 def _macos_process_architecture(machine: str | None = None) -> str | None:

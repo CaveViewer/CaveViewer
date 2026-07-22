@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import enum
 import os
-import sys
 from dataclasses import dataclass
 
 from caveviewer.version import APP_NAME, APP_VERSION
@@ -85,12 +84,9 @@ def _resolve_asset_path(filename: str) -> str | None:
 # in-program loading-screen logo, reused here rather than shipping a
 # second copy of the same image.
 _LOGO_PATH = _resolve_asset_path("app_mark_transparent.png")
-if sys.platform == "darwin":
-    _APP_ICON_PATH = _resolve_asset_path("app_icon_macos.png")
-elif sys.platform == "win32":
-    _APP_ICON_PATH = _resolve_asset_path("app_icon_windows.png")
-else:
-    _APP_ICON_PATH = _resolve_asset_path("app_icon_macos.png")
+_PLATFORM_ADAPTER = get_splash_platform_adapter()
+_SPLASH_LAYOUT_POLICY = _PLATFORM_ADAPTER.splash_layout_policy()
+_APP_ICON_PATH = _resolve_asset_path(_SPLASH_LAYOUT_POLICY.app_icon_resource_name)
 
 
 def _last_browse_path_file() -> str:
@@ -129,7 +125,7 @@ def _create_splash_root(tk):
     stays attached to a valid Tk application.  Reuse that root on the next
     splash cycle instead of creating another Tk root in the same process.
     """
-    if sys.platform == "darwin":
+    if _SPLASH_LAYOUT_POLICY.reuse_existing_root:
         existing_root = getattr(tk, "_default_root", None)
         if _tk_root_exists(existing_root):
             _destroy_tk_children(existing_root)
@@ -150,9 +146,8 @@ _BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 _BUTTON_FG = DARK_THEME.primary_button_text
 _BORDER_COLOR = DARK_THEME.border
-_PLATFORM_ADAPTER = get_splash_platform_adapter()
-_WINDOWS_SPLASH_LAYOUT = sys.platform == "win32"
-_LINUX_SPLASH_LAYOUT = sys.platform.startswith("linux")
+_WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
+_LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _ROOMY_SPLASH_LAYOUT = _WINDOWS_SPLASH_LAYOUT or _LINUX_SPLASH_LAYOUT
 _UI_FONT_FAMILY = _PLATFORM_ADAPTER.ui_font_family()
 _TITLE_FONT = (_UI_FONT_FAMILY, 24, "bold")
@@ -166,14 +161,16 @@ _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
 _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
 _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
 _SPLASH_WINDOW_WIDTH = 940
-_SPLASH_WINDOW_MIN_HEIGHT = 480 if sys.platform == "darwin" else 560
-_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = 24 if sys.platform == "darwin" else 0
-_SECONDARY_LINK_ROW_BOTTOM_GAP = 18 if sys.platform == "darwin" else 36
-_FOOTER_CREDITS_BOTTOM_PAD = 18 if sys.platform == "darwin" else 36
-_TITLE_TO_ACTION_GAP = 72 if _LINUX_SPLASH_LAYOUT else (58 if _WINDOWS_SPLASH_LAYOUT else 28)
-_BROWSE_BUTTON_BOTTOM_GAP = 42 if _LINUX_SPLASH_LAYOUT else (32 if _WINDOWS_SPLASH_LAYOUT else 16)
-_INSTRUCTION_BOTTOM_GAP = 30 if _LINUX_SPLASH_LAYOUT else (20 if _WINDOWS_SPLASH_LAYOUT else 0)
-_SECONDARY_LINK_ROW_TOP_GAP = 40 if _LINUX_SPLASH_LAYOUT else (30 if _WINDOWS_SPLASH_LAYOUT else 16)
+_SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
+_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
+_SECONDARY_LINK_ROW_BOTTOM_GAP = (
+    _SPLASH_LAYOUT_POLICY.secondary_link_row_bottom_gap
+)
+_FOOTER_CREDITS_BOTTOM_PAD = _SPLASH_LAYOUT_POLICY.footer_credits_bottom_pad
+_TITLE_TO_ACTION_GAP = _SPLASH_LAYOUT_POLICY.title_to_action_gap
+_BROWSE_BUTTON_BOTTOM_GAP = _SPLASH_LAYOUT_POLICY.browse_button_bottom_gap
+_INSTRUCTION_BOTTOM_GAP = _SPLASH_LAYOUT_POLICY.instruction_bottom_gap
+_SECONDARY_LINK_ROW_TOP_GAP = _SPLASH_LAYOUT_POLICY.secondary_link_row_top_gap
 _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
     "BottomLine Projects Scientific Dive Team.\n"
@@ -850,13 +847,9 @@ def show_splash_screen(
     finally:
         update_manager.set_foreground_update_surface_active(False)
 
-    # On macOS, keep the single Tk app object alive for the process lifetime so
-    # the global app-menu About callback remains bound to a valid Tk
-    # application. The next splash cycle reuses this hidden root instead of
-    # creating a second Tk root. Destroying it here leaves a stale About
-    # callback that can trigger "application has been destroyed" errors after
-    # returning from the OpenGL viewer window.
-    if sys.platform != "darwin":
+    # Some adapters keep the single Tk app object alive for process-level
+    # native menu callbacks. Others destroy the splash root normally.
+    if _SPLASH_LAYOUT_POLICY.destroy_root_on_close:
         try:
             root.destroy()
         except Exception:

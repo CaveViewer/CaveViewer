@@ -1,6 +1,7 @@
 """Public factories and types for platform-specific desktop integration."""
 
 from .app_identity import LINUX_WINDOW_INSTANCE_NAME, tk_root_options
+from .base import DialogLayoutPolicy, PreferencesDialogLayoutPolicy, SplashLayoutPolicy
 from .desktop_services import (
     DesktopServiceError,
     DesktopInhibitor,
@@ -20,6 +21,9 @@ __all__ = [
     "get_desktop_services",
     "LINUX_WINDOW_INSTANCE_NAME",
     "tk_root_options",
+    "DialogLayoutPolicy",
+    "PreferencesDialogLayoutPolicy",
+    "SplashLayoutPolicy",
     "DesktopServiceError",
     "DesktopInhibitor",
     "DesktopServices",
