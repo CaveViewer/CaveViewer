@@ -5,9 +5,6 @@ on:
   schedule:
     - cron: "42 10 * * 2"
   pull_request:
-    branches:
-      - main
-      - "release/**"
     paths:
       - ".github/workflows/macos-arm64-package-smoke.yml"
       - ".github/workflows/macos-arm64-release.yml"
