@@ -266,6 +266,11 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
     workflow_source = inspect.getsource(map_library_workflow.MapLibraryWorkflow)
     source = splash_source + style_source + panel_source + workflow_source
+    section_source = panel_source[
+        panel_source.find("def _create_section") : panel_source.find(
+            "def _create_empty_note"
+        )
+    ]
 
     assert 'text="Map Library"' not in source
     assert "Your Recent Maps" in source
@@ -282,6 +287,8 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "Available Maps" not in source
     assert "Open recent or available maps." not in source
     assert "Available to download" not in source
+    assert "font=self._style.section_font" in panel_source
+    assert "font=self._style.small_font" not in section_source
     assert "Scrollbar(" not in source
     assert "yscrollcommand=self._set_scrollbar_fraction" in panel_source
     assert 'self._content_scrollbar.pack(side="right", fill="y")' in panel_source
@@ -294,6 +301,7 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert 'divider.pack(side="left", fill="y", padx=(px(18), px(12)), pady=px(26))' in source
     assert 'panel.pack(fill="both", expand=True, pady=self._px(26))' in panel_source
     assert "metadata_font=_LIBRARY_METADATA_FONT" in style_source
+    assert "section_font=_LIBRARY_SECTION_FONT" in style_source
     assert "metadata_color=_LIBRARY_METADATA_COLOR" in style_source
     assert "_action_button_pixel_size" in panel_source
     assert "style.action_button_width" in panel_source

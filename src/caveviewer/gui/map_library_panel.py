@@ -20,6 +20,7 @@ class MapLibraryPanelStyle:
     panel_border_color: str
     title_color: str
     instruction_color: str
+    section_font: tuple
     small_font: tuple
     metadata_font: tuple
     button_bg: str
@@ -449,7 +450,7 @@ class MapLibraryPanel:
         label = tk.Label(
             parent,
             text=text,
-            font=self._style.small_font,
+            font=self._style.section_font,
             fg=self._style.instruction_color,
             bg=self._style.panel_color,
             anchor="w",
