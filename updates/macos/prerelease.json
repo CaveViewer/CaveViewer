@@ -1,12 +1,12 @@
 {
-  "latest_version": "1.0.68",
+  "latest_version": "1.0.69",
   "platform": "macos",
   "architecture": "arm64",
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.68/CaveViewer-1.0.68-macos-arm64.dmg",
-  "download_size_bytes": 57745835,
-  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.68/CaveViewer-1.0.68-macos-arm64.dmg",
-  "download_size_bytes_macosx_dmg": 57745835,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.69/CaveViewer-1.0.69-macos-arm64.dmg",
+  "download_size_bytes": 57961250,
+  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.69/CaveViewer-1.0.69-macos-arm64.dmg",
+  "download_size_bytes_macosx_dmg": 57961250,
   "release_notes": "CaveViewer pre-release",
-  "sha256": "77a87e8fd0a6236a3c5687423c386205f91a802e92cc035462dbde22662812d1",
-  "sha256_macosx_dmg": "77a87e8fd0a6236a3c5687423c386205f91a802e92cc035462dbde22662812d1"
+  "sha256": "d68b5345b6f9c18865ef847862ecd08eaf79d07ae23c0c566ae37f1f3d70f14f",
+  "sha256_macosx_dmg": "d68b5345b6f9c18865ef847862ecd08eaf79d07ae23c0c566ae37f1f3d70f14f"
 }
