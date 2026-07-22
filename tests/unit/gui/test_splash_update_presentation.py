@@ -266,15 +266,17 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     source = splash_source + style_source + panel_source + workflow_source
 
     assert 'text="Map Library"' not in source
-    assert "Your Library" in source
-    assert "Standard Library" in source
+    assert "Your Recent Maps" in source
+    assert "CaveViewer Maps" in source
+    assert "Your Library" not in source
+    assert "Standard Library" not in source
     assert "Open your maps or explore the standard library." not in source
     assert "No maps added yet." in source
     assert "Maps you open yourself will appear here." not in source
     assert "No user-opened maps yet." not in source
     assert 'top_pad=16' in source
     assert 'bottom_pad=18' in source
-    assert "Recent Maps" not in source
+    assert '"Recent Maps"' not in source
     assert "Available Maps" not in source
     assert "Open recent or available maps." not in source
     assert "Available to download" not in source

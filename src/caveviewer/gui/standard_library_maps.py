@@ -413,7 +413,7 @@ def remove_downloaded_standard_library_map(
     install_dir: str | os.PathLike[str],
     sample: StandardLibraryMapInfo,
 ) -> StandardLibraryMapRemovalResult:
-    """Remove app-managed downloaded files for one Standard Library map."""
+    """Remove app-managed downloaded files for one bundled CaveViewer map."""
     removed_paths: list[str] = []
     errors: list[str] = []
 
@@ -444,7 +444,7 @@ def is_app_supplied_standard_library_map_path(
     Return whether `path` is one of CaveViewer's known app-library maps.
 
     Recent maps should reflect user-opened maps, not the curated map-library maps
-    already listed in the Map Library's Available Maps section.  Compare exact
+    already listed in the Map Library's CaveViewer Maps section.  Compare exact
     managed-library and legacy folder locations so similarly named
     user maps elsewhere on disk still remain eligible for history.
     """

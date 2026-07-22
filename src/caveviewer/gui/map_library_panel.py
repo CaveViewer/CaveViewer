@@ -183,12 +183,12 @@ class MapLibraryPanel:
             add="+",
         )
 
-        self._create_section(self._rows_frame, "Your Library", top_pad=16)
+        self._create_section(self._rows_frame, "Your Recent Maps", top_pad=16)
         self._recent_container = tk.Frame(
             self._rows_frame, bg=style.panel_color
         )
         self._recent_container.pack(fill="x")
-        self._create_section(self._rows_frame, "Standard Library")
+        self._create_section(self._rows_frame, "CaveViewer Maps")
 
     def finish_population(self) -> None:
         """Bind mousewheel events after rows exist and schedule scroll sync."""
@@ -214,7 +214,7 @@ class MapLibraryPanel:
         action: Callable[[], None],
         menu_actions_factory: MenuActionsFactory | None = None,
     ) -> MapLibraryRowWidgets:
-        """Append one recent-map row to the Your Library section."""
+        """Append one recent-map row to the Your Recent Maps section."""
         if self._recent_container is None:
             raise RuntimeError("MapLibraryPanel.create() must run first")
         if self._widget_exists(self._recent_empty_note):
@@ -233,7 +233,7 @@ class MapLibraryPanel:
         return widgets
 
     def ensure_recent_empty_note(self) -> None:
-        """Show the empty Your Library note when no recent rows remain."""
+        """Show the empty Your Recent Maps note when no recent rows remain."""
         if self._recent_container is None:
             return
         if self.recent_rows:
@@ -262,7 +262,7 @@ class MapLibraryPanel:
         action: Callable[[], None],
         menu_actions_factory: MenuActionsFactory | None = None,
     ) -> MapLibraryRowWidgets:
-        """Append one standard-library row to the Standard Library section."""
+        """Append one standard-library row to the CaveViewer Maps section."""
         if self._rows_frame is None:
             raise RuntimeError("MapLibraryPanel.create() must run first")
         widgets = self._create_row(
