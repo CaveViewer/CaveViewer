@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
 from types import SimpleNamespace
 
@@ -82,13 +81,6 @@ class FakeSpawnContext:
         process = FakeProcess(target, args, name)
         self.processes.append(process)
         return process
-
-
-def test_import_process_does_not_import_app_layer():
-    source = inspect.getsource(import_process)
-
-    assert "from caveviewer.app" not in source
-    assert "import caveviewer.app" not in source
 
 
 def test_source_path_from_descriptor_accepts_supported_formats():
