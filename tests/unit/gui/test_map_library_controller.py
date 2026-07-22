@@ -1,3 +1,5 @@
+"""Exercise splash map-library controller presentation and lifecycle state."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -92,4 +94,3 @@ def test_active_download_cleanup_returns_tk_owned_handles():
     assert cleanup.after_id == after_id
     assert cleanup.inhibitor is inhibitor
     assert not controller.active_download.in_progress
-
