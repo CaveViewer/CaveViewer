@@ -366,7 +366,8 @@ def _run_import_process(
             command_stop,
         )
 
-        from caveviewer.app import import_and_cache_any
+        from caveviewer.core.map.importer import import_and_cache_any
+
         source_path = source_path_from_descriptor(model_descriptor)
         _LOG.info("Import process started for %s.", source_path)
 
@@ -383,8 +384,7 @@ def _run_import_process(
             model_descriptor,
             textures_dir,
             force_rebuild=False,
-            extra_progress_cb=on_progress,
-            console_progress=False,
+            progress_cb=on_progress,
             pause_requested=pause_event.is_set,
         )
         _put_event(events, ("done", cache_dir, cache_dir))
