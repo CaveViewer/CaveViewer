@@ -1,4 +1,4 @@
-"""Exercise cleanup behavior for interrupted update and sample-map downloads."""
+"""Exercise cleanup behavior for interrupted update and map-library downloads."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from caveviewer.gui import sample_maps, update_checker
+from caveviewer.gui import standard_library_maps, update_checker
 
 
 class BytesResponse:
@@ -99,7 +99,7 @@ def test_interrupted_update_download_removes_partial_file(tmp_path, monkeypatch)
 def test_cancelled_download_removes_partial_and_retry_does_not_resume(
     tmp_path, monkeypatch
 ):
-    destination = tmp_path / "downloads" / "sample-map.zip"
+    destination = tmp_path / "downloads" / "map-library.zip"
     responses = iter([BytesResponse(b"partial"), BytesResponse(b"complete")])
     requests = []
 
@@ -115,7 +115,7 @@ def test_cancelled_download_removes_partial_and_retry_does_not_resume(
 
     with pytest.raises(update_checker.DownloadCancelled):
         update_checker.download_update(
-            "https://invalid.example/sample-map.zip",
+            "https://invalid.example/map-library.zip",
             None,
             str(destination),
             progress_cb=request_cancellation,
@@ -126,7 +126,7 @@ def test_cancelled_download_removes_partial_and_retry_does_not_resume(
 
     cancel_requested[0] = False
     update_checker.download_update(
-        "https://invalid.example/sample-map.zip",
+        "https://invalid.example/map-library.zip",
         len(b"complete"),
         str(destination),
         cancel_cb=lambda: cancel_requested[0],
@@ -225,40 +225,40 @@ def test_cancellation_at_verification_phase_removes_download(tmp_path, monkeypat
 
 
 @pytest.mark.integration
-def test_sample_map_without_download_url_is_rejected(tmp_path):
-    sample = sample_maps.SampleMapInfo("Test Cave", "test.zip")
+def test_standard_library_map_without_download_url_is_rejected(tmp_path):
+    sample = standard_library_maps.StandardLibraryMapInfo("Test Cave", "test.zip")
     with pytest.raises(ValueError, match="No download URL"):
-        sample_maps.download_and_extract_sample_map(str(tmp_path), sample)
+        standard_library_maps.download_and_extract_standard_library_map(str(tmp_path), sample)
 
 
 @pytest.mark.integration
-def test_failed_sample_download_preserves_existing_install(tmp_path, monkeypatch):
-    sample = sample_maps.SampleMapInfo(
+def test_failed_standard_library_download_preserves_existing_install(tmp_path, monkeypatch):
+    sample = standard_library_maps.StandardLibraryMapInfo(
         "Test Cave", "test.zip", "https://invalid.example/test.zip", 50
     )
-    destination = sample_maps.local_sample_map_path(str(tmp_path), sample)
-    marker = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / sample.display_name / "map.obj"
+    destination = standard_library_maps.local_standard_library_map_path(str(tmp_path), sample)
+    marker = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / sample.display_name / "map.obj"
     marker.parent.mkdir(parents=True)
     marker.write_text("existing map", encoding="utf-8")
 
     def fail_download(*_args, **_kwargs):
         raise urllib.error.URLError("offline")
 
-    monkeypatch.setattr(sample_maps, "download_update", fail_download)
+    monkeypatch.setattr(standard_library_maps, "download_update", fail_download)
 
     with pytest.raises(urllib.error.URLError):
-        sample_maps.download_and_extract_sample_map(str(tmp_path), sample)
+        standard_library_maps.download_and_extract_standard_library_map(str(tmp_path), sample)
 
     assert marker.read_text(encoding="utf-8") == "existing map"
     assert destination == str(marker.parent)
 
 
 @pytest.mark.integration
-def test_corrupt_sample_zip_preserves_existing_install(tmp_path, monkeypatch):
-    sample = sample_maps.SampleMapInfo(
+def test_corrupt_standard_library_zip_preserves_existing_install(tmp_path, monkeypatch):
+    sample = standard_library_maps.StandardLibraryMapInfo(
         "Test Cave", "test.zip", "https://invalid.example/test.zip", None
     )
-    marker = tmp_path / sample_maps.SAMPLE_MAPS_DIRNAME / sample.display_name / "map.obj"
+    marker = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / sample.display_name / "map.obj"
     marker.parent.mkdir(parents=True)
     marker.write_text("existing map", encoding="utf-8")
 
@@ -266,9 +266,9 @@ def test_corrupt_sample_zip_preserves_existing_install(tmp_path, monkeypatch):
         with open(destination, "wb") as file_obj:
             file_obj.write(b"not a zip archive")
 
-    monkeypatch.setattr(sample_maps, "download_update", write_corrupt_zip)
+    monkeypatch.setattr(standard_library_maps, "download_update", write_corrupt_zip)
 
     with pytest.raises(zipfile.BadZipFile):
-        sample_maps.download_and_extract_sample_map(str(tmp_path), sample)
+        standard_library_maps.download_and_extract_standard_library_map(str(tmp_path), sample)
 
     assert marker.read_text(encoding="utf-8") == "existing map"

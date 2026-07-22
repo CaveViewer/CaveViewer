@@ -20,20 +20,20 @@ from caveviewer.gui.map_library_panel import (
     MapLibraryRowWidgets,
 )
 from caveviewer.gui.platform import DesktopServices, DirectorySelection
-from caveviewer.gui.sample_map_download import (
-    SampleDownloadFailed,
-    SampleDownloadProgress,
-    SampleDownloadSucceeded,
+from caveviewer.gui.standard_library_download import (
+    StandardLibraryDownloadFailed,
+    StandardLibraryDownloadProgress,
+    StandardLibraryDownloadSucceeded,
     close_desktop_inhibitor,
     safe_desktop_inhibit,
-    start_sample_download_worker,
+    start_standard_library_download_worker,
 )
-from caveviewer.gui.sample_maps import (
+from caveviewer.gui.standard_library_maps import (
     DownloadCancelled,
-    existing_sample_map_path,
-    fetch_sample_map_catalog,
-    is_sample_map_already_downloaded,
-    remove_downloaded_sample_map,
+    existing_standard_library_map_path,
+    fetch_standard_library_catalog,
+    is_standard_library_map_downloaded,
+    remove_downloaded_standard_library_map,
 )
 
 
@@ -76,13 +76,13 @@ class MapLibraryWorkflow:
         has_cache: Callable[[str], bool] = has_managed_map_cache,
         remove_cache: Callable[[str], Any] = remove_managed_map_cache,
         remove_recent_path: Callable[[str], None] = remove_recent_map_path,
-        is_downloaded: Callable[[str, Any], bool] = is_sample_map_already_downloaded,
-        existing_path: Callable[[str, Any], str | None] = existing_sample_map_path,
-        remove_downloaded: Callable[[str, Any], Any] = remove_downloaded_sample_map,
-        fetch_catalog: Callable[[], tuple[list[Any], str | None]] = fetch_sample_map_catalog,
+        is_downloaded: Callable[[str, Any], bool] = is_standard_library_map_downloaded,
+        existing_path: Callable[[str, Any], str | None] = existing_standard_library_map_path,
+        remove_downloaded: Callable[[str, Any], Any] = remove_downloaded_standard_library_map,
+        fetch_catalog: Callable[[], tuple[list[Any], str | None]] = fetch_standard_library_catalog,
         start_download_worker: Callable[
             [DirectorySelection, Any, threading.Event, Any], threading.Thread
-        ] = start_sample_download_worker,
+        ] = start_standard_library_download_worker,
         start_catalog_worker: Callable[
             [Callable[[], None]], None
         ] = _start_catalog_thread,
@@ -513,7 +513,7 @@ class MapLibraryWorkflow:
                 message = message_queue.get_nowait()
             except queue.Empty:
                 break
-            if isinstance(message, SampleDownloadProgress):
+            if isinstance(message, StandardLibraryDownloadProgress):
                 latest_progress = message
             else:
                 terminal_message = message
@@ -527,13 +527,13 @@ class MapLibraryWorkflow:
                 self.clear_active_download(library_map)
                 return
 
-        if isinstance(terminal_message, SampleDownloadSucceeded):
+        if isinstance(terminal_message, StandardLibraryDownloadSucceeded):
             self.finish_download_success(
                 library_map,
                 terminal_message.result_path,
             )
             return
-        if isinstance(terminal_message, SampleDownloadFailed):
+        if isinstance(terminal_message, StandardLibraryDownloadFailed):
             self.finish_download_failure(library_map, terminal_message.error)
             return
 
@@ -743,7 +743,7 @@ class MapLibraryWorkflow:
     def apply_download_progress(
         self,
         library_map,
-        progress: SampleDownloadProgress,
+        progress: StandardLibraryDownloadProgress,
     ) -> None:
         """Apply a worker progress message to the matching row."""
         self.panel.apply_standard_progress(

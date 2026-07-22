@@ -6,7 +6,7 @@ import json
 import os
 
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
-from caveviewer.gui.sample_maps import is_app_supplied_sample_map_path
+from caveviewer.gui.standard_library_maps import is_app_supplied_standard_library_map_path
 
 
 def _recent_map_paths_file() -> str:
@@ -68,7 +68,7 @@ def load_recent_map_paths() -> list[str]:
         if (
             normalized is None
             or normalized in seen
-            or is_app_supplied_sample_map_path(path)
+            or is_app_supplied_standard_library_map_path(path)
         ):
             continue
         paths.append(path)
@@ -83,7 +83,7 @@ def remember_recent_map_path(path: str) -> None:
     if (
         recent_path is None
         or normalized is None
-        or is_app_supplied_sample_map_path(recent_path)
+        or is_app_supplied_standard_library_map_path(recent_path)
     ):
         return
 

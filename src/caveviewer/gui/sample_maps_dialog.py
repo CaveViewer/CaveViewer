@@ -2,11 +2,11 @@
 caveviewer.gui.sample_maps_dialog
 
 The map library window lists the standard library cave scans (see
-caveviewer.gui.sample_maps), shows their size, and lets the person download
+caveviewer.gui.standard_library_maps), shows their size, and lets the person download
 (or, if already downloaded, directly open) whichever one they want -- a
 one-click way to try CaveViewer without having their own scan yet.
 
-Kept separate from caveviewer.gui.sample_maps (pure fetch/download/extract
+Kept separate from caveviewer.gui.standard_library_maps (pure fetch/download/extract
 logic, no UI) the same way update workflow code is kept separate from
 caveviewer.gui.update_checker -- this module is purely the Tkinter presentation
 and the glue that drives the other one.
@@ -38,13 +38,13 @@ from caveviewer.gui.platform import (
     get_splash_platform_adapter,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
-from caveviewer.gui.sample_map_download import (
-    SampleDownloadFailed as _SampleDownloadFailed,
-    SampleDownloadProgress as _SampleDownloadProgress,
-    SampleDownloadSucceeded as _SampleDownloadSucceeded,
+from caveviewer.gui.standard_library_download import (
+    StandardLibraryDownloadFailed as _SampleDownloadFailed,
+    StandardLibraryDownloadProgress as _SampleDownloadProgress,
+    StandardLibraryDownloadSucceeded as _SampleDownloadSucceeded,
     close_desktop_inhibitor as _close_desktop_inhibitor,
     safe_desktop_inhibit as _safe_desktop_inhibit,
-    start_sample_download_worker as _start_sample_download_worker,
+    start_standard_library_download_worker as _start_sample_download_worker,
 )
 from caveviewer.gui.tk_feedback import FeedbackKind, show_feedback
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
@@ -171,10 +171,10 @@ def show_sample_maps_dialog(
     go load it" outcome.
     """
     import tkinter as tk
-    from caveviewer.gui.sample_maps import (
-        DownloadCancelled, KNOWN_SAMPLE_MAPS, fetch_sample_map_catalog,
-        is_sample_map_already_downloaded,
-        existing_sample_map_path,
+    from caveviewer.gui.standard_library_maps import (
+        DownloadCancelled, KNOWN_STANDARD_LIBRARY_MAPS, fetch_standard_library_catalog,
+        is_standard_library_map_downloaded,
+        existing_standard_library_map_path,
     )
 
     _UI_FONT_FAMILY = (
@@ -271,7 +271,7 @@ def show_sample_maps_dialog(
     window_w = _px(560)
     preload_h = max(
         loading_window_h,
-        _px(178) + row_height * max(1, min(4, len(KNOWN_SAMPLE_MAPS))),
+        _px(178) + row_height * max(1, min(4, len(KNOWN_STANDARD_LIBRARY_MAPS))),
     )
     dialog.minsize(min_window_w, 1)
 
@@ -343,7 +343,7 @@ def show_sample_maps_dialog(
     list_frame = tk.Frame(content, bg=_BG_COLOR)
 
     # Fetch the catalog on a background thread so the loading indicator can
-    # actually animate. fetch_sample_map_catalog() makes a network request
+    # actually animate. fetch_standard_library_catalog() makes a network request
     # that can take several seconds; running it inline would freeze the UI.
     # The worker only publishes to a thread-safe queue; Tk state is read and
     # mutated by the after() poller on the Tk thread.
@@ -354,7 +354,7 @@ def show_sample_maps_dialog(
 
     def _fetch_worker():
         try:
-            result = fetch_sample_map_catalog()
+            result = fetch_standard_library_catalog()
         except Exception as exc:
             result = ([], f"Couldn't load the map library: {exc}")
         fetch_queue.put(result)
@@ -439,7 +439,7 @@ def show_sample_maps_dialog(
     # Only show the hard "couldn't load anything" error screen if there's
     # truly nothing to show at all -- in every other case (including a
     # failed network fetch), still show the list built from
-    # KNOWN_SAMPLE_MAPS, since any map already downloaded previously
+    # KNOWN_STANDARD_LIBRARY_MAPS, since any map already downloaded previously
     # needs to stay openable regardless of whether THIS fetch succeeded.
     # This is the actual fix for map library entries becoming unreachable while
     # offline: a network failure used to unconditionally show this error
@@ -475,7 +475,7 @@ def show_sample_maps_dialog(
         return None
 
     # A network error alongside a non-empty catalog means: every known
-    # map is still listed (from KNOWN_SAMPLE_MAPS), but fresh
+    # map is still listed (from KNOWN_STANDARD_LIBRARY_MAPS), but fresh
     # download_url/size info couldn't be fetched for any of them. Maps
     # already downloaded are completely unaffected by this (their Open
     # button works from local disk alone) -- only maps NOT yet
@@ -553,7 +553,7 @@ def show_sample_maps_dialog(
             open_path = (
                 result_path
                 or downloaded_paths.get(sample.display_name)
-                or existing_sample_map_path(sample_maps_root_dir, sample)
+                or existing_standard_library_map_path(sample_maps_root_dir, sample)
             )
             _set_action_button(
                 action_btn,
@@ -575,7 +575,7 @@ def show_sample_maps_dialog(
             if row_sample.display_name == active_name:
                 continue
             row_result_path = downloaded_paths.get(row_sample.display_name)
-            row_downloaded = bool(row_result_path) or is_sample_map_already_downloaded(
+            row_downloaded = bool(row_result_path) or is_standard_library_map_downloaded(
                 sample_maps_root_dir, row_sample
             )
             _set_sample_action(
@@ -584,7 +584,7 @@ def show_sample_maps_dialog(
                 enabled=enabled,
                 result_path=(
                     row_result_path
-                    or existing_sample_map_path(sample_maps_root_dir, row_sample)
+                    or existing_standard_library_map_path(sample_maps_root_dir, row_sample)
                 ),
             )
 
@@ -875,16 +875,16 @@ def show_sample_maps_dialog(
         )
 
     def on_pick(sample):
-        sample_path = existing_sample_map_path(sample_maps_root_dir, sample)
+        sample_path = existing_standard_library_map_path(sample_maps_root_dir, sample)
 
         # Only treat the map as openable if its folder still contains a usable
         # map. The folder can go stale between opening this dialog and clicking
-        # (moved or partially deleted), and is_sample_map_already_downloaded()
+        # (moved or partially deleted), and is_standard_library_map_downloaded()
         # only checks that the folder is non-empty -- not that it holds a real
         # .glb / .obj+.mtl / cache. Validate the same way the splash screen's
         # Open flow does so a broken folder shows a friendly message instead of
         # crashing the viewer with "No supported model file found".
-        if is_sample_map_already_downloaded(sample_maps_root_dir, sample):
+        if is_standard_library_map_downloaded(sample_maps_root_dir, sample):
             is_valid, error_message = _validate_selected_map_folder(sample_path)
             if is_valid:
                 _open_installed_sample(sample_path)
@@ -943,7 +943,7 @@ def show_sample_maps_dialog(
             fg=_SUBTITLE_COLOR, bg=_PANEL_COLOR, anchor="w",
         ).grid(row=0, column=0, sticky="ew")
 
-        already_have = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
+        already_have = is_standard_library_map_downloaded(sample_maps_root_dir, sample)
         detail_text = _sample_detail_text(sample, downloaded=already_have)
 
         detail_label = tk.Label(

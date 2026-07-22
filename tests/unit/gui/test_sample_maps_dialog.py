@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from caveviewer.gui import sample_map_download, sample_maps_dialog
+from caveviewer.gui import standard_library_download, sample_maps_dialog
 from caveviewer.gui.platform import DirectorySelection
 
 
@@ -179,7 +179,7 @@ def test_sample_maps_dialog_is_modal_and_has_initial_focus_policy():
     assert "set_dialog_action_button(" in source
 
 
-def test_sample_download_worker_queues_progress_and_success(monkeypatch, tmp_path):
+def test_standard_library_download_worker_queues_progress_and_success(monkeypatch, tmp_path):
     sample = _sample()
     result_queue = queue.Queue()
     cancel_event = threading.Event()
@@ -192,13 +192,13 @@ def test_sample_download_worker_queues_progress_and_success(monkeypatch, tmp_pat
         return "/downloaded/devils-eye"
 
     monkeypatch.setattr(
-        sample_map_download,
+        standard_library_download,
         "download_and_extract_to_selected_directory",
         fake_download,
     )
 
     save_dir = DirectorySelection.from_path(str(tmp_path))
-    sample_map_download.run_sample_download_worker(
+    standard_library_download.run_standard_library_download_worker(
         save_dir,
         sample,
         cancel_event,
@@ -208,17 +208,17 @@ def test_sample_download_worker_queues_progress_and_success(monkeypatch, tmp_pat
     assert calls == [
         (save_dir, sample, {"progress_cb", "cancel_cb"}),
     ]
-    assert result_queue.get_nowait() == sample_map_download.SampleDownloadProgress(
+    assert result_queue.get_nowait() == standard_library_download.StandardLibraryDownloadProgress(
         5, 10
     )
-    assert result_queue.get_nowait() == sample_map_download.SampleDownloadSucceeded(
+    assert result_queue.get_nowait() == standard_library_download.StandardLibraryDownloadSucceeded(
         "/downloaded/devils-eye"
     )
     with pytest.raises(queue.Empty):
         result_queue.get_nowait()
 
 
-def test_sample_download_worker_queues_failure(monkeypatch, tmp_path):
+def test_standard_library_download_worker_queues_failure(monkeypatch, tmp_path):
     sample = _sample()
     result_queue = queue.Queue()
     cancel_event = threading.Event()
@@ -227,12 +227,12 @@ def test_sample_download_worker_queues_failure(monkeypatch, tmp_path):
         raise RuntimeError("network failed")
 
     monkeypatch.setattr(
-        sample_map_download,
+        standard_library_download,
         "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    sample_map_download.run_sample_download_worker(
+    standard_library_download.run_standard_library_download_worker(
         DirectorySelection.from_path(str(tmp_path)),
         sample,
         cancel_event,
@@ -240,14 +240,14 @@ def test_sample_download_worker_queues_failure(monkeypatch, tmp_path):
     )
 
     message = result_queue.get_nowait()
-    assert isinstance(message, sample_map_download.SampleDownloadFailed)
+    assert isinstance(message, standard_library_download.StandardLibraryDownloadFailed)
     assert str(message.error) == "network failed"
     with pytest.raises(queue.Empty):
         result_queue.get_nowait()
 
 
-def test_sample_download_worker_progress_observes_cancel(monkeypatch, tmp_path):
-    from caveviewer.gui.sample_maps import DownloadCancelled
+def test_standard_library_download_worker_progress_observes_cancel(monkeypatch, tmp_path):
+    from caveviewer.gui.standard_library_maps import DownloadCancelled
 
     sample = _sample()
     result_queue = queue.Queue()
@@ -258,12 +258,12 @@ def test_sample_download_worker_progress_observes_cancel(monkeypatch, tmp_path):
         options["progress_cb"](5, 10)
 
     monkeypatch.setattr(
-        sample_map_download,
+        standard_library_download,
         "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    sample_map_download.run_sample_download_worker(
+    standard_library_download.run_standard_library_download_worker(
         DirectorySelection.from_path(str(tmp_path)),
         sample,
         cancel_event,
@@ -271,13 +271,13 @@ def test_sample_download_worker_progress_observes_cancel(monkeypatch, tmp_path):
     )
 
     message = result_queue.get_nowait()
-    assert isinstance(message, sample_map_download.SampleDownloadFailed)
+    assert isinstance(message, standard_library_download.StandardLibraryDownloadFailed)
     assert isinstance(message.error, DownloadCancelled)
     with pytest.raises(queue.Empty):
         result_queue.get_nowait()
 
 
-def test_start_sample_download_worker_uses_owned_non_daemon_thread(
+def test_start_standard_library_download_worker_uses_owned_non_daemon_thread(
     monkeypatch, tmp_path
 ):
     sample = _sample()
@@ -294,12 +294,12 @@ def test_start_sample_download_worker_uses_owned_non_daemon_thread(
         done.set()
 
     monkeypatch.setattr(
-        sample_map_download,
-        "run_sample_download_worker",
+        standard_library_download,
+        "run_standard_library_download_worker",
         fake_run,
     )
 
-    worker = sample_map_download.start_sample_download_worker(
+    worker = standard_library_download.start_standard_library_download_worker(
         save_dir,
         sample,
         cancel_event,
@@ -369,7 +369,7 @@ def test_save_directory_chooser_restores_topmost_state_after_failure():
 
 
 def test_download_uses_selected_directory_path(monkeypatch, tmp_path):
-    from caveviewer.gui import sample_maps
+    from caveviewer.gui import standard_library_maps
 
     sample = object()
     progress_cb = object()
@@ -381,10 +381,10 @@ def test_download_uses_selected_directory_path(monkeypatch, tmp_path):
         return "/downloaded/sample"
 
     monkeypatch.setattr(
-        sample_maps, "download_and_extract_sample_map", fake_download
+        standard_library_maps, "download_and_extract_standard_library_map", fake_download
     )
 
-    result = sample_map_download.download_and_extract_to_selected_directory(
+    result = standard_library_download.download_and_extract_to_selected_directory(
         DirectorySelection.from_path(str(tmp_path)),
         sample,
         progress_cb=progress_cb,
@@ -401,7 +401,7 @@ def test_download_uses_selected_directory_path(monkeypatch, tmp_path):
     ]
 
 
-def test_sample_download_uses_desktop_notification_and_inhibit(
+def test_standard_library_download_uses_desktop_notification_and_inhibit(
     monkeypatch, tmp_path
 ):
     sample = _sample()
@@ -416,12 +416,12 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
         return "/downloaded/devils-eye"
 
     monkeypatch.setattr(
-        sample_map_download,
+        standard_library_download,
         "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    result = sample_map_download.download_sample_with_desktop_activity(
+    result = standard_library_download.download_standard_library_with_desktop_activity(
         services,
         parent,
         DirectorySelection.from_path(str(tmp_path)),
@@ -430,7 +430,7 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
         cancel_cb=cancel_cb,
     )
 
-    notification_id = sample_map_download.sample_download_notification_id(sample)
+    notification_id = standard_library_download.standard_library_download_notification_id(sample)
     assert result == "/downloaded/devils-eye"
     assert download_calls == [
         (
@@ -459,7 +459,7 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
     ]
 
 
-def test_sample_download_can_use_foreground_dialog_without_desktop_notifications(
+def test_standard_library_download_can_use_foreground_dialog_without_desktop_notifications(
     monkeypatch, tmp_path
 ):
     sample = _sample()
@@ -470,12 +470,12 @@ def test_sample_download_can_use_foreground_dialog_without_desktop_notifications
         return "/downloaded/devils-eye"
 
     monkeypatch.setattr(
-        sample_map_download,
+        standard_library_download,
         "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    result = sample_map_download.download_sample_with_desktop_activity(
+    result = standard_library_download.download_standard_library_with_desktop_activity(
         services,
         parent,
         DirectorySelection.from_path(str(tmp_path)),
@@ -490,10 +490,10 @@ def test_sample_download_can_use_foreground_dialog_without_desktop_notifications
     ]
 
 
-def test_sample_download_withdraws_notification_on_cancel(
+def test_standard_library_download_withdraws_notification_on_cancel(
     monkeypatch, tmp_path
 ):
-    from caveviewer.gui.sample_maps import DownloadCancelled
+    from caveviewer.gui.standard_library_maps import DownloadCancelled
 
     sample = _sample()
     services = FakeActivityDesktopServices()
@@ -502,20 +502,20 @@ def test_sample_download_withdraws_notification_on_cancel(
         raise DownloadCancelled("cancelled")
 
     monkeypatch.setattr(
-        sample_map_download,
+        standard_library_download,
         "download_and_extract_to_selected_directory",
         fake_download,
     )
 
     with pytest.raises(DownloadCancelled):
-        sample_map_download.download_sample_with_desktop_activity(
+        standard_library_download.download_standard_library_with_desktop_activity(
             services,
             object(),
             DirectorySelection.from_path(str(tmp_path)),
             sample,
         )
 
-    notification_id = sample_map_download.sample_download_notification_id(sample)
+    notification_id = standard_library_download.standard_library_download_notification_id(sample)
     assert ("close_inhibitor",) in services.calls
     assert ("withdraw_notification", notification_id) in services.calls
     assert not any(
@@ -524,7 +524,7 @@ def test_sample_download_withdraws_notification_on_cancel(
     )
 
 
-def test_sample_download_reports_failure_to_desktop(
+def test_standard_library_download_reports_failure_to_desktop(
     monkeypatch, tmp_path
 ):
     sample = _sample()
@@ -534,20 +534,20 @@ def test_sample_download_reports_failure_to_desktop(
         raise RuntimeError("network failed")
 
     monkeypatch.setattr(
-        sample_map_download,
+        standard_library_download,
         "download_and_extract_to_selected_directory",
         fake_download,
     )
 
     with pytest.raises(RuntimeError, match="network failed"):
-        sample_map_download.download_sample_with_desktop_activity(
+        standard_library_download.download_standard_library_with_desktop_activity(
             services,
             object(),
             DirectorySelection.from_path(str(tmp_path)),
             sample,
         )
 
-    notification_id = sample_map_download.sample_download_notification_id(sample)
+    notification_id = standard_library_download.standard_library_download_notification_id(sample)
     assert ("close_inhibitor",) in services.calls
     assert (
         "notify",
@@ -558,7 +558,7 @@ def test_sample_download_reports_failure_to_desktop(
     ) in services.calls
 
 
-def test_sample_download_continues_when_desktop_activity_is_unavailable(
+def test_standard_library_download_continues_when_desktop_activity_is_unavailable(
     monkeypatch, tmp_path
 ):
     sample = _sample()
@@ -570,12 +570,12 @@ def test_sample_download_continues_when_desktop_activity_is_unavailable(
         return "/downloaded/devils-eye"
 
     monkeypatch.setattr(
-        sample_map_download,
+        standard_library_download,
         "download_and_extract_to_selected_directory",
         fake_download,
     )
 
-    result = sample_map_download.download_sample_with_desktop_activity(
+    result = standard_library_download.download_standard_library_with_desktop_activity(
         services,
         object(),
         DirectorySelection.from_path(str(tmp_path)),
