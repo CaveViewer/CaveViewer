@@ -14,7 +14,6 @@ simple lookup-and-release.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-import json
 import logging
 import math
 import os
@@ -48,6 +47,7 @@ from caveviewer.gui.import_controller import MapImportController
 from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_folder
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
+from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform import tk_root_options
@@ -548,7 +548,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._navigation_guard_enabled = _env_bool("CAVEVIEWER_NAVIGATION_GUARD", True)
         self._navigation_guard_radius_cells = _env_int("CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS", 2, 0, 12)
         self._bookmarks_path: str | None = None
-        self._bookmarks: dict[int, dict] = {}
+        self._bookmarks: viewer_bookmarks.BookmarkSlots = {}
         self._recording_fps = _env_int("CAVEVIEWER_RECORDING_FPS", 30, 1, 60)
         self._recording_max_height = _env_int("CAVEVIEWER_RECORDING_MAX_HEIGHT", 1080, 240, 4320)
         self._recording_crf = _env_int("CAVEVIEWER_RECORDING_CRF", 23, 0, 51)
@@ -4468,58 +4468,26 @@ class CaveViewerWindow(mglw.WindowConfig):
         return False
 
     def _load_bookmarks(self) -> None:
-        self._bookmarks = {}
-        if not self._bookmarks_path:
-            return
-        if not os.path.exists(self._bookmarks_path):
-            return
-        try:
-            with open(self._bookmarks_path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            slots = raw.get("slots", {}) if isinstance(raw, dict) else {}
-            for slot_str, payload in slots.items():
-                slot = int(slot_str)
-                if slot < 1 or slot > 9:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                pos = payload.get("position")
-                yaw = payload.get("yaw")
-                pitch = payload.get("pitch")
-                if isinstance(pos, list) and len(pos) == 3 and yaw is not None and pitch is not None:
-                    self._bookmarks[slot] = {
-                        "position": [float(pos[0]), float(pos[1]), float(pos[2])],
-                        "yaw": float(yaw),
-                        "pitch": float(pitch),
-                    }
-        except Exception as e:
-            _LOG.warning(f"Failed to load bookmarks: {e}")
+        self._bookmarks = viewer_bookmarks.load_bookmarks(
+            self._bookmarks_path,
+            logger=_LOG,
+        )
 
     def _save_bookmarks(self) -> None:
-        if not self._bookmarks_path:
-            return
-        try:
-            payload = {
-                "version": 1,
-                "slots": {str(slot): data for slot, data in sorted(self._bookmarks.items())},
-            }
-            with open(self._bookmarks_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-        except Exception as e:
-            _LOG.warning(f"Failed to save bookmarks: {e}")
+        viewer_bookmarks.save_bookmarks(
+            self._bookmarks_path,
+            self._bookmarks,
+            logger=_LOG,
+        )
 
     def _save_bookmark_slot(self, slot: int) -> None:
         if not self._has_map_loaded:
             return
-        self._bookmarks[slot] = {
-            "position": [
-                float(self.camera.position[0]),
-                float(self.camera.position[1]),
-                float(self.camera.position[2]),
-            ],
-            "yaw": float(self.camera.yaw),
-            "pitch": float(self.camera.pitch),
-        }
+        self._bookmarks[slot] = viewer_bookmarks.bookmark_from_camera(
+            self.camera.position,
+            yaw=self.camera.yaw,
+            pitch=self.camera.pitch,
+        )
         self._save_bookmarks()
         _LOG.info(f"Saved camera bookmark {slot}.")
 
@@ -4579,29 +4547,25 @@ class CaveViewerWindow(mglw.WindowConfig):
             "FORWARD_DELETE", "FWDDELETE",
         )
 
-        # Delete: Backspace held + digit (all platforms, checked first).
-        if backspace_down:
+        action = viewer_bookmarks.bookmark_hotkey_action(
+            slot,
+            save_modifier_down=save_modifier_down,
+            shift_down=shift_down,
+            ctrl_down=ctrl_down,
+            backspace_down=backspace_down,
+            shift_digit_save_fallback=(
+                self._active_platform_adapter()
+                .shift_digit_bookmark_save_fallback()
+            ),
+        )
+        if action is viewer_bookmarks.BookmarkHotkeyAction.NONE:
+            return False
+        if action is viewer_bookmarks.BookmarkHotkeyAction.DELETE:
             self._delete_bookmark_slot(slot)
             return True
-
-        # Delete: Ctrl + Shift + digit (all platforms, checked first so the
-        # macOS Shift-only save fallback doesn't interfere).
-        if ctrl_down and shift_down:
-            self._delete_bookmark_slot(slot)
-            return True
-
-        # Save: platform modifier + digit (Cmd on macOS, Ctrl on Win/Linux).
-        # Shift+digit is a macOS-only fallback for backends that don't report Cmd.
-        if (
-            save_modifier_down
-            or (
-                self._active_platform_adapter().shift_digit_bookmark_save_fallback()
-                and shift_down
-            )
-        ):
+        if action is viewer_bookmarks.BookmarkHotkeyAction.SAVE:
             self._save_bookmark_slot(slot)
             return True
-
         self._recall_bookmark_slot(slot)
         return True
 
