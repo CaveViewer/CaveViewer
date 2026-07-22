@@ -60,11 +60,11 @@ screen coordinates.
 ### In-app update downloads
 
 The splash screen checks the signed update manifest for the current platform
-and architecture. If you start a download, it continues in the background
-while you open maps, download sample maps, or change settings. When the splash
-screen is visible it owns update progress and completion feedback; if a
-download completes in the background, CaveViewer may use a desktop
-notification instead of interrupting map viewing.
+and architecture. If you start a download, it continues in the background while
+you open maps, download standard library maps, or change settings. When the
+splash screen is visible it owns update progress and completion feedback; if a
+download completes in the background, CaveViewer may use a desktop notification
+instead of interrupting map viewing.
 
 After verification, CaveViewer keeps the package in `~/Downloads` and reveals
 it for manual installation: macOS mounts the DMG read-only and shows the app in
@@ -73,16 +73,24 @@ folder. CaveViewer never executes the package or installs the update. Closing
 the whole application cancels an unfinished download and removes its temporary
 files; a verified package remains in `~/Downloads`.
 
-## Getting Started with Sample Maps
+## Getting Started with the Map Library
 
-If you want to try CaveViewer without your own scan, use the built-in sample maps.
+If you want to try CaveViewer without your own scan, use the built-in map
+library.
 
 1. Start CaveViewer and open the splash screen.
-2. Use the `Map Library` panel to reopen a recent map or pick an available sample cave map.
-3. Click `Get` for a sample map that is not downloaded yet, then choose a folder to save it. The dialog stays responsive while CaveViewer downloads and extracts the map in the background, and the row button can cancel the active download.
+2. Use the `Map Library` panel to reopen a recent map or pick an available
+   standard library map.
+3. Click `Get` for a standard library map that is not downloaded yet, then
+   choose a folder to save it. The dialog stays responsive while CaveViewer
+   downloads and extracts the map in the background, and the row button can
+   cancel the active download.
 4. When a map is already downloaded, click `Open` to load it.
 
-Sample maps are a good way to confirm that CaveViewer is working before you import your own data. CaveViewer stores the app-managed sample map library under `map_library`; older `sample_maps` directories are moved there automatically when possible.
+The map library is a good way to confirm that CaveViewer is working before you
+import your own data. CaveViewer stores the app-managed map library under
+`map_library`; older `sample_maps` directories are moved there automatically
+when possible.
 
 ## Recording a Flight
 

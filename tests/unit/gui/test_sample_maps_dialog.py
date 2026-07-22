@@ -1,4 +1,4 @@
-"""Exercise sample-map dialog focus, action-state, and cancellation workflows."""
+"""Exercise map library dialog focus, action-state, and cancellation workflows."""
 
 from __future__ import annotations
 
@@ -307,7 +307,7 @@ def test_start_sample_download_worker_uses_owned_non_daemon_thread(
     )
     worker.join(timeout=1.0)
 
-    assert worker.name == "CaveViewer-sample-map-download"
+    assert worker.name == "CaveViewer-map-library-download"
     assert worker.daemon is False
     assert done.is_set()
     assert calls == [(save_dir, sample, cancel_event, result_queue)]
@@ -443,7 +443,7 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
         (
             "notify",
             notification_id,
-            "Sample Map Download Started",
+            "Map Library Download Started",
             "Downloading Devils Eye",
             "normal",
         ),
@@ -452,7 +452,7 @@ def test_sample_download_uses_desktop_notification_and_inhibit(
         (
             "notify",
             notification_id,
-            "Sample Map Ready",
+            "Map Library Download Ready",
             "Devils Eye finished downloading",
             "normal",
         ),
@@ -519,7 +519,7 @@ def test_sample_download_withdraws_notification_on_cancel(
     assert ("close_inhibitor",) in services.calls
     assert ("withdraw_notification", notification_id) in services.calls
     assert not any(
-        call[0] == "notify" and call[2] == "Sample Map Ready"
+        call[0] == "notify" and call[2] == "Map Library Download Ready"
         for call in services.calls
     )
 
@@ -552,7 +552,7 @@ def test_sample_download_reports_failure_to_desktop(
     assert (
         "notify",
         notification_id,
-        "Sample Map Download Failed",
+        "Map Library Download Failed",
         "Couldn’t download Devils Eye",
         "high",
     ) in services.calls

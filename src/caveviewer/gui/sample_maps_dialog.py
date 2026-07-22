@@ -1,11 +1,10 @@
 """
 caveviewer.gui.sample_maps_dialog
 
-The window opened by the splash screen's "Sample Maps..." button: lists
-the known sample cave scans (see caveviewer.gui.sample_maps), shows their size,
-and lets the person download (or, if already downloaded, directly open)
-whichever one they want -- a one-click way to try CaveViewer without
-having their own scan yet.
+The map library window lists the standard library cave scans (see
+caveviewer.gui.sample_maps), shows their size, and lets the person download
+(or, if already downloaded, directly open) whichever one they want -- a
+one-click way to try CaveViewer without having their own scan yet.
 
 Kept separate from caveviewer.gui.sample_maps (pure fetch/download/extract
 logic, no UI) the same way update workflow code is kept separate from
@@ -84,7 +83,7 @@ def _ask_directory_in_front(
         # Supplying parent establishes native window ownership where Tk can
         # provide it.  On Linux portal/Wayland paths, however, the chooser may
         # not become a real child of this Toplevel. Keeping this dialog topmost
-        # during the chooser call can then put Sample Maps above the chooser.
+        # during the chooser call can then put Map Library above the chooser.
         # Pulse topmost only to raise the owner, then clear it before the
         # blocking native dialog request.
         if topmost_supported:
@@ -120,7 +119,7 @@ def _format_sample_size(size_bytes) -> str:
 
 
 def _sample_detail_text(sample, *, downloaded: bool) -> str:
-    """Return the secondary row text for a sample map."""
+    """Return the secondary row text for a standard library map."""
     if downloaded:
         return "Ready to open"
     if getattr(sample, "download_url", None) is None:
@@ -129,7 +128,7 @@ def _sample_detail_text(sample, *, downloaded: bool) -> str:
 
 
 def _sample_action_text(sample, *, downloaded: bool) -> str:
-    """Return the primary action label for a sample map row."""
+    """Return the primary action label for a standard library map row."""
     if downloaded:
         return "Open Map"
     if getattr(sample, "download_url", None) is None:
@@ -160,14 +159,14 @@ def show_sample_maps_dialog(
     desktop_services: DesktopServices | None = None,
 ):
     """
-    Shows the sample maps list as a modal dialog over `parent` (the
+    Shows the map library list as a modal dialog over `parent` (the
     splash screen's Tk root). Blocks until the person either picks a map
     to open (downloading it first if needed) or closes the window.
 
     Returns the local folder path of the map to open, or None if the
     dialog was closed without selecting one -- the caller (the splash
     screen) treats a non-None return exactly like a Browse-selected
-    folder, so picking a sample map and browsing to your own folder are
+    folder, so picking a standard library map and browsing to your own folder are
     just two different ways of arriving at the same "here's a folder,
     go load it" outcome.
     """
@@ -196,7 +195,7 @@ def show_sample_maps_dialog(
 
     dialog = tk.Toplevel(parent)
     dialog.withdraw()
-    dialog.title("Sample Maps")
+    dialog.title("Map Library")
     dialog.configure(bg=_BG_COLOR)
     dialog.resizable(False, False)
     dialog.transient(parent)
@@ -300,7 +299,7 @@ def show_sample_maps_dialog(
 
     header = tk.Label(
         content,
-        text="Sample Maps",
+        text="Map Library",
         font=(_UI_FONT_FAMILY, 15, "bold"),
         fg=_TITLE_COLOR,
         bg=_BG_COLOR,
@@ -311,7 +310,7 @@ def show_sample_maps_dialog(
 
     sub = tk.Label(
         content,
-        text="Download a sample map folder, or open one you already have.",
+        text="Download a standard library map folder, or open one you already have.",
         font=(_UI_FONT_FAMILY, 10),
         fg=_INSTRUCTION_COLOR,
         bg=_BG_COLOR,
@@ -357,12 +356,12 @@ def show_sample_maps_dialog(
         try:
             result = fetch_sample_map_catalog()
         except Exception as exc:
-            result = ([], f"Couldn't load the sample map list: {exc}")
+            result = ([], f"Couldn't load the map library: {exc}")
         fetch_queue.put(result)
 
     threading.Thread(
         target=_fetch_worker,
-        name="CaveViewer-sample-map-catalog",
+        name="CaveViewer-map-library-catalog",
         daemon=True,
     ).start()
 
@@ -442,18 +441,18 @@ def show_sample_maps_dialog(
     # failed network fetch), still show the list built from
     # KNOWN_SAMPLE_MAPS, since any map already downloaded previously
     # needs to stay openable regardless of whether THIS fetch succeeded.
-    # This is the actual fix for sample maps becoming unreachable while
+    # This is the actual fix for map library entries becoming unreachable while
     # offline: a network failure used to unconditionally show this error
     # screen and never even check local disk for what's already there.
     if not catalog:
         dialog.geometry(f"{window_w}x{loading_window_h}+{anchor_x}+{anchor_y}")
         _set_notice(
-            f"Couldn’t load the sample map list. {error or 'Try again later.'}",
+            f"Couldn’t load the map library. {error or 'Try again later.'}",
             kind="error",
         )
         tk.Label(
             content,
-            text="No sample maps are available right now.",
+            text="No map library entries are available right now.",
             font=(_UI_FONT_FAMILY, 10),
             fg=_INSTRUCTION_COLOR,
             bg=_BG_COLOR,
@@ -491,7 +490,7 @@ def show_sample_maps_dialog(
 
     list_frame.pack(fill="x")
 
-    # The dialog intentionally supports the small curated sample-map set offered
+    # The dialog intentionally supports the small curated map-library set offered
     # here, not a large catalog.  A future larger collection belongs behind a
     # separate map-library link instead of putting a scrollbar into this small
     # chooser.
@@ -727,7 +726,7 @@ def show_sample_maps_dialog(
         nonlocal sample_maps_root_dir
         if active_download.get("cancel_event") is not None:
             _show_inline_feedback(
-                "Finish or cancel the current sample-map download before starting another.",
+                "Finish or cancel the current map library download before starting another.",
                 kind="info",
             )
             return
@@ -735,13 +734,13 @@ def show_sample_maps_dialog(
             _show_inline_feedback(
                 f"{sample.display_name} isn't available for download right now "
                 f"(its file wasn't found on the server, or the server couldn't be "
-                f"reached). Try again later, or pick a different sample map.",
+                f"reached). Try again later, or pick a different standard library map.",
                 kind="info",
             )
             return
 
         # Keep the OS-native chooser owned by and above this dialog. Without
-        # an owner, some window managers place it behind the Sample Maps
+        # an owner, some window managers place it behind the Map Library
         # window, making Download appear unresponsive.
         save_dir = _ask_directory_in_front(
             desktop_services,
@@ -1015,7 +1014,7 @@ def _center_over_parent(window, parent, width, height):
 
 
 def _load_last_sample_maps_dir() -> str | None:
-    """Load the last directory where the user saved sample maps."""
+    """Load the last directory where the user saved map library entries."""
     try:
         with open(_last_sample_maps_dir_file(), "r", encoding="utf-8") as f:
             path = f.read().strip()
@@ -1027,7 +1026,7 @@ def _load_last_sample_maps_dir() -> str | None:
 
 
 def _save_last_sample_maps_dir(path: str) -> None:
-    """Save the directory where the user saved sample maps."""
+    """Save the directory where the user saved map library entries."""
     try:
         if not path or not os.path.isdir(path):
             return

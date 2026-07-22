@@ -130,8 +130,8 @@ adapter.
 Directory selection, file reveal, notifications, and idle/suspend inhibition
 use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal
 first and falls back to Tk or `xdg-open` only when the portal is unavailable.
-Long sample-map downloads request desktop notification and inhibit support
-through this same capability, but the visible Sample Maps dialog suppresses
+Long map library downloads request desktop notification and inhibit support
+through this same capability, but the visible Map Library dialog suppresses
 duplicate desktop notifications because it already presents progress and
 completion actions. Background update downloads request notification and
 inhibit support while the package is being downloaded and verified; a visible

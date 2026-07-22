@@ -1,4 +1,4 @@
-"""Map-folder validation shared by the splash and sample-map dialogs."""
+"""Map-folder validation shared by the splash and map-library dialogs."""
 
 from __future__ import annotations
 

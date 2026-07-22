@@ -1,9 +1,9 @@
-"""Worker coordination for GUI-owned sample-map downloads.
+"""Worker coordination for GUI-owned map library downloads.
 
 Tk surfaces own all widget state on the Tk thread.  This module owns the
 worker-thread handoff used by those surfaces: download/extract work happens in
 a non-daemon worker, progress and terminal events cross a queue boundary, and
-the underlying sample-map installer keeps its existing temporary-file cleanup
+the underlying map library installer keeps its existing temporary-file cleanup
 and staged publish behavior.
 """
 
@@ -17,7 +17,7 @@ from caveviewer.gui.platform import DesktopServices, DirectorySelection
 
 @dataclass(frozen=True)
 class SampleDownloadProgress:
-    """Worker-to-UI progress message for a sample-map download."""
+    """Worker-to-UI progress message for a map library download."""
 
     downloaded_bytes: int
     total_bytes: int | None
@@ -25,25 +25,25 @@ class SampleDownloadProgress:
 
 @dataclass(frozen=True)
 class SampleDownloadSucceeded:
-    """Worker-to-UI completion message for a sample-map download."""
+    """Worker-to-UI completion message for a map library download."""
 
     result_path: str
 
 
 @dataclass(frozen=True)
 class SampleDownloadFailed:
-    """Worker-to-UI failure message for a sample-map download."""
+    """Worker-to-UI failure message for a map library download."""
 
     error: Exception
 
 
-_SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX = "caveviewer.sample-map-download"
+_SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX = "caveviewer.map-library-download"
 
 
 def download_and_extract_to_selected_directory(
     save_dir: DirectorySelection, sample, *, progress_cb=None, cancel_cb=None
 ) -> str:
-    """Download a sample map into the local path selected by DesktopServices."""
+    """Download a standard library map into the selected local path."""
     from caveviewer.gui.sample_maps import download_and_extract_sample_map
 
     return download_and_extract_sample_map(
@@ -60,12 +60,12 @@ def run_sample_download_worker(
     cancel_event: threading.Event,
     result_queue,
 ) -> None:
-    """Download/extract a sample map without touching Tk state."""
+    """Download/extract a standard library map without touching Tk state."""
     from caveviewer.gui.sample_maps import DownloadCancelled
 
     def on_progress(downloaded_bytes, total_bytes) -> None:
         if cancel_event.is_set():
-            raise DownloadCancelled("Sample map download cancelled")
+            raise DownloadCancelled("Map library download cancelled")
         result_queue.put(
             SampleDownloadProgress(
                 max(0, int(downloaded_bytes)),
@@ -73,7 +73,7 @@ def run_sample_download_worker(
             )
         )
         if cancel_event.is_set():
-            raise DownloadCancelled("Sample map download cancelled")
+            raise DownloadCancelled("Map library download cancelled")
 
     try:
         result_path = download_and_extract_to_selected_directory(
@@ -94,11 +94,11 @@ def start_sample_download_worker(
     cancel_event: threading.Event,
     result_queue,
 ) -> threading.Thread:
-    """Start the owned worker thread for a sample-map download."""
+    """Start the owned worker thread for a map library download."""
     worker = threading.Thread(
         target=run_sample_download_worker,
         args=(save_dir, sample, cancel_event, result_queue),
-        name="CaveViewer-sample-map-download",
+        name="CaveViewer-map-library-download",
         # Partial zip/extraction cleanup must reach its finally blocks.
         daemon=False,
     )
@@ -180,16 +180,16 @@ def download_sample_with_desktop_activity(
     cancel_cb=None,
     notify_desktop: bool = True,
 ) -> str:
-    """Download a sample map while using native desktop activity affordances."""
+    """Download a standard library map with native desktop activity affordances."""
     from caveviewer.gui.sample_maps import DownloadCancelled
 
-    display_name = getattr(sample, "display_name", "sample map")
+    display_name = getattr(sample, "display_name", "standard library map")
     notification_id = sample_download_notification_id(sample)
     if notify_desktop:
         safe_desktop_notify(
             desktop_services,
             notification_id,
-            "Sample Map Download Started",
+            "Map Library Download Started",
             f"Downloading {display_name}",
         )
     inhibitor = safe_desktop_inhibit(
@@ -214,7 +214,7 @@ def download_sample_with_desktop_activity(
             safe_desktop_notify(
                 desktop_services,
                 notification_id,
-                "Sample Map Download Failed",
+                "Map Library Download Failed",
                 f"Couldn’t download {display_name}",
                 priority="high",
             )
@@ -225,7 +225,7 @@ def download_sample_with_desktop_activity(
         safe_desktop_notify(
             desktop_services,
             notification_id,
-            "Sample Map Ready",
+            "Map Library Download Ready",
             f"{display_name} finished downloading",
         )
     return result_path

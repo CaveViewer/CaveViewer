@@ -189,14 +189,16 @@ updates the version and signed manifests in a single branch commit. Do not use
 has completed successfully. Tests and development dependencies are not included
 in release archives.
 
-## Sample Map Source Overrides
+## Map Library Source Overrides
 
-By default, the built-in sample maps dialog reads release assets from:
+By default, the built-in map library reads release assets from:
 
 - Repository: `CaveViewer/CaveViewer`
 - Release tag: `sample-data`
 
-For local development, you can point the sample maps dialog at a different source before launching the program. These settings are environment variables only; they are not exposed in the app UI.
+For local development, you can point the map library at a different source
+before launching the program. These settings are environment variables only;
+they are not exposed in the app UI.
 
 Precedence:
 
@@ -290,7 +292,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_GITHUB_REPO` | `CaveViewer/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and sample-maps API URL. Override when running a fork or testing a package from Terminal. |
+| `CAVEVIEWER_GITHUB_REPO` | `CaveViewer/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and map-library API URL. Override when running a fork or testing a package from Terminal. |
 | `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for update testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_CHANNEL` | `stable` | Update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
@@ -549,7 +551,7 @@ for that map cache when termination completes. The child also lowers its
 desktop scheduling priority and caps common native compute libraries to one
 thread unless the user has already set those library-specific variables.
 
-The splash screen, Preferences, and Sample Maps dialogs share their Tk
+The splash screen, Preferences, and Map Library dialogs share their Tk
 color and control tokens through `src/caveviewer/gui/tk_theme.py`. Map-folder
 validation lives in `src/caveviewer/gui/map_selection.py`, allowing both
 map-selection dialogs to reuse it without importing private splash-screen
@@ -606,16 +608,16 @@ beside its chunks before the manifest becomes visible. Disk-space checks
 therefore target the cache filesystem rather than assuming the map's filesystem
 is writable.
 
-### Sample Maps
+### Map Library
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_SAMPLE_MAPS_REPO` | `CaveViewer/CaveViewer` | GitHub `owner/repo` for the sample maps release. |
-| `CAVEVIEWER_SAMPLE_DATA_TAG` | `sample-data` | Release tag to fetch sample map assets from. |
+| `CAVEVIEWER_SAMPLE_MAPS_REPO` | `CaveViewer/CaveViewer` | GitHub `owner/repo` for the map library release. |
+| `CAVEVIEWER_SAMPLE_DATA_TAG` | `sample-data` | Release tag to fetch standard library map assets from. |
 | `CAVEVIEWER_SAMPLE_MAPS_API_URL` | _(derived from repo + tag)_ | Full GitHub release API URL. Overrides the repo/tag variables when set. |
 
-The Sample Maps dialog keeps Tk work on the Tk thread. Catalog fetches and
-sample-map download/extract work run in background workers; workers publish
+The Map Library dialog keeps Tk work on the Tk thread. Catalog fetches and
+map-library download/extract work run in background workers; workers publish
 progress and terminal status through queues, and the dialog applies those
 messages from `after()` callbacks. Worker callbacks must not read or mutate Tk
 widgets directly. Closing the dialog sets the active download's cancellation
