@@ -379,33 +379,11 @@ def _embedded_texture_filename(image_bytes: bytes, material_name: str) -> str:
     return importer.embedded_texture_filename(image_bytes, material_name)
 
 
-def _hidden_tk_root():
-    """Create the hidden Tk owner used for native chooser dialogs."""
-    import tkinter as tk
-    from caveviewer.gui.dpi_utils import apply_tk_scaling, configure_process_dpi_awareness
-    from caveviewer.gui.platform import tk_root_options
-
-    configure_process_dpi_awareness()
-    root = tk.Tk(**tk_root_options())
-    apply_tk_scaling(root)
-    root.withdraw()
-    return root
-
-
 def pick_folder_dialog(*, desktop_services=None) -> str | None:
     """Open the platform directory chooser used by folder/cache workflows."""
-    from caveviewer.gui.platform import get_desktop_services
+    from caveviewer.gui.map_opening import pick_folder_dialog as _pick_folder_dialog
 
-    root = _hidden_tk_root()
-    try:
-        services = desktop_services or get_desktop_services()
-        selection = services.choose_directory(
-            title="Open Map Folder",
-            parent=root,
-        )
-        return selection.path if selection else None
-    finally:
-        root.destroy()
+    return _pick_folder_dialog(desktop_services=desktop_services)
 
 
 def _print_viewer_controls() -> None:

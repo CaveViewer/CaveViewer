@@ -765,6 +765,13 @@ def test_render_loop_uses_nonblocking_throttle_instead_of_sleep():
     assert "_render_throttle_due(" in source
 
 
+def test_viewer_window_does_not_import_app_layer():
+    source = inspect.getsource(viewer_window)
+
+    assert "from caveviewer.app" not in source
+    assert "import caveviewer.app" not in source
+
+
 def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypatch):
     logger = FakeLogger()
     monkeypatch.setattr(viewer_window, "_LOG", logger)

@@ -52,11 +52,13 @@ src/caveviewer/gui/map_library.py             recent-map row display models
 src/caveviewer/gui/map_library_controller.py  standard-library row/download state
 src/caveviewer/gui/map_library_panel.py       splash Map Library Tk panel
 src/caveviewer/gui/map_library_workflow.py    splash Map Library workflow
+src/caveviewer/gui/map_opening.py             shared map-folder chooser and target resolution
 src/caveviewer/gui/standard_library_maps.py   standard-library map source/storage
 src/caveviewer/gui/standard_library_download.py standard-library download workers
 src/caveviewer/gui/preferences.py             preference persistence facade
 src/caveviewer/gui/preferences_form.py        Tk-free preference form state
 src/caveviewer/gui/preferences_dialog.py      Tk preference dialog presentation
+src/caveviewer/gui/recording.py               recording encoder process/thread helpers
 src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
 src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
 src/caveviewer/resources/                     shaders, images, and public key
