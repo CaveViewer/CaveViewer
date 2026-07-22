@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.dpi_utils
+"""Tk DPI-scaling setup delegated through GUI platform adapters.
 
 Small DPI helpers for Tk-based windows/dialogs.
 

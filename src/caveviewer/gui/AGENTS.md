@@ -17,10 +17,15 @@ runtime rendering behavior is explained in `/docs/development/rendering.md`.
 
 - `caveviewer.gui` may depend on `caveviewer.core`; core must not depend on
   GUI.
+- GUI modules must not import upward into `caveviewer.app`; entry-point
+  compatibility wrappers should call into GUI helpers rather than the other way
+  around.
 - Keep Tk presentation, OpenGL rendering, platform integration, and testable
   controller/model logic separated.
 - Platform-specific behavior belongs behind `caveviewer.gui.platform` adapters
-  rather than scattered `sys.platform` checks.
+  rather than scattered `sys.platform`, `os.name`, or `platform.*` checks.
+- Every GUI Python module should start with an ownership-focused module
+  docstring. Avoid placeholder docstrings that only repeat the module path.
 - Resource loading must work from source, tests, and packaged builds.
 
 ## Tk rules
@@ -61,6 +66,8 @@ runtime rendering behavior is explained in `/docs/development/rendering.md`.
 
 - Put GUI-adjacent logic that can run deterministically under
   `tests/unit/gui/`.
+- `tests/unit/gui/test_gui_architecture_boundaries.py` enforces the GUI app
+  import boundary, platform-check boundary, and module ownership docstrings.
 - Test controller behavior independently from widgets where practical.
 - Use bounded waits, events, fake adapters, and mocked worker results instead
   of timing-only sleeps.

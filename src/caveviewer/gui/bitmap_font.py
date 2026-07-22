@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.bitmap_font
+"""Bitmap-font rasterization for OpenGL overlay text.
 
 FreeType-based text rasterization helpers for the overlay UI.
 

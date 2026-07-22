@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.update_checker
+"""Network update-manifest checks and package download helpers.
 
 Checks a hosted update manifest (JSON) for a newer CaveViewer version and
 downloads the signed manifest's platform-specific package when requested.

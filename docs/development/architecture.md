@@ -127,6 +127,12 @@ model modules. `caveviewer.gui.platform` contains OS-specific focus, update,
 and system integration behavior. Unsupported platforms use the default
 adapter.
 
+GUI architecture guardrails are executable. The test file
+`tests/unit/gui/test_gui_architecture_boundaries.py` checks that GUI modules do
+not import upward into `caveviewer.app`, that direct platform checks stay
+inside `src/caveviewer/gui/platform`, and that GUI Python modules carry
+ownership docstrings instead of placeholder module-path docstrings.
+
 The splash Map Library is split by responsibility: `map_library.py` builds
 presentation-independent recent-map titles, `map_library_controller.py` owns
 standard-library catalog/download state, `map_library_workflow.py` owns

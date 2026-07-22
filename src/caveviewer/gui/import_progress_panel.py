@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.import_progress_panel
+"""OpenGL progress panel for first-time map imports.
 
 A simple full-screen progress panel, drawn while a newly-opened map is
 being imported and chunked for the FIRST time (no cache yet) -- the same
