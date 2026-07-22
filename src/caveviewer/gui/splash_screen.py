@@ -159,6 +159,7 @@ _TITLE_FONT = (_UI_FONT_FAMILY, 24, "bold")
 _VERSION_FONT = (_UI_FONT_FAMILY, 12)
 _BODY_FONT = (_UI_FONT_FAMILY, 12)
 _SMALL_FONT = (_UI_FONT_FAMILY, 10)
+_LIBRARY_SECTION_FONT = (_UI_FONT_FAMILY, 10, "bold")
 _LIBRARY_METADATA_FONT = (_UI_FONT_FAMILY, 9)
 _INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
 _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
@@ -244,7 +245,7 @@ def _select_tk_font_family(
 def _configure_runtime_tk_fonts(root) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
     global _UI_FONT_FAMILY, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
-    global _SMALL_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
+    global _SMALL_FONT, _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
     global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT, _LIBRARY_OVERFLOW_FONT
 
     try:
@@ -276,6 +277,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     _VERSION_FONT = (_UI_FONT_FAMILY, 12)
     _BODY_FONT = (_UI_FONT_FAMILY, 12)
     _SMALL_FONT = (_UI_FONT_FAMILY, 10)
+    _LIBRARY_SECTION_FONT = (_UI_FONT_FAMILY, 10, "bold")
     _LIBRARY_METADATA_FONT = (_UI_FONT_FAMILY, 9)
     _INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
     _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
@@ -291,6 +293,7 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         panel_border_color=_LIBRARY_PANEL_BORDER_COLOR,
         title_color=_TITLE_COLOR,
         instruction_color=_INSTRUCTION_COLOR,
+        section_font=_LIBRARY_SECTION_FONT,
         small_font=_SMALL_FONT,
         metadata_font=_LIBRARY_METADATA_FONT,
         button_bg=_BUTTON_BG,
