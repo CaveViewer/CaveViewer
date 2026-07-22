@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from types import SimpleNamespace
 
 import pytest
 
-from caveviewer import app
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.map import importer
 from caveviewer.gui import import_process
 
 
@@ -83,6 +84,13 @@ class FakeSpawnContext:
         return process
 
 
+def test_import_process_does_not_import_app_layer():
+    source = inspect.getsource(import_process)
+
+    assert "from caveviewer.app" not in source
+    assert "import caveviewer.app" not in source
+
+
 def test_source_path_from_descriptor_accepts_supported_formats():
     assert (
         import_process.source_path_from_descriptor({"obj_path": "/maps/cave.obj"})
@@ -147,10 +155,10 @@ def test_import_process_reports_progress_and_done(monkeypatch):
         assert model_descriptor == {"glb_path": "/maps/cave.glb"}
         assert textures_dir == "/maps"
         assert options["force_rebuild"] is False
-        options["extra_progress_cb"]("building cache", 0.5)
+        options["progress_cb"]("building cache", 0.5)
         return "/cache/cave"
 
-    monkeypatch.setattr(app, "import_and_cache_any", fake_import)
+    monkeypatch.setattr(importer, "import_and_cache_any", fake_import)
     monkeypatch.setattr(
         import_process,
         "_configure_import_child_logging",
@@ -186,7 +194,7 @@ def test_import_process_reports_paused_checkpoint(monkeypatch):
         pause_event.set()
         return SimpleNamespace(join=lambda timeout=None: None)
 
-    monkeypatch.setattr(app, "import_and_cache_any", fake_import)
+    monkeypatch.setattr(importer, "import_and_cache_any", fake_import)
     monkeypatch.setattr(import_process, "_LOG", logger)
     monkeypatch.setattr(
         import_process,
@@ -218,7 +226,7 @@ def test_import_process_reports_error_with_traceback(monkeypatch):
     def fail_import(*_args, **_kwargs):
         raise RuntimeError("parse failed")
 
-    monkeypatch.setattr(app, "import_and_cache_any", fail_import)
+    monkeypatch.setattr(importer, "import_and_cache_any", fail_import)
     monkeypatch.setattr(
         import_process,
         "_configure_import_child_logging",
@@ -249,7 +257,7 @@ def test_import_process_reports_actionable_chunker_error_without_traceback(
     logger = FakeLogger()
 
     def fail_import(*_args, **kwargs):
-        assert kwargs["console_progress"] is False
+        assert "console_progress" not in kwargs
         raise chunker.InsufficientImportMemoryError(
             20 * 1024**3,
             9 * 1024**3,
@@ -258,7 +266,7 @@ def test_import_process_reports_actionable_chunker_error_without_traceback(
             physical_limit_bytes=18 * 1024**3,
         )
 
-    monkeypatch.setattr(app, "import_and_cache_any", fail_import)
+    monkeypatch.setattr(importer, "import_and_cache_any", fail_import)
     monkeypatch.setattr(import_process, "_LOG", logger)
     monkeypatch.setattr(
         import_process,
@@ -296,7 +304,7 @@ def test_import_process_reports_cancelled_without_traceback_on_keyboard_interrup
     def interrupt_import(*_args, **_kwargs):
         raise KeyboardInterrupt()
 
-    monkeypatch.setattr(app, "import_and_cache_any", interrupt_import)
+    monkeypatch.setattr(importer, "import_and_cache_any", interrupt_import)
     monkeypatch.setattr(import_process, "_LOG", logger)
     monkeypatch.setattr(
         import_process,

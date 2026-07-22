@@ -163,6 +163,9 @@ Startup map sessions accept either a folder containing a supported map or one
 direct `.glb`/`.obj` file. This keeps Linux `Exec ... %f` desktop launches and
 the in-app folder chooser on the same import/cache path as desktop-shell direct
 file launches.
+`gui.map_opening` owns the shared directory chooser and selected-folder
+resolution used by startup compatibility wrappers and the in-viewer Open
+action, so viewer rendering code does not import upward into `caveviewer.app`.
 
 Linux viewer windows use GLFW 3.4. `CAVEVIEWER_WINDOW_SYSTEM=auto` prefers
 X11/XWayland when `DISPLAY` is available, then retries Wayland only for a
@@ -178,6 +181,9 @@ OpenGL HUD text is rasterized at framebuffer scale for crispness, while the
 always-visible right-side viewer controls use a separate responsive HUD scale
 based on the current viewer surface size. That keeps maximized and AppImage
 windows legible without requiring user-provided environment variables.
+Viewer recording keeps OpenGL framebuffer readback in `viewer_window.py` on the
+render thread, while `gui.recording` owns ffmpeg command construction, encoder
+writer/stderr workers, and asynchronous stop finalization.
 
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL

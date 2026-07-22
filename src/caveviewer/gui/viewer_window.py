@@ -15,13 +15,11 @@ simple lookup-and-release.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 import json
 import logging
 import math
 import os
 import queue
-import shutil
 import subprocess
 import sys
 import threading
@@ -49,6 +47,8 @@ from caveviewer.gui.import_process import (
     terminate_import_process,
 )
 from caveviewer.gui.import_controller import MapImportController
+from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_folder
+from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform import tk_root_options
@@ -81,30 +81,9 @@ _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
 
 
-@dataclass(frozen=True)
-class _RecordingStopWork:
-    process: subprocess.Popen
-    output_path: str | None
-    frame_queue: queue.Queue | None
-    writer_thread: threading.Thread | None
-    stderr_thread: threading.Thread | None
-    show_message: bool
-
-
-@dataclass(frozen=True)
-class _RecordingStopResult:
-    output_path: str | None
-    returncode: int | None
-    stderr_text: str
-    writer_error: Exception | None
-    dropped_frames: int
-    show_message: bool
-
-
-@dataclass
-class _RecordingReadbackSlot:
-    buffer: moderngl.Buffer
-    in_flight: bool = False
+_RecordingStopWork = recording.RecordingStopWork
+_RecordingStopResult = recording.RecordingStopResult
+_RecordingReadbackSlot = recording.RecordingReadbackSlot
 
 
 def _import_controller_property(attribute_name: str):
@@ -1135,19 +1114,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         _LOG.info("Recording countdown started. Press Shift+R to cancel or stop.")
 
     def _resolve_ffmpeg_path(self) -> str | None:
-        configured = os.getenv("CAVEVIEWER_FFMPEG", "").strip()
-        if configured:
-            return configured
-
-        path = shutil.which("ffmpeg")
-        if path:
-            return path
-
-        try:
-            import imageio_ffmpeg
-            return imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            return None
+        return recording.resolve_ffmpeg_path()
 
     def _recording_unavailable(self, reason: str) -> None:
         message = f"Cannot start recording: {reason}"
@@ -1182,11 +1149,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         return width, height
 
     def _recording_output_size(self, width: int, height: int) -> tuple[int, int]:
-        output_height = min(int(height), self._recording_max_height)
-        output_height = max(2, (output_height // 2) * 2)
-        output_width = max(2, int(round((width * output_height) / max(height, 1))))
-        output_width = (output_width // 2) * 2
-        return output_width, output_height
+        return recording.recording_output_size(
+            width,
+            height,
+            self._recording_max_height,
+        )
 
     def _release_recording_readback_framebuffer(self) -> None:
         framebuffer = getattr(self, "_recording_readback_framebuffer", None)
@@ -1310,24 +1277,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             return False
 
-        cmd = [
-            ffmpeg_path,
-            "-hide_banner",
-            "-loglevel", "error",
-            "-y",
-            "-f", "rawvideo",
-            "-pix_fmt", self.RECORDING_RAW_PIX_FMT,
-            "-s", f"{output_width}x{output_height}",
-            "-r", str(self._recording_fps),
-            "-i", "-",
-            "-an",
-            "-vf", "vflip",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", str(self._recording_crf),
-            "-pix_fmt", "yuv420p",
-            output_path,
-        ]
+        cmd = recording.build_ffmpeg_command(
+            ffmpeg_path=ffmpeg_path,
+            output_size=output_size,
+            fps=self._recording_fps,
+            crf=self._recording_crf,
+            raw_pix_fmt=self.RECORDING_RAW_PIX_FMT,
+            output_path=output_path,
+        )
         popen_kwargs = {
             "stdin": subprocess.PIPE,
             "stdout": subprocess.DEVNULL,
@@ -1385,65 +1342,31 @@ class CaveViewerWindow(mglw.WindowConfig):
         return True
 
     def _recording_writer_loop(self, process: subprocess.Popen, frame_queue: queue.Queue) -> None:
-        try:
-            while True:
-                frame = frame_queue.get()
-                if frame is None:
-                    break
-                stdin = process.stdin
-                if stdin is None:
-                    break
-                try:
-                    stdin.write(frame)
-                except (BrokenPipeError, OSError) as exc:
-                    self._recording_writer_error = exc
-                    break
-        finally:
-            try:
-                if process.stdin:
-                    process.stdin.close()
-            except OSError:
-                pass
+        recording.writer_loop(
+            process,
+            frame_queue,
+            set_writer_error=self._set_recording_writer_error,
+        )
 
     def _recording_stderr_reader(self, process: subprocess.Popen) -> None:
-        pipe = process.stderr
-        if pipe is None:
-            return
-        try:
-            for line in iter(pipe.readline, b""):
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="replace")
-                with self._recording_stderr_lock:
-                    self._recording_stderr_parts.append(text)
-                    joined = "".join(self._recording_stderr_parts)
-                    if len(joined) > 16384:
-                        self._recording_stderr_parts = [joined[-16384:]]
-        except OSError:
-            return
+        recording.stderr_reader(process, append_stderr=self._append_recording_stderr)
+
+    def _set_recording_writer_error(self, exc: Exception) -> None:
+        self._recording_writer_error = exc
+
+    def _append_recording_stderr(self, text: str) -> None:
+        with self._recording_stderr_lock:
+            self._recording_stderr_parts.append(text)
+            joined = "".join(self._recording_stderr_parts)
+            if len(joined) > 16384:
+                self._recording_stderr_parts = [joined[-16384:]]
 
     def _recording_stderr_text(self) -> str:
         with self._recording_stderr_lock:
             return "".join(self._recording_stderr_parts).strip()
 
     def _recording_signal_writer_stop(self, frame_queue: queue.Queue | None) -> None:
-        if frame_queue is None:
-            return
-        try:
-            frame_queue.put_nowait(None)
-            return
-        except queue.Full:
-            pass
-
-        try:
-            frame_queue.get_nowait()
-        except queue.Empty:
-            pass
-
-        try:
-            frame_queue.put_nowait(None)
-        except queue.Full:
-            pass
+        recording.signal_writer_stop(frame_queue)
 
     def _recording_drop_frames(self, count: int = 1) -> None:
         if count <= 0:
@@ -1473,16 +1396,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         return True
 
     def _recording_display_path(self, path: str | None) -> str | None:
-        if not path:
-            return None
-        home = os.path.expanduser("~")
-        try:
-            rel = os.path.relpath(path, home)
-        except ValueError:
-            return path
-        if rel.startswith(".."):
-            return path
-        return os.path.join("~", rel)
+        return recording.recording_display_path(path)
 
     def _show_recording_status(
         self,
@@ -1556,47 +1470,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
 
     def _recording_finalize_stop_worker(self, work: _RecordingStopWork) -> None:
-        process = work.process
-        writer_error: Exception | None = None
-        try:
-            if work.writer_thread is not None:
-                work.writer_thread.join(timeout=2.0)
-                if work.writer_thread.is_alive():
-                    _LOG.warning("Recording writer did not finish promptly; forcing encoder shutdown.")
-                    try:
-                        if process.stdin:
-                            process.stdin.close()
-                    except OSError:
-                        pass
-
-            try:
-                process.wait(timeout=8.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            if work.writer_thread is not None and work.writer_thread.is_alive():
-                work.writer_thread.join(timeout=1.0)
-
-            if work.stderr_thread is not None:
-                work.stderr_thread.join(timeout=1.0)
-        except Exception as exc:
-            writer_error = exc
-            _LOG.warning("Recording finalizer failed: %s", exc)
-
-        stderr_text = self._recording_stderr_text()
-        writer_error = writer_error or self._recording_writer_error
-        dropped_frames = self._recording_dropped_frames
-        self._ensure_recording_stop_state()
-        self._recording_stop_results.put(
-            _RecordingStopResult(
-                output_path=work.output_path,
-                returncode=process.returncode,
-                stderr_text=stderr_text,
-                writer_error=writer_error,
-                dropped_frames=dropped_frames,
-                show_message=work.show_message,
-            )
+        result = recording.finalize_stop_worker(
+            work,
+            stderr_text=self._recording_stderr_text,
+            writer_error=lambda: self._recording_writer_error,
+            dropped_frames=lambda: self._recording_dropped_frames,
+            logger=_LOG,
         )
+        self._ensure_recording_stop_state()
+        self._recording_stop_results.put(result)
 
     def _drain_recording_stop_results(self) -> None:
         self._ensure_recording_stop_state()
@@ -1644,10 +1526,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 )
 
     def _recording_failure_detail(self, stderr_text: str) -> str:
-        normalized = stderr_text.lower()
-        if "no space left" in normalized or "enospc" in normalized:
-            return "Disk may be full"
-        return "Video could not be saved"
+        return recording.recording_failure_detail(stderr_text)
 
     def _recording_capture_state(self) -> tuple[tuple[int, int], tuple[int, int, int, int], int]:
         if self._recording_size is None or self._recording_viewport is None:
@@ -2093,55 +1972,41 @@ class CaveViewerWindow(mglw.WindowConfig):
         open a different map should never take down the map you already
         had open and were presumably still looking at.
         """
-        # Local imports here (not at module top) since these pull in
-        # tkinter and the parser/chunker modules, which the rest of this
-        # file doesn't otherwise need -- same reasoning the application
-        # startup module uses for its own local imports of these.
-        from caveviewer.app import pick_folder_dialog, find_model_file
-        from caveviewer.core.chunking import builder as chunker_module
-
         folder = pick_folder_dialog()
         if not folder:
             _LOG.info("Open cancelled -- no folder selected.")
             return
 
-        folder = os.path.abspath(folder)
-        _LOG.info(f"Opening new map from: {folder}")
+        _LOG.info(f"Opening new map from: {os.path.abspath(folder)}")
 
         try:
-            model_descriptor = find_model_file(folder)
+            open_target = resolve_selected_map_folder(folder)
         except FileNotFoundError as e:
-            # Match caveviewer.app's startup behavior: allow selecting a
-            # cache directory itself directly, but do not auto-discover old
-            # adjacent _cache/.caveviewer_cache folders.
-            prebuilt_cache = folder
-            textures_dir = folder
-            if not os.path.exists(os.path.join(prebuilt_cache, chunker_module.MANIFEST_NAME)):
-                _LOG.warning(f"Could not open this folder: {e}")
-                return
-            _LOG.info(f"Found cache manifest in selected directory: {folder}")
-
-            try:
-                new_manifest = chunker_module.load_manifest(prebuilt_cache)
-            except Exception as manifest_err:
-                _LOG.error(f"Failed to load the selected prebuilt map: {manifest_err}")
-                return
-
-            map_name = os.path.basename(new_manifest.get("source_obj") or folder)
-            _LOG.info(f"Switching to prebuilt map: {map_name}")
-            _LOG.info(f"Using cache directory: {prebuilt_cache}")
-            self.load_new_map(
-                prebuilt_cache,
-                textures_dir,
-                new_manifest,
-                source_dir=folder,
-            )
-            _LOG.info(f"Now viewing: {map_name}")
+            _LOG.warning(f"Could not open this folder: {e}")
+            return
+        except Exception as manifest_err:
+            _LOG.error(f"Failed to load the selected prebuilt map: {manifest_err}")
             return
 
-        source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
-        map_name = os.path.basename(source_path)
-        self._start_import_async(model_descriptor, folder, map_name, is_startup=False)
+        if open_target.is_prebuilt_cache:
+            _LOG.info(f"Found cache manifest in selected directory: {open_target.cache_dir}")
+            _LOG.info(f"Switching to prebuilt map: {open_target.map_name}")
+            _LOG.info(f"Using cache directory: {open_target.cache_dir}")
+            self.load_new_map(
+                open_target.cache_dir,
+                open_target.textures_dir,
+                open_target.manifest,
+                source_dir=open_target.source_dir,
+            )
+            _LOG.info(f"Now viewing: {open_target.map_name}")
+            return
+
+        self._start_import_async(
+            open_target.model_descriptor,
+            open_target.textures_dir,
+            open_target.map_name,
+            is_startup=False,
+        )
 
     def _import_model_format_from_descriptor(self, model_descriptor: dict) -> str | None:
         return self._ensure_import_controller().import_model_format_from_descriptor(
