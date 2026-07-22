@@ -71,6 +71,13 @@ class CatalogFetchCompletion:
     pending_map: Any | None
 
 
+@dataclass(frozen=True)
+class CatalogFetchCleanup:
+    """State that the Tk owner must cancel while closing a catalog fetch."""
+
+    after_id: Any | None
+
+
 class MapLibraryController:
     """
     Own non-widget state for the splash map library.
@@ -244,3 +251,9 @@ class MapLibraryController:
             error=error,
             pending_map=pending_map,
         )
+
+    def close_catalog_fetch(self) -> CatalogFetchCleanup:
+        """Clear catalog fetch state and return cleanup handles."""
+        cleanup = CatalogFetchCleanup(after_id=self.catalog_fetch.after_id)
+        self.catalog_fetch = CatalogFetchState()
+        return cleanup

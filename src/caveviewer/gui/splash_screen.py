@@ -30,9 +30,7 @@ from __future__ import annotations
 
 import enum
 import os
-import queue
 import sys
-import threading
 from dataclasses import dataclass
 
 from caveviewer.version import APP_NAME, APP_VERSION
@@ -49,37 +47,23 @@ from caveviewer.gui.dpi_utils import (
     configure_process_dpi_awareness,
     tk_display_scale,
 )
-from caveviewer.gui.map_cache_management import (
-    has_managed_map_cache,
-    remove_managed_map_cache,
-)
 from caveviewer.gui.map_library_controller import MapLibraryController
-from caveviewer.gui.map_history import load_recent_map_paths, remove_recent_map_path
-from caveviewer.gui.map_library import recent_map_entry, recent_map_key
+from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.map_library_panel import (
     MapLibraryPanel,
     MapLibraryPanelStyle,
-    MapLibraryRowWidgets,
 )
+from caveviewer.gui.map_library_workflow import MapLibraryWorkflow
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import (
     DesktopServices,
-    DirectorySelection,
     get_desktop_services,
     tk_root_options,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
-from caveviewer.gui.sample_map_download import (
-    SampleDownloadFailed,
-    SampleDownloadProgress,
-    SampleDownloadSucceeded,
-    close_desktop_inhibitor,
-    safe_desktop_inhibit,
-    start_sample_download_worker,
-)
 from caveviewer.gui.tk_feedback import show_feedback
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -530,7 +514,7 @@ def show_splash_screen(
 
     splash_state = {"closing": False}
     last_update_presentation: list[_UpdatePresentation | None] = [None]
-    map_library_panel_ref: list[MapLibraryPanel | None] = [None]
+    map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
 
     # Status and action labels stay packed even when empty. State changes never
     # resize the splash, and keyboard focus is enabled only for active actions.
@@ -638,10 +622,9 @@ def show_splash_screen(
         root.after(100, _refresh_update_presentation)
 
     def _leave_splash() -> None:
-        panel = map_library_panel_ref[0]
-        if panel is not None:
-            panel.close_active_menu()
-        _cancel_active_library_download_for_close()
+        workflow = map_library_workflow_ref[0]
+        if workflow is not None:
+            workflow.close()
         splash_state["closing"] = True
         root.withdraw()
         root.quit()
@@ -723,31 +706,6 @@ def show_splash_screen(
             desktop_services=desktop_services,
         )
 
-    from caveviewer.gui.sample_maps import (
-        DownloadCancelled,
-        KNOWN_SAMPLE_MAPS,
-        default_sample_maps_install_dir,
-        existing_sample_map_path,
-        fetch_sample_map_catalog,
-        is_sample_map_already_downloaded,
-        remove_downloaded_sample_map,
-    )
-
-    sample_maps_root_dir = default_sample_maps_install_dir()
-    recent_map_paths = _load_library_recent_map_paths()
-    map_library_controller = MapLibraryController(KNOWN_SAMPLE_MAPS)
-    # Splash owns workflow decisions. The panel owns Tk widgets on the Tk
-    # thread, and the controller owns presentation-independent map-library
-    # state.
-    map_library_panel = MapLibraryPanel(
-        root,
-        px=px,
-        bind_activation=_bind_activation,
-        widget_exists=lambda widget: _widget_exists(widget),
-        logger=_LOG,
-        style=_map_library_panel_style(),
-    )
-    map_library_panel_ref[0] = map_library_panel
     def _widget_exists(widget) -> bool:
         if widget is None:
             return False
@@ -759,15 +717,6 @@ def show_splash_screen(
     def _splash_exists() -> bool:
         return not splash_state["closing"] and _widget_exists(root)
 
-    def _set_library_row_metadata(
-        library_map, text: str, *, error: bool = False
-    ) -> None:
-        map_library_panel.set_standard_row_metadata(
-            map_library_controller.map_key(library_map),
-            text,
-            error=error,
-        )
-
     def _open_library_map_from_splash(path: str) -> None:
         is_valid, error_message = _validate_selected_map_folder(path)
         if not is_valid:
@@ -778,613 +727,57 @@ def show_splash_screen(
         _save_last_browse_dir(path)
         _leave_splash()
 
-    def _remove_map_cache_from_splash(
-        path: str,
-        title: str,
-        row_widgets: MapLibraryRowWidgets | None,
+    from caveviewer.gui.sample_maps import (
+        KNOWN_SAMPLE_MAPS,
+        default_sample_maps_install_dir,
+    )
+
+    map_library_root_dir = default_sample_maps_install_dir()
+    recent_map_paths = _load_library_recent_map_paths()
+    map_library_controller = MapLibraryController(KNOWN_SAMPLE_MAPS)
+    map_library_panel = MapLibraryPanel(
+        root,
+        px=px,
+        bind_activation=_bind_activation,
+        widget_exists=lambda widget: _widget_exists(widget),
+        logger=_LOG,
+        style=_map_library_panel_style(),
+    )
+
+    def _show_map_library_feedback(
+        message: str,
+        *,
+        kind: str,
+        duration_ms: int,
+        max_wraplength: int | None = None,
     ) -> None:
-        result = remove_managed_map_cache(path)
-        if result.error:
-            _LOG.warning("Unable to remove cache for %s: %s", title, result.error)
-            if not map_library_panel.show_row_status(
-                row_widgets,
-                "Couldn’t remove cache",
-                error=True,
-            ):
-                show_feedback(
-                    root,
-                    f"Unable to remove cache for {title}: {result.error}",
-                    kind="error",
-                    duration_ms=9000,
-                    font=_BODY_FONT,
-                )
-        elif result.removed:
-            map_library_panel.show_row_status(row_widgets, "Cache removed")
-        else:
-            map_library_panel.show_row_status(row_widgets, "No cache found")
-
-        map_library_panel.refresh_row_overflow(row_widgets)
-
-    def _refresh_available_library_row(library_map) -> None:
-        downloaded = is_sample_map_already_downloaded(
-            sample_maps_root_dir, library_map
-        )
-        result_path = existing_sample_map_path(sample_maps_root_dir, library_map)
-        map_library_controller.set_downloaded_path(
-            library_map,
-            downloaded=downloaded,
-            result_path=result_path,
-        )
-        resolved_map = map_library_controller.resolve_catalog_entry(library_map)
-        row = map_library_controller.row(
-            resolved_map,
-            downloaded=downloaded,
-            result_path=result_path if downloaded else None,
-        )
-        _set_library_row_metadata(
-            library_map,
-            row.detail,
-        )
-        _set_available_library_action(library_map, row)
-
-    def _remove_standard_library_download_from_splash(
-        sample,
-        sample_path: str,
-        row_widgets: MapLibraryRowWidgets | None,
-    ) -> None:
-        cache_result = remove_managed_map_cache(sample_path)
-        if cache_result.error:
-            _LOG.warning(
-                "Unable to remove downloaded files for %s: %s",
-                sample.display_name,
-                cache_result.error,
-            )
-            if not map_library_panel.show_row_status(
-                row_widgets,
-                "Couldn’t remove files",
-                error=True,
-            ):
-                show_feedback(
-                    root,
-                    f"Unable to remove downloaded files for {sample.display_name}: "
-                    f"{cache_result.error}",
-                    kind="error",
-                    duration_ms=9000,
-                    font=_BODY_FONT,
-                )
-            map_library_panel.refresh_row_overflow(row_widgets)
-            return
-
-        removal_result = remove_downloaded_sample_map(sample_maps_root_dir, sample)
-        _refresh_available_library_row(sample)
-        if removal_result.error:
-            _LOG.warning(
-                "Unable to remove downloaded files for %s: %s",
-                sample.display_name,
-                removal_result.error,
-            )
-            if not map_library_panel.show_row_status(
-                row_widgets,
-                "Couldn’t remove files",
-                error=True,
-            ):
-                show_feedback(
-                    root,
-                    f"Unable to remove downloaded files for {sample.display_name}: "
-                    f"{removal_result.error}",
-                    kind="error",
-                    duration_ms=9000,
-                    font=_BODY_FONT,
-                )
-            return
-
-        if removal_result.removed_paths or cache_result.removed:
-            map_library_panel.show_row_status(row_widgets, "Removed")
-            return
-
-        map_library_panel.show_row_status(row_widgets, "No files found")
-
-    def _remove_recent_map_from_splash(path: str) -> None:
-        remove_recent_map_path(path)
-        normalized = recent_map_key(path)
-        recent_map_paths[:] = [
-            recent_path
-            for recent_path in recent_map_paths
-            if recent_map_key(recent_path) != normalized
-        ]
-        map_library_panel.remove_recent_row(normalized)
-
-    def _open_standard_library_map_from_splash(library_map) -> None:
-        map_path = (
-            _downloaded_library_map_path(library_map)
-            or existing_sample_map_path(sample_maps_root_dir, library_map)
-        )
-        _open_library_map_from_splash(map_path)
-
-    def _downloaded_library_map_path(library_map) -> str | None:
-        return map_library_controller.downloaded_path(
-            library_map,
-            is_downloaded=is_sample_map_already_downloaded(
-                sample_maps_root_dir, library_map
-            ),
-            existing_path=existing_sample_map_path(
-                sample_maps_root_dir, library_map
-            ),
-        )
-
-    def _set_available_library_action(
-        library_map,
-        row,
-    ) -> None:
-        if row.downloaded:
-            if not map_library_panel.set_standard_row_action(
-                row.key,
-                row.action_text,
-                lambda s=library_map: _open_standard_library_map_from_splash(s),
-                enabled=row.enabled,
-            ):
-                return
-            _set_library_row_metadata(library_map, row.detail)
-            map_library_panel.refresh_standard_row_overflow(row.key)
-            return
-        if not map_library_panel.set_standard_row_action(
-            row.key,
-            row.action_text,
-            lambda s=library_map: _on_library_map_action(s),
-            enabled=row.enabled,
-        ):
-            return
-        map_library_panel.refresh_standard_row_overflow(row.key)
-
-    def _set_non_active_library_actions_enabled(
-        active_map, enabled: bool
-    ) -> None:
-        active_key = map_library_controller.map_key(active_map)
-        for row_map in KNOWN_SAMPLE_MAPS:
-            if map_library_controller.map_key(row_map) == active_key:
-                continue
-            result_path = _downloaded_library_map_path(row_map)
-            downloaded = bool(result_path) or is_sample_map_already_downloaded(
-                sample_maps_root_dir,
-                row_map,
-            )
-            row = map_library_controller.row(
-                row_map,
-                downloaded=downloaded,
-                enabled=enabled,
-                result_path=result_path if downloaded else None,
-            )
-            _set_available_library_action(row_map, row)
-
-    def _reset_library_progress_bar(library_map) -> None:
-        map_library_panel.reset_standard_progress(
-            map_library_controller.map_key(library_map)
-        )
-
-    def _show_library_progress_bar(library_map) -> None:
-        map_library_panel.show_standard_progress(
-            map_library_controller.map_key(library_map)
-        )
-
-    def _apply_library_download_progress(
-        library_map, progress: SampleDownloadProgress
-    ) -> None:
-        map_library_panel.apply_standard_progress(
-            map_library_controller.map_key(library_map),
-            progress.downloaded_bytes,
-            progress.total_bytes,
-        )
-
-    def _clear_active_library_download(library_map) -> None:
-        inhibitor = map_library_controller.clear_active_download()
-        close_desktop_inhibitor(inhibitor)
-        if _splash_exists():
-            _set_non_active_library_actions_enabled(library_map, True)
-
-    def _cancel_active_library_download_for_close() -> None:
-        cleanup = map_library_controller.close_active_download()
-        if cleanup.cancel_event is not None:
-            cleanup.cancel_event.set()
-        if cleanup.after_id is not None:
-            try:
-                root.after_cancel(cleanup.after_id)
-            except tk.TclError:
-                pass
-        close_desktop_inhibitor(cleanup.inhibitor)
-
-    def _finish_library_download_success(library_map, result_path: str) -> None:
-        if not _splash_exists():
-            _clear_active_library_download(library_map)
-            return
-        _reset_library_progress_bar(library_map)
-        row = map_library_controller.row(
-            library_map,
-            downloaded=True,
-            result_path=result_path,
-        )
-        _set_available_library_action(library_map, row)
-        _clear_active_library_download(library_map)
-
-    def _finish_library_download_failure(library_map, error: Exception) -> None:
-        if not _splash_exists():
-            _clear_active_library_download(library_map)
-            return
-        _reset_library_progress_bar(library_map)
-        if isinstance(error, DownloadCancelled):
-            row = map_library_controller.row(library_map, downloaded=False)
-            _set_library_row_metadata(
-                library_map,
-                row.detail,
-            )
-            _set_available_library_action(library_map, row)
-            _clear_active_library_download(library_map)
-            return
-        _set_library_row_metadata(library_map, "Download failed", error=True)
-        row = map_library_controller.row(
-            library_map,
-            downloaded=False,
-            action_text="Retry",
-        )
-        _set_available_library_action(library_map, row)
-        _clear_active_library_download(library_map)
         show_feedback(
             root,
-            f"Couldn't download {library_map.display_name}. "
-            "Check your connection and retry.",
-            kind="error",
-            duration_ms=9000,
+            message,
+            kind=kind,
+            duration_ms=duration_ms,
             font=_BODY_FONT,
-            max_wraplength=360,
+            max_wraplength=520 if max_wraplength is None else max_wraplength,
         )
 
-    def _schedule_library_download_poll(
-        library_map, message_queue, cancel_event
-    ) -> None:
-        if not map_library_controller.should_handle_download_poll(cancel_event):
-            return
-        if not _splash_exists():
-            cancel_event.set()
-            _clear_active_library_download(library_map)
-            return
-        after_id = root.after(
-            80,
-            lambda s=library_map, q=message_queue, c=cancel_event: _poll_library_download_queue(
-                s,
-                q,
-                c,
-            ),
-        )
-        map_library_controller.set_download_after_id(after_id)
-
-    def _poll_library_download_queue(
-        library_map, message_queue, cancel_event
-    ) -> None:
-        if not map_library_controller.should_handle_download_poll(cancel_event):
-            return
-        map_library_controller.set_download_after_id(None)
-        if not _splash_exists():
-            cancel_event.set()
-            _clear_active_library_download(library_map)
-            return
-
-        latest_progress = None
-        terminal_message = None
-        while True:
-            try:
-                message = message_queue.get_nowait()
-            except queue.Empty:
-                break
-            if isinstance(message, SampleDownloadProgress):
-                latest_progress = message
-            else:
-                terminal_message = message
-                break
-
-        if latest_progress is not None:
-            try:
-                _apply_library_download_progress(library_map, latest_progress)
-            except tk.TclError:
-                cancel_event.set()
-                _clear_active_library_download(library_map)
-                return
-
-        if isinstance(terminal_message, SampleDownloadSucceeded):
-            _finish_library_download_success(
-                library_map, terminal_message.result_path
-            )
-            return
-        if isinstance(terminal_message, SampleDownloadFailed):
-            _finish_library_download_failure(library_map, terminal_message.error)
-            return
-
-        try:
-            _schedule_library_download_poll(library_map, message_queue, cancel_event)
-        except tk.TclError:
-            cancel_event.set()
-            _clear_active_library_download(library_map)
-
-    def _start_inline_library_download(library_map) -> None:
-        if map_library_controller.active_download.in_progress:
-            show_feedback(
-                root,
-                "Finish or cancel the current map library download before starting another.",
-                kind="info",
-                duration_ms=7000,
-                font=_BODY_FONT,
-                max_wraplength=360,
-            )
-            return
-        if getattr(library_map, "download_url", None) is None:
-            _prepare_library_catalog_for_download(library_map)
-            return
-
-        row_key = map_library_controller.map_key(library_map)
-        if not map_library_panel.has_standard_row(row_key):
-            return
-
-        _show_library_progress_bar(library_map)
-        _set_library_row_metadata(library_map, "Downloading…")
-        cancel_event = threading.Event()
-        message_queue = queue.Queue()
-
-        def request_cancel() -> None:
-            cancel_event.set()
-            map_library_panel.set_standard_row_action(
-                row_key,
-                "Cancel",
-                lambda: None,
-                enabled=False,
-            )
-            _set_library_row_metadata(library_map, "Canceling…")
-
-        map_library_panel.set_standard_row_action(
-            row_key,
-            "Cancel",
-            request_cancel,
-        )
-        _set_non_active_library_actions_enabled(library_map, False)
-        map_library_controller.begin_download(
-            library_map,
-            cancel_event=cancel_event,
-            inhibitor=safe_desktop_inhibit(
-                desktop_services,
-                f"Downloading {library_map.display_name}",
-                parent=root,
-            ),
-        )
-
-        try:
-            worker = start_sample_download_worker(
-                DirectorySelection.from_path(sample_maps_root_dir),
-                library_map,
-                cancel_event,
-                message_queue,
-            )
-        except RuntimeError as exc:
-            _reset_library_progress_bar(library_map)
-            _set_library_row_metadata(library_map, "Download failed", error=True)
-            row = map_library_controller.row(
-                library_map,
-                downloaded=False,
-                action_text="Retry",
-            )
-            _set_available_library_action(library_map, row)
-            _clear_active_library_download(library_map)
-            show_feedback(
-                root,
-                f"Couldn't start the {library_map.display_name} download: {exc}",
-                kind="error",
-                duration_ms=9000,
-                font=_BODY_FONT,
-                max_wraplength=360,
-            )
-            return
-
-        map_library_controller.attach_download_thread(worker)
-        _schedule_library_download_poll(library_map, message_queue, cancel_event)
-
-    def _handle_download_info_unavailable(library_map) -> None:
-        _set_library_row_metadata(library_map, "Download info unavailable", error=True)
-        row = map_library_controller.row(
-            library_map,
-            downloaded=False,
-            action_text="Retry",
-        )
-        _set_available_library_action(library_map, row)
-        _set_non_active_library_actions_enabled(library_map, True)
-        show_feedback(
-            root,
-            "Couldn't load download info. Check your connection and retry.",
-            kind="error",
-            duration_ms=9000,
-            font=_BODY_FONT,
-            max_wraplength=360,
-        )
-
-    def _schedule_library_catalog_poll() -> None:
-        if not _splash_exists():
-            return
-        after_id = root.after(
-            120, _poll_library_catalog_fetch
-        )
-        map_library_controller.set_catalog_after_id(after_id)
-
-    def _poll_library_catalog_fetch() -> None:
-        map_library_controller.set_catalog_after_id(None)
-        if not _splash_exists():
-            return
-        fetch_queue = map_library_controller.catalog_fetch.queue
-        if fetch_queue is None:
-            return
-        try:
-            catalog, error = fetch_queue.get_nowait()
-        except queue.Empty:
-            _schedule_library_catalog_poll()
-            return
-
-        completion = map_library_controller.complete_catalog_fetch(
-            catalog,
-            error,
-        )
-        for catalog_map in completion.maps:
-            if (
-                map_library_controller.active_download.map_name
-                == map_library_controller.map_key(catalog_map)
-            ):
-                continue
-            downloaded = is_sample_map_already_downloaded(
-                sample_maps_root_dir,
-                catalog_map,
-            )
-            row = map_library_controller.row(
-                catalog_map,
-                downloaded=downloaded,
-            )
-            _set_library_row_metadata(
-                catalog_map,
-                row.detail,
-            )
-
-        pending_map = completion.pending_map
-        if pending_map is None:
-            return
-        resolved_map = map_library_controller.resolve_catalog_entry(pending_map)
-        if getattr(resolved_map, "download_url", None) is None:
-            _handle_download_info_unavailable(pending_map)
-            return
-        _start_inline_library_download(resolved_map)
-
-    def _start_library_catalog_fetch(pending_map=None) -> None:
-        if pending_map is not None:
-            map_library_controller.set_pending_catalog_map(pending_map)
-        if map_library_controller.catalog_fetch.loading:
-            return
-        fetch_queue = queue.Queue(maxsize=1)
-        if not map_library_controller.begin_catalog_fetch(fetch_queue):
-            return
-
-        def fetch_worker() -> None:
-            try:
-                result = fetch_sample_map_catalog()
-            except Exception as exc:
-                result = ([], f"Couldn't load the map library: {exc}")
-            fetch_queue.put(result)
-
-        threading.Thread(
-            target=fetch_worker,
-            name="CaveViewer-map-library-catalog",
-            daemon=True,
-        ).start()
-        _schedule_library_catalog_poll()
-
-    def _prepare_library_catalog_for_download(library_map) -> None:
-        if map_library_controller.active_download.in_progress:
-            show_feedback(
-                root,
-                "Finish or cancel the current map library download before starting another.",
-                kind="info",
-                duration_ms=7000,
-                font=_BODY_FONT,
-                max_wraplength=360,
-            )
-            return
-        _set_library_row_metadata(library_map, "Preparing download…")
-        row = map_library_controller.row(
-            library_map,
-            downloaded=False,
-            enabled=False,
-        )
-        _set_available_library_action(library_map, row)
-        _set_non_active_library_actions_enabled(library_map, False)
-        _start_library_catalog_fetch(pending_map=library_map)
-
-    def _on_library_map_action(library_map) -> None:
-        resolved_map = map_library_controller.resolve_catalog_entry(library_map)
-        if is_sample_map_already_downloaded(sample_maps_root_dir, resolved_map):
-            _open_standard_library_map_from_splash(library_map)
-            return
-        if map_library_controller.catalog_fetch.loading and getattr(
-            resolved_map, "download_url", None
-        ) is None:
-            _prepare_library_catalog_for_download(library_map)
-            return
-        _start_inline_library_download(resolved_map)
-
-    def _create_recent_map_row(path: str) -> None:
-        entry = recent_map_entry(path)
-        title = entry.title
-
-        def menu_actions(row_widgets, path=path, title=title):
-            actions = [
-                (
-                    "Remove from this list",
-                    lambda path=path: _remove_recent_map_from_splash(path),
-                )
-            ]
-            if has_managed_map_cache(path):
-                actions.append(
-                    (
-                        "Remove cache",
-                        lambda path=path, title=title: _remove_map_cache_from_splash(
-                            path,
-                            title,
-                            row_widgets,
-                        ),
-                    )
-                )
-            return tuple(actions)
-
-        map_library_panel.add_recent_row(
-            entry,
-            action=lambda path=path: _open_library_map_from_splash(path),
-            menu_actions_factory=menu_actions,
-        )
-
-    def _create_available_map_row(sample) -> None:
-        downloaded = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
-        result_path = existing_sample_map_path(sample_maps_root_dir, sample)
-        row = map_library_controller.row(
-            sample,
-            downloaded=downloaded,
-            result_path=result_path if downloaded else None,
-        )
-
-        def menu_actions(row_widgets, sample=sample):
-            sample_path = _downloaded_library_map_path(sample)
-            if sample_path is None:
-                return ()
-            return (
-                (
-                    "Remove downloaded files",
-                    lambda sample_path=sample_path, sample=sample: (
-                        _remove_standard_library_download_from_splash(
-                            sample,
-                            sample_path,
-                            row_widgets,
-                        )
-                    ),
-                ),
-            )
-
-        map_library_panel.add_standard_row(
-            row,
-            action=lambda sample=sample: _on_library_map_action(sample),
-            menu_actions_factory=menu_actions,
-        )
+    map_library_workflow = MapLibraryWorkflow(
+        root=root,
+        controller=map_library_controller,
+        panel=map_library_panel,
+        standard_library_maps=KNOWN_SAMPLE_MAPS,
+        map_library_root_dir=map_library_root_dir,
+        desktop_services=desktop_services,
+        splash_exists=_splash_exists,
+        open_map=_open_library_map_from_splash,
+        show_feedback=_show_map_library_feedback,
+        logger=_LOG,
+    )
+    map_library_workflow_ref[0] = map_library_workflow
 
     def _create_map_library_panel(parent) -> None:
-        map_library_panel.create(parent)
-        if recent_map_paths:
-            for recent_path in recent_map_paths:
-                _create_recent_map_row(recent_path)
-        else:
-            map_library_panel.ensure_recent_empty_note()
-
-        for sample in KNOWN_SAMPLE_MAPS:
-            _create_available_map_row(sample)
-
-        map_library_panel.finish_population()
-        _start_library_catalog_fetch()
+        # The workflow owns catalog/download state transitions; splash only
+        # supplies the parent widget and session-level callbacks.
+        map_library_workflow.populate_panel(parent, recent_map_paths)
 
     secondary_link_row = tk.Frame(left_frame, bg=_BG_COLOR)
     secondary_link_row.pack(pady=(_SECONDARY_LINK_ROW_TOP_GAP, _SECONDARY_LINK_ROW_BOTTOM_GAP))

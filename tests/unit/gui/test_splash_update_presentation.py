@@ -7,7 +7,12 @@ import sys
 
 import pytest
 
-from caveviewer.gui import map_history, map_library_panel, splash_screen
+from caveviewer.gui import (
+    map_history,
+    map_library_panel,
+    map_library_workflow,
+    splash_screen,
+)
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
 
@@ -248,8 +253,8 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "def _bind_activation(widget, callback) -> None:" in source
     assert "_bind_activation(browse_button, on_open_map_folder)" in source
     assert "_bind_activation(preferences_link, _on_preferences_click)" in source
-    assert "_on_library_map_action(sample)" in source
-    assert "start_sample_download_worker(" in source
+    assert "MapLibraryWorkflow(" in source
+    assert "start_sample_download_worker(" not in source
     assert "show_sample_maps_dialog(" not in source
 
 
@@ -257,7 +262,8 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
-    source = splash_source + style_source + panel_source
+    workflow_source = inspect.getsource(map_library_workflow.MapLibraryWorkflow)
+    source = splash_source + style_source + panel_source + workflow_source
 
     assert 'text="Map Library"' not in source
     assert "Your Library" in source
@@ -277,7 +283,7 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert 'self._content_scrollbar.pack(side="right", fill="y")' in panel_source
     assert "self.bind_mousewheel_if_ready(self._rows_frame)" in panel_source
     assert "recent_map_paths = _load_library_recent_map_paths()" in splash_source
-    assert "map_library_controller.row(" in splash_source
+    assert "self.controller.row(" in workflow_source
     assert "detail=row.detail" in panel_source
     assert "highlightthickness=0" in source
     assert "panel_border_color=_LIBRARY_PANEL_BORDER_COLOR" in style_source
@@ -297,17 +303,19 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "reserve_progress=True" in panel_source
     assert "widgets.progress_bar_canvas.pack(" not in source
     assert "widgets.progress_bar_canvas.pack_forget()" not in source
-    assert "_poll_library_download_queue" in splash_source
-    assert "_cancel_active_library_download_for_close()" in splash_source
-    assert "DirectorySelection.from_path(sample_maps_root_dir)" in splash_source
-    assert "_start_library_catalog_fetch()" in splash_source
+    assert "poll_download_queue" in workflow_source
+    assert "cancel_active_download_for_close" in workflow_source
+    assert "directory_selection_factory" in workflow_source
+    assert "start_catalog_fetch" in workflow_source
+    assert "poll_download_queue" not in splash_source
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
-    source = splash_source + style_source + panel_source
+    workflow_source = inspect.getsource(map_library_workflow.MapLibraryWorkflow)
+    source = splash_source + style_source + panel_source + workflow_source
 
     assert "Remove from this list" in source
     assert "Remove cache" in source
@@ -318,11 +326,12 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "menu_actions_factory=" in source
     assert "leading_widget_factory=" not in source
     assert "leading_widget=leading_widget" in source
-    assert "remove_recent_map_path(path)" in splash_source
-    assert "has_managed_map_cache(path)" in splash_source
-    assert "remove_managed_map_cache(path)" in splash_source
-    assert "remove_downloaded_sample_map(sample_maps_root_dir, sample)" in splash_source
-    assert "_remove_standard_library_download_from_splash" in splash_source
+    assert "self.remove_recent_path(path)" in workflow_source
+    assert "self.has_cache(path)" in workflow_source
+    assert "self.remove_cache(path)" in workflow_source
+    assert "self.remove_downloaded(" in workflow_source
+    assert "remove_standard_download" in workflow_source
+    assert "remove_standard_download" not in splash_source
     assert "show_row_status" in source
     assert "Cache removed" in source
     assert "Couldn’t remove cache" in source
