@@ -195,45 +195,82 @@ By default, the built-in map library reads release assets from:
 
 - Repository: `CaveViewer/CaveViewer`
 - Release tag: `sample-data`
+- Catalog asset: `caveviewer-map-library.v1.json`
 
 For local development, you can point the map library at a different source
 before launching the program. These settings are environment variables only;
 they are not exposed in the app UI.
 
-The variable names below are retained for compatibility with existing
-developer scripts and environments. They configure the map library source even
-though they still include `SAMPLE` in the name.
+The release keeps each map as a `.zip` asset. When the release also includes
+`caveviewer-map-library.v1.json`, that manifest controls the available map
+list, row titles, ordering, optional stable folder names, fallback sizes, and
+optional SHA-256 hashes. CaveViewer joins those manifest entries to the matching
+GitHub release assets to get current download URLs and asset sizes. If the
+catalog asset is absent, CaveViewer uses its bundled fallback catalog and still
+joins matching release assets so the current release layout remains usable.
+
+Catalog v1 shape:
+
+```json
+{
+  "version": 1,
+  "maps": [
+    {
+      "id": "devils-eye",
+      "title": "Devils Eye",
+      "asset": "Devils.Eye.3D.Map.zip",
+      "sort": 30,
+      "folder": "Devils Eye",
+      "size_bytes": 91226112,
+      "sha256": "optional 64-character lowercase hex digest"
+    }
+  ]
+}
+```
+
+`id`, `title`, and `asset` are required. `folder`, `size_bytes`, `sort`, and
+`sha256` are optional. The `asset` value must match the corresponding release
+zip filename exactly.
 
 Precedence:
 
-1. `CAVEVIEWER_SAMPLE_MAPS_API_URL` uses a full release API URL directly.
-2. Otherwise, CaveViewer builds the GitHub release API URL from `CAVEVIEWER_SAMPLE_MAPS_REPO` and `CAVEVIEWER_SAMPLE_DATA_TAG`.
-3. If none are set, the defaults above are used.
+1. `CAVEVIEWER_MAP_LIBRARY_API_URL` uses a full GitHub release API URL directly.
+2. Otherwise, CaveViewer builds the GitHub release API URL from `CAVEVIEWER_MAP_LIBRARY_REPO` and `CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG`.
+3. `CAVEVIEWER_MAP_LIBRARY_CATALOG_ASSET_NAME` overrides the manifest asset name.
+4. If none are set, the defaults above are used.
+
+The old `CAVEVIEWER_SAMPLE_MAPS_API_URL`, `CAVEVIEWER_SAMPLE_MAPS_REPO`, and
+`CAVEVIEWER_SAMPLE_DATA_TAG` names remain supported as lower-priority aliases
+for existing development environments.
 
 macOS/Linux example:
 
 ```bash
-CAVEVIEWER_SAMPLE_MAPS_REPO="MyOrg/MyMaps" \
-CAVEVIEWER_SAMPLE_DATA_TAG="public-samples" \
+CAVEVIEWER_MAP_LIBRARY_REPO="MyOrg/MyMaps" \
+CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG="public-maps" \
 ./run_caveviewer.sh
 ```
 
 Windows PowerShell example:
 
 ```powershell
-$env:CAVEVIEWER_SAMPLE_MAPS_REPO = "MyOrg/MyMaps"
-$env:CAVEVIEWER_SAMPLE_DATA_TAG = "public-samples"
+$env:CAVEVIEWER_MAP_LIBRARY_REPO = "MyOrg/MyMaps"
+$env:CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG = "public-maps"
 .\.venv-dev\Scripts\python -m caveviewer
 ```
 
 Advanced direct API override:
 
 ```bash
-CAVEVIEWER_SAMPLE_MAPS_API_URL="https://api.github.com/repos/MyOrg/MyMaps/releases/tags/public-samples" \
+CAVEVIEWER_MAP_LIBRARY_API_URL="https://api.github.com/repos/MyOrg/MyMaps/releases/tags/public-maps" \
 ./run_caveviewer.sh
 ```
 
-The API response must be compatible with GitHub's release API shape, including an `assets` list with asset `name`, `browser_download_url`, and `size` fields.
+The API response must be compatible with GitHub's release API shape, including
+an `assets` list with asset `name`, `browser_download_url`, and `size` fields.
+CaveViewer caches the last successful remote catalog under its application
+cache root and falls back to that cache, then to the bundled catalog, when
+GitHub cannot be reached.
 
 ## Updating Your Local Source Environment
 
@@ -614,14 +651,16 @@ is writable.
 
 ### Map Library
 
-These compatibility environment variable names are retained from older builds;
-they now configure the map library source.
-
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_SAMPLE_MAPS_REPO` | `CaveViewer/CaveViewer` | GitHub `owner/repo` for the map library release. |
-| `CAVEVIEWER_SAMPLE_DATA_TAG` | `sample-data` | Release tag to fetch standard library map assets from. |
-| `CAVEVIEWER_SAMPLE_MAPS_API_URL` | _(derived from repo + tag)_ | Full GitHub release API URL. Overrides the repo/tag variables when set. |
+| `CAVEVIEWER_MAP_LIBRARY_REPO` | `CaveViewer/CaveViewer` | GitHub `owner/repo` for the map library release. |
+| `CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG` | `sample-data` | Release tag to fetch CaveViewer map assets from. |
+| `CAVEVIEWER_MAP_LIBRARY_API_URL` | _(derived from repo + tag)_ | Full GitHub release API URL. Overrides the repo/tag variables when set. |
+| `CAVEVIEWER_MAP_LIBRARY_CATALOG_ASSET_NAME` | `caveviewer-map-library.v1.json` | Release asset name for the map-library catalog manifest. |
+
+Legacy aliases remain supported at lower precedence:
+`CAVEVIEWER_SAMPLE_MAPS_REPO`, `CAVEVIEWER_SAMPLE_DATA_TAG`, and
+`CAVEVIEWER_SAMPLE_MAPS_API_URL`.
 
 The Map Library dialog keeps Tk work on the Tk thread. Catalog fetches and
 map-library download/extract work run in background workers; workers publish

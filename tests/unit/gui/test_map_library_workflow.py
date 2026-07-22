@@ -68,6 +68,11 @@ class _FakePanel:
     def has_standard_row(self, key: str) -> bool:
         return key in self.standard_rows
 
+    def remove_standard_row(self, key: str) -> None:
+        self.removed_standard_key = key
+        self.standard_rows.pop(key, None)
+        self.standard_actions.pop(key, None)
+
     def set_standard_row_action(
         self,
         key: str,
@@ -142,12 +147,14 @@ def _library_map(
     asset_name: str = "test.zip",
     download_url: str | None = "https://example.invalid/test.zip",
     size_bytes: int | None = None,
+    catalog_id: str | None = None,
 ):
     return SimpleNamespace(
         display_name=display_name,
         asset_name=asset_name,
         download_url=download_url,
         size_bytes=size_bytes,
+        catalog_id=catalog_id,
     )
 
 
@@ -378,6 +385,81 @@ def test_pending_download_waits_for_catalog_then_starts_resolved_download():
 
     assert download_calls == [catalog_map]
     assert state.panel.metadata["Test Cave"] == ("Downloading…", False)
+
+
+def test_catalog_refresh_adds_new_remote_standard_library_rows():
+    initial_map = _library_map(
+        display_name="Initial Cave",
+        asset_name="initial.zip",
+        catalog_id="initial-cave",
+    )
+    new_map = _library_map(
+        display_name="New Remote Cave",
+        asset_name="new.zip",
+        size_bytes=25 * 1024 * 1024,
+        catalog_id="new-remote-cave",
+    )
+    state = _workflow(
+        [initial_map],
+        fetch_catalog=lambda: ([initial_map, new_map], None),
+    )
+
+    state.workflow.populate_panel("parent", [])
+    state.workflow.poll_catalog_fetch()
+
+    assert set(state.panel.standard_rows) == {
+        "initial-cave",
+        "new-remote-cave",
+    }
+    assert state.panel.standard_rows["new-remote-cave"].title == "New Remote Cave"
+    assert state.panel.standard_rows["new-remote-cave"].detail == "25 MB"
+
+
+def test_catalog_refresh_removes_stale_not_downloaded_rows():
+    stale_map = _library_map(
+        display_name="Stale Cave",
+        asset_name="stale.zip",
+        catalog_id="stale-cave",
+    )
+    current_map = _library_map(
+        display_name="Current Cave",
+        asset_name="current.zip",
+        catalog_id="current-cave",
+    )
+    state = _workflow([stale_map], fetch_catalog=lambda: ([current_map], None))
+
+    state.workflow.populate_panel("parent", [])
+    state.workflow.poll_catalog_fetch()
+
+    assert "stale-cave" not in state.panel.standard_rows
+    assert "current-cave" in state.panel.standard_rows
+    assert state.panel.removed_standard_key == "stale-cave"
+
+
+def test_catalog_refresh_keeps_stale_downloaded_rows():
+    stale_map = _library_map(
+        display_name="Downloaded Stale Cave",
+        asset_name="stale.zip",
+        catalog_id="downloaded-stale-cave",
+    )
+    state = _workflow(
+        [stale_map],
+        fetch_catalog=lambda: ([], None),
+        is_downloaded=lambda _root, library_map: (
+            library_map.catalog_id == "downloaded-stale-cave"
+        ),
+        existing_path=lambda _root, library_map: (
+            "/library/Downloaded Stale Cave"
+            if library_map.catalog_id == "downloaded-stale-cave"
+            else None
+        ),
+    )
+
+    state.workflow.populate_panel("parent", [])
+    state.workflow.poll_catalog_fetch()
+
+    assert "downloaded-stale-cave" in state.panel.standard_rows
+    assert state.panel.standard_actions["downloaded-stale-cave"][0] == "Open"
 
 
 def test_unavailable_catalog_details_show_retry_state():

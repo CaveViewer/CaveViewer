@@ -3,7 +3,12 @@
 import ast
 from pathlib import Path
 
-from caveviewer.resources import image_path, release_public_key_path, shader_path
+from caveviewer.resources import (
+    image_path,
+    map_library_catalog_path,
+    release_public_key_path,
+    shader_path,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -47,6 +52,7 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "resources" / "shaders" / "mesh.vert",
         PACKAGE_ROOT / "resources" / "images" / "app_mark_transparent.png",
         PACKAGE_ROOT / "resources" / "release_signing_public_key.pem",
+        PACKAGE_ROOT / "resources" / "map_library_catalog.v1.json",
         REPOSITORY_ROOT / "packaging" / "pyinstaller" / "CaveViewer.spec",
     )
 
@@ -62,6 +68,7 @@ def test_package_resource_service_resolves_runtime_files():
     assert shader_path("mesh.vert").is_file()
     assert image_path("app_mark_transparent.png").is_file()
     assert release_public_key_path().is_file()
+    assert map_library_catalog_path().is_file()
 
 
 def test_legacy_runtime_paths_are_removed():

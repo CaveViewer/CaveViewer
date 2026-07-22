@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import io
 import sys
 import urllib.error
 import zipfile
@@ -24,21 +26,31 @@ class JsonResponse:
     def __exit__(self, exc_type, exc, traceback):
         return False
 
-    def read(self):
+    def read(self, _size=-1):
         return self._payload
 
 
-def test_known_standard_library_maps_include_current_public_release_assets():
+def _request_url(request) -> str:
+    return getattr(request, "full_url", request)
+
+
+def test_bundled_standard_library_catalog_includes_current_public_release_assets():
     expected_assets = [
         "Boh.Yai.Mine.I.Low.Res.zip",
         "Boh.Yai.Mine.II.Low.Res.zip",
         "Devils.Eye.3D.Map.zip",
         "Peacock.Springs.Cave.System.3D.Map.zip",
     ]
+    catalog = standard_library_maps.bundled_standard_library_catalog()
 
-    assert [
-        sample.asset_name for sample in standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS
-    ] == expected_assets
+    assert [sample.asset_name for sample in catalog] == expected_assets
+    assert [sample.catalog_id for sample in catalog] == [
+        "boh-yai-mine-i-low-res",
+        "boh-yai-mine-ii-low-res",
+        "devils-eye",
+        "peacock-springs-cave-system",
+    ]
+    assert all(sample.size_bytes for sample in catalog)
 
 
 def test_map_library_dirname_points_to_map_library():
@@ -46,8 +58,66 @@ def test_map_library_dirname_points_to_map_library():
     assert not hasattr(standard_library_maps, "SAMPLE_MAPS_DIRNAME")
 
 
-def test_catalog_populates_known_assets_and_keeps_missing_entries(monkeypatch):
-    known = standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS[0]
+def test_catalog_manifest_populates_remote_maps_and_caches(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path))
+    release_payload = {
+        "assets": [
+            {
+                "name": "caveviewer-map-library.v1.json",
+                "browser_download_url": "https://example.invalid/catalog.json",
+                "size": 300,
+            },
+            {
+                "name": "Brand.New.Cave.zip",
+                "browser_download_url": "https://example.invalid/brand-new.zip",
+                "size": 44 * 1024 * 1024,
+            },
+        ]
+    }
+    catalog_payload = {
+        "version": 1,
+        "maps": [
+            {
+                "id": "brand-new-cave",
+                "title": "Brand New Cave",
+                "asset": "Brand.New.Cave.zip",
+                "sort": 10,
+            }
+        ],
+    }
+
+    def fake_urlopen(request, **_kwargs):
+        if _request_url(request) == "https://example.invalid/catalog.json":
+            return JsonResponse(catalog_payload)
+        return JsonResponse(release_payload)
+
+    monkeypatch.setattr(standard_library_maps.urllib.request, "urlopen", fake_urlopen)
+    standard_library_maps._MAP_LIBRARY_CONFIG_LOGGED = False
+
+    catalog, error = standard_library_maps.fetch_standard_library_catalog()
+
+    assert error is None
+    assert [(item.catalog_id, item.display_name, item.asset_name) for item in catalog] == [
+        ("brand-new-cave", "Brand New Cave", "Brand.New.Cave.zip")
+    ]
+    assert catalog[0].download_url == "https://example.invalid/brand-new.zip"
+    assert catalog[0].size_bytes == 44 * 1024 * 1024
+    cached_catalog = json.loads(
+        (tmp_path / "cache" / "map_library_catalog.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert cached_catalog["maps"][0]["title"] == "Brand New Cave"
+    assert "download_url" not in cached_catalog["maps"][0]
+    assert standard_library_maps._MAP_LIBRARY_CONFIG_LOGGED
+
+
+def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
+    monkeypatch,
+):
+    known = standard_library_maps.bundled_standard_library_catalog()[0]
     payload = {
         "assets": [
             {
@@ -67,18 +137,20 @@ def test_catalog_populates_known_assets_and_keeps_missing_entries(monkeypatch):
     catalog, error = standard_library_maps.fetch_standard_library_catalog()
 
     assert error is None
-    assert len(catalog) == len(standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS)
+    assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
     assert catalog[0].download_url == "https://example.invalid/map.zip"
     assert catalog[0].size_bytes == 1234
     assert catalog[1].download_url is None
-    assert standard_library_maps._MAP_LIBRARY_CONFIG_LOGGED
 
 
 @pytest.mark.parametrize(
     ("code", "message_fragment"),
     [(404, "No map library release"), (500, "HTTP 500")],
 )
-def test_catalog_http_errors_keep_known_maps(monkeypatch, code, message_fragment):
+def test_catalog_http_errors_keep_local_catalog(
+    monkeypatch, tmp_path, code, message_fragment
+):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path))
     error = urllib.error.HTTPError("url", code, "failure", {}, None)
     monkeypatch.setattr(
         standard_library_maps.urllib.request,
@@ -88,7 +160,7 @@ def test_catalog_http_errors_keep_known_maps(monkeypatch, code, message_fragment
 
     catalog, message = standard_library_maps.fetch_standard_library_catalog()
 
-    assert len(catalog) == len(standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS)
+    assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
     assert all(item.download_url is None for item in catalog)
     assert message_fragment in (message or "")
 
@@ -97,7 +169,10 @@ def test_catalog_http_errors_keep_known_maps(monkeypatch, code, message_fragment
     ("reason", "message_fragment"),
     [("DNS failure", "DNS failure"), (None, "Couldn't reach GitHub right now")],
 )
-def test_catalog_network_errors_are_actionable(monkeypatch, reason, message_fragment):
+def test_catalog_network_errors_are_actionable(
+    monkeypatch, tmp_path, reason, message_fragment
+):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path))
     monkeypatch.setattr(
         standard_library_maps.urllib.request,
         "urlopen",
@@ -108,11 +183,45 @@ def test_catalog_network_errors_are_actionable(monkeypatch, reason, message_frag
 
     catalog, message = standard_library_maps.fetch_standard_library_catalog()
 
-    assert len(catalog) == len(standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS)
+    assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
     assert message_fragment in (message or "")
 
 
-def test_catalog_rejects_malformed_json(monkeypatch):
+def test_catalog_network_errors_use_cached_remote_catalog(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path))
+    cached_payload = {
+        "version": 1,
+        "maps": [
+            {
+                "id": "cached-cave",
+                "title": "Cached Cave",
+                "asset": "Cached.Cave.zip",
+                "size_bytes": 99,
+            }
+        ],
+    }
+    cache_file = tmp_path / "cache" / "map_library_catalog.v1.json"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text(json.dumps(cached_payload), encoding="utf-8")
+    monkeypatch.setattr(
+        standard_library_maps.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            urllib.error.URLError("offline")
+        ),
+    )
+
+    catalog, message = standard_library_maps.fetch_standard_library_catalog()
+
+    assert message and "offline" in message
+    assert [(item.catalog_id, item.display_name, item.download_url) for item in catalog] == [
+        ("cached-cave", "Cached Cave", None)
+    ]
+
+
+def test_catalog_rejects_malformed_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path))
+
     class BadJsonResponse(JsonResponse):
         def read(self):
             return b"{broken"
@@ -123,8 +232,34 @@ def test_catalog_rejects_malformed_json(monkeypatch):
         lambda *_args, **_kwargs: BadJsonResponse({}),
     )
     catalog, message = standard_library_maps.fetch_standard_library_catalog()
-    assert len(catalog) == len(standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS)
+    assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
     assert "unexpected response" in (message or "")
+
+
+def test_catalog_rejects_malformed_remote_manifest(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path))
+    release_payload = {
+        "assets": [
+            {
+                "name": "caveviewer-map-library.v1.json",
+                "browser_download_url": "https://example.invalid/catalog.json",
+                "size": 300,
+            }
+        ]
+    }
+    catalog_payload = {"version": 1, "maps": [{"id": "", "title": "Bad"}]}
+
+    def fake_urlopen(request, **_kwargs):
+        if _request_url(request) == "https://example.invalid/catalog.json":
+            return JsonResponse(catalog_payload)
+        return JsonResponse(release_payload)
+
+    monkeypatch.setattr(standard_library_maps.urllib.request, "urlopen", fake_urlopen)
+
+    catalog, message = standard_library_maps.fetch_standard_library_catalog()
+
+    assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
+    assert "unexpected map library catalog" in (message or "")
 
 
 def test_map_library_container_avoids_duplicate_folder_name(tmp_path):
@@ -321,7 +456,7 @@ def test_app_supplied_standard_library_map_path_matches_managed_library_only(
 ):
     caveviewer_home = tmp_path / "caveviewer-home"
     monkeypatch.setenv("CAVEVIEWER_HOME", str(caveviewer_home))
-    sample = standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS[0]
+    sample = standard_library_maps.bundled_standard_library_catalog()[0]
     managed_library_path = (
         caveviewer_home
         / "data"
@@ -390,6 +525,58 @@ def test_successful_standard_library_download_extracts_expected_layout(
     assert not list(destination.parent.glob(".Test-Cave.tmp-*"))
     assert not list(destination.parent.glob(".Test-Cave.tmp-*.previous"))
     assert progress == [(1, 1)]
+
+
+def test_standard_library_download_rejects_sha256_mismatch(tmp_path, monkeypatch):
+    sample = standard_library_maps.StandardLibraryMapInfo(
+        "Test Cave",
+        "test.zip",
+        "https://example.invalid/test.zip",
+        None,
+        sha256="0" * 64,
+    )
+
+    def create_zip(_url, _size, zip_path, progress_cb=None, cancel_cb=None):
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr("map.obj", "new mesh")
+
+    monkeypatch.setattr(standard_library_maps, "download_update", create_zip)
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        standard_library_maps.download_and_extract_standard_library_map(
+            str(tmp_path),
+            sample,
+        )
+
+    assert not (
+        tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    ).exists()
+
+
+def test_standard_library_download_accepts_matching_sha256(tmp_path, monkeypatch):
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("map.obj", "new mesh")
+    archive_bytes = archive_buffer.getvalue()
+
+    def create_zip(_url, _size, zip_path, progress_cb=None, cancel_cb=None):
+        Path(zip_path).write_bytes(archive_bytes)
+
+    sample = standard_library_maps.StandardLibraryMapInfo(
+        "Test Cave",
+        "test.zip",
+        "https://example.invalid/test.zip",
+        None,
+        sha256=hashlib.sha256(archive_bytes).hexdigest(),
+    )
+    monkeypatch.setattr(standard_library_maps, "download_update", create_zip)
+
+    result = standard_library_maps.download_and_extract_standard_library_map(
+        str(tmp_path),
+        sample,
+    )
+
+    assert result == str(tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave")
 
 
 def test_standard_library_publish_copy_failure_preserves_existing_install_and_cleans_staging(

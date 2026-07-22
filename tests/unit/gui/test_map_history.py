@@ -51,7 +51,7 @@ def test_recent_map_history_excludes_app_supplied_standard_library_maps(
 ):
     caveviewer_home = tmp_path / "caveviewer-home"
     monkeypatch.setenv("CAVEVIEWER_HOME", str(caveviewer_home))
-    sample = standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS[0]
+    sample = standard_library_maps.bundled_standard_library_catalog()[0]
     library_map_path = (
         caveviewer_home
         / "data"
@@ -75,7 +75,7 @@ def test_recent_map_history_filters_existing_standard_library_entries_on_load(
 ):
     caveviewer_home = tmp_path / "caveviewer-home"
     monkeypatch.setenv("CAVEVIEWER_HOME", str(caveviewer_home))
-    sample = standard_library_maps.KNOWN_STANDARD_LIBRARY_MAPS[0]
+    sample = standard_library_maps.bundled_standard_library_catalog()[0]
     library_map_path = (
         caveviewer_home
         / "data"

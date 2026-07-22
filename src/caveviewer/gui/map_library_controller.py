@@ -6,14 +6,6 @@ from dataclasses import dataclass
 from typing import Any
 
 
-_STANDARD_LIBRARY_SIZE_LABELS = {
-    "Boh.Yai.Mine.I.Low.Res.zip": "57 MB",
-    "Boh.Yai.Mine.II.Low.Res.zip": "62 MB",
-    "Devils.Eye.3D.Map.zip": "87 MB",
-    "Peacock.Springs.Cave.System.3D.Map.zip": "365 MB",
-}
-
-
 @dataclass(frozen=True)
 class StandardLibraryMapRow:
     """Presentation model for one standard-library map row."""
@@ -90,7 +82,7 @@ class MapLibraryController:
 
     def __init__(self, standard_library_maps) -> None:
         self.standard_library_maps = tuple(standard_library_maps)
-        self.catalog_by_name = {
+        self.catalog_by_key = {
             self.map_key(library_map): library_map
             for library_map in self.standard_library_maps
         }
@@ -100,12 +92,15 @@ class MapLibraryController:
 
     @staticmethod
     def map_key(library_map) -> str:
-        """Return the stable display-name key for a standard-library map."""
-        return getattr(library_map, "display_name", "")
+        """Return the stable row key for a standard-library map."""
+        return (
+            getattr(library_map, "catalog_id", None)
+            or getattr(library_map, "display_name", "")
+        )
 
     def resolve_catalog_entry(self, library_map):
         """Return a catalog-refreshed map entry when available."""
-        return self.catalog_by_name.get(self.map_key(library_map), library_map)
+        return self.catalog_by_key.get(self.map_key(library_map), library_map)
 
     @staticmethod
     def action_text(*, downloaded: bool) -> str:
@@ -118,9 +113,7 @@ class MapLibraryController:
         size_bytes = getattr(library_map, "size_bytes", None)
         if size_bytes:
             return f"{size_bytes / (1024 * 1024):.0f} MB"
-        return _STANDARD_LIBRARY_SIZE_LABELS.get(
-            getattr(library_map, "asset_name", ""), ""
-        )
+        return ""
 
     def status_text(self, library_map, *, downloaded: bool) -> str:
         """Return the secondary row text for a standard-library map."""
@@ -243,7 +236,7 @@ class MapLibraryController:
         self.catalog_fetch.queue = None
         self.catalog_fetch.error = error
         for library_map in catalog:
-            self.catalog_by_name[self.map_key(library_map)] = library_map
+            self.catalog_by_key[self.map_key(library_map)] = library_map
         pending_map = self.catalog_fetch.pending_map
         self.catalog_fetch.pending_map = None
         return CatalogFetchCompletion(
@@ -251,6 +244,15 @@ class MapLibraryController:
             error=error,
             pending_map=pending_map,
         )
+
+    def replace_standard_library_maps(self, standard_library_maps) -> tuple[Any, ...]:
+        """Replace catalog rows after a remote refresh reconciles visibility."""
+        self.standard_library_maps = tuple(standard_library_maps)
+        self.catalog_by_key = {
+            self.map_key(library_map): library_map
+            for library_map in self.standard_library_maps
+        }
+        return self.standard_library_maps
 
     def close_catalog_fetch(self) -> CatalogFetchCleanup:
         """Clear catalog fetch state and return cleanup handles."""

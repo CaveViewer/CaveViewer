@@ -11,23 +11,27 @@ downloads/extracts a selected standard-library map archive. It has no Tk UI.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
-import zipfile
 import tempfile
-import urllib.request
 import urllib.error
+import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from caveviewer.core.json_io import load_bounded_json
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.gui.preference_paths import write_text_atomic
 from caveviewer.gui.update_checker import (
     DownloadCancelled,
     download_update,
     make_ssl_context,
 )
+from caveviewer.resources import resource_path
 from caveviewer.storage_paths import resolve_application_paths
 
 
@@ -39,6 +43,11 @@ _LOG = get_logger("StandardLibraryMaps")
 # https://github.com/CaveViewer/CaveViewer/releases/tag/sample-data
 _DEFAULT_MAP_LIBRARY_REPO = "CaveViewer/CaveViewer"
 _DEFAULT_MAP_LIBRARY_RELEASE_TAG = "sample-data"
+_DEFAULT_MAP_LIBRARY_CATALOG_ASSET_NAME = "caveviewer-map-library.v1.json"
+_BUNDLED_MAP_LIBRARY_CATALOG_RESOURCE = "map_library_catalog.v1.json"
+_MAP_LIBRARY_CATALOG_CACHE_FILE = "map_library_catalog.v1.json"
+_MAX_RELEASE_METADATA_BYTES = 2 * 1024 * 1024
+_MAX_MAP_LIBRARY_CATALOG_BYTES = 128 * 1024
 
 
 def _env_or_default(name: str, default: str) -> str:
@@ -46,15 +55,32 @@ def _env_or_default(name: str, default: str) -> str:
     return value or default
 
 
-_MAP_LIBRARY_REPO = _env_or_default(
-    "CAVEVIEWER_SAMPLE_MAPS_REPO", _DEFAULT_MAP_LIBRARY_REPO
+def _env_alias_or_default(primary_name: str, legacy_name: str, default: str) -> str:
+    """Return a renamed environment override while preserving legacy aliases."""
+    primary_value = os.environ.get(primary_name, "").strip()
+    if primary_value:
+        return primary_value
+    return _env_or_default(legacy_name, default)
+
+
+_MAP_LIBRARY_REPO = _env_alias_or_default(
+    "CAVEVIEWER_MAP_LIBRARY_REPO",
+    "CAVEVIEWER_SAMPLE_MAPS_REPO",
+    _DEFAULT_MAP_LIBRARY_REPO,
 )
-_MAP_LIBRARY_RELEASE_TAG = _env_or_default(
-    "CAVEVIEWER_SAMPLE_DATA_TAG", _DEFAULT_MAP_LIBRARY_RELEASE_TAG
+_MAP_LIBRARY_RELEASE_TAG = _env_alias_or_default(
+    "CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG",
+    "CAVEVIEWER_SAMPLE_DATA_TAG",
+    _DEFAULT_MAP_LIBRARY_RELEASE_TAG,
 )
-_TAGGED_RELEASE_API_URL = _env_or_default(
+_TAGGED_RELEASE_API_URL = _env_alias_or_default(
+    "CAVEVIEWER_MAP_LIBRARY_API_URL",
     "CAVEVIEWER_SAMPLE_MAPS_API_URL",
     f"https://api.github.com/repos/{_MAP_LIBRARY_REPO}/releases/tags/{_MAP_LIBRARY_RELEASE_TAG}",
+)
+_MAP_LIBRARY_CATALOG_ASSET_NAME = _env_or_default(
+    "CAVEVIEWER_MAP_LIBRARY_CATALOG_ASSET_NAME",
+    _DEFAULT_MAP_LIBRARY_CATALOG_ASSET_NAME,
 )
 _REQUEST_TIMEOUT_SECONDS = 8
 
@@ -70,6 +96,9 @@ class StandardLibraryMapInfo:
     asset_name: str
     download_url: Optional[str] = None
     size_bytes: Optional[int] = None
+    catalog_id: Optional[str] = None
+    folder_name: Optional[str] = None
+    sha256: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -80,24 +109,26 @@ class StandardLibraryMapRemovalResult:
     error: str | None = None
 
 
-KNOWN_STANDARD_LIBRARY_MAPS = [
-    StandardLibraryMapInfo(
-        display_name="Boh Yai Mine I (Low Res)",
-        asset_name="Boh.Yai.Mine.I.Low.Res.zip",
-    ),
-    StandardLibraryMapInfo(
-        display_name="Boh Yai Mine II (Low Res)",
-        asset_name="Boh.Yai.Mine.II.Low.Res.zip",
-    ),
-    StandardLibraryMapInfo(
-        display_name="Devils Eye",
-        asset_name="Devils.Eye.3D.Map.zip",
-    ),
-    StandardLibraryMapInfo(
-        display_name="Peacock Springs Cave System",
-        asset_name="Peacock.Springs.Cave.System.3D.Map.zip",
-    ),
-]
+def bundled_standard_library_catalog() -> list[StandardLibraryMapInfo]:
+    """Return the package-bundled fallback map catalog."""
+    catalog_path = resource_path(_BUNDLED_MAP_LIBRARY_CATALOG_RESOURCE)
+    payload = load_bounded_json(
+        catalog_path,
+        max_bytes=_MAX_MAP_LIBRARY_CATALOG_BYTES,
+        description="bundled map library catalog",
+    )
+    return _standard_library_maps_from_catalog_payload(
+        payload,
+        source_description="bundled map library catalog",
+    )
+
+
+def load_initial_standard_library_catalog() -> list[StandardLibraryMapInfo]:
+    """Return the best local catalog for initial splash rendering."""
+    cached_catalog = _load_cached_standard_library_catalog()
+    if cached_catalog:
+        return cached_catalog
+    return bundled_standard_library_catalog()
 
 
 def default_map_library_install_dir() -> str:
@@ -212,57 +243,379 @@ def _merge_legacy_map_library_directory(source: Path, destination: Path) -> None
         )
 
 
-def _known_maps_with_no_download_info():
-    """
-    Fresh StandardLibraryMapInfo entries for every known map, with download_url/
-    size_bytes left as None -- used as the fallback whenever the GitHub
-    fetch fails for any reason. Returning these (rather than an empty
-    list) keeps standard-library maps reachable while
-    offline: the dialog can still show every known map and still check
-    each one against local disk independently, so an already-downloaded
-    map's Open button keeps working even when this fetch fails entirely.
-    """
+def _catalog_cache_path() -> Path:
+    """Return the last-successful remote catalog cache file."""
+    return resolve_application_paths().cache_dir / _MAP_LIBRARY_CATALOG_CACHE_FILE
+
+
+def _load_cached_standard_library_catalog() -> list[StandardLibraryMapInfo]:
+    """Return cached remote map metadata, or an empty list when unavailable."""
+    cache_path = _catalog_cache_path()
+    if not cache_path.is_file():
+        return []
+    try:
+        payload = load_bounded_json(
+            cache_path,
+            max_bytes=_MAX_MAP_LIBRARY_CATALOG_BYTES,
+            description="cached map library catalog",
+        )
+        return _standard_library_maps_from_catalog_payload(
+            payload,
+            source_description="cached map library catalog",
+        )
+    except Exception as exc:
+        _LOG.warning("Ignoring unreadable map library catalog cache %s: %s", cache_path, exc)
+        return []
+
+
+def _save_cached_standard_library_catalog(
+    maps: list[StandardLibraryMapInfo],
+) -> None:
+    """Persist remote map metadata without temporary download URLs."""
+    cache_path = _catalog_cache_path()
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(
+            str(cache_path),
+            json.dumps(
+                _catalog_payload_from_standard_library_maps(maps),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+    except Exception as exc:
+        _LOG.warning("Could not cache map library catalog %s: %s", cache_path, exc)
+
+
+def _maps_without_download_info(
+    maps: list[StandardLibraryMapInfo],
+) -> list[StandardLibraryMapInfo]:
+    """Return local catalog entries with network-only URLs removed."""
     return [
-        StandardLibraryMapInfo(display_name=known.display_name, asset_name=known.asset_name)
-        for known in KNOWN_STANDARD_LIBRARY_MAPS
+        StandardLibraryMapInfo(
+            display_name=library_map.display_name,
+            asset_name=library_map.asset_name,
+            size_bytes=library_map.size_bytes,
+            catalog_id=library_map.catalog_id,
+            folder_name=library_map.folder_name,
+            sha256=library_map.sha256,
+        )
+        for library_map in maps
     ]
 
 
-def fetch_standard_library_catalog():
+def _fallback_maps_with_no_download_info() -> list[StandardLibraryMapInfo]:
     """
-    Fetches the sample-data release's asset list from GitHub and matches
-    it up against KNOWN_STANDARD_LIBRARY_MAPS by filename, filling in each entry's
-    real download_url/size_bytes.
+    Return the best local catalog for network failures.
 
-    Returns (list_of_standard_library_maps, error_message_or_None).
+    A failed GitHub fetch should not hide maps that were bundled with the app
+    or discovered during an earlier successful remote catalog refresh. The UI
+    checks local disk independently, so already-downloaded entries can still
+    open while offline.
+    """
+    return _maps_without_download_info(load_initial_standard_library_catalog())
 
-    IMPORTANT: even when this fails (no internet, GitHub unreachable,
-    etc -- reported via the error string), it still returns one
-    StandardLibraryMapInfo per entry in KNOWN_STANDARD_LIBRARY_MAPS, just with
-    download_url/size_bytes left as None. This is deliberate: a failed
-    network fetch should never hide or remove an entry that the person
-    might ALREADY have downloaded previously -- the caller
-    the caller checks local disk state independently of
-    whatever this function returns, specifically so "no internet right
-    now" never blocks opening a map-library entry that's already sitting on
-    disk from an earlier successful download. Only entries that are
-    NEITHER already-downloaded NOR successfully fetched end up
-    genuinely unusable, and even then they're shown (as "unavailable"),
-    never silently dropped.
+
+def _read_json_url(url: str, *, accept: str, max_bytes: int):
+    """Fetch a bounded UTF-8 JSON document from a trusted configured URL."""
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": accept,
+            "User-Agent": "CaveViewer-MapLibrary",
+        },
+    )
+    with urllib.request.urlopen(
+        request,
+        timeout=_REQUEST_TIMEOUT_SECONDS,
+        context=make_ssl_context(),
+    ) as response:
+        payload = response.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ValueError(f"map library response exceeded {max_bytes} bytes")
+    return json.loads(payload.decode("utf-8"))
+
+
+def _release_assets_by_name(release_payload) -> dict[str, dict]:
+    """Return valid GitHub release assets keyed by filename."""
+    assets = release_payload.get("assets", [])
+    if not isinstance(assets, list):
+        raise TypeError("release assets must be a list")
+    results: dict[str, dict] = {}
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = asset.get("name")
+        if isinstance(name, str) and name:
+            results[name] = asset
+    return results
+
+
+def _catalog_payload_from_standard_library_maps(
+    maps: list[StandardLibraryMapInfo],
+) -> dict:
+    """Serialize map metadata for the local cache using the public v1 shape."""
+    entries = []
+    for index, library_map in enumerate(maps):
+        entry = {
+            "id": library_map.catalog_id or _catalog_id_from_asset(library_map),
+            "title": library_map.display_name,
+            "asset": library_map.asset_name,
+            "sort": index * 10,
+        }
+        if library_map.folder_name and library_map.folder_name != library_map.display_name:
+            entry["folder"] = library_map.folder_name
+        if library_map.size_bytes is not None:
+            entry["size_bytes"] = library_map.size_bytes
+        if library_map.sha256:
+            entry["sha256"] = library_map.sha256
+        entries.append(entry)
+    return {"version": 1, "maps": entries}
+
+
+def _catalog_id_from_asset(library_map: StandardLibraryMapInfo) -> str:
+    """Return a stable fallback ID when older metadata has no explicit ID."""
+    raw_value = library_map.asset_name or library_map.display_name
+    return "".join(
+        char.lower() if char.isalnum() else "-"
+        for char in raw_value
+    ).strip("-") or "standard-library-map"
+
+
+def _standard_library_maps_from_catalog_payload(
+    payload,
+    *,
+    source_description: str,
+) -> list[StandardLibraryMapInfo]:
+    """Validate the v1 catalog manifest and return ordered map entries."""
+    if not isinstance(payload, dict):
+        raise ValueError(f"{source_description} must be a JSON object")
+    if payload.get("version") != 1:
+        raise ValueError(f"{source_description} must declare version 1")
+    raw_maps = payload.get("maps")
+    if not isinstance(raw_maps, list):
+        raise ValueError(f"{source_description} maps must be a list")
+
+    parsed: list[tuple[int, int, StandardLibraryMapInfo]] = []
+    seen_ids: set[str] = set()
+    seen_assets: set[str] = set()
+    for index, raw_map in enumerate(raw_maps):
+        if not isinstance(raw_map, dict):
+            raise ValueError(f"{source_description} map #{index + 1} must be an object")
+        catalog_id = _required_catalog_string(
+            raw_map,
+            "id",
+            source_description=source_description,
+            index=index,
+        )
+        title = _required_catalog_string(
+            raw_map,
+            "title",
+            source_description=source_description,
+            index=index,
+        )
+        asset = _required_catalog_string(
+            raw_map,
+            "asset",
+            source_description=source_description,
+            index=index,
+        )
+        folder = _optional_catalog_string(raw_map, "folder")
+        sha256 = _optional_sha256(raw_map, source_description, index)
+        size_bytes = _optional_nonnegative_int(
+            raw_map,
+            "size_bytes",
+            source_description=source_description,
+            index=index,
+        )
+        sort_order = _optional_nonnegative_int(
+            raw_map,
+            "sort",
+            source_description=source_description,
+            index=index,
+        )
+        if catalog_id in seen_ids:
+            raise ValueError(f"{source_description} has duplicate map id {catalog_id!r}")
+        if asset in seen_assets:
+            raise ValueError(f"{source_description} has duplicate asset {asset!r}")
+        seen_ids.add(catalog_id)
+        seen_assets.add(asset)
+        parsed.append(
+            (
+                index if sort_order is None else sort_order,
+                index,
+                StandardLibraryMapInfo(
+                    display_name=title,
+                    asset_name=asset,
+                    size_bytes=size_bytes,
+                    catalog_id=catalog_id,
+                    folder_name=folder,
+                    sha256=sha256,
+                ),
+            )
+        )
+    return [item[2] for item in sorted(parsed, key=lambda item: (item[0], item[1]))]
+
+
+def _required_catalog_string(
+    raw_map: dict,
+    field_name: str,
+    *,
+    source_description: str,
+    index: int,
+) -> str:
+    value = raw_map.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{source_description} map #{index + 1} has invalid {field_name!r}"
+        )
+    return value.strip()
+
+
+def _optional_catalog_string(raw_map: dict, field_name: str) -> str | None:
+    value = raw_map.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+def _optional_nonnegative_int(
+    raw_map: dict,
+    field_name: str,
+    *,
+    source_description: str,
+    index: int,
+) -> int | None:
+    value = raw_map.get(field_name)
+    if value is None:
+        return None
+    if type(value) is not int or value < 0:
+        raise ValueError(
+            f"{source_description} map #{index + 1} has invalid {field_name!r}"
+        )
+    return value
+
+
+def _optional_sha256(
+    raw_map: dict,
+    source_description: str,
+    index: int,
+) -> str | None:
+    value = raw_map.get("sha256")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{source_description} map #{index + 1} has invalid 'sha256'"
+        )
+    cleaned = value.strip().lower()
+    if len(cleaned) != 64 or any(char not in "0123456789abcdef" for char in cleaned):
+        raise ValueError(
+            f"{source_description} map #{index + 1} has invalid 'sha256'"
+        )
+    return cleaned
+
+
+def _enrich_catalog_with_release_assets(
+    catalog: list[StandardLibraryMapInfo],
+    assets_by_name: dict[str, dict],
+) -> list[StandardLibraryMapInfo]:
+    """Join catalog metadata to GitHub release asset URLs and sizes."""
+    results = []
+    for library_map in catalog:
+        asset = assets_by_name.get(library_map.asset_name)
+        results.append(
+            StandardLibraryMapInfo(
+                display_name=library_map.display_name,
+                asset_name=library_map.asset_name,
+                download_url=(
+                    asset.get("browser_download_url")
+                    if isinstance(asset, dict)
+                    else None
+                ),
+                size_bytes=(
+                    asset.get("size")
+                    if isinstance(asset, dict) and isinstance(asset.get("size"), int)
+                    else library_map.size_bytes
+                ),
+                catalog_id=library_map.catalog_id,
+                folder_name=library_map.folder_name,
+                sha256=library_map.sha256,
+            )
+        )
+    return results
+
+
+def _remote_catalog_from_release_assets(
+    assets_by_name: dict[str, dict],
+) -> tuple[list[StandardLibraryMapInfo], str | None, bool]:
+    """
+    Return catalog entries, an optional warning, and whether remote metadata won.
+
+    The release manifest controls the dynamic list when present. Until that
+    asset is published, CaveViewer joins the bundled fallback catalog to the
+    release zip assets so the existing GitHub distribution continues to work.
+    """
+    catalog_asset = assets_by_name.get(_MAP_LIBRARY_CATALOG_ASSET_NAME)
+    catalog_url = (
+        catalog_asset.get("browser_download_url")
+        if isinstance(catalog_asset, dict)
+        else None
+    )
+    if not catalog_url:
+        return bundled_standard_library_catalog(), None, False
+
+    try:
+        payload = _read_json_url(
+            catalog_url,
+            accept="application/json",
+            max_bytes=_MAX_MAP_LIBRARY_CATALOG_BYTES,
+        )
+        return (
+            _standard_library_maps_from_catalog_payload(
+                payload,
+                source_description="remote map library catalog",
+            ),
+            None,
+            True,
+        )
+    except (
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        urllib.error.URLError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        return (
+            load_initial_standard_library_catalog(),
+            f"Got an unexpected map library catalog: {exc}",
+            False,
+        )
+
+
+def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str | None]:
+    """
+    Fetch the GitHub-hosted map catalog and release asset download details.
+
+    Returns ``(maps, error_message_or_None)``. A remote catalog manifest named
+    ``caveviewer-map-library.v1.json`` controls the dynamic map list when it is
+    attached to the configured release. If the manifest is absent, CaveViewer
+    uses the bundled fallback catalog and still fills download URLs from the
+    release assets. If GitHub cannot be reached, CaveViewer returns cached or
+    bundled catalog metadata without download URLs so previously downloaded
+    maps remain visible and openable.
     """
     _log_map_library_config_once()
 
     try:
-        request = urllib.request.Request(
+        data = _read_json_url(
             _TAGGED_RELEASE_API_URL,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "CaveViewer-MapLibrary",
-            },
+            accept="application/vnd.github+json",
+            max_bytes=_MAX_RELEASE_METADATA_BYTES,
         )
-        with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS,
-                                     context=make_ssl_context()) as response:
-            data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
             error_msg = (
@@ -270,7 +623,7 @@ def fetch_standard_library_catalog():
             )
         else:
             error_msg = f"GitHub returned an error (HTTP {e.code})."
-        return _known_maps_with_no_download_info(), error_msg
+        return _fallback_maps_with_no_download_info(), error_msg
     except urllib.error.URLError as e:
         # URLError is a catch-all for "the request itself failed to
         # complete" -- it does NOT specifically mean "no internet
@@ -294,35 +647,27 @@ def fetch_standard_library_catalog():
                 "Couldn't reach GitHub right now. This may be a temporary "
                 "network issue -- try again in a moment."
             )
-        return _known_maps_with_no_download_info(), error_msg
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        return _fallback_maps_with_no_download_info(), error_msg
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError, TypeError) as e:
         return (
-            _known_maps_with_no_download_info(),
+            _fallback_maps_with_no_download_info(),
             f"Got an unexpected response from GitHub: {e}",
         )
 
-    assets_by_name = {a.get("name"): a for a in data.get("assets", [])}
-
-    results = []
-    for known in KNOWN_STANDARD_LIBRARY_MAPS:
-        asset = assets_by_name.get(known.asset_name)
-        if asset:
-            results.append(
-                StandardLibraryMapInfo(
-                    display_name=known.display_name,
-                    asset_name=known.asset_name,
-                    download_url=asset.get("browser_download_url"),
-                    size_bytes=asset.get("size"),
-                )
-            )
-        else:
-            results.append(
-                StandardLibraryMapInfo(
-                    display_name=known.display_name, asset_name=known.asset_name
-                )
-            )
-
-    return results, None
+    try:
+        assets_by_name = _release_assets_by_name(data)
+    except TypeError as exc:
+        return (
+            _fallback_maps_with_no_download_info(),
+            f"Got an unexpected response from GitHub: {exc}",
+        )
+    catalog, catalog_error, remote_manifest_loaded = _remote_catalog_from_release_assets(
+        assets_by_name
+    )
+    results = _enrich_catalog_with_release_assets(catalog, assets_by_name)
+    if remote_manifest_loaded:
+        _save_cached_standard_library_catalog(results)
+    return results, catalog_error
 
 
 def _log_map_library_config_once() -> None:
@@ -332,6 +677,16 @@ def _log_map_library_config_once() -> None:
 
     _MAP_LIBRARY_CONFIG_LOGGED = True
     _LOG.info(
+        "Map library source env: CAVEVIEWER_MAP_LIBRARY_API_URL=%r, "
+        "CAVEVIEWER_MAP_LIBRARY_REPO=%r, "
+        "CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG=%r, "
+        "CAVEVIEWER_MAP_LIBRARY_CATALOG_ASSET_NAME=%r",
+        os.environ.get("CAVEVIEWER_MAP_LIBRARY_API_URL"),
+        os.environ.get("CAVEVIEWER_MAP_LIBRARY_REPO"),
+        os.environ.get("CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG"),
+        os.environ.get("CAVEVIEWER_MAP_LIBRARY_CATALOG_ASSET_NAME"),
+    )
+    _LOG.info(
         "Map library source legacy env: CAVEVIEWER_SAMPLE_MAPS_API_URL=%r, "
         "CAVEVIEWER_SAMPLE_MAPS_REPO=%r, CAVEVIEWER_SAMPLE_DATA_TAG=%r",
         os.environ.get("CAVEVIEWER_SAMPLE_MAPS_API_URL"),
@@ -339,10 +694,11 @@ def _log_map_library_config_once() -> None:
         os.environ.get("CAVEVIEWER_SAMPLE_DATA_TAG"),
     )
     _LOG.info(
-        "Map library source resolved: api_url=%r, repo=%r, tag=%r",
+        "Map library source resolved: api_url=%r, repo=%r, tag=%r, catalog=%r",
         _TAGGED_RELEASE_API_URL,
         _MAP_LIBRARY_REPO,
         _MAP_LIBRARY_RELEASE_TAG,
+        _MAP_LIBRARY_CATALOG_ASSET_NAME,
     )
 
 
@@ -363,7 +719,10 @@ def local_standard_library_map_path(install_dir: str, sample: StandardLibraryMap
     one subfolder per map, named after its display name (so it reads
     clearly in a file browser), inside the shared map_library folder.
     """
-    return os.path.join(_map_library_container_dir(install_dir), sample.display_name)
+    return os.path.join(
+        _map_library_container_dir(install_dir),
+        sample.folder_name or sample.display_name,
+    )
 
 
 def _map_library_container_dir(install_dir: str) -> str:
@@ -501,7 +860,7 @@ def _app_supplied_standard_library_map_path_candidates(
     candidates: list[str] = []
     for root in roots:
         root_path = os.fspath(root)
-        for sample in KNOWN_STANDARD_LIBRARY_MAPS:
+        for sample in load_initial_standard_library_catalog():
             candidates.append(local_standard_library_map_path(root_path, sample))
             candidates.extend(_legacy_standard_library_map_paths(root_path, sample))
     return candidates
@@ -527,24 +886,38 @@ def _legacy_standard_library_map_paths(
     legacy_paths: list[str] = []
 
     if basename == _LEGACY_MAP_LIBRARY_DIRNAME.lower():
-        legacy_paths.append(os.path.join(normalized, sample.display_name))
         legacy_paths.append(
-            os.path.join(normalized, _LEGACY_MAP_LIBRARY_DIRNAME, sample.display_name)
+            os.path.join(normalized, sample.folder_name or sample.display_name)
+        )
+        legacy_paths.append(
+            os.path.join(
+                normalized,
+                _LEGACY_MAP_LIBRARY_DIRNAME,
+                sample.folder_name or sample.display_name,
+            )
         )
     elif basename == MAP_LIBRARY_DIRNAME.lower():
         legacy_paths.append(
-            os.path.join(normalized, _LEGACY_MAP_LIBRARY_DIRNAME, sample.display_name)
+            os.path.join(
+                normalized,
+                _LEGACY_MAP_LIBRARY_DIRNAME,
+                sample.folder_name or sample.display_name,
+            )
         )
         legacy_paths.append(
             os.path.join(
                 os.path.dirname(normalized),
                 _LEGACY_MAP_LIBRARY_DIRNAME,
-                sample.display_name,
+                sample.folder_name or sample.display_name,
             )
         )
     else:
         legacy_paths.append(
-            os.path.join(normalized, _LEGACY_MAP_LIBRARY_DIRNAME, sample.display_name)
+            os.path.join(
+                normalized,
+                _LEGACY_MAP_LIBRARY_DIRNAME,
+                sample.folder_name or sample.display_name,
+            )
         )
 
     return legacy_paths
@@ -564,6 +937,25 @@ def _remove_replaced_standard_library_backup(backup_dir: str) -> None:
         shutil.rmtree(backup_dir)
     else:
         os.remove(backup_dir)
+
+
+def _verify_standard_library_zip_hash(
+    zip_path: str,
+    sample: StandardLibraryMapInfo,
+) -> None:
+    """Verify a downloaded archive when the catalog supplies a SHA-256 hash."""
+    if not sample.sha256:
+        return
+    digest = hashlib.sha256()
+    with open(zip_path, "rb") as archive:
+        for chunk in iter(lambda: archive.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual_hash = digest.hexdigest()
+    if actual_hash != sample.sha256:
+        raise ValueError(
+            f"Downloaded map archive for {sample.display_name!r} failed "
+            "SHA-256 verification"
+        )
 
 
 def _publish_standard_library_map_directory(staging_dir: str, dest_dir: str) -> None:
@@ -650,7 +1042,7 @@ def download_and_extract_standard_library_map(install_dir: str, sample: Standard
     install_dir = _install_dir_path(install_dir)
     if sample.download_url is None:
         raise ValueError(f"No download URL available for {sample.display_name!r} "
-                          f"(asset {sample.asset_name!r} not found on the sample-data release).")
+                          f"(asset {sample.asset_name!r} not found on the map library release).")
 
     def raise_if_cancelled() -> None:
         if cancel_cb and cancel_cb():
@@ -670,6 +1062,8 @@ def download_and_extract_standard_library_map(install_dir: str, sample: Standard
             progress_cb=progress_cb,
             cancel_cb=cancel_cb,
         )
+        raise_if_cancelled()
+        _verify_standard_library_zip_hash(zip_path, sample)
         raise_if_cancelled()
 
         staging_dir = os.path.join(tmp_dir, "extracted")
