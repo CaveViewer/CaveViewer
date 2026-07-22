@@ -5,9 +5,6 @@ on:
   schedule:
     - cron: "27 9 * * 1"
   pull_request:
-    branches:
-      - main
-      - "release/**"
     paths:
       - ".github/workflows/linux-package-smoke.yml"
       - ".github/workflows/linux-x86_64-release.yml"
