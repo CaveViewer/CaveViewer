@@ -1,7 +1,7 @@
 """Shared Tk dialog presentation helpers.
 
 The app still uses hand-built Tk dialogs, so keeping button and notice styling
-in one place prevents Preferences, Sample Maps, and future dialogs from
+in one place prevents Preferences, Map Library, and future dialogs from
 quietly drifting apart.
 """
 

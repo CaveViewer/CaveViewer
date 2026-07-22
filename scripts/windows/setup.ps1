@@ -633,7 +633,7 @@ function Install-Requirements {
 function Add-PythonFirewallRule {
     <#
         Adds a Windows Firewall outbound allow-rule for python.exe so that
-        CaveViewer can reach GitHub (update checks, sample-map catalog) the
+        CaveViewer can reach GitHub (update checks, map-library catalog) the
         very first time it runs.
 
         Why this matters: setup runs elevated (Administrator), but the
@@ -642,7 +642,7 @@ function Add-PythonFirewallRule {
         Defender Firewall can show a "allow / block" popup.  If the user
         dismisses or blocks that popup, Python is firewall-blocked for every
         subsequent session -- the app can't check for updates or load the
-        sample-map list even though the machine is genuinely online.
+        map-library list even though the machine is genuinely online.
         Creating the rule here, while we're still elevated, prevents the
         popup entirely and ensures the app works out of the box.
 

@@ -592,9 +592,9 @@ def test_dbus_notification_calls_portal_methods():
 
     asyncio.run(
         transport._notify(
-            "sample-download",
+            "map-library-download",
             "Download ready",
-            "Open the sample map.",
+            "Open the map library entry.",
             priority="normal",
         )
     )
@@ -602,15 +602,15 @@ def test_dbus_notification_calls_portal_methods():
     assert transport.call_request["interface"].endswith("Notification")
     assert transport.call_request["member"] == "AddNotification"
     notification_id, payload = transport.call_request["body"]
-    assert notification_id == "sample-download"
+    assert notification_id == "map-library-download"
     assert payload["title"].value == "Download ready"
-    assert payload["body"].value == "Open the sample map."
+    assert payload["body"].value == "Open the map library entry."
     assert payload["priority"].value == "normal"
 
-    asyncio.run(transport._withdraw_notification("sample-download"))
+    asyncio.run(transport._withdraw_notification("map-library-download"))
 
     assert transport.call_request["member"] == "RemoveNotification"
-    assert transport.call_request["body"] == ["sample-download"]
+    assert transport.call_request["body"] == ["map-library-download"]
 
 
 @requires_dbus_fast

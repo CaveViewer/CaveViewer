@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import sys
-from types import SimpleNamespace
 
 import pytest
 
@@ -249,10 +248,9 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "def _bind_activation(widget, callback) -> None:" in source
     assert "_bind_activation(browse_button, on_open_map_folder)" in source
     assert "_bind_activation(preferences_link, _on_preferences_click)" in source
-    assert "_on_sample_map_action(sample)" in source
+    assert "_on_library_map_action(sample)" in source
     assert "start_sample_download_worker(" in source
     assert "show_sample_maps_dialog(" not in source
-    assert "Download sample maps" not in source
 
 
 def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
@@ -270,14 +268,14 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "Recent Maps" not in source
     assert "Available Maps" not in source
     assert "Open recent or available maps." not in source
-    assert "Explore sample maps" not in source
     assert "Available to download" not in source
     assert "Scrollbar(" not in source
     assert "content_canvas.configure(yscrollcommand=_set_library_scrollbar)" in source
     assert 'content_scrollbar.pack(side="right", fill="y")' in source
     assert "_bind_library_mousewheel(rows_frame)" in source
     assert "recent_map_paths = _load_library_recent_map_paths()" in source
-    assert "detail=_sample_map_status_text(sample, downloaded=downloaded)" in source
+    assert "map_library_controller.row(" in source
+    assert "detail=row.detail" in source
     assert "highlightthickness=0" in source
     assert "highlightbackground=_LIBRARY_PANEL_BORDER_COLOR" in source
     assert 'divider.pack(side="left", fill="y", padx=(px(18), px(12)), pady=px(26))' in source
@@ -299,7 +297,7 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "_poll_library_download_queue" in source
     assert "_cancel_active_library_download_for_close()" in source
     assert "DirectorySelection.from_path(sample_maps_root_dir)" in source
-    assert "_start_sample_catalog_fetch()" in source
+    assert "_start_library_catalog_fetch()" in source
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
@@ -335,27 +333,6 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "Open" in source
 
 
-def test_sample_map_splash_actions_are_compact():
-    assert splash_screen._sample_map_splash_action_text(downloaded=True) == "Open"
-    assert splash_screen._sample_map_splash_action_text(downloaded=False) == "Get"
-    assert splash_screen._sample_map_splash_size_text(
-        SimpleNamespace(
-            asset_name="Boh.Yai.Mine.I.Low.Res.zip",
-            size_bytes=None,
-        )
-    ) == "57 MB"
-    assert splash_screen._sample_map_splash_size_text(
-        SimpleNamespace(
-            asset_name="custom.zip",
-            size_bytes=52 * 1024 * 1024,
-        )
-    ) == "52 MB"
-    assert splash_screen._sample_map_splash_size_text(
-        SimpleNamespace(
-            asset_name="custom.zip",
-            size_bytes=None,
-        )
-    ) == ""
 
 
 def test_library_action_buttons_use_normalized_dimensions():

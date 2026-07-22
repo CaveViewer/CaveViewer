@@ -30,13 +30,13 @@ The module uses Python's **Protocol** pattern to define a contract (`SplashPlatf
 
 `SplashPlatformAdapter` continues to own update-channel, control, font, and
 package behavior. `DesktopServices` is intentionally separate: splash, viewer,
-settings, sample-map, and background-task code request host-desktop behavior
+settings, map-library, and background-task code request host-desktop behavior
 through one capability instead of importing Tk, shell commands, or D-Bus
 directly. Linux implements file/directory selection, file/URI opening, file
 reveal, notifications, and idle/suspend inhibition portal-first, with
-conservative fallbacks for non-portal sessions. Long sample-map downloads use
+conservative fallbacks for non-portal sessions. Long map library downloads use
 notification and inhibit requests through `DesktopServices`, suppressing
-duplicate desktop notifications while the Sample Maps dialog owns foreground
+duplicate desktop notifications while the Map Library dialog owns foreground
 feedback; background update downloads use notification and inhibit requests
 while the package is downloaded and verified; uncached map imports use inhibit
 requests while parsing and building the cache. These requests are best-effort
