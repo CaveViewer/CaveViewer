@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 import os
 import queue
 import shutil
@@ -34,6 +34,89 @@ class RecordingStopResult:
     writer_error: Exception | None
     dropped_frames: int
     show_message: bool
+
+
+@dataclass
+class RecordingEncoderSession:
+    """Own one active ffmpeg encoder process and its worker-thread state."""
+
+    process: subprocess.Popen
+    output_path: str
+    output_size: tuple[int, int]
+    viewport: tuple[int, int, int, int]
+    frame_queue: queue.Queue
+    writer_thread: threading.Thread | None = None
+    stderr_thread: threading.Thread | None = None
+    _writer_error: Exception | None = None
+    _stderr_parts: list[str] = field(default_factory=list)
+    _stderr_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    @property
+    def writer_error(self) -> Exception | None:
+        """Return the first encoder-writer failure observed by the session."""
+        return self._writer_error
+
+    def set_writer_error(self, exc: Exception) -> None:
+        """Record a writer-thread failure for render-thread polling."""
+        self._writer_error = exc
+
+    def append_stderr(self, text: str) -> None:
+        """Append bounded stderr text emitted by the encoder."""
+        with self._stderr_lock:
+            self._stderr_parts.append(text)
+            joined = "".join(self._stderr_parts)
+            if len(joined) > 16384:
+                self._stderr_parts = [joined[-16384:]]
+
+    def stderr_text(self) -> str:
+        """Return collected encoder stderr text without surrounding whitespace."""
+        with self._stderr_lock:
+            return "".join(self._stderr_parts).strip()
+
+    def writer_loop(self) -> None:
+        """Run the session-owned raw-frame writer worker."""
+        writer_loop(
+            self.process,
+            self.frame_queue,
+            set_writer_error=self.set_writer_error,
+        )
+
+    def stderr_reader(self) -> None:
+        """Run the session-owned stderr reader worker."""
+        stderr_reader(self.process, append_stderr=self.append_stderr)
+
+    def start_workers(self) -> None:
+        """Start encoder helper threads owned by this session."""
+        self.writer_thread = threading.Thread(
+            target=self.writer_loop,
+            daemon=True,
+        )
+        self.writer_thread.start()
+
+        self.stderr_thread = threading.Thread(
+            target=self.stderr_reader,
+            daemon=True,
+        )
+        self.stderr_thread.start()
+
+    def signal_writer_stop(self) -> None:
+        """Ask the writer worker to finish after queued frames are drained."""
+        signal_writer_stop(self.frame_queue)
+
+    def stopped_before_finalization(self) -> bool:
+        """Return whether the encoder exited or its writer failed early."""
+        return self.writer_error is not None or self.process.poll() is not None
+
+    def stop_work(self, *, show_message: bool) -> RecordingStopWork:
+        """Package this active session for asynchronous stop finalization."""
+        return RecordingStopWork(
+            process=self.process,
+            output_path=self.output_path,
+            frame_queue=self.frame_queue,
+            writer_thread=self.writer_thread,
+            stderr_thread=self.stderr_thread,
+            show_message=show_message,
+        )
 
 
 @dataclass
@@ -110,6 +193,61 @@ def build_ffmpeg_command(
         "yuv420p",
         output_path,
     ]
+
+
+def start_encoder_session(
+    *,
+    ffmpeg_path: str,
+    output_path: str,
+    output_size: tuple[int, int],
+    viewport: tuple[int, int, int, int],
+    fps: int,
+    crf: int,
+    raw_pix_fmt: str,
+    popen_startup_kwargs: Mapping[str, Any] | None = None,
+    frame_queue_size: int = 2,
+) -> RecordingEncoderSession:
+    """Start ffmpeg and return the session that owns its helper workers."""
+    command = build_ffmpeg_command(
+        ffmpeg_path=ffmpeg_path,
+        output_size=output_size,
+        fps=fps,
+        crf=crf,
+        raw_pix_fmt=raw_pix_fmt,
+        output_path=output_path,
+    )
+    popen_kwargs: dict[str, Any] = {
+        "stdin": subprocess.PIPE,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.PIPE,
+    }
+    if popen_startup_kwargs:
+        popen_kwargs.update(popen_startup_kwargs)
+
+    process = subprocess.Popen(command, **popen_kwargs)
+    frame_queue = queue.Queue(maxsize=frame_queue_size)
+    session = RecordingEncoderSession(
+        process=process,
+        output_path=output_path,
+        output_size=output_size,
+        viewport=viewport,
+        frame_queue=frame_queue,
+    )
+    try:
+        session.start_workers()
+    except Exception:
+        signal_writer_stop(frame_queue)
+        try:
+            if process.stdin:
+                process.stdin.close()
+        except OSError:
+            pass
+        try:
+            process.kill()
+        except OSError:
+            pass
+        raise
+    return session
 
 
 def recording_display_path(path: str | None) -> str | None:
@@ -247,3 +385,38 @@ def finalize_stop_worker(
         dropped_frames=dropped_frames(),
         show_message=work.show_message,
     )
+
+
+def start_stop_finalizer(
+    work: RecordingStopWork,
+    *,
+    result_queue: queue.Queue,
+    stderr_text: Callable[[], str],
+    writer_error: Callable[[], Exception | None],
+    dropped_frames: Callable[[], int],
+    logger,
+) -> threading.Thread | None:
+    """Start the worker that finalizes a stopped encoder session."""
+
+    def run_finalizer() -> None:
+        result = finalize_stop_worker(
+            work,
+            stderr_text=stderr_text,
+            writer_error=writer_error,
+            dropped_frames=dropped_frames,
+            logger=logger,
+        )
+        result_queue.put(result)
+
+    thread = threading.Thread(
+        target=run_finalizer,
+        name="CaveViewer-recording-finalizer",
+        daemon=False,
+    )
+    try:
+        thread.start()
+    except RuntimeError as exc:
+        logger.warning("Could not start recording finalizer thread: %s", exc)
+        run_finalizer()
+        return None
+    return thread
