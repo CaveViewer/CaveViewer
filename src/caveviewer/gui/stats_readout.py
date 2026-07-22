@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.stats_readout
+"""OpenGL text readout for live viewer performance statistics.
 
 A small text readout showing live FPS and chunk-loading stats (loaded /
 pending), positioned directly above the minimap panel in the bottom-left

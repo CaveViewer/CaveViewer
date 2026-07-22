@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.controls_overlay
+"""Controls/help overlay drawn inside the OpenGL viewer.
 
 A loading overlay that doubles as a controls reference diagram, shown:
   - Full-screen, right after the OpenGL window opens, while the first

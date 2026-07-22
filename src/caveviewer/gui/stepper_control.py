@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.stepper_control
+"""Reusable OpenGL +/- stepper control for integer viewer settings.
 
 A small horizontal control: a "-" button, the current integer value, and
 a "+" button -- replacing the draggable vertical sliders previously used

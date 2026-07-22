@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.splash_screen
+"""Tk startup surface for map selection, preferences, and updates.
 
 The very first thing shown when CaveViewer launches: a small landing
 window with the program name/version, the skull logo, and an Open Map Folder

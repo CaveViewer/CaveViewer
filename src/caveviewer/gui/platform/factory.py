@@ -1,3 +1,10 @@
+"""Factory for selecting the active GUI platform adapter.
+
+All GUI code that needs OS-specific behavior should enter through this module
+or ``caveviewer.gui.platform`` exports instead of checking ``sys.platform``
+directly.
+"""
+
 from __future__ import annotations
 
 import sys
