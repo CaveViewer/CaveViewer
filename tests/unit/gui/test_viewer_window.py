@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from caveviewer.core.map import cache_paths
-from caveviewer.gui import viewer_window
+from caveviewer.gui import recording, viewer_window
 from caveviewer.gui.platform.app_identity import tk_root_options
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
@@ -138,7 +138,7 @@ def _recording_window():
     window._platform_adapter = DefaultSplashPlatformAdapter()
     window._recording_countdown_started_at = None
     window._recording_countdown_until = None
-    window._recording_process = None
+    window._recording_session = None
     window._recording_output_path = None
     window._recording_size = None
     window._recording_viewport = None
@@ -151,12 +151,7 @@ def _recording_window():
     window._recording_next_frame_time = None
     window._recording_frame_interval = 1.0 / 30.0
     window._recording_frame_queue = None
-    window._recording_writer_thread = None
-    window._recording_stderr_thread = None
-    window._recording_writer_error = None
     window._recording_dropped_frames = 0
-    window._recording_stderr_lock = viewer_window.threading.Lock()
-    window._recording_stderr_parts = []
     window._recording_stop_results = queue.Queue()
     window._recording_stop_thread = None
     window._recording_status_message = None
@@ -164,6 +159,27 @@ def _recording_window():
     window._recording_status_kind = None
     window._recording_status_until = None
     return window
+
+
+def _active_recording_session(
+    *,
+    process=None,
+    frame_queue: queue.Queue | None = None,
+    output_path: str = "/recordings/cave.mp4",
+    output_size: tuple[int, int] = (2, 2),
+    viewport: tuple[int, int, int, int] = (0, 0, 2, 2),
+) -> recording.RecordingEncoderSession:
+    if process is None:
+        process = SimpleNamespace(poll=lambda: None)
+    if frame_queue is None:
+        frame_queue = queue.Queue(maxsize=2)
+    return recording.RecordingEncoderSession(
+        process=process,
+        output_path=output_path,
+        output_size=output_size,
+        viewport=viewport,
+        frame_queue=frame_queue,
+    )
 
 
 def test_desktop_relative_window_size_uses_eighty_percent_per_axis(monkeypatch):
@@ -402,11 +418,11 @@ def test_start_recording_encoder_sends_output_size_to_ffmpeg_without_scale_filte
             return FakeBuffer()
 
     monkeypatch.setattr(
-        viewer_window.subprocess,
+        recording.subprocess,
         "Popen",
         lambda cmd, **kwargs: popen_calls.append((cmd, kwargs)) or FakeProcess(),
     )
-    monkeypatch.setattr(viewer_window.threading, "Thread", FakeThread)
+    monkeypatch.setattr(recording.threading, "Thread", FakeThread)
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 100.0)
 
     window = _recording_window()
@@ -425,7 +441,9 @@ def test_start_recording_encoder_sends_output_size_to_ffmpeg_without_scale_filte
     assert cmd[cmd.index("-pix_fmt") + 1] == "rgb24"
     assert cmd[cmd.index("-vf") + 1] == "vflip"
     assert not any("scale=" in part for part in cmd)
-    assert popen_kwargs["stdin"] is viewer_window.subprocess.PIPE
+    assert popen_kwargs["stdin"] is recording.subprocess.PIPE
+    assert window._recording_session is not None
+    assert window._recording_frame_queue is window._recording_session.frame_queue
     assert window._recording_size == (1280, 720)
     assert window._recording_readback_framebuffer is None
     assert ctx.buffer_reserves == [1280 * 720 * 3] * 3
@@ -482,11 +500,11 @@ def test_start_recording_encoder_allocates_output_sized_readback_framebuffer(
             return FakeBuffer()
 
     monkeypatch.setattr(
-        viewer_window.subprocess,
+        recording.subprocess,
         "Popen",
         lambda cmd, **kwargs: popen_calls.append((cmd, kwargs)) or FakeProcess(),
     )
-    monkeypatch.setattr(viewer_window.threading, "Thread", FakeThread)
+    monkeypatch.setattr(recording.threading, "Thread", FakeThread)
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 100.0)
 
     ctx = FakeCtx()
@@ -530,13 +548,14 @@ def test_recording_skips_framebuffer_read_when_writer_queue_is_full(monkeypatch)
     screen = FakeScreen()
     window = _recording_window()
     window.ctx = SimpleNamespace(viewport=(0, 0, 2, 2), screen=screen)
-    window._recording_process = SimpleNamespace(poll=lambda: None)
     window._recording_size = (2, 2)
     window._recording_viewport = (0, 0, 2, 2)
     window._recording_next_frame_time = 10.0
     window._recording_frame_interval = 1.0
-    window._recording_frame_queue = queue.Queue(maxsize=1)
-    window._recording_frame_queue.put_nowait(b"queued-frame")
+    frame_queue = queue.Queue(maxsize=1)
+    frame_queue.put_nowait(b"queued-frame")
+    window._recording_session = _active_recording_session(frame_queue=frame_queue)
+    window._recording_frame_queue = frame_queue
 
     read_ms = window._recording_update_after_scene(12.2)
 
@@ -720,7 +739,6 @@ def test_recording_late_capture_drops_frames_instead_of_enqueuing_duplicates(
     buffer = FakeBuffer()
     window = _recording_window()
     window.ctx = SimpleNamespace(viewport=(0, 0, 2, 2), screen=screen)
-    window._recording_process = SimpleNamespace(poll=lambda: None)
     window._recording_size = (2, 2)
     window._recording_viewport = (0, 0, 2, 2)
     window._recording_readback_slots = [
@@ -729,7 +747,9 @@ def test_recording_late_capture_drops_frames_instead_of_enqueuing_duplicates(
     window._recording_readback_byte_count = 12
     window._recording_next_frame_time = 10.0
     window._recording_frame_interval = 1.0
-    window._recording_frame_queue = queue.Queue(maxsize=5)
+    frame_queue = queue.Queue(maxsize=5)
+    window._recording_session = _active_recording_session(frame_queue=frame_queue)
+    window._recording_frame_queue = frame_queue
 
     read_ms = window._recording_update_after_scene(12.2)
 
@@ -765,6 +785,15 @@ def test_render_loop_uses_nonblocking_throttle_instead_of_sleep():
     assert "_render_throttle_due(" in source
 
 
+def test_viewer_window_delegates_recording_encoder_ownership():
+    source = inspect.getsource(viewer_window)
+
+    assert "import subprocess" not in source
+    assert "subprocess.Popen" not in source
+    assert "target=self._recording_writer_loop" not in source
+    assert "target=self._recording_stderr_reader" not in source
+
+
 def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypatch):
     logger = FakeLogger()
     monkeypatch.setattr(viewer_window, "_LOG", logger)
@@ -781,7 +810,7 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
         def wait(self, timeout=None):
             self.wait_calls.append(timeout)
             if len(self.wait_calls) == 1:
-                raise viewer_window.subprocess.TimeoutExpired("ffmpeg", timeout)
+                raise recording.subprocess.TimeoutExpired("ffmpeg", timeout)
             self.returncode = -9
 
         def kill(self):
@@ -806,7 +835,9 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     buffer = FakeBuffer()
     slot = viewer_window._RecordingReadbackSlot(buffer, in_flight=True)
     window = _recording_window()
-    window._recording_process = process
+    session = _active_recording_session(process=process)
+    session.append_stderr("No space left on device")
+    window._recording_session = session
     window._recording_output_path = "/recordings/cave.mp4"
     window._recording_size = (640, 480)
     window._recording_viewport = (0, 0, 640, 480)
@@ -815,8 +846,7 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     window._recording_readback_pending = [slot]
     window._recording_readback_byte_count = 640 * 480 * 3
     window._recording_next_frame_time = 20.0
-    window._recording_frame_queue = queue.Queue(maxsize=1)
-    window._recording_stderr_parts = ["No space left on device"]
+    window._recording_frame_queue = session.frame_queue
 
     window._stop_recording(show_message=True)
 
@@ -831,7 +861,7 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     assert framebuffer.released is True
     assert buffer.released is True
     assert slot.in_flight is False
-    assert window._recording_process is None
+    assert window._recording_session is None
     assert window._recording_output_path is None
     assert window._recording_readback_framebuffer is None
     assert window._recording_readback_slots == []

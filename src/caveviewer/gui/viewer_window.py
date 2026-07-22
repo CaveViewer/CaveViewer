@@ -19,7 +19,6 @@ import logging
 import math
 import os
 import queue
-import subprocess
 import sys
 import threading
 import time
@@ -81,7 +80,6 @@ _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
 
 
-_RecordingStopWork = recording.RecordingStopWork
 _RecordingStopResult = recording.RecordingStopResult
 _RecordingReadbackSlot = recording.RecordingReadbackSlot
 
@@ -560,7 +558,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_controller = RecordingStateController(
             frame_interval=1.0 / float(self._recording_fps)
         )
-        self._recording_process: subprocess.Popen | None = None
+        self._recording_session: recording.RecordingEncoderSession | None = None
         self._recording_output_path: str | None = None
         self._recording_size: tuple[int, int] | None = None
         self._recording_viewport: tuple[int, int, int, int] | None = None
@@ -569,11 +567,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_readback_pending: list[_RecordingReadbackSlot] = []
         self._recording_readback_byte_count = 0
         self._recording_frame_queue: queue.Queue | None = None
-        self._recording_writer_thread: threading.Thread | None = None
-        self._recording_writer_error: Exception | None = None
-        self._recording_stderr_thread: threading.Thread | None = None
-        self._recording_stderr_parts: list[str] = []
-        self._recording_stderr_lock = threading.Lock()
         self._recording_stop_results: queue.Queue[_RecordingStopResult] = queue.Queue()
         self._recording_stop_thread: threading.Thread | None = None
 
@@ -1147,7 +1140,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _recording_is_armed(self) -> bool:
         return self._ensure_recording_controller().is_armed(
-            process_active=self._recording_process is not None
+            process_active=self._recording_session is not None
         )
 
     def _ensure_recording_stop_state(self) -> None:
@@ -1174,7 +1167,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             return
 
-        if self._recording_process is not None:
+        if self._recording_session is not None:
             self._stop_recording(show_message=True)
             return
 
@@ -1361,54 +1354,31 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             return False
 
-        cmd = recording.build_ffmpeg_command(
-            ffmpeg_path=ffmpeg_path,
-            output_size=output_size,
-            fps=self._recording_fps,
-            crf=self._recording_crf,
-            raw_pix_fmt=self.RECORDING_RAW_PIX_FMT,
-            output_path=output_path,
-        )
-        popen_kwargs = {
-            "stdin": subprocess.PIPE,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.PIPE,
-        }
-        popen_kwargs.update(
-            self._active_platform_adapter().recording_subprocess_startup_kwargs()
-        )
-
         try:
-            process = subprocess.Popen(cmd, **popen_kwargs)
-        except OSError as exc:
+            session = recording.start_encoder_session(
+                ffmpeg_path=ffmpeg_path,
+                output_path=output_path,
+                output_size=output_size,
+                viewport=viewport,
+                fps=self._recording_fps,
+                crf=self._recording_crf,
+                raw_pix_fmt=self.RECORDING_RAW_PIX_FMT,
+                popen_startup_kwargs=(
+                    self._active_platform_adapter().recording_subprocess_startup_kwargs()
+                ),
+            )
+        except (OSError, RuntimeError) as exc:
             _LOG.warning(f"Cannot start recording: {exc}")
             self._release_recording_readback_framebuffer()
             self._release_recording_readback_buffers()
             self._ensure_recording_controller().clear_countdown()
             return False
 
-        self._recording_process = process
-        self._recording_frame_queue = queue.Queue(maxsize=2)
-        self._recording_writer_error = None
-        self._recording_stderr_parts = []
-
-        self._recording_writer_thread = threading.Thread(
-            target=self._recording_writer_loop,
-            args=(process, self._recording_frame_queue),
-            daemon=True,
-        )
-        self._recording_writer_thread.start()
-
-        self._recording_stderr_thread = threading.Thread(
-            target=self._recording_stderr_reader,
-            args=(process,),
-            daemon=True,
-        )
-        self._recording_stderr_thread.start()
-
-        self._recording_output_path = output_path
-        self._recording_size = output_size
-        self._recording_viewport = viewport
+        self._recording_session = session
+        self._recording_frame_queue = session.frame_queue
+        self._recording_output_path = session.output_path
+        self._recording_size = session.output_size
+        self._recording_viewport = session.viewport
         self._recording_readback_framebuffer = readback_framebuffer
         now = time.perf_counter()
         self._ensure_recording_controller().mark_encoder_started(now=now)
@@ -1420,30 +1390,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             f"readback_buffers={len(self._recording_readback_slots)}"
         )
         return True
-
-    def _recording_writer_loop(self, process: subprocess.Popen, frame_queue: queue.Queue) -> None:
-        recording.writer_loop(
-            process,
-            frame_queue,
-            set_writer_error=self._set_recording_writer_error,
-        )
-
-    def _recording_stderr_reader(self, process: subprocess.Popen) -> None:
-        recording.stderr_reader(process, append_stderr=self._append_recording_stderr)
-
-    def _set_recording_writer_error(self, exc: Exception) -> None:
-        self._recording_writer_error = exc
-
-    def _append_recording_stderr(self, text: str) -> None:
-        with self._recording_stderr_lock:
-            self._recording_stderr_parts.append(text)
-            joined = "".join(self._recording_stderr_parts)
-            if len(joined) > 16384:
-                self._recording_stderr_parts = [joined[-16384:]]
-
-    def _recording_stderr_text(self) -> str:
-        with self._recording_stderr_lock:
-            return "".join(self._recording_stderr_parts).strip()
 
     def _recording_signal_writer_stop(self, frame_queue: queue.Queue | None) -> None:
         recording.signal_writer_stop(frame_queue)
@@ -1496,14 +1442,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self._recording_stop_in_progress():
             return
 
-        process = self._recording_process
-        output_path = self._recording_output_path
-        frame_queue = self._recording_frame_queue
-        writer_thread = self._recording_writer_thread
-        stderr_thread = self._recording_stderr_thread
+        session = self._recording_session
+        output_path = session.output_path if session is not None else None
 
         self._ensure_recording_controller().clear_countdown()
-        self._recording_process = None
+        self._recording_session = None
         self._recording_output_path = None
         self._recording_size = None
         self._recording_viewport = None
@@ -1511,34 +1454,20 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._release_recording_readback_framebuffer()
         self._recording_next_frame_time = None
         self._recording_frame_queue = None
-        self._recording_writer_thread = None
-        self._recording_stderr_thread = None
 
-        if process is None:
+        if session is None:
             return
 
-        self._recording_signal_writer_stop(frame_queue)
-        work = _RecordingStopWork(
-            process=process,
-            output_path=output_path,
-            frame_queue=frame_queue,
-            writer_thread=writer_thread,
-            stderr_thread=stderr_thread,
-            show_message=show_message,
+        session.signal_writer_stop()
+        work = session.stop_work(show_message=show_message)
+        self._recording_stop_thread = recording.start_stop_finalizer(
+            work,
+            result_queue=self._recording_stop_results,
+            stderr_text=session.stderr_text,
+            writer_error=lambda: session.writer_error,
+            dropped_frames=lambda: self._recording_dropped_frames,
+            logger=_LOG,
         )
-        stop_thread = threading.Thread(
-            target=self._recording_finalize_stop_worker,
-            args=(work,),
-            name="CaveViewer-recording-finalizer",
-            daemon=False,
-        )
-        self._recording_stop_thread = stop_thread
-        try:
-            stop_thread.start()
-        except RuntimeError as exc:
-            self._recording_stop_thread = None
-            _LOG.warning("Could not start recording finalizer thread: %s", exc)
-            self._recording_finalize_stop_worker(work)
         if show_message:
             self._show_recording_status(
                 "Finishing recording",
@@ -1546,17 +1475,6 @@ class CaveViewerWindow(mglw.WindowConfig):
                 kind="info",
                 duration=2.0,
             )
-
-    def _recording_finalize_stop_worker(self, work: _RecordingStopWork) -> None:
-        result = recording.finalize_stop_worker(
-            work,
-            stderr_text=self._recording_stderr_text,
-            writer_error=lambda: self._recording_writer_error,
-            dropped_frames=lambda: self._recording_dropped_frames,
-            logger=_LOG,
-        )
-        self._ensure_recording_stop_state()
-        self._recording_stop_results.put(result)
 
     def _drain_recording_stop_results(self) -> None:
         self._ensure_recording_stop_state()
@@ -1569,7 +1487,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._recording_stop_thread = None
 
     def _apply_recording_stop_result(self, result: _RecordingStopResult) -> None:
-        self._recording_writer_error = None
         self._ensure_recording_controller().reset_after_stop_result()
 
         if result.returncode == 0:
@@ -1730,10 +1647,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             if not self._start_recording_encoder():
                 return 0.0
 
-        if self._recording_process is None:
+        session = self._recording_session
+        if session is None:
             return 0.0
 
-        if self._recording_writer_error is not None or self._recording_process.poll() is not None:
+        if session.stopped_before_finalization():
             _LOG.warning("Recording encoder stopped before recording was finalized.")
             self._stop_recording(show_message=True)
             return 0.0
@@ -1752,7 +1670,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             _LOG.warning(f"Recording stopped because frame capture failed: {exc}")
             self._stop_recording(show_message=True)
             return read_ms
-        if self._recording_process is None:
+        if self._recording_session is None:
             return read_ms
 
         next_frame_time = self._recording_next_frame_time
