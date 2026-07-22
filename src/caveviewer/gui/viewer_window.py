@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.viewer_window
+"""OpenGL viewer-window lifecycle and render-loop orchestration.
 
 The actual OpenGL window: owns the moderngl context, the free-fly camera,
 the StreamingWorld (which decides what to load/unload), and the per-chunk
