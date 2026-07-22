@@ -614,7 +614,7 @@ def _remote_catalog_from_release_assets(
         else None
     )
     if not catalog_url:
-        return _map_catalog_from_release_zip_assets(assets_by_name), None, False
+        return _map_catalog_from_release_zip_assets(assets_by_name), None, True
 
     try:
         payload = _read_json_url(

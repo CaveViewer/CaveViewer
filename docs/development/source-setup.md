@@ -271,9 +271,9 @@ CAVEVIEWER_MAP_LIBRARY_API_URL="https://api.github.com/repos/MyOrg/MyMaps/releas
 
 The API response must be compatible with GitHub's release API shape, including
 an `assets` list with asset `name`, `browser_download_url`, and `size` fields.
-CaveViewer caches the last successful remote manifest catalog under its
-application cache root and falls back to that cache, then to the bundled
-catalog, when GitHub cannot be reached.
+CaveViewer caches the last successful remote catalog under its application
+cache root and falls back to that cache, then to the bundled catalog, when
+GitHub cannot be reached.
 
 ## Updating Your Local Source Environment
 

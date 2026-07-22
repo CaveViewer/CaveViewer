@@ -115,8 +115,9 @@ def test_catalog_manifest_populates_remote_maps_and_caches(
 
 
 def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path))
     known = standard_library_maps.bundled_standard_library_catalog()[0]
     payload = {
         "assets": [
@@ -152,6 +153,12 @@ def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
     assert catalog[-1].display_name == "Emergence du Ressel"
     assert catalog[-1].download_url == "https://example.invalid/ressel.zip"
     assert catalog[-1].size_bytes == 99 * 1024 * 1024
+    cached_catalog = json.loads(
+        (tmp_path / "cache" / "map_library_catalog.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert cached_catalog["maps"][-1]["title"] == "Emergence du Ressel"
 
 
 @pytest.mark.parametrize(
