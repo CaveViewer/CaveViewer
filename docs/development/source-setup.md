@@ -200,6 +200,10 @@ For local development, you can point the map library at a different source
 before launching the program. These settings are environment variables only;
 they are not exposed in the app UI.
 
+The variable names below are retained for compatibility with existing
+developer scripts and environments. They configure the map library source even
+though they still include `SAMPLE` in the name.
+
 Precedence:
 
 1. `CAVEVIEWER_SAMPLE_MAPS_API_URL` uses a full release API URL directly.
@@ -609,6 +613,9 @@ therefore target the cache filesystem rather than assuming the map's filesystem
 is writable.
 
 ### Map Library
+
+These compatibility environment variable names are retained from older builds;
+they now configure the map library source.
 
 | Variable | Default | Description |
 |---|---|---|

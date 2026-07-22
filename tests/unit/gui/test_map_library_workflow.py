@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_library import recent_map_key
 from caveviewer.gui.map_library_workflow import MapLibraryWorkflow
-from caveviewer.gui.sample_map_download import (
-    SampleDownloadProgress,
-    SampleDownloadSucceeded,
+from caveviewer.gui.standard_library_download import (
+    StandardLibraryDownloadProgress,
+    StandardLibraryDownloadSucceeded,
 )
 
 
@@ -241,8 +241,8 @@ def test_download_success_applies_progress_and_open_action():
 
     state.workflow.start_inline_download(library_map)
     _selection, _map, cancel_event, result_queue = download_calls[0]
-    result_queue.put(SampleDownloadProgress(40, 100))
-    result_queue.put(SampleDownloadSucceeded("/library/Test Cave"))
+    result_queue.put(StandardLibraryDownloadProgress(40, 100))
+    result_queue.put(StandardLibraryDownloadSucceeded("/library/Test Cave"))
 
     state.workflow.poll_download_queue(library_map, result_queue, cancel_event)
 

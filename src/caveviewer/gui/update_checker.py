@@ -78,7 +78,7 @@ _DEFAULT_BRANCH = os.getenv("CAVEVIEWER_UPDATE_BRANCH", "main").strip() or "main
 _DEFAULT_CHANNEL = os.getenv("CAVEVIEWER_UPDATE_CHANNEL", "stable").strip().lower() or "stable"
 if _DEFAULT_CHANNEL not in {"stable", "prerelease"}:
     _DEFAULT_CHANNEL = "stable"
-GITHUB_REPO = _DEFAULT_REPO  # Export for use by other modules (e.g. sample_maps.py)
+GITHUB_REPO = _DEFAULT_REPO  # Export for use by other modules (e.g. standard_library_maps.py)
 _STABLE_MANIFEST_URL = _PLATFORM_ADAPTER.default_update_manifest_url(_DEFAULT_REPO, _DEFAULT_BRANCH)
 _DEFAULT_MANIFEST_URL = (
     _STABLE_MANIFEST_URL

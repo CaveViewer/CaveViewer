@@ -44,7 +44,7 @@ COVERAGE_FILE=/tmp/caveviewer.coverage \
   --cov=caveviewer.core.map.source_model \
   --cov=caveviewer.core.textures.decoding \
   --cov=caveviewer.gui.preferences \
-  --cov=caveviewer.gui.sample_maps \
+  --cov=caveviewer.gui.standard_library_maps \
   --cov=caveviewer.gui.texture_manager \
   --cov=caveviewer.gui.update_checker \
   --cov=caveviewer.gui.update_manager \
@@ -72,7 +72,7 @@ The current CI workflow enforces:
 
 - 60% across its essential measured modules.
 - 90% for `src/caveviewer/app.py`.
-- 85% for `src/caveviewer/gui/sample_maps.py`.
+- 85% for `src/caveviewer/gui/standard_library_maps.py`.
 - 90% for `src/caveviewer/core/chunking/builder.py`.
 - 90% for `src/caveviewer/gui/update_checker.py`.
 

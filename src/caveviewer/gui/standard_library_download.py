@@ -16,7 +16,7 @@ from caveviewer.gui.platform import DesktopServices, DirectorySelection
 
 
 @dataclass(frozen=True)
-class SampleDownloadProgress:
+class StandardLibraryDownloadProgress:
     """Worker-to-UI progress message for a map library download."""
 
     downloaded_bytes: int
@@ -24,29 +24,29 @@ class SampleDownloadProgress:
 
 
 @dataclass(frozen=True)
-class SampleDownloadSucceeded:
+class StandardLibraryDownloadSucceeded:
     """Worker-to-UI completion message for a map library download."""
 
     result_path: str
 
 
 @dataclass(frozen=True)
-class SampleDownloadFailed:
+class StandardLibraryDownloadFailed:
     """Worker-to-UI failure message for a map library download."""
 
     error: Exception
 
 
-_SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX = "caveviewer.map-library-download"
+_STANDARD_LIBRARY_DOWNLOAD_NOTIFICATION_PREFIX = "caveviewer.map-library-download"
 
 
 def download_and_extract_to_selected_directory(
     save_dir: DirectorySelection, sample, *, progress_cb=None, cancel_cb=None
 ) -> str:
     """Download a standard library map into the selected local path."""
-    from caveviewer.gui.sample_maps import download_and_extract_sample_map
+    from caveviewer.gui.standard_library_maps import download_and_extract_standard_library_map
 
-    return download_and_extract_sample_map(
+    return download_and_extract_standard_library_map(
         save_dir.path,
         sample,
         progress_cb=progress_cb,
@@ -54,20 +54,20 @@ def download_and_extract_to_selected_directory(
     )
 
 
-def run_sample_download_worker(
+def run_standard_library_download_worker(
     save_dir: DirectorySelection,
     sample,
     cancel_event: threading.Event,
     result_queue,
 ) -> None:
     """Download/extract a standard library map without touching Tk state."""
-    from caveviewer.gui.sample_maps import DownloadCancelled
+    from caveviewer.gui.standard_library_maps import DownloadCancelled
 
     def on_progress(downloaded_bytes, total_bytes) -> None:
         if cancel_event.is_set():
             raise DownloadCancelled("Map library download cancelled")
         result_queue.put(
-            SampleDownloadProgress(
+            StandardLibraryDownloadProgress(
                 max(0, int(downloaded_bytes)),
                 None if total_bytes is None else max(0, int(total_bytes)),
             )
@@ -83,12 +83,12 @@ def run_sample_download_worker(
             cancel_cb=cancel_event.is_set,
         )
     except Exception as exc:
-        result_queue.put(SampleDownloadFailed(exc))
+        result_queue.put(StandardLibraryDownloadFailed(exc))
     else:
-        result_queue.put(SampleDownloadSucceeded(result_path))
+        result_queue.put(StandardLibraryDownloadSucceeded(result_path))
 
 
-def start_sample_download_worker(
+def start_standard_library_download_worker(
     save_dir: DirectorySelection,
     sample,
     cancel_event: threading.Event,
@@ -96,7 +96,7 @@ def start_sample_download_worker(
 ) -> threading.Thread:
     """Start the owned worker thread for a map library download."""
     worker = threading.Thread(
-        target=run_sample_download_worker,
+        target=run_standard_library_download_worker,
         args=(save_dir, sample, cancel_event, result_queue),
         name="CaveViewer-map-library-download",
         # Partial zip/extraction cleanup must reach its finally blocks.
@@ -106,18 +106,18 @@ def start_sample_download_worker(
     return worker
 
 
-def sample_download_notification_id(sample) -> str:
-    """Return a stable per-sample desktop notification ID."""
+def standard_library_download_notification_id(sample) -> str:
+    """Return a stable per-map desktop notification ID."""
     raw_key = (
         getattr(sample, "asset_name", "")
         or getattr(sample, "display_name", "")
-        or "sample"
+        or "standard-library-map"
     )
     safe_key = "".join(
         character.lower() if character.isalnum() else "-"
         for character in str(raw_key)
     ).strip("-")
-    return f"{_SAMPLE_DOWNLOAD_NOTIFICATION_PREFIX}.{safe_key or 'sample'}"
+    return f"{_STANDARD_LIBRARY_DOWNLOAD_NOTIFICATION_PREFIX}.{safe_key or 'standard-library-map'}"
 
 
 def safe_desktop_notify(
@@ -170,7 +170,7 @@ def close_desktop_inhibitor(inhibitor) -> None:
         pass
 
 
-def download_sample_with_desktop_activity(
+def download_standard_library_with_desktop_activity(
     desktop_services: DesktopServices,
     parent,
     save_dir: DirectorySelection,
@@ -181,10 +181,10 @@ def download_sample_with_desktop_activity(
     notify_desktop: bool = True,
 ) -> str:
     """Download a standard library map with native desktop activity affordances."""
-    from caveviewer.gui.sample_maps import DownloadCancelled
+    from caveviewer.gui.standard_library_maps import DownloadCancelled
 
     display_name = getattr(sample, "display_name", "standard library map")
-    notification_id = sample_download_notification_id(sample)
+    notification_id = standard_library_download_notification_id(sample)
     if notify_desktop:
         safe_desktop_notify(
             desktop_services,
