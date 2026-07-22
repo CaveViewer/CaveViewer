@@ -12,7 +12,27 @@ ENV DEBIAN_FRONTEND=noninteractive
 #       those calls are skipped, but sudo must exist so the script doesn't error.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y \
+    set -eux; \
+    apt_retry() { \
+      attempts=5; \
+      delay_seconds=10; \
+      attempt=1; \
+      while [ "$attempt" -le "$attempts" ]; do \
+        if "$@"; then \
+          return 0; \
+        fi; \
+        status="$?"; \
+        if [ "$attempt" -eq "$attempts" ]; then \
+          return "$status"; \
+        fi; \
+        echo "apt command failed; retrying in ${delay_seconds}s (attempt ${attempt}/${attempts})." >&2; \
+        sleep "$delay_seconds"; \
+        attempt=$((attempt + 1)); \
+        delay_seconds=$((delay_seconds * 2)); \
+      done; \
+    }; \
+    apt_retry apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update; \
+    apt_retry apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 install -y \
     build-essential \
     fontconfig \
     fonts-noto-core \

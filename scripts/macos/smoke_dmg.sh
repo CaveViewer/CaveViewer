@@ -149,7 +149,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
-hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
+attach_dmg() {
+  local attempt=1
+  local max_attempts=5
+  local delay_seconds=5
+  local status=0
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null; then
+      return 0
+    fi
+    status=$?
+
+    if [ "$attempt" -eq "$max_attempts" ]; then
+      echo "Error: hdiutil attach failed after $max_attempts attempts." >&2
+      return "$status"
+    fi
+
+    echo "hdiutil attach failed; retrying in ${delay_seconds}s (attempt $attempt/$max_attempts)." >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+    delay_seconds=$((delay_seconds * 2))
+  done
+}
+
+attach_dmg
 attached=1
 
 app="$mount_dir/CaveViewer.app"
