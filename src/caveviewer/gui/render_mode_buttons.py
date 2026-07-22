@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.render_mode_buttons
+"""OpenGL overlay buttons for viewer render and workflow actions.
 
 Small buttons, stacked just below the headlamp brightness slider on
 the right side of the screen:

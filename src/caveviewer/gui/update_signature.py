@@ -1,3 +1,9 @@
+"""Signature verification for update manifests.
+
+This module owns manifest trust checks only. It does not choose update policy,
+download packages, or install anything.
+"""
+
 from __future__ import annotations
 
 import base64

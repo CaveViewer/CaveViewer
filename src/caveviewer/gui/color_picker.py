@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.color_picker
+"""Background-color picker overlay and interaction state.
 
 A centered panel (toggled via the COLOR button, same pattern as the HELP
 screen) with three horizontal sliders -- Red, Green, Blue -- for picking

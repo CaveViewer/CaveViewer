@@ -127,6 +127,12 @@ model modules. `caveviewer.gui.platform` contains OS-specific focus, update,
 and system integration behavior. Unsupported platforms use the default
 adapter.
 
+GUI architecture guardrails are executable. The test file
+`tests/unit/gui/test_gui_architecture_boundaries.py` checks that GUI modules do
+not import upward into `caveviewer.app`, that direct platform checks stay
+inside `src/caveviewer/gui/platform`, and that GUI Python modules carry
+ownership docstrings instead of placeholder module-path docstrings.
+
 The splash Map Library is split by responsibility: `map_library.py` builds
 presentation-independent recent-map titles, `map_library_controller.py` owns
 standard-library catalog/download state, `map_library_workflow.py` owns
@@ -182,8 +188,11 @@ always-visible right-side viewer controls use a separate responsive HUD scale
 based on the current viewer surface size. That keeps maximized and AppImage
 windows legible without requiring user-provided environment variables.
 Viewer recording keeps OpenGL framebuffer readback in `viewer_window.py` on the
-render thread, while `gui.recording` owns ffmpeg command construction, encoder
+render thread. `gui.recording` owns ffmpeg command construction, encoder
 writer/stderr workers, and asynchronous stop finalization.
+`gui.recording_controller` owns recording countdowns, transient status
+messages, capture timing, and dropped-frame accounting so those workflow
+decisions remain testable without constructing an OpenGL window.
 
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL

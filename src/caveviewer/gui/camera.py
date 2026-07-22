@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.camera
+"""Free-fly camera state and movement math for the viewer.
 
 Free-fly (6DOF, "noclip"/spectator style) camera. Cave traversal needs
 full pitch/yaw with no ground constraint -- divers move in 3D, not on a

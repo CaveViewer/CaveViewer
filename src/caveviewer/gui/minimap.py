@@ -1,5 +1,4 @@
-"""
-caveviewer.gui.minimap
+"""Top-down cave-position overlay for the OpenGL viewer.
 
 A small top-down minimap overlay, bottom-left of the screen, showing a
 crude outline of the entire cave map's footprint (computed once from the
