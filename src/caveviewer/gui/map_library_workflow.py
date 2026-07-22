@@ -547,7 +547,7 @@ class MapLibraryWorkflow:
         """Start a standard-library download from an already resolved row."""
         if self.controller.active_download.in_progress:
             self._show_info(
-                "Finish or cancel the current map library download before "
+                "Finish or stop the current map library download before "
                 "starting another.",
                 duration_ms=7000,
                 max_wraplength=360,
@@ -570,13 +570,19 @@ class MapLibraryWorkflow:
             cancel_event.set()
             self.panel.set_standard_row_action(
                 row_key,
-                "Cancel",
+                "",
                 lambda: None,
                 enabled=False,
+                show_stop_progress=True,
             )
-            self.set_row_metadata(library_map, "Canceling…")
+            self.set_row_metadata(library_map, "Stopping…")
 
-        self.panel.set_standard_row_action(row_key, "Cancel", request_cancel)
+        self.panel.set_standard_row_action(
+            row_key,
+            "",
+            request_cancel,
+            show_stop_progress=True,
+        )
         self.set_non_active_actions_enabled(library_map, False)
         self.controller.begin_download(
             library_map,
@@ -701,7 +707,7 @@ class MapLibraryWorkflow:
         """Fetch catalog details before downloading an unresolved row."""
         if self.controller.active_download.in_progress:
             self._show_info(
-                "Finish or cancel the current map library download before "
+                "Finish or stop the current map library download before "
                 "starting another.",
                 duration_ms=7000,
                 max_wraplength=360,

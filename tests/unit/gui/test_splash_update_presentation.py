@@ -291,18 +291,21 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert 'panel.pack(fill="both", expand=True, pady=self._px(26))' in panel_source
     assert "metadata_font=_LIBRARY_METADATA_FONT" in style_source
     assert "metadata_color=_LIBRARY_METADATA_COLOR" in style_source
-    assert "width=style.action_button_width" in panel_source
-    assert "padx=self._px(style.action_button_pad_x)" in panel_source
-    assert "pady=self._px(style.action_button_pad_y)" in panel_source
-    assert "progress_bar_canvas = tk.Canvas(" in source
-    assert "width=self._px(style.progress_width)" in panel_source
-    assert "height=self._px(style.progress_height)" in panel_source
-    assert 'progress_bar_canvas.pack(' in source
-    assert 'anchor="w"' in source
-    assert "pady=(self._px(style.progress_top_pad), 0)" in panel_source
-    assert "reserve_progress=True" in panel_source
-    assert "widgets.progress_bar_canvas.pack(" not in source
-    assert "widgets.progress_bar_canvas.pack_forget()" not in source
+    assert "_action_button_pixel_size" in panel_source
+    assert "style.action_button_width" in panel_source
+    assert "style.action_button_pad_x" in panel_source
+    assert "style.action_button_pad_y" in panel_source
+    assert "progress_bar_canvas = tk.Canvas(" not in source
+    assert "reserve_progress=True" not in panel_source
+    assert "_create_action_button" in panel_source
+    assert "_draw_action_stop_progress" in panel_source
+    assert "button.create_arc(" in panel_source
+    assert "button.create_rectangle(" in panel_source
+    assert "action_progress_ring_diameter=" in style_source
+    assert "action_stop_size=" in style_source
+    assert "show_stop_progress=True" in workflow_source
+    assert '"Cancel"' not in workflow_source
+    assert '"Stopping…"' in workflow_source
     assert "poll_download_queue" in workflow_source
     assert "cancel_active_download_for_close" in workflow_source
     assert "directory_selection_factory" in workflow_source
