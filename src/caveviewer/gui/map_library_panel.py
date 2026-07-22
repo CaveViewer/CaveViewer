@@ -702,7 +702,10 @@ class MapLibraryPanel:
         y1 = center_y + radius - inset
 
         track_color = style.progress_track_color
-        fill_color = style.progress_fill_color if enabled else style.disabled_button_fg
+        progress_fill_color = (
+            style.progress_fill_color if enabled else style.disabled_button_fg
+        )
+        stop_fill_color = style.button_fg if enabled else style.disabled_button_fg
         button.create_oval(
             x0,
             y0,
@@ -726,7 +729,7 @@ class MapLibraryPanel:
             start=90,
             extent=extent,
             style="arc",
-            outline=fill_color,
+            outline=progress_fill_color,
             width=stroke_width,
             tags="cv_action_content",
         )
@@ -737,7 +740,7 @@ class MapLibraryPanel:
             center_y - half_stop,
             center_x + half_stop,
             center_y + half_stop,
-            fill=fill_color,
+            fill=stop_fill_color,
             outline="",
             tags="cv_action_content",
         )

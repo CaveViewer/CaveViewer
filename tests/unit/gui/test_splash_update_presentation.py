@@ -301,6 +301,7 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "_draw_action_stop_progress" in panel_source
     assert "button.create_arc(" in panel_source
     assert "button.create_rectangle(" in panel_source
+    assert "stop_fill_color = style.button_fg" in panel_source
     assert "action_progress_ring_diameter=" in style_source
     assert "action_stop_size=" in style_source
     assert "show_stop_progress=True" in workflow_source
@@ -311,6 +312,11 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "directory_selection_factory" in workflow_source
     assert "start_catalog_fetch" in workflow_source
     assert "poll_download_queue" not in splash_source
+
+    style = splash_screen._map_library_panel_style()
+    assert style.progress_track_color != style.button_bg
+    assert style.progress_fill_color != style.button_bg
+    assert style.progress_fill_color != style.button_fg
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
