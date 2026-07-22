@@ -282,6 +282,13 @@ class MapLibraryPanel:
         """Return whether a standard-library row currently exists."""
         return key in self.standard_rows
 
+    def remove_standard_row(self, key: str) -> None:
+        """Remove a standard-library row when refreshed catalog metadata drops it."""
+        row_widgets = self.standard_rows.pop(key, None)
+        if row_widgets is not None and self._widget_exists(row_widgets.row_shell):
+            row_widgets.row_shell.destroy()
+        self.sync_after_row_change()
+
     def set_standard_row_metadata(
         self,
         key: str,

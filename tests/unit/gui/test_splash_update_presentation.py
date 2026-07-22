@@ -254,6 +254,8 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "_bind_activation(browse_button, on_open_map_folder)" in source
     assert "_bind_activation(preferences_link, _on_preferences_click)" in source
     assert "MapLibraryWorkflow(" in source
+    assert "load_initial_standard_library_catalog" in source
+    assert "KNOWN_STANDARD_LIBRARY_MAPS" not in source
     assert "start_sample_download_worker(" not in source
     assert "show_sample_maps_dialog(" not in source
 

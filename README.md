@@ -90,7 +90,9 @@ library.
 The map library is a good way to confirm that CaveViewer is working before you
 import your own data. CaveViewer stores the app-managed map library under
 `map_library`; older `sample_maps` directories are moved there automatically
-when possible.
+when possible. The CaveViewer Maps list is refreshed from CaveViewer's
+GitHub-hosted map catalog when the splash screen is online and falls back to
+the last cached or bundled catalog when it is offline.
 
 ## Recording a Flight
 

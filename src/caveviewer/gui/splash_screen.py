@@ -730,13 +730,14 @@ def show_splash_screen(
         _leave_splash()
 
     from caveviewer.gui.standard_library_maps import (
-        KNOWN_STANDARD_LIBRARY_MAPS,
         default_map_library_install_dir,
+        load_initial_standard_library_catalog,
     )
 
     map_library_root_dir = default_map_library_install_dir()
     recent_map_paths = _load_library_recent_map_paths()
-    map_library_controller = MapLibraryController(KNOWN_STANDARD_LIBRARY_MAPS)
+    standard_library_maps = load_initial_standard_library_catalog()
+    map_library_controller = MapLibraryController(standard_library_maps)
     map_library_panel = MapLibraryPanel(
         root,
         px=px,
@@ -766,7 +767,7 @@ def show_splash_screen(
         root=root,
         controller=map_library_controller,
         panel=map_library_panel,
-        standard_library_maps=KNOWN_STANDARD_LIBRARY_MAPS,
+        standard_library_maps=standard_library_maps,
         map_library_root_dir=map_library_root_dir,
         desktop_services=desktop_services,
         splash_exists=_splash_exists,

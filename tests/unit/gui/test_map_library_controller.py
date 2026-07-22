@@ -10,12 +10,14 @@ from caveviewer.gui.map_library_controller import MapLibraryController
 def _library_map(
     display_name: str = "Boh Yai Mine I",
     asset_name: str = "Boh.Yai.Mine.I.Low.Res.zip",
-    size_bytes: int | None = None,
+    size_bytes: int | None = 57 * 1024 * 1024,
+    catalog_id: str | None = None,
 ):
     return SimpleNamespace(
         display_name=display_name,
         asset_name=asset_name,
         size_bytes=size_bytes,
+        catalog_id=catalog_id,
     )
 
 
@@ -30,6 +32,15 @@ def test_standard_library_row_uses_compact_action_and_size_text():
     assert row.detail == "57 MB"
     assert row.action_text == "Get"
     assert not row.downloaded
+
+
+def test_standard_library_row_uses_catalog_id_when_available():
+    library_map = _library_map(catalog_id="boh-yai-mine-i")
+    controller = MapLibraryController([library_map])
+
+    row = controller.row(library_map, downloaded=False)
+
+    assert row.key == "boh-yai-mine-i"
 
 
 def test_downloaded_standard_library_row_remembers_open_path():

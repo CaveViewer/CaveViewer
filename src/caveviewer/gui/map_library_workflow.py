@@ -661,18 +661,7 @@ class MapLibraryWorkflow:
             return
 
         completion = self.controller.complete_catalog_fetch(catalog, error)
-        for catalog_map in completion.maps:
-            if (
-                self.controller.active_download.map_name
-                == self.controller.map_key(catalog_map)
-            ):
-                continue
-            downloaded = self.is_downloaded(
-                self.map_library_root_dir,
-                catalog_map,
-            )
-            row = self.controller.row(catalog_map, downloaded=downloaded)
-            self.set_row_metadata(catalog_map, row.detail)
+        self.reconcile_standard_catalog(completion.maps)
 
         pending_map = completion.pending_map
         if pending_map is None:
@@ -682,6 +671,45 @@ class MapLibraryWorkflow:
             self.handle_download_info_unavailable(pending_map)
             return
         self.start_inline_download(resolved_map)
+
+    def reconcile_standard_catalog(self, catalog) -> None:
+        """
+        Reconcile visible standard-library rows after a catalog refresh.
+
+        Remote catalog metadata owns the current available-map list. Rows not in
+        the refreshed catalog are removed unless they are active or downloaded
+        locally, because those still need a safe way to finish or open/remove
+        already-managed files.
+        """
+        active_key = self.controller.active_download.map_name
+        visible_by_key = {
+            self.controller.map_key(library_map): library_map
+            for library_map in catalog
+        }
+
+        for library_map in self.standard_library_maps:
+            key = self.controller.map_key(library_map)
+            if key in visible_by_key:
+                continue
+            if key == active_key or self.is_downloaded(
+                self.map_library_root_dir,
+                library_map,
+            ):
+                visible_by_key[key] = library_map
+                continue
+            self.panel.remove_standard_row(key)
+
+        visible_maps = tuple(visible_by_key.values())
+        self.standard_library_maps = visible_maps
+        self.controller.replace_standard_library_maps(visible_maps)
+
+        for library_map in visible_maps:
+            if active_key == self.controller.map_key(library_map):
+                continue
+            if not self.panel.has_standard_row(self.controller.map_key(library_map)):
+                self.add_standard_row(library_map)
+                continue
+            self.refresh_standard_row(library_map)
 
     def start_catalog_fetch(self, pending_map=None) -> None:
         """Start a background standard-library catalog refresh."""
