@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import tkinter as tk
 from typing import Callable
 
@@ -23,13 +22,16 @@ from caveviewer.gui.preferences_form import (
     MessageKind,
 )
 from caveviewer.gui.dialog_style import (
-    DIALOG_BODY_PAD_X,
     DIALOG_BODY_PAD_Y,
     DIALOG_PANEL_BORDER,
     create_dialog_action_button,
     set_dialog_action_button,
 )
-from caveviewer.gui.platform import DesktopServices, get_desktop_services
+from caveviewer.gui.platform import (
+    DesktopServices,
+    get_desktop_services,
+    get_platform_adapter,
+)
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
 
@@ -42,37 +44,30 @@ _PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
-_WINDOWS_LAYOUT = sys.platform == "win32"
-_MACOS_LAYOUT = sys.platform == "darwin"
-_LINUX_LAYOUT = sys.platform.startswith("linux")
+_LAYOUT_POLICY = get_platform_adapter().preferences_dialog_layout_policy()
+_WINDOWS_LAYOUT = _LAYOUT_POLICY.windows_layout
+_MACOS_LAYOUT = _LAYOUT_POLICY.macos_layout
+_LINUX_LAYOUT = _LAYOUT_POLICY.linux_layout
 # Keep Preferences close to platform-native boxed-list proportions. macOS gets
 # a narrower, denser panel because the window chrome and Tk font metrics leave
 # noticeably more unused space than the Linux and Windows layouts.
-_WRAP_LENGTH = 520 if sys.platform == "win32" else 300 if _MACOS_LAYOUT else 460
-_TEXT_ENTRY_WIDTH = 42 if sys.platform == "win32" else 24 if _MACOS_LAYOUT else 36
+_WRAP_LENGTH = _LAYOUT_POLICY.wrap_length
+_TEXT_ENTRY_WIDTH = _LAYOUT_POLICY.text_entry_width
 _NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
-_BODY_PAD_X = 32 if _LINUX_LAYOUT else 12 if _MACOS_LAYOUT else DIALOG_BODY_PAD_X
-_MIN_WIDTH = (
-    860
-    if sys.platform == "win32"
-    else 860
-    if _LINUX_LAYOUT
-    else 430
-    if _MACOS_LAYOUT
-    else 760
-)
-_ROW_PAD_X = 14 if _MACOS_LAYOUT else 18
-_ROW_PAD_Y = 5 if _MACOS_LAYOUT else 12
-_CONTROL_ROW_TOP_PAD_Y = 5 if _MACOS_LAYOUT else 14
+_BODY_PAD_X = _LAYOUT_POLICY.body_pad_x
+_MIN_WIDTH = _LAYOUT_POLICY.min_width
+_ROW_PAD_X = _LAYOUT_POLICY.row_pad_x
+_ROW_PAD_Y = _LAYOUT_POLICY.row_pad_y
+_CONTROL_ROW_TOP_PAD_Y = _LAYOUT_POLICY.control_row_top_pad_y
 _CONTROL_GAP_X = 10
-_TAB_PAD_X = 10 if _MACOS_LAYOUT else 14
-_TAB_PAD_Y = 6 if _MACOS_LAYOUT else 7
+_TAB_PAD_X = _LAYOUT_POLICY.tab_pad_x
+_TAB_PAD_Y = _LAYOUT_POLICY.tab_pad_y
 _TAB_GAP_X = 10
-_TAB_BOTTOM_PAD_Y = 8 if _MACOS_LAYOUT else 18
-_BUTTON_ROW_TOP_PAD_Y = 8 if _MACOS_LAYOUT else 18
-_TAB_HIGHLIGHT_THICKNESS = 0 if _MACOS_LAYOUT else 1
-_NOTICE_WRAP_LENGTH = 390 if _MACOS_LAYOUT else 720
+_TAB_BOTTOM_PAD_Y = _LAYOUT_POLICY.tab_bottom_pad_y
+_BUTTON_ROW_TOP_PAD_Y = _LAYOUT_POLICY.button_row_top_pad_y
+_TAB_HIGHLIGHT_THICKNESS = _LAYOUT_POLICY.tab_highlight_thickness
+_NOTICE_WRAP_LENGTH = _LAYOUT_POLICY.notice_wrap_length
 _INLINE_FEEDBACK_PAD_X = 10
 _SCROLLBAR_WIDTH = 14
 _SCROLL_THUMB_WIDTH = 5
@@ -110,7 +105,7 @@ class PreferencesDialog:
         # Windows can report less usable vertical space than the GNOME-style
         # preference layout wants, so keep width fixed but let people grow the
         # dialog vertically when the page content is constrained.
-        self.dialog.resizable(False, _WINDOWS_LAYOUT)
+        self.dialog.resizable(False, _LAYOUT_POLICY.resizable_vertical)
         self.dialog.transient(parent)
 
         if _LINUX_LAYOUT:

@@ -324,10 +324,7 @@ SHADER_DIR = str(resource_path("shaders"))
 
 
 def _runtime_app_icon_path() -> str:
-    if sys.platform == "win32":
-        filenames = ("app_icon_windows.png",)
-    else:
-        filenames = ("app_icon_macos.png",)
+    filenames = (get_platform_adapter().splash_layout_policy().app_icon_resource_name,)
     for filename in filenames:
         path = image_path(filename)
         if path.exists():
@@ -459,12 +456,16 @@ class CaveViewerWindow(mglw.WindowConfig):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._window_setup_complete = False
+        self._platform_adapter = get_platform_adapter()
         self._set_runtime_window_icon()
 
         force_focus_env = os.getenv(self.FORCE_STARTUP_FOCUS_ENV, "").strip().lower()
         force_focus = force_focus_env in {"1", "true", "yes", "on"}
         self._startup_focus_enabled = True
-        if sys.platform == "darwin" and getattr(sys, "frozen", False) and not force_focus:
+        if self._platform_adapter.suppress_forced_startup_focus(
+            is_frozen=bool(getattr(sys, "frozen", False)),
+            force_requested=force_focus,
+        ):
             self._startup_focus_enabled = False
 
         # Optional env override for quick testing/tuning without code edits.
@@ -569,7 +570,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._texture_upload_slice_bytes = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
         self._navigation_guard_enabled = _env_bool("CAVEVIEWER_NAVIGATION_GUARD", True)
         self._navigation_guard_radius_cells = _env_int("CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS", 2, 0, 12)
-        self._platform_adapter = get_platform_adapter()
         self._bookmarks_path: str | None = None
         self._bookmarks: dict[int, dict] = {}
         self._recording_fps = _env_int("CAVEVIEWER_RECORDING_FPS", 30, 1, 60)
@@ -786,6 +786,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         # exact same "nothing to draw into yet" problem this feature
         # exists to avoid.
         self._window_setup_complete = True
+
+    def _active_platform_adapter(self):
+        """Return the initialized platform adapter, creating it for test shells."""
+        adapter = getattr(self, "_platform_adapter", None)
+        if adapter is None:
+            adapter = get_platform_adapter()
+            self._platform_adapter = adapter
+        return adapter
 
     def _ensure_import_controller(self) -> MapImportController:
         controller = self.__dict__.get("_import_controller")
@@ -1325,14 +1333,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.PIPE,
         }
-        if sys.platform == "win32":
-            # ffmpeg.exe is usually a console-subsystem executable; hide
-            # its console window when recording starts from the GUI.
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = 0
-            popen_kwargs["startupinfo"] = startupinfo
-            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        popen_kwargs.update(
+            self._active_platform_adapter().recording_subprocess_startup_kwargs()
+        )
 
         try:
             process = subprocess.Popen(cmd, **popen_kwargs)
@@ -4548,8 +4551,12 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _command_is_down(self, modifiers: KeyModifiers) -> bool:
         keys = self.wnd.keys
 
-        # Raw backend modifiers are the most reliable source on macOS.
-        if sys.platform == "darwin" and self._raw_command_modifier_down():
+        # Raw backend modifiers are the most reliable source on macOS-style
+        # command-key backends.
+        if (
+            self._active_platform_adapter().command_modifier_uses_control_fallback()
+            and self._raw_command_modifier_down()
+        ):
             return True
 
         # Prefer explicit modifier flags if available.
@@ -4562,7 +4569,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     pass
 
         # Some macOS backends report Command through control-style flags.
-        if sys.platform == "darwin":
+        if self._active_platform_adapter().command_modifier_uses_control_fallback():
             for attr in ("ctrl", "control"):
                 if hasattr(modifiers, attr):
                     try:
@@ -4612,7 +4619,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _bookmark_save_modifier_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if the platform-specific bookmark save modifier is down."""
-        save_modifier = self._platform_adapter.bookmark_save_modifier()
+        save_modifier = self._active_platform_adapter().bookmark_save_modifier()
         if save_modifier == "command":
             return self._command_is_down(modifiers)
         elif save_modifier == "control":
@@ -4744,7 +4751,13 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         # Save: platform modifier + digit (Cmd on macOS, Ctrl on Win/Linux).
         # Shift+digit is a macOS-only fallback for backends that don't report Cmd.
-        if save_modifier_down or (sys.platform == "darwin" and shift_down):
+        if (
+            save_modifier_down
+            or (
+                self._active_platform_adapter().shift_digit_bookmark_save_fallback()
+                and shift_down
+            )
+        ):
             self._save_bookmark_slot(slot)
             return True
 
@@ -4752,7 +4765,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         return True
 
     def _option_look_active(self) -> bool:
-        if sys.platform != "darwin":
+        if not self._active_platform_adapter().option_left_mouse_look_enabled():
             return False
         return self._key_is_down(
             self.wnd.keys,
@@ -4863,7 +4876,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         """Handle desktop-standard window and open shortcuts."""
         shortcut_down = (
             self._command_is_down(modifiers)
-            if sys.platform == "darwin"
+            if self._active_platform_adapter().tk_primary_modifier_name() == "Command"
             else self._control_is_down(modifiers)
         )
         if not shortcut_down:
@@ -4915,17 +4928,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not self._is_zero_key(keys, key):
             return False
         
-        # Check platform-specific modifier
-        if sys.platform == "darwin":
-            # macOS: check for Command key via modifiers
-            if self._command_is_down(modifiers):
-                self.camera.reset_view()
-                return True
-        else:
-            # Windows/Linux: check for Control key via modifiers
-            if self._control_is_down(modifiers):
-                self.camera.reset_view()
-                return True
+        shortcut_down = (
+            self._command_is_down(modifiers)
+            if self._active_platform_adapter().tk_primary_modifier_name() == "Command"
+            else self._control_is_down(modifiers)
+        )
+        if shortcut_down:
+            self.camera.reset_view()
+            return True
         
         return False
 
@@ -4935,41 +4945,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         self._startup_focus_requested = True
 
-        # macOS window managers can re-place windows when visibility/frontmost
-        # is forced too aggressively (appears at top-left, then jumps). Prefer
-        # a minimal one-shot activate path and avoid set_visible/AppleScript.
-        if sys.platform == "darwin":
-            for target in (getattr(self.wnd, "_window", None), self.wnd):
-                if target is None:
-                    continue
-                try:
-                    if hasattr(target, "activate"):
-                        target.activate()
-                        break
-                except Exception:
-                    pass
-                try:
-                    if hasattr(target, "switch_to"):
-                        target.switch_to()
-                        break
-                except Exception:
-                    pass
-            return
-
-        # Non-macOS: keep broader compatibility with backend APIs.
-        for target in (self.wnd, getattr(self.wnd, "_window", None)):
-            if target is None:
-                continue
-            try:
-                if hasattr(target, "switch_to"):
-                    target.switch_to()
-            except Exception:
-                pass
-            try:
-                if hasattr(target, "activate"):
-                    target.activate()
-            except Exception:
-                pass
+        self._active_platform_adapter().focus_viewer_window(self.wnd)
 
     def _reset_transient_input_state(self, reason: str) -> None:
         """Clear transient input/capture flags that can get stuck across sleep/focus changes."""
@@ -5096,11 +5072,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.controls_overlay.hide_help()
             return
 
-        look_button_name = self._platform_adapter.mouse_look_button_name()
+        look_button_name = self._active_platform_adapter().mouse_look_button_name()
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
 
         if self._recording_hides_hud():
-            if button == self.wnd.mouse.left and sys.platform == "darwin" and self._option_look_active():
+            if button == self.wnd.mouse.left and self._option_look_active():
                 self._mouse_look_active = True
                 self._mouse_look_left_option_active = True
                 self._last_mouse_pos = None
@@ -5115,13 +5091,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         if button == self.wnd.mouse.left:
             # macOS-friendly mouse-look: Option + left-drag avoids relying
             # on right-click behavior (which can vary across trackpads/mice).
-            if sys.platform == "darwin":
-                if self._option_look_active():
-                    self._mouse_look_active = True
-                    self._mouse_look_left_option_active = True
-                    self._last_mouse_pos = None
-                    self.wnd.mouse_exclusivity = True
-                    return
+            if self._option_look_active():
+                self._mouse_look_active = True
+                self._mouse_look_left_option_active = True
+                self._last_mouse_pos = None
+                self.wnd.mouse_exclusivity = True
+                return
 
             # Check order: all three steppers, then mesh/texture toggle
             # buttons, then minimap. All four pieces (brightness, global
@@ -5272,7 +5247,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_press_event = on_mouse_press_event
 
     def on_mouse_release_event(self, x, y, button):
-        look_button_name = self._platform_adapter.mouse_look_button_name()
+        look_button_name = self._active_platform_adapter().mouse_look_button_name()
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
 
         if button == self.wnd.mouse.left:
@@ -5369,7 +5344,7 @@ def _run_moderngl_window_config(config_class: type, args=None) -> None:
 
 def _launch_viewer_window() -> None:
     """Launch with dimensions expressed in the selected backend's coordinates."""
-    if sys.platform.startswith("linux"):
+    if get_platform_adapter().viewer_uses_glfw_native_initial_size():
         # Linux GLFW sizing happens after the Wayland/X11 backend is selected,
         # using that backend's DPI-aware work-area coordinate system.
         CaveViewerWindow.window_size = _DEFAULT_WINDOW_SIZE

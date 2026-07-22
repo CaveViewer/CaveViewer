@@ -13,6 +13,8 @@ from caveviewer.gui import (
     map_library_workflow,
     splash_screen,
 )
+from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
+from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
 
@@ -145,7 +147,11 @@ def test_library_recent_maps_use_open_history_not_last_browse(
 
 
 def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
-    monkeypatch.setattr(splash_screen.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        splash_screen,
+        "_SPLASH_LAYOUT_POLICY",
+        MacOSSplashPlatformAdapter().splash_layout_policy(),
+    )
     destroyed_children = []
 
     class Child:
@@ -179,7 +185,11 @@ def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
 
 
 def test_splash_root_creates_new_tk_when_no_macos_root(monkeypatch):
-    monkeypatch.setattr(splash_screen.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        splash_screen,
+        "_SPLASH_LAYOUT_POLICY",
+        MacOSSplashPlatformAdapter().splash_layout_policy(),
+    )
     created = []
     root = object()
     tk_module = type(
@@ -196,7 +206,11 @@ def test_splash_root_creates_new_tk_when_no_macos_root(monkeypatch):
 
 
 def test_splash_root_does_not_reuse_default_root_off_macos(monkeypatch):
-    monkeypatch.setattr(splash_screen.sys, "platform", "linux")
+    monkeypatch.setattr(
+        splash_screen,
+        "_SPLASH_LAYOUT_POLICY",
+        DefaultSplashPlatformAdapter().splash_layout_policy(),
+    )
     existing_root = object()
     created = []
     root = object()

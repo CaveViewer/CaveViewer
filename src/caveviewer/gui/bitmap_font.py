@@ -121,10 +121,9 @@ def _get_aa_target() -> int:
     FreeType-rendered overlay text smooth on high-DPI and fractional-scale
     desktops without requiring users to set environment variables.
     """
-    import sys
     env = os.getenv("CAVEVIEWER_TEXT_AA_MODE", "").lower()
     if not env:
-        mode = "light" if sys.platform == "darwin" or sys.platform.startswith("linux") else "normal"
+        mode = get_platform_adapter().default_text_antialiasing_mode()
     else:
         mode = env
     if mode == "lcd":

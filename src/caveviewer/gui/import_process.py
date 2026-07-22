@@ -26,6 +26,7 @@ from caveviewer.core.chunking.capacity import (
 )
 from caveviewer.core.chunking.staging import ImportPaused
 from caveviewer.core.diagnostics.logging import configure_logging, get_logger
+from caveviewer.gui.platform.process_priority import lower_current_process_priority
 
 
 _LOG = get_logger("ImportProcess")
@@ -222,7 +223,7 @@ def configure_import_child_runtime() -> None:
             ", ".join(capped),
             IMPORT_NATIVE_THREAD_LIMIT,
         )
-    _lower_process_priority()
+    lower_current_process_priority(nice_increment=IMPORT_CHILD_NICE_INCREMENT)
 
 
 def _limit_native_threads(environ: dict[str, str] | None = None) -> list[str]:
@@ -235,44 +236,6 @@ def _limit_native_threads(environ: dict[str, str] | None = None) -> list[str]:
         env[name] = IMPORT_NATIVE_THREAD_LIMIT
         capped.append(name)
     return capped
-
-
-def _lower_process_priority() -> bool:
-    """Best-effort lower process priority on Windows and POSIX desktops."""
-    if os.name == "nt":
-        try:
-            import ctypes
-
-            below_normal_priority_class = 0x00004000
-            kernel32 = ctypes.windll.kernel32
-            handle = kernel32.GetCurrentProcess()
-            if kernel32.SetPriorityClass(handle, below_normal_priority_class):
-                _LOG.info("Import child process priority set to below normal.")
-                return True
-        except Exception as exc:
-            _LOG.debug("Could not lower Windows import process priority: %s", exc)
-        return False
-
-    if not hasattr(os, "nice"):
-        return False
-
-    raw_increment = os.environ.get("CAVEVIEWER_IMPORT_NICE", "").strip()
-    try:
-        increment = (
-            int(raw_increment) if raw_increment else IMPORT_CHILD_NICE_INCREMENT
-        )
-    except ValueError:
-        increment = IMPORT_CHILD_NICE_INCREMENT
-    if increment <= 0:
-        return False
-
-    try:
-        os.nice(increment)
-        _LOG.info("Import child process nice value increased by %d.", increment)
-        return True
-    except OSError as exc:
-        _LOG.debug("Could not lower POSIX import process priority: %s", exc)
-        return False
 
 
 def _put_event(events: Any, event: ImportEvent) -> None:

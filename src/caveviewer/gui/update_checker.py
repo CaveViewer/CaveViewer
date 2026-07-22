@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 import ssl
-import sys
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
@@ -47,21 +46,11 @@ def make_ssl_context() -> ssl.SSLContext:
     root CA, which Windows trusts but Python's bundle does not.
 
     Loading the Windows store alongside the bundled bundle fixes both cases
-    without disabling verification.  The Windows-store loading path is
-    gated on sys.platform so it has no effect on macOS or Linux.
+    without disabling verification.  The active platform adapter owns whether
+    any operating-system certificate stores need to be loaded.
     """
     ctx = ssl.create_default_context()
-    if sys.platform == "win32":
-        for store_name in ("CA", "ROOT"):
-            try:
-                for cert, enc, _trust in ssl.enum_certificates(store_name):
-                    if enc == "x509_asn":
-                        try:
-                            ctx.load_verify_locations(cadata=cert)
-                        except ssl.SSLError:
-                            pass
-            except (AttributeError, OSError):
-                pass
+    _PLATFORM_ADAPTER.load_system_certificates(ctx)
     return ctx
 
 

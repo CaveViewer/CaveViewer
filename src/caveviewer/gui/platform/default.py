@@ -1,9 +1,16 @@
+"""Default GUI platform behavior for unsupported or generic desktops."""
+
 from __future__ import annotations
 
 import os
 import shutil
 
-from .base import SplashPlatformAdapter
+from .base import (
+    DialogLayoutPolicy,
+    PreferencesDialogLayoutPolicy,
+    SplashLayoutPolicy,
+    SplashPlatformAdapter,
+)
 
 
 class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
@@ -124,3 +131,109 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         ]
+
+    def splash_layout_policy(self) -> SplashLayoutPolicy:
+        """Return generic splash layout values for non-specialized platforms."""
+        return SplashLayoutPolicy(
+            app_icon_resource_name="app_icon_macos.png",
+            reuse_existing_root=False,
+            destroy_root_on_close=True,
+            windows_layout=False,
+            linux_layout=False,
+            min_height=560,
+            extra_bottom_slack=0,
+            secondary_link_row_bottom_gap=36,
+            footer_credits_bottom_pad=36,
+            title_to_action_gap=28,
+            browse_button_bottom_gap=16,
+            instruction_bottom_gap=0,
+            secondary_link_row_top_gap=16,
+        )
+
+    def preferences_dialog_layout_policy(self) -> PreferencesDialogLayoutPolicy:
+        """Return generic Preferences layout values."""
+        return PreferencesDialogLayoutPolicy(
+            windows_layout=False,
+            macos_layout=False,
+            linux_layout=False,
+            wrap_length=460,
+            text_entry_width=36,
+            body_pad_x=24,
+            min_width=760,
+            row_pad_x=18,
+            row_pad_y=12,
+            control_row_top_pad_y=14,
+            tab_pad_x=14,
+            tab_pad_y=7,
+            tab_bottom_pad_y=18,
+            button_row_top_pad_y=18,
+            tab_highlight_thickness=1,
+            notice_wrap_length=720,
+            resizable_vertical=False,
+        )
+
+    def dialog_layout_policy(self) -> DialogLayoutPolicy:
+        """Return generic shared dialog layout values."""
+        return DialogLayoutPolicy(body_pad_x=24, use_label_action_buttons=False)
+
+    def tk_primary_modifier_name(self) -> str:
+        """Return the Tk event modifier for primary shortcuts."""
+        return "Control"
+
+    def default_text_antialiasing_mode(self) -> str:
+        """Return the default FreeType anti-aliasing mode."""
+        return "normal"
+
+    def supports_tk_display_scaling(self) -> bool:
+        """Return whether Tk scaling should be adjusted on this platform."""
+        return False
+
+    def configure_process_dpi_awareness(self) -> None:
+        """Configure process DPI awareness when the platform requires it."""
+        return None
+
+    def load_system_certificates(self, context) -> None:
+        """Load any platform certificate stores needed by urllib SSL contexts."""
+        return None
+
+    def recording_subprocess_startup_kwargs(self) -> dict:
+        """Return subprocess kwargs for GUI-launched recording encoders."""
+        return {}
+
+    def suppress_forced_startup_focus(
+        self, *, is_frozen: bool, force_requested: bool
+    ) -> bool:
+        """Return whether startup focus forcing should be suppressed."""
+        return False
+
+    def command_modifier_uses_control_fallback(self) -> bool:
+        """Return whether Command checks should also inspect Control flags."""
+        return False
+
+    def shift_digit_bookmark_save_fallback(self) -> bool:
+        """Return whether Shift+digit can save camera bookmarks."""
+        return False
+
+    def option_left_mouse_look_enabled(self) -> bool:
+        """Return whether Option+left-click/motion enables mouse look."""
+        return False
+
+    def focus_viewer_window(self, window) -> None:
+        """Best-effort foreground activation for generic window backends."""
+        for target in (window, getattr(window, "_window", None)):
+            if target is None:
+                continue
+            try:
+                if hasattr(target, "switch_to"):
+                    target.switch_to()
+            except Exception:
+                pass
+            try:
+                if hasattr(target, "activate"):
+                    target.activate()
+            except Exception:
+                pass
+
+    def viewer_uses_glfw_native_initial_size(self) -> bool:
+        """Return whether viewer sizing is deferred to GLFW backend selection."""
+        return False
