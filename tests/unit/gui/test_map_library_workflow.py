@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from caveviewer.gui.map_library_controller import MapLibraryController
+from caveviewer.gui.map_library import recent_map_key
 from caveviewer.gui.map_library_workflow import MapLibraryWorkflow
 from caveviewer.gui.sample_map_download import (
     SampleDownloadProgress,
@@ -309,7 +310,7 @@ def test_remove_recent_map_uses_injected_history_side_effect():
 
     assert removed_paths == ["/maps/one"]
     assert state.workflow.recent_map_paths == ["/maps/two"]
-    assert state.panel.removed_recent_key == "/maps/one"
+    assert state.panel.removed_recent_key == recent_map_key("/maps/one")
 
 
 def test_pending_download_waits_for_catalog_then_starts_resolved_download():
