@@ -9,7 +9,6 @@ import pytest
 from caveviewer.gui import (
     preferences_dialog,
     dialog_style,
-    sample_maps_dialog,
     splash_screen,
 )
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -19,7 +18,6 @@ def test_dialogs_share_the_same_theme_tokens():
     for dialog_module in (
         splash_screen,
         preferences_dialog,
-        sample_maps_dialog,
     ):
         assert dialog_module._BG_COLOR == DARK_THEME.background
         assert dialog_module._TITLE_COLOR == DARK_THEME.title

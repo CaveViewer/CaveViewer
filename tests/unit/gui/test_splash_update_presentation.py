@@ -266,15 +266,17 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     source = splash_source + style_source + panel_source + workflow_source
 
     assert 'text="Map Library"' not in source
-    assert "Your Library" in source
-    assert "Standard Library" in source
+    assert "Your Recent Maps" in source
+    assert "CaveViewer Maps" in source
+    assert "Your Library" not in source
+    assert "Standard Library" not in source
     assert "Open your maps or explore the standard library." not in source
     assert "No maps added yet." in source
     assert "Maps you open yourself will appear here." not in source
     assert "No user-opened maps yet." not in source
     assert 'top_pad=16' in source
     assert 'bottom_pad=18' in source
-    assert "Recent Maps" not in source
+    assert '"Recent Maps"' not in source
     assert "Available Maps" not in source
     assert "Open recent or available maps." not in source
     assert "Available to download" not in source
@@ -291,23 +293,34 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert 'panel.pack(fill="both", expand=True, pady=self._px(26))' in panel_source
     assert "metadata_font=_LIBRARY_METADATA_FONT" in style_source
     assert "metadata_color=_LIBRARY_METADATA_COLOR" in style_source
-    assert "width=style.action_button_width" in panel_source
-    assert "padx=self._px(style.action_button_pad_x)" in panel_source
-    assert "pady=self._px(style.action_button_pad_y)" in panel_source
-    assert "progress_bar_canvas = tk.Canvas(" in source
-    assert "width=self._px(style.progress_width)" in panel_source
-    assert "height=self._px(style.progress_height)" in panel_source
-    assert 'progress_bar_canvas.pack(' in source
-    assert 'anchor="w"' in source
-    assert "pady=(self._px(style.progress_top_pad), 0)" in panel_source
-    assert "reserve_progress=True" in panel_source
-    assert "widgets.progress_bar_canvas.pack(" not in source
-    assert "widgets.progress_bar_canvas.pack_forget()" not in source
+    assert "_action_button_pixel_size" in panel_source
+    assert "style.action_button_width" in panel_source
+    assert "style.action_button_pad_x" in panel_source
+    assert "style.action_button_pad_y" in panel_source
+    assert "progress_bar_canvas = tk.Canvas(" not in source
+    assert "reserve_progress=True" not in panel_source
+    assert "_create_action_button" in panel_source
+    assert "_draw_action_stop_progress" in panel_source
+    assert "button.create_arc(" in panel_source
+    assert "button.create_rectangle(" in panel_source
+    assert "stop_fill_color = style.button_fg" in panel_source
+    assert "action_progress_ring_diameter=" in style_source
+    assert "action_stop_size=" in style_source
+    assert "show_stop_progress=True" in workflow_source
+    assert '"Cancel"' not in workflow_source
+    assert '"Stopping…"' in workflow_source
     assert "poll_download_queue" in workflow_source
     assert "cancel_active_download_for_close" in workflow_source
     assert "directory_selection_factory" in workflow_source
     assert "start_catalog_fetch" in workflow_source
     assert "poll_download_queue" not in splash_source
+
+    style = splash_screen._map_library_panel_style()
+    assert style.progress_track_color == splash_screen.DARK_THEME.primary_button_hover
+    assert style.progress_fill_color == splash_screen.DARK_THEME.primary_button_border
+    assert style.progress_track_color != style.button_bg
+    assert style.progress_fill_color != style.button_bg
+    assert style.progress_fill_color != style.button_fg
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():

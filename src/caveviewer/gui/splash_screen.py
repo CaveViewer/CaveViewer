@@ -189,11 +189,13 @@ _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
 _LIBRARY_METADATA_ERROR_COLOR = DARK_THEME.error_text
 _LIBRARY_METADATA_STATUS_DURATION_MS = 2500
 _LIBRARY_METADATA_ERROR_DURATION_MS = 7000
-_LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
-_LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button
-_LIBRARY_PROGRESS_HEIGHT = 3
-_LIBRARY_PROGRESS_WIDTH = 180
-_LIBRARY_PROGRESS_TOP_PAD = 5
+# In-button download progress draws on the amber action button, so use palette
+# colors that contrast with the button rather than the dark row panel.
+_LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.primary_button_hover
+_LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button_border
+_LIBRARY_ACTION_PROGRESS_RING_DIAMETER = 16
+_LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH = 2
+_LIBRARY_ACTION_STOP_SIZE = 6
 _LIBRARY_ACTION_BUTTON_WIDTH = 8
 _LIBRARY_ACTION_BUTTON_PAD_X = 10
 _LIBRARY_ACTION_BUTTON_PAD_Y = 5
@@ -306,9 +308,9 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         metadata_error_duration_ms=_LIBRARY_METADATA_ERROR_DURATION_MS,
         progress_track_color=_LIBRARY_PROGRESS_TRACK_COLOR,
         progress_fill_color=_LIBRARY_PROGRESS_FILL_COLOR,
-        progress_height=_LIBRARY_PROGRESS_HEIGHT,
-        progress_width=_LIBRARY_PROGRESS_WIDTH,
-        progress_top_pad=_LIBRARY_PROGRESS_TOP_PAD,
+        action_progress_ring_diameter=_LIBRARY_ACTION_PROGRESS_RING_DIAMETER,
+        action_progress_ring_stroke_width=_LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH,
+        action_stop_size=_LIBRARY_ACTION_STOP_SIZE,
         action_button_width=_LIBRARY_ACTION_BUTTON_WIDTH,
         action_button_pad_x=_LIBRARY_ACTION_BUTTON_PAD_X,
         action_button_pad_y=_LIBRARY_ACTION_BUTTON_PAD_Y,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+import tkinter.font as tkfont
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
@@ -36,9 +37,9 @@ class MapLibraryPanelStyle:
     metadata_error_duration_ms: int
     progress_track_color: str
     progress_fill_color: str
-    progress_height: int
-    progress_width: int
-    progress_top_pad: int
+    action_progress_ring_diameter: int
+    action_progress_ring_stroke_width: int
+    action_stop_size: int
     action_button_width: int
     action_button_pad_x: int
     action_button_pad_y: int
@@ -66,8 +67,6 @@ class MapLibraryRowWidgets:
     leading_widget: object
     action_button: object
     metadata_label: object | None
-    progress_bar_canvas: object | None = None
-    progress_bar: object | None = None
 
 
 class MapLibraryPanel:
@@ -184,12 +183,12 @@ class MapLibraryPanel:
             add="+",
         )
 
-        self._create_section(self._rows_frame, "Your Library", top_pad=16)
+        self._create_section(self._rows_frame, "Your Recent Maps", top_pad=16)
         self._recent_container = tk.Frame(
             self._rows_frame, bg=style.panel_color
         )
         self._recent_container.pack(fill="x")
-        self._create_section(self._rows_frame, "Standard Library")
+        self._create_section(self._rows_frame, "CaveViewer Maps")
 
     def finish_population(self) -> None:
         """Bind mousewheel events after rows exist and schedule scroll sync."""
@@ -215,7 +214,7 @@ class MapLibraryPanel:
         action: Callable[[], None],
         menu_actions_factory: MenuActionsFactory | None = None,
     ) -> MapLibraryRowWidgets:
-        """Append one recent-map row to the Your Library section."""
+        """Append one recent-map row to the Your Recent Maps section."""
         if self._recent_container is None:
             raise RuntimeError("MapLibraryPanel.create() must run first")
         if self._widget_exists(self._recent_empty_note):
@@ -234,7 +233,7 @@ class MapLibraryPanel:
         return widgets
 
     def ensure_recent_empty_note(self) -> None:
-        """Show the empty Your Library note when no recent rows remain."""
+        """Show the empty Your Recent Maps note when no recent rows remain."""
         if self._recent_container is None:
             return
         if self.recent_rows:
@@ -263,7 +262,7 @@ class MapLibraryPanel:
         action: Callable[[], None],
         menu_actions_factory: MenuActionsFactory | None = None,
     ) -> MapLibraryRowWidgets:
-        """Append one standard-library row to the Standard Library section."""
+        """Append one standard-library row to the CaveViewer Maps section."""
         if self._rows_frame is None:
             raise RuntimeError("MapLibraryPanel.create() must run first")
         widgets = self._create_row(
@@ -274,7 +273,6 @@ class MapLibraryPanel:
             action_text=row.action_text,
             action=action,
             reserve_metadata=True,
-            reserve_progress=True,
             menu_actions_factory=menu_actions_factory,
         )
         self.standard_rows[row.key] = widgets
@@ -345,12 +343,19 @@ class MapLibraryPanel:
         command: Callable[[], None],
         *,
         enabled: bool = True,
+        show_stop_progress: bool = False,
     ) -> bool:
         """Update the primary action button for one standard-library row."""
         widgets = self.standard_rows.get(key)
         if widgets is None or not self._widget_exists(widgets.action_button):
             return False
-        self._set_action_button(widgets.action_button, text, command, enabled=enabled)
+        self._set_action_button(
+            widgets.action_button,
+            text,
+            command,
+            enabled=enabled,
+            show_stop_progress=show_stop_progress,
+        )
         return True
 
     def refresh_standard_row_overflow(self, key: str) -> None:
@@ -367,32 +372,22 @@ class MapLibraryPanel:
             self._refresh_overflow_button(row_widgets.leading_widget)
 
     def reset_standard_progress(self, key: str) -> None:
-        """Return a standard-library row progress strip to its empty state."""
+        """Return a standard-library row action button to text mode."""
         widgets = self.standard_rows.get(key)
-        if widgets is None or not self._widget_exists(widgets.progress_bar_canvas):
+        if widgets is None or not self._widget_exists(widgets.action_button):
             return
-        widgets.progress_bar_canvas.config(bg=self._style.panel_color)
-        widgets.progress_bar_canvas.coords(
-            widgets.progress_bar,
-            0,
-            0,
-            0,
-            self._px(self._style.progress_height),
-        )
+        widgets.action_button._cv_show_stop_progress = False
+        widgets.action_button._cv_progress_fraction = 0.0
+        self._draw_action_button(widgets.action_button)
 
     def show_standard_progress(self, key: str) -> None:
-        """Show an empty progress strip for an active standard-library download."""
+        """Show the stop/progress affordance for an active download row."""
         widgets = self.standard_rows.get(key)
-        if widgets is None or not self._widget_exists(widgets.progress_bar_canvas):
+        if widgets is None or not self._widget_exists(widgets.action_button):
             return
-        widgets.progress_bar_canvas.config(bg=self._style.progress_track_color)
-        widgets.progress_bar_canvas.coords(
-            widgets.progress_bar,
-            0,
-            0,
-            0,
-            self._px(self._style.progress_height),
-        )
+        widgets.action_button._cv_show_stop_progress = True
+        widgets.action_button._cv_progress_fraction = 0.0
+        self._draw_action_button(widgets.action_button)
         self.root.update_idletasks()
 
     def apply_standard_progress(
@@ -403,24 +398,17 @@ class MapLibraryPanel:
     ) -> None:
         """Apply download progress to one standard-library row."""
         widgets = self.standard_rows.get(key)
-        if widgets is None or not self._widget_exists(widgets.progress_bar_canvas):
+        if widgets is None or not self._widget_exists(widgets.action_button):
             return
         if total_bytes is None or total_bytes <= 0:
             self.set_standard_row_metadata(key, "Downloading…")
+            widgets.action_button._cv_progress_fraction = None
+            self._draw_action_button(widgets.action_button)
             return
         fraction = min(1.0, downloaded_bytes / total_bytes)
-        self.set_standard_row_metadata(
-            key, f"Downloading… {int(round(fraction * 100))}%"
-        )
-        canvas_width = widgets.progress_bar_canvas.winfo_width()
-        if canvas_width > 1:
-            widgets.progress_bar_canvas.coords(
-                widgets.progress_bar,
-                0,
-                0,
-                int(canvas_width * fraction),
-                self._px(self._style.progress_height),
-            )
+        self.set_standard_row_metadata(key, "Downloading…")
+        widgets.action_button._cv_progress_fraction = fraction
+        self._draw_action_button(widgets.action_button)
 
     def sync_after_row_change(self) -> None:
         """Schedule a scroll-region refresh after row insertion/removal."""
@@ -490,7 +478,6 @@ class MapLibraryPanel:
         action_text: str,
         action: Callable[[], None],
         reserve_metadata: bool = False,
-        reserve_progress: bool = False,
         menu_actions_factory: MenuActionsFactory | None = None,
     ) -> MapLibraryRowWidgets:
         style = self._style
@@ -557,60 +544,19 @@ class MapLibraryPanel:
             metadata_label._cv_base_fg = style.metadata_color
             metadata_label._cv_status_after_id = None
 
-        action_button = tk.Label(
+        action_button = self._create_action_button(
             row_content,
             text=action_text,
-            font=style.small_font,
-            bg=style.button_bg,
-            fg=style.button_fg,
-            width=style.action_button_width,
-            padx=self._px(style.action_button_pad_x),
-            pady=self._px(style.action_button_pad_y),
-            cursor="hand2",
-            takefocus=True,
-            highlightthickness=1,
-            highlightbackground=style.button_border_color,
-            highlightcolor=style.button_border_color,
-        )
-        self._bind_activation(
-            action_button,
-            action,
+            action=action,
         )
         self._configure_action_button_hover(action_button)
         action_button.pack(side="right", padx=(0, self._px(12)), pady=self._px(5))
-        action_button._cv_enabled = True
 
-        progress_bar_canvas = None
-        progress_bar = None
-        if reserve_progress:
-            # The strip is always packed; downloads only redraw it. This keeps
-            # the surrounding rows stable when progress starts.
-            progress_bar_canvas = tk.Canvas(
-                text_column,
-                width=self._px(style.progress_width),
-                height=self._px(style.progress_height),
-                bg=style.panel_color,
-                highlightthickness=0,
-            )
-            progress_bar_canvas.pack(
-                anchor="w",
-                pady=(self._px(style.progress_top_pad), 0),
-            )
-            progress_bar = progress_bar_canvas.create_rectangle(
-                0,
-                0,
-                0,
-                self._px(style.progress_height),
-                fill=style.progress_fill_color,
-                width=0,
-            )
         row_widgets = MapLibraryRowWidgets(
             row_shell=row_shell,
             leading_widget=leading_widget,
             action_button=action_button,
             metadata_label=metadata_label,
-            progress_bar_canvas=progress_bar_canvas,
-            progress_bar=progress_bar,
         )
         row_holder[0] = row_widgets
         self.refresh_row_overflow(row_widgets)
@@ -643,6 +589,168 @@ class MapLibraryPanel:
         metadata_label._cv_base_fg = fg
         metadata_label.config(text=text, fg=fg)
 
+    def _create_action_button(
+        self,
+        parent,
+        *,
+        text: str,
+        action: Callable[[], None],
+    ) -> tk.Canvas:
+        """Create the fixed-size canvas button used by map-library rows."""
+        style = self._style
+        button_width, button_height = self._action_button_pixel_size()
+        button = tk.Canvas(
+            parent,
+            width=button_width,
+            height=button_height,
+            bg=style.button_bg,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=style.button_border_color,
+            highlightcolor=style.button_border_color,
+            cursor="hand2",
+            takefocus=True,
+        )
+        button._cv_enabled = True
+        button._cv_action_text = text
+        button._cv_show_stop_progress = False
+        button._cv_progress_fraction = 0.0
+        self._bind_activation(button, action)
+        button.bind(
+            "<Configure>",
+            lambda _event, target=button: self._draw_action_button(target),
+            add="+",
+        )
+        self._draw_action_button(button)
+        return button
+
+    def _action_button_pixel_size(self) -> tuple[int, int]:
+        """Return a canvas size matching the old fixed-width label button."""
+        style = self._style
+        pad_x = self._px(style.action_button_pad_x)
+        pad_y = self._px(style.action_button_pad_y)
+        try:
+            font = tkfont.Font(font=style.small_font)
+            text_width = font.measure("0" * style.action_button_width)
+            text_height = font.metrics("linespace")
+        except tk.TclError:
+            text_width = self._px(style.action_button_width * 8)
+            text_height = self._px(16)
+        return max(1, text_width + pad_x * 2), max(1, text_height + pad_y * 2)
+
+    def _set_action_button_style(self, button, *, hovered: bool = False) -> None:
+        enabled = getattr(button, "_cv_enabled", True)
+        style = self._style
+        bg = (
+            style.button_hover_bg
+            if enabled and hovered
+            else style.button_bg
+            if enabled
+            else style.disabled_button_bg
+        )
+        border = style.button_border_color if enabled else style.disabled_button_border
+        button.config(
+            bg=bg,
+            cursor="hand2" if enabled else "arrow",
+            takefocus=enabled,
+            highlightbackground=border,
+            highlightcolor=border,
+        )
+
+    def _draw_action_button(self, button) -> None:
+        """Redraw the button text or in-button stop/progress affordance."""
+        if not self._widget_exists(button):
+            return
+
+        button.delete("cv_action_content")
+        width = self._canvas_dimension(button, "width")
+        height = self._canvas_dimension(button, "height")
+        if getattr(button, "_cv_show_stop_progress", False):
+            self._draw_action_stop_progress(button, width, height)
+            return
+
+        enabled = getattr(button, "_cv_enabled", True)
+        fill = self._style.button_fg if enabled else self._style.disabled_button_fg
+        button.create_text(
+            width / 2,
+            height / 2,
+            text=getattr(button, "_cv_action_text", ""),
+            font=self._style.small_font,
+            fill=fill,
+            tags="cv_action_content",
+        )
+
+    def _draw_action_stop_progress(
+        self,
+        button,
+        width: int,
+        height: int,
+    ) -> None:
+        """Draw the centered circular progress ring with a stop square."""
+        style = self._style
+        enabled = getattr(button, "_cv_enabled", True)
+        diameter = self._px(style.action_progress_ring_diameter)
+        stroke_width = max(1, self._px(style.action_progress_ring_stroke_width))
+        stop_size = self._px(style.action_stop_size)
+        center_x = width / 2
+        center_y = height / 2
+        radius = diameter / 2
+        inset = stroke_width / 2
+        x0 = center_x - radius + inset
+        y0 = center_y - radius + inset
+        x1 = center_x + radius - inset
+        y1 = center_y + radius - inset
+
+        track_color = style.progress_track_color
+        progress_fill_color = (
+            style.progress_fill_color if enabled else style.disabled_button_fg
+        )
+        stop_fill_color = style.button_fg if enabled else style.disabled_button_fg
+        button.create_oval(
+            x0,
+            y0,
+            x1,
+            y1,
+            outline=track_color,
+            width=stroke_width,
+            tags="cv_action_content",
+        )
+
+        fraction = getattr(button, "_cv_progress_fraction", 0.0)
+        if fraction is None:
+            extent = -100
+        else:
+            extent = -max(2, int(round(359 * max(0.0, min(1.0, fraction)))))
+        button.create_arc(
+            x0,
+            y0,
+            x1,
+            y1,
+            start=90,
+            extent=extent,
+            style="arc",
+            outline=progress_fill_color,
+            width=stroke_width,
+            tags="cv_action_content",
+        )
+
+        half_stop = stop_size / 2
+        button.create_rectangle(
+            center_x - half_stop,
+            center_y - half_stop,
+            center_x + half_stop,
+            center_y + half_stop,
+            fill=stop_fill_color,
+            outline="",
+            tags="cv_action_content",
+        )
+
+    def _canvas_dimension(self, canvas, option: str) -> int:
+        try:
+            return max(1, int(float(canvas.cget(option))))
+        except (tk.TclError, TypeError, ValueError):
+            return 1
+
     def _set_action_button(
         self,
         button,
@@ -650,42 +758,29 @@ class MapLibraryPanel:
         command: Callable[[], None],
         *,
         enabled: bool = True,
+        show_stop_progress: bool = False,
     ) -> None:
         button._cv_enabled = bool(enabled)
+        button._cv_action_text = text
+        button._cv_show_stop_progress = bool(show_stop_progress)
+        if not show_stop_progress:
+            button._cv_progress_fraction = 0.0
 
         def invoke_if_enabled() -> None:
             if getattr(button, "_cv_enabled", True):
                 command()
 
         self._bind_activation(button, invoke_if_enabled)
-        style = self._style
-        button.config(
-            text=text,
-            bg=style.button_bg if enabled else style.disabled_button_bg,
-            fg=style.button_fg if enabled else style.disabled_button_fg,
-            cursor="hand2" if enabled else "arrow",
-            takefocus=enabled,
-            highlightbackground=(
-                style.button_border_color if enabled else style.disabled_button_border
-            ),
-            highlightcolor=(
-                style.button_border_color if enabled else style.disabled_button_border
-            ),
-        )
+        self._set_action_button_style(button)
+        self._draw_action_button(button)
 
     def _configure_action_button_hover(self, button) -> None:
         def show_hover(_event) -> None:
             if getattr(button, "_cv_enabled", True):
-                button.config(bg=self._style.button_hover_bg)
+                self._set_action_button_style(button, hovered=True)
 
         def clear_hover(_event) -> None:
-            button.config(
-                bg=(
-                    self._style.button_bg
-                    if getattr(button, "_cv_enabled", True)
-                    else self._style.disabled_button_bg
-                )
-            )
+            self._set_action_button_style(button)
 
         button.bind("<Enter>", show_hover)
         button.bind("<Leave>", clear_hover)

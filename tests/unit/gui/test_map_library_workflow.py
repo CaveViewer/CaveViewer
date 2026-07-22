@@ -75,10 +75,11 @@ class _FakePanel:
         command,
         *,
         enabled: bool = True,
+        show_stop_progress: bool = False,
     ) -> bool:
         if key not in self.standard_rows:
             return False
-        self.standard_actions[key] = (text, command, enabled)
+        self.standard_actions[key] = (text, command, enabled, show_stop_progress)
         return True
 
     def set_standard_row_metadata(
@@ -240,6 +241,9 @@ def test_download_success_applies_progress_and_open_action():
     )
 
     state.workflow.start_inline_download(library_map)
+    active_action = state.panel.standard_actions["Test Cave"]
+    assert active_action[0] == ""
+    assert active_action[3] is True
     _selection, _map, cancel_event, result_queue = download_calls[0]
     result_queue.put(StandardLibraryDownloadProgress(40, 100))
     result_queue.put(StandardLibraryDownloadSucceeded("/library/Test Cave"))
@@ -251,6 +255,43 @@ def test_download_success_applies_progress_and_open_action():
     assert state.panel.standard_actions["Test Cave"][0] == "Open"
     assert not state.controller.active_download.in_progress
     assert state.closed_inhibitors == [state.inhibitor]
+
+
+def test_download_stop_action_requests_cancel_and_stays_in_stop_mode():
+    library_map = _library_map()
+    download_calls = []
+
+    def start_download_worker(selection, active_map, cancel_event, result_queue):
+        download_calls.append(
+            (selection, active_map, cancel_event, result_queue)
+        )
+        return object()
+
+    state = _workflow(
+        [library_map],
+        start_download_worker=start_download_worker,
+    )
+    state.panel.add_standard_row(
+        state.controller.row(library_map, downloaded=False),
+        action=lambda: None,
+    )
+
+    state.workflow.start_inline_download(library_map)
+    _text, stop_action, enabled, show_stop_progress = state.panel.standard_actions[
+        "Test Cave"
+    ]
+    _selection, _map, cancel_event, _result_queue = download_calls[0]
+
+    assert enabled is True
+    assert show_stop_progress is True
+
+    stop_action()
+
+    assert cancel_event.is_set()
+    assert state.panel.standard_actions["Test Cave"][0] == ""
+    assert state.panel.standard_actions["Test Cave"][2] is False
+    assert state.panel.standard_actions["Test Cave"][3] is True
+    assert state.panel.metadata["Test Cave"] == ("Stopping…", False)
 
 
 def test_close_cancels_active_download_poll_and_closes_menu():
