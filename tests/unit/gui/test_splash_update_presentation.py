@@ -314,6 +314,8 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "poll_download_queue" not in splash_source
 
     style = splash_screen._map_library_panel_style()
+    assert style.progress_track_color == splash_screen.DARK_THEME.primary_button_hover
+    assert style.progress_fill_color == splash_screen.DARK_THEME.primary_button_border
     assert style.progress_track_color != style.button_bg
     assert style.progress_fill_color != style.button_bg
     assert style.progress_fill_color != style.button_fg

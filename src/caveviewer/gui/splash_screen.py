@@ -189,10 +189,10 @@ _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
 _LIBRARY_METADATA_ERROR_COLOR = DARK_THEME.error_text
 _LIBRARY_METADATA_STATUS_DURATION_MS = 2500
 _LIBRARY_METADATA_ERROR_DURATION_MS = 7000
-# In-button download progress draws on the amber action button, so it needs
-# colors that contrast with the button itself rather than the dark row panel.
-_LIBRARY_PROGRESS_TRACK_COLOR = "#8b641c"
-_LIBRARY_PROGRESS_FILL_COLOR = "#f8d27a"
+# In-button download progress draws on the amber action button, so use palette
+# colors that contrast with the button rather than the dark row panel.
+_LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.primary_button_hover
+_LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button_border
 _LIBRARY_ACTION_PROGRESS_RING_DIAMETER = 16
 _LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH = 2
 _LIBRARY_ACTION_STOP_SIZE = 6
