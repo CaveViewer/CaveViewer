@@ -1,56 +1,15 @@
-"""Exercise map library dialog focus, action-state, and cancellation workflows."""
+"""Exercise GUI-owned standard-library map download coordination."""
 
 from __future__ import annotations
 
-import inspect
 import queue
-import sys
 import threading
 from types import SimpleNamespace
 
 import pytest
 
-from caveviewer.gui import standard_library_download, sample_maps_dialog
+from caveviewer.gui import standard_library_download
 from caveviewer.gui.platform import DirectorySelection
-
-
-class FakeOwner:
-    def __init__(self, topmost=False):
-        self.topmost = topmost
-        self.exists = True
-        self.calls = []
-
-    def attributes(self, name, *value):
-        assert name == "-topmost"
-        if not value:
-            self.calls.append(("get_topmost", self.topmost))
-            return self.topmost
-        self.topmost = value[0]
-        self.calls.append(("set_topmost", self.topmost))
-
-    def lift(self):
-        self.calls.append(("lift",))
-
-    def focus_force(self):
-        self.calls.append(("focus_force",))
-
-    def update_idletasks(self):
-        self.calls.append(("update_idletasks",))
-
-    def winfo_exists(self):
-        return self.exists
-
-
-class FakeDesktopServices:
-    def __init__(self, owner, result="/chosen/folder"):
-        self.owner = owner
-        self.result = result
-        self.options = None
-
-    def choose_directory(self, **options):
-        assert self.owner.topmost is False
-        self.options = options
-        return DirectorySelection.from_path(self.result) if self.result else None
 
 
 class FakeInhibitor:
@@ -89,97 +48,9 @@ def _sample():
     )
 
 
-def test_sample_map_row_copy_uses_folder_and_download_actions():
-    downloadable = SimpleNamespace(
-        display_name="Devils Eye",
-        download_url="https://example.test/devils-eye.zip",
-        size_bytes=52 * 1024 * 1024,
-    )
-    unavailable = SimpleNamespace(
-        display_name="Devils Eye",
-        download_url=None,
-        size_bytes=None,
-    )
-
-    assert sample_maps_dialog._sample_detail_text(
-        downloadable, downloaded=False
-    ) == "52 MB"
-    assert sample_maps_dialog._sample_action_text(
-        downloadable, downloaded=False
-    ) == "Download…"
-    assert sample_maps_dialog._sample_action_enabled(
-        downloadable, downloaded=False
-    )
-
-    assert sample_maps_dialog._sample_detail_text(
-        downloadable, downloaded=True
-    ) == "Ready to open"
-    assert sample_maps_dialog._sample_action_text(
-        downloadable, downloaded=True
-    ) == "Open Map"
-
-    assert sample_maps_dialog._sample_detail_text(
-        unavailable, downloaded=False
-    ) == "Download unavailable"
-    assert sample_maps_dialog._sample_action_text(
-        unavailable, downloaded=False
-    ) == "Unavailable"
-    assert not sample_maps_dialog._sample_action_enabled(
-        unavailable, downloaded=False
-    )
-
-
-def test_sample_catalog_notice_keeps_download_failure_non_blocking():
-    notice = sample_maps_dialog._sample_catalog_notice_text("offline")
-
-    assert "already downloaded" in notice
-    assert "new downloads need the internet" in notice
-
-
-def test_sample_maps_dialog_keeps_curated_list_out_of_scroll_container():
-    source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
-
-    assert "Scrollbar(" not in source
-    assert "yscrollcommand" not in source
-
-
-def test_sample_maps_dialog_catalog_load_uses_after_polling():
-    source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
-
-    assert "queue.Queue" in source
-    assert "dialog.after(0, _poll_catalog_fetch)" in source
-    assert "dialog.update()" not in source
-    assert ".update()" not in source
-    assert "time.sleep(" not in source
-
-
-def test_sample_maps_dialog_download_uses_worker_and_after_polling():
-    source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
-
-    assert "_start_sample_download_worker(" in source
-    assert "_poll_download_queue" in source
-    assert "_cancel_active_download_for_close" in source
-    assert "cancel_event.set()" in source
-    assert "\"Cancel\"" in source
-    assert "\"Cancelling…\"" in source
-    assert "progress_bar_canvas.update()" not in source
-
-
-def test_sample_maps_dialog_is_modal_and_has_initial_focus_policy():
-    source = inspect.getsource(sample_maps_dialog.show_sample_maps_dialog)
-
-    assert "dialog.withdraw()" in source
-    assert "dialog.deiconify()" in source
-    assert "dialog.grab_set()" in source
-    assert "dialog.wait_visibility()" in source
-    assert "focus_set()" in source
-    assert "create_dialog_notice(" in source
-    assert "set_dialog_notice(" in source
-    assert "create_dialog_action_button(" in source
-    assert "set_dialog_action_button(" in source
-
-
-def test_standard_library_download_worker_queues_progress_and_success(monkeypatch, tmp_path):
+def test_standard_library_download_worker_queues_progress_and_success(
+    monkeypatch, tmp_path
+):
     sample = _sample()
     result_queue = queue.Queue()
     cancel_event = threading.Event()
@@ -208,11 +79,13 @@ def test_standard_library_download_worker_queues_progress_and_success(monkeypatc
     assert calls == [
         (save_dir, sample, {"progress_cb", "cancel_cb"}),
     ]
-    assert result_queue.get_nowait() == standard_library_download.StandardLibraryDownloadProgress(
-        5, 10
+    assert result_queue.get_nowait() == (
+        standard_library_download.StandardLibraryDownloadProgress(5, 10)
     )
-    assert result_queue.get_nowait() == standard_library_download.StandardLibraryDownloadSucceeded(
-        "/downloaded/devils-eye"
+    assert result_queue.get_nowait() == (
+        standard_library_download.StandardLibraryDownloadSucceeded(
+            "/downloaded/devils-eye"
+        )
     )
     with pytest.raises(queue.Empty):
         result_queue.get_nowait()
@@ -240,13 +113,17 @@ def test_standard_library_download_worker_queues_failure(monkeypatch, tmp_path):
     )
 
     message = result_queue.get_nowait()
-    assert isinstance(message, standard_library_download.StandardLibraryDownloadFailed)
+    assert isinstance(
+        message, standard_library_download.StandardLibraryDownloadFailed
+    )
     assert str(message.error) == "network failed"
     with pytest.raises(queue.Empty):
         result_queue.get_nowait()
 
 
-def test_standard_library_download_worker_progress_observes_cancel(monkeypatch, tmp_path):
+def test_standard_library_download_worker_progress_observes_cancel(
+    monkeypatch, tmp_path
+):
     from caveviewer.gui.standard_library_maps import DownloadCancelled
 
     sample = _sample()
@@ -271,7 +148,9 @@ def test_standard_library_download_worker_progress_observes_cancel(monkeypatch, 
     )
 
     message = result_queue.get_nowait()
-    assert isinstance(message, standard_library_download.StandardLibraryDownloadFailed)
+    assert isinstance(
+        message, standard_library_download.StandardLibraryDownloadFailed
+    )
     assert isinstance(message.error, DownloadCancelled)
     with pytest.raises(queue.Empty):
         result_queue.get_nowait()
@@ -313,61 +192,6 @@ def test_start_standard_library_download_worker_uses_owned_non_daemon_thread(
     assert calls == [(save_dir, sample, cancel_event, result_queue)]
 
 
-def test_save_directory_chooser_is_owned_focused_and_not_left_topmost():
-    owner = FakeOwner(topmost=False)
-    desktop_services = FakeDesktopServices(owner)
-
-    result = sample_maps_dialog._ask_directory_in_front(
-        desktop_services,
-        owner,
-        title="Save Test Cave to…",
-        initial_dir="/maps",
-    )
-
-    assert result == DirectorySelection.from_path("/chosen/folder")
-    assert desktop_services.options == {
-        "title": "Save Test Cave to…",
-        "initial_dir": "/maps",
-        "parent": owner,
-    }
-    assert owner.topmost is False
-    assert owner.calls == [
-        ("get_topmost", False),
-        ("set_topmost", True),
-        ("lift",),
-        ("focus_force",),
-        ("update_idletasks",),
-        ("set_topmost", False),
-        ("update_idletasks",),
-        ("set_topmost", False),
-        ("lift",),
-        ("focus_force",),
-    ]
-
-
-def test_save_directory_chooser_restores_topmost_state_after_failure():
-    owner = FakeOwner(topmost=True)
-
-    class FailingDesktopServices:
-        def choose_directory(self, **_options):
-            assert owner.topmost is False
-            raise RuntimeError("native chooser failed")
-
-    try:
-        sample_maps_dialog._ask_directory_in_front(
-            FailingDesktopServices(),
-            owner,
-            title="Save Test Cave to…",
-            initial_dir="/maps",
-        )
-    except RuntimeError as error:
-        assert str(error) == "native chooser failed"
-    else:
-        raise AssertionError("chooser failure should propagate")
-
-    assert owner.topmost is True
-
-
 def test_download_uses_selected_directory_path(monkeypatch, tmp_path):
     from caveviewer.gui import standard_library_maps
 
@@ -381,7 +205,9 @@ def test_download_uses_selected_directory_path(monkeypatch, tmp_path):
         return "/downloaded/sample"
 
     monkeypatch.setattr(
-        standard_library_maps, "download_and_extract_standard_library_map", fake_download
+        standard_library_maps,
+        "download_and_extract_standard_library_map",
+        fake_download,
     )
 
     result = standard_library_download.download_and_extract_to_selected_directory(
@@ -430,7 +256,11 @@ def test_standard_library_download_uses_desktop_notification_and_inhibit(
         cancel_cb=cancel_cb,
     )
 
-    notification_id = standard_library_download.standard_library_download_notification_id(sample)
+    notification_id = (
+        standard_library_download.standard_library_download_notification_id(
+            sample
+        )
+    )
     assert result == "/downloaded/devils-eye"
     assert download_calls == [
         (
@@ -515,7 +345,11 @@ def test_standard_library_download_withdraws_notification_on_cancel(
             sample,
         )
 
-    notification_id = standard_library_download.standard_library_download_notification_id(sample)
+    notification_id = (
+        standard_library_download.standard_library_download_notification_id(
+            sample
+        )
+    )
     assert ("close_inhibitor",) in services.calls
     assert ("withdraw_notification", notification_id) in services.calls
     assert not any(
@@ -547,7 +381,11 @@ def test_standard_library_download_reports_failure_to_desktop(
             sample,
         )
 
-    notification_id = standard_library_download.standard_library_download_notification_id(sample)
+    notification_id = (
+        standard_library_download.standard_library_download_notification_id(
+            sample
+        )
+    )
     assert ("close_inhibitor",) in services.calls
     assert (
         "notify",
@@ -584,17 +422,3 @@ def test_standard_library_download_continues_when_desktop_activity_is_unavailabl
 
     assert result == "/downloaded/devils-eye"
     assert len(download_calls) == 1
-
-
-def test_last_sample_maps_directory_uses_xdg_state_home(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")
-    state_home = tmp_path / "state"
-    sample_root = tmp_path / "downloads"
-    sample_root.mkdir()
-    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
-
-    sample_maps_dialog._save_last_sample_maps_dir(str(sample_root))
-
-    state_file = state_home / "caveviewer" / "last_sample_maps_dir"
-    assert state_file.read_text(encoding="utf-8") == str(sample_root)
-    assert sample_maps_dialog._load_last_sample_maps_dir() == str(sample_root)
