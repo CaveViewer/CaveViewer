@@ -127,6 +127,12 @@ model modules. `caveviewer.gui.platform` contains OS-specific focus, update,
 and system integration behavior. Unsupported platforms use the default
 adapter.
 
+The splash Map Library is split by responsibility: `map_library.py` builds
+presentation-independent recent-map titles, `map_library_controller.py` owns
+standard-library catalog/download state, `map_library_panel.py` owns Tk row,
+scroll, status, and overflow-menu presentation, and `splash_screen.py` wires
+those pieces to session actions such as opening maps and removing files.
+
 Directory selection, file reveal, notifications, and idle/suspend inhibition
 use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal
 first and falls back to Tk or `xdg-open` only when the portal is unavailable.
