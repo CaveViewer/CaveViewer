@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from caveviewer.gui import map_history, splash_screen
+from caveviewer.gui import map_history, map_library_panel, splash_screen
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
 
@@ -254,7 +254,10 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
 
 
 def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    style_source = inspect.getsource(splash_screen._map_library_panel_style)
+    panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
+    source = splash_source + style_source + panel_source
 
     assert 'text="Map Library"' not in source
     assert "Your Library" in source
@@ -270,54 +273,57 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "Open recent or available maps." not in source
     assert "Available to download" not in source
     assert "Scrollbar(" not in source
-    assert "content_canvas.configure(yscrollcommand=_set_library_scrollbar)" in source
-    assert 'content_scrollbar.pack(side="right", fill="y")' in source
-    assert "_bind_library_mousewheel(rows_frame)" in source
-    assert "recent_map_paths = _load_library_recent_map_paths()" in source
-    assert "map_library_controller.row(" in source
-    assert "detail=row.detail" in source
+    assert "yscrollcommand=self._set_scrollbar_fraction" in panel_source
+    assert 'self._content_scrollbar.pack(side="right", fill="y")' in panel_source
+    assert "self.bind_mousewheel_if_ready(self._rows_frame)" in panel_source
+    assert "recent_map_paths = _load_library_recent_map_paths()" in splash_source
+    assert "map_library_controller.row(" in splash_source
+    assert "detail=row.detail" in panel_source
     assert "highlightthickness=0" in source
-    assert "highlightbackground=_LIBRARY_PANEL_BORDER_COLOR" in source
+    assert "panel_border_color=_LIBRARY_PANEL_BORDER_COLOR" in style_source
     assert 'divider.pack(side="left", fill="y", padx=(px(18), px(12)), pady=px(26))' in source
-    assert 'panel.pack(fill="both", expand=True, pady=px(26))' in source
-    assert "font=_LIBRARY_METADATA_FONT" in source
-    assert "fg=_LIBRARY_METADATA_COLOR" in source
-    assert "width=_LIBRARY_ACTION_BUTTON_WIDTH" in source
-    assert "padx=px(_LIBRARY_ACTION_BUTTON_PAD_X)" in source
-    assert "pady=px(_LIBRARY_ACTION_BUTTON_PAD_Y)" in source
+    assert 'panel.pack(fill="both", expand=True, pady=self._px(26))' in panel_source
+    assert "metadata_font=_LIBRARY_METADATA_FONT" in style_source
+    assert "metadata_color=_LIBRARY_METADATA_COLOR" in style_source
+    assert "width=style.action_button_width" in panel_source
+    assert "padx=self._px(style.action_button_pad_x)" in panel_source
+    assert "pady=self._px(style.action_button_pad_y)" in panel_source
     assert "progress_bar_canvas = tk.Canvas(" in source
-    assert "width=px(_LIBRARY_PROGRESS_WIDTH)" in source
-    assert "height=px(_LIBRARY_PROGRESS_HEIGHT)" in source
+    assert "width=self._px(style.progress_width)" in panel_source
+    assert "height=self._px(style.progress_height)" in panel_source
     assert 'progress_bar_canvas.pack(' in source
     assert 'anchor="w"' in source
-    assert "pady=(px(_LIBRARY_PROGRESS_TOP_PAD), 0)" in source
-    assert "reserve_progress=True" in source
+    assert "pady=(self._px(style.progress_top_pad), 0)" in panel_source
+    assert "reserve_progress=True" in panel_source
     assert "widgets.progress_bar_canvas.pack(" not in source
     assert "widgets.progress_bar_canvas.pack_forget()" not in source
-    assert "_poll_library_download_queue" in source
-    assert "_cancel_active_library_download_for_close()" in source
-    assert "DirectorySelection.from_path(sample_maps_root_dir)" in source
-    assert "_start_library_catalog_fetch()" in source
+    assert "_poll_library_download_queue" in splash_source
+    assert "_cancel_active_library_download_for_close()" in splash_source
+    assert "DirectorySelection.from_path(sample_maps_root_dir)" in splash_source
+    assert "_start_library_catalog_fetch()" in splash_source
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    style_source = inspect.getsource(splash_screen._map_library_panel_style)
+    panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
+    source = splash_source + style_source + panel_source
 
     assert "Remove from this list" in source
     assert "Remove cache" in source
     assert "Remove downloaded files" in source
     assert "Remove from Recent" not in source
-    assert "_create_library_overflow_button" in source
+    assert "_create_overflow_button" in panel_source
     assert "_create_recent_overflow_button" not in source
     assert "menu_actions_factory=" in source
     assert "leading_widget_factory=" not in source
     assert "leading_widget=leading_widget" in source
-    assert "remove_recent_map_path(path)" in source
-    assert "has_managed_map_cache(path)" in source
-    assert "remove_managed_map_cache(path)" in source
-    assert "remove_downloaded_sample_map(sample_maps_root_dir, sample)" in source
-    assert "_remove_standard_library_download_from_splash" in source
-    assert "_show_library_row_status" in source
+    assert "remove_recent_map_path(path)" in splash_source
+    assert "has_managed_map_cache(path)" in splash_source
+    assert "remove_managed_map_cache(path)" in splash_source
+    assert "remove_downloaded_sample_map(sample_maps_root_dir, sample)" in splash_source
+    assert "_remove_standard_library_download_from_splash" in splash_source
+    assert "show_row_status" in source
     assert "Cache removed" in source
     assert "Couldn’t remove cache" in source
     assert "Couldn’t remove files" in source
@@ -326,9 +332,9 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "Removed downloaded files for" not in source
     assert "Removed cache for" not in source
     assert "has_managed_map_cache(sample_path)" not in source
-    assert "recent_container = tk.Frame(rows_frame" in source
-    assert "recent_rows_container[0] = recent_container" in source
-    assert "recent_empty_note[0] = _create_map_library_empty_note" in source
+    assert "self._recent_container = tk.Frame(" in panel_source
+    assert "self.recent_rows" in panel_source
+    assert "self._recent_empty_note = self._create_empty_note" in panel_source
     assert "_LIBRARY_OVERFLOW_TEXT" in source
     assert "Open" in source
 

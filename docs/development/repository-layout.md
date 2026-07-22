@@ -48,6 +48,9 @@ src/caveviewer/core/mesh/glb.py                GLB/glTF parsing
 src/caveviewer/core/textures/                  worker-safe texture CPU policy
 src/caveviewer/core/textures/decoding.py       texture decode, inspection, and budgets
 src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
+src/caveviewer/gui/map_library.py             recent-map row display models
+src/caveviewer/gui/map_library_controller.py  standard-library row/download state
+src/caveviewer/gui/map_library_panel.py       splash Map Library Tk panel
 src/caveviewer/gui/preferences.py             preference persistence facade
 src/caveviewer/gui/preferences_form.py        Tk-free preference form state
 src/caveviewer/gui/preferences_dialog.py      Tk preference dialog presentation

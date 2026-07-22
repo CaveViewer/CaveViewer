@@ -56,6 +56,11 @@ from caveviewer.gui.map_cache_management import (
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_history import load_recent_map_paths, remove_recent_map_path
 from caveviewer.gui.map_library import recent_map_entry, recent_map_key
+from caveviewer.gui.map_library_panel import (
+    MapLibraryPanel,
+    MapLibraryPanelStyle,
+    MapLibraryRowWidgets,
+)
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
@@ -293,6 +298,53 @@ def _configure_runtime_tk_fonts(root) -> None:
     _LIBRARY_OVERFLOW_FONT = (_UI_FONT_FAMILY, 14, "bold")
 
 
+def _map_library_panel_style() -> MapLibraryPanelStyle:
+    """Return the splash-owned style tokens for the Map Library panel."""
+    return MapLibraryPanelStyle(
+        panel_color=_PANEL_COLOR,
+        panel_border_color=_LIBRARY_PANEL_BORDER_COLOR,
+        title_color=_TITLE_COLOR,
+        instruction_color=_INSTRUCTION_COLOR,
+        small_font=_SMALL_FONT,
+        metadata_font=_LIBRARY_METADATA_FONT,
+        button_bg=_BUTTON_BG,
+        button_fg=_BUTTON_FG,
+        button_hover_bg=_BUTTON_HOVER_BG,
+        button_border_color=_BUTTON_BORDER_COLOR,
+        disabled_button_bg=DARK_THEME.secondary_button,
+        disabled_button_fg=DARK_THEME.placeholder_text,
+        disabled_button_border=DARK_THEME.entry_border,
+        empty_note_color="#5f606b",
+        metadata_color=_LIBRARY_METADATA_COLOR,
+        metadata_error_color=_LIBRARY_METADATA_ERROR_COLOR,
+        metadata_status_color=_LIBRARY_METADATA_STATUS_COLOR,
+        metadata_status_duration_ms=_LIBRARY_METADATA_STATUS_DURATION_MS,
+        metadata_error_duration_ms=_LIBRARY_METADATA_ERROR_DURATION_MS,
+        progress_track_color=_LIBRARY_PROGRESS_TRACK_COLOR,
+        progress_fill_color=_LIBRARY_PROGRESS_FILL_COLOR,
+        progress_height=_LIBRARY_PROGRESS_HEIGHT,
+        progress_width=_LIBRARY_PROGRESS_WIDTH,
+        progress_top_pad=_LIBRARY_PROGRESS_TOP_PAD,
+        action_button_width=_LIBRARY_ACTION_BUTTON_WIDTH,
+        action_button_pad_x=_LIBRARY_ACTION_BUTTON_PAD_X,
+        action_button_pad_y=_LIBRARY_ACTION_BUTTON_PAD_Y,
+        overflow_text=_LIBRARY_OVERFLOW_TEXT,
+        overflow_font=_LIBRARY_OVERFLOW_FONT,
+        overflow_fg=_LIBRARY_OVERFLOW_FG,
+        overflow_hover_fg=_LIBRARY_OVERFLOW_HOVER_FG,
+        overflow_hover_bg=_LIBRARY_OVERFLOW_HOVER_BG,
+        menu_bg=_LIBRARY_MENU_BG,
+        menu_border=_LIBRARY_MENU_BORDER,
+        menu_hover_bg=_LIBRARY_MENU_HOVER_BG,
+        menu_text=_LIBRARY_MENU_TEXT,
+        scrollbar_width=_LIBRARY_SCROLLBAR_WIDTH,
+        scroll_thumb_min_height=_LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
+        scroll_thumb_width=_LIBRARY_SCROLL_THUMB_WIDTH,
+        scroll_thumb_color=_LIBRARY_SCROLL_THUMB_COLOR,
+        scroll_thumb_active_color=_LIBRARY_SCROLL_THUMB_ACTIVE_COLOR,
+    )
+
+
 def _set_tk_window_icon(window) -> None:
     if not _APP_ICON_PATH:
         return
@@ -321,18 +373,6 @@ class _UpdatePresentation:
     progress_visible: bool = False
     progress_fraction: float = 0.0
     error: bool = False
-
-
-@dataclass(frozen=True)
-class _MapLibraryRowWidgets:
-    """Tk widgets owned by one map-library row on the splash thread."""
-
-    row_shell: object
-    leading_widget: object
-    action_button: object
-    metadata_label: object | None
-    progress_bar_canvas: object | None = None
-    progress_bar: object | None = None
 
 
 def _display_version(version: str | None) -> str:
@@ -490,6 +530,7 @@ def show_splash_screen(
 
     splash_state = {"closing": False}
     last_update_presentation: list[_UpdatePresentation | None] = [None]
+    map_library_panel_ref: list[MapLibraryPanel | None] = [None]
 
     # Status and action labels stay packed even when empty. State changes never
     # resize the splash, and keyboard focus is enabled only for active actions.
@@ -597,7 +638,9 @@ def show_splash_screen(
         root.after(100, _refresh_update_presentation)
 
     def _leave_splash() -> None:
-        _close_active_library_menu()
+        panel = map_library_panel_ref[0]
+        if panel is not None:
+            panel.close_active_menu()
         _cancel_active_library_download_for_close()
         splash_state["closing"] = True
         root.withdraw()
@@ -693,16 +736,18 @@ def show_splash_screen(
     sample_maps_root_dir = default_sample_maps_install_dir()
     recent_map_paths = _load_library_recent_map_paths()
     map_library_controller = MapLibraryController(KNOWN_SAMPLE_MAPS)
-    # Splash owns row widgets on the Tk thread. The controller owns
-    # presentation-independent map-library state; catalog/download workers only
-    # publish queue messages polled by this surface.
-    standard_library_rows: dict[str, _MapLibraryRowWidgets] = {}
-    recent_map_rows: dict[str, _MapLibraryRowWidgets] = {}
-    recent_rows_container = [None]
-    recent_empty_note = [None]
-    active_library_menu = {"window": None}
-    library_scroll_sync = {"callback": None}
-    library_mousewheel_bind = {"callback": None}
+    # Splash owns workflow decisions. The panel owns Tk widgets on the Tk
+    # thread, and the controller owns presentation-independent map-library
+    # state.
+    map_library_panel = MapLibraryPanel(
+        root,
+        px=px,
+        bind_activation=_bind_activation,
+        widget_exists=lambda widget: _widget_exists(widget),
+        logger=_LOG,
+        style=_map_library_panel_style(),
+    )
+    map_library_panel_ref[0] = map_library_panel
     def _widget_exists(widget) -> bool:
         if widget is None:
             return False
@@ -714,94 +759,13 @@ def show_splash_screen(
     def _splash_exists() -> bool:
         return not splash_state["closing"] and _widget_exists(root)
 
-    def _cancel_library_row_status(metadata_label) -> None:
-        after_id = getattr(metadata_label, "_cv_status_after_id", None)
-        if after_id is None:
-            return
-        metadata_label._cv_status_after_id = None
-        try:
-            root.after_cancel(after_id)
-        except tk.TclError:
-            pass
-
-    def _set_metadata_label_base(metadata_label, text: str, *, error: bool = False) -> None:
-        _cancel_library_row_status(metadata_label)
-        fg = _LIBRARY_METADATA_ERROR_COLOR if error else _LIBRARY_METADATA_COLOR
-        metadata_label._cv_base_text = text
-        metadata_label._cv_base_fg = fg
-        metadata_label.config(text=text, fg=fg)
-
     def _set_library_row_metadata(
         library_map, text: str, *, error: bool = False
     ) -> None:
-        widgets = standard_library_rows.get(
-            map_library_controller.map_key(library_map)
-        )
-        if widgets is None or not _widget_exists(widgets.metadata_label):
-            return
-        _set_metadata_label_base(widgets.metadata_label, text, error=error)
-
-    def _show_library_row_status(
-        row_widgets: _MapLibraryRowWidgets | None,
-        text: str,
-        *,
-        error: bool = False,
-    ) -> bool:
-        if row_widgets is None or not _widget_exists(row_widgets.metadata_label):
-            return False
-
-        label = row_widgets.metadata_label
-        _cancel_library_row_status(label)
-        label.config(
-            text=text,
-            fg=(
-                _LIBRARY_METADATA_ERROR_COLOR
-                if error
-                else _LIBRARY_METADATA_STATUS_COLOR
-            ),
-        )
-
-        def restore_metadata() -> None:
-            label._cv_status_after_id = None
-            if not _widget_exists(label):
-                return
-            label.config(
-                text=getattr(label, "_cv_base_text", ""),
-                fg=getattr(label, "_cv_base_fg", _LIBRARY_METADATA_COLOR),
-            )
-
-        label._cv_status_after_id = root.after(
-            (
-                _LIBRARY_METADATA_ERROR_DURATION_MS
-                if error
-                else _LIBRARY_METADATA_STATUS_DURATION_MS
-            ),
-            restore_metadata,
-        )
-        return True
-
-    def _set_library_action_button(
-        button, text: str, command, *, enabled: bool = True
-    ) -> None:
-        button._cv_enabled = bool(enabled)
-
-        def invoke_if_enabled() -> None:
-            if getattr(button, "_cv_enabled", True):
-                command()
-
-        _bind_activation(button, invoke_if_enabled)
-        button.config(
-            text=text,
-            bg=_BUTTON_BG if enabled else DARK_THEME.secondary_button,
-            fg=_BUTTON_FG if enabled else DARK_THEME.placeholder_text,
-            cursor="hand2" if enabled else "arrow",
-            takefocus=enabled,
-            highlightbackground=(
-                _BUTTON_BORDER_COLOR if enabled else DARK_THEME.entry_border
-            ),
-            highlightcolor=(
-                _BUTTON_BORDER_COLOR if enabled else DARK_THEME.entry_border
-            ),
+        map_library_panel.set_standard_row_metadata(
+            map_library_controller.map_key(library_map),
+            text,
+            error=error,
         )
 
     def _open_library_map_from_splash(path: str) -> None:
@@ -814,34 +778,15 @@ def show_splash_screen(
         _save_last_browse_dir(path)
         _leave_splash()
 
-    def _close_active_library_menu() -> None:
-        menu = active_library_menu.get("window")
-        active_library_menu["window"] = None
-        if _widget_exists(menu):
-            try:
-                menu.destroy()
-            except tk.TclError:
-                pass
-
-    def _sync_library_scroll_after_row_change() -> None:
-        callback = library_scroll_sync.get("callback")
-        if callback is not None and _splash_exists():
-            root.after_idle(callback)
-
-    def _bind_library_mousewheel_if_ready(widget) -> None:
-        callback = library_mousewheel_bind.get("callback")
-        if callback is not None and _widget_exists(widget):
-            callback(widget)
-
     def _remove_map_cache_from_splash(
         path: str,
         title: str,
-        row_widgets: _MapLibraryRowWidgets | None,
+        row_widgets: MapLibraryRowWidgets | None,
     ) -> None:
         result = remove_managed_map_cache(path)
         if result.error:
             _LOG.warning("Unable to remove cache for %s: %s", title, result.error)
-            if not _show_library_row_status(
+            if not map_library_panel.show_row_status(
                 row_widgets,
                 "Couldn’t remove cache",
                 error=True,
@@ -854,12 +799,11 @@ def show_splash_screen(
                     font=_BODY_FONT,
                 )
         elif result.removed:
-            _show_library_row_status(row_widgets, "Cache removed")
+            map_library_panel.show_row_status(row_widgets, "Cache removed")
         else:
-            _show_library_row_status(row_widgets, "No cache found")
+            map_library_panel.show_row_status(row_widgets, "No cache found")
 
-        if row_widgets is not None and _widget_exists(row_widgets.leading_widget):
-            _refresh_library_overflow_button(row_widgets.leading_widget)
+        map_library_panel.refresh_row_overflow(row_widgets)
 
     def _refresh_available_library_row(library_map) -> None:
         downloaded = is_sample_map_already_downloaded(
@@ -886,7 +830,7 @@ def show_splash_screen(
     def _remove_standard_library_download_from_splash(
         sample,
         sample_path: str,
-        row_widgets: _MapLibraryRowWidgets | None,
+        row_widgets: MapLibraryRowWidgets | None,
     ) -> None:
         cache_result = remove_managed_map_cache(sample_path)
         if cache_result.error:
@@ -895,7 +839,7 @@ def show_splash_screen(
                 sample.display_name,
                 cache_result.error,
             )
-            if not _show_library_row_status(
+            if not map_library_panel.show_row_status(
                 row_widgets,
                 "Couldn’t remove files",
                 error=True,
@@ -908,8 +852,7 @@ def show_splash_screen(
                     duration_ms=9000,
                     font=_BODY_FONT,
                 )
-            if row_widgets is not None and _widget_exists(row_widgets.leading_widget):
-                _refresh_library_overflow_button(row_widgets.leading_widget)
+            map_library_panel.refresh_row_overflow(row_widgets)
             return
 
         removal_result = remove_downloaded_sample_map(sample_maps_root_dir, sample)
@@ -920,7 +863,7 @@ def show_splash_screen(
                 sample.display_name,
                 removal_result.error,
             )
-            if not _show_library_row_status(
+            if not map_library_panel.show_row_status(
                 row_widgets,
                 "Couldn’t remove files",
                 error=True,
@@ -936,10 +879,10 @@ def show_splash_screen(
             return
 
         if removal_result.removed_paths or cache_result.removed:
-            _show_library_row_status(row_widgets, "Removed")
+            map_library_panel.show_row_status(row_widgets, "Removed")
             return
 
-        _show_library_row_status(row_widgets, "No files found")
+        map_library_panel.show_row_status(row_widgets, "No files found")
 
     def _remove_recent_map_from_splash(path: str) -> None:
         remove_recent_map_path(path)
@@ -949,169 +892,7 @@ def show_splash_screen(
             for recent_path in recent_map_paths
             if recent_map_key(recent_path) != normalized
         ]
-        row_widgets = recent_map_rows.pop(normalized, None)
-        if row_widgets is not None and _widget_exists(row_widgets.row_shell):
-            row_widgets.row_shell.destroy()
-
-        container = recent_rows_container[0]
-        if not recent_map_rows and _widget_exists(container):
-            if not _widget_exists(recent_empty_note[0]):
-                recent_empty_note[0] = _create_map_library_empty_note(
-                    container,
-                    "No maps added yet.",
-                    bottom_pad=18,
-                )
-                _bind_library_mousewheel_if_ready(recent_empty_note[0])
-        _sync_library_scroll_after_row_change()
-
-    def _library_row_menu_actions(button) -> tuple[tuple[str, object], ...]:
-        factory = getattr(button, "_cv_menu_actions_factory", None)
-        if factory is None:
-            return ()
-        try:
-            return tuple(factory() or ())
-        except Exception as exc:
-            _LOG.warning("could not build map-library row menu: %s", exc)
-            return ()
-
-    def _refresh_library_overflow_button(button) -> None:
-        has_actions = bool(_library_row_menu_actions(button))
-        button._cv_has_menu_actions = has_actions
-        button.config(
-            text=_LIBRARY_OVERFLOW_TEXT if has_actions else "",
-            fg=_LIBRARY_OVERFLOW_FG if has_actions else _PANEL_COLOR,
-            cursor="hand2" if has_actions else "arrow",
-            takefocus=has_actions,
-            highlightbackground=_PANEL_COLOR,
-            highlightcolor=_BUTTON_BORDER_COLOR if has_actions else _PANEL_COLOR,
-        )
-
-    def _show_library_row_menu(button) -> None:
-        _close_active_library_menu()
-        if not _widget_exists(button):
-            return
-
-        actions = _library_row_menu_actions(button)
-        if not actions:
-            _refresh_library_overflow_button(button)
-            return
-
-        menu = tk.Toplevel(root)
-        active_library_menu["window"] = menu
-        menu.withdraw()
-        menu.overrideredirect(True)
-        menu.transient(root)
-        menu.configure(bg=_LIBRARY_MENU_BORDER)
-
-        frame = tk.Frame(
-            menu,
-            bg=_LIBRARY_MENU_BG,
-            highlightthickness=1,
-            highlightbackground=_LIBRARY_MENU_BORDER,
-            highlightcolor=_LIBRARY_MENU_BORDER,
-        )
-        frame.pack()
-
-        first_item = [None]
-        for item_text, item_action in actions:
-
-            def invoke_and_close(action=item_action) -> None:
-                _close_active_library_menu()
-                action()
-
-            item = tk.Label(
-                frame,
-                text=item_text,
-                font=_SMALL_FONT,
-                bg=_LIBRARY_MENU_BG,
-                fg=_LIBRARY_MENU_TEXT,
-                padx=px(12),
-                pady=px(7),
-                cursor="hand2",
-                takefocus=True,
-                anchor="w",
-            )
-            _bind_activation(item, invoke_and_close)
-            item.bind(
-                "<Enter>",
-                lambda _event, target=item: target.config(
-                    bg=_LIBRARY_MENU_HOVER_BG
-                ),
-            )
-            item.bind(
-                "<Leave>",
-                lambda _event, target=item: target.config(bg=_LIBRARY_MENU_BG),
-            )
-            item.pack(fill="x")
-            if first_item[0] is None:
-                first_item[0] = item
-
-        try:
-            x = button.winfo_rootx()
-            y = button.winfo_rooty() + button.winfo_height() + px(4)
-            menu.geometry(f"+{x}+{y}")
-            menu.deiconify()
-            menu.lift()
-            if first_item[0] is not None:
-                first_item[0].focus_set()
-        except tk.TclError:
-            _close_active_library_menu()
-            return
-
-        menu.bind("<Escape>", lambda _event: _close_active_library_menu())
-        menu.bind(
-            "<FocusOut>",
-            lambda _event: root.after(80, _close_active_library_menu),
-        )
-
-    def _create_library_overflow_button(parent, menu_actions_factory=None):
-        button = tk.Label(
-            parent,
-            text="",
-            font=_LIBRARY_OVERFLOW_FONT,
-            bg=_PANEL_COLOR,
-            fg=_PANEL_COLOR,
-            width=2,
-            padx=0,
-            pady=0,
-            cursor="arrow",
-            takefocus=False,
-            highlightthickness=1,
-            highlightbackground=_PANEL_COLOR,
-            highlightcolor=_PANEL_COLOR,
-        )
-        button._cv_menu_actions_factory = menu_actions_factory
-        button._cv_has_menu_actions = False
-
-        def show_hover(_event=None) -> None:
-            if not getattr(button, "_cv_has_menu_actions", False):
-                return
-            button.config(
-                bg=_LIBRARY_OVERFLOW_HOVER_BG,
-                fg=_LIBRARY_OVERFLOW_HOVER_FG,
-                highlightbackground=_LIBRARY_MENU_BORDER,
-            )
-
-        def clear_hover(_event=None) -> None:
-            if not getattr(button, "_cv_has_menu_actions", False):
-                button.config(
-                    bg=_PANEL_COLOR,
-                    fg=_PANEL_COLOR,
-                    highlightbackground=_PANEL_COLOR,
-                )
-                return
-            button.config(
-                bg=_PANEL_COLOR,
-                fg=_LIBRARY_OVERFLOW_FG,
-                highlightbackground=_PANEL_COLOR,
-            )
-
-        _bind_activation(button, lambda: _show_library_row_menu(button))
-        button.bind("<Enter>", show_hover)
-        button.bind("<Leave>", clear_hover)
-        button.pack(side="left", padx=(px(6), 0), pady=px(5))
-        _refresh_library_overflow_button(button)
-        return button
+        map_library_panel.remove_recent_row(normalized)
 
     def _open_standard_library_map_from_splash(library_map) -> None:
         map_path = (
@@ -1135,28 +916,25 @@ def show_splash_screen(
         library_map,
         row,
     ) -> None:
-        widgets = standard_library_rows.get(row.key)
-        if widgets is None or not _widget_exists(widgets.action_button):
-            return
         if row.downloaded:
-            _set_library_action_button(
-                widgets.action_button,
+            if not map_library_panel.set_standard_row_action(
+                row.key,
                 row.action_text,
                 lambda s=library_map: _open_standard_library_map_from_splash(s),
                 enabled=row.enabled,
-            )
+            ):
+                return
             _set_library_row_metadata(library_map, row.detail)
-            if _widget_exists(widgets.leading_widget):
-                _refresh_library_overflow_button(widgets.leading_widget)
+            map_library_panel.refresh_standard_row_overflow(row.key)
             return
-        _set_library_action_button(
-            widgets.action_button,
+        if not map_library_panel.set_standard_row_action(
+            row.key,
             row.action_text,
             lambda s=library_map: _on_library_map_action(s),
             enabled=row.enabled,
-        )
-        if _widget_exists(widgets.leading_widget):
-            _refresh_library_overflow_button(widgets.leading_widget)
+        ):
+            return
+        map_library_panel.refresh_standard_row_overflow(row.key)
 
     def _set_non_active_library_actions_enabled(
         active_map, enabled: bool
@@ -1179,60 +957,23 @@ def show_splash_screen(
             _set_available_library_action(row_map, row)
 
     def _reset_library_progress_bar(library_map) -> None:
-        widgets = standard_library_rows.get(
+        map_library_panel.reset_standard_progress(
             map_library_controller.map_key(library_map)
-        )
-        if widgets is None or not _widget_exists(widgets.progress_bar_canvas):
-            return
-        widgets.progress_bar_canvas.config(bg=_PANEL_COLOR)
-        widgets.progress_bar_canvas.coords(
-            widgets.progress_bar,
-            0,
-            0,
-            0,
-            px(_LIBRARY_PROGRESS_HEIGHT),
         )
 
     def _show_library_progress_bar(library_map) -> None:
-        widgets = standard_library_rows.get(
+        map_library_panel.show_standard_progress(
             map_library_controller.map_key(library_map)
         )
-        if widgets is None or not _widget_exists(widgets.progress_bar_canvas):
-            return
-        widgets.progress_bar_canvas.config(bg=_LIBRARY_PROGRESS_TRACK_COLOR)
-        widgets.progress_bar_canvas.coords(
-            widgets.progress_bar,
-            0,
-            0,
-            0,
-            px(_LIBRARY_PROGRESS_HEIGHT),
-        )
-        root.update_idletasks()
 
     def _apply_library_download_progress(
         library_map, progress: SampleDownloadProgress
     ) -> None:
-        widgets = standard_library_rows.get(
-            map_library_controller.map_key(library_map)
+        map_library_panel.apply_standard_progress(
+            map_library_controller.map_key(library_map),
+            progress.downloaded_bytes,
+            progress.total_bytes,
         )
-        if widgets is None or not _widget_exists(widgets.progress_bar_canvas):
-            return
-        if progress.total_bytes is None or progress.total_bytes <= 0:
-            _set_library_row_metadata(library_map, "Downloading…")
-            return
-        fraction = min(1.0, progress.downloaded_bytes / progress.total_bytes)
-        _set_library_row_metadata(
-            library_map, f"Downloading… {int(round(fraction * 100))}%"
-        )
-        canvas_width = widgets.progress_bar_canvas.winfo_width()
-        if canvas_width > 1:
-            widgets.progress_bar_canvas.coords(
-                widgets.progress_bar,
-                0,
-                0,
-                int(canvas_width * fraction),
-                px(_LIBRARY_PROGRESS_HEIGHT),
-            )
 
     def _clear_active_library_download(library_map) -> None:
         inhibitor = map_library_controller.clear_active_download()
@@ -1377,10 +1118,8 @@ def show_splash_screen(
             _prepare_library_catalog_for_download(library_map)
             return
 
-        widgets = standard_library_rows.get(
-            map_library_controller.map_key(library_map)
-        )
-        if widgets is None or not _widget_exists(widgets.action_button):
+        row_key = map_library_controller.map_key(library_map)
+        if not map_library_panel.has_standard_row(row_key):
             return
 
         _show_library_progress_bar(library_map)
@@ -1390,16 +1129,19 @@ def show_splash_screen(
 
         def request_cancel() -> None:
             cancel_event.set()
-            if _widget_exists(widgets.action_button):
-                _set_library_action_button(
-                    widgets.action_button,
-                    "Cancel",
-                    lambda: None,
-                    enabled=False,
-                )
+            map_library_panel.set_standard_row_action(
+                row_key,
+                "Cancel",
+                lambda: None,
+                enabled=False,
+            )
             _set_library_row_metadata(library_map, "Canceling…")
 
-        _set_library_action_button(widgets.action_button, "Cancel", request_cancel)
+        map_library_panel.set_standard_row_action(
+            row_key,
+            "Cancel",
+            request_cancel,
+        )
         _set_non_active_library_actions_enabled(library_map, False)
         map_library_controller.begin_download(
             library_map,
@@ -1568,181 +1310,11 @@ def show_splash_screen(
             return
         _start_inline_library_download(resolved_map)
 
-    def _configure_sample_button_hover(button) -> None:
-        def show_hover(_event) -> None:
-            if getattr(button, "_cv_enabled", True):
-                button.config(bg=_BUTTON_HOVER_BG)
-
-        def clear_hover(_event) -> None:
-            button.config(
-                bg=(
-                    _BUTTON_BG
-                    if getattr(button, "_cv_enabled", True)
-                    else DARK_THEME.secondary_button
-                )
-            )
-
-        button.bind("<Enter>", show_hover)
-        button.bind("<Leave>", clear_hover)
-
-    def _create_map_library_section(parent, text: str, *, top_pad: int = 10) -> None:
-        label = tk.Label(
-            parent,
-            text=text,
-            font=_SMALL_FONT,
-            fg=_INSTRUCTION_COLOR,
-            bg=_PANEL_COLOR,
-            anchor="w",
-        )
-        label.pack(anchor="w", fill="x", pady=(px(top_pad), px(6)))
-
-    def _create_map_library_empty_note(
-        parent,
-        text: str,
-        *,
-        bottom_pad: int = 8,
-    ) -> tk.Label:
-        label = tk.Label(
-            parent,
-            text=text,
-            font=_SMALL_FONT,
-            fg="#5f606b",
-            bg=_PANEL_COLOR,
-            anchor="w",
-            justify="left",
-        )
-        label.pack(anchor="w", fill="x", pady=(0, px(bottom_pad)))
-        return label
-
-    def _create_map_library_row(
-        parent,
-        *,
-        title: str,
-        detail: str,
-        size_text: str,
-        action_text: str,
-        action,
-        reserve_metadata: bool = False,
-        reserve_progress: bool = False,
-        menu_actions_factory=None,
-    ) -> _MapLibraryRowWidgets:
-        row_shell = tk.Frame(
-            parent,
-            bg=_PANEL_COLOR,
-            highlightthickness=0,
-        )
-        row_shell.pack(fill="x", pady=(0, px(12)))
-
-        row_content = tk.Frame(row_shell, bg=_PANEL_COLOR)
-        row_content.pack(fill="x")
-
-        leading_widget = _create_library_overflow_button(
-            row_content,
-            menu_actions_factory,
-        )
-
-        text_column = tk.Frame(row_content, bg=_PANEL_COLOR)
-        text_column.pack(
-            side="left",
-            fill="x",
-            expand=True,
-            padx=(px(12), px(8)),
-            pady=px(5),
-        )
-
-        name_label = tk.Label(
-            text_column,
-            text=title,
-            font=_SMALL_FONT,
-            fg=_TITLE_COLOR,
-            bg=_PANEL_COLOR,
-            anchor="w",
-            justify="left",
-            wraplength=px(250),
-        )
-        name_label.pack(anchor="w", fill="x")
-
-        metadata_text = detail or size_text
-        metadata_label = None
-        if metadata_text or reserve_metadata:
-            metadata_label = tk.Label(
-                text_column,
-                text=metadata_text,
-                font=_LIBRARY_METADATA_FONT,
-                fg=_LIBRARY_METADATA_COLOR,
-                bg=_PANEL_COLOR,
-                anchor="w",
-                justify="left",
-            )
-            metadata_label.pack(anchor="w", fill="x", pady=(px(2), 0))
-            metadata_label._cv_base_text = metadata_text
-            metadata_label._cv_base_fg = _LIBRARY_METADATA_COLOR
-            metadata_label._cv_status_after_id = None
-
-        action_button = tk.Label(
-            row_content,
-            text=action_text,
-            font=_SMALL_FONT,
-            bg=_BUTTON_BG,
-            fg=_BUTTON_FG,
-            width=_LIBRARY_ACTION_BUTTON_WIDTH,
-            padx=px(_LIBRARY_ACTION_BUTTON_PAD_X),
-            pady=px(_LIBRARY_ACTION_BUTTON_PAD_Y),
-            cursor="hand2",
-            takefocus=True,
-            highlightthickness=1,
-            highlightbackground=_BUTTON_BORDER_COLOR,
-            highlightcolor=_BUTTON_BORDER_COLOR,
-        )
-        _bind_activation(
-            action_button,
-            action,
-        )
-        _configure_sample_button_hover(action_button)
-        action_button.pack(side="right", padx=(0, px(12)), pady=px(5))
-        action_button._cv_enabled = True
-
-        progress_bar_canvas = None
-        progress_bar = None
-        if reserve_progress:
-            # Reserve a compact progress strip inside the row's text column.
-            # Starting a download only redraws this already-packed canvas, so
-            # rows below the active map do not shift when the download begins.
-            progress_bar_canvas = tk.Canvas(
-                text_column,
-                width=px(_LIBRARY_PROGRESS_WIDTH),
-                height=px(_LIBRARY_PROGRESS_HEIGHT),
-                bg=_PANEL_COLOR,
-                highlightthickness=0,
-            )
-            progress_bar_canvas.pack(
-                anchor="w",
-                pady=(px(_LIBRARY_PROGRESS_TOP_PAD), 0),
-            )
-            progress_bar = progress_bar_canvas.create_rectangle(
-                0,
-                0,
-                0,
-                px(_LIBRARY_PROGRESS_HEIGHT),
-                fill=_LIBRARY_PROGRESS_FILL_COLOR,
-                width=0,
-            )
-        return _MapLibraryRowWidgets(
-            row_shell=row_shell,
-            leading_widget=leading_widget,
-            action_button=action_button,
-            metadata_label=metadata_label,
-            progress_bar_canvas=progress_bar_canvas,
-            progress_bar=progress_bar,
-        )
-
-    def _create_recent_map_row(parent, path: str) -> None:
+    def _create_recent_map_row(path: str) -> None:
         entry = recent_map_entry(path)
-        normalized = entry.key
-        row_widgets = None
         title = entry.title
 
-        def menu_actions(path=path, title=title):
+        def menu_actions(row_widgets, path=path, title=title):
             actions = [
                 (
                     "Remove from this list",
@@ -1762,18 +1334,13 @@ def show_splash_screen(
                 )
             return tuple(actions)
 
-        row_widgets = _create_map_library_row(
-            parent,
-            title=title,
-            detail=entry.detail,
-            size_text="",
-            action_text="Open",
+        map_library_panel.add_recent_row(
+            entry,
             action=lambda path=path: _open_library_map_from_splash(path),
             menu_actions_factory=menu_actions,
         )
-        recent_map_rows[normalized] = row_widgets
 
-    def _create_available_map_row(parent, sample) -> None:
+    def _create_available_map_row(sample) -> None:
         downloaded = is_sample_map_already_downloaded(sample_maps_root_dir, sample)
         result_path = existing_sample_map_path(sample_maps_root_dir, sample)
         row = map_library_controller.row(
@@ -1781,9 +1348,8 @@ def show_splash_screen(
             downloaded=downloaded,
             result_path=result_path if downloaded else None,
         )
-        row_widgets = None
 
-        def menu_actions(sample=sample):
+        def menu_actions(row_widgets, sample=sample):
             sample_path = _downloaded_library_map_path(sample)
             if sample_path is None:
                 return ()
@@ -1800,221 +1366,24 @@ def show_splash_screen(
                 ),
             )
 
-        row_widgets = _create_map_library_row(
-            parent,
-            title=row.title,
-            detail=row.detail,
-            size_text="",
-            action_text=row.action_text,
+        map_library_panel.add_standard_row(
+            row,
             action=lambda sample=sample: _on_library_map_action(sample),
-            reserve_metadata=True,
-            reserve_progress=True,
             menu_actions_factory=menu_actions,
         )
-        standard_library_rows[row.key] = row_widgets
 
     def _create_map_library_panel(parent) -> None:
-        panel = tk.Frame(
-            parent,
-            bg=_PANEL_COLOR,
-            highlightthickness=1,
-            highlightbackground=_LIBRARY_PANEL_BORDER_COLOR,
-            highlightcolor=_LIBRARY_PANEL_BORDER_COLOR,
-        )
-        panel.pack(fill="both", expand=True, pady=px(26))
-
-        scrollbar_fraction = [(0.0, 1.0)]
-        scrollbar_thumb = [None]
-        scrollbar_drag_offset = [0.0]
-
-        scroll_shell = tk.Frame(panel, bg=_PANEL_COLOR)
-        scroll_shell.pack(fill="both", expand=True, padx=px(12), pady=(0, px(12)))
-
-        content_canvas = tk.Canvas(
-            scroll_shell,
-            bg=_PANEL_COLOR,
-            borderwidth=0,
-            highlightthickness=0,
-            yscrollcommand=lambda *_args: None,
-        )
-        content_scrollbar = tk.Canvas(
-            scroll_shell,
-            bg=_PANEL_COLOR,
-            borderwidth=0,
-            highlightthickness=0,
-            width=_LIBRARY_SCROLLBAR_WIDTH,
-            cursor="sb_v_double_arrow",
-        )
-        content_canvas.pack(side="left", fill="both", expand=True)
-
-        rows_frame = tk.Frame(content_canvas, bg=_PANEL_COLOR)
-        rows_window = content_canvas.create_window(
-            (0, 0),
-            window=rows_frame,
-            anchor="nw",
-        )
-
-        def _draw_library_scrollbar_thumb() -> None:
-            height = max(1, content_scrollbar.winfo_height())
-            first, last = scrollbar_fraction[0]
-            visible_fraction = max(0.0, min(1.0, last - first))
-            if visible_fraction >= 1.0:
-                if scrollbar_thumb[0] is not None:
-                    content_scrollbar.delete(scrollbar_thumb[0])
-                    scrollbar_thumb[0] = None
-                return
-
-            thumb_height = max(
-                _LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
-                int(round(height * visible_fraction)),
-            )
-            travel = max(1, height - thumb_height)
-            y0 = int(round(max(0.0, min(1.0, first)) * travel))
-            y1 = min(height, y0 + thumb_height)
-            x = _LIBRARY_SCROLLBAR_WIDTH // 2
-            if scrollbar_thumb[0] is None:
-                scrollbar_thumb[0] = content_scrollbar.create_line(
-                    x,
-                    y0,
-                    x,
-                    y1,
-                    fill=_LIBRARY_SCROLL_THUMB_COLOR,
-                    width=_LIBRARY_SCROLL_THUMB_WIDTH,
-                    capstyle="round",
-                )
-            else:
-                content_scrollbar.coords(scrollbar_thumb[0], x, y0, x, y1)
-
-        def _set_library_scrollbar(first: str, last: str) -> None:
-            scrollbar_fraction[0] = (float(first), float(last))
-            _draw_library_scrollbar_thumb()
-
-        content_canvas.configure(yscrollcommand=_set_library_scrollbar)
-
-        def _sync_library_scrollbar() -> None:
-            width = max(1, content_canvas.winfo_width())
-            content_height = rows_frame.winfo_reqheight()
-            content_canvas.configure(scrollregion=(0, 0, width, content_height))
-            visible_height = content_canvas.winfo_height()
-            if content_height > visible_height + 1:
-                if not content_scrollbar.winfo_manager():
-                    content_scrollbar.pack(side="right", fill="y")
-            else:
-                if content_scrollbar.winfo_manager():
-                    content_scrollbar.pack_forget()
-                content_canvas.yview_moveto(0)
-
-        def _resize_library_canvas_window(event) -> None:
-            content_canvas.itemconfigure(rows_window, width=event.width)
-            _sync_library_scrollbar()
-
-        def _scroll_library_content(event):
-            if not content_scrollbar.winfo_manager():
-                return None
-            delta = getattr(event, "delta", 0)
-            if delta:
-                content_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
-            elif getattr(event, "num", None) == 4:
-                content_canvas.yview_scroll(-1, "units")
-            elif getattr(event, "num", None) == 5:
-                content_canvas.yview_scroll(1, "units")
-            return "break"
-
-        def _start_library_scrollbar_drag(event):
-            first, last = scrollbar_fraction[0]
-            height = max(1, content_scrollbar.winfo_height())
-            visible_fraction = max(0.0, min(1.0, last - first))
-            thumb_height = max(
-                _LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
-                int(round(height * visible_fraction)),
-            )
-            travel = max(1, height - thumb_height)
-            thumb_top = int(round(first * travel))
-            thumb_bottom = thumb_top + thumb_height
-            if thumb_top <= event.y <= thumb_bottom:
-                scrollbar_drag_offset[0] = event.y - thumb_top
-            else:
-                scrollbar_drag_offset[0] = thumb_height / 2
-                _drag_library_scrollbar(event)
-            if scrollbar_thumb[0] is not None:
-                content_scrollbar.itemconfigure(
-                    scrollbar_thumb[0],
-                    fill=_LIBRARY_SCROLL_THUMB_ACTIVE_COLOR,
-                )
-            return "break"
-
-        def _drag_library_scrollbar(event):
-            first, last = scrollbar_fraction[0]
-            height = max(1, content_scrollbar.winfo_height())
-            visible_fraction = max(0.0, min(1.0, last - first))
-            thumb_height = max(
-                _LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
-                int(round(height * visible_fraction)),
-            )
-            travel = max(1, height - thumb_height)
-            thumb_top = max(0, min(travel, event.y - scrollbar_drag_offset[0]))
-            content_canvas.yview_moveto(thumb_top / travel)
-            return "break"
-
-        def _end_library_scrollbar_drag(_event):
-            if scrollbar_thumb[0] is not None:
-                content_scrollbar.itemconfigure(
-                    scrollbar_thumb[0],
-                    fill=_LIBRARY_SCROLL_THUMB_COLOR,
-                )
-            return "break"
-
-        def _bind_library_mousewheel(widget) -> None:
-            widget.bind("<MouseWheel>", _scroll_library_content, add="+")
-            widget.bind("<Button-4>", _scroll_library_content, add="+")
-            widget.bind("<Button-5>", _scroll_library_content, add="+")
-            for child in widget.winfo_children():
-                _bind_library_mousewheel(child)
-
-        library_scroll_sync["callback"] = _sync_library_scrollbar
-        library_mousewheel_bind["callback"] = _bind_library_mousewheel
-
-        content_canvas.bind("<Configure>", _resize_library_canvas_window, add="+")
-        content_canvas.bind("<MouseWheel>", _scroll_library_content, add="+")
-        content_canvas.bind("<Button-4>", _scroll_library_content, add="+")
-        content_canvas.bind("<Button-5>", _scroll_library_content, add="+")
-        content_scrollbar.bind(
-            "<Configure>",
-            lambda _event: _draw_library_scrollbar_thumb(),
-            add="+",
-        )
-        content_scrollbar.bind(
-            "<ButtonPress-1>",
-            _start_library_scrollbar_drag,
-            add="+",
-        )
-        content_scrollbar.bind("<B1-Motion>", _drag_library_scrollbar, add="+")
-        content_scrollbar.bind(
-            "<ButtonRelease-1>",
-            _end_library_scrollbar_drag,
-            add="+",
-        )
-
-        _create_map_library_section(rows_frame, "Your Library", top_pad=16)
-        recent_container = tk.Frame(rows_frame, bg=_PANEL_COLOR)
-        recent_container.pack(fill="x")
-        recent_rows_container[0] = recent_container
+        map_library_panel.create(parent)
         if recent_map_paths:
             for recent_path in recent_map_paths:
-                _create_recent_map_row(recent_container, recent_path)
+                _create_recent_map_row(recent_path)
         else:
-            recent_empty_note[0] = _create_map_library_empty_note(
-                recent_container,
-                "No maps added yet.",
-                bottom_pad=18,
-            )
+            map_library_panel.ensure_recent_empty_note()
 
-        _create_map_library_section(rows_frame, "Standard Library")
         for sample in KNOWN_SAMPLE_MAPS:
-            _create_available_map_row(rows_frame, sample)
+            _create_available_map_row(sample)
 
-        _bind_library_mousewheel(rows_frame)
-        root.after_idle(_sync_library_scrollbar)
+        map_library_panel.finish_population()
         _start_library_catalog_fetch()
 
     secondary_link_row = tk.Frame(left_frame, bg=_BG_COLOR)
