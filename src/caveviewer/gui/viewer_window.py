@@ -49,6 +49,7 @@ from caveviewer.gui.import_controller import MapImportController
 from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_folder
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
+from caveviewer.gui.recording_controller import RecordingStateController
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform import tk_root_options
 from caveviewer.gui.platform.windowing import run_window_config
@@ -556,8 +557,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_output_dir = os.path.expanduser(
             os.getenv("CAVEVIEWER_RECORDING_DIR", os.path.join("~", "Movies", "CaveViewer"))
         )
-        self._recording_countdown_started_at: float | None = None
-        self._recording_countdown_until: float | None = None
+        self._recording_controller = RecordingStateController(
+            frame_interval=1.0 / float(self._recording_fps)
+        )
         self._recording_process: subprocess.Popen | None = None
         self._recording_output_path: str | None = None
         self._recording_size: tuple[int, int] | None = None
@@ -566,23 +568,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_readback_slots: list[_RecordingReadbackSlot] = []
         self._recording_readback_pending: list[_RecordingReadbackSlot] = []
         self._recording_readback_byte_count = 0
-        self._recording_last_stage_ms = 0.0
-        self._recording_last_drain_ms = 0.0
-        self._recording_next_frame_time: float | None = None
-        self._recording_frame_interval = 1.0 / float(self._recording_fps)
         self._recording_frame_queue: queue.Queue | None = None
         self._recording_writer_thread: threading.Thread | None = None
         self._recording_writer_error: Exception | None = None
-        self._recording_dropped_frames = 0
         self._recording_stderr_thread: threading.Thread | None = None
         self._recording_stderr_parts: list[str] = []
         self._recording_stderr_lock = threading.Lock()
         self._recording_stop_results: queue.Queue[_RecordingStopResult] = queue.Queue()
         self._recording_stop_thread: threading.Thread | None = None
-        self._recording_status_message: str | None = None
-        self._recording_status_detail: str | None = None
-        self._recording_status_kind = "info"
-        self._recording_status_until: float | None = None
 
         self._install_backend_modifier_probe()
 
@@ -789,6 +782,101 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             self.__dict__["_import_controller"] = controller
         return controller
+
+    def _ensure_recording_controller(self) -> RecordingStateController:
+        controller = self.__dict__.get("_recording_controller")
+        if controller is None:
+            controller = RecordingStateController()
+            self.__dict__["_recording_controller"] = controller
+        return controller
+
+    @property
+    def _recording_countdown_started_at(self) -> float | None:
+        return self._ensure_recording_controller().countdown_started_at
+
+    @_recording_countdown_started_at.setter
+    def _recording_countdown_started_at(self, value: float | None) -> None:
+        self._ensure_recording_controller().countdown_started_at = value
+
+    @property
+    def _recording_countdown_until(self) -> float | None:
+        return self._ensure_recording_controller().countdown_until
+
+    @_recording_countdown_until.setter
+    def _recording_countdown_until(self, value: float | None) -> None:
+        self._ensure_recording_controller().countdown_until = value
+
+    @property
+    def _recording_last_stage_ms(self) -> float:
+        return self._ensure_recording_controller().last_stage_ms
+
+    @_recording_last_stage_ms.setter
+    def _recording_last_stage_ms(self, value: float) -> None:
+        self._ensure_recording_controller().last_stage_ms = value
+
+    @property
+    def _recording_last_drain_ms(self) -> float:
+        return self._ensure_recording_controller().last_drain_ms
+
+    @_recording_last_drain_ms.setter
+    def _recording_last_drain_ms(self, value: float) -> None:
+        self._ensure_recording_controller().last_drain_ms = value
+
+    @property
+    def _recording_next_frame_time(self) -> float | None:
+        return self._ensure_recording_controller().next_frame_time
+
+    @_recording_next_frame_time.setter
+    def _recording_next_frame_time(self, value: float | None) -> None:
+        self._ensure_recording_controller().next_frame_time = value
+
+    @property
+    def _recording_frame_interval(self) -> float:
+        return self._ensure_recording_controller().frame_interval
+
+    @_recording_frame_interval.setter
+    def _recording_frame_interval(self, value: float) -> None:
+        self._ensure_recording_controller().frame_interval = value
+
+    @property
+    def _recording_dropped_frames(self) -> int:
+        return self._ensure_recording_controller().dropped_frames
+
+    @_recording_dropped_frames.setter
+    def _recording_dropped_frames(self, value: int) -> None:
+        self._ensure_recording_controller().dropped_frames = value
+
+    @property
+    def _recording_status_message(self) -> str | None:
+        return self._ensure_recording_controller().status_message
+
+    @_recording_status_message.setter
+    def _recording_status_message(self, value: str | None) -> None:
+        self._ensure_recording_controller().status_message = value
+
+    @property
+    def _recording_status_detail(self) -> str | None:
+        return self._ensure_recording_controller().status_detail
+
+    @_recording_status_detail.setter
+    def _recording_status_detail(self, value: str | None) -> None:
+        self._ensure_recording_controller().status_detail = value
+
+    @property
+    def _recording_status_kind(self) -> str | None:
+        return self._ensure_recording_controller().status_kind
+
+    @_recording_status_kind.setter
+    def _recording_status_kind(self, value: str | None) -> None:
+        self._ensure_recording_controller().status_kind = value
+
+    @property
+    def _recording_status_until(self) -> float | None:
+        return self._ensure_recording_controller().status_until
+
+    @_recording_status_until.setter
+    def _recording_status_until(self, value: float | None) -> None:
+        self._ensure_recording_controller().status_until = value
 
     def _set_runtime_window_icon(self) -> None:
         """Set the native viewer-window icon when the backend exposes one."""
@@ -1058,7 +1146,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.camera.position = old_position
 
     def _recording_is_armed(self) -> bool:
-        return self._recording_countdown_until is not None or self._recording_process is not None
+        return self._ensure_recording_controller().is_armed(
+            process_active=self._recording_process is not None
+        )
 
     def _ensure_recording_stop_state(self) -> None:
         if not hasattr(self, "_recording_stop_results"):
@@ -1089,10 +1179,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         if self._recording_countdown_until is not None:
-            self._recording_countdown_started_at = None
-            self._recording_countdown_until = None
+            self._ensure_recording_controller().cancel_countdown(now=time.perf_counter())
             _LOG.info("Recording countdown canceled.")
-            self._show_recording_status("Recording canceled", kind="cancel")
             return
 
         self._start_recording_countdown()
@@ -1108,8 +1196,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self.controls_overlay.is_manual_mode:
             self.controls_overlay.hide_help()
         now = time.perf_counter()
-        self._recording_countdown_started_at = now
-        self._recording_countdown_until = now + self.RECORDING_COUNTDOWN_START_NUMBER + 1.0
+        self._ensure_recording_controller().start_countdown(
+            now=now,
+            start_number=self.RECORDING_COUNTDOWN_START_NUMBER,
+        )
         _LOG.info("Recording countdown started. Press Shift+R to cancel or stop.")
 
     def _resolve_ffmpeg_path(self) -> str | None:
@@ -1178,8 +1268,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_readback_slots = []
         self._recording_readback_pending = []
         self._recording_readback_byte_count = 0
-        self._recording_last_stage_ms = 0.0
-        self._recording_last_drain_ms = 0.0
+        self._ensure_recording_controller().reset_frame_timings()
         for slot in slots:
             try:
                 slot.buffer.release()
@@ -1227,23 +1316,20 @@ class CaveViewerWindow(mglw.WindowConfig):
         ffmpeg_path = self._resolve_ffmpeg_path()
         if ffmpeg_path is None:
             self._recording_unavailable("ffmpeg was not found. Install dependencies or set CAVEVIEWER_FFMPEG.")
-            self._recording_countdown_until = None
-            self._recording_countdown_started_at = None
+            self._ensure_recording_controller().clear_countdown()
             return False
 
         viewport = self._recording_capture_viewport()
         width, height = viewport[2], viewport[3]
         if width <= 0 or height <= 0:
-            self._recording_countdown_until = None
-            self._recording_countdown_started_at = None
+            self._ensure_recording_controller().clear_countdown()
             return False
 
         try:
             os.makedirs(self._recording_output_dir, exist_ok=True)
         except OSError as exc:
             _LOG.warning(f"Cannot start recording: failed to create output directory: {exc}")
-            self._recording_countdown_until = None
-            self._recording_countdown_started_at = None
+            self._ensure_recording_controller().clear_countdown()
             self._show_recording_status(
                 "Recording unavailable",
                 f"Cannot save to {self._recording_display_path(self._recording_output_dir)}",
@@ -1266,8 +1352,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._release_recording_readback_framebuffer()
             self._release_recording_readback_buffers()
             _LOG.warning(f"Cannot start recording: failed to create recording readback resources: {exc}")
-            self._recording_countdown_until = None
-            self._recording_countdown_started_at = None
+            self._ensure_recording_controller().clear_countdown()
             self._show_recording_status(
                 "Recording unavailable",
                 "Could not prepare the recording framebuffer.",
@@ -1299,14 +1384,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             _LOG.warning(f"Cannot start recording: {exc}")
             self._release_recording_readback_framebuffer()
             self._release_recording_readback_buffers()
-            self._recording_countdown_until = None
-            self._recording_countdown_started_at = None
+            self._ensure_recording_controller().clear_countdown()
             return False
 
         self._recording_process = process
         self._recording_frame_queue = queue.Queue(maxsize=2)
         self._recording_writer_error = None
-        self._recording_dropped_frames = 0
         self._recording_stderr_parts = []
 
         self._recording_writer_thread = threading.Thread(
@@ -1328,9 +1411,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_viewport = viewport
         self._recording_readback_framebuffer = readback_framebuffer
         now = time.perf_counter()
-        self._recording_next_frame_time = now
-        self._recording_countdown_until = None
-        self._recording_countdown_started_at = None
+        self._ensure_recording_controller().mark_encoder_started(now=now)
         _LOG.info(
             f"Recording started: {output_path} "
             f"capture_viewport={viewport} readback_size={output_width}x{output_height} "
@@ -1368,18 +1449,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         recording.signal_writer_stop(frame_queue)
 
     def _recording_drop_frames(self, count: int = 1) -> None:
-        if count <= 0:
-            return
-        previous = self._recording_dropped_frames
-        self._recording_dropped_frames += count
-        if previous == 0:
+        if self._ensure_recording_controller().drop_frames(count):
             _LOG.warning("Recording encoder is falling behind; dropping video frames.")
 
     def _recording_due_frame_slots(self, now: float, next_frame_time: float | None) -> int:
-        if next_frame_time is None:
-            return 1
-        late_by = max(0.0, now - next_frame_time)
-        return 1 + int(late_by / self._recording_frame_interval)
+        return self._ensure_recording_controller().due_frame_slots(
+            now=now,
+            next_frame_time=next_frame_time,
+        )
 
     def _recording_enqueue_frame(self, frame: bytes) -> bool:
         frame_queue = self._recording_frame_queue
@@ -1405,10 +1482,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         kind: str = "info",
         duration: float = 2.8,
     ) -> None:
-        self._recording_status_message = message
-        self._recording_status_detail = detail
-        self._recording_status_kind = kind
-        self._recording_status_until = time.perf_counter() + duration
+        self._ensure_recording_controller().show_status(
+            message,
+            detail=detail,
+            kind=kind,
+            duration=duration,
+            now=time.perf_counter(),
+        )
 
     def _stop_recording(self, *, show_message: bool = False) -> None:
         self._ensure_recording_stop_state()
@@ -1422,8 +1502,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         writer_thread = self._recording_writer_thread
         stderr_thread = self._recording_stderr_thread
 
-        self._recording_countdown_until = None
-        self._recording_countdown_started_at = None
+        self._ensure_recording_controller().clear_countdown()
         self._recording_process = None
         self._recording_output_path = None
         self._recording_size = None
@@ -1491,9 +1570,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _apply_recording_stop_result(self, result: _RecordingStopResult) -> None:
         self._recording_writer_error = None
-        self._recording_dropped_frames = 0
-        self._recording_last_stage_ms = 0.0
-        self._recording_last_drain_ms = 0.0
+        self._ensure_recording_controller().reset_after_stop_result()
 
         if result.returncode == 0:
             _LOG.info(f"Recording saved: {result.output_path}")
@@ -1644,11 +1721,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         *,
         render_frame: Callable[[moderngl.Framebuffer, tuple[int, int]], None] | None = None,
     ) -> float:
-        self._recording_last_stage_ms = 0.0
-        self._recording_last_drain_ms = 0.0
+        controller = self._ensure_recording_controller()
+        controller.reset_frame_timings()
 
-        if self._recording_countdown_until is not None:
-            if now < self._recording_countdown_until:
+        if controller.countdown_until is not None:
+            if not controller.countdown_ready(now=now):
                 return 0.0
             if not self._start_recording_encoder():
                 return 0.0
@@ -1691,9 +1768,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if frame_queue.full():
             staged_frames = self._discard_recording_staged_frames()
             self._recording_drop_frames(frame_slots + staged_frames)
-            self._recording_next_frame_time = (
-                (next_frame_time or now) + frame_slots * self._recording_frame_interval
-            )
+            controller.advance_next_frame_time(now=now, frame_slots=frame_slots)
             return read_ms
 
         try:
@@ -1705,9 +1780,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             stage_ms = (time.perf_counter() - t_stage) * 1000.0
             self._recording_last_stage_ms = stage_ms
             read_ms += stage_ms
-            self._recording_next_frame_time = (
-                (next_frame_time or now) + frame_slots * self._recording_frame_interval
-            )
+            controller.advance_next_frame_time(now=now, frame_slots=frame_slots)
             return read_ms
         except (OSError, moderngl.Error) as exc:
             _LOG.warning(f"Recording stopped because frame capture failed: {exc}")
@@ -1715,19 +1788,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             return read_ms
 
     def _recording_countdown_display(self, now: float) -> tuple[int, float]:
-        if self._recording_countdown_until is None:
-            return 0, 1.0
-
-        duration = self.RECORDING_COUNTDOWN_START_NUMBER + 1.0
-        started_at = self._recording_countdown_started_at
-        if started_at is None:
-            started_at = self._recording_countdown_until - duration
-
-        elapsed = max(0.0, now - started_at)
-        remaining = max(0.0, self._recording_countdown_until - now)
-        number = max(0, min(self.RECORDING_COUNTDOWN_START_NUMBER, int(math.ceil(remaining)) - 1))
-        progress = max(0.0, min(1.0, elapsed / duration))
-        return number, progress
+        display = self._ensure_recording_controller().countdown_display(
+            now=now,
+            start_number=self.RECORDING_COUNTDOWN_START_NUMBER,
+        )
+        return display.number, display.progress
 
     def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
         """Print a one-time texture summary to console on map load."""
@@ -3648,20 +3713,14 @@ class CaveViewerWindow(mglw.WindowConfig):
                                 self._bookmarks)
 
     def _render_recording_status_message(self, window_size: tuple[int, int]) -> None:
-        message = self._recording_status_message
-        detail = self._recording_status_detail
-        kind = self._recording_status_kind
-        until = self._recording_status_until
-        if not message or until is None:
+        now = time.perf_counter()
+        status = self._ensure_recording_controller().active_status(now=now)
+        if status is None:
             return
 
-        now = time.perf_counter()
-        if now >= until:
-            self._recording_status_message = None
-            self._recording_status_detail = None
-            self._recording_status_kind = "info"
-            self._recording_status_until = None
-            return
+        message = status.message
+        detail = status.detail
+        kind = status.kind
 
         w, h = window_size
         self._render_recording_countdown_scrim(window_size, alpha=0.42)

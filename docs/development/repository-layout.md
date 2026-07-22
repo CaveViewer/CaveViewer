@@ -59,6 +59,7 @@ src/caveviewer/gui/preferences.py             preference persistence facade
 src/caveviewer/gui/preferences_form.py        Tk-free preference form state
 src/caveviewer/gui/preferences_dialog.py      Tk preference dialog presentation
 src/caveviewer/gui/recording.py               recording encoder process/thread helpers
+src/caveviewer/gui/recording_controller.py    recording countdown/status/timing state
 src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
 src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
 src/caveviewer/resources/                     shaders, images, and public key
