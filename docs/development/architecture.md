@@ -136,8 +136,9 @@ overflow-menu presentation, and `splash_screen.py` wires those pieces to
 session actions such as opening maps and preferences. The standard-library map
 list is remote-data driven: `standard_library_maps.py` fetches the configured
 GitHub release, loads the `caveviewer-map-library.v1.json` release asset when
-present, joins manifest entries to release zip assets, and falls back to the
-last cached catalog or bundled catalog resource when offline.
+present, joins manifest entries to release zip assets, infers rows for extra
+zip assets when no manifest is present, and falls back to the last cached
+catalog or bundled catalog resource when offline.
 
 Directory selection, file reveal, notifications, and idle/suspend inhibition
 use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal

@@ -374,9 +374,57 @@ def _catalog_payload_from_standard_library_maps(
     return {"version": 1, "maps": entries}
 
 
+def _map_catalog_from_release_zip_assets(
+    assets_by_name: dict[str, dict],
+) -> list[StandardLibraryMapInfo]:
+    """
+    Build a compatible catalog when a release has map zips but no manifest.
+
+    Bundled metadata preserves the established titles/order for known release
+    assets. Additional zip assets are inferred from their filenames so adding a
+    new map zip to the current GitHub release still makes it visible before a
+    full manifest asset is published.
+    """
+    catalog = bundled_standard_library_catalog()
+    seen_assets = {library_map.asset_name for library_map in catalog}
+    extra_assets = sorted(
+        asset_name
+        for asset_name in assets_by_name
+        if _is_map_archive_asset_name(asset_name) and asset_name not in seen_assets
+    )
+    catalog.extend(
+        StandardLibraryMapInfo(
+            display_name=_display_name_from_map_asset_name(asset_name),
+            asset_name=asset_name,
+            catalog_id=_catalog_id_from_asset_name(asset_name),
+        )
+        for asset_name in extra_assets
+    )
+    return catalog
+
+
+def _is_map_archive_asset_name(asset_name: str) -> bool:
+    """Return whether a GitHub release asset should be treated as a map zip."""
+    return asset_name.lower().endswith(".zip")
+
+
+def _display_name_from_map_asset_name(asset_name: str) -> str:
+    """Infer a readable title for manifest-less map zip assets."""
+    stem = asset_name[:-4] if asset_name.lower().endswith(".zip") else asset_name
+    words = stem.replace("_", " ").replace("-", " ").replace(".", " ").split()
+    return " ".join(words) or stem or asset_name
+
+
 def _catalog_id_from_asset(library_map: StandardLibraryMapInfo) -> str:
     """Return a stable fallback ID when older metadata has no explicit ID."""
-    raw_value = library_map.asset_name or library_map.display_name
+    return _catalog_id_from_asset_name(
+        library_map.asset_name or library_map.display_name
+    )
+
+
+def _catalog_id_from_asset_name(asset_name: str) -> str:
+    """Return a stable ID derived from an asset filename or display value."""
+    raw_value = asset_name[:-4] if asset_name.lower().endswith(".zip") else asset_name
     return "".join(
         char.lower() if char.isalnum() else "-"
         for char in raw_value
@@ -556,8 +604,8 @@ def _remote_catalog_from_release_assets(
     Return catalog entries, an optional warning, and whether remote metadata won.
 
     The release manifest controls the dynamic list when present. Until that
-    asset is published, CaveViewer joins the bundled fallback catalog to the
-    release zip assets so the existing GitHub distribution continues to work.
+    asset is published, CaveViewer preserves bundled metadata for known zips
+    and infers rows for additional release zip assets.
     """
     catalog_asset = assets_by_name.get(_MAP_LIBRARY_CATALOG_ASSET_NAME)
     catalog_url = (
@@ -566,7 +614,7 @@ def _remote_catalog_from_release_assets(
         else None
     )
     if not catalog_url:
-        return bundled_standard_library_catalog(), None, False
+        return _map_catalog_from_release_zip_assets(assets_by_name), None, False
 
     try:
         payload = _read_json_url(
@@ -603,10 +651,11 @@ def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str 
     Returns ``(maps, error_message_or_None)``. A remote catalog manifest named
     ``caveviewer-map-library.v1.json`` controls the dynamic map list when it is
     attached to the configured release. If the manifest is absent, CaveViewer
-    uses the bundled fallback catalog and still fills download URLs from the
-    release assets. If GitHub cannot be reached, CaveViewer returns cached or
-    bundled catalog metadata without download URLs so previously downloaded
-    maps remain visible and openable.
+    preserves bundled metadata for known zip assets, infers rows for additional
+    release zip assets, and fills download URLs from the release assets. If
+    GitHub cannot be reached, CaveViewer returns cached or bundled catalog
+    metadata without download URLs so previously downloaded maps remain visible
+    and openable.
     """
     _log_map_library_config_once()
 

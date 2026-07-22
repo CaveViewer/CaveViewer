@@ -124,6 +124,11 @@ def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
                 "name": known.asset_name,
                 "browser_download_url": "https://example.invalid/map.zip",
                 "size": 1234,
+            },
+            {
+                "name": "Emergence.du.Ressel.zip",
+                "browser_download_url": "https://example.invalid/ressel.zip",
+                "size": 99 * 1024 * 1024,
             }
         ]
     }
@@ -137,10 +142,16 @@ def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
     catalog, error = standard_library_maps.fetch_standard_library_catalog()
 
     assert error is None
-    assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
+    assert len(catalog) == (
+        len(standard_library_maps.bundled_standard_library_catalog()) + 1
+    )
     assert catalog[0].download_url == "https://example.invalid/map.zip"
     assert catalog[0].size_bytes == 1234
     assert catalog[1].download_url is None
+    assert catalog[-1].catalog_id == "emergence-du-ressel"
+    assert catalog[-1].display_name == "Emergence du Ressel"
+    assert catalog[-1].download_url == "https://example.invalid/ressel.zip"
+    assert catalog[-1].size_bytes == 99 * 1024 * 1024
 
 
 @pytest.mark.parametrize(
