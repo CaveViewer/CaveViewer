@@ -457,6 +457,27 @@ def test_default_map_library_install_dir_ignores_legacy_child_conflict(
     assert (downloads_dir / standard_library_maps.MAP_LIBRARY_DIRNAME).is_file()
 
 
+def test_default_map_library_install_dir_uses_legacy_when_configured_path_is_file(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    data_home = tmp_path / "data"
+    blocked_downloads = tmp_path / "blocked-downloads"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    monkeypatch.setattr(
+        standard_library_maps,
+        "_configured_map_library_install_dir",
+        lambda: str(blocked_downloads),
+    )
+    legacy_dir = data_home / "caveviewer" / standard_library_maps._LEGACY_MAP_LIBRARY_DIRNAME
+    legacy_dir.mkdir(parents=True)
+    blocked_downloads.write_text("not a directory", encoding="utf-8")
+
+    install_dir = Path(standard_library_maps.default_map_library_install_dir())
+
+    assert install_dir == legacy_dir
+
+
 def test_downloaded_state_and_existing_path_use_normal_location(tmp_path):
     sample = standard_library_maps.StandardLibraryMapInfo("Test Cave", "test.zip")
     expected = tmp_path / "Test Cave"
