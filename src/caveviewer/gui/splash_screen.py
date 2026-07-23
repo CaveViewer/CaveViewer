@@ -62,6 +62,7 @@ from caveviewer.gui.platform import (
     tk_root_options,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
+from caveviewer.gui.splash_session import SplashSession
 from caveviewer.gui.tk_feedback import show_feedback
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -421,7 +422,7 @@ def show_splash_screen(
     """
     import tkinter as tk
 
-    selected_folder: list[str | None] = [None]
+    session = SplashSession()
     desktop_services = desktop_services or get_desktop_services()
     _apply_preferences_to_env(_load_preferences())
 
@@ -513,7 +514,6 @@ def show_splash_screen(
     )
     version_label.pack(pady=(0, 8))
 
-    splash_state = {"closing": False}
     last_update_presentation: list[_UpdatePresentation | None] = [None]
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
 
@@ -606,7 +606,7 @@ def show_splash_screen(
         _set_progress(presentation.progress_fraction)
 
     def _refresh_update_presentation() -> None:
-        if splash_state["closing"]:
+        if session.closing:
             return
         snapshot = update_manager.snapshot()
         presentation = _update_presentation(
@@ -620,13 +620,14 @@ def show_splash_screen(
             # Only a visible splash performs the one automatic file-manager
             # reveal; downloads completing inside the viewer stay unobtrusive.
             update_manager.reveal_download(automatic=True)
-        root.after(100, _refresh_update_presentation)
+        session.schedule_after(root, 100, _refresh_update_presentation)
 
     def _leave_splash() -> None:
         workflow = map_library_workflow_ref[0]
         if workflow is not None:
             workflow.close()
-        splash_state["closing"] = True
+        session.mark_closing()
+        session.cancel_after_callbacks(root)
         root.withdraw()
         root.quit()
 
@@ -653,7 +654,7 @@ def show_splash_screen(
                 _show_invalid_map_feedback(error_message)
                 return
 
-            selected_folder[0] = selection.path
+            session.select_folder(selection.path)
             _save_last_browse_dir(selection.path)
             _leave_splash()
 
@@ -716,7 +717,7 @@ def show_splash_screen(
             return False
 
     def _splash_exists() -> bool:
-        return not splash_state["closing"] and _widget_exists(root)
+        return not session.closing and _widget_exists(root)
 
     def _open_library_map_from_splash(path: str) -> None:
         is_valid, error_message = _validate_selected_map_folder(path)
@@ -724,7 +725,7 @@ def show_splash_screen(
             _show_invalid_map_feedback(error_message)
             return
 
-        selected_folder[0] = path
+        session.select_folder(path)
         _save_last_browse_dir(path)
         _leave_splash()
 
@@ -830,11 +831,11 @@ def show_splash_screen(
     # Briefly force topmost so the splash appears above the GLFW viewer window
     # that just closed -- on macOS the focus doesn't transfer automatically.
     root.attributes("-topmost", True)
-    root.after(200, lambda: root.attributes("-topmost", False))
+    session.schedule_after(root, 200, lambda: root.attributes("-topmost", False))
     # The app-owned manager survives this Tk window and any intervening viewer.
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
-    root.after(50, _refresh_update_presentation)
-    root.after(350, update_manager.check_for_updates)
+    session.schedule_after(root, 50, _refresh_update_presentation)
+    session.schedule_after(root, 350, update_manager.check_for_updates)
     root.bind("<Return>", lambda _event: on_open_map_folder())
     root.bind("<Escape>", on_close)
     bind_primary_shortcut(root, "w", on_close)
@@ -844,6 +845,7 @@ def show_splash_screen(
     try:
         root.mainloop()
     finally:
+        session.cancel_after_callbacks(root)
         update_manager.set_foreground_update_surface_active(False)
 
     # Some adapters keep the single Tk app object alive for process-level
@@ -854,7 +856,7 @@ def show_splash_screen(
         except Exception:
             pass  # already destroyed, or a background thread beat us to it
 
-    return selected_folder[0]
+    return session.selected_folder
 
 
 def _load_last_browse_dir() -> str | None:
