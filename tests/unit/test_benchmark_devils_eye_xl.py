@@ -54,7 +54,8 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "Devil's Eye XL local benchmark plan:" in output
-    assert "route_mode: auto-dense" in output
+    assert "route_mode: auto-centerline" in output
+    assert "centerline_route: keyframes=8" in output
     assert "copy_map: yes" in output
     assert "compile_cache: yes" in output
     assert str(local_map_dir / "_cache") in output
@@ -118,7 +119,7 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
         assert any(str(part).endswith("run_local_benchmark.py") for part in command)
         scenario_path = Path(command[command.index("--scenario") + 1])
         generated_scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
-        assert generated_scenario["metadata"]["route_mode"] == "auto_dense_chunks_v1"
+        assert generated_scenario["metadata"]["route_mode"] == "auto_centerline_v1"
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "summary.json").write_text(
             json.dumps(
@@ -149,11 +150,11 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
 
     assert exit_code == 1
     assert (run_dir / "comparison.json").is_file()
-    assert (run_dir / "auto-dense-route-v1.json").is_file()
+    assert (run_dir / "auto-centerline-route-v1.json").is_file()
     latest_text = (results_dir / "latest-summary.txt").read_text(encoding="utf-8")
     assert "Status: FAIL" in latest_text
     assert "wall_clock_fps=90.00" in latest_text
-    assert "Route: auto_dense_chunks" in latest_text
+    assert "Route: auto_centerline" in latest_text
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
     assert "Previous local runs compared to current" in latest_text
@@ -174,7 +175,7 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     )
     assert str(local_map_dir / "_cache") in benchmark_command
     assert str(local_map_dir) in benchmark_command
-    assert str(run_dir / "auto-dense-route-v1.json") in benchmark_command
+    assert str(run_dir / "auto-centerline-route-v1.json") in benchmark_command
 
 
 def test_devils_eye_xl_uses_only_compatible_history_as_gate_baseline():
@@ -237,7 +238,7 @@ def _manifest() -> dict:
         for y in range(2):
             for z in range(4):
                 chunks[f"{x}_{y}_{z}"] = _chunk(x, y, z)
-    return {"chunks": chunks}
+    return {"chunk_size": 10.0, "chunks": chunks}
 
 
 def _chunk(x: int, y: int, z: int) -> dict:

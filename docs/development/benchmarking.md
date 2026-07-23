@@ -93,7 +93,7 @@ be uploaded. The wrapper uses:
 - source map: `~/Downloads/Maps/Devil's Eye XL`
 - ignored local copy: `.benchmark-data/maps/devils-eye-xl`
 - ignored local results/history: `.benchmark-data/results/devils-eye-xl`
-- default route mode: manifest-derived dense chunk route
+- default route mode: vertex-footprint centerline route
 
 First validate the plan:
 
@@ -130,18 +130,34 @@ single latest run used as the gate baseline, detailed threshold checks, and a
 compact comparison against recent local history. Use `--history-limit <n>` to
 change how many previous runs are listed.
 
-By default the local wrapper generates an `auto-dense-route-v1.json` file inside
-the run artifact directory after the cache exists. It estimates dense areas from
-the manifest by counting occupied chunks inside the same cube radius used by the
-viewer streaming system. The path stays inside the selected dense chunk
-component where possible and points the camera toward the next route point. This
-is a deterministic streaming-load proxy; it is not a guaranteed human-swimmable
-path because the cache does not encode free-space/navigation data.
+By default the local wrapper generates an `auto-centerline-route-v1.json` file
+inside the run artifact directory after the cache exists. It uses the
+fine-grained `footprint_cells` manifest field, which the chunker derives from
+source vertex positions, to estimate the middle of the cave passage. The
+generator computes a high-clearance path through that footprint, where clearance
+means grid distance from the footprint boundary, then selects a representative
+segment instead of sweeping the entire cave. It estimates Y from the nearest
+occupied chunk column. This better approximates what virtual divers tend to look
+at: a route through the middle of the visible passage at a reasonable traversal
+rate.
+
+This remains a deterministic benchmark route, not a collision-checked
+navigation mesh. The cache describes surface geometry and chunk bounds; it does
+not encode free water volume or diver-swimmable constraints.
 
 Use these controls when calibrating the route:
 
 ```bash
 python scripts/benchmark/run_devils_eye_xl_benchmark.py \
+  --centerline-route-keyframes 10 \
+  --centerline-route-target-length-m 1000
+```
+
+To run the older dense-streaming-load proxy instead:
+
+```bash
+python scripts/benchmark/run_devils_eye_xl_benchmark.py \
+  --route-mode auto-dense \
   --dense-route-keyframes 10 \
   --dense-route-percentile 85
 ```

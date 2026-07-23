@@ -36,8 +36,10 @@ from caveviewer.gui.benchmark import (
     load_json_file,
 )
 from caveviewer.gui.benchmark_routes import (
+    DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
     DEFAULT_DENSE_ROUTE_KEYFRAMES,
     DEFAULT_DENSE_ROUTE_PERCENTILE,
+    generate_centerline_route_scenario,
     generate_dense_chunk_route_scenario,
 )
 
@@ -95,17 +97,32 @@ def _parser() -> argparse.ArgumentParser:
         "--scenario",
         default=str(DEFAULT_SCENARIO_PATH),
         help=(
-            "Benchmark scenario JSON. In auto-dense mode this is used as the "
-            "timing/control template. Defaults to benchmarks/gold-route-v1.json."
+            "Benchmark scenario JSON. In generated route modes this is used as "
+            "the timing/control template. Defaults to benchmarks/gold-route-v1.json."
         ),
     )
     parser.add_argument(
         "--route-mode",
-        choices=("auto-dense", "static"),
-        default="auto-dense",
+        choices=("auto-centerline", "auto-dense", "static"),
+        default="auto-centerline",
         help=(
-            "Use a manifest-derived dense route, or run the scenario file "
-            "exactly as written. Defaults to auto-dense."
+            "Use a vertex-footprint centerline route, use a manifest-derived "
+            "dense route, or run the scenario file exactly as written. Defaults "
+            "to auto-centerline."
+        ),
+    )
+    parser.add_argument(
+        "--centerline-route-keyframes",
+        type=int,
+        default=DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
+        help="Target number of keyframes for the generated centerline route.",
+    )
+    parser.add_argument(
+        "--centerline-route-target-length-m",
+        type=float,
+        help=(
+            "Target centerline segment length in meters. Defaults to a "
+            "map-scaled length based on footprint cell size and keyframe count."
         ),
     )
     parser.add_argument(
@@ -252,14 +269,14 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
     label = _safe_label(args.label or _default_label())
     run_dir = results_dir / "runs" / label
     route_mode = str(args.route_mode)
-    scenario_path = (
-        run_dir / "auto-dense-route-v1.json"
-        if route_mode == "auto-dense"
-        else scenario_template_path
-    )
+    generated_scenario_paths = {
+        "auto-centerline": run_dir / "auto-centerline-route-v1.json",
+        "auto-dense": run_dir / "auto-dense-route-v1.json",
+    }
+    scenario_path = generated_scenario_paths.get(route_mode, scenario_template_path)
     scenario_fingerprint = (
         "<generated after cache validation>"
-        if route_mode == "auto-dense"
+        if route_mode in generated_scenario_paths
         else scenario_template.fingerprint
     )
 
@@ -309,6 +326,12 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "scenario_template": scenario_template,
         "scenario_fingerprint": scenario_fingerprint,
         "route_mode": route_mode,
+        "centerline_route_keyframes": max(1, int(args.centerline_route_keyframes)),
+        "centerline_route_target_length_m": (
+            None
+            if args.centerline_route_target_length_m is None
+            else float(args.centerline_route_target_length_m)
+        ),
         "dense_route_keyframes": max(1, int(args.dense_route_keyframes)),
         "dense_route_percentile": float(args.dense_route_percentile),
         "thresholds_path": threshold_path,
@@ -340,13 +363,7 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
         f"  scenario_template: {plan['scenario_template_path']}",
         f"  scenario: {plan['scenario_path']}",
         f"  scenario_fingerprint: {plan['scenario_fingerprint']}",
-        (
-            "  dense_route: "
-            f"keyframes={plan['dense_route_keyframes']} "
-            f"percentile={plan['dense_route_percentile']:g}"
-            if plan["route_mode"] == "auto-dense"
-            else "  dense_route: disabled"
-        ),
+        *_route_generation_plan_lines(plan),
         f"  thresholds: {plan['thresholds_path']}",
         f"  history: {plan['history_path']}",
         f"  output_dir: {plan['run_dir']}",
@@ -368,6 +385,29 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
+    if plan["route_mode"] == "auto-centerline":
+        target_length = plan["centerline_route_target_length_m"]
+        target_text = "auto" if target_length is None else f"{target_length:g}m"
+        return [
+            "  centerline_route: "
+            f"keyframes={plan['centerline_route_keyframes']} "
+            f"target_length={target_text}",
+            "  dense_route: disabled",
+        ]
+    if plan["route_mode"] == "auto-dense":
+        return [
+            "  centerline_route: disabled",
+            "  dense_route: "
+            f"keyframes={plan['dense_route_keyframes']} "
+            f"percentile={plan['dense_route_percentile']:g}",
+        ]
+    return [
+        "  centerline_route: disabled",
+        "  dense_route: disabled",
+    ]
 
 
 def _prepare_orchestration_log(plan: Mapping[str, Any]) -> None:
@@ -415,25 +455,37 @@ def _ensure_cache(plan: Mapping[str, Any]) -> None:
 
 
 def _prepare_scenario(plan: dict[str, Any]) -> None:
-    if plan["route_mode"] != "auto-dense":
+    if plan["route_mode"] == "static":
         return
     manifest = load_json_file(plan["manifest_path"])
-    dense_route = generate_dense_chunk_route_scenario(
-        manifest,
-        plan["scenario_template"],
-        dense_percentile=float(plan["dense_route_percentile"]),
-        keyframe_count=int(plan["dense_route_keyframes"]),
-    )
+    if plan["route_mode"] == "auto-centerline":
+        route_result = generate_centerline_route_scenario(
+            manifest,
+            plan["scenario_template"],
+            keyframe_count=int(plan["centerline_route_keyframes"]),
+            target_length_m=plan["centerline_route_target_length_m"],
+        )
+        summary_text = _centerline_route_summary
+        plan_key = "centerline_route"
+    else:
+        route_result = generate_dense_chunk_route_scenario(
+            manifest,
+            plan["scenario_template"],
+            dense_percentile=float(plan["dense_route_percentile"]),
+            keyframe_count=int(plan["dense_route_keyframes"]),
+        )
+        summary_text = _dense_route_summary
+        plan_key = "dense_route"
     scenario_path = Path(plan["scenario_path"])
     scenario_path.parent.mkdir(parents=True, exist_ok=True)
     scenario_path.write_text(
-        json.dumps(dense_route.scenario_payload, indent=2, sort_keys=True) + "\n",
+        json.dumps(route_result.scenario_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    scenario = BenchmarkScenario.from_mapping(dense_route.scenario_payload)
+    scenario = BenchmarkScenario.from_mapping(route_result.scenario_payload)
     plan["scenario_fingerprint"] = scenario.fingerprint
-    plan["dense_route"] = dense_route
-    _log_message(plan, _dense_route_summary(dense_route, scenario_path))
+    plan[plan_key] = route_result
+    _log_message(plan, summary_text(route_result, scenario_path))
 
 
 def _dense_route_summary(dense_route, scenario_path: Path) -> str:
@@ -447,6 +499,23 @@ def _dense_route_summary(dense_route, scenario_path: Path) -> str:
         f"dense_component_size={metadata['dense_component_size']} "
         f"max_neighborhood_chunks={metadata['max_neighborhood_chunks']} "
         f"mean_route_neighborhood_chunks={metadata['mean_route_neighborhood_chunks']:.1f}"
+    )
+
+
+def _centerline_route_summary(centerline_route, scenario_path: Path) -> str:
+    metadata = centerline_route.scenario_payload["metadata"]
+    return (
+        "Generated centerline route: "
+        f"scenario={scenario_path} "
+        f"route_length_m={metadata['route_length_m']:.1f} "
+        f"target_route_length_m={metadata['target_route_length_m']:.1f} "
+        f"keyframes={metadata['route_keyframe_count']} "
+        f"path_cells={metadata['path_cell_count']} "
+        f"full_path_cells={metadata['full_path_cell_count']} "
+        f"footprint_component_size={metadata['footprint_component_size']} "
+        f"route_source={metadata['route_source']} "
+        f"max_clearance_m={metadata['max_clearance_m']:.1f} "
+        f"mean_route_clearance_m={metadata['mean_route_clearance_m']:.1f}"
     )
 
 
@@ -775,16 +844,28 @@ def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
     metadata = summary.get("scenario", {}).get("metadata", {})
     if not isinstance(metadata, Mapping):
         return None
-    if metadata.get("route_mode") != "auto_dense_chunks_v1":
-        return None
-    return (
-        "Route: auto_dense_chunks "
-        f"length_m={_format_metric(metadata.get('route_length_m'))}, "
-        f"keyframes={metadata.get('route_keyframe_count', '<missing>')}, "
-        f"path_cells={metadata.get('path_cell_count', '<missing>')}, "
-        f"max_neighborhood_chunks={metadata.get('max_neighborhood_chunks', '<missing>')}, "
-        f"mean_route_neighborhood_chunks={_format_metric(metadata.get('mean_route_neighborhood_chunks'))}"
-    )
+    route_mode = metadata.get("route_mode")
+    if route_mode == "auto_centerline_v1":
+        return (
+            "Route: auto_centerline "
+            f"length_m={_format_metric(metadata.get('route_length_m'))}, "
+            f"target_length_m={_format_metric(metadata.get('target_route_length_m'))}, "
+            f"keyframes={metadata.get('route_keyframe_count', '<missing>')}, "
+            f"path_cells={metadata.get('path_cell_count', '<missing>')}, "
+            f"route_source={metadata.get('route_source', '<missing>')}, "
+            f"max_clearance_m={_format_metric(metadata.get('max_clearance_m'))}, "
+            f"mean_route_clearance_m={_format_metric(metadata.get('mean_route_clearance_m'))}"
+        )
+    if route_mode == "auto_dense_chunks_v1":
+        return (
+            "Route: auto_dense_chunks "
+            f"length_m={_format_metric(metadata.get('route_length_m'))}, "
+            f"keyframes={metadata.get('route_keyframe_count', '<missing>')}, "
+            f"path_cells={metadata.get('path_cell_count', '<missing>')}, "
+            f"max_neighborhood_chunks={metadata.get('max_neighborhood_chunks', '<missing>')}, "
+            f"mean_route_neighborhood_chunks={_format_metric(metadata.get('mean_route_neighborhood_chunks'))}"
+        )
+    return None
 
 
 def _timestamp_suffix(record: Mapping[str, Any]) -> str:

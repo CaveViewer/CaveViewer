@@ -3,7 +3,47 @@
 from __future__ import annotations
 
 from caveviewer.gui.benchmark import BenchmarkScenario
-from caveviewer.gui.benchmark_routes import generate_dense_chunk_route_scenario
+from caveviewer.gui.benchmark_routes import (
+    generate_centerline_route_scenario,
+    generate_dense_chunk_route_scenario,
+)
+
+
+def test_centerline_route_uses_vertex_footprint_middle_passage():
+    template = BenchmarkScenario.from_mapping(
+        {
+            "version": 1,
+            "name": "template",
+            "warmup_seconds": 2.0,
+            "measurement_seconds": 8.0,
+            "render_distance": 1,
+            "route": [{"time_s": 0.0, "position": [0.0, 0.0, 0.0]}],
+        }
+    )
+
+    centerline_route = generate_centerline_route_scenario(
+        _centerline_manifest(),
+        template,
+        keyframe_count=4,
+    )
+    scenario = BenchmarkScenario.from_mapping(centerline_route.scenario_payload)
+    metadata = centerline_route.scenario_payload["metadata"]
+
+    assert scenario.position_mode == "absolute"
+    assert scenario.total_duration_seconds == 10.0
+    assert metadata["route_mode"] == "auto_centerline_v1"
+    assert metadata["route_source"] == "vertex_footprint_manifest"
+    assert metadata["footprint_cell_size_m"] == 2.0
+    assert metadata["max_clearance_cells"] >= 3
+    assert metadata["route_length_m"] > 0.0
+    assert metadata["route_keyframe_count"] >= 2
+    assert all(cell[1] in {1, 2, 3} for cell in centerline_route.route_cells)
+    assert centerline_route.scenario_payload["route"][0]["time_s"] == 0.0
+    assert centerline_route.scenario_payload["route"][-1]["time_s"] == 10.0
+    assert all(
+        keyframe["position"][1] == 5.0
+        for keyframe in centerline_route.scenario_payload["route"]
+    )
 
 
 def test_dense_chunk_route_uses_connected_high_density_manifest_region():
@@ -56,4 +96,23 @@ def _chunk(x: int, y: int, z: int) -> dict:
         "bounds_min": [x * 10.0, y * 10.0, z * 10.0],
         "bounds_max": [x * 10.0 + 10.0, y * 10.0 + 10.0, z * 10.0 + 10.0],
         "materials": ["rock"],
+    }
+
+
+def _centerline_manifest() -> dict:
+    chunks = {}
+    footprint_cells = []
+    for x in range(7):
+        for z in range(5):
+            chunks[f"{x}_0_{z}"] = {
+                "bounds_min": [x * 2.0, 0.0, z * 2.0],
+                "bounds_max": [x * 2.0 + 2.0, 10.0, z * 2.0 + 2.0],
+                "materials": ["rock"],
+            }
+            footprint_cells.extend((x, z))
+    return {
+        "chunk_size": 2.0,
+        "footprint_cell_size": 2.0,
+        "footprint_cells": footprint_cells,
+        "chunks": chunks,
     }
