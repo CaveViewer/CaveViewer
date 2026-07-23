@@ -172,6 +172,7 @@ def _workflow(
     remove_recent_path=None,
     has_cache=None,
     remove_cache=None,
+    map_library_root_dir_provider=None,
 ):
     root = _FakeRoot()
     panel = _FakePanel()
@@ -204,6 +205,7 @@ def _workflow(
         existing_path=existing_path or (lambda _root, _map: None),
         remove_downloaded=lambda _root, _map: _RemovalResult(("/removed",)),
         fetch_catalog=fetch_catalog or (lambda: ([], None)),
+        map_library_root_dir_provider=map_library_root_dir_provider,
         start_download_worker=(
             start_download_worker
             or (lambda _selection, _map, _event, _queue: object())
@@ -236,6 +238,64 @@ def test_populate_panel_creates_rows_and_starts_catalog_fetch():
     assert "Test Cave" in state.panel.standard_rows
     assert state.controller.catalog_fetch.loading
     assert state.root.after_calls[-1][1] == 120
+
+
+def test_map_library_root_change_refreshes_standard_rows():
+    library_map = _library_map()
+    checked_roots = []
+
+    def is_downloaded(root, _map):
+        checked_roots.append(root)
+        return root == "/downloads"
+
+    state = _workflow(
+        [library_map],
+        is_downloaded=is_downloaded,
+        existing_path=lambda root, _map: f"{root}/Test Cave",
+    )
+    state.workflow.add_standard_row(library_map)
+
+    state.workflow.set_map_library_root_dir("/downloads")
+
+    assert state.workflow.map_library_root_dir == "/downloads"
+    assert "/downloads" in checked_roots
+    assert state.panel.standard_actions["Test Cave"][0] == "Open"
+    assert state.panel.metadata["Test Cave"] == ("Downloaded", False)
+
+
+def test_download_action_syncs_latest_map_library_root_before_worker_start():
+    library_map = _library_map()
+    selections = []
+
+    state = _workflow(
+        [library_map],
+        map_library_root_dir_provider=lambda: "/custom-downloads",
+        start_download_worker=lambda selection, _map, _event, _queue: (
+            selections.append(selection.path) or object()
+        ),
+    )
+    state.workflow.add_standard_row(library_map)
+
+    state.workflow.on_map_action(library_map)
+
+    assert state.workflow.map_library_root_dir == "/custom-downloads"
+    assert selections == ["/custom-downloads"]
+
+
+def test_map_library_root_change_waits_for_active_download():
+    library_map = _library_map()
+    state = _workflow([library_map])
+    state.controller.begin_download(
+        library_map,
+        cancel_event=object(),
+        inhibitor=None,
+    )
+
+    state.workflow.set_map_library_root_dir("/downloads")
+
+    assert state.workflow.map_library_root_dir == "/library"
+    assert state.feedback
+    assert "after the current download finishes" in state.feedback[-1][0]
 
 
 def test_downloaded_standard_library_menu_omits_cache_action_without_cache():

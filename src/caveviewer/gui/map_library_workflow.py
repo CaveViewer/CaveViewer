@@ -80,6 +80,7 @@ class MapLibraryWorkflow:
         existing_path: Callable[[str, Any], str | None] = existing_standard_library_map_path,
         remove_downloaded: Callable[[str, Any], Any] = remove_downloaded_standard_library_map,
         fetch_catalog: Callable[[], tuple[list[Any], str | None]] = fetch_standard_library_catalog,
+        map_library_root_dir_provider: Callable[[], str] | None = None,
         start_download_worker: Callable[
             [DirectorySelection, Any, threading.Event, Any], threading.Thread
         ] = start_standard_library_download_worker,
@@ -113,6 +114,7 @@ class MapLibraryWorkflow:
         self.existing_path = existing_path
         self.remove_downloaded = remove_downloaded
         self.fetch_catalog = fetch_catalog
+        self.map_library_root_dir_provider = map_library_root_dir_provider
         self.start_download_worker = start_download_worker
         self.start_catalog_worker = start_catalog_worker
         self.download_cancelled_type = download_cancelled_type
@@ -145,6 +147,32 @@ class MapLibraryWorkflow:
         self.panel.close_active_menu()
         self.cancel_active_download_for_close()
         self.cancel_catalog_fetch_for_close()
+
+    def set_map_library_root_dir(self, map_library_root_dir: str) -> None:
+        """Update the storage root used by standard-library rows."""
+        if map_library_root_dir == self.map_library_root_dir:
+            return
+        if self.controller.active_download.in_progress:
+            self._show_info(
+                "The map library folder change will be used after the current "
+                "download finishes.",
+                duration_ms=7000,
+                max_wraplength=360,
+            )
+            return
+
+        self.map_library_root_dir = map_library_root_dir
+        for library_map in self.standard_library_maps:
+            self.refresh_standard_row(library_map)
+
+    def sync_map_library_root_dir(self) -> None:
+        """Refresh the storage root from Preferences before map actions."""
+        if (
+            self.map_library_root_dir_provider is None
+            or self.controller.active_download.in_progress
+        ):
+            return
+        self.set_map_library_root_dir(self.map_library_root_dir_provider())
 
     def add_recent_row(self, path: str) -> None:
         """Append one recent-map row and wire its management actions."""
@@ -348,6 +376,7 @@ class MapLibraryWorkflow:
 
     def open_standard_map(self, library_map) -> None:
         """Open the selected standard-library map when it is available locally."""
+        self.sync_map_library_root_dir()
         map_path = (
             self.downloaded_library_map_path(library_map)
             or self.existing_path(self.map_library_root_dir, library_map)
@@ -559,6 +588,7 @@ class MapLibraryWorkflow:
 
     def start_inline_download(self, library_map) -> None:
         """Start a standard-library download from an already resolved row."""
+        self.sync_map_library_root_dir()
         if self.controller.active_download.in_progress:
             self._show_info(
                 "Finish or stop the current map library download before "
@@ -767,6 +797,7 @@ class MapLibraryWorkflow:
 
     def on_map_action(self, library_map) -> None:
         """Open a local map or start the standard-library download workflow."""
+        self.sync_map_library_root_dir()
         resolved_map = self.controller.resolve_catalog_entry(library_map)
         if self.is_downloaded(self.map_library_root_dir, resolved_map):
             self.open_standard_map(library_map)

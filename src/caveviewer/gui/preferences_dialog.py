@@ -8,6 +8,7 @@ from typing import Callable
 
 from caveviewer.gui.preferences import (
     PREFERENCE_FIELDS,
+    Preferences,
     PreferenceSpec,
     PreferenceValueType,
     preference_placeholder_text,
@@ -90,10 +91,12 @@ class PreferencesDialog:
         *,
         ui_font_family: str,
         desktop_services: DesktopServices | None = None,
+        on_applied: Callable[[Preferences], None] | None = None,
     ) -> None:
         self.parent = parent
         self.ui_font_family = ui_font_family
         self.desktop_services = desktop_services or get_desktop_services()
+        self.on_applied = on_applied
         self.workflow = PreferencesDialogWorkflow(
             load_preferences_fn=load_preferences,
             save_preferences_fn=save_preferences,
@@ -304,8 +307,12 @@ class PreferencesDialog:
 
     def _render_field(self, section, field: PreferenceSpec, *, last: bool) -> None:
         key = field.key
+        value_type = field.value_type
         self.field_page_keys[key] = field.section
-        compact_path = key == "recording_dir"
+        compact_path = value_type in {
+            PreferenceValueType.PATH,
+            PreferenceValueType.PATH_CREATE,
+        }
         row = tk.Frame(
             section,
             bg=_PANEL_COLOR,
@@ -332,7 +339,6 @@ class PreferencesDialog:
 
         var = tk.StringVar(master=self.dialog, value=self.form.state.values[key])
         self.field_vars[key] = var
-        value_type = field.value_type
         entry_width = (
             _NUMERIC_ENTRY_WIDTH
             if value_type in {PreferenceValueType.INT, PreferenceValueType.FLOAT}
@@ -463,7 +469,7 @@ class PreferencesDialog:
                 browse_button.pack(side="left", padx=(_CONTROL_GAP_X, 0))
             self.field_browse_buttons[key] = browse_button
 
-        single_line_hint = key == "recording_dir"
+        single_line_hint = compact_path
         hint_label = tk.Label(
             text_column,
             text=field.hint,
@@ -995,6 +1001,9 @@ class PreferencesDialog:
             self._set_feedback(result.error or "", MessageKind.ERROR)
             return
         self.preferences = result.preferences
+        on_applied = getattr(self, "on_applied", None)
+        if on_applied is not None and result.preferences is not None:
+            on_applied(result.preferences)
         self.dialog.destroy()
 
     def cancel(self) -> None:
@@ -1066,10 +1075,12 @@ def show_preferences_dialog(
     *,
     ui_font_family: str,
     desktop_services: DesktopServices | None = None,
+    on_applied: Callable[[Preferences], None] | None = None,
 ) -> None:
     """Create and display a non-blocking modal Preferences dialog."""
     PreferencesDialog(
         parent,
         ui_font_family=ui_font_family,
         desktop_services=desktop_services,
+        on_applied=on_applied,
     ).show()

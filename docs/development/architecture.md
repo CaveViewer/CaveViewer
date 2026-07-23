@@ -205,16 +205,20 @@ the XDG configuration, data, cache, state, and runtime roots; macOS, Windows,
 and unsupported platforms currently preserve the historical `~/.caveviewer/`
 root until their storage conventions are migrated separately. Preferences
 are configuration; remembered chooser locations are state; generated map
-caches are rebuildable cache data. `CAVEVIEWER_HOME` creates isolated
-`config/`, `data/`, `cache/`, `state/`, and `runtime/` children for portable or
-test runs, and map caches are stored under that cache child unless
-`CAVEVIEWER_MAP_CACHE_DIR` overrides only the map-cache root. Relative XDG
-variables are ignored as required by the specification, and relative CaveViewer
-overrides are rejected.
+caches are rebuildable cache data. Downloaded map-library entries are ordinary
+user downloads by default, stored under the user's Downloads folder or the
+folder selected by `CAVEVIEWER_MAP_LIBRARY_DIR` or Preferences.
+`CAVEVIEWER_HOME` creates isolated `config/`, `data/`, `cache/`, `state/`, and
+`runtime/` children for portable or test runs, and map caches are stored under
+that cache child unless `CAVEVIEWER_MAP_CACHE_DIR` overrides only the map-cache
+root. Relative XDG variables are ignored as required by the specification, and
+relative CaveViewer storage-root/cache overrides are rejected.
 
 On Linux, migration from `~/.caveviewer/` and older `~/.caveviewer_*` files is
-copy-once and non-destructive. Managed map cache keys derive from the canonical
-source path without reading or hashing a multi-gigabyte map.
+copy-once and non-destructive. Older app-data `map_library` and `sample_maps`
+directories are moved into the configured map-library location when possible.
+Managed map cache keys derive from the canonical source path without reading or
+hashing a multi-gigabyte map.
 
 The GUI process owns one `caveviewer.gui.update_manager.UpdateManager`, created
 by `caveviewer.app` before the splash/viewer session loop and shut down when

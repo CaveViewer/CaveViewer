@@ -132,44 +132,55 @@ def load_initial_standard_library_catalog() -> list[StandardLibraryMapInfo]:
 
 
 def default_map_library_install_dir() -> str:
-    """Return the app-managed default root for first-time map-library downloads."""
-    data_dir = resolve_application_paths().data_dir
-    map_library_dir = data_dir / MAP_LIBRARY_DIRNAME
-    legacy_map_library_dir = data_dir / _LEGACY_MAP_LIBRARY_DIRNAME
+    """Return the configured folder for first-time map-library downloads."""
+    install_dir = Path(_configured_map_library_install_dir())
+    legacy_dirs = _default_legacy_map_library_dirs()
 
-    if (
-        legacy_map_library_dir.is_dir()
-        and map_library_dir.exists()
-        and not map_library_dir.is_dir()
-    ):
-        _LOG.warning(
-            "Could not use map library path %s because it is not a directory; "
-            "using legacy map-library directory %s",
-            map_library_dir,
-            legacy_map_library_dir,
-        )
-        return str(legacy_map_library_dir)
+    if install_dir.exists() and not install_dir.is_dir():
+        for legacy_dir in legacy_dirs:
+            if legacy_dir.is_dir():
+                _LOG.warning(
+                    "Could not use map library path %s because it is not a "
+                    "directory; using legacy map-library directory %s",
+                    install_dir,
+                    legacy_dir,
+                )
+                return str(legacy_dir)
 
     try:
-        map_library_dir.mkdir(parents=True, exist_ok=True)
+        install_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         _LOG.warning(
             "Could not create default map library directory %s: %s",
-            map_library_dir,
+            install_dir,
             exc,
         )
-    if map_library_dir.is_dir():
-        _move_legacy_map_library_contents(legacy_map_library_dir, map_library_dir)
-        return str(map_library_dir)
+    if install_dir.is_dir():
+        for legacy_dir in legacy_dirs:
+            _move_legacy_map_library_contents(legacy_dir, install_dir)
+        return str(install_dir)
 
-    # If a conflicting file or permissions problem blocks the dedicated
-    # map_library/ folder, fall back to the XDG data root. The normal
-    # download helper will still create map_library/<map> under this root.
     try:
-        data_dir.mkdir(parents=True, exist_ok=True)
+        install_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    return str(data_dir)
+    return str(install_dir)
+
+
+def _configured_map_library_install_dir() -> str:
+    """Return the saved or default map-library parent directory."""
+    from caveviewer.gui.preferences import load_preferences
+
+    return load_preferences()["map_library_dir"]
+
+
+def _default_legacy_map_library_dirs() -> tuple[Path, Path]:
+    """Return app-managed map-library paths used before the Downloads default."""
+    data_dir = resolve_application_paths().data_dir
+    return (
+        data_dir / MAP_LIBRARY_DIRNAME,
+        data_dir / _LEGACY_MAP_LIBRARY_DIRNAME,
+    )
 
 
 def _move_legacy_map_library_contents(legacy_dir: Path, map_library_dir: Path) -> None:
@@ -765,8 +776,8 @@ def _install_dir_path(install_dir) -> str:
 def local_standard_library_map_path(install_dir: str, sample: StandardLibraryMapInfo) -> str:
     """
     Where a given standard-library map would live locally once downloaded --
-    one subfolder per map, named after its display name (so it reads
-    clearly in a file browser), inside the shared map_library folder.
+    one subfolder per map, named after its display name so it reads clearly in
+    a file browser, inside the configured downloaded-maps folder.
     """
     return os.path.join(
         _map_library_container_dir(install_dir),
@@ -778,18 +789,11 @@ def _map_library_container_dir(install_dir: str) -> str:
     """
     Return the folder that should directly contain individual map-library entries.
 
-    The dialog asks where to save map-library entries, and CaveViewer normally
-    creates a shared map_library/ folder inside that selected directory. If
-    the user already chooses a folder named map_library, treat that folder
-    itself as the container instead of creating map_library/map_library/... .
-    Legacy sample_maps/ selections are also treated as existing containers so
-    older custom locations remain usable.
+    The Storage preference names the folder where downloaded maps are stored.
+    Older releases treated that value as a parent and created map_library/
+    inside it; those paths remain readable as legacy candidates.
     """
-    normalized = os.path.normpath(_install_dir_path(install_dir))
-    basename = os.path.basename(normalized).lower()
-    if basename in {MAP_LIBRARY_DIRNAME.lower(), _LEGACY_MAP_LIBRARY_DIRNAME.lower()}:
-        return normalized
-    return os.path.join(normalized, MAP_LIBRARY_DIRNAME)
+    return os.path.normpath(_install_dir_path(install_dir))
 
 
 def is_standard_library_map_downloaded(install_dir: str, sample: StandardLibraryMapInfo) -> bool:
@@ -898,7 +902,11 @@ def _app_supplied_standard_library_map_path_candidates(
 ) -> list[str]:
     if install_dir is None:
         data_dir = resolve_application_paths().data_dir
+        configured_dir = Path(_configured_map_library_install_dir())
         roots = (
+            configured_dir,
+            configured_dir / MAP_LIBRARY_DIRNAME,
+            configured_dir / _LEGACY_MAP_LIBRARY_DIRNAME,
             data_dir,
             data_dir / MAP_LIBRARY_DIRNAME,
             data_dir / _LEGACY_MAP_LIBRARY_DIRNAME,
@@ -933,39 +941,38 @@ def _legacy_standard_library_map_paths(
     normalized = os.path.normpath(_install_dir_path(install_dir))
     basename = os.path.basename(normalized).lower()
     legacy_paths: list[str] = []
+    map_folder_name = sample.folder_name or sample.display_name
 
     if basename == _LEGACY_MAP_LIBRARY_DIRNAME.lower():
-        legacy_paths.append(
-            os.path.join(normalized, sample.folder_name or sample.display_name)
-        )
+        legacy_paths.append(os.path.join(normalized, map_folder_name))
         legacy_paths.append(
             os.path.join(
                 normalized,
                 _LEGACY_MAP_LIBRARY_DIRNAME,
-                sample.folder_name or sample.display_name,
+                map_folder_name,
             )
         )
     elif basename == MAP_LIBRARY_DIRNAME.lower():
         legacy_paths.append(
             os.path.join(
-                normalized,
-                _LEGACY_MAP_LIBRARY_DIRNAME,
-                sample.folder_name or sample.display_name,
-            )
-        )
-        legacy_paths.append(
-            os.path.join(
                 os.path.dirname(normalized),
                 _LEGACY_MAP_LIBRARY_DIRNAME,
-                sample.folder_name or sample.display_name,
+                map_folder_name,
             )
         )
     else:
         legacy_paths.append(
             os.path.join(
                 normalized,
+                MAP_LIBRARY_DIRNAME,
+                map_folder_name,
+            )
+        )
+        legacy_paths.append(
+            os.path.join(
+                normalized,
                 _LEGACY_MAP_LIBRARY_DIRNAME,
-                sample.folder_name or sample.display_name,
+                map_folder_name,
             )
         )
 

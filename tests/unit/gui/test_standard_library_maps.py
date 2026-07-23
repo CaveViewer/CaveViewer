@@ -293,29 +293,50 @@ def test_standard_library_map_paths_accept_portal_directory_selection(tmp_path):
     sample = standard_library_maps.StandardLibraryMapInfo("Test Cave", "test.zip")
 
     assert standard_library_maps.local_standard_library_map_path(selection, sample) == str(
-        tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+        tmp_path / "Test Cave"
     )
     assert not standard_library_maps.is_standard_library_map_downloaded(selection, sample)
 
 
-def test_default_map_library_install_dir_uses_xdg_data_home(tmp_path, monkeypatch):
+def test_default_map_library_install_dir_uses_downloads_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
-    data_home = tmp_path / "data"
-    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
 
     install_dir = Path(standard_library_maps.default_map_library_install_dir())
 
-    assert install_dir == data_home / "caveviewer" / standard_library_maps.MAP_LIBRARY_DIRNAME
+    assert install_dir == home / "Downloads"
     assert install_dir.is_dir()
     assert standard_library_maps.local_standard_library_map_path(
         str(install_dir), standard_library_maps.StandardLibraryMapInfo("Test Cave", "test.zip")
     ) == str(install_dir / "Test Cave")
 
 
+def test_default_map_library_install_dir_honors_saved_preference(
+    tmp_path, monkeypatch
+):
+    from caveviewer.gui import preferences as settings
+
+    configured_parent = tmp_path / "configured-downloads"
+    values = settings.preference_defaults()
+    values["recording_dir"] = str(tmp_path / "recordings")
+    values["map_library_dir"] = str(configured_parent)
+    settings.save_preferences(settings.require_validated_preferences(values))
+
+    install_dir = Path(standard_library_maps.default_map_library_install_dir())
+
+    assert install_dir == configured_parent
+    assert configured_parent.is_dir()
+
+
 def test_default_map_library_install_dir_migrates_legacy_sample_maps_dir(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(sys, "platform", "linux")
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
     legacy_dir = data_home / "caveviewer" / standard_library_maps._LEGACY_MAP_LIBRARY_DIRNAME
@@ -324,17 +345,24 @@ def test_default_map_library_install_dir_migrates_legacy_sample_maps_dir(
 
     install_dir = Path(standard_library_maps.default_map_library_install_dir())
 
-    assert install_dir == data_home / "caveviewer" / standard_library_maps.MAP_LIBRARY_DIRNAME
+    assert install_dir == home / "Downloads"
     assert not legacy_dir.exists()
-    assert (install_dir / "marker.txt").read_text(encoding="utf-8") == "legacy map"
+    assert (install_dir / "marker.txt").read_text(
+        encoding="utf-8"
+    ) == "legacy map"
 
 
 def test_default_map_library_install_dir_merges_legacy_into_existing_map_library(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(sys, "platform", "linux")
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    downloads_library = home / "Downloads"
+    downloads_library.mkdir(parents=True)
     library_dir = data_home / "caveviewer" / standard_library_maps.MAP_LIBRARY_DIRNAME
     legacy_dir = data_home / "caveviewer" / standard_library_maps._LEGACY_MAP_LIBRARY_DIRNAME
     library_dir.mkdir(parents=True)
@@ -344,9 +372,10 @@ def test_default_map_library_install_dir_merges_legacy_into_existing_map_library
 
     install_dir = Path(standard_library_maps.default_map_library_install_dir())
 
-    assert install_dir == library_dir
+    assert install_dir == home / "Downloads"
     assert not legacy_dir.exists()
-    assert (library_dir / "Test Cave" / "map.obj").read_text(
+    assert not library_dir.exists()
+    assert (downloads_library / "Test Cave" / "map.obj").read_text(
         encoding="utf-8"
     ) == "legacy map"
 
@@ -355,8 +384,16 @@ def test_default_map_library_install_dir_does_not_overwrite_library_conflicts(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(sys, "platform", "linux")
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    downloads_library_map = (
+        home
+        / "Downloads"
+        / "Test Cave"
+    )
     library_map = (
         data_home
         / "caveviewer"
@@ -369,41 +406,60 @@ def test_default_map_library_install_dir_does_not_overwrite_library_conflicts(
         / standard_library_maps._LEGACY_MAP_LIBRARY_DIRNAME
         / "Test Cave"
     )
+    downloads_library_map.mkdir(parents=True)
     library_map.mkdir(parents=True)
     legacy_map.mkdir(parents=True)
+    (downloads_library_map / "map.obj").write_text(
+        "downloads map", encoding="utf-8"
+    )
     (library_map / "map.obj").write_text("library map", encoding="utf-8")
     (legacy_map / "map.obj").write_text("legacy map", encoding="utf-8")
     (legacy_map / "texture.png").write_text("texture", encoding="utf-8")
 
     install_dir = Path(standard_library_maps.default_map_library_install_dir())
 
-    assert install_dir == library_map.parent
+    assert install_dir == home / "Downloads"
+    assert (downloads_library_map / "map.obj").read_text(
+        encoding="utf-8"
+    ) == "downloads map"
+    assert (downloads_library_map / "texture.png").read_text(
+        encoding="utf-8"
+    ) == "texture"
     assert (library_map / "map.obj").read_text(encoding="utf-8") == "library map"
-    assert (library_map / "texture.png").read_text(encoding="utf-8") == "texture"
     assert (legacy_map / "map.obj").read_text(encoding="utf-8") == "legacy map"
 
 
-def test_default_map_library_install_dir_uses_legacy_when_map_library_is_file(
+def test_default_map_library_install_dir_ignores_legacy_child_conflict(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(sys, "platform", "linux")
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
     app_data_dir = data_home / "caveviewer"
     legacy_dir = app_data_dir / standard_library_maps._LEGACY_MAP_LIBRARY_DIRNAME
     legacy_dir.mkdir(parents=True)
-    (app_data_dir / standard_library_maps.MAP_LIBRARY_DIRNAME).write_text(
+    (legacy_dir / "marker.txt").write_text("legacy map", encoding="utf-8")
+    downloads_dir = home / "Downloads"
+    downloads_dir.mkdir()
+    (downloads_dir / standard_library_maps.MAP_LIBRARY_DIRNAME).write_text(
         "blocked", encoding="utf-8"
     )
 
     install_dir = Path(standard_library_maps.default_map_library_install_dir())
 
-    assert install_dir == legacy_dir
+    assert install_dir == downloads_dir
+    assert (downloads_dir / "marker.txt").read_text(
+        encoding="utf-8"
+    ) == "legacy map"
+    assert (downloads_dir / standard_library_maps.MAP_LIBRARY_DIRNAME).is_file()
 
 
 def test_downloaded_state_and_existing_path_use_normal_location(tmp_path):
     sample = standard_library_maps.StandardLibraryMapInfo("Test Cave", "test.zip")
-    expected = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    expected = tmp_path / "Test Cave"
     assert not standard_library_maps.is_standard_library_map_downloaded(str(tmp_path), sample)
     expected.mkdir(parents=True)
     assert not standard_library_maps.is_standard_library_map_downloaded(str(tmp_path), sample)
@@ -439,27 +495,32 @@ def test_existing_path_supports_legacy_sibling_location(tmp_path):
 
 def test_remove_downloaded_standard_library_map_removes_current_and_legacy_files(tmp_path):
     sample = standard_library_maps.StandardLibraryMapInfo("Test Cave", "test.zip")
-    current = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
-    legacy = tmp_path / standard_library_maps._LEGACY_MAP_LIBRARY_DIRNAME / "Test Cave"
-    unrelated = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Other Cave"
+    current = tmp_path / "Test Cave"
+    legacy_library = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    legacy_samples = tmp_path / standard_library_maps._LEGACY_MAP_LIBRARY_DIRNAME / "Test Cave"
+    unrelated = tmp_path / "Other Cave"
 
-    for folder in (current, legacy, unrelated):
+    for folder in (current, legacy_library, legacy_samples, unrelated):
         folder.mkdir(parents=True)
         (folder / "map.obj").write_text("mesh", encoding="utf-8")
 
     result = standard_library_maps.remove_downloaded_standard_library_map(str(tmp_path), sample)
 
-    assert set(result.removed_paths) == {str(current), str(legacy)}
+    assert set(result.removed_paths) == {
+        str(current),
+        str(legacy_library),
+        str(legacy_samples),
+    }
     assert result.error is None
     assert not current.exists()
-    assert not legacy.exists()
+    assert not legacy_library.exists()
+    assert not legacy_samples.exists()
     assert unrelated.exists()
 
 
 def test_remove_downloaded_standard_library_map_rejects_non_directory_conflict(tmp_path):
     sample = standard_library_maps.StandardLibraryMapInfo("Test Cave", "test.zip")
-    current = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
-    current.parent.mkdir(parents=True)
+    current = tmp_path / "Test Cave"
     current.write_text("not a directory", encoding="utf-8")
 
     result = standard_library_maps.remove_downloaded_standard_library_map(str(tmp_path), sample)
@@ -475,9 +536,14 @@ def test_app_supplied_standard_library_map_path_matches_managed_library_only(
     caveviewer_home = tmp_path / "caveviewer-home"
     monkeypatch.setenv("CAVEVIEWER_HOME", str(caveviewer_home))
     sample = standard_library_maps.bundled_standard_library_catalog()[0]
+    download_parent = tmp_path / "downloads"
+    monkeypatch.setenv("CAVEVIEWER_MAP_LIBRARY_DIR", str(download_parent))
     managed_library_path = (
-        caveviewer_home
-        / "data"
+        download_parent
+        / sample.display_name
+    )
+    legacy_managed_library_path = (
+        download_parent
         / standard_library_maps.MAP_LIBRARY_DIRNAME
         / sample.display_name
     )
@@ -495,6 +561,9 @@ def test_app_supplied_standard_library_map_path_matches_managed_library_only(
     )
 
     assert standard_library_maps.is_app_supplied_standard_library_map_path(managed_library_path)
+    assert standard_library_maps.is_app_supplied_standard_library_map_path(
+        legacy_managed_library_path
+    )
     assert standard_library_maps.is_app_supplied_standard_library_map_path(legacy_sample_path)
     assert not standard_library_maps.is_app_supplied_standard_library_map_path(unrelated_user_path)
 
@@ -517,7 +586,7 @@ def test_successful_standard_library_download_extracts_expected_layout(
     sample = standard_library_maps.StandardLibraryMapInfo(
         "Test Cave", "test.zip", "https://example.invalid/test.zip", None
     )
-    destination = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    destination = tmp_path / "Test Cave"
     destination.mkdir(parents=True)
     (destination / "obsolete.txt").write_text("old", encoding="utf-8")
 
@@ -567,7 +636,7 @@ def test_standard_library_download_rejects_sha256_mismatch(tmp_path, monkeypatch
         )
 
     assert not (
-        tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+        tmp_path / "Test Cave"
     ).exists()
 
 
@@ -594,7 +663,7 @@ def test_standard_library_download_accepts_matching_sha256(tmp_path, monkeypatch
         sample,
     )
 
-    assert result == str(tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave")
+    assert result == str(tmp_path / "Test Cave")
 
 
 def test_standard_library_publish_copy_failure_preserves_existing_install_and_cleans_staging(
@@ -603,7 +672,7 @@ def test_standard_library_publish_copy_failure_preserves_existing_install_and_cl
     sample = standard_library_maps.StandardLibraryMapInfo(
         "Test Cave", "test.zip", "https://example.invalid/test.zip", None
     )
-    destination = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    destination = tmp_path / "Test Cave"
     destination.mkdir(parents=True)
     marker = destination / "map.obj"
     marker.write_text("existing map", encoding="utf-8")
@@ -634,7 +703,7 @@ def test_standard_library_publish_failure_restores_existing_install_and_cleans_s
     sample = standard_library_maps.StandardLibraryMapInfo(
         "Test Cave", "test.zip", "https://example.invalid/test.zip", None
     )
-    destination = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave"
+    destination = tmp_path / "Test Cave"
     destination.mkdir(parents=True)
     marker = destination / "map.obj"
     marker.write_text("existing map", encoding="utf-8")
@@ -684,7 +753,7 @@ def test_standard_library_download_accepts_portal_directory_selection(tmp_path, 
         sample,
     )
 
-    assert result == str(tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / "Test Cave")
+    assert result == str(tmp_path / "Test Cave")
     assert Path(result, "map.obj").read_text(encoding="utf-8") == "mesh"
 
 

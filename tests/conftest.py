@@ -45,4 +45,5 @@ def valid_preferences(tmp_path):
 
     values = preference_defaults()
     values["recording_dir"] = str(tmp_path / "recordings")
+    values["map_library_dir"] = str(tmp_path / "downloads")
     return values

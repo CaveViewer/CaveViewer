@@ -537,6 +537,7 @@ the automatic right-side HUD scale. These are not required for normal users.
 | `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | `2` | Number of chunk cells around occupied map chunks that remain navigable. Larger values allow more free space around the cave; smaller values keep users closer to rendered chunks. |
 | `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
 | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Folder where saved recordings are stored. The Preferences panel saves this value. |
+| `CAVEVIEWER_MAP_LIBRARY_DIR` | User Downloads folder | Folder where CaveViewer stores downloaded Map Library maps. The Preferences panel saves this value. |
 | `CAVEVIEWER_RECORDING_FPS` | `30` | Target MP4 recording frame rate. Range: 1–60. Frames are streamed to `ffmpeg`; they are not buffered in memory. |
 | `CAVEVIEWER_RECORDING_MAX_HEIGHT` | `720` | Maximum output video height. The framebuffer is downscaled before encoding to reduce render readback and encoding cost. Set to `1080` to opt back into 1080p recording. |
 | `CAVEVIEWER_RECORDING_CRF` | `23` | H.264 quality value passed to `ffmpeg`. Lower is larger/higher quality; higher is smaller/lower quality. Range: 0–51. |
@@ -642,20 +643,26 @@ Unless overridden, CaveViewer stores files in these locations:
 | Preferences | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback; legacy-compatible filename) | `~/.caveviewer/advanced_settings.json` |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
 | Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) | `~/.caveviewer/maps/` |
+| Downloaded map library | `$XDG_DOWNLOAD_DIR/` (`~/Downloads/` fallback) | `~/Downloads/` |
 
 `CAVEVIEWER_HOME` creates isolated `config`, `data`, `cache`, `state`, and
 `runtime` children and places map caches under `<root>/cache/maps`.
-`CAVEVIEWER_MAP_CACHE_DIR` overrides only the generated map-cache root. On
-Linux, old `~/.caveviewer/` and `~/.caveviewer_*` files are copied once and
-left in place. A managed cache is self-contained: texture files are staged
-beside its chunks before the manifest becomes visible. Disk-space checks
-therefore target the cache filesystem rather than assuming the map's filesystem
-is writable.
+`CAVEVIEWER_MAP_CACHE_DIR` overrides only the generated map-cache root.
+`CAVEVIEWER_MAP_LIBRARY_DIR` overrides the folder used for downloaded
+map-library entries. Older child `map_library` and `sample_maps` layouts remain
+readable as legacy locations. On Linux, old `~/.caveviewer/` and
+`~/.caveviewer_*` files are copied once and left in place, and older app-data
+`map_library` or `sample_maps` directories are moved into the configured
+map-library location when possible. A managed cache is self-contained: texture
+files are staged beside its chunks before the manifest becomes visible.
+Disk-space checks therefore target the cache filesystem rather than assuming
+the map's filesystem is writable.
 
 ### Map Library
 
 | Variable | Default | Description |
 |---|---|---|
+| `CAVEVIEWER_MAP_LIBRARY_DIR` | User Downloads folder | Folder where CaveViewer stores downloaded Map Library maps. |
 | `CAVEVIEWER_MAP_LIBRARY_REPO` | `CaveViewer/CaveViewer` | GitHub `owner/repo` for the map library release. |
 | `CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG` | `sample-data` | Release tag to fetch CaveViewer map assets from. |
 | `CAVEVIEWER_MAP_LIBRARY_API_URL` | _(derived from repo + tag)_ | Full GitHub release API URL. Overrides the repo/tag variables when set. |

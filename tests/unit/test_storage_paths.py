@@ -12,6 +12,7 @@ from caveviewer import storage_paths
 from caveviewer.storage_paths import (
     STORAGE_HOME_ENV_VAR,
     StoragePathError,
+    default_downloads_dir,
     resolve_application_paths,
 )
 
@@ -68,6 +69,34 @@ def test_relative_xdg_values_are_ignored(tmp_path):
     assert paths.cache_dir == tmp_path / "home" / ".cache" / "caveviewer"
     assert paths.state_dir == tmp_path / "home" / ".local" / "state" / "caveviewer"
     assert paths.runtime_dir == _expected_runtime_fallback_dir()
+
+
+def test_default_downloads_dir_uses_linux_xdg_user_dir(tmp_path):
+    home = tmp_path / "home"
+    config_home = tmp_path / "config"
+    config_home.mkdir(exist_ok=True)
+    (config_home / "user-dirs.dirs").write_text(
+        'XDG_DOWNLOAD_DIR="$HOME/Incoming"\n',
+        encoding="utf-8",
+    )
+
+    result = default_downloads_dir(
+        environ={"XDG_CONFIG_HOME": str(config_home)},
+        home=home,
+        platform_name="linux",
+    )
+
+    assert result == home / "Incoming"
+
+
+def test_default_downloads_dir_falls_back_to_home_downloads(tmp_path):
+    result = default_downloads_dir(
+        environ={},
+        home=tmp_path / "home",
+        platform_name="darwin",
+    )
+
+    assert result == tmp_path / "home" / "Downloads"
 
 
 def test_invalid_xdg_runtime_dir_is_ignored(tmp_path):

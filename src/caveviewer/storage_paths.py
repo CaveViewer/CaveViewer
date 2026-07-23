@@ -91,6 +91,29 @@ def resolve_application_paths(
     )
 
 
+def default_downloads_dir(
+    *,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+    platform_name: str | None = None,
+) -> Path:
+    """Return the user's Downloads directory with platform-safe fallbacks."""
+    environment = os.environ if environ is None else environ
+    platform_name = sys.platform if platform_name is None else platform_name
+    home_path = _required_home_path(home)
+
+    if platform_name.startswith("linux"):
+        xdg_download_dir = _linux_xdg_user_dir(
+            environment,
+            "XDG_DOWNLOAD_DIR",
+            home_path,
+        )
+        if xdg_download_dir is not None:
+            return xdg_download_dir
+
+    return home_path / "Downloads"
+
+
 def _xdg_path(
     environment: Mapping[str, str], variable: str, fallback: Path
 ) -> Path:
@@ -112,6 +135,52 @@ def _xdg_runtime_path(
     if _is_valid_xdg_runtime_dir(candidate):
         return candidate
     return fallback
+
+
+def _linux_xdg_user_dir(
+    environment: Mapping[str, str],
+    key: str,
+    home_path: Path,
+) -> Path | None:
+    user_dirs_path = _xdg_path(
+        environment,
+        "XDG_CONFIG_HOME",
+        home_path / ".config",
+    ) / "user-dirs.dirs"
+    try:
+        lines = user_dirs_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    prefix = f"{key}="
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or not line.startswith(prefix):
+            continue
+        value = line[len(prefix):].strip()
+        resolved = _resolve_xdg_user_dir_value(value, home_path)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _resolve_xdg_user_dir_value(raw_value: str, home_path: Path) -> Path | None:
+    if (
+        len(raw_value) >= 2
+        and raw_value[0] == raw_value[-1]
+        and raw_value[0] in {"'", '"'}
+    ):
+        raw_value = raw_value[1:-1]
+    if not raw_value:
+        return None
+    if raw_value == "$HOME":
+        return home_path
+    home_prefix = "$HOME/"
+    if raw_value.startswith(home_prefix):
+        return home_path / raw_value[len(home_prefix):]
+    if os.path.isabs(raw_value):
+        return Path(raw_value)
+    return None
 
 
 def _is_valid_xdg_runtime_dir(path: Path) -> bool:

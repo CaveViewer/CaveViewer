@@ -23,6 +23,7 @@ from caveviewer.core.preferences.schema import (
     preference_range_text,
     preference_env_updates,
     default_preferences,
+    default_map_library_dir,
     default_recording_dir,
     effective_preferences,
     normalize_preferences,

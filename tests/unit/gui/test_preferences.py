@@ -64,6 +64,7 @@ from caveviewer.gui import preferences as settings
         ("chunk_build_reserved_cpus", "1", "at least 2"),
         ("chunk_build_reserved_cpus", "33", "no more than 32"),
         ("recording_dir", "", "required"),
+        ("map_library_dir", "", "required"),
     ],
 )
 def test_invalid_setting_reports_field(
@@ -168,6 +169,9 @@ def test_schema_is_typed_and_has_unique_runtime_mappings():
     assert settings.preference_defaults()["chunk_size_meters"] == "50"
     assert settings.preference_defaults()["max_upload_group_mb"] == "16"
     assert settings.preference_defaults()["obj_import_batch_thousands"] == "200"
+    assert settings.preference_defaults()["map_library_dir"].endswith(
+        os.path.join("Downloads")
+    )
 
 
 def test_setting_spec_is_immutable():
@@ -272,6 +276,17 @@ def test_recording_path_rejects_creation_under_unwritable_parent(
     assert not result.is_valid
     assert result.error_key == "recording_dir"
     assert "inside a writable folder" in (result.message or "")
+
+
+def test_map_library_path_expands_home(valid_preferences):
+    valid_preferences["map_library_dir"] = "~/map-library-parent"
+    result = settings.validate_preferences(
+        valid_preferences
+    )
+    assert result.is_valid, result.message
+    assert result.normalized_values["map_library_dir"] == os.path.join(
+        os.path.expanduser("~"), "map-library-parent"
+    )
 
 
 def test_load_missing_settings_returns_validated_defaults(tmp_path):
@@ -521,14 +536,27 @@ def test_required_numeric_settings_open_with_defaults():
     assert all(defaults[key] for key in required_numeric_keys)
 
 
-def test_non_numeric_setting_has_no_display_range():
-    recording_dir = next(
+def test_non_numeric_settings_have_no_display_range():
+    non_numeric_fields = [
         field
         for field in settings.PREFERENCE_FIELDS
-        if field.key == "recording_dir"
+        if field.value_type not in {
+            settings.PreferenceValueType.INT,
+            settings.PreferenceValueType.FLOAT,
+        }
+    ]
+    assert {field.key for field in non_numeric_fields} == {
+        "recording_dir",
+        "map_library_dir",
+    }
+    assert all(
+        settings.preference_range_text(field) is None
+        for field in non_numeric_fields
     )
-    assert settings.preference_range_text(recording_dir) is None
-    assert settings.preference_placeholder_text(recording_dir) is None
+    assert all(
+        settings.preference_placeholder_text(field) is None
+        for field in non_numeric_fields
+    )
 
 
 def test_apply_maps_every_setting_to_its_declared_environment_variable(
@@ -680,7 +708,15 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
         assert preferences_dialog._NOTICE_WRAP_LENGTH == 720
     assert fields_by_key["recording_dir"].label == "Recordings folder"
     assert fields_by_key["recording_dir"].hint == "Where saved recordings are stored."
-    assert "compact_path = key == \"recording_dir\"" in render_field_source
+    assert (
+        fields_by_key["map_library_dir"].label
+        == "Downloaded maps folder"
+    )
+    assert (
+        fields_by_key["map_library_dir"].hint
+        == "Where CaveViewer stores downloaded Map Library maps."
+    )
+    assert "compact_path = value_type in {" in render_field_source
     assert "row=1" in render_field_source
     assert "pady=(_CONTROL_ROW_TOP_PAD_Y, 0)" in render_field_source
     assert "entry.grid(row=0, column=0, sticky=\"ew\")" in render_field_source
@@ -798,3 +834,34 @@ def test_dialog_stays_open_and_reports_atomic_save_failure(
     assert dialog.preferences is original_preferences
     assert applied == []
     assert destroyed == []
+
+
+def test_dialog_calls_apply_callback_after_success(valid_preferences):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_workflow import PreferencesApplyResult
+
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    destroyed = []
+    applied = []
+    dialog = preferences_dialog.PreferencesDialog.__new__(
+        preferences_dialog.PreferencesDialog
+    )
+    dialog.form = SimpleNamespace(
+        attempt_apply=lambda: (SimpleNamespace(), snapshot)
+    )
+    dialog._render_form_state = lambda *_args, **_kwargs: None
+    dialog.numeric_entry_states = {}
+    dialog.workflow = SimpleNamespace(
+        apply=lambda preferences: PreferencesApplyResult(
+            preferences=preferences
+        )
+    )
+    dialog.dialog = SimpleNamespace(destroy=lambda: destroyed.append(True))
+    dialog.on_applied = applied.append
+    dialog.preferences = None
+
+    dialog.apply()
+
+    assert applied == [snapshot]
+    assert dialog.preferences is snapshot
+    assert destroyed == [True]
