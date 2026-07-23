@@ -31,6 +31,8 @@ from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
+from caveviewer.gui.chunk_upload import ChunkUploadManager
+from caveviewer.gui.recording_capture import RecordingCaptureResources
 from caveviewer.gui.texture_manager import TextureManager
 from caveviewer.gui.camera import FlyCamera
 from caveviewer.gui.minimap import Minimap
@@ -48,7 +50,7 @@ from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import render_upload
-from caveviewer.gui import streaming_frame_timing
+from caveviewer.gui import view_culling
 from caveviewer.gui import viewer_input
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
@@ -66,9 +68,7 @@ _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
 _GPU_RESIDENCY_SAFETY_SHARE = 0.05
-_RENDER_UPLOAD_VERTEX_BYTES = render_upload.RENDER_UPLOAD_VERTEX_BYTES
 _RENDER_UPLOAD_INITIAL_SLICE_BYTES = render_upload.RENDER_UPLOAD_INITIAL_SLICE_BYTES
-_RENDER_UPLOAD_SLICE_BYTES = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
 _CATCHUP_UPLOAD_CHUNKS_PER_FRAME = 2
 _CATCHUP_UPLOAD_OPERATIONS_PER_CHUNK = 8
 _CATCHUP_UPLOAD_TIME_BUDGET_MS = 8.0
@@ -565,6 +565,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._recording_session: recording.RecordingEncoderSession | None = None
         self._recording_output_path: str | None = None
+        self._recording_capture: RecordingCaptureResources | None = None
         self._recording_size: tuple[int, int] | None = None
         self._recording_viewport: tuple[int, int, int, int] | None = None
         self._recording_readback_framebuffer: moderngl.Framebuffer | None = None
@@ -692,6 +693,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.camera = None
         self.minimap = None
         self.texture_manager = None
+        self._chunk_upload_manager: ChunkUploadManager | None = None
         self._chunk_gpu_objects: dict[tuple, list] = {}
         self._chunk_upload_states: dict[tuple, dict] = {}
         # Per-chunk, per-material CPU-side data for instant SHADE toggle:
@@ -699,9 +701,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # tuples in the same order as _chunk_gpu_objects, so toggling shading
         # can zip the two lists and rewrite each VBO in place via vbo.write().
         self._chunk_normal_cache: dict[tuple, list] = {}
-        # Per-cell world-space AABBs for frustum culling, populated in
-        # _load_map from the manifest's pre-computed bounding boxes.
+        # Per-cell world-space AABBs for frustum culling, populated as chunks
+        # become resident.
         self._chunk_aabbs: dict[tuple, tuple] = {}
+        self._view_culling_cache = view_culling.FrustumCullingCache()
+        self._chunk_visibility_generation = 0
         self._navigation_guard_cells: set[tuple[int, int, int]] = set()
         self._navigation_guard_chunk_size: float | None = None
         self._has_map_loaded = False
@@ -787,6 +791,46 @@ class CaveViewerWindow(mglw.WindowConfig):
             controller = RecordingStateController()
             self.__dict__["_recording_controller"] = controller
         return controller
+
+    def _ensure_recording_capture(self) -> RecordingCaptureResources:
+        capture = self.__dict__.get("_recording_capture")
+        if capture is None:
+            capture = RecordingCaptureResources(
+                ctx=getattr(self, "ctx", None),
+                buffer_count=self.RECORDING_READBACK_BUFFER_COUNT,
+                readback_components=self.RECORDING_READBACK_COMPONENTS,
+                logger=_LOG,
+                perf_counter=lambda: time.perf_counter(),
+            )
+            self.__dict__["_recording_capture"] = capture
+        capture.ctx = getattr(self, "ctx", None)
+        capture.buffer_count = self.RECORDING_READBACK_BUFFER_COUNT
+        capture.readback_components = self.RECORDING_READBACK_COMPONENTS
+        capture.logger = _LOG
+        capture.output_size = getattr(self, "_recording_size", None)
+        capture.capture_viewport = getattr(self, "_recording_viewport", None)
+        capture.readback_framebuffer = getattr(
+            self,
+            "_recording_readback_framebuffer",
+            None,
+        )
+        capture.readback_slots = getattr(self, "_recording_readback_slots", [])
+        capture.readback_pending = getattr(self, "_recording_readback_pending", [])
+        capture.readback_byte_count = int(
+            getattr(self, "_recording_readback_byte_count", 0)
+        )
+        return capture
+
+    def _sync_recording_capture_state_from_manager(self) -> None:
+        capture = self.__dict__.get("_recording_capture")
+        if capture is None:
+            return
+        self._recording_size = capture.output_size
+        self._recording_viewport = capture.capture_viewport
+        self._recording_readback_framebuffer = capture.readback_framebuffer
+        self._recording_readback_slots = capture.readback_slots
+        self._recording_readback_pending = capture.readback_pending
+        self._recording_readback_byte_count = capture.readback_byte_count
 
     @property
     def _recording_countdown_started_at(self) -> float | None:
@@ -1051,11 +1095,31 @@ class CaveViewerWindow(mglw.WindowConfig):
         # console so atlas feasibility can be judged without guessing.
         self._print_texture_diagnostics(manifest, textures_dir)
 
-        # Keep frustum-culling bounds only for currently loaded chunks.  Large
-        # maps can have tens or hundreds of thousands of manifest cells; copying
-        # every AABB into Python containers at map-open time defeats streaming's
-        # memory cap before the first frame is drawn.
+        # Keep GPU upload state scoped to the active map.  Large maps can have
+        # tens or hundreds of thousands of manifest cells, so frustum-culling
+        # bounds are populated only as chunks become resident.
+        self._chunk_gpu_objects = {}
+        self._chunk_upload_states = {}
+        self._chunk_normal_cache = {}
         self._chunk_aabbs = {}
+        self._view_culling_cache = view_culling.FrustumCullingCache()
+        self._chunk_visibility_generation = 0
+        self._chunk_upload_manager = ChunkUploadManager(
+            ctx=self.ctx,
+            program=self.program,
+            texture_manager=self.texture_manager,
+            smooth_shading_enabled=lambda: bool(
+                self.render_mode_buttons.smooth_shading_enabled
+            ),
+            gpu_objects=self._chunk_gpu_objects,
+            upload_states=self._chunk_upload_states,
+            normal_cache=self._chunk_normal_cache,
+            aabbs=self._chunk_aabbs,
+            upload_operations_per_chunk=self._current_upload_operations_per_chunk,
+            upload_time_budget_ms=self._current_upload_time_budget_ms,
+            vbo_upload_slice_bytes=self._vbo_upload_slice_bytes,
+            texture_upload_slice_bytes=self._texture_upload_slice_bytes,
+        )
         self._navigation_guard_cells = self.world.available_cells
         self._navigation_guard_chunk_size = chunk_size
         if self._navigation_guard_enabled:
@@ -1243,72 +1307,34 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _release_recording_readback_framebuffer(self) -> None:
-        framebuffer = getattr(self, "_recording_readback_framebuffer", None)
-        self._recording_readback_framebuffer = None
-        if framebuffer is None:
-            return
-        try:
-            framebuffer.release()
-        except Exception:
-            pass
+        self._ensure_recording_capture().release_framebuffer()
+        self._sync_recording_capture_state_from_manager()
 
     def _discard_recording_staged_frames(self) -> int:
-        pending = getattr(self, "_recording_readback_pending", [])
-        dropped = len(pending)
-        for slot in pending:
-            slot.in_flight = False
-        pending.clear()
+        dropped = self._ensure_recording_capture().discard_staged_frames()
+        self._sync_recording_capture_state_from_manager()
         return dropped
 
     def _release_recording_readback_buffers(self) -> None:
-        self._discard_recording_staged_frames()
-        slots = getattr(self, "_recording_readback_slots", [])
-        self._recording_readback_slots = []
-        self._recording_readback_pending = []
-        self._recording_readback_byte_count = 0
+        self._ensure_recording_capture().release_buffers()
+        self._sync_recording_capture_state_from_manager()
         self._ensure_recording_controller().reset_frame_timings()
-        for slot in slots:
-            try:
-                slot.buffer.release()
-            except Exception:
-                pass
 
     def _create_recording_readback_framebuffer(
         self,
         capture_size: tuple[int, int],
         output_size: tuple[int, int],
     ) -> moderngl.Framebuffer | None:
-        self._release_recording_readback_framebuffer()
-        if output_size == capture_size:
-            return None
-
-        # Downscale on the GPU before readback. Reading the full high-DPI
-        # window framebuffer can block the render loop for tens of
-        # milliseconds per recorded frame; reading the output-sized buffer
-        # keeps the synchronized transfer much smaller.
-        framebuffer = self.ctx.simple_framebuffer(output_size, components=4)
-        framebuffer.viewport = (0, 0, output_size[0], output_size[1])
-        self._recording_readback_framebuffer = framebuffer
+        framebuffer = self._ensure_recording_capture().create_framebuffer(
+            capture_size,
+            output_size,
+        )
+        self._sync_recording_capture_state_from_manager()
         return framebuffer
 
     def _create_recording_readback_buffers(self, output_size: tuple[int, int]) -> None:
-        self._release_recording_readback_buffers()
-        width, height = output_size
-        byte_count = width * height * self.RECORDING_READBACK_COMPONENTS
-        slots = []
-        try:
-            for _ in range(self.RECORDING_READBACK_BUFFER_COUNT):
-                slots.append(_RecordingReadbackSlot(self.ctx.buffer(reserve=byte_count)))
-        except Exception:
-            for slot in slots:
-                try:
-                    slot.buffer.release()
-                except Exception:
-                    pass
-            raise
-        self._recording_readback_slots = slots
-        self._recording_readback_pending = []
-        self._recording_readback_byte_count = byte_count
+        self._ensure_recording_capture().create_buffers(output_size)
+        self._sync_recording_capture_state_from_manager()
 
     def _start_recording_encoder(self) -> bool:
         ffmpeg_path = self._resolve_ffmpeg_path()
@@ -1538,18 +1564,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         return recording.recording_failure_detail(stderr_text)
 
     def _recording_capture_state(self) -> tuple[tuple[int, int], tuple[int, int, int, int], int]:
-        if self._recording_size is None or self._recording_viewport is None:
-            raise OSError("recording capture state is not initialized")
-        byte_count = self._recording_readback_byte_count
-        if byte_count <= 0:
-            raise OSError("recording readback buffers are not initialized")
-        return self._recording_size, self._recording_viewport, byte_count
+        return self._ensure_recording_capture().capture_state()
 
     def _recording_free_readback_slot(self) -> _RecordingReadbackSlot | None:
-        for slot in self._recording_readback_slots:
-            if not slot.in_flight:
-                return slot
-        return None
+        return self._ensure_recording_capture().free_readback_slot()
 
     def _recording_copy_to_readback_framebuffer(
         self,
@@ -1557,96 +1575,32 @@ class CaveViewerWindow(mglw.WindowConfig):
         output_size: tuple[int, int],
         capture_viewport: tuple[int, int, int, int],
     ) -> None:
-        screen = self.ctx.screen
-        previous_screen_viewport = getattr(screen, "viewport", None)
-        previous_readback_viewport = getattr(readback_framebuffer, "viewport", None)
-        width, height = output_size
-        try:
-            screen.viewport = capture_viewport
-            readback_framebuffer.viewport = (0, 0, width, height)
-            self.ctx.copy_framebuffer(readback_framebuffer, screen)
-        finally:
-            if previous_screen_viewport is not None:
-                try:
-                    screen.viewport = previous_screen_viewport
-                except Exception:
-                    pass
-            if previous_readback_viewport is not None:
-                try:
-                    readback_framebuffer.viewport = previous_readback_viewport
-                except Exception:
-                    pass
+        self._ensure_recording_capture().copy_to_readback_framebuffer(
+            readback_framebuffer,
+            output_size,
+            capture_viewport,
+        )
 
     def _recording_stage_frame(
         self,
         render_frame: Callable[[moderngl.Framebuffer, tuple[int, int]], None] | None = None,
     ) -> bool:
-        output_size, capture_viewport, _byte_count = self._recording_capture_state()
-        slot = self._recording_free_readback_slot()
-        if slot is None:
-            return False
-
-        width, height = output_size
-        readback_framebuffer = self._recording_readback_framebuffer
-        if readback_framebuffer is None:
-            self.ctx.screen.read_into(
-                slot.buffer,
-                viewport=capture_viewport,
-                components=self.RECORDING_READBACK_COMPONENTS,
-                alignment=1,
+        try:
+            return self._ensure_recording_capture().stage_frame(
+                render_frame=render_frame,
             )
-        else:
-            if render_frame is None:
-                self._recording_copy_to_readback_framebuffer(
-                    readback_framebuffer,
-                    output_size,
-                    capture_viewport,
-                )
-            else:
-                render_frame(readback_framebuffer, output_size)
-            readback_framebuffer.read_into(
-                slot.buffer,
-                viewport=(0, 0, width, height),
-                components=self.RECORDING_READBACK_COMPONENTS,
-                alignment=1,
-            )
-
-        slot.in_flight = True
-        self._recording_readback_pending.append(slot)
-        return True
+        finally:
+            self._sync_recording_capture_state_from_manager()
 
     def _recording_drain_staged_frames(self) -> float:
-        pending = self._recording_readback_pending
-        slots = self._recording_readback_slots
-        frame_queue = self._recording_frame_queue
-        if (
-            not pending
-            or not slots
-            or len(pending) < len(slots)
-            or frame_queue is None
-            or frame_queue.full()
-        ):
-            return 0.0
-
-        _output_size, _capture_viewport, byte_count = self._recording_capture_state()
-        slot = pending.pop(0)
-        frame = None
-        t_read = time.perf_counter()
         try:
-            frame = slot.buffer.read(size=byte_count)
-            read_ms = (time.perf_counter() - t_read) * 1000.0
-            if len(frame) != byte_count:
-                _LOG.warning(
-                    "Recording stopped because framebuffer byte size changed: "
-                    f"actual={len(frame)} expected={byte_count}."
-                )
-                self._stop_recording()
-                return read_ms
-            self._recording_enqueue_frame(frame)
-            return read_ms
+            return self._ensure_recording_capture().drain_staged_frames(
+                frame_queue=self._recording_frame_queue,
+                enqueue_frame=self._recording_enqueue_frame,
+                stop_recording=self._stop_recording,
+            )
         finally:
-            slot.in_flight = False
-            frame = None
+            self._sync_recording_capture_state_from_manager()
 
     def _recording_update_after_scene(
         self,
@@ -1822,11 +1776,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         # frozen if a streaming worker is stuck in disk or callback code.
         self.world.shutdown(timeout=_VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS)
 
-        for cell in list(getattr(self, "_chunk_upload_states", {}).keys()):
-            self._on_chunk_unload(cell)
+        upload_manager = getattr(self, "_chunk_upload_manager", None)
+        if upload_manager is not None:
+            upload_manager.unload_all()
+            self._sync_chunk_upload_state_from_manager(upload_manager)
+        else:
+            for cell in list(getattr(self, "_chunk_upload_states", {}).keys()):
+                self._on_chunk_unload(cell)
 
-        for cell in list(self._chunk_gpu_objects.keys()):
-            self._on_chunk_unload(cell)
+            for cell in list(self._chunk_gpu_objects.keys()):
+                self._on_chunk_unload(cell)
 
         # belt-and-suspenders: if anything was somehow left behind (it
         # shouldn't be, given the loop above), don't carry it into the
@@ -1835,6 +1794,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_upload_states.clear()
         self._chunk_normal_cache.clear()
         self._chunk_aabbs.clear()
+        self._chunk_upload_manager = None
+        self._invalidate_visible_chunk_cache()
         self._navigation_guard_cells = set()
         self._navigation_guard_chunk_size = None
 
@@ -2147,24 +2108,137 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _format_streaming_frame_timing(timing: dict) -> str:
         return render_upload.format_streaming_frame_timing(timing)
 
-    @staticmethod
-    def _new_chunk_upload_counters() -> dict:
-        return render_upload.new_chunk_upload_counters()
+    def _ensure_chunk_upload_manager(self) -> ChunkUploadManager:
+        """Return the render-thread chunk upload owner for the active window."""
+        gpu_objects = getattr(self, "_chunk_gpu_objects", None)
+        if gpu_objects is None:
+            gpu_objects = {}
+            self._chunk_gpu_objects = gpu_objects
+        upload_states = getattr(self, "_chunk_upload_states", None)
+        if upload_states is None:
+            upload_states = {}
+            self._chunk_upload_states = upload_states
+        normal_cache = getattr(self, "_chunk_normal_cache", None)
+        if normal_cache is None:
+            normal_cache = {}
+            self._chunk_normal_cache = normal_cache
+        aabbs = getattr(self, "_chunk_aabbs", None)
+        if aabbs is None:
+            aabbs = {}
+            self._chunk_aabbs = aabbs
 
-    @staticmethod
-    def _add_chunk_upload_counters(target: dict, source: dict) -> None:
-        render_upload.add_chunk_upload_counters(target, source)
+        ctx = getattr(self, "ctx", None)
+        program = getattr(self, "program", None)
+        texture_manager = getattr(self, "texture_manager", None)
 
-    @staticmethod
-    def _add_texture_timing_counters(
-        counters: dict,
-        texture_timing: dict,
-        frame_timing: dict | None,
+        def smooth_shading_enabled() -> bool:
+            render_mode_buttons = getattr(self, "render_mode_buttons", None)
+            return bool(getattr(render_mode_buttons, "smooth_shading_enabled", False))
+
+        manager = getattr(self, "_chunk_upload_manager", None)
+        current_time_budget = getattr(
+            self,
+            "_current_upload_time_budget_ms",
+            getattr(self, "_upload_time_budget_ms", 3.0),
+        )
+        current_operations = getattr(
+            self,
+            "_current_upload_operations_per_chunk",
+            getattr(self, "_upload_groups_per_frame", 1),
+        )
+        if (
+            manager is None
+            or manager.ctx is not ctx
+            or manager.program is not program
+            or manager.texture_manager is not texture_manager
+            or manager.gpu_objects is not gpu_objects
+            or manager.upload_states is not upload_states
+            or manager.normal_cache is not normal_cache
+            or manager.aabbs is not aabbs
+        ):
+            manager = ChunkUploadManager(
+                ctx=ctx,
+                program=program,
+                texture_manager=texture_manager,
+                smooth_shading_enabled=smooth_shading_enabled,
+                gpu_objects=gpu_objects,
+                upload_states=upload_states,
+                normal_cache=normal_cache,
+                aabbs=aabbs,
+                upload_operations_per_chunk=current_operations,
+                upload_time_budget_ms=current_time_budget,
+                vbo_upload_slice_bytes=getattr(
+                    self,
+                    "_vbo_upload_slice_bytes",
+                    _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+                ),
+                texture_upload_slice_bytes=getattr(
+                    self,
+                    "_texture_upload_slice_bytes",
+                    _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+                ),
+            )
+            self._chunk_upload_manager = manager
+        else:
+            manager.upload_operations_per_chunk = max(1, int(current_operations))
+            manager.upload_time_budget_ms = max(0.5, float(current_time_budget))
+        return manager
+
+    def _sync_chunk_upload_state_from_manager(
+        self,
+        manager: ChunkUploadManager | None = None,
     ) -> None:
-        render_upload.add_texture_timing_counters(
-            counters,
-            texture_timing,
-            frame_timing,
+        """Mirror manager-owned upload state for legacy private callers/tests."""
+        manager = self._ensure_chunk_upload_manager() if manager is None else manager
+        self._vbo_upload_slice_bytes = manager.vbo_upload_slice_bytes
+        self._texture_upload_slice_bytes = manager.texture_upload_slice_bytes
+        self._chunk_gpu_objects = manager.gpu_objects
+        self._chunk_upload_states = manager.upload_states
+        self._chunk_normal_cache = manager.normal_cache
+        self._chunk_aabbs = manager.aabbs
+
+    def _ensure_view_culling_cache(self) -> view_culling.FrustumCullingCache:
+        cache = getattr(self, "_view_culling_cache", None)
+        if cache is None:
+            cache = view_culling.FrustumCullingCache()
+            self._view_culling_cache = cache
+        if not hasattr(self, "_chunk_visibility_generation"):
+            self._chunk_visibility_generation = 0
+        return cache
+
+    def _invalidate_visible_chunk_cache(self) -> None:
+        self._chunk_visibility_generation = int(
+            getattr(self, "_chunk_visibility_generation", 0)
+        ) + 1
+        cache = getattr(self, "_view_culling_cache", None)
+        if cache is not None:
+            cache.invalidate()
+
+    @staticmethod
+    def _resident_chunk_signature(
+        manager: ChunkUploadManager,
+        cell,
+    ) -> tuple[int, int, bool]:
+        vao_list = manager.gpu_objects.get(cell)
+        aabb = manager.aabbs.get(cell)
+        return (
+            id(vao_list) if vao_list is not None else 0,
+            len(vao_list) if vao_list is not None else 0,
+            aabb is not None,
+        )
+
+    def _visible_chunk_gpu_objects(
+        self,
+        view: np.ndarray,
+        projection: np.ndarray,
+    ) -> list[tuple[tuple, list]]:
+        cache = self._ensure_view_culling_cache()
+        return cache.visible_chunks(
+            view=view,
+            projection=projection,
+            chunk_gpu_objects=self._chunk_gpu_objects,
+            chunk_aabbs=self._chunk_aabbs,
+            generation=self._chunk_visibility_generation,
         )
 
     def _render_upload_slice_vertices(self) -> int:
@@ -2181,25 +2255,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         return render_upload.min_vbo_upload_slice_bytes()
 
     def _record_upload_slice_sizes(self, timing: dict | None) -> None:
-        render_upload.record_upload_slice_sizes(
-            timing,
-            render_upload.UploadSliceState(
-                vbo_upload_slice_bytes=int(
-                    getattr(
-                        self,
-                        "_vbo_upload_slice_bytes",
-                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-                    )
-                ),
-                texture_upload_slice_bytes=int(
-                    getattr(
-                        self,
-                        "_texture_upload_slice_bytes",
-                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-                    )
-                ),
-            ),
-        )
+        manager = self._ensure_chunk_upload_manager()
+        manager.record_upload_slice_sizes(timing)
+        self._sync_chunk_upload_state_from_manager(manager)
 
     def _adapt_upload_slice_size(
         self,
@@ -2209,553 +2267,73 @@ class CaveViewerWindow(mglw.WindowConfig):
         byte_count: int,
         timing: dict | None,
     ) -> None:
-        """
-        Shrink future render-thread upload slices after a measured stall.
-
-        The OpenGL driver can block on a single texture or buffer write even
-        when the payload is already small. This feedback path keeps normal
-        settings automatic: if one operation exceeds the frame upload target,
-        later operations use a smaller byte budget instead of asking the user
-        to keep tuning environment variables.
-        """
-        target_ms = float(
-            getattr(
-                self,
-                "_current_upload_time_budget_ms",
-                getattr(
-                    self,
-                    "_upload_time_budget_ms",
-                    3.0,
-                ),
-            )
-        )
-        decision = render_upload.adapt_upload_slice_size(
+        """Delegate adaptive upload-slice policy to the chunk upload manager."""
+        manager = self._ensure_chunk_upload_manager()
+        manager.adapt_upload_slice_size(
             kind=kind,
             elapsed_ms=elapsed_ms,
             byte_count=byte_count,
-            target_ms=target_ms,
-            state=render_upload.UploadSliceState(
-                vbo_upload_slice_bytes=int(
-                    getattr(
-                        self,
-                        "_vbo_upload_slice_bytes",
-                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-                    )
-                ),
-                texture_upload_slice_bytes=int(
-                    getattr(
-                        self,
-                        "_texture_upload_slice_bytes",
-                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-                    )
-                ),
-            ),
             timing=timing,
         )
-        self._vbo_upload_slice_bytes = decision.state.vbo_upload_slice_bytes
-        self._texture_upload_slice_bytes = decision.state.texture_upload_slice_bytes
-
-    @staticmethod
-    def _new_chunk_group_upload_job(group, smooth_shading: bool) -> dict:
-        return render_upload.new_chunk_group_upload_job(group, smooth_shading)
-
-    def _cancel_chunk_group_upload_job(self, job: dict | None) -> None:
-        if not job:
-            return
-        texture_task = job.get("texture_task")
-        cancel_acquire_task = getattr(self.texture_manager, "cancel_acquire_task", None)
-        if texture_task is not None and callable(cancel_acquire_task):
-            cancel_acquire_task(texture_task)
-        if job.get("texture") is not None:
-            self.texture_manager.release(job["group"].material_name)
-            job["texture"] = None
-        pending_vbo = job.get("pending_vbo")
-        if pending_vbo is not None and hasattr(pending_vbo, "release"):
-            pending_vbo.release()
-        job["pending_vbo"] = None
-        job["pending_vbo_payload"] = None
-
-    def _advance_texture_upload_job(
-        self,
-        job: dict,
-        counters: dict,
-        timing: dict | None,
-    ) -> bool:
-        """Return True when the current render-upload job has a texture."""
-        if job.get("texture") is not None:
-            return True
-
-        texture_task = job.get("texture_task")
-        begin_acquire = getattr(self.texture_manager, "begin_acquire_with_timing", None)
-        advance_acquire = getattr(
-            self.texture_manager,
-            "advance_acquire_with_timing",
-            None,
-        )
-        if texture_task is None and callable(begin_acquire) and callable(advance_acquire):
-            t_texture_begin = time.perf_counter()
-            texture_task = begin_acquire(job["group"].material_name)
-            counters["texture_ms"] += (
-                time.perf_counter() - t_texture_begin
-            ) * 1000.0
-            job["texture_task"] = texture_task
-            if texture_task.complete:
-                job["texture"] = texture_task.result_texture
-                job["texture_task"] = None
-                self._add_texture_timing_counters(counters, texture_task.timing, timing)
-                return True
-
-        if texture_task is not None and callable(advance_acquire):
-            texture, texture_timing, complete = advance_acquire(
-                texture_task,
-                max_upload_bytes=max(
-                    1,
-                    int(
-                        getattr(
-                            self,
-                            "_texture_upload_slice_bytes",
-                            _RENDER_UPLOAD_SLICE_BYTES,
-                        )
-                    ),
-                ),
-            )
-            counters["texture_ms"] += texture_timing.get("total_ms", 0.0)
-            self._add_texture_timing_counters(counters, texture_timing, timing)
-            self._adapt_upload_slice_size(
-                kind="texture",
-                elapsed_ms=texture_timing.get("total_ms", 0.0),
-                byte_count=int(texture_timing.get("image_bytes", 0)),
-                timing=timing,
-            )
-            if complete:
-                job["texture"] = texture
-                job["texture_task"] = None
-                return True
-            return False
-
-        t_texture = time.perf_counter()
-        acquire_with_timing = getattr(
-            self.texture_manager,
-            "acquire_with_timing",
-            None,
-        )
-        texture_timing = None
-        if callable(acquire_with_timing):
-            texture, texture_timing = acquire_with_timing(job["group"].material_name)
-        else:
-            texture = self.texture_manager.acquire(job["group"].material_name)
-        counters["texture_ms"] += (time.perf_counter() - t_texture) * 1000.0
-        if texture_timing is not None:
-            self._add_texture_timing_counters(counters, texture_timing, timing)
-            self._adapt_upload_slice_size(
-                kind="texture",
-                elapsed_ms=texture_timing.get("total_ms", texture_timing.get("texture_ms", 0.0)),
-                byte_count=int(texture_timing.get("image_bytes", 0)),
-                timing=timing,
-            )
-        job["texture"] = texture
-        return True
-
-    def _append_chunk_vbo_slice(
-        self,
-        job: dict,
-        chunk_state: dict,
-        vbo,
-        start_vertex: int,
-        end_vertex: int,
-        counters: dict,
-    ) -> bool:
-        group = job["group"]
-        t_vao = time.perf_counter()
-        vao = self.ctx.vertex_array(
-            self.program, [(vbo, "3f 2f 3f", "in_position", "in_uv", "in_normal")]
-        )
-        counters["vao_ms"] += (time.perf_counter() - t_vao) * 1000.0
-
-        chunk_state["vao_list"].append(
-            (vao, vbo, group.material_name, job["texture"])
-        )
-        chunk_state["normal_cache_entry"].append(
-            (
-                group.material_name,
-                group.positions[start_vertex:end_vertex],
-                group.uvs[start_vertex:end_vertex],
-                group.smooth_normals[start_vertex:end_vertex],
-            )
-        )
-        job["texture"] = None
-        job["next_vertex_index"] = end_vertex
-        if end_vertex >= len(group.positions):
-            counters["groups"] += 1
-            return True
-        return False
-
-    def _complete_pending_vbo_upload_job(
-        self,
-        job: dict,
-        chunk_state: dict,
-        counters: dict,
-        timing: dict | None,
-    ) -> bool:
-        vbo = job["pending_vbo"]
-        payload = job["pending_vbo_payload"]
-        start_vertex = int(job["pending_vbo_start_vertex"])
-        end_vertex = int(job["pending_vbo_end_vertex"])
-        byte_count = len(payload)
-
-        t_buffer = time.perf_counter()
-        vbo.write(payload)
-        elapsed_ms = (time.perf_counter() - t_buffer) * 1000.0
-        counters["buffer_ms"] += elapsed_ms
-        counters["buffer_write_ms"] += elapsed_ms
-        counters["buffer_write_bytes"] += byte_count
-        counters["vertices"] += end_vertex - start_vertex
-        counters["bytes"] += byte_count
-        self._adapt_upload_slice_size(
-            kind="vbo",
-            elapsed_ms=elapsed_ms,
-            byte_count=byte_count,
-            timing=timing,
-        )
-
-        complete = self._append_chunk_vbo_slice(
-            job,
-            chunk_state,
-            vbo,
-            start_vertex,
-            end_vertex,
-            counters,
-        )
-        job["pending_vbo"] = None
-        job["pending_vbo_payload"] = None
-        job["pending_vbo_start_vertex"] = 0
-        job["pending_vbo_end_vertex"] = 0
-        return complete
-
-    def _advance_chunk_group_upload_job(
-        self,
-        job: dict,
-        chunk_state: dict,
-        counters: dict,
-        timing: dict | None,
-    ) -> bool:
-        """
-        Advance one render-thread upload operation for a material group.
-
-        A group is deliberately split into a resumable texture acquire and
-        triangle-aligned VBO slices. This keeps the streaming frame budget from
-        starting a single large ``ctx.texture`` or ``ctx.buffer`` call that can
-        monopolize the render thread.
-        """
-        if not self._advance_texture_upload_job(job, counters, timing):
-            return False
-
-        if job.get("pending_vbo") is not None:
-            return self._complete_pending_vbo_upload_job(
-                job,
-                chunk_state,
-                counters,
-                timing,
-            )
-
-        group = job["group"]
-        start_vertex = int(job["next_vertex_index"])
-        vertex_count = len(group.positions)
-        if start_vertex >= vertex_count:
-            return True
-
-        end_vertex = min(
-            vertex_count,
-            start_vertex + self._render_upload_slice_vertices(),
-        )
-        if end_vertex < vertex_count:
-            end_vertex -= (end_vertex - start_vertex) % 3
-            if end_vertex <= start_vertex:
-                end_vertex = min(vertex_count, start_vertex + 3)
-
-        used_prepacked = group.has_prepacked_vertex_bytes(
-            smooth_shading=job["smooth_shading"]
-        )
-        t_pack = time.perf_counter()
-        if used_prepacked:
-            byte_start = start_vertex * _RENDER_UPLOAD_VERTEX_BYTES
-            byte_end = end_vertex * _RENDER_UPLOAD_VERTEX_BYTES
-            active_bytes = memoryview(group.prepacked_vertex_bytes)[
-                byte_start:byte_end
-            ]
-        else:
-            active_bytes = chunker.vertex_bytes_for_shading(
-                group.positions[start_vertex:end_vertex],
-                group.uvs[start_vertex:end_vertex],
-                group.smooth_normals[start_vertex:end_vertex],
-                smooth_shading=job["smooth_shading"],
-            )
-        counters["vertex_pack_ms"] += (time.perf_counter() - t_pack) * 1000.0
-        if used_prepacked:
-            counters["prepacked_groups"] += 1
-        else:
-            counters["fallback_pack_groups"] += 1
-        byte_count = len(active_bytes)
-        counters["buffer_alloc_bytes"] += byte_count
-
-        t_buffer = time.perf_counter()
-        try:
-            vbo = self.ctx.buffer(reserve=byte_count)
-        except TypeError:
-            t_buffer = time.perf_counter()
-            vbo = self.ctx.buffer(active_bytes)
-            elapsed_ms = (time.perf_counter() - t_buffer) * 1000.0
-            counters["buffer_ms"] += elapsed_ms
-            counters["buffer_alloc_ms"] += elapsed_ms
-            counters["buffer_write_ms"] += elapsed_ms
-            counters["buffer_write_bytes"] += byte_count
-            counters["vertices"] += end_vertex - start_vertex
-            counters["bytes"] += byte_count
-            self._adapt_upload_slice_size(
-                kind="vbo",
-                elapsed_ms=elapsed_ms,
-                byte_count=byte_count,
-                timing=timing,
-            )
-            try:
-                return self._append_chunk_vbo_slice(
-                    job,
-                    chunk_state,
-                    vbo,
-                    start_vertex,
-                    end_vertex,
-                    counters,
-                )
-            except Exception:
-                if hasattr(vbo, "release"):
-                    vbo.release()
-                raise
-
-        elapsed_ms = (time.perf_counter() - t_buffer) * 1000.0
-        counters["buffer_ms"] += elapsed_ms
-        counters["buffer_alloc_ms"] += elapsed_ms
-        self._adapt_upload_slice_size(
-            kind="vbo",
-            elapsed_ms=elapsed_ms,
-            byte_count=byte_count,
-            timing=timing,
-        )
-        job["pending_vbo"] = vbo
-        job["pending_vbo_payload"] = active_bytes
-        job["pending_vbo_start_vertex"] = start_vertex
-        job["pending_vbo_end_vertex"] = end_vertex
-        return False
-
-    def _record_chunk_upload_timing(
-        self,
-        timing: dict | None,
-        counters: dict,
-        *,
-        chunk_ms: float,
-        cell,
-        completed: bool,
-    ) -> None:
-        streaming_frame_timing.record_chunk_upload_timing(
-            timing,
-            counters,
-            chunk_ms=chunk_ms,
-            cell=cell,
-            completed=completed,
-        )
-
-    def _publish_chunk_upload_state(self, chunk_data, state: dict) -> None:
-        """Make completed upload slices drawable before the whole chunk is done."""
-        if not state.get("vao_list"):
-            return
-        self._chunk_gpu_objects[chunk_data.cell] = state["vao_list"]
-        self._chunk_normal_cache[chunk_data.cell] = state["normal_cache_entry"]
-        self._chunk_aabbs[chunk_data.cell] = (
-            chunk_data.bounds_min.astype(np.float32, copy=False),
-            chunk_data.bounds_max.astype(np.float32, copy=False),
-        )
+        self._sync_chunk_upload_state_from_manager(manager)
 
     def _on_chunk_ready(self, chunk_data):
-        timing = getattr(self, "_streaming_frame_timing", None)
-        chunk_start = time.perf_counter()
-        frame_counters = self._new_chunk_upload_counters()
-
-        upload_states = getattr(self, "_chunk_upload_states", None)
-        if upload_states is None:
-            self._chunk_upload_states = {}
-            upload_states = self._chunk_upload_states
-
-        state = upload_states.get(chunk_data.cell)
-        if state is None:
-            upload_groups = chunk_data.upload_groups
-            if upload_groups is None:
-                t_prepare = time.perf_counter()
-                chunker.prepare_chunk_upload_groups(chunk_data)
-                frame_counters["chunk_prepare_ms"] = (
-                    time.perf_counter() - t_prepare
-                ) * 1000.0
-                upload_groups = chunk_data.upload_groups or []
-
-            state = {
-                "upload_groups": upload_groups or [],
-                "next_group_index": 0,
-                "active_group_job": None,
-                "vao_list": [],
-                "normal_cache_entry": [],
-                "smooth_shading": bool(
-                    self.render_mode_buttons.smooth_shading_enabled
-                ),
-            }
-            upload_states[chunk_data.cell] = state
-
-        max_groups = max(
-            1,
-            int(
-                getattr(
-                    self,
-                    "_current_upload_operations_per_chunk",
-                    getattr(self, "_upload_groups_per_frame", 1),
-                )
+        manager = self._ensure_chunk_upload_manager()
+        before_signature = self._resident_chunk_signature(manager, chunk_data.cell)
+        manager.set_frame_limits(
+            operations_per_chunk=getattr(
+                self,
+                "_current_upload_operations_per_chunk",
+                getattr(self, "_upload_groups_per_frame", 1),
             ),
-        )
-        time_budget_ms = max(
-            0.5,
-            float(
-                getattr(
-                    self,
-                    "_current_upload_time_budget_ms",
-                    getattr(self, "_upload_time_budget_ms", 3.0),
-                )
+            time_budget_ms=getattr(
+                self,
+                "_current_upload_time_budget_ms",
+                getattr(self, "_upload_time_budget_ms", 3.0),
             ),
+            timing=getattr(self, "_streaming_frame_timing", None),
         )
-        operations_this_call = 0
-        upload_groups = state["upload_groups"]
-
-        while state["next_group_index"] < len(upload_groups):
-            if operations_this_call >= max_groups:
-                break
-            if (
-                operations_this_call > 0
-                and (time.perf_counter() - chunk_start) * 1000.0 >= time_budget_ms
-            ):
-                break
-
-            group_job = state.get("active_group_job")
-            if group_job is None:
-                group_job = self._new_chunk_group_upload_job(
-                    upload_groups[state["next_group_index"]],
-                    state["smooth_shading"],
-                )
-                state["active_group_job"] = group_job
-
-            group_counters = self._new_chunk_upload_counters()
-            group_complete = self._advance_chunk_group_upload_job(
-                group_job,
-                state,
-                group_counters,
-                timing,
-            )
-            operations_this_call += 1
-            self._add_chunk_upload_counters(frame_counters, group_counters)
-            self._publish_chunk_upload_state(chunk_data, state)
-            if group_complete:
-                state["active_group_job"] = None
-                state["next_group_index"] += 1
-
-        completed = state["next_group_index"] >= len(upload_groups)
-        if completed:
-            t_book = time.perf_counter()
-            self._publish_chunk_upload_state(chunk_data, state)
-            frame_counters["chunk_bookkeeping_ms"] += (
-                time.perf_counter() - t_book
-            ) * 1000.0
-            del upload_states[chunk_data.cell]
-            if state["smooth_shading"] != bool(
-                self.render_mode_buttons.smooth_shading_enabled
-            ):
-                self._apply_shading_toggle_to_cell(chunk_data.cell)
-
-        chunk_ms = (time.perf_counter() - chunk_start) * 1000.0
-        self._record_chunk_upload_timing(
-            timing,
-            frame_counters,
-            chunk_ms=chunk_ms,
-            cell=chunk_data.cell,
-            completed=completed,
-        )
-        return completed
+        try:
+            return manager.on_chunk_ready(chunk_data)
+        finally:
+            after_signature = self._resident_chunk_signature(manager, chunk_data.cell)
+            if after_signature != before_signature:
+                self._invalidate_visible_chunk_cache()
+            self._sync_chunk_upload_state_from_manager(manager)
 
     def _on_chunk_unload(self, cell):
-        t_unload = time.perf_counter()
-        partial_state = getattr(self, "_chunk_upload_states", {}).pop(cell, None)
-        partial_was_published = (
-            partial_state is not None
-            and self._chunk_gpu_objects.get(cell)
-            is partial_state.get("vao_list")
+        manager = self._ensure_chunk_upload_manager()
+        before_signature = self._resident_chunk_signature(manager, cell)
+        manager.set_frame_limits(
+            operations_per_chunk=getattr(
+                self,
+                "_current_upload_operations_per_chunk",
+                getattr(self, "_upload_groups_per_frame", 1),
+            ),
+            time_budget_ms=getattr(
+                self,
+                "_current_upload_time_budget_ms",
+                getattr(self, "_upload_time_budget_ms", 3.0),
+            ),
+            timing=getattr(self, "_streaming_frame_timing", None),
         )
-        if partial_state is not None:
-            self._cancel_chunk_group_upload_job(
-                partial_state.get("active_group_job")
-            )
-            for vao, vbo, mat_name, texture in partial_state.get("vao_list", []):
-                vao.release()
-                vbo.release()
-                self.texture_manager.release(mat_name)
-        if partial_was_published:
-            self._chunk_gpu_objects.pop(cell, None)
-        else:
-            vao_list = self._chunk_gpu_objects.pop(cell, [])
-            for vao, vbo, mat_name, texture in vao_list:
-                vao.release()
-                vbo.release()
-                self.texture_manager.release(mat_name)
-        self._chunk_normal_cache.pop(cell, None)
-        self._chunk_aabbs.pop(cell, None)
-        timing = getattr(self, "_streaming_frame_timing", None)
-        if timing is not None:
-            timing["unload_ms"] += (time.perf_counter() - t_unload) * 1000.0
-            timing["chunks_unloaded"] += 1
+        try:
+            manager.on_chunk_unload(cell)
+        finally:
+            if before_signature != self._resident_chunk_signature(manager, cell):
+                self._invalidate_visible_chunk_cache()
+            self._sync_chunk_upload_state_from_manager(manager)
 
     def _apply_shading_toggle_to_cell(self, cell) -> None:
-        smooth = self.render_mode_buttons.smooth_shading_enabled
-        vao_list = self._chunk_gpu_objects.get(cell)
-        cache_entries = self._chunk_normal_cache.get(cell)
-        if not vao_list or not cache_entries or len(cache_entries) != len(vao_list):
-            return
-        for (
-            _vao,
-            vbo,
-            _mat_name,
-            _texture,
-        ), (
-            _cached_mat,
-            positions,
-            uvs,
-            smooth_normals,
-        ) in zip(vao_list, cache_entries):
-            vbo.write(
-                chunker.vertex_bytes_for_shading(
-                    positions,
-                    uvs,
-                    smooth_normals,
-                    smooth_shading=smooth,
-                )
-            )
+        manager = self._ensure_chunk_upload_manager()
+        manager.apply_shading_toggle_to_cell(cell)
+        self._sync_chunk_upload_state_from_manager(manager)
 
     def _apply_shading_toggle(self) -> None:
-        """
-        Rewrites the normal columns of every currently-loaded chunk's VBO
-        in place to match the current smooth_shading_enabled state -- no
-        chunk reload or new GPU objects needed. The alternate payload is
-        rebuilt only when the user toggles shading so loaded chunks do not
-        retain both smooth and flat byte streams in RAM.
-        """
-        world = getattr(self, "world", None)
-        if world is not None and hasattr(world, "set_prepack_smooth_shading"):
-            world.set_prepack_smooth_shading(
-                bool(self.render_mode_buttons.smooth_shading_enabled)
-            )
-        for cell in list(self._chunk_gpu_objects.keys()):
-            self._apply_shading_toggle_to_cell(cell)
+        """Rewrite loaded VBO normals through the chunk upload manager."""
+        manager = self._ensure_chunk_upload_manager()
+        manager.apply_shading_toggle(world=getattr(self, "world", None))
+        self._sync_chunk_upload_state_from_manager(manager)
 
     def _buttons_locked_for_loading(self) -> bool:
         """True while map loading should disable the right-side button block."""
@@ -3037,42 +2615,12 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     @staticmethod
     def _frustum_planes(view: np.ndarray, proj: np.ndarray) -> np.ndarray:
-        """
-        Extract the 6 view-frustum planes in world space from the row-major
-        view and projection matrices using the Gribb-Hartmann method.
-        The combined clip matrix M = proj @ view maps world-space column
-        vectors to clip space; summing/differencing rows of M gives the 6
-        plane equations. Returns a (6, 4) float64 array where each row
-        (a, b, c, d) satisfies a*x + b*y + c*z + d >= 0 for inside points.
-        """
-        vp = (proj @ view).astype(np.float64)
-        planes = np.empty((6, 4), dtype=np.float64)
-        planes[0] = vp[3] + vp[0]   # left
-        planes[1] = vp[3] - vp[0]   # right
-        planes[2] = vp[3] + vp[1]   # bottom
-        planes[3] = vp[3] - vp[1]   # top
-        planes[4] = vp[3] + vp[2]   # near
-        planes[5] = vp[3] - vp[2]   # far
-        lengths = np.linalg.norm(planes[:, :3], axis=1, keepdims=True)
-        planes /= np.maximum(lengths, 1e-9)
-        return planes
+        return view_culling.frustum_planes(view, proj)
 
     @staticmethod
     def _aabb_inside_frustum(planes: np.ndarray,
                               bmin: np.ndarray, bmax: np.ndarray) -> bool:
-        """
-        Positive-vertex frustum-AABB test. For each plane, pick the AABB
-        corner furthest along the plane normal (the 'positive vertex'). If
-        that corner is outside the plane, the entire AABB is outside the
-        frustum (conservative -- produces no false culls).
-        """
-        for a, b, c, d in planes:
-            px = bmax[0] if a >= 0 else bmin[0]
-            py = bmax[1] if b >= 0 else bmin[1]
-            pz = bmax[2] if c >= 0 else bmin[2]
-            if a * px + b * py + c * pz + d < 0:
-                return False
-        return True
+        return view_culling.aabb_inside_frustum(planes, bmin, bmax)
 
     def _right_column_ui_scale(self) -> float:
         return float(getattr(self, "_viewer_ui_scale", 1.0))
@@ -3661,6 +3209,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             streaming_timing["drain_ms"] = (time.perf_counter() - t_drain) * 1000.0
             self._record_upload_slice_sizes(streaming_timing)
         finally:
+            upload_manager = getattr(self, "_chunk_upload_manager", None)
+            if upload_manager is not None:
+                upload_manager.clear_frame_timing()
             self._streaming_frame_timing = None
         streaming_ms = (time.perf_counter() - t0) * 1000.0
         stats = self.world.stats()
@@ -3741,12 +3292,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Build _visible_cells once so both solid and wireframe passes share
         # the same culled set without repeating the test.
         t_cull = time.perf_counter()
-        _vp_planes = self._frustum_planes(view, proj)
-        _visible_cells = []
-        for cell, vao_list in self._chunk_gpu_objects.items():
-            aabb = self._chunk_aabbs.get(cell)
-            if aabb is None or self._aabb_inside_frustum(_vp_planes, aabb[0], aabb[1]):
-                _visible_cells.append((cell, vao_list))
+        _visible_cells = self._visible_chunk_gpu_objects(view, proj)
         _chunks_drawn = len(_visible_cells)
         mesh_cull_ms = (time.perf_counter() - t_cull) * 1000.0
 

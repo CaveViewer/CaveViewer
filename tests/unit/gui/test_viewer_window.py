@@ -1544,6 +1544,61 @@ def test_chunk_upload_can_be_split_across_group_frames():
     assert window._chunk_aabbs[cell][0].dtype == np.float32
 
 
+def test_chunk_upload_invalidates_visible_chunk_cache_when_residency_changes():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.ctx = _FakeViewerContext()
+    window.program = object()
+    window.texture_manager = _FakeTextureManager()
+    window.render_mode_buttons = SimpleNamespace(smooth_shading_enabled=True)
+    window._upload_groups_per_frame = 1
+    window._upload_time_budget_ms = 100.0
+    window._streaming_frame_timing = None
+    window._chunk_gpu_objects = {}
+    window._chunk_upload_states = {}
+    window._chunk_normal_cache = {}
+    window._chunk_aabbs = {}
+    window._chunk_visibility_generation = 0
+    cell = (1, 2, 3)
+    positions = np.zeros((3, 3), dtype=np.float32)
+    uvs = np.zeros((3, 2), dtype=np.float32)
+    normals = np.tile(np.array([[0.0, 1.0, 0.0]], dtype=np.float32), (3, 1))
+    chunk_data = SimpleNamespace(
+        cell=cell,
+        bounds_min=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        bounds_max=np.array([4.0, 5.0, 6.0], dtype=np.float64),
+        upload_groups=[
+            viewer_window.chunker.ChunkUploadGroup(
+                material_name="mat_a",
+                positions=positions,
+                uvs=uvs,
+                smooth_normals=normals,
+            ),
+            viewer_window.chunker.ChunkUploadGroup(
+                material_name="mat_b",
+                positions=positions,
+                uvs=uvs,
+                smooth_normals=normals,
+            ),
+        ],
+    )
+
+    assert window._on_chunk_ready(chunk_data) is False
+    assert window._chunk_visibility_generation == 0
+
+    assert window._on_chunk_ready(chunk_data) is False
+    assert len(window._chunk_gpu_objects[cell]) == 1
+    assert window._chunk_visibility_generation == 1
+
+    assert window._on_chunk_ready(chunk_data) is False
+    assert window._on_chunk_ready(chunk_data) is True
+    assert len(window._chunk_gpu_objects[cell]) == 2
+    assert window._chunk_visibility_generation == 2
+
+    window._on_chunk_unload(cell)
+
+    assert window._chunk_visibility_generation == 3
+
+
 def test_partial_chunk_upload_unloads_published_slices_once():
     window = object.__new__(viewer_window.CaveViewerWindow)
     texture_manager = _FakeTextureManager()

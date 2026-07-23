@@ -97,6 +97,12 @@ Completed upload slices become drawable before the entire chunk finishes.
 Partial GPU resources are tracked separately and released if the chunk becomes
 stale before completion.
 
+The render loop frustum-culls resident chunks before drawing them. The culling
+result is cached across frames and invalidated when the camera view/projection
+changes or when the resident chunk generation changes. This keeps static/idling
+views from retesting every loaded chunk every frame while preserving immediate
+updates as chunks stream in and out.
+
 Texture handling is intentionally separate from geometry residency. If a map has
 too many large texture tiles for the GPU budget, CaveViewer downsizes oversized
 textures during decode instead of dropping nearby geometry from the visible
