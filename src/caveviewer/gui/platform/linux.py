@@ -105,6 +105,10 @@ class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def reveal_downloaded_payload(self, payload_path: str) -> None:
         self._desktop_services.reveal_path(payload_path)
 
+    def reveal_file(self, path: str) -> None:
+        """Reveal a saved user file through portal-backed desktop services."""
+        self._desktop_services.reveal_path(path)
+
     def font_candidates(self) -> list[str]:
         """Return Linux-specific font file paths in priority order."""
         candidates = [

@@ -118,6 +118,10 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         else:
             subprocess.Popen(["open", mountpoint])
 
+    def reveal_file(self, path: str) -> None:
+        """Reveal a saved user file in Finder without opening the file."""
+        subprocess.Popen(["open", "-R", os.path.abspath(path)])
+
     def install_about_handler(self, root, program_name: str, version: str) -> None:
         global _about_root_ref
         # Hold a module-level strong reference so the Tcl interpreter is

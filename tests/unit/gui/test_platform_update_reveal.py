@@ -27,6 +27,24 @@ def test_windows_reveals_package_with_explorer_selection(tmp_path, monkeypatch):
     assert launched == [["explorer", f"/select,{payload}"]]
 
 
+def test_windows_reveals_saved_file_with_explorer_selection(
+    tmp_path,
+    monkeypatch,
+):
+    payload = tmp_path / "CaveViewerDive.mp4"
+    payload.write_bytes(b"video")
+    launched = []
+    monkeypatch.setattr(
+        windows.subprocess,
+        "Popen",
+        lambda command: launched.append(command),
+    )
+
+    windows.WindowsSplashPlatformAdapter().reveal_file(str(payload))
+
+    assert launched == [["explorer", f"/select,{payload}"]]
+
+
 def test_linux_opens_download_directory_without_launching_package(
     tmp_path, monkeypatch
 ):
@@ -44,6 +62,23 @@ def test_linux_opens_download_directory_without_launching_package(
     adapter.reveal_downloaded_payload(str(payload))
 
     assert adapter.download_reveal_action_label() == "Open Download Folder"
+    assert revealed == [(str(payload), None)]
+
+
+def test_linux_reveals_saved_file_with_desktop_services(tmp_path):
+    payload = tmp_path / "CaveViewerDive.mp4"
+    payload.write_bytes(b"video")
+    revealed = []
+
+    class FakeDesktopServices:
+        def reveal_path(self, path, *, parent=None):
+            revealed.append((path, parent))
+
+    adapter = linux.LinuxSplashPlatformAdapter(
+        desktop_services=FakeDesktopServices()
+    )
+    adapter.reveal_file(str(payload))
+
     assert revealed == [(str(payload), None)]
 
 
@@ -114,6 +149,21 @@ def test_macos_reveals_non_dmg_package_without_executing_it(
     assert finder_calls == [["open", "-R", str(payload)]]
 
 
+def test_macos_reveals_saved_file_without_mounting(tmp_path, monkeypatch):
+    payload = tmp_path / "CaveViewerDive.mp4"
+    payload.write_bytes(b"video")
+    finder_calls = []
+    monkeypatch.setattr(
+        macos.subprocess,
+        "Popen",
+        lambda command: finder_calls.append(command),
+    )
+
+    macos.MacOSSplashPlatformAdapter().reveal_file(str(payload))
+
+    assert finder_calls == [["open", "-R", str(payload)]]
+
+
 def test_default_adapter_fails_safely_on_unsupported_platform(tmp_path):
     payload = tmp_path / "CaveViewer.bin"
     payload.write_bytes(b"package")
@@ -122,3 +172,6 @@ def test_default_adapter_fails_safely_on_unsupported_platform(tmp_path):
         default.DefaultSplashPlatformAdapter().reveal_downloaded_payload(
             str(payload)
         )
+
+    with pytest.raises(RuntimeError, match="unsupported"):
+        default.DefaultSplashPlatformAdapter().reveal_file(str(payload))

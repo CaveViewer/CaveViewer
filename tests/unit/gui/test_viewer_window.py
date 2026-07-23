@@ -794,6 +794,88 @@ def test_viewer_window_delegates_recording_encoder_ownership():
     assert "target=self._recording_stderr_reader" not in source
 
 
+def test_recording_success_reveals_saved_file_after_user_visible_stop():
+    revealed = []
+
+    class FakePlatformAdapter:
+        def reveal_file(self, path):
+            revealed.append(path)
+
+    window = _recording_window()
+    window._platform_adapter = FakePlatformAdapter()
+
+    window._apply_recording_stop_result(
+        recording.RecordingStopResult(
+            output_path="/recordings/cave.mp4",
+            returncode=0,
+            stderr_text="",
+            writer_error=None,
+            dropped_frames=0,
+            show_message=True,
+        )
+    )
+
+    assert window._recording_status_message == "Recording saved"
+    assert window._recording_status_detail is None
+    assert window._recording_status_kind == "success"
+    assert revealed == ["/recordings/cave.mp4"]
+
+
+def test_recording_success_does_not_reveal_after_background_stop():
+    revealed = []
+
+    class FakePlatformAdapter:
+        def reveal_file(self, path):
+            revealed.append(path)
+
+    window = _recording_window()
+    window._platform_adapter = FakePlatformAdapter()
+
+    window._apply_recording_stop_result(
+        recording.RecordingStopResult(
+            output_path="/recordings/cave.mp4",
+            returncode=0,
+            stderr_text="",
+            writer_error=None,
+            dropped_frames=0,
+            show_message=False,
+        )
+    )
+
+    assert window._recording_status_message is None
+    assert revealed == []
+
+
+def test_recording_reveal_failure_keeps_saved_status(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+
+    class FakePlatformAdapter:
+        def reveal_file(self, path):
+            raise RuntimeError(f"blocked: {path}")
+
+    window = _recording_window()
+    window._platform_adapter = FakePlatformAdapter()
+
+    window._apply_recording_stop_result(
+        recording.RecordingStopResult(
+            output_path="/recordings/cave.mp4",
+            returncode=0,
+            stderr_text="",
+            writer_error=None,
+            dropped_frames=0,
+            show_message=True,
+        )
+    )
+
+    assert window._recording_status_message == "Recording saved"
+    assert window._recording_status_kind == "success"
+    assert logger.warning_messages == [
+        "Could not reveal saved recording /recordings/cave.mp4: "
+        "blocked: /recordings/cave.mp4"
+    ]
+
+
 def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypatch):
     logger = FakeLogger()
     monkeypatch.setattr(viewer_window, "_LOG", logger)

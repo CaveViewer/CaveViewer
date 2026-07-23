@@ -77,6 +77,9 @@ class SplashPlatformAdapter(Protocol):
     def reveal_downloaded_payload(self, payload_path: str) -> None:
         ...
 
+    def reveal_file(self, path: str) -> None:
+        ...
+
     def default_update_repo(self) -> str:
         ...
 
