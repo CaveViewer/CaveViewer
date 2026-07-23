@@ -47,6 +47,8 @@ from caveviewer.gui.import_controller import MapImportController
 from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_folder
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
+from caveviewer.gui import render_upload
+from caveviewer.gui import viewer_input
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
 from caveviewer.gui.platform.factory import get_platform_adapter
@@ -63,11 +65,8 @@ _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
 _GPU_RESIDENCY_SAFETY_SHARE = 0.05
-_RENDER_UPLOAD_VERTEX_BYTES = 8 * np.dtype(np.float32).itemsize
-_RENDER_UPLOAD_MAX_SLICE_BYTES = 1 * 1024 ** 2
-_RENDER_UPLOAD_INITIAL_SLICE_BYTES = 512 * 1024
-_RENDER_UPLOAD_MIN_SLICE_BYTES = 256 * 1024
-_RENDER_UPLOAD_STALL_SHRINK_FACTOR = 0.5
+_RENDER_UPLOAD_VERTEX_BYTES = render_upload.RENDER_UPLOAD_VERTEX_BYTES
+_RENDER_UPLOAD_INITIAL_SLICE_BYTES = render_upload.RENDER_UPLOAD_INITIAL_SLICE_BYTES
 _RENDER_UPLOAD_SLICE_BYTES = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
 _CATCHUP_UPLOAD_CHUNKS_PER_FRAME = 2
 _CATCHUP_UPLOAD_OPERATIONS_PER_CHUNK = 8
@@ -2121,216 +2120,23 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     @staticmethod
     def _new_streaming_frame_timing() -> dict:
-        return {
-            "update_ms": 0.0,
-            "drain_ms": 0.0,
-            "ready_drain_ms": 0.0,
-            "failure_drain_ms": 0.0,
-            "chunk_ready_ms": 0.0,
-            "chunk_prepare_ms": 0.0,
-            "vertex_pack_ms": 0.0,
-            "buffer_ms": 0.0,
-            "buffer_alloc_ms": 0.0,
-            "buffer_write_ms": 0.0,
-            "buffer_alloc_bytes": 0,
-            "buffer_write_bytes": 0,
-            "vao_ms": 0.0,
-            "texture_ms": 0.0,
-            "texture_decode_ms": 0.0,
-            "texture_alloc_ms": 0.0,
-            "texture_write_ms": 0.0,
-            "texture_upload_ms": 0.0,
-            "texture_mipmap_ms": 0.0,
-            "texture_image_bytes": 0,
-            "texture_material_cache_hits": 0,
-            "texture_file_cache_hits": 0,
-            "texture_decoded_cache_hits": 0,
-            "texture_sync_decodes": 0,
-            "texture_placeholders": 0,
-            "worst_texture_ms": 0.0,
-            "worst_texture_material": None,
-            "worst_texture_size": None,
-            "worst_texture_bytes": 0,
-            "worst_texture_decode_ms": 0.0,
-            "worst_texture_alloc_ms": 0.0,
-            "worst_texture_write_ms": 0.0,
-            "worst_texture_upload_ms": 0.0,
-            "worst_texture_mipmap_ms": 0.0,
-            "worst_texture_sync_decode": False,
-            "worst_texture_decoded_cache_hit": False,
-            "chunk_bookkeeping_ms": 0.0,
-            "unload_ms": 0.0,
-            "chunks_uploaded": 0,
-            "chunks_unloaded": 0,
-            "groups_uploaded": 0,
-            "prepacked_groups": 0,
-            "fallback_pack_groups": 0,
-            "vertices_uploaded": 0,
-            "bytes_uploaded": 0,
-            "worst_chunk_ms": 0.0,
-            "worst_chunk_cell": None,
-            "worst_chunk_groups": 0,
-            "worst_chunk_vertices": 0,
-            "worst_chunk_bytes": 0,
-            "worst_chunk_prepare_ms": 0.0,
-            "worst_chunk_vertex_pack_ms": 0.0,
-            "worst_chunk_buffer_ms": 0.0,
-            "worst_chunk_buffer_alloc_ms": 0.0,
-            "worst_chunk_buffer_write_ms": 0.0,
-            "worst_chunk_vao_ms": 0.0,
-            "worst_chunk_texture_ms": 0.0,
-            "worst_chunk_bookkeeping_ms": 0.0,
-            "upload_stalls": 0,
-            "vbo_upload_slice_bytes": 0,
-            "texture_upload_slice_bytes": 0,
-        }
+        return render_upload.new_streaming_frame_timing()
 
     @staticmethod
     def _format_optional_ms(value: float | None) -> str:
-        if value is None:
-            return "n/a"
-        return f"{value:.1f}ms"
+        return render_upload.format_optional_ms(value)
 
     @staticmethod
     def _format_streaming_frame_timing(timing: dict) -> str:
-        uploaded_mb = timing["bytes_uploaded"] / (1024 ** 2)
-        allocated_mb = timing.get("buffer_alloc_bytes", 0) / (1024 ** 2)
-        written_mb = timing.get("buffer_write_bytes", 0) / (1024 ** 2)
-        texture_mb = timing["texture_image_bytes"] / (1024 ** 2)
-        ready_other_ms = max(
-            0.0,
-            timing.get("ready_drain_ms", 0.0)
-            - timing["chunk_ready_ms"]
-            - timing["unload_ms"],
-        )
-        drain_other_ms = max(
-            0.0,
-            timing["drain_ms"]
-            - timing.get("ready_drain_ms", 0.0)
-            - timing.get("failure_drain_ms", 0.0),
-        )
-        vbo_slice_kb = timing.get("vbo_upload_slice_bytes", 0) / 1024
-        texture_slice_kb = timing.get("texture_upload_slice_bytes", 0) / 1024
-        detail = (
-            f"update={timing['update_ms']:.1f}ms "
-            f"drain={timing['drain_ms']:.1f}ms "
-            f"ready_drain={timing.get('ready_drain_ms', 0.0):.1f}ms "
-            f"upload={timing['chunk_ready_ms']:.1f}ms "
-            f"unload={timing['unload_ms']:.1f}ms "
-            f"ready_other={ready_other_ms:.1f}ms "
-            f"failures={timing.get('failure_drain_ms', 0.0):.1f}ms "
-            f"drain_other={drain_other_ms:.1f}ms | "
-            f"chunks_up={timing['chunks_uploaded']} "
-            f"chunks_down={timing['chunks_unloaded']} "
-            f"groups={timing['groups_uploaded']} "
-            f"prepacked={timing['prepacked_groups']} "
-            f"fallback_pack={timing['fallback_pack_groups']} "
-            f"verts={timing['vertices_uploaded']} "
-            f"vbo={uploaded_mb:.1f}MB "
-            f"vbo_alloc={allocated_mb:.1f}MB "
-            f"vbo_write={written_mb:.1f}MB | "
-            f"prepare={timing['chunk_prepare_ms']:.1f}ms "
-            f"pack={timing['vertex_pack_ms']:.1f}ms "
-            f"buffer={timing['buffer_ms']:.1f}ms "
-            f"buffer_alloc={timing.get('buffer_alloc_ms', 0.0):.1f}ms "
-            f"buffer_write={timing.get('buffer_write_ms', 0.0):.1f}ms "
-            f"vao={timing['vao_ms']:.1f}ms "
-            f"texture={timing['texture_ms']:.1f}ms "
-            f"tex_decode={timing['texture_decode_ms']:.1f}ms "
-            f"tex_alloc={timing.get('texture_alloc_ms', 0.0):.1f}ms "
-            f"tex_upload={timing['texture_upload_ms']:.1f}ms "
-            f"tex_mipmap={timing['texture_mipmap_ms']:.1f}ms "
-            f"tex_mb={texture_mb:.1f} "
-            f"slices=vbo:{vbo_slice_kb:.0f}KB/tex:{texture_slice_kb:.0f}KB "
-            f"stalls={timing.get('upload_stalls', 0)} "
-            f"tex_mat_reuse={timing['texture_material_cache_hits']} "
-            f"tex_file_reuse={timing['texture_file_cache_hits']} "
-            f"tex_decoded={timing['texture_decoded_cache_hits']} "
-            f"tex_sync_decode={timing['texture_sync_decodes']} "
-            f"tex_placeholder={timing['texture_placeholders']} "
-            f"book={timing['chunk_bookkeeping_ms']:.1f}ms"
-        )
-
-        worst_texture_material = timing["worst_texture_material"]
-        if worst_texture_material is not None:
-            worst_texture_size = timing["worst_texture_size"]
-            worst_texture_size_text = (
-                "unknown"
-                if worst_texture_size is None
-                else f"{worst_texture_size[0]}x{worst_texture_size[1]}"
-            )
-            worst_texture_mb = timing["worst_texture_bytes"] / (1024 ** 2)
-            detail += (
-                f" | worst_texture={worst_texture_material!r} "
-                f"{timing['worst_texture_ms']:.1f}ms "
-                f"size={worst_texture_size_text} "
-                f"bytes={worst_texture_mb:.1f}MB "
-                f"decode={timing['worst_texture_decode_ms']:.1f}ms "
-                f"alloc={timing.get('worst_texture_alloc_ms', 0.0):.1f}ms "
-                f"upload={timing['worst_texture_upload_ms']:.1f}ms "
-                f"mipmap={timing['worst_texture_mipmap_ms']:.1f}ms "
-                f"sync_decode={timing['worst_texture_sync_decode']} "
-                f"decoded_cache={timing['worst_texture_decoded_cache_hit']}"
-            )
-
-        worst_cell = timing["worst_chunk_cell"]
-        if worst_cell is None:
-            return detail + " | worst_chunk=none"
-
-        worst_mb = timing["worst_chunk_bytes"] / (1024 ** 2)
-        return (
-            detail
-            + f" | worst_chunk={worst_cell} "
-            f"{timing['worst_chunk_ms']:.1f}ms "
-            f"groups={timing['worst_chunk_groups']} "
-            f"verts={timing['worst_chunk_vertices']} "
-            f"vbo={worst_mb:.1f}MB "
-            f"prepare={timing['worst_chunk_prepare_ms']:.1f}ms "
-            f"pack={timing['worst_chunk_vertex_pack_ms']:.1f}ms "
-            f"buffer={timing['worst_chunk_buffer_ms']:.1f}ms "
-            f"buffer_alloc={timing.get('worst_chunk_buffer_alloc_ms', 0.0):.1f}ms "
-            f"buffer_write={timing.get('worst_chunk_buffer_write_ms', 0.0):.1f}ms "
-            f"vao={timing['worst_chunk_vao_ms']:.1f}ms "
-            f"texture={timing['worst_chunk_texture_ms']:.1f}ms "
-            f"book={timing['worst_chunk_bookkeeping_ms']:.1f}ms"
-        )
+        return render_upload.format_streaming_frame_timing(timing)
 
     @staticmethod
     def _new_chunk_upload_counters() -> dict:
-        return {
-            "chunk_prepare_ms": 0.0,
-            "vertex_pack_ms": 0.0,
-            "buffer_ms": 0.0,
-            "buffer_alloc_ms": 0.0,
-            "buffer_write_ms": 0.0,
-            "buffer_alloc_bytes": 0,
-            "buffer_write_bytes": 0,
-            "vao_ms": 0.0,
-            "texture_ms": 0.0,
-            "texture_decode_ms": 0.0,
-            "texture_alloc_ms": 0.0,
-            "texture_write_ms": 0.0,
-            "texture_upload_ms": 0.0,
-            "texture_mipmap_ms": 0.0,
-            "texture_image_bytes": 0,
-            "texture_material_cache_hits": 0,
-            "texture_file_cache_hits": 0,
-            "texture_decoded_cache_hits": 0,
-            "texture_sync_decodes": 0,
-            "texture_placeholders": 0,
-            "chunk_bookkeeping_ms": 0.0,
-            "groups": 0,
-            "prepacked_groups": 0,
-            "fallback_pack_groups": 0,
-            "vertices": 0,
-            "bytes": 0,
-            "upload_stalls": 0,
-        }
+        return render_upload.new_chunk_upload_counters()
 
     @staticmethod
     def _add_chunk_upload_counters(target: dict, source: dict) -> None:
-        for key, value in source.items():
-            target[key] += value
+        render_upload.add_chunk_upload_counters(target, source)
 
     @staticmethod
     def _add_texture_timing_counters(
@@ -2338,91 +2144,44 @@ class CaveViewerWindow(mglw.WindowConfig):
         texture_timing: dict,
         frame_timing: dict | None,
     ) -> None:
-        texture_alloc_ms = texture_timing.get("texture_alloc_ms", 0.0)
-        texture_write_ms = texture_timing.get("texture_write_ms")
-        if texture_write_ms is None:
-            texture_write_ms = texture_timing.get("texture_ms", 0.0)
-        counters["texture_decode_ms"] += texture_timing.get("decode_ms", 0.0)
-        counters["texture_alloc_ms"] += texture_alloc_ms
-        counters["texture_write_ms"] += texture_write_ms
-        counters["texture_upload_ms"] += texture_write_ms
-        counters["texture_mipmap_ms"] += texture_timing.get("mipmap_ms", 0.0)
-        counters["texture_image_bytes"] += texture_timing.get("image_bytes", 0)
-        if texture_timing.get("material_cache_hit"):
-            counters["texture_material_cache_hits"] += 1
-        if texture_timing.get("file_cache_hit"):
-            counters["texture_file_cache_hits"] += 1
-        if texture_timing.get("decoded_cache_hit"):
-            counters["texture_decoded_cache_hits"] += 1
-        if texture_timing.get("sync_decode"):
-            counters["texture_sync_decodes"] += 1
-        if texture_timing.get("placeholder"):
-            counters["texture_placeholders"] += 1
-        if (
-            frame_timing is not None
-            and texture_timing.get("total_ms", 0.0) > frame_timing["worst_texture_ms"]
-        ):
-            frame_timing["worst_texture_ms"] = texture_timing.get("total_ms", 0.0)
-            frame_timing["worst_texture_material"] = texture_timing.get("material")
-            frame_timing["worst_texture_size"] = texture_timing.get("image_size")
-            frame_timing["worst_texture_bytes"] = texture_timing.get(
-                "image_total_bytes",
-                texture_timing.get("image_bytes", 0),
-            )
-            frame_timing["worst_texture_decode_ms"] = texture_timing.get(
-                "decode_ms", 0.0
-            )
-            frame_timing["worst_texture_alloc_ms"] = texture_alloc_ms
-            frame_timing["worst_texture_write_ms"] = texture_write_ms
-            frame_timing["worst_texture_upload_ms"] = texture_write_ms
-            frame_timing["worst_texture_mipmap_ms"] = texture_timing.get(
-                "mipmap_ms", 0.0
-            )
-            frame_timing["worst_texture_sync_decode"] = texture_timing.get(
-                "sync_decode", False
-            )
-            frame_timing["worst_texture_decoded_cache_hit"] = texture_timing.get(
-                "decoded_cache_hit", False
-            )
+        render_upload.add_texture_timing_counters(
+            counters,
+            texture_timing,
+            frame_timing,
+        )
 
     def _render_upload_slice_vertices(self) -> int:
-        slice_bytes = max(
-            3 * _RENDER_UPLOAD_VERTEX_BYTES,
-            min(
-                _RENDER_UPLOAD_MAX_SLICE_BYTES,
-                int(
-                    getattr(
-                        self,
-                        "_vbo_upload_slice_bytes",
-                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-                    )
-                ),
-            ),
-        )
-        vertices = max(3, slice_bytes // _RENDER_UPLOAD_VERTEX_BYTES)
-        vertices -= vertices % 3
-        return max(3, int(vertices))
-
-    @staticmethod
-    def _min_vbo_upload_slice_bytes() -> int:
-        return max(_RENDER_UPLOAD_MIN_SLICE_BYTES, 3 * _RENDER_UPLOAD_VERTEX_BYTES)
-
-    def _record_upload_slice_sizes(self, timing: dict | None) -> None:
-        if timing is None:
-            return
-        timing["vbo_upload_slice_bytes"] = int(
+        return render_upload.render_upload_slice_vertices(
             getattr(
                 self,
                 "_vbo_upload_slice_bytes",
                 _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
             )
         )
-        timing["texture_upload_slice_bytes"] = int(
-            getattr(
-                self,
-                "_texture_upload_slice_bytes",
-                _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-            )
+
+    @staticmethod
+    def _min_vbo_upload_slice_bytes() -> int:
+        return render_upload.min_vbo_upload_slice_bytes()
+
+    def _record_upload_slice_sizes(self, timing: dict | None) -> None:
+        render_upload.record_upload_slice_sizes(
+            timing,
+            render_upload.UploadSliceState(
+                vbo_upload_slice_bytes=int(
+                    getattr(
+                        self,
+                        "_vbo_upload_slice_bytes",
+                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+                    )
+                ),
+                texture_upload_slice_bytes=int(
+                    getattr(
+                        self,
+                        "_texture_upload_slice_bytes",
+                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+                    )
+                ),
+            ),
         )
 
     def _adapt_upload_slice_size(
@@ -2442,63 +2201,46 @@ class CaveViewerWindow(mglw.WindowConfig):
         later operations use a smaller byte budget instead of asking the user
         to keep tuning environment variables.
         """
-        target_ms = max(
-            0.5,
-            float(
+        target_ms = float(
+            getattr(
+                self,
+                "_current_upload_time_budget_ms",
                 getattr(
                     self,
-                    "_current_upload_time_budget_ms",
-                    getattr(self, "_upload_time_budget_ms", 3.0),
-                )
-            ),
+                    "_upload_time_budget_ms",
+                    3.0,
+                ),
+            )
         )
-        if elapsed_ms <= target_ms:
-            self._record_upload_slice_sizes(timing)
-            return
-
-        if timing is not None:
-            timing["upload_stalls"] += 1
-
-        if kind == "texture":
-            attr = "_texture_upload_slice_bytes"
-            minimum = _RENDER_UPLOAD_MIN_SLICE_BYTES
-        elif kind == "vbo":
-            attr = "_vbo_upload_slice_bytes"
-            minimum = self._min_vbo_upload_slice_bytes()
-        else:
-            self._record_upload_slice_sizes(timing)
-            return
-
-        current = max(
-            minimum,
-            min(
-                _RENDER_UPLOAD_MAX_SLICE_BYTES,
-                int(getattr(self, attr, _RENDER_UPLOAD_INITIAL_SLICE_BYTES)),
+        decision = render_upload.adapt_upload_slice_size(
+            kind=kind,
+            elapsed_ms=elapsed_ms,
+            byte_count=byte_count,
+            target_ms=target_ms,
+            state=render_upload.UploadSliceState(
+                vbo_upload_slice_bytes=int(
+                    getattr(
+                        self,
+                        "_vbo_upload_slice_bytes",
+                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+                    )
+                ),
+                texture_upload_slice_bytes=int(
+                    getattr(
+                        self,
+                        "_texture_upload_slice_bytes",
+                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+                    )
+                ),
             ),
+            timing=timing,
         )
-        if byte_count > 0:
-            throughput_limited = int(byte_count * target_ms / max(elapsed_ms, 0.001))
-            conservative_target = int(throughput_limited * 0.75)
-            halved = int(current * _RENDER_UPLOAD_STALL_SHRINK_FACTOR)
-            next_size = max(minimum, min(halved, conservative_target))
-            if next_size < current:
-                setattr(self, attr, next_size)
-
-        self._record_upload_slice_sizes(timing)
+        self._vbo_upload_slice_bytes = decision.state.vbo_upload_slice_bytes
+        self._texture_upload_slice_bytes = decision.state.texture_upload_slice_bytes
 
     @staticmethod
     def _new_chunk_group_upload_job(group, smooth_shading: bool) -> dict:
-        return {
-            "group": group,
-            "smooth_shading": bool(smooth_shading),
-            "next_vertex_index": 0,
-            "texture_task": None,
-            "texture": None,
-            "pending_vbo": None,
-            "pending_vbo_payload": None,
-            "pending_vbo_start_vertex": 0,
-            "pending_vbo_end_vertex": 0,
-        }
+        return render_upload.new_chunk_group_upload_job(group, smooth_shading)
 
     def _cancel_chunk_group_upload_job(self, job: dict | None) -> None:
         if not job:
@@ -4285,19 +4027,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if cache is None:
             cache = {}
             self._key_resolve_cache = cache
-        cache_key = candidate_names
-        if cache_key in cache:
-            return cache[cache_key]
-        for name in candidate_names:
-            if hasattr(keys, name):
-                value = getattr(keys, name)
-                cache[cache_key] = value
-                return value
-        raise AttributeError(
-            f"None of the key names {candidate_names} exist on this "
-            f"moderngl-window version's Keys class. Available attributes: "
-            f"{[a for a in dir(keys) if not a.startswith('_')]}"
-        )
+        return viewer_input.resolve_key(keys, *candidate_names, cache=cache)
 
     def _install_backend_modifier_probe(self) -> None:
         """Capture raw backend modifier bitmasks before they are reduced to shift/ctrl/alt."""
@@ -4316,156 +4046,56 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _raw_command_modifier_down(self) -> bool:
         raw_mods = int(getattr(self, "_last_raw_modifiers", 0) or 0)
-        if raw_mods == 0:
-            return False
-
-        backend_module = type(self.wnd).__module__.lower()
-
-        # pyglet: MOD_COMMAND is bit 6 (1 << 6)
-        if ".pyglet." in backend_module:
-            return (raw_mods & (1 << 6)) != 0
-
-        # glfw: MOD_SUPER is bit 3 (1 << 3)
-        if ".glfw." in backend_module:
-            return (raw_mods & (1 << 3)) != 0
-
-        # sdl2/pygame2: GUI modifiers are typically these bits.
-        if ".sdl2." in backend_module or ".pygame2." in backend_module:
-            return (raw_mods & 0x0C00) != 0
-
-        return False
+        backend_module = type(self.wnd).__module__
+        return viewer_input.raw_command_modifier_down(raw_mods, backend_module)
 
     def _key_is_down(self, keys, *candidate_names) -> bool:
         """Return True if any candidate key exists on this backend and is currently held."""
-        for name in candidate_names:
-            if hasattr(keys, name):
-                if getattr(keys, name) in self._keys_down:
-                    return True
-        return False
+        return viewer_input.key_is_down(keys, self._keys_down, *candidate_names)
 
     def _resolve_key_optional(self, keys, *candidate_names):
         """Return key code if present on this backend, else None."""
-        for name in candidate_names:
-            if hasattr(keys, name):
-                return getattr(keys, name)
-        return None
+        return viewer_input.resolve_key_optional(keys, *candidate_names)
 
     def _digit_for_key(self, keys, key) -> int | None:
         """Return bookmark slot (1..9) for a key press across backend key name variants."""
-        for digit in range(1, 10):
-            candidates = (
-                f"_{digit}",
-                f"KEY_{digit}",
-                f"NUMBER_{digit}",
-                f"NUM_{digit}",
-                f"NUMPAD_{digit}",
-            )
-            for name in candidates:
-                if hasattr(keys, name) and getattr(keys, name) == key:
-                    return digit
-
-        # Common fallback for top-row number keys on many backends.
-        if isinstance(key, int) and ord("1") <= key <= ord("9"):
-            return key - ord("0")
-
-        return None
+        return viewer_input.digit_for_key(keys, key)
 
     def _is_zero_key(self, keys, key) -> bool:
         """Check if the key is the 0 key across backend key name variants."""
-        candidates = (
-            "_0",
-            "KEY_0",
-            "NUMBER_0",
-            "NUM_0",
-            "NUMPAD_0",
-        )
-        for name in candidates:
-            if hasattr(keys, name) and getattr(keys, name) == key:
-                return True
-
-        # Common fallback for top-row 0 key on many backends.
-        if isinstance(key, int) and key == ord("0"):
-            return True
-
-        return False
+        return viewer_input.is_zero_key(keys, key)
 
     def _command_is_down(self, modifiers: KeyModifiers) -> bool:
         keys = self.wnd.keys
-
-        # Raw backend modifiers are the most reliable source on macOS-style
-        # command-key backends.
-        if (
-            self._active_platform_adapter().command_modifier_uses_control_fallback()
-            and self._raw_command_modifier_down()
-        ):
-            return True
-
-        # Prefer explicit modifier flags if available.
-        for attr in ("super", "command", "logo", "meta"):
-            if hasattr(modifiers, attr):
-                try:
-                    if bool(getattr(modifiers, attr)):
-                        return True
-                except Exception:
-                    pass
-
-        # Some macOS backends report Command through control-style flags.
-        if self._active_platform_adapter().command_modifier_uses_control_fallback():
-            for attr in ("ctrl", "control"):
-                if hasattr(modifiers, attr):
-                    try:
-                        if bool(getattr(modifiers, attr)):
-                            return True
-                    except Exception:
-                        pass
-
-        # Fallback to key-state checks across backend naming variants.
-        return self._key_is_down(
+        return viewer_input.command_is_down(
+            modifiers,
             keys,
-            "LEFT_SUPER", "RIGHT_SUPER",
-            "LEFT_COMMAND", "RIGHT_COMMAND",
-            "COMMAND", "LCOMMAND", "RCOMMAND", "CMD",
-            "LSUPER", "RSUPER", "LGUI", "RGUI",
-            "LEFT_WINDOWS", "RIGHT_WINDOWS", "LWIN", "RWIN",
+            self._keys_down,
+            command_modifier_uses_control_fallback=(
+                self._active_platform_adapter()
+                .command_modifier_uses_control_fallback()
+            ),
+            raw_command_down=self._raw_command_modifier_down(),
         )
 
     def _control_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if Control/Ctrl modifier key is currently down."""
         keys = self.wnd.keys
-        # Prefer explicit modifier flags if available.
-        for attr in ("ctrl", "control"):
-            if hasattr(modifiers, attr):
-                try:
-                    if bool(getattr(modifiers, attr)):
-                        return True
-                except Exception:
-                    pass
-        # Fallback to key-state checks.
-        return self._key_is_down(
-            keys,
-            "LEFT_CONTROL", "RIGHT_CONTROL",
-            "LCTRL", "RCTRL", "CONTROL", "LCONTROL", "RCONTROL",
-        )
+        return viewer_input.control_is_down(modifiers, keys, self._keys_down)
 
     def _shift_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if Shift modifier key is currently down."""
         keys = self.wnd.keys
-        if hasattr(modifiers, "shift"):
-            try:
-                if bool(getattr(modifiers, "shift")):
-                    return True
-            except Exception:
-                pass
-        return self._key_is_down(keys, "LEFT_SHIFT", "RIGHT_SHIFT", "LSHIFT", "RSHIFT", "SHIFT")
+        return viewer_input.shift_is_down(modifiers, keys, self._keys_down)
 
     def _bookmark_save_modifier_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if the platform-specific bookmark save modifier is down."""
         save_modifier = self._active_platform_adapter().bookmark_save_modifier()
-        if save_modifier == "command":
-            return self._command_is_down(modifiers)
-        elif save_modifier == "control":
-            return self._control_is_down(modifiers)
-        return False
+        return viewer_input.bookmark_save_modifier_is_down(
+            save_modifier=save_modifier,
+            command_down=self._command_is_down(modifiers),
+            control_down=self._control_is_down(modifiers),
+        )
 
     def _load_bookmarks(self) -> None:
         self._bookmarks = viewer_bookmarks.load_bookmarks(
@@ -4578,68 +4208,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _handle_continuous_input(self, dt: float):
-        keys = self.wnd.keys
-        forward_amt = 0.0
-        right_amt = 0.0
-        up_amt = 0.0
-        if keys.W in self._keys_down:
-            forward_amt += 1.0
-        if keys.S in self._keys_down:
-            forward_amt -= 1.0
-        if keys.D in self._keys_down:
-            right_amt += 1.0
-        if keys.A in self._keys_down:
-            right_amt -= 1.0
-        e_key = self._resolve_key(keys, "E")
-        q_key = self._resolve_key(keys, "Q")
-        if e_key in self._keys_down:
-            up_amt += 1.0
-        if q_key in self._keys_down:
-            up_amt -= 1.0
-
-        shift_key = self._resolve_key(keys, "LEFT_SHIFT", "LSHIFT")
-        speed_mult = 3.0 if shift_key in self._keys_down else 1.0
-        if forward_amt or right_amt or up_amt:
-            self._move_camera_guarded(forward_amt, right_amt, up_amt, dt, speed_mult)
-
-        # Keyboard look fallback: arrow keys and I/J/K/L.
-        # left/right or J/L = yaw, up/down or I/K = pitch.
-        left_key = self._resolve_key(keys, "LEFT", "ARROW_LEFT")
-        right_key = self._resolve_key(keys, "RIGHT", "ARROW_RIGHT")
-        up_key = self._resolve_key(keys, "UP", "ARROW_UP")
-        down_key = self._resolve_key(keys, "DOWN", "ARROW_DOWN")
-        i_key = self._resolve_key_optional(keys, "I")
-        j_key = self._resolve_key_optional(keys, "J")
-        k_key = self._resolve_key_optional(keys, "K")
-        l_key = self._resolve_key_optional(keys, "L")
-
-        yaw_dir = 0.0
-        if left_key in self._keys_down or (j_key is not None and j_key in self._keys_down):
-            yaw_dir -= 1.0
-        if right_key in self._keys_down or (l_key is not None and l_key in self._keys_down):
-            yaw_dir += 1.0
-
-        pitch_dir = 0.0
-        if up_key in self._keys_down or (i_key is not None and i_key in self._keys_down):
-            pitch_dir -= 1.0  # up arrow = look up
-        if down_key in self._keys_down or (k_key is not None and k_key in self._keys_down):
-            pitch_dir += 1.0  # down arrow = look down
-
-        if yaw_dir or pitch_dir:
-            look_amount = self._KEY_LOOK_PIXELS_PER_SECOND * dt
-            self.camera.look(yaw_dir * look_amount, pitch_dir * look_amount)
-
-        # Barrel roll: Z = counterclockwise (positive roll), X = clockwise (negative roll)
-        z_key = self._resolve_key_optional(keys, "Z")
-        x_key = self._resolve_key_optional(keys, "X")
-        roll_dir = 0.0
-        if z_key is not None and z_key in self._keys_down:
-            roll_dir += 1.0
-        if x_key is not None and x_key in self._keys_down:
-            roll_dir -= 1.0
-        if roll_dir:
-            roll_speed = 2.0  # radians per second
-            self.camera.barrel_roll(roll_dir * roll_speed * dt)
+        intent = viewer_input.continuous_input_intent(
+            keys=self.wnd.keys,
+            keys_down=self._keys_down,
+            dt=dt,
+            key_look_pixels_per_second=self._KEY_LOOK_PIXELS_PER_SECOND,
+        )
+        if intent.has_motion:
+            self._move_camera_guarded(
+                intent.forward_amount,
+                intent.right_amount,
+                intent.up_amount,
+                dt,
+                intent.speed_multiplier,
+            )
+        if intent.has_look:
+            self.camera.look(intent.yaw_delta, intent.pitch_delta)
+        if intent.has_roll:
+            self.camera.barrel_roll(intent.roll_delta)
 
     def on_key_event(self, key, action, modifiers: KeyModifiers):
         # Cocoa may dispatch key callbacks before viewer controls exist or
@@ -4728,11 +4314,11 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _handle_reset_view_shortcut(self, key, modifiers: KeyModifiers) -> bool:
         """Handle CMD+0 (macOS) or CTRL+0 (Windows/Linux) to reset view."""
         keys = self.wnd.keys
-        
+
         # Check if this is the 0 key
         if not self._is_zero_key(keys, key):
             return False
-        
+
         shortcut_down = (
             self._command_is_down(modifiers)
             if self._active_platform_adapter().tk_primary_modifier_name() == "Command"
@@ -4741,7 +4327,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if shortcut_down:
             self.camera.reset_view()
             return True
-        
+
         return False
 
     def _request_startup_focus_once(self) -> None:
