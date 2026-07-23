@@ -199,6 +199,31 @@ def _window_pixel_ratio(window) -> float:
         return 1.0
 
 
+def _viewer_ui_surface_size(
+    window,
+    fallback_size: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Return the framebuffer-aware surface size used for HUD auto-scaling."""
+    fallback = fallback_size or _DEFAULT_WINDOW_SIZE
+    try:
+        buffer_width, buffer_height = window.buffer_size
+        buffer_width = int(buffer_width)
+        buffer_height = int(buffer_height)
+        if buffer_width > 0 and buffer_height > 0:
+            return buffer_width, buffer_height
+    except Exception:
+        pass
+    try:
+        width, height = window.size
+        width = int(width)
+        height = int(height)
+        if width > 0 and height > 0:
+            return width, height
+    except Exception:
+        pass
+    return fallback
+
+
 def _viewer_ui_scale_for_window_size(
     window_size: tuple[int, int] | None,
     environ: Mapping[str, str] | None = None,
@@ -459,7 +484,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
         bitmap_font.set_raster_scale(_window_pixel_ratio(getattr(self, "wnd", None)))
         self._viewer_ui_scale = _viewer_ui_scale_for_window_size(
-            getattr(getattr(self, "wnd", None), "size", _DEFAULT_WINDOW_SIZE)
+            _viewer_ui_surface_size(getattr(self, "wnd", None), _DEFAULT_WINDOW_SIZE)
         )
         self._right_column_panel_scale = (
             self.RIGHT_COLUMN_PANEL_SCALE * self._viewer_ui_scale
@@ -2703,7 +2728,9 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _update_right_column_hud_scale(self, window_size: tuple[int, int]) -> None:
         """Keep the always-visible HUD legible as the viewer is resized."""
-        viewer_ui_scale = _viewer_ui_scale_for_window_size(window_size)
+        viewer_ui_scale = _viewer_ui_scale_for_window_size(
+            _viewer_ui_surface_size(getattr(self, "wnd", None), window_size)
+        )
         geometry_scale = self.RIGHT_COLUMN_PANEL_SCALE * viewer_ui_scale
         text_scale = (
             self.RIGHT_COLUMN_PANEL_TEXT_SCALE

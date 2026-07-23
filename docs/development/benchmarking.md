@@ -127,8 +127,8 @@ code and still leaves all artifacts for inspection.
 
 The console output and `latest-summary.txt` include the current metrics, the
 single latest run used as the gate baseline, detailed threshold checks, and a
-compact comparison against recent local history. Use `--history-limit <n>` to
-change how many previous runs are listed.
+compact comparison against the most recent local history record. Use
+`--history-limit <n>` when deliberately inspecting more previous runs.
 
 By default the local wrapper generates an `auto-centerline-route-v1.json` file
 inside the run artifact directory after the cache exists. It uses the
@@ -136,8 +136,9 @@ fine-grained `footprint_cells` manifest field, which the chunker derives from
 source vertex positions, to estimate the middle of the cave passage. The
 generator computes a high-clearance path through that footprint, where clearance
 means grid distance from the footprint boundary, then scores candidate positions
-by render-distance x/z column load across occupied vertical layers: occupied
+by render-distance forward-view load from the route camera direction: visible
 chunk count plus unique texture count from the manifest material-to-texture map.
+This avoids selecting a heavy area that is mostly behind or beside the camera.
 The route segment is centered on the highest-scoring position instead of
 sweeping the entire cave.
 

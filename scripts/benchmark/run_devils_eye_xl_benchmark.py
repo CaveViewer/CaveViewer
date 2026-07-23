@@ -190,7 +190,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--history-limit",
         type=int,
-        default=5,
+        default=1,
         help="Number of previous local runs to include in the text summary.",
     )
     return parser
@@ -415,7 +415,7 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
             "  centerline_route: "
             f"keyframes={plan['centerline_route_keyframes']} "
             f"target_length={target_text} "
-            "selection=max_chunk_texture_complexity "
+            "selection=max_visible_chunk_texture_complexity "
             "movement=after_warmup "
             f"vertical_fraction={CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION:g} "
             f"y_search_radius_cells={plan['centerline_route_y_search_radius_cells']}",
@@ -545,7 +545,7 @@ def _centerline_route_summary(centerline_route, scenario_path: Path) -> str:
         f"full_path_cells={metadata['full_path_cell_count']} "
         f"footprint_component_size={metadata['footprint_component_size']} "
         f"selection={metadata['route_selection_strategy']} "
-        f"max_route_chunks={metadata['max_route_neighborhood_chunks']} "
+        f"max_visible_chunks={metadata['max_route_visible_chunks']} "
         f"max_route_textures={metadata['max_route_unique_textures']} "
         f"route_source={metadata['route_source']} "
         f"y_strategy={metadata['y_strategy']} "
@@ -792,7 +792,10 @@ def _history_comparison_lines(
     if limit <= 0:
         return []
 
-    lines = [f"Previous local runs compared to current (most recent {limit}):"]
+    if limit == 1:
+        lines = ["Previous local run compared to current:"]
+    else:
+        lines = [f"Previous local runs compared to current (most recent {limit}):"]
     for record in reversed(previous_records[-limit:]):
         previous_summary = _summary_from_record(record)
         if previous_summary is None:
@@ -804,9 +807,8 @@ def _history_comparison_lines(
         lines.extend(
             [
                 f"  - Run: {record.get('label', '<unknown>')}",
-                f"    Time: {_record_time_text(record)}",
                 f"    Gate: {gate}{_compatibility_note(previous_summary, current_summary)}",
-                "    FPS (higher is better, previous -> current):",
+                "    FPS (higher is better, current vs previous):",
                 _metric_change_line(
                     "wall clock FPS",
                     "wall_clock_fps",
@@ -828,7 +830,7 @@ def _history_comparison_lines(
                     previous_summary=previous_summary,
                     unit="fps",
                 ),
-                "    Frame time (lower is better, previous -> current):",
+                "    Frame time (lower is better, current vs previous):",
                 _metric_change_line(
                     "p95 frame time",
                     "p95_frame_ms",
@@ -853,14 +855,14 @@ def _metric_change_line(
     previous_value = _metric_value(previous_summary, metric_name)
     if current_value is None or previous_value is None:
         return (
-            f"      {label}: previous={_format_metric_with_unit(previous_value, unit)}, "
-            f"current={_format_metric_with_unit(current_value, unit)} "
+            f"      {label}: current={_format_metric_with_unit(current_value, unit)}, "
+            f"previous={_format_metric_with_unit(previous_value, unit)} "
             "(delta unavailable)"
         )
     return (
-        f"      {label}: {_format_metric_with_unit(previous_value, unit)} -> "
-        f"{_format_metric_with_unit(current_value, unit)} "
-        f"({_percent_delta_text(previous_value, current_value)})"
+        f"      {label}: current={_format_metric_with_unit(current_value, unit)}, "
+        f"previous={_format_metric_with_unit(previous_value, unit)}, "
+        f"delta={_percent_delta_text(previous_value, current_value)}"
     )
 
 
@@ -993,8 +995,8 @@ def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
             f"keyframes={metadata.get('route_keyframe_count', '<missing>')}, "
             f"path_cells={metadata.get('path_cell_count', '<missing>')}, "
             f"selection={metadata.get('route_selection_strategy', '<missing>')}, "
-            f"max_route_chunks={metadata.get('max_route_neighborhood_chunks', '<missing>')}, "
-            f"mean_route_chunks={_format_metric(metadata.get('mean_route_neighborhood_chunks'))}, "
+            f"max_visible_chunks={metadata.get('max_route_visible_chunks', '<missing>')}, "
+            f"mean_visible_chunks={_format_metric(metadata.get('mean_route_visible_chunks'))}, "
             f"max_route_textures={metadata.get('max_route_unique_textures', '<missing>')}, "
             f"mean_route_textures={_format_metric(metadata.get('mean_route_unique_textures'))}, "
             f"route_source={metadata.get('route_source', '<missing>')}, "
@@ -1014,20 +1016,6 @@ def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
             f"mean_route_neighborhood_chunks={_format_metric(metadata.get('mean_route_neighborhood_chunks'))}"
         )
     return None
-
-
-def _record_time_text(record: Mapping[str, Any]) -> str:
-    timestamp = record.get("timestamp_utc")
-    if not timestamp:
-        return "<unknown>"
-    timestamp_text = str(timestamp)
-    try:
-        parsed = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
-    except ValueError:
-        return timestamp_text
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-    return f"{parsed:%Y-%m-%d %H:%M:%S} UTC"
 
 
 def _status_text(comparison: Mapping[str, Any] | None) -> str:

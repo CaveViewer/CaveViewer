@@ -191,10 +191,10 @@ def generate_centerline_route_scenario(
                 "grid distance from the footprint boundary in footprint cells"
             ),
             "complexity_definition": (
-                "normalized sum of render-distance x/z column chunk count "
-                "and unique texture count across occupied vertical layers"
+                "normalized sum of render-distance forward-view chunk count "
+                "and unique texture count from the route camera direction"
             ),
-            "route_selection_strategy": "max_chunk_texture_complexity_v1",
+            "route_selection_strategy": "max_visible_chunk_texture_complexity_v1",
             "warmup_behavior": "hold_first_keyframe_until_measurement",
             "route_travel_start_s": round(template.warmup_seconds, 3),
             "route_travel_duration_s": round(template.measurement_seconds, 3),
@@ -274,10 +274,10 @@ def generate_centerline_route_scenario(
                 / len(route_complexities),
                 3,
             ),
-            "max_route_neighborhood_chunks": max(
+            "max_route_visible_chunks": max(
                 item.chunk_count for item in route_complexities
             ),
-            "mean_route_neighborhood_chunks": round(
+            "mean_route_visible_chunks": round(
                 sum(item.chunk_count for item in route_complexities)
                 / len(route_complexities),
                 3,
@@ -302,7 +302,7 @@ def generate_centerline_route_scenario(
                 max(item.score for item in path_complexities),
                 3,
             ),
-            "max_path_neighborhood_chunks": max(
+            "max_path_visible_chunks": max(
                 item.chunk_count for item in path_complexities
             ),
             "max_path_unique_textures": max(
@@ -573,32 +573,48 @@ def _route_complexity_scores(
     chunk_infos = _chunk_load_infos(manifest)
     columns = _chunk_columns(manifest)
     chunk_size = columns[0]
-    load_columns: dict[FootprintCell, list[_ChunkLoadInfo]] = {}
-    for chunk_cell, info in chunk_infos.items():
-        load_columns.setdefault((chunk_cell[0], chunk_cell[2]), []).append(info)
     raw_scores: dict[FootprintCell, _RouteComplexityScore] = {}
     radius = max(0, int(render_distance))
+    max_distance_m = max(chunk_size, (radius + 0.75) * chunk_size)
+    max_distance_sq = max_distance_m * max_distance_m
+    forward_slop_m = chunk_size * 0.5
+    cone_tan = math.tan(math.radians(75.0 * 0.5)) * 1.6
 
-    for path_cell in path_cells:
-        target_x, target_z = centers[path_cell]
-        route_point = _vertical_center_point_for_xz(
+    route_points = tuple(
+        _vertical_center_point_for_xz(
             columns,
-            target_x=target_x,
-            target_z=target_z,
+            target_x=centers[path_cell][0],
+            target_z=centers[path_cell][1],
             local_radius_cells=y_search_radius_cells,
         )
-        center_chunk = _chunk_cell_for_point(route_point, chunk_size)
+        for path_cell in path_cells
+    )
+
+    for index, path_cell in enumerate(path_cells):
+        route_point = route_points[index]
+        forward = _route_forward_vector(route_points, index)
         materials: set[str] = set()
         textures: set[str] = set()
         chunk_count = 0
-        for neighbor in _footprint_column_neighborhood(
-            (center_chunk[0], center_chunk[2]),
-            radius=radius,
-        ):
-            for info in load_columns.get(neighbor, ()):
-                chunk_count += 1
-                materials.update(info.materials)
-                textures.update(info.textures)
+        for info in chunk_infos.values():
+            rel = (
+                info.center[0] - route_point[0],
+                info.center[1] - route_point[1],
+                info.center[2] - route_point[2],
+            )
+            distance_sq = rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]
+            if distance_sq > max_distance_sq:
+                continue
+            depth = rel[0] * forward[0] + rel[1] * forward[1] + rel[2] * forward[2]
+            if depth < -forward_slop_m:
+                continue
+            lateral_sq = max(0.0, distance_sq - depth * depth)
+            visible_radius = max(chunk_size, depth) * cone_tan + chunk_size
+            if lateral_sq > visible_radius * visible_radius:
+                continue
+            chunk_count += 1
+            materials.update(info.materials)
+            textures.update(info.textures)
         raw_scores[path_cell] = _RouteComplexityScore(
             score=0.0,
             chunk_count=chunk_count,
@@ -637,6 +653,24 @@ def _route_complexity_scores(
         )
         for cell, score in raw_scores.items()
     }
+
+
+def _route_forward_vector(points: tuple[Point, ...], index: int) -> Point:
+    if len(points) <= 1:
+        return 1.0, 0.0, 0.0
+    if index < len(points) - 1:
+        source = points[index]
+        target = points[index + 1]
+    else:
+        source = points[index - 1]
+        target = points[index]
+    dx = target[0] - source[0]
+    dy = target[1] - source[1]
+    dz = target[2] - source[2]
+    length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if length <= 1e-9:
+        return 1.0, 0.0, 0.0
+    return dx / length, dy / length, dz / length
 
 
 def _parse_cell_key(value: str) -> Cell:
@@ -1371,17 +1405,6 @@ def _chunk_cell_for_point(point: Point, chunk_size: float) -> Cell:
         int(math.floor(coordinate / chunk_size))
         for coordinate in point
     )  # type: ignore[return-value]
-
-
-def _footprint_column_neighborhood(
-    cell: FootprintCell,
-    *,
-    radius: int,
-) -> Iterable[FootprintCell]:
-    cx, cz = cell
-    for dx in range(-radius, radius + 1):
-        for dz in range(-radius, radius + 1):
-            yield cx + dx, cz + dz
 
 
 def _cell_distance(first: Cell, second: Cell) -> float:

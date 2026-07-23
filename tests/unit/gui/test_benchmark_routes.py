@@ -40,7 +40,9 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     assert metadata["vertical_position_fraction"] == 0.65
     assert metadata["footprint_cell_size_m"] == 2.0
     assert metadata["max_clearance_cells"] >= 3
-    assert metadata["route_selection_strategy"] == "max_chunk_texture_complexity_v1"
+    assert metadata["route_selection_strategy"] == (
+        "max_visible_chunk_texture_complexity_v1"
+    )
     assert metadata["warmup_behavior"] == "hold_first_keyframe_until_measurement"
     assert metadata["target_route_length_source"] == "default_chunk_widths"
     assert metadata["target_route_length_chunks"] == DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS
@@ -54,7 +56,7 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     assert metadata["route_travel_duration_s"] == 8.0
     assert metadata["route_length_m"] == pytest.approx(5.696, abs=0.01)
     assert metadata["route_keyframe_count"] == 5
-    assert metadata["max_route_neighborhood_chunks"] > 0
+    assert metadata["max_route_visible_chunks"] > 0
     assert metadata["max_route_unique_textures"] > 0
     assert all(cell[1] in {1, 2, 3} for cell in centerline_route.route_cells)
     route = centerline_route.scenario_payload["route"]

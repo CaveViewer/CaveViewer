@@ -294,6 +294,12 @@ def test_window_pixel_ratio_falls_back_for_missing_backend_data():
     assert viewer_window._window_pixel_ratio(SimpleNamespace(size=(1000, 700))) == 1.0
 
 
+def test_viewer_ui_surface_size_prefers_framebuffer_size_for_scaled_dpi():
+    window = SimpleNamespace(size=(1600, 1000), buffer_size=(2048, 1280))
+
+    assert viewer_window._viewer_ui_surface_size(window) == (2048, 1280)
+
+
 def test_viewer_ui_scale_grows_on_large_viewer_surfaces():
     assert viewer_window._viewer_ui_scale_for_window_size((1536, 864), {}) == 1.0
     assert viewer_window._viewer_ui_scale_for_window_size((2048, 1152), {}) == pytest.approx(
@@ -1264,6 +1270,21 @@ def test_right_column_panel_scales_up_on_large_viewer_surfaces():
     assert large_rect[3] - large_rect[1] > base_rect[3] - base_rect[1]
     assert 0 <= large_rect[0] < large_rect[2] <= 2048
     assert 0 <= large_rect[1] < large_rect[3] <= 1152
+
+
+def test_right_column_panel_scales_from_framebuffer_on_scaled_dpi():
+    window = _right_column_probe_window()
+    window.wnd = SimpleNamespace(size=(1600, 1000), buffer_size=(2048, 1280))
+
+    column = window._right_column_layout((1600, 1000))
+    rect = window._right_column_panel_rect((1600, 1000), column)
+
+    assert window._right_column_ui_scale() == pytest.approx(4 / 3)
+    assert window.light_stepper._geometry_scale == pytest.approx(
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE * 4 / 3
+    )
+    assert 0 <= rect[0] < rect[2] <= 1600
+    assert 0 <= rect[1] < rect[3] <= 1000
 
 
 def test_initial_chunk_readiness_respects_budget_limited_wanted_count():

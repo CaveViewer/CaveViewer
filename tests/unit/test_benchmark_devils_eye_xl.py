@@ -57,7 +57,7 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=8" in output
     assert "target_length=auto(3 chunks)" in output
-    assert "selection=max_chunk_texture_complexity" in output
+    assert "selection=max_visible_chunk_texture_complexity" in output
     assert "movement=after_warmup" in output
     assert "copy_map: yes" in output
     assert "compile_cache: yes" in output
@@ -160,19 +160,19 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "Runtime load:" in latest_text
     assert "median_drawn_chunks=40.00" in latest_text
     assert "Route: auto_centerline" in latest_text
-    assert "selection=max_chunk_texture_complexity_v1" in latest_text
+    assert "selection=max_visible_chunk_texture_complexity_v1" in latest_text
     assert "target_speed_m_per_s=1.00" in latest_text
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
-    assert "Previous local runs compared to current" in latest_text
+    assert "Previous local run compared to current" in latest_text
     assert "Run: previous-main" in latest_text
-    assert "Time: 2026-07-23 10:00:00 UTC" in latest_text
     assert "Gate: FAIL" in latest_text
-    assert "median render FPS: 100.00 fps -> 90.00 fps (-10.00%)" in latest_text
-    assert "Run: older-release" in latest_text
-    assert "Time: 2026-07-22 10:00:00 UTC" in latest_text
-    assert "Gate: PASS" in latest_text
-    assert "median render FPS: 80.00 fps -> 90.00 fps (+12.50%)" in latest_text
+    assert (
+        "median render FPS: current=90.00 fps, previous=100.00 fps, delta=-10.00%"
+        in latest_text
+    )
+    assert "Run: older-release" not in latest_text
+    assert "Time:" not in latest_text
     orchestration_log = (run_dir / "orchestration.log").read_text(encoding="utf-8")
     assert "Devil's Eye XL local benchmark plan:" in orchestration_log
     assert "Status: FAIL" in orchestration_log
@@ -223,9 +223,11 @@ def test_devils_eye_xl_uses_only_compatible_history_as_gate_baseline():
         )
     )
     assert "Run: old-route" in history_text
-    assert "Time: 2026-07-23 10:00:00 UTC" in history_text
     assert "Gate: INCOMPATIBLE (route changed; not used as gate baseline)" in history_text
-    assert "wall clock FPS: 100.00 fps -> 90.00 fps (-10.00%)" in history_text
+    assert (
+        "wall clock FPS: current=90.00 fps, previous=100.00 fps, delta=-10.00%"
+        in history_text
+    )
 
 
 def _summary(
