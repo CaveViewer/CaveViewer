@@ -800,29 +800,74 @@ def _history_comparison_lines(
                 f"  - {record.get('label', '<unknown>')}: metrics unavailable"
             )
             continue
-        lines.append(
-            "  - "
-            f"{record.get('label', '<unknown>')}"
-            f"{_timestamp_suffix(record)}: "
-            f"wall_clock_fps={_metric_with_delta(current_summary, previous_summary, 'wall_clock_fps')}, "
-            f"median_render_fps={_metric_with_delta(current_summary, previous_summary, 'median_fps')}, "
-            f"one_percent_low_render_fps={_metric_with_delta(current_summary, previous_summary, 'one_percent_low_fps')}, "
-            f"p95_frame_ms={_metric_with_delta(current_summary, previous_summary, 'p95_frame_ms')}, "
-            f"gate={_comparison_status(previous_summary, current_summary, thresholds)}"
+        gate = _comparison_status(previous_summary, current_summary, thresholds)
+        lines.extend(
+            [
+                f"  - Run: {record.get('label', '<unknown>')}",
+                f"    Time: {_record_time_text(record)}",
+                f"    Gate: {gate}{_compatibility_note(previous_summary, current_summary)}",
+                "    FPS (higher is better, previous -> current):",
+                _metric_change_line(
+                    "wall clock FPS",
+                    "wall_clock_fps",
+                    current_summary=current_summary,
+                    previous_summary=previous_summary,
+                    unit="fps",
+                ),
+                _metric_change_line(
+                    "median render FPS",
+                    "median_fps",
+                    current_summary=current_summary,
+                    previous_summary=previous_summary,
+                    unit="fps",
+                ),
+                _metric_change_line(
+                    "1% low render FPS",
+                    "one_percent_low_fps",
+                    current_summary=current_summary,
+                    previous_summary=previous_summary,
+                    unit="fps",
+                ),
+                "    Frame time (lower is better, previous -> current):",
+                _metric_change_line(
+                    "p95 frame time",
+                    "p95_frame_ms",
+                    current_summary=current_summary,
+                    previous_summary=previous_summary,
+                    unit="ms",
+                ),
+            ]
         )
     return lines
 
 
-def _metric_with_delta(
+def _metric_change_line(
+    label: str,
+    metric_name: str,
+    *,
     current_summary: Mapping[str, Any],
     previous_summary: Mapping[str, Any],
-    metric_name: str,
+    unit: str,
 ) -> str:
     current_value = _metric_value(current_summary, metric_name)
     previous_value = _metric_value(previous_summary, metric_name)
     if current_value is None or previous_value is None:
+        return (
+            f"      {label}: previous={_format_metric_with_unit(previous_value, unit)}, "
+            f"current={_format_metric_with_unit(current_value, unit)} "
+            "(delta unavailable)"
+        )
+    return (
+        f"      {label}: {_format_metric_with_unit(previous_value, unit)} -> "
+        f"{_format_metric_with_unit(current_value, unit)} "
+        f"({_percent_delta_text(previous_value, current_value)})"
+    )
+
+
+def _format_metric_with_unit(value: float | None, unit: str) -> str:
+    if value is None:
         return "<missing>"
-    return f"{previous_value:.2f} ({_percent_delta_text(previous_value, current_value)})"
+    return f"{value:.2f} {unit}"
 
 
 def _metric_value(summary: Mapping[str, Any], metric_name: str) -> float | None:
@@ -838,6 +883,50 @@ def _percent_delta_text(baseline: float, candidate: float) -> str:
     else:
         delta = ((candidate - baseline) / abs(baseline)) * 100.0
     return f"{delta:+.2f}%"
+
+
+def _compatibility_note(
+    previous_summary: Mapping[str, Any],
+    current_summary: Mapping[str, Any],
+) -> str:
+    reasons = _incompatibility_reasons(previous_summary, current_summary)
+    if not reasons:
+        return ""
+    return f" ({'; '.join(reasons)}; not used as gate baseline)"
+
+
+def _incompatibility_reasons(
+    previous_summary: Mapping[str, Any],
+    current_summary: Mapping[str, Any],
+) -> list[str]:
+    previous_scenario = previous_summary.get("scenario", {})
+    current_scenario = current_summary.get("scenario", {})
+    previous_environment = previous_summary.get("environment", {})
+    current_environment = current_summary.get("environment", {})
+
+    reasons: list[str] = []
+    previous_name = previous_scenario.get("name")
+    current_name = current_scenario.get("name")
+    if not previous_name or not current_name:
+        reasons.append("scenario name missing")
+    elif previous_name != current_name:
+        reasons.append("scenario name changed")
+
+    previous_fingerprint = previous_scenario.get("fingerprint")
+    current_fingerprint = current_scenario.get("fingerprint")
+    if not previous_fingerprint or not current_fingerprint:
+        reasons.append("scenario fingerprint missing")
+    elif previous_fingerprint != current_fingerprint:
+        reasons.append("route changed")
+
+    previous_map = previous_environment.get("cache_manifest_sha256")
+    current_map = current_environment.get("cache_manifest_sha256")
+    if not previous_map or not current_map:
+        reasons.append("map manifest hash missing")
+    elif previous_map != current_map:
+        reasons.append("map manifest changed")
+
+    return reasons
 
 
 def _comparison_status(
@@ -927,9 +1016,18 @@ def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _timestamp_suffix(record: Mapping[str, Any]) -> str:
+def _record_time_text(record: Mapping[str, Any]) -> str:
     timestamp = record.get("timestamp_utc")
-    return "" if not timestamp else f" @ {timestamp}"
+    if not timestamp:
+        return "<unknown>"
+    timestamp_text = str(timestamp)
+    try:
+        parsed = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+    except ValueError:
+        return timestamp_text
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return f"{parsed:%Y-%m-%d %H:%M:%S} UTC"
 
 
 def _status_text(comparison: Mapping[str, Any] | None) -> str:

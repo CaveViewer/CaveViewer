@@ -165,10 +165,14 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
     assert "Previous local runs compared to current" in latest_text
-    assert "previous-main @ 2026-07-23T10:00:00Z" in latest_text
-    assert "median_render_fps=100.00 (-10.00%)" in latest_text
-    assert "older-release @ 2026-07-22T10:00:00Z" in latest_text
-    assert "median_render_fps=80.00 (+12.50%)" in latest_text
+    assert "Run: previous-main" in latest_text
+    assert "Time: 2026-07-23 10:00:00 UTC" in latest_text
+    assert "Gate: FAIL" in latest_text
+    assert "median render FPS: 100.00 fps -> 90.00 fps (-10.00%)" in latest_text
+    assert "Run: older-release" in latest_text
+    assert "Time: 2026-07-22 10:00:00 UTC" in latest_text
+    assert "Gate: PASS" in latest_text
+    assert "median render FPS: 80.00 fps -> 90.00 fps (+12.50%)" in latest_text
     orchestration_log = (run_dir / "orchestration.log").read_text(encoding="utf-8")
     assert "Devil's Eye XL local benchmark plan:" in orchestration_log
     assert "Status: FAIL" in orchestration_log
@@ -203,6 +207,25 @@ def test_devils_eye_xl_uses_only_compatible_history_as_gate_baseline():
         [{"label": "old-route", "summary": incompatible_summary}],
         current_summary,
     ) is None
+
+    history_text = "\n".join(
+        module._history_comparison_lines(
+            [
+                {
+                    "label": "old-route",
+                    "timestamp_utc": "2026-07-23T10:00:00Z",
+                    "summary": incompatible_summary,
+                }
+            ],
+            current_summary=current_summary,
+            thresholds=module.BenchmarkThresholds(),
+            limit=5,
+        )
+    )
+    assert "Run: old-route" in history_text
+    assert "Time: 2026-07-23 10:00:00 UTC" in history_text
+    assert "Gate: INCOMPATIBLE (route changed; not used as gate baseline)" in history_text
+    assert "wall clock FPS: 100.00 fps -> 90.00 fps (-10.00%)" in history_text
 
 
 def _summary(
