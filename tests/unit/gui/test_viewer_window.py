@@ -1354,6 +1354,61 @@ def test_initial_chunk_readiness_counts_failed_wanted_chunks():
     ) is True
 
 
+def test_initial_visual_readiness_waits_for_settled_scene_frames():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(config=SimpleNamespace(max_loaded_chunks=100))
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 0
+    window._initial_visual_ready_visible_chunks = 0
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {}
+
+    stats = {
+        "loaded_wanted": 27,
+        "loaded": 27,
+        "pending": 0,
+        "ready": 0,
+        "wanted": 27,
+        "total_available": 1655,
+    }
+
+    first = window._initial_visual_readiness_stats(stats, 12)
+    second = window._initial_visual_readiness_stats(stats, 12)
+    third = window._initial_visual_readiness_stats(stats, 12)
+
+    assert first["visual_ready"] is False
+    assert second["visual_ready"] is False
+    assert third["visual_ready"] is True
+    assert window._initial_visual_ready_frames == 3
+
+
+def test_initial_visual_readiness_waits_for_pending_upload_state():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(config=SimpleNamespace(max_loaded_chunks=100))
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 2
+    window._initial_visual_ready_visible_chunks = 12
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {(1, 2, 3): {"next_group_index": 0}}
+
+    visual_stats = window._initial_visual_readiness_stats(
+        {
+            "loaded_wanted": 27,
+            "loaded": 27,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 27,
+            "total_available": 1655,
+        },
+        12,
+    )
+
+    assert visual_stats["visual_ready"] is False
+    assert window._initial_visual_ready_frames == 0
+
+
 def test_startup_upload_limits_are_boosted_until_initial_load_is_ready():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._upload_chunks_per_frame = 1

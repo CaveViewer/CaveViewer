@@ -160,6 +160,8 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "wall_clock_fps=90.00" in latest_text
     assert "Runtime load:" in latest_text
     assert "median_drawn_chunks=40.00" in latest_text
+    assert "Startup readiness:" in latest_text
+    assert "visible_chunks=40" in latest_text
     assert "Streaming request:" in latest_text
     assert "distance=6 chunks" in latest_text
     assert "Streaming effective:" in latest_text
@@ -356,6 +358,9 @@ def _summary(
             "catchup_upload_chunks_per_frame": 2,
             "catchup_upload_groups_per_frame": 8,
             "catchup_upload_time_budget_ms": 8.0,
+            "initial_visual_ready_seconds": 12.5,
+            "initial_visual_ready_frames": 3,
+            "initial_visual_ready_visible_chunks": 40,
             "texture_max_dimension": 2048,
             "texture_resident_budget_bytes": 1720 * 1024 * 1024,
             "texture_decoded_cache_budget_bytes": 304 * 1024 * 1024,

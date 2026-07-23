@@ -793,6 +793,7 @@ def _human_summary(
             f"ui_surface={_format_size(environment.get('actual_ui_surface_size'))}, "
             f"backend={environment.get('window_backend') or '<missing>'}"
         ),
+        *_startup_readiness_summary_lines(environment),
         *_streaming_summary_lines(environment),
     ]
     route_line = _route_summary_for_summary(summary)
@@ -839,6 +840,19 @@ def _human_summary(
     if comparison_path is not None:
         lines.append(f"Comparison JSON: {comparison_path}")
     return "\n".join(lines) + "\n"
+
+
+def _startup_readiness_summary_lines(environment: Mapping[str, Any]) -> list[str]:
+    if "initial_visual_ready_seconds" not in environment:
+        return []
+    return [
+        (
+            "Startup readiness: "
+            f"visual_ready_after={_format_setting(environment.get('initial_visual_ready_seconds'), suffix=' s')}, "
+            f"settle_frames={_format_setting(environment.get('initial_visual_ready_frames'))}, "
+            f"visible_chunks={_format_setting(environment.get('initial_visual_ready_visible_chunks'))}"
+        )
+    ]
 
 
 def _streaming_summary_lines(environment: Mapping[str, Any]) -> list[str]:

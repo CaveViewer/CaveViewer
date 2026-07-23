@@ -835,6 +835,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
+        self._initial_visual_ready = False
+        self._initial_visual_ready_frames = 0
+        self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_logged = False
         self._initial_compilation_started_at = None
         self._initial_compilation_logged = False
         self._chunk_prep_progress = 0.0
@@ -1285,6 +1289,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Reset on each map load; set True when the initial view has enough
         # uploaded chunks to be usable, not merely when the first chunk arrives.
         self._initial_chunks_loaded = False
+        self._initial_visual_ready = False
+        self._initial_visual_ready_frames = 0
+        self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_logged = False
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
         self._chunk_prep_completion_armed = False
@@ -2637,6 +2645,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     _AMBIENT_MIN = 0.04
     _AMBIENT_MAX = 0.9
     _INITIAL_LOAD_MIN_CHUNKS = 6
+    _INITIAL_VISUAL_READY_SETTLE_FRAMES = 3
     _CHUNK_PREP_MAX_FRACTION = 0.97
     _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.85
     _STREAMING_FAILURES_PER_FRAME = 8
@@ -2781,6 +2790,102 @@ class CaveViewerWindow(mglw.WindowConfig):
         max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
         needed = self._initial_chunk_load_needed(stats, max_loaded)
         return loaded + failed_wanted >= needed
+
+    def _initial_visual_readiness_is_settled(self, stats: dict) -> bool:
+        if not getattr(self, "_initial_chunks_loaded", False):
+            return False
+        if not self._initial_chunk_load_is_ready(stats):
+            return False
+        if max(0, int(stats.get("pending", 0))) > 0:
+            return False
+        if max(0, int(stats.get("ready", 0))) > 0:
+            return False
+        upload_states = getattr(self, "_chunk_upload_states", {})
+        return len(upload_states) == 0
+
+    def _initial_visual_readiness_stats(
+        self,
+        stats: dict,
+        visible_chunk_count: int,
+    ) -> dict:
+        """Update and return startup stats augmented with visual-ready state."""
+        if getattr(self, "_initial_visual_ready", False):
+            visual_stats = dict(stats)
+            visual_stats["visual_ready"] = True
+            visual_stats["visual_ready_frames"] = int(
+                getattr(self, "_initial_visual_ready_frames", 0)
+            )
+            visual_stats["visual_ready_visible_chunks"] = int(
+                getattr(self, "_initial_visual_ready_visible_chunks", 0)
+            )
+            return visual_stats
+
+        if self._initial_visual_readiness_is_settled(stats):
+            self._initial_visual_ready_frames = (
+                int(getattr(self, "_initial_visual_ready_frames", 0)) + 1
+            )
+            self._initial_visual_ready_visible_chunks = int(visible_chunk_count)
+            if (
+                self._initial_visual_ready_frames
+                >= self._INITIAL_VISUAL_READY_SETTLE_FRAMES
+            ):
+                self._initial_visual_ready = True
+                self._log_initial_visual_ready_complete(
+                    stats,
+                    visible_chunk_count=visible_chunk_count,
+                )
+        else:
+            self._initial_visual_ready_frames = 0
+            self._initial_visual_ready_visible_chunks = 0
+
+        visual_stats = dict(stats)
+        visual_stats["visual_ready"] = bool(
+            getattr(self, "_initial_visual_ready", False)
+        )
+        visual_stats["visual_ready_frames"] = int(
+            getattr(self, "_initial_visual_ready_frames", 0)
+        )
+        visual_stats["visual_ready_visible_chunks"] = int(visible_chunk_count)
+        return visual_stats
+
+    def _log_initial_visual_ready_complete(
+        self,
+        stats: dict,
+        *,
+        visible_chunk_count: int,
+    ) -> None:
+        if getattr(self, "_initial_visual_ready_logged", False):
+            return
+        self._initial_visual_ready_logged = True
+        started_at = getattr(self, "_initial_compilation_started_at", None)
+        elapsed_s = (
+            0.0
+            if started_at is None
+            else max(0.0, time.perf_counter() - started_at)
+        )
+        upload_states = getattr(self, "_chunk_upload_states", {})
+        _LOG.info(
+            "Initial visual readiness completed in %.2fs "
+            "(visible=%d loaded=%d pending=%d ready=%d wanted=%d upload_states=%d).",
+            elapsed_s,
+            int(visible_chunk_count),
+            int(stats.get("loaded", 0)),
+            int(stats.get("pending", 0)),
+            int(stats.get("ready", 0)),
+            int(stats.get("wanted", 0)),
+            len(upload_states),
+        )
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        if benchmark_controller is not None:
+            benchmark_controller.update_environment(
+                {
+                    "initial_visual_ready_seconds": round(elapsed_s, 6),
+                    "initial_visual_ready_visible_chunks": int(visible_chunk_count),
+                    "initial_visual_ready_frames": int(
+                        getattr(self, "_initial_visual_ready_frames", 0)
+                    ),
+                }
+            )
 
     def _log_initial_compilation_complete(self, stats: dict) -> None:
         if getattr(self, "_initial_compilation_logged", False):
@@ -3493,11 +3598,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         self._chunk_prep_complete_until = None
         if benchmark_active:
-            self.controls_overlay.update(stats)
-            self.controls_overlay.dismiss_begin_screen()
             self._sync_render_mode_loading_policy()
-            if not benchmark_controller.started:
-                benchmark_controller.update_camera(self.camera, time.perf_counter())
 
         t_scene_setup = time.perf_counter()
         self.ctx.clear(*self.color_picker.color)  # background ("void") color, adjustable via the COLOR button
@@ -3542,6 +3643,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         _visible_cells = self._visible_chunk_gpu_objects(view, proj)
         _chunks_drawn = len(_visible_cells)
         mesh_cull_ms = (time.perf_counter() - t_cull) * 1000.0
+        visual_stats = self._initial_visual_readiness_stats(stats, _chunks_drawn)
 
         # u_texture always refers to sampler unit 0 -- set it once before
         # the loop rather than redundantly on every single draw call.
@@ -3702,7 +3804,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             # other UI element -- while it's showing, it's meant to be the
             # thing you're looking at (it's explaining what the other UI
             # pieces do), so it should never be obscured by them.
-            self.controls_overlay.update(stats)
+            self.controls_overlay.update(visual_stats)
             self.controls_overlay.render(self.wnd.size)
             self._render_recording_status_message(self.wnd.size)
             overlay_ms = (time.perf_counter() - t0) * 1000.0
@@ -3721,6 +3823,15 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         if benchmark_active:
             benchmark_now = time.perf_counter()
+            if not getattr(self, "_initial_visual_ready", False):
+                if benchmark_controller.exceeded_max_runtime(benchmark_now):
+                    benchmark_controller.finish(reason="max_runtime_exceeded")
+                    self.close()
+                return
+            if not benchmark_controller.started:
+                self.controls_overlay.dismiss_begin_screen()
+                benchmark_controller.update_camera(self.camera, benchmark_now)
+                return
             benchmark_complete = benchmark_controller.record_frame(
                 now=benchmark_now,
                 frame_ms=total_ms,
