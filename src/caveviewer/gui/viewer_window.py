@@ -2538,52 +2538,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         cell,
         completed: bool,
     ) -> None:
-        if timing is None:
-            return
-
-        timing["chunk_ready_ms"] += chunk_ms
-        timing["chunk_prepare_ms"] += counters["chunk_prepare_ms"]
-        timing["vertex_pack_ms"] += counters["vertex_pack_ms"]
-        timing["buffer_ms"] += counters["buffer_ms"]
-        timing["buffer_alloc_ms"] += counters["buffer_alloc_ms"]
-        timing["buffer_write_ms"] += counters["buffer_write_ms"]
-        timing["buffer_alloc_bytes"] += counters["buffer_alloc_bytes"]
-        timing["buffer_write_bytes"] += counters["buffer_write_bytes"]
-        timing["vao_ms"] += counters["vao_ms"]
-        timing["texture_ms"] += counters["texture_ms"]
-        timing["texture_decode_ms"] += counters["texture_decode_ms"]
-        timing["texture_alloc_ms"] += counters["texture_alloc_ms"]
-        timing["texture_write_ms"] += counters["texture_write_ms"]
-        timing["texture_upload_ms"] += counters["texture_upload_ms"]
-        timing["texture_mipmap_ms"] += counters["texture_mipmap_ms"]
-        timing["texture_image_bytes"] += counters["texture_image_bytes"]
-        timing["texture_material_cache_hits"] += counters["texture_material_cache_hits"]
-        timing["texture_file_cache_hits"] += counters["texture_file_cache_hits"]
-        timing["texture_decoded_cache_hits"] += counters["texture_decoded_cache_hits"]
-        timing["texture_sync_decodes"] += counters["texture_sync_decodes"]
-        timing["texture_placeholders"] += counters["texture_placeholders"]
-        timing["chunk_bookkeeping_ms"] += counters["chunk_bookkeeping_ms"]
-        if completed:
-            timing["chunks_uploaded"] += 1
-        timing["groups_uploaded"] += counters["groups"]
-        timing["prepacked_groups"] += counters["prepacked_groups"]
-        timing["fallback_pack_groups"] += counters["fallback_pack_groups"]
-        timing["vertices_uploaded"] += counters["vertices"]
-        timing["bytes_uploaded"] += counters["bytes"]
-        if chunk_ms > timing["worst_chunk_ms"]:
-            timing["worst_chunk_ms"] = chunk_ms
-            timing["worst_chunk_cell"] = cell
-            timing["worst_chunk_groups"] = counters["groups"]
-            timing["worst_chunk_vertices"] = counters["vertices"]
-            timing["worst_chunk_bytes"] = counters["bytes"]
-            timing["worst_chunk_prepare_ms"] = counters["chunk_prepare_ms"]
-            timing["worst_chunk_vertex_pack_ms"] = counters["vertex_pack_ms"]
-            timing["worst_chunk_buffer_ms"] = counters["buffer_ms"]
-            timing["worst_chunk_buffer_alloc_ms"] = counters["buffer_alloc_ms"]
-            timing["worst_chunk_buffer_write_ms"] = counters["buffer_write_ms"]
-            timing["worst_chunk_vao_ms"] = counters["vao_ms"]
-            timing["worst_chunk_texture_ms"] = counters["texture_ms"]
-            timing["worst_chunk_bookkeeping_ms"] = counters["chunk_bookkeeping_ms"]
+        streaming_frame_timing.record_chunk_upload_timing(
+            timing,
+            counters,
+            chunk_ms=chunk_ms,
+            cell=cell,
+            completed=completed,
+        )
 
     def _publish_chunk_upload_state(self, chunk_data, state: dict) -> None:
         """Make completed upload slices drawable before the whole chunk is done."""
