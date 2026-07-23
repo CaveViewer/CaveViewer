@@ -129,6 +129,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate inputs and print planned work without copying or running.",
     )
+    parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=5,
+        help="Number of previous local runs to include in the text summary.",
+    )
     return parser
 
 
@@ -153,7 +159,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return benchmark_returncode
 
         summary = load_json_file(plan["summary_path"])
-        previous_record = _latest_history_record(plan["history_path"])
+        previous_records = _history_records(plan["history_path"])
+        previous_record = previous_records[-1] if previous_records else None
         previous_summary = _summary_from_record(previous_record)
         thresholds = BenchmarkThresholds.load(plan["thresholds_path"])
         comparison = (
@@ -173,8 +180,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan,
             summary=summary,
             previous_record=previous_record,
+            previous_records=previous_records,
             comparison=comparison,
             comparison_path=comparison_path,
+            thresholds=thresholds,
         )
         plan["latest_summary_path"].parent.mkdir(parents=True, exist_ok=True)
         plan["latest_summary_path"].write_text(text_summary, encoding="utf-8")
@@ -265,6 +274,7 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "source_copy_needed": source_copy_needed,
         "compile_needed": compile_needed,
         "force_compile": bool(args.force_compile),
+        "history_limit": max(0, int(args.history_limit)),
         "compile_command": compile_command,
         "benchmark_command": benchmark_command,
     }
@@ -407,10 +417,10 @@ def _has_map_source(map_dir: Path) -> bool:
     return False
 
 
-def _latest_history_record(path: Path) -> dict[str, Any] | None:
-    latest: dict[str, Any] | None = None
+def _history_records(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     if not path.is_file():
-        return None
+        return records
     with open(path, encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
@@ -421,8 +431,8 @@ def _latest_history_record(path: Path) -> dict[str, Any] | None:
             except json.JSONDecodeError:
                 continue
             if isinstance(payload, dict):
-                latest = payload
-    return latest
+                records.append(payload)
+    return records
 
 
 def _summary_from_record(record: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -498,8 +508,10 @@ def _human_summary(
     *,
     summary: Mapping[str, Any],
     previous_record: Mapping[str, Any] | None,
+    previous_records: Sequence[Mapping[str, Any]],
     comparison: Mapping[str, Any] | None,
     comparison_path: Path | None,
+    thresholds: BenchmarkThresholds,
 ) -> str:
     metrics = summary.get("metrics", {})
     lines = [
@@ -516,12 +528,12 @@ def _human_summary(
         ),
     ]
     if previous_record is None:
-        lines.append("Previous: none; this run seeds the local baseline history.")
+        lines.append("Gate baseline: none; this run seeds the local benchmark history.")
     else:
         previous_summary = _summary_from_record(previous_record) or {}
         previous_metrics = previous_summary.get("metrics", {})
         lines.append(
-            "Previous: "
+            "Gate baseline: "
             f"{previous_record.get('label', '<unknown>')} "
             f"median_fps={_format_metric(previous_metrics.get('median_fps'))}"
         )
@@ -529,6 +541,12 @@ def _human_summary(
         lines.append("Comparison checks:")
         for check in comparison.get("checks", []):
             lines.append(f"  - {_format_check(check)}")
+    lines.extend(_history_comparison_lines(
+        previous_records,
+        current_summary=summary,
+        thresholds=thresholds,
+        limit=int(plan["history_limit"]),
+    ))
     lines.extend(
         [
             f"Artifacts: {plan['run_dir']}",
@@ -543,6 +561,82 @@ def _human_summary(
     if comparison_path is not None:
         lines.append(f"Comparison JSON: {comparison_path}")
     return "\n".join(lines) + "\n"
+
+
+def _history_comparison_lines(
+    previous_records: Sequence[Mapping[str, Any]],
+    *,
+    current_summary: Mapping[str, Any],
+    thresholds: BenchmarkThresholds,
+    limit: int,
+) -> list[str]:
+    if not previous_records:
+        return ["Previous local runs: none"]
+    if limit <= 0:
+        return []
+
+    lines = [f"Previous local runs compared to current (most recent {limit}):"]
+    for record in reversed(previous_records[-limit:]):
+        previous_summary = _summary_from_record(record)
+        if previous_summary is None:
+            lines.append(
+                f"  - {record.get('label', '<unknown>')}: metrics unavailable"
+            )
+            continue
+        lines.append(
+            "  - "
+            f"{record.get('label', '<unknown>')}"
+            f"{_timestamp_suffix(record)}: "
+            f"median_fps={_metric_with_delta(current_summary, previous_summary, 'median_fps')}, "
+            f"one_percent_low_fps={_metric_with_delta(current_summary, previous_summary, 'one_percent_low_fps')}, "
+            f"p95_frame_ms={_metric_with_delta(current_summary, previous_summary, 'p95_frame_ms')}, "
+            f"gate={_comparison_status(previous_summary, current_summary, thresholds)}"
+        )
+    return lines
+
+
+def _metric_with_delta(
+    current_summary: Mapping[str, Any],
+    previous_summary: Mapping[str, Any],
+    metric_name: str,
+) -> str:
+    current_value = _metric_value(current_summary, metric_name)
+    previous_value = _metric_value(previous_summary, metric_name)
+    if current_value is None or previous_value is None:
+        return "<missing>"
+    return f"{previous_value:.2f} ({_percent_delta_text(previous_value, current_value)})"
+
+
+def _metric_value(summary: Mapping[str, Any], metric_name: str) -> float | None:
+    value = summary.get("metrics", {}).get(metric_name)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _percent_delta_text(baseline: float, candidate: float) -> str:
+    if baseline == 0:
+        delta = 0.0 if candidate == 0 else 100.0
+    else:
+        delta = ((candidate - baseline) / abs(baseline)) * 100.0
+    return f"{delta:+.2f}%"
+
+
+def _comparison_status(
+    previous_summary: Mapping[str, Any],
+    current_summary: Mapping[str, Any],
+    thresholds: BenchmarkThresholds,
+) -> str:
+    return (
+        "PASS"
+        if compare_summaries(previous_summary, current_summary, thresholds)["passed"]
+        else "FAIL"
+    )
+
+
+def _timestamp_suffix(record: Mapping[str, Any]) -> str:
+    timestamp = record.get("timestamp_utc")
+    return "" if not timestamp else f" @ {timestamp}"
 
 
 def _status_text(comparison: Mapping[str, Any] | None) -> str:

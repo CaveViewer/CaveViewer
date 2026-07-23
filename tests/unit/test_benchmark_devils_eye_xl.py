@@ -77,13 +77,27 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     (local_map_dir / "_cache" / "manifest.json").write_text("{}", encoding="utf-8")
     history_path.parent.mkdir(parents=True)
     history_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "label": "previous-main",
-                "summary": _summary(median_fps=100.0),
-            },
-            sort_keys=True,
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "timestamp_utc": "2026-07-22T10:00:00Z",
+                        "label": "older-release",
+                        "summary": _summary(median_fps=80.0),
+                    },
+                    sort_keys=True,
+                ),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "timestamp_utc": "2026-07-23T10:00:00Z",
+                        "label": "previous-main",
+                        "summary": _summary(median_fps=100.0),
+                    },
+                    sort_keys=True,
+                ),
+            ]
         )
         + "\n",
         encoding="utf-8",
@@ -123,13 +137,18 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert (run_dir / "comparison.json").is_file()
     latest_text = (results_dir / "latest-summary.txt").read_text(encoding="utf-8")
     assert "Status: FAIL" in latest_text
-    assert "Previous: previous-main median_fps=100.00" in latest_text
+    assert "Gate baseline: previous-main median_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
+    assert "Previous local runs compared to current" in latest_text
+    assert "previous-main @ 2026-07-23T10:00:00Z" in latest_text
+    assert "median_fps=100.00 (-10.00%)" in latest_text
+    assert "older-release @ 2026-07-22T10:00:00Z" in latest_text
+    assert "median_fps=80.00 (+12.50%)" in latest_text
     orchestration_log = (run_dir / "orchestration.log").read_text(encoding="utf-8")
     assert "Devil's Eye XL local benchmark plan:" in orchestration_log
     assert "Status: FAIL" in orchestration_log
     history_lines = history_path.read_text(encoding="utf-8").strip().splitlines()
-    assert len(history_lines) == 2
+    assert len(history_lines) == 3
     assert json.loads(history_lines[-1])["comparison_passed"] is False
     benchmark_command = next(
         command

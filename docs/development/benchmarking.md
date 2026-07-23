@@ -116,6 +116,11 @@ local record exists, the new run is compared against it with
 `benchmarks/viewer-thresholds.v1.json`; a regression returns a non-zero exit
 code and still leaves all artifacts for inspection.
 
+The console output and `latest-summary.txt` include the current metrics, the
+single latest run used as the gate baseline, detailed threshold checks, and a
+compact comparison against recent local history. Use `--history-limit <n>` to
+change how many previous runs are listed.
+
 To make this run automatically before local pushes to `main`, install the
 tracked pre-push hook template on this machine:
 
