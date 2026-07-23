@@ -35,6 +35,11 @@ from caveviewer.gui.benchmark import (
     compare_summaries,
     load_json_file,
 )
+from caveviewer.gui.benchmark_routes import (
+    DEFAULT_DENSE_ROUTE_KEYFRAMES,
+    DEFAULT_DENSE_ROUTE_PERCENTILE,
+    generate_dense_chunk_route_scenario,
+)
 
 
 LOCAL_BENCHMARK_ID = "devils-eye-xl"
@@ -89,7 +94,31 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--scenario",
         default=str(DEFAULT_SCENARIO_PATH),
-        help="Benchmark scenario JSON. Defaults to benchmarks/gold-route-v1.json.",
+        help=(
+            "Benchmark scenario JSON. In auto-dense mode this is used as the "
+            "timing/control template. Defaults to benchmarks/gold-route-v1.json."
+        ),
+    )
+    parser.add_argument(
+        "--route-mode",
+        choices=("auto-dense", "static"),
+        default="auto-dense",
+        help=(
+            "Use a manifest-derived dense route, or run the scenario file "
+            "exactly as written. Defaults to auto-dense."
+        ),
+    )
+    parser.add_argument(
+        "--dense-route-keyframes",
+        type=int,
+        default=DEFAULT_DENSE_ROUTE_KEYFRAMES,
+        help="Target number of keyframes for the generated dense route.",
+    )
+    parser.add_argument(
+        "--dense-route-percentile",
+        type=float,
+        default=DEFAULT_DENSE_ROUTE_PERCENTILE,
+        help="Chunk-density percentile used to select dense route cells.",
     )
     parser.add_argument(
         "--thresholds",
@@ -154,13 +183,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         _prepare_orchestration_log(plan)
         _ensure_local_map_copy(plan)
         _ensure_cache(plan)
+        _prepare_scenario(plan)
         benchmark_returncode = _run_benchmark(plan)
         if benchmark_returncode != 0:
             return benchmark_returncode
 
         summary = load_json_file(plan["summary_path"])
         previous_records = _history_records(plan["history_path"])
-        previous_record = previous_records[-1] if previous_records else None
+        previous_record = _latest_compatible_record(previous_records, summary)
         previous_summary = _summary_from_record(previous_record)
         thresholds = BenchmarkThresholds.load(plan["thresholds_path"])
         comparison = (
@@ -202,9 +232,9 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
     source_map_dir = Path(args.source_map_dir).expanduser().resolve()
     local_map_dir = Path(args.local_map_dir).expanduser().resolve()
     results_dir = Path(args.results_dir).expanduser().resolve()
-    scenario_path = _existing_file(args.scenario, "scenario")
+    scenario_template_path = _existing_file(args.scenario, "scenario")
     threshold_path = _existing_file(args.thresholds, "thresholds")
-    scenario = BenchmarkScenario.load(scenario_path)
+    scenario_template = BenchmarkScenario.load(scenario_template_path)
     BenchmarkThresholds.load(threshold_path)
 
     source_copy_needed = not _has_map_source(local_map_dir)
@@ -221,6 +251,17 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
     compile_needed = bool(args.force_compile or not manifest_path.is_file())
     label = _safe_label(args.label or _default_label())
     run_dir = results_dir / "runs" / label
+    route_mode = str(args.route_mode)
+    scenario_path = (
+        run_dir / "auto-dense-route-v1.json"
+        if route_mode == "auto-dense"
+        else scenario_template_path
+    )
+    scenario_fingerprint = (
+        "<generated after cache validation>"
+        if route_mode == "auto-dense"
+        else scenario_template.fingerprint
+    )
 
     compile_command = [
         sys.executable,
@@ -264,7 +305,12 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "history_path": results_dir / "history.jsonl",
         "latest_summary_path": results_dir / "latest-summary.txt",
         "scenario_path": scenario_path,
-        "scenario_fingerprint": scenario.fingerprint,
+        "scenario_template_path": scenario_template_path,
+        "scenario_template": scenario_template,
+        "scenario_fingerprint": scenario_fingerprint,
+        "route_mode": route_mode,
+        "dense_route_keyframes": max(1, int(args.dense_route_keyframes)),
+        "dense_route_percentile": float(args.dense_route_percentile),
         "thresholds_path": threshold_path,
         "label": label,
         "run_dir": run_dir,
@@ -290,8 +336,17 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
         f"  source_map_dir: {plan['source_map_dir']}",
         f"  local_map_dir: {plan['local_map_dir']}",
         f"  cache_dir: {plan['cache_dir']}",
+        f"  route_mode: {plan['route_mode']}",
+        f"  scenario_template: {plan['scenario_template_path']}",
         f"  scenario: {plan['scenario_path']}",
         f"  scenario_fingerprint: {plan['scenario_fingerprint']}",
+        (
+            "  dense_route: "
+            f"keyframes={plan['dense_route_keyframes']} "
+            f"percentile={plan['dense_route_percentile']:g}"
+            if plan["route_mode"] == "auto-dense"
+            else "  dense_route: disabled"
+        ),
         f"  thresholds: {plan['thresholds_path']}",
         f"  history: {plan['history_path']}",
         f"  output_dir: {plan['run_dir']}",
@@ -357,6 +412,42 @@ def _ensure_cache(plan: Mapping[str, Any]) -> None:
         raise BenchmarkConfigurationError(
             f"chunker completed but did not create {manifest_path}"
         )
+
+
+def _prepare_scenario(plan: dict[str, Any]) -> None:
+    if plan["route_mode"] != "auto-dense":
+        return
+    manifest = load_json_file(plan["manifest_path"])
+    dense_route = generate_dense_chunk_route_scenario(
+        manifest,
+        plan["scenario_template"],
+        dense_percentile=float(plan["dense_route_percentile"]),
+        keyframe_count=int(plan["dense_route_keyframes"]),
+    )
+    scenario_path = Path(plan["scenario_path"])
+    scenario_path.parent.mkdir(parents=True, exist_ok=True)
+    scenario_path.write_text(
+        json.dumps(dense_route.scenario_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    scenario = BenchmarkScenario.from_mapping(dense_route.scenario_payload)
+    plan["scenario_fingerprint"] = scenario.fingerprint
+    plan["dense_route"] = dense_route
+    _log_message(plan, _dense_route_summary(dense_route, scenario_path))
+
+
+def _dense_route_summary(dense_route, scenario_path: Path) -> str:
+    metadata = dense_route.scenario_payload["metadata"]
+    return (
+        "Generated dense chunk route: "
+        f"scenario={scenario_path} "
+        f"route_length_m={metadata['route_length_m']:.1f} "
+        f"keyframes={metadata['route_keyframe_count']} "
+        f"path_cells={metadata['path_cell_count']} "
+        f"dense_component_size={metadata['dense_component_size']} "
+        f"max_neighborhood_chunks={metadata['max_neighborhood_chunks']} "
+        f"mean_route_neighborhood_chunks={metadata['mean_route_neighborhood_chunks']:.1f}"
+    )
 
 
 def _run_benchmark(plan: Mapping[str, Any]) -> int:
@@ -521,21 +612,31 @@ def _human_summary(
         f"Git SHA: {_git_sha()}",
         (
             "Current: "
-            f"median_fps={_format_metric(metrics.get('median_fps'))}, "
-            f"mean_fps={_format_metric(metrics.get('mean_fps'))}, "
-            f"one_percent_low_fps={_format_metric(metrics.get('one_percent_low_fps'))}, "
+            f"wall_clock_fps={_format_metric(metrics.get('wall_clock_fps'))}, "
+            f"median_render_fps={_format_metric(metrics.get('median_fps'))}, "
+            f"one_percent_low_render_fps={_format_metric(metrics.get('one_percent_low_fps'))}, "
             f"p95_frame_ms={_format_metric(metrics.get('p95_frame_ms'))}"
         ),
     ]
+    route_line = _route_summary_for_summary(summary)
+    if route_line:
+        lines.append(route_line)
     if previous_record is None:
-        lines.append("Gate baseline: none; this run seeds the local benchmark history.")
+        if previous_records:
+            lines.append(
+                "Gate baseline: none compatible; this run seeds a new comparable "
+                "local benchmark history."
+            )
+        else:
+            lines.append("Gate baseline: none; this run seeds the local benchmark history.")
     else:
         previous_summary = _summary_from_record(previous_record) or {}
         previous_metrics = previous_summary.get("metrics", {})
         lines.append(
             "Gate baseline: "
             f"{previous_record.get('label', '<unknown>')} "
-            f"median_fps={_format_metric(previous_metrics.get('median_fps'))}"
+            f"wall_clock_fps={_format_metric(previous_metrics.get('wall_clock_fps'))} "
+            f"median_render_fps={_format_metric(previous_metrics.get('median_fps'))}"
         )
     if comparison is not None:
         lines.append("Comparison checks:")
@@ -587,8 +688,9 @@ def _history_comparison_lines(
             "  - "
             f"{record.get('label', '<unknown>')}"
             f"{_timestamp_suffix(record)}: "
-            f"median_fps={_metric_with_delta(current_summary, previous_summary, 'median_fps')}, "
-            f"one_percent_low_fps={_metric_with_delta(current_summary, previous_summary, 'one_percent_low_fps')}, "
+            f"wall_clock_fps={_metric_with_delta(current_summary, previous_summary, 'wall_clock_fps')}, "
+            f"median_render_fps={_metric_with_delta(current_summary, previous_summary, 'median_fps')}, "
+            f"one_percent_low_render_fps={_metric_with_delta(current_summary, previous_summary, 'one_percent_low_fps')}, "
             f"p95_frame_ms={_metric_with_delta(current_summary, previous_summary, 'p95_frame_ms')}, "
             f"gate={_comparison_status(previous_summary, current_summary, thresholds)}"
         )
@@ -627,10 +729,61 @@ def _comparison_status(
     current_summary: Mapping[str, Any],
     thresholds: BenchmarkThresholds,
 ) -> str:
+    if not _summaries_are_comparable(previous_summary, current_summary):
+        return "INCOMPATIBLE"
     return (
         "PASS"
         if compare_summaries(previous_summary, current_summary, thresholds)["passed"]
         else "FAIL"
+    )
+
+
+def _latest_compatible_record(
+    records: Sequence[Mapping[str, Any]],
+    current_summary: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    for record in reversed(records):
+        previous_summary = _summary_from_record(record)
+        if previous_summary is not None and _summaries_are_comparable(
+            previous_summary,
+            current_summary,
+        ):
+            return record
+    return None
+
+
+def _summaries_are_comparable(
+    previous_summary: Mapping[str, Any],
+    current_summary: Mapping[str, Any],
+) -> bool:
+    previous_scenario = previous_summary.get("scenario", {})
+    current_scenario = current_summary.get("scenario", {})
+    previous_environment = previous_summary.get("environment", {})
+    current_environment = current_summary.get("environment", {})
+    return (
+        bool(previous_scenario.get("name"))
+        and previous_scenario.get("name") == current_scenario.get("name")
+        and bool(previous_scenario.get("fingerprint"))
+        and previous_scenario.get("fingerprint") == current_scenario.get("fingerprint")
+        and bool(previous_environment.get("cache_manifest_sha256"))
+        and previous_environment.get("cache_manifest_sha256")
+        == current_environment.get("cache_manifest_sha256")
+    )
+
+
+def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
+    metadata = summary.get("scenario", {}).get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        return None
+    if metadata.get("route_mode") != "auto_dense_chunks_v1":
+        return None
+    return (
+        "Route: auto_dense_chunks "
+        f"length_m={_format_metric(metadata.get('route_length_m'))}, "
+        f"keyframes={metadata.get('route_keyframe_count', '<missing>')}, "
+        f"path_cells={metadata.get('path_cell_count', '<missing>')}, "
+        f"max_neighborhood_chunks={metadata.get('max_neighborhood_chunks', '<missing>')}, "
+        f"mean_route_neighborhood_chunks={_format_metric(metadata.get('mean_route_neighborhood_chunks'))}"
     )
 
 
@@ -651,6 +804,11 @@ def _format_check(check: Mapping[str, Any]) -> str:
     baseline = _format_metric(check.get("baseline"))
     candidate = _format_metric(check.get("candidate"))
     delta = _format_metric(check.get("delta_pct"))
+    if check.get("skipped"):
+        return (
+            f"{status} {metric}: skipped "
+            f"(baseline={baseline}, candidate={candidate}; {check.get('reason')})"
+        )
     if check.get("kind") == "compatibility":
         return f"{status} {metric}: baseline={baseline}, candidate={candidate}"
     if "allowed_drop_pct" in check:

@@ -17,6 +17,14 @@ The benchmark records:
 - `environment.json`: app, Python, platform, OpenGL, runner, and tuning details.
 - `benchmark.log` and workflow `console.log`: parse-friendly debug output.
 
+Each summary includes both user-visible wall-clock FPS and lower-level render
+work timing. Use `wall_clock_fps` as the primary release gate: it is frames
+completed during the benchmark measurement window divided by wall-clock
+measurement seconds. The older `median_fps` value remains useful diagnostic
+data, but it is derived from per-frame measured render-work time and can be much
+higher than what a user actually sees when frame intervals include scheduling,
+upload waits, or other loop overhead.
+
 Each summary includes a scenario fingerprint and a SHA-256 of the cache
 `manifest.json`. The comparison step fails if either differs between baseline
 and candidate. That prevents accidental release decisions from comparing a
@@ -85,6 +93,7 @@ be uploaded. The wrapper uses:
 - source map: `~/Downloads/Maps/Devil's Eye XL`
 - ignored local copy: `.benchmark-data/maps/devils-eye-xl`
 - ignored local results/history: `.benchmark-data/results/devils-eye-xl`
+- default route mode: manifest-derived dense chunk route
 
 First validate the plan:
 
@@ -120,6 +129,28 @@ The console output and `latest-summary.txt` include the current metrics, the
 single latest run used as the gate baseline, detailed threshold checks, and a
 compact comparison against recent local history. Use `--history-limit <n>` to
 change how many previous runs are listed.
+
+By default the local wrapper generates an `auto-dense-route-v1.json` file inside
+the run artifact directory after the cache exists. It estimates dense areas from
+the manifest by counting occupied chunks inside the same cube radius used by the
+viewer streaming system. The path stays inside the selected dense chunk
+component where possible and points the camera toward the next route point. This
+is a deterministic streaming-load proxy; it is not a guaranteed human-swimmable
+path because the cache does not encode free-space/navigation data.
+
+Use these controls when calibrating the route:
+
+```bash
+python scripts/benchmark/run_devils_eye_xl_benchmark.py \
+  --dense-route-keyframes 10 \
+  --dense-route-percentile 85
+```
+
+To run the checked-in scenario exactly as written instead:
+
+```bash
+python scripts/benchmark/run_devils_eye_xl_benchmark.py --route-mode static
+```
 
 To make this run automatically before local pushes to `main`, install the
 tracked pre-push hook template on this machine:
@@ -192,5 +223,6 @@ runner class with the same gold map:
 4. Treat failures as release blockers only after the map artifact and runner
    class are stable.
 
-Use the default comparison limits as starting values: 5% median FPS drop, 10%
-1% low FPS drop, 15% p95 frame-time increase, and 20% stutter-count increase.
+Use the default comparison limits as starting values: 5% wall-clock FPS drop,
+5% median render-FPS drop, 10% 1% low render-FPS drop, 15% p95 frame-time
+increase, and 20% stutter-count increase.

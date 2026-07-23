@@ -327,6 +327,7 @@ class BenchmarkFrameSample:
 class BenchmarkThresholds:
     """Allowed candidate-vs-baseline performance deltas."""
 
+    max_wall_clock_fps_drop_pct: float = 5.0
     max_median_fps_drop_pct: float = 5.0
     max_one_percent_low_fps_drop_pct: float = 10.0
     max_p95_frame_ms_increase_pct: float = 15.0
@@ -352,6 +353,9 @@ class BenchmarkThresholds:
             payload = threshold_payload
         try:
             return cls(
+                max_wall_clock_fps_drop_pct=float(
+                    payload.get("max_wall_clock_fps_drop_pct", 5.0)
+                ),
                 max_median_fps_drop_pct=float(
                     payload.get("max_median_fps_drop_pct", 5.0)
                 ),
@@ -377,6 +381,7 @@ class BenchmarkThresholds:
     def with_overrides(
         self,
         *,
+        max_wall_clock_fps_drop_pct: float | None = None,
         max_median_fps_drop_pct: float | None = None,
         max_one_percent_low_fps_drop_pct: float | None = None,
         max_p95_frame_ms_increase_pct: float | None = None,
@@ -384,6 +389,11 @@ class BenchmarkThresholds:
     ) -> "BenchmarkThresholds":
         """Return a copy with non-None command-line overrides applied."""
         return BenchmarkThresholds(
+            max_wall_clock_fps_drop_pct=(
+                self.max_wall_clock_fps_drop_pct
+                if max_wall_clock_fps_drop_pct is None
+                else float(max_wall_clock_fps_drop_pct)
+            ),
             max_median_fps_drop_pct=(
                 self.max_median_fps_drop_pct
                 if max_median_fps_drop_pct is None
@@ -634,6 +644,15 @@ def summarize_samples(
     fps_values = [sample.fps for sample in sample_list]
     measured_seconds = sum(frame_ms_values) / 1000.0
     measured_frames = len(sample_list)
+    frame_interval_ms_values = [
+        max(1e-9, (current.elapsed_s - previous.elapsed_s) * 1000.0)
+        for previous, current in zip(sample_list, sample_list[1:])
+    ]
+    wall_clock_seconds = _wall_clock_seconds(
+        sample_list,
+        scenario=scenario,
+        reason=reason,
+    )
     stutter_counts = {
         f"over_{_threshold_label(threshold)}": sum(
             1 for value in frame_ms_values if value > threshold
@@ -642,6 +661,9 @@ def summarize_samples(
     }
     metrics = {
         "mean_fps": _round_metric((measured_frames / measured_seconds) if measured_seconds > 0 else 0.0),
+        "wall_clock_fps": _round_metric(
+            (measured_frames / wall_clock_seconds) if wall_clock_seconds > 0 else 0.0
+        ),
         "median_fps": _round_metric(_median(fps_values)),
         "one_percent_low_fps": _round_metric(_fps_from_frame_percentile(frame_ms_values, 99.0)),
         "point_one_percent_low_fps": _round_metric(_fps_from_frame_percentile(frame_ms_values, 99.9)),
@@ -651,6 +673,13 @@ def summarize_samples(
         "p99_frame_ms": _round_metric(_percentile(frame_ms_values, 99.0)),
         "max_frame_ms": _round_metric(max(frame_ms_values) if frame_ms_values else 0.0),
         "measured_seconds": _round_metric(measured_seconds),
+        "wall_clock_seconds": _round_metric(wall_clock_seconds),
+        "median_frame_interval_ms": _round_metric(_median(frame_interval_ms_values)),
+        "p95_frame_interval_ms": _round_metric(_percentile(frame_interval_ms_values, 95.0)),
+        "p99_frame_interval_ms": _round_metric(_percentile(frame_interval_ms_values, 99.0)),
+        "max_frame_interval_ms": _round_metric(
+            max(frame_interval_ms_values) if frame_interval_ms_values else 0.0
+        ),
         "stutter_counts": stutter_counts,
     }
     return {
@@ -682,6 +711,12 @@ def compare_summaries(
     baseline_metrics = baseline.get("metrics", {})
     candidate_metrics = candidate.get("metrics", {})
     checks = _compatibility_checks(baseline, candidate) + [
+        _optional_drop_check(
+            "wall_clock_fps",
+            baseline_metrics,
+            candidate_metrics,
+            thresholds.max_wall_clock_fps_drop_pct,
+        ),
         _drop_check(
             "median_fps",
             baseline_metrics.get("median_fps", 0.0),
@@ -720,6 +755,7 @@ def compare_summaries(
         "passed": passed,
         "checks": checks,
         "thresholds": {
+            "max_wall_clock_fps_drop_pct": thresholds.max_wall_clock_fps_drop_pct,
             "max_median_fps_drop_pct": thresholds.max_median_fps_drop_pct,
             "max_one_percent_low_fps_drop_pct": thresholds.max_one_percent_low_fps_drop_pct,
             "max_p95_frame_ms_increase_pct": thresholds.max_p95_frame_ms_increase_pct,
@@ -814,6 +850,36 @@ def _increase_check(name: str, baseline_value: Any, candidate_value: Any, max_in
     }
 
 
+def _optional_drop_check(
+    name: str,
+    baseline_metrics: Mapping[str, Any],
+    candidate_metrics: Mapping[str, Any],
+    max_drop_pct: float,
+) -> dict[str, Any]:
+    if name not in baseline_metrics or name not in candidate_metrics:
+        return {
+            "metric": name,
+            "kind": "optional_metric",
+            "baseline": _format_optional_metric(baseline_metrics.get(name)),
+            "candidate": _format_optional_metric(candidate_metrics.get(name)),
+            "passed": True,
+            "skipped": True,
+            "reason": "metric missing from baseline or candidate summary",
+        }
+    return _drop_check(
+        name,
+        baseline_metrics.get(name, 0.0),
+        candidate_metrics.get(name, 0.0),
+        max_drop_pct,
+    )
+
+
+def _format_optional_metric(value: Any) -> float | str:
+    if isinstance(value, (int, float)):
+        return _round_metric(float(value))
+    return "<missing>"
+
+
 def _percent_delta(baseline: float, candidate: float) -> float:
     if baseline == 0:
         if candidate == 0:
@@ -894,6 +960,19 @@ def _fps_from_frame_percentile(frame_ms_values: list[float], percentile: float) 
     if frame_ms <= 0:
         return 0.0
     return 1000.0 / frame_ms
+
+
+def _wall_clock_seconds(
+    samples: list[BenchmarkFrameSample],
+    *,
+    scenario: BenchmarkScenario,
+    reason: str,
+) -> float:
+    if not samples:
+        return 0.0
+    if reason == "completed":
+        return float(scenario.measurement_seconds)
+    return max(0.0, float(samples[-1].measured_elapsed_s))
 
 
 def _threshold_label(threshold_ms: float) -> str:

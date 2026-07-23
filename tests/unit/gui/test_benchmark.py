@@ -133,6 +133,8 @@ def test_controller_writes_frame_artifacts_and_summary(tmp_path):
     assert (tmp_path / "frames.jsonl").read_text(encoding="utf-8").count("\n") == 1
     assert summary["measured_frames"] == 1
     assert summary["metrics"]["median_fps"] == 50.0
+    assert summary["metrics"]["wall_clock_fps"] == 50.0
+    assert summary["metrics"]["wall_clock_seconds"] == 0.02
     assert summary["scenario"]["fingerprint"] == scenario.fingerprint
     assert summary["environment"]["runner"] == "unit"
 
@@ -191,6 +193,8 @@ def test_summarize_samples_reports_stutter_counts():
     )
 
     assert summary["metrics"]["median_fps"] == 25.0
+    assert summary["metrics"]["wall_clock_fps"] == 3.0
+    assert summary["metrics"]["median_frame_interval_ms"] == 16.666667
     assert summary["metrics"]["stutter_counts"] == {
         "over_33_3ms": 2,
         "over_50ms": 1,
@@ -207,6 +211,7 @@ def test_thresholds_load_from_versioned_config_with_overrides(tmp_path):
         {
           "version": 1,
           "thresholds": {
+            "max_wall_clock_fps_drop_pct": 1.5,
             "max_median_fps_drop_pct": 2.0,
             "max_one_percent_low_fps_drop_pct": 4.0,
             "max_p95_frame_ms_increase_pct": 6.0,
@@ -218,9 +223,11 @@ def test_thresholds_load_from_versioned_config_with_overrides(tmp_path):
     )
 
     thresholds = BenchmarkThresholds.load(threshold_path).with_overrides(
-        max_p95_frame_ms_increase_pct=7.5
+        max_p95_frame_ms_increase_pct=7.5,
+        max_wall_clock_fps_drop_pct=2.5,
     )
 
+    assert thresholds.max_wall_clock_fps_drop_pct == 2.5
     assert thresholds.max_median_fps_drop_pct == 2.0
     assert thresholds.max_one_percent_low_fps_drop_pct == 4.0
     assert thresholds.max_p95_frame_ms_increase_pct == 7.5
@@ -233,6 +240,7 @@ def test_compare_summaries_flags_fps_and_frame_time_regressions():
             "scenario": {"name": "gold", "fingerprint": "scenario-a"},
             "environment": {"cache_manifest_sha256": "map-a"},
             "metrics": {
+                "wall_clock_fps": 100.0,
                 "median_fps": 100.0,
                 "one_percent_low_fps": 80.0,
                 "p95_frame_ms": 20.0,
@@ -243,6 +251,7 @@ def test_compare_summaries_flags_fps_and_frame_time_regressions():
             "scenario": {"name": "gold", "fingerprint": "scenario-a"},
             "environment": {"cache_manifest_sha256": "map-a"},
             "metrics": {
+                "wall_clock_fps": 94.0,
                 "median_fps": 94.0,
                 "one_percent_low_fps": 70.0,
                 "p95_frame_ms": 24.0,
@@ -250,6 +259,7 @@ def test_compare_summaries_flags_fps_and_frame_time_regressions():
             },
         },
         BenchmarkThresholds(
+            max_wall_clock_fps_drop_pct=5.0,
             max_median_fps_drop_pct=5.0,
             max_one_percent_low_fps_drop_pct=10.0,
             max_p95_frame_ms_increase_pct=15.0,
@@ -263,10 +273,42 @@ def test_compare_summaries_flags_fps_and_frame_time_regressions():
     assert comparison["passed"] is False
     assert failed_metrics == {
         "median_fps",
+        "wall_clock_fps",
         "one_percent_low_fps",
         "p95_frame_ms",
         "stutter_counts.over_50ms",
     }
+
+
+def test_compare_summaries_skips_wall_clock_check_for_legacy_summaries():
+    comparison = compare_summaries(
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {"cache_manifest_sha256": "map-a"},
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {"cache_manifest_sha256": "map-a"},
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+    )
+
+    wall_clock_check = next(
+        check for check in comparison["checks"] if check["metric"] == "wall_clock_fps"
+    )
+    assert wall_clock_check["passed"] is True
+    assert wall_clock_check["skipped"] is True
 
 
 def test_compare_summaries_fails_on_scenario_or_map_mismatch():
