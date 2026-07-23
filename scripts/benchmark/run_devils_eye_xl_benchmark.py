@@ -38,6 +38,7 @@ from caveviewer.gui.benchmark import (
 from caveviewer.gui.benchmark_routes import (
     CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
     DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
+    DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS,
     DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE,
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
@@ -64,6 +65,7 @@ CACHE_DIRNAME = "_cache"
 MANIFEST_NAME = "manifest.json"
 MAP_SOURCE_SUFFIXES = {".glb", ".gltf", ".obj"}
 LOCAL_HISTORY_SCHEMA_VERSION = 1
+DEFAULT_DEVILS_EYE_RENDER_DISTANCE = 6
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -116,6 +118,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--render-distance",
+        type=int,
+        default=DEFAULT_DEVILS_EYE_RENDER_DISTANCE,
+        help=(
+            "Render-distance chunk radius for the local gold benchmark. "
+            f"Defaults to {DEFAULT_DEVILS_EYE_RENDER_DISTANCE} to exercise "
+            "a visually fuller Devil's Eye XL load."
+        ),
+    )
+    parser.add_argument(
         "--centerline-route-keyframes",
         type=int,
         default=DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
@@ -125,8 +137,9 @@ def _parser() -> argparse.ArgumentParser:
         "--centerline-route-target-length-m",
         type=float,
         help=(
-            "Target centerline segment length in meters. Defaults to three "
-            "chunk widths through the most complex local route segment."
+            "Target centerline segment length in map units. Defaults to "
+            "50 ft/min converted to metric units, with a half-chunk minimum "
+            "for visible movement on large maps."
         ),
     )
     parser.add_argument(
@@ -170,8 +183,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vsync",
         choices=("off", "on", "unchanged"),
-        default="off",
-        help="Forwarded caveviewer-benchmark vsync policy.",
+        default="unchanged",
+        help=(
+            "Forwarded caveviewer-benchmark vsync policy. Defaults to unchanged "
+            "so the local gold benchmark starts like the regular app."
+        ),
     )
     parser.add_argument(
         "--xvfb",
@@ -264,7 +280,10 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
     results_dir = Path(args.results_dir).expanduser().resolve()
     scenario_template_path = _existing_file(args.scenario, "scenario")
     threshold_path = _existing_file(args.thresholds, "thresholds")
-    scenario_template = BenchmarkScenario.load(scenario_template_path)
+    scenario_template = _scenario_with_render_distance(
+        BenchmarkScenario.load(scenario_template_path),
+        int(args.render_distance),
+    )
     BenchmarkThresholds.load(threshold_path)
 
     source_copy_needed = not _has_map_source(local_map_dir)
@@ -285,11 +304,12 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
     generated_scenario_paths = {
         "auto-centerline": run_dir / "auto-centerline-route-v1.json",
         "auto-dense": run_dir / "auto-dense-route-v1.json",
+        "static": run_dir / "static-route-v1.json",
     }
     scenario_path = generated_scenario_paths.get(route_mode, scenario_template_path)
     scenario_fingerprint = (
         "<generated after cache validation>"
-        if route_mode in generated_scenario_paths
+        if route_mode != "static" and route_mode in generated_scenario_paths
         else scenario_template.fingerprint
     )
 
@@ -338,6 +358,7 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "scenario_template_path": scenario_template_path,
         "scenario_template": scenario_template,
         "scenario_fingerprint": scenario_fingerprint,
+        "render_distance": scenario_template.render_distance,
         "route_mode": route_mode,
         "centerline_route_keyframes": max(1, int(args.centerline_route_keyframes)),
         "centerline_route_target_length_m": (
@@ -377,6 +398,7 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
         f"  local_map_dir: {plan['local_map_dir']}",
         f"  cache_dir: {plan['cache_dir']}",
         f"  route_mode: {plan['route_mode']}",
+        f"  render_distance: {plan['render_distance']}",
         f"  scenario_template: {plan['scenario_template_path']}",
         f"  scenario: {plan['scenario_path']}",
         f"  scenario_fingerprint: {plan['scenario_fingerprint']}",
@@ -411,7 +433,8 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
             (
                 "auto("
                 f"{DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE:g} ft/min, "
-                f"{DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND:.3f} m/s"
+                f"{DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND:.3f} m/s, "
+                f"min {DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS:g} chunk"
                 ")"
             )
             if target_length is None
@@ -438,6 +461,19 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
         "  centerline_route: disabled",
         "  dense_route: disabled",
     ]
+
+
+def _scenario_with_render_distance(
+    scenario: BenchmarkScenario,
+    render_distance: int,
+) -> BenchmarkScenario:
+    distance = max(1, int(render_distance))
+    if scenario.render_distance == distance:
+        return scenario
+    payload = scenario.identity_payload
+    payload["metadata"] = dict(scenario.metadata)
+    payload["render_distance"] = distance
+    return BenchmarkScenario.from_mapping(payload)
 
 
 def _prepare_orchestration_log(plan: Mapping[str, Any]) -> None:
@@ -486,6 +522,16 @@ def _ensure_cache(plan: Mapping[str, Any]) -> None:
 
 def _prepare_scenario(plan: dict[str, Any]) -> None:
     if plan["route_mode"] == "static":
+        scenario_path = Path(plan["scenario_path"])
+        scenario_path.parent.mkdir(parents=True, exist_ok=True)
+        scenario = plan["scenario_template"]
+        assert isinstance(scenario, BenchmarkScenario)
+        payload = scenario.identity_payload
+        payload["metadata"] = dict(scenario.metadata)
+        scenario_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         return
     manifest = load_json_file(plan["manifest_path"])
     if plan["route_mode"] == "auto-centerline":

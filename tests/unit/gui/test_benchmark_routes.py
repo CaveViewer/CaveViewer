@@ -6,6 +6,7 @@ import pytest
 
 from caveviewer.gui.benchmark import BenchmarkScenario
 from caveviewer.gui.benchmark_routes import (
+    DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS,
     DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE,
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
     generate_centerline_route_scenario,
@@ -38,7 +39,7 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     assert metadata["route_mode"] == "auto_centerline_v1"
     assert metadata["route_source"] == "vertex_footprint_manifest"
     assert metadata["y_strategy"] == "local_vertical_center_v1"
-    assert metadata["vertical_position_fraction"] == 0.65
+    assert metadata["vertical_position_fraction"] == 0.5
     assert metadata["footprint_cell_size_m"] == 2.0
     assert metadata["max_clearance_cells"] >= 3
     assert metadata["route_selection_strategy"] == (
@@ -46,7 +47,10 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     )
     assert metadata["warmup_behavior"] == "hold_first_keyframe_until_measurement"
     assert metadata["target_route_length_source"] == "default_diver_speed"
-    assert metadata["target_route_length_chunks"] is None
+    assert metadata["target_route_length_chunks"] == pytest.approx(1.016)
+    assert metadata["target_route_minimum_length_chunks"] == (
+        DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS
+    )
     assert metadata["target_route_length_m"] == pytest.approx(
         DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * 8.0,
         abs=0.001,
@@ -80,7 +84,7 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     assert route[-1]["yaw_deg"] == route[-2]["yaw_deg"]
     assert route[-1]["pitch_deg"] == route[-2]["pitch_deg"]
     assert all(
-        keyframe["position"][1] == 6.5
+        keyframe["position"][1] == 5.0
         for keyframe in route
     )
 
@@ -109,9 +113,9 @@ def test_centerline_route_uses_vertical_center_in_tall_columns():
         keyframe["position"][1]
         for keyframe in centerline_route.scenario_payload["route"]
     ]
-    assert all(value == 78.0 for value in route_y_values)
-    assert centerline_route.scenario_payload["metadata"]["min_route_y"] == 78.0
-    assert centerline_route.scenario_payload["metadata"]["max_route_y"] == 78.0
+    assert all(value == 60.0 for value in route_y_values)
+    assert centerline_route.scenario_payload["metadata"]["min_route_y"] == 60.0
+    assert centerline_route.scenario_payload["metadata"]["max_route_y"] == 60.0
 
 
 def test_centerline_route_target_length_override_controls_route_speed():

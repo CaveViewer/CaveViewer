@@ -27,8 +27,9 @@ DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE = 50.0
 DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND = (
     DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE * 0.3048 / 60.0
 )
+DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS = 0.5
 DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS = 1
-CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.65
+CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.50
 DEFAULT_DENSE_ROUTE_KEYFRAMES = 8
 DEFAULT_DENSE_ROUTE_PERCENTILE = 90.0
 DEFAULT_DENSE_ROUTE_CANDIDATE_LIMIT = 64
@@ -124,8 +125,12 @@ def generate_centerline_route_scenario(
         render_distance=template.render_distance,
         y_search_radius_cells=max(0, int(y_search_radius_cells)),
     )
-    resolved_target_length_m = _target_centerline_route_length_m(
-        chunk_size=_positive_float(manifest.get("chunk_size"), "chunk_size"),
+    chunk_size = _positive_float(manifest.get("chunk_size"), "chunk_size")
+    (
+        resolved_target_length_m,
+        default_length_source,
+    ) = _target_centerline_route_length_m(
+        chunk_size=chunk_size,
         measurement_duration_s=template.measurement_seconds,
         target_length_m=target_length_m,
     )
@@ -215,9 +220,21 @@ def generate_centerline_route_scenario(
             "target_route_length_source": (
                 "explicit_meters"
                 if target_length_is_override
-                else "default_diver_speed"
+                else default_length_source
             ),
-            "target_route_length_chunks": None,
+            "target_route_length_chunks": (
+                None
+                if target_length_is_override
+                else round(
+                    resolved_target_length_m / chunk_size,
+                    6,
+                )
+            ),
+            "target_route_minimum_length_chunks": (
+                None
+                if target_length_is_override
+                else DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS
+            ),
             "target_route_speed_m_per_second": round(
                 resolved_target_speed_m_per_second,
                 6,
@@ -840,20 +857,24 @@ def _target_centerline_route_length_m(
     chunk_size: float,
     measurement_duration_s: float,
     target_length_m: float | None,
-) -> float:
+) -> tuple[float, str]:
     if target_length_m is not None:
         target = float(target_length_m)
         if not math.isfinite(target) or target <= 0.0:
             raise BenchmarkConfigurationError(
                 "centerline target route length must be a positive number"
             )
-        return target
+        return target, "explicit_meters"
     duration = float(measurement_duration_s)
     if not math.isfinite(duration) or duration <= 0.0:
         raise BenchmarkConfigurationError(
             "centerline route duration must be a positive number"
         )
-    return DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * duration
+    speed_length = DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * duration
+    minimum_length = float(chunk_size) * DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS
+    if minimum_length > speed_length:
+        return minimum_length, "default_diver_speed_min_half_chunk"
+    return speed_length, "default_diver_speed"
 
 
 def _select_footprint_path_segment(

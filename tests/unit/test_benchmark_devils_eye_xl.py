@@ -56,7 +56,8 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert "Devil's Eye XL local benchmark plan:" in output
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=8" in output
-    assert "target_length=auto(50 ft/min, 0.254 m/s)" in output
+    assert "render_distance: 6" in output
+    assert "target_length=auto(50 ft/min, 0.254 m/s, min 0.5 chunk)" in output
     assert "selection=max_visible_chunk_texture_complexity" in output
     assert "movement=after_warmup" in output
     assert "copy_map: yes" in output
@@ -160,7 +161,7 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "Runtime load:" in latest_text
     assert "median_drawn_chunks=40.00" in latest_text
     assert "Streaming request:" in latest_text
-    assert "distance=3 chunks" in latest_text
+    assert "distance=6 chunks" in latest_text
     assert "Streaming effective:" in latest_text
     assert "Texture residency:" in latest_text
     assert "Route: auto_centerline" in latest_text
@@ -304,8 +305,10 @@ def _summary(
             "name": "gold",
             "fingerprint": "scenario-a",
             "metadata": scenario.get("metadata", {}),
+            "render_distance": scenario.get("render_distance", 3),
         }
     )
+    render_distance = int(scenario_payload.get("render_distance", 3))
     metrics = {
         "mean_fps": median_fps,
         "median_fps": median_fps,
@@ -332,7 +335,7 @@ def _summary(
             "cache_manifest_sha256": "map-a",
             "streaming_settings_fingerprint": "streaming-a",
             "streaming_settings": {
-                "render_distance_chunks": 3,
+                "render_distance_chunks": render_distance,
                 "system_ram_target_percent": "8",
                 "gpu_memory_target_percent": "70",
                 "gpu_memory_override_gb": "",
@@ -342,7 +345,7 @@ def _summary(
                 "upload_groups_per_frame": "1",
                 "upload_time_budget_ms": "3.0",
             },
-            "effective_render_distance_chunks": 3,
+            "effective_render_distance_chunks": render_distance,
             "streaming_chunk_size_m": 50.0,
             "streaming_max_loaded_chunks": 488,
             "streaming_ready_backlog_capacity": 16,
