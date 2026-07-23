@@ -1476,7 +1476,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         if show_message:
             self._show_recording_status(
                 "Finishing recording",
-                self._recording_display_path(output_path),
                 kind="info",
                 duration=2.0,
             )
