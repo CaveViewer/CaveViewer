@@ -810,6 +810,11 @@ class TextureManager:
         gpu_stats.update(self.decoder.stats())
         return gpu_stats
 
+    def resident_texture_sources(self) -> tuple[object, ...]:
+        """Return the exact texture source keys currently resident on the GPU."""
+        with self._state_lock:
+            return tuple(self._file_cache.keys())
+
 
 __all__ = [
     "DecodedImage",

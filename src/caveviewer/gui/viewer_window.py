@@ -858,6 +858,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_visual_ready_required_textures = 0
         self._initial_visual_ready_resident_textures = 0
         self._initial_visual_ready_visible_textures = 0
+        self._initial_visual_ready_missing_textures = 0
+        self._initial_visual_ready_expected_chunks = 0
+        self._initial_visual_ready_covered_chunks = 0
+        self._initial_visual_ready_missing_chunks = 0
+        self._initial_visual_ready_coverage_pct = 100.0
         self._initial_visual_ready_logged = False
         self._initial_compilation_started_at = None
         self._initial_compilation_logged = False
@@ -1329,6 +1334,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_visual_ready_required_textures = 0
         self._initial_visual_ready_resident_textures = 0
         self._initial_visual_ready_visible_textures = 0
+        self._initial_visual_ready_missing_textures = 0
+        self._initial_visual_ready_expected_chunks = 0
+        self._initial_visual_ready_covered_chunks = 0
+        self._initial_visual_ready_missing_chunks = 0
+        self._initial_visual_ready_coverage_pct = 100.0
         self._initial_visual_ready_logged = False
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
@@ -2682,12 +2692,42 @@ class CaveViewerWindow(mglw.WindowConfig):
     _AMBIENT_MAX = 0.9
     _INITIAL_LOAD_MIN_CHUNKS = 6
     _INITIAL_VISUAL_READY_SETTLE_FRAMES = 3
+    _STARTUP_VISUAL_RADIUS_EXTRA_CHUNKS = 3
+    _STARTUP_VISUAL_RADIUS_MAX_CHUNKS = 10
     _CHUNK_PREP_MAX_FRACTION = 0.97
     _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.85
     _STREAMING_FAILURES_PER_FRAME = 8
 
+    def _startup_visual_prefetch_is_active(self) -> bool:
+        overlay = getattr(self, "controls_overlay", None)
+        return (
+            overlay is not None
+            and bool(getattr(overlay, "is_waiting_for_begin", False))
+            and not getattr(self, "_initial_visual_ready", False)
+        )
+
     def _target_streaming_load_radius(self) -> int:
-        return int(self.render_distance_stepper.value)
+        base_radius = max(1, int(self.render_distance_stepper.value))
+        if not self._startup_visual_prefetch_is_active():
+            return base_radius
+        max_radius = max(
+            base_radius,
+            min(
+                int(
+                    getattr(
+                        self.render_distance_stepper,
+                        "max_value",
+                        self._STARTUP_VISUAL_RADIUS_MAX_CHUNKS,
+                    )
+                ),
+                self._STARTUP_VISUAL_RADIUS_MAX_CHUNKS,
+            ),
+        )
+        return min(
+            max_radius,
+            base_radius + self._STARTUP_VISUAL_RADIUS_EXTRA_CHUNKS,
+        )
+
 
     def _streaming_cell_priority_key(
         self,
@@ -2831,6 +2871,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self,
         stats: dict,
         texture_readiness: Mapping[str, object] | None = None,
+        visual_coverage: Mapping[str, object] | None = None,
     ) -> bool:
         if not getattr(self, "_initial_chunks_loaded", False):
             return False
@@ -2845,6 +2886,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         if texture_readiness is not None and not bool(
             texture_readiness.get("textures_ready", True)
+        ):
+            return False
+        if visual_coverage is not None and not bool(
+            visual_coverage.get("coverage_ready", True)
         ):
             return False
         return True
@@ -2907,6 +2952,23 @@ class CaveViewerWindow(mglw.WindowConfig):
                     sources.add(self._texture_source_key(source))
         return sources
 
+    def _resident_texture_source_keys(self) -> tuple[set[object], bool]:
+        texture_manager = getattr(self, "texture_manager", None)
+        resident_sources = None
+        known_exact = False
+        if texture_manager is not None:
+            exact_sources = getattr(texture_manager, "resident_texture_sources", None)
+            if callable(exact_sources):
+                resident_sources = exact_sources()
+                known_exact = True
+        if resident_sources is None:
+            return set(), known_exact
+        return {
+            self._texture_source_key(source)
+            for source in resident_sources
+            if source
+        }, known_exact
+
     def _initial_texture_readiness_stats(
         self,
         visible_cells: Iterable[tuple[tuple, list]] | None,
@@ -2921,18 +2983,28 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._current_wanted_cells_snapshot()
         )
         visible_sources = self._texture_sources_for_visible_cells(visible_cells)
-        required_textures = (
-            len(wanted_sources) if wanted_sources else len(visible_sources)
-        )
+        required_sources = wanted_sources if wanted_sources else visible_sources
+        required_textures = len(required_sources)
         resident_textures = max(
             0,
             int(manager_stats.get("unique_files_resident", required_textures)),
         )
+        resident_sources, exact_sources_known = self._resident_texture_source_keys()
+        missing_sources = (
+            required_sources - resident_sources
+            if exact_sources_known and required_sources
+            else set()
+        )
+        textures_ready = (
+            not missing_sources
+            if exact_sources_known and required_sources
+            else required_textures <= 0 or resident_textures >= required_textures
+        )
         return {
-            "textures_ready": required_textures <= 0
-            or resident_textures >= required_textures,
+            "textures_ready": textures_ready,
             "required_textures": required_textures,
             "resident_textures": resident_textures,
+            "missing_textures": len(missing_sources),
             "visible_textures": len(visible_sources),
             "resident_texture_bytes": int(
                 manager_stats.get("resident_texture_bytes", 0)
@@ -2942,14 +3014,103 @@ class CaveViewerWindow(mglw.WindowConfig):
             ),
         }
 
+    def _manifest_chunk_bounds(
+        self,
+        cell: tuple[int, int, int],
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        manifest = getattr(self, "manifest", {})
+        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
+        chunk_info = chunks.get(f"{cell[0]}_{cell[1]}_{cell[2]}")
+        if not isinstance(chunk_info, Mapping):
+            return None
+        try:
+            bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
+            bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
+        except (KeyError, TypeError, ValueError):
+            return None
+        if bounds_min.shape != (3,) or bounds_max.shape != (3,):
+            return None
+        return bounds_min, bounds_max
+
+    def _failed_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
+        world = getattr(self, "world", None)
+        failed_cells = getattr(world, "_failed_cells", {})
+        if isinstance(failed_cells, Mapping):
+            return frozenset(failed_cells.keys())
+        return frozenset(failed_cells or ())
+
+    def _startup_visual_coverage_stats(
+        self,
+        visible_cells: Iterable[tuple[tuple, list]] | None,
+        view: np.ndarray | None,
+        projection: np.ndarray | None,
+    ) -> dict[str, object]:
+        if view is None or projection is None:
+            return {
+                "coverage_ready": True,
+                "expected_chunks": 0,
+                "covered_chunks": 0,
+                "missing_chunks": 0,
+                "coverage_pct": 100.0,
+            }
+
+        wanted_cells = self._current_wanted_cells_snapshot()
+        if not wanted_cells:
+            return {
+                "coverage_ready": True,
+                "expected_chunks": 0,
+                "covered_chunks": 0,
+                "missing_chunks": 0,
+                "coverage_pct": 100.0,
+            }
+
+        planes = view_culling.frustum_planes(
+            np.asarray(view, dtype=np.float64),
+            np.asarray(projection, dtype=np.float64),
+        )
+        expected_cells = set()
+        for cell in wanted_cells:
+            bounds = self._manifest_chunk_bounds(cell)
+            if bounds is None:
+                continue
+            if view_culling.aabb_inside_frustum(planes, bounds[0], bounds[1]):
+                expected_cells.add(cell)
+
+        visible_loaded_cells = {
+            tuple(cell)
+            for cell, _vao_list in (visible_cells or ())
+        }
+        terminal_cells = visible_loaded_cells | self._failed_cells_snapshot()
+        covered_chunks = len(expected_cells & terminal_cells)
+        missing_chunks = max(0, len(expected_cells) - covered_chunks)
+        coverage_pct = (
+            100.0
+            if not expected_cells
+            else 100.0 * covered_chunks / len(expected_cells)
+        )
+        return {
+            "coverage_ready": missing_chunks == 0,
+            "expected_chunks": len(expected_cells),
+            "covered_chunks": covered_chunks,
+            "missing_chunks": missing_chunks,
+            "coverage_pct": coverage_pct,
+        }
+
     def _initial_visual_readiness_stats(
         self,
         stats: dict,
         visible_chunk_count: int,
         visible_cells: Iterable[tuple[tuple, list]] | None = None,
+        view: np.ndarray | None = None,
+        projection: np.ndarray | None = None,
     ) -> dict:
         """Update and return startup stats augmented with visual-ready state."""
         texture_readiness = self._initial_texture_readiness_stats(visible_cells)
+        visual_coverage = self._startup_visual_coverage_stats(
+            visible_cells,
+            view,
+            projection,
+        )
         if getattr(self, "_initial_visual_ready", False):
             visual_stats = dict(stats)
             visual_stats["visual_ready"] = True
@@ -2968,9 +3129,28 @@ class CaveViewerWindow(mglw.WindowConfig):
             visual_stats["visual_ready_visible_textures"] = int(
                 getattr(self, "_initial_visual_ready_visible_textures", 0)
             )
+            visual_stats["visual_ready_missing_textures"] = int(
+                getattr(self, "_initial_visual_ready_missing_textures", 0)
+            )
+            visual_stats["visual_ready_expected_chunks"] = int(
+                getattr(self, "_initial_visual_ready_expected_chunks", 0)
+            )
+            visual_stats["visual_ready_covered_chunks"] = int(
+                getattr(self, "_initial_visual_ready_covered_chunks", 0)
+            )
+            visual_stats["visual_ready_missing_chunks"] = int(
+                getattr(self, "_initial_visual_ready_missing_chunks", 0)
+            )
+            visual_stats["visual_ready_coverage_pct"] = float(
+                getattr(self, "_initial_visual_ready_coverage_pct", 100.0)
+            )
             return visual_stats
 
-        if self._initial_visual_readiness_is_settled(stats, texture_readiness):
+        if self._initial_visual_readiness_is_settled(
+            stats,
+            texture_readiness,
+            visual_coverage,
+        ):
             self._initial_visual_ready_frames = (
                 int(getattr(self, "_initial_visual_ready_frames", 0)) + 1
             )
@@ -2983,6 +3163,21 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             self._initial_visual_ready_visible_textures = int(
                 texture_readiness["visible_textures"]
+            )
+            self._initial_visual_ready_missing_textures = int(
+                texture_readiness["missing_textures"]
+            )
+            self._initial_visual_ready_expected_chunks = int(
+                visual_coverage["expected_chunks"]
+            )
+            self._initial_visual_ready_covered_chunks = int(
+                visual_coverage["covered_chunks"]
+            )
+            self._initial_visual_ready_missing_chunks = int(
+                visual_coverage["missing_chunks"]
+            )
+            self._initial_visual_ready_coverage_pct = float(
+                visual_coverage["coverage_pct"]
             )
             if (
                 self._initial_visual_ready_frames
@@ -3003,6 +3198,21 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._initial_visual_ready_visible_textures = int(
                 texture_readiness["visible_textures"]
             )
+            self._initial_visual_ready_missing_textures = int(
+                texture_readiness["missing_textures"]
+            )
+            self._initial_visual_ready_expected_chunks = int(
+                visual_coverage["expected_chunks"]
+            )
+            self._initial_visual_ready_covered_chunks = int(
+                visual_coverage["covered_chunks"]
+            )
+            self._initial_visual_ready_missing_chunks = int(
+                visual_coverage["missing_chunks"]
+            )
+            self._initial_visual_ready_coverage_pct = float(
+                visual_coverage["coverage_pct"]
+            )
 
         visual_stats = dict(stats)
         visual_stats["visual_ready"] = bool(
@@ -3020,6 +3230,22 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         visual_stats["visual_ready_visible_textures"] = int(
             texture_readiness["visible_textures"]
+        )
+        visual_stats["visual_ready_missing_textures"] = int(
+            texture_readiness["missing_textures"]
+        )
+        visual_stats["visual_ready_expected_chunks"] = int(
+            visual_coverage["expected_chunks"]
+        )
+        visual_stats["visual_ready_covered_chunks"] = int(
+            visual_coverage["covered_chunks"]
+        )
+        visual_stats["visual_ready_missing_chunks"] = int(
+            visual_coverage["missing_chunks"]
+        )
+        visual_stats["visual_ready_coverage_pct"] = round(
+            float(visual_coverage["coverage_pct"]),
+            3,
         )
         return visual_stats
 
@@ -3048,10 +3274,31 @@ class CaveViewerWindow(mglw.WindowConfig):
         visible_textures = int(
             getattr(self, "_initial_visual_ready_visible_textures", 0)
         )
+        missing_textures = int(
+            getattr(self, "_initial_visual_ready_missing_textures", 0)
+        )
+        expected_chunks = int(
+            getattr(self, "_initial_visual_ready_expected_chunks", 0)
+        )
+        covered_chunks = int(
+            getattr(self, "_initial_visual_ready_covered_chunks", 0)
+        )
+        missing_chunks = int(
+            getattr(self, "_initial_visual_ready_missing_chunks", 0)
+        )
+        coverage_pct = float(
+            getattr(self, "_initial_visual_ready_coverage_pct", 100.0)
+        )
+        world = getattr(self, "world", None)
+        startup_radius = int(
+            getattr(getattr(world, "config", None), "load_radius_cells", 0) or 0
+        )
         _LOG.info(
             "Initial visual readiness completed in %.2fs "
             "(visible=%d loaded=%d pending=%d ready=%d wanted=%d "
-            "upload_states=%d textures=%d/%d visible_textures=%d).",
+            "upload_states=%d textures=%d/%d missing_textures=%d "
+            "visible_textures=%d coverage=%d/%d missing_chunks=%d %.1f%% "
+            "startup_radius=%d).",
             elapsed_s,
             int(visible_chunk_count),
             int(stats.get("loaded", 0)),
@@ -3061,7 +3308,13 @@ class CaveViewerWindow(mglw.WindowConfig):
             len(upload_states),
             resident_textures,
             required_textures,
+            missing_textures,
             visible_textures,
+            covered_chunks,
+            expected_chunks,
+            missing_chunks,
+            coverage_pct,
+            startup_radius,
         )
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         if benchmark_controller is not None:
@@ -3075,6 +3328,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "initial_visual_ready_required_textures": required_textures,
                     "initial_visual_ready_resident_textures": resident_textures,
                     "initial_visual_ready_visible_textures": visible_textures,
+                    "initial_visual_ready_missing_textures": missing_textures,
+                    "initial_visual_ready_expected_chunks": expected_chunks,
+                    "initial_visual_ready_covered_chunks": covered_chunks,
+                    "initial_visual_ready_missing_chunks": missing_chunks,
+                    "initial_visual_ready_coverage_pct": round(coverage_pct, 3),
+                    "initial_visual_ready_load_radius_chunks": startup_radius,
                 }
             )
 
@@ -3838,6 +4097,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             stats,
             _chunks_drawn,
             visible_cells=_visible_cells,
+            view=view,
+            projection=proj,
         )
 
         # u_texture always refers to sampler unit 0 -- set it once before

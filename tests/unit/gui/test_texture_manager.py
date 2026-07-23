@@ -433,6 +433,7 @@ def test_release_keeps_texture_idle_for_lru_reuse(tmp_path):
     assert manager.stats()["unique_materials_loaded"] == 0
     assert manager.stats()["unique_files_resident"] == 1
     assert manager.stats()["idle_files_resident"] == 1
+    assert manager.resident_texture_sources() == ("tile.png",)
     assert context.textures[0].released is False
 
     second_texture, timing = manager.acquire_with_timing("mat")

@@ -993,7 +993,14 @@ def _startup_readiness_summary_lines(environment: Mapping[str, Any]) -> list[str
             "textures="
             f"{_format_setting(environment.get('initial_visual_ready_resident_textures'))}/"
             f"{_format_setting(environment.get('initial_visual_ready_required_textures'))} resident, "
-            f"visible_textures={_format_setting(environment.get('initial_visual_ready_visible_textures'))}"
+            f"missing_textures={_format_setting(environment.get('initial_visual_ready_missing_textures'))}, "
+            f"visible_textures={_format_setting(environment.get('initial_visual_ready_visible_textures'))}, "
+            "coverage="
+            f"{_format_setting(environment.get('initial_visual_ready_covered_chunks'))}/"
+            f"{_format_setting(environment.get('initial_visual_ready_expected_chunks'))} chunks, "
+            f"missing_chunks={_format_setting(environment.get('initial_visual_ready_missing_chunks'))}, "
+            f"coverage_pct={_format_setting(environment.get('initial_visual_ready_coverage_pct'), suffix='%')}, "
+            f"startup_radius={_format_setting(environment.get('initial_visual_ready_load_radius_chunks'), suffix=' chunks')}"
         )
     ]
 

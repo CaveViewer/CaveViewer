@@ -174,6 +174,10 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "Startup readiness:" in latest_text
     assert "visible_chunks=40" in latest_text
     assert "textures=40/40 resident" in latest_text
+    assert "missing_textures=0" in latest_text
+    assert "coverage=40/40 chunks" in latest_text
+    assert "missing_chunks=0" in latest_text
+    assert "startup_radius=9 chunks" in latest_text
     assert "Streaming request:" in latest_text
     assert "distance=6 chunks" in latest_text
     assert "Streaming effective:" in latest_text
@@ -395,6 +399,12 @@ def _summary(
             "initial_visual_ready_required_textures": 40,
             "initial_visual_ready_resident_textures": 40,
             "initial_visual_ready_visible_textures": 12,
+            "initial_visual_ready_missing_textures": 0,
+            "initial_visual_ready_expected_chunks": 40,
+            "initial_visual_ready_covered_chunks": 40,
+            "initial_visual_ready_missing_chunks": 0,
+            "initial_visual_ready_coverage_pct": 100.0,
+            "initial_visual_ready_load_radius_chunks": min(render_distance + 3, 10),
             "texture_max_dimension": 2048,
             "texture_resident_budget_bytes": 1720 * 1024 * 1024,
             "texture_decoded_cache_budget_bytes": 304 * 1024 * 1024,

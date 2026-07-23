@@ -1460,6 +1460,113 @@ def test_initial_visual_readiness_waits_for_startup_texture_residency():
     assert window._initial_visual_ready_frames == 0
 
 
+def test_initial_visual_readiness_uses_exact_texture_sources_when_available():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(
+        config=SimpleNamespace(max_loaded_chunks=100),
+        wanted_cells_snapshot=lambda: frozenset({(1, 2, 3)}),
+    )
+    window.manifest = {
+        "chunks": {
+            "1_2_3": {
+                "materials": ["rock", "silt"],
+            },
+        },
+    }
+    window.texture_manager = SimpleNamespace(
+        material_to_file={
+            "rock": "rock.jpg",
+            "silt": "silt.jpg",
+        },
+        resident_texture_sources=lambda: ("rock.jpg",),
+        stats=lambda: {
+            "unique_files_resident": 2,
+            "resident_texture_bytes": 1024,
+            "resident_texture_budget_bytes": 4096,
+        },
+    )
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 2
+    window._initial_visual_ready_visible_chunks = 1
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {}
+
+    visual_stats = window._initial_visual_readiness_stats(
+        {
+            "loaded_wanted": 1,
+            "loaded": 1,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 1,
+            "total_available": 10,
+        },
+        1,
+    )
+
+    assert visual_stats["visual_ready"] is False
+    assert visual_stats["visual_ready_required_textures"] == 2
+    assert visual_stats["visual_ready_resident_textures"] == 2
+    assert visual_stats["visual_ready_missing_textures"] == 1
+    assert window._initial_visual_ready_frames == 0
+
+
+def test_startup_visual_readiness_waits_for_frustum_coverage():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(
+        config=SimpleNamespace(max_loaded_chunks=100),
+        wanted_cells_snapshot=lambda: frozenset({(0, 0, 0), (1, 0, 0)}),
+        _failed_cells={},
+    )
+    window.manifest = {
+        "chunks": {
+            "0_0_0": {
+                "bounds_min": [-0.8, -0.8, -0.8],
+                "bounds_max": [-0.2, 0.8, 0.8],
+                "materials": [],
+            },
+            "1_0_0": {
+                "bounds_min": [0.2, -0.8, -0.8],
+                "bounds_max": [0.8, 0.8, 0.8],
+                "materials": [],
+            },
+        },
+    }
+    window.texture_manager = SimpleNamespace(
+        material_to_file={},
+        resident_texture_sources=lambda: (),
+        stats=lambda: {"unique_files_resident": 0},
+    )
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 2
+    window._initial_visual_ready_visible_chunks = 1
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {}
+
+    visual_stats = window._initial_visual_readiness_stats(
+        {
+            "loaded_wanted": 2,
+            "loaded": 2,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 2,
+            "total_available": 10,
+        },
+        1,
+        visible_cells=[((0, 0, 0), [(object(), object(), "rock", object())])],
+        view=np.eye(4),
+        projection=np.eye(4),
+    )
+
+    assert visual_stats["visual_ready"] is False
+    assert visual_stats["visual_ready_expected_chunks"] == 2
+    assert visual_stats["visual_ready_covered_chunks"] == 1
+    assert visual_stats["visual_ready_missing_chunks"] == 1
+    assert visual_stats["visual_ready_coverage_pct"] == pytest.approx(50.0)
+    assert window._initial_visual_ready_frames == 0
+
+
 def test_loading_render_mode_unlocks_after_initial_chunks_for_texture_settle():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._has_map_loaded = True
@@ -1567,20 +1674,22 @@ def test_initial_compilation_completion_is_logged_once(monkeypatch):
     ]
 
 
-def test_startup_streaming_radius_matches_revealed_render_distance():
+def test_startup_streaming_radius_prefetches_beyond_revealed_render_distance():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window.render_distance_stepper = SimpleNamespace(value=6)
+    window.render_distance_stepper = SimpleNamespace(value=6, max_value=10)
     window.controls_overlay = SimpleNamespace(is_waiting_for_begin=True)
     window._initial_chunks_loaded = False
+    window._initial_visual_ready = False
 
-    assert window._target_streaming_load_radius() == 6
+    assert window._target_streaming_load_radius() == 9
 
 
 def test_streaming_radius_uses_stepper_after_begin_screen_is_dismissed():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window.render_distance_stepper = SimpleNamespace(value=6)
+    window.render_distance_stepper = SimpleNamespace(value=6, max_value=10)
     window.controls_overlay = SimpleNamespace(is_waiting_for_begin=False)
     window._initial_chunks_loaded = True
+    window._initial_visual_ready = True
 
     assert window._target_streaming_load_radius() == 6
 
