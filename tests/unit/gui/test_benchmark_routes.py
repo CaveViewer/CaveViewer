@@ -34,7 +34,7 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     assert metadata["route_mode"] == "auto_centerline_v1"
     assert metadata["route_source"] == "vertex_footprint_manifest"
     assert metadata["y_strategy"] == "local_vertical_center_v1"
-    assert metadata["y_bias"] == 0.65
+    assert metadata["vertical_position_fraction"] == 0.65
     assert metadata["footprint_cell_size_m"] == 2.0
     assert metadata["max_clearance_cells"] >= 3
     assert metadata["route_length_m"] > 0.0

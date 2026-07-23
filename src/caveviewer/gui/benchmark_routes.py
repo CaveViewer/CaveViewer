@@ -24,8 +24,8 @@ DEFAULT_CENTERLINE_ROUTE_KEYFRAMES = 8
 DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT = 96
 DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE = 70.0
 DEFAULT_CENTERLINE_ROUTE_TARGET_CELLS = 24
-DEFAULT_CENTERLINE_ROUTE_Y_BIAS = 0.65
 DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS = 1
+CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.65
 DEFAULT_DENSE_ROUTE_KEYFRAMES = 8
 DEFAULT_DENSE_ROUTE_PERCENTILE = 90.0
 DEFAULT_DENSE_ROUTE_CANDIDATE_LIMIT = 64
@@ -73,7 +73,6 @@ def generate_centerline_route_scenario(
     candidate_limit: int = DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT,
     endpoint_percentile: float = DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE,
     target_length_m: float | None = None,
-    y_bias: float = DEFAULT_CENTERLINE_ROUTE_Y_BIAS,
     y_search_radius_cells: int = DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
 ) -> CenterlineRoute:
     """Generate a deterministic virtual route through the passage center.
@@ -123,7 +122,6 @@ def generate_centerline_route_scenario(
         route_cells,
         manifest=manifest,
         footprint_cell_size=footprint.cell_size,
-        y_bias=float(y_bias),
         y_search_radius_cells=max(0, int(y_search_radius_cells)),
     )
     route_scores = [clearance_scores[cell] for cell in route_cells]
@@ -156,7 +154,9 @@ def generate_centerline_route_scenario(
                 "grid distance from the footprint boundary in footprint cells"
             ),
             "y_strategy": "local_vertical_center_v1",
-            "y_bias": float(y_bias),
+            "vertical_position_fraction": (
+                CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION
+            ),
             "y_search_radius_cells": max(0, int(y_search_radius_cells)),
             "footprint_cell_size_m": round(footprint.cell_size, 3),
             "footprint_cell_count": len(footprint.cells),
@@ -808,10 +808,8 @@ def _route_points_for_footprint_cells(
     *,
     manifest: Mapping[str, Any],
     footprint_cell_size: float,
-    y_bias: float,
     y_search_radius_cells: int,
 ) -> tuple[Point, ...]:
-    _validate_y_bias(y_bias)
     columns = _chunk_columns(manifest)
     points: list[Point] = []
     for cell in route_cells:
@@ -820,18 +818,10 @@ def _route_points_for_footprint_cells(
             columns,
             target_x=x,
             target_z=z,
-            y_bias=y_bias,
             local_radius_cells=y_search_radius_cells,
         )
         points.append((x, y, z))
     return tuple(points)
-
-
-def _validate_y_bias(value: float) -> None:
-    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
-        raise BenchmarkConfigurationError(
-            "centerline Y bias must be a finite value between 0.0 and 1.0"
-        )
 
 
 def _chunk_columns(
@@ -869,7 +859,6 @@ def _vertical_center_point_for_xz(
     *,
     target_x: float,
     target_z: float,
-    y_bias: float,
     local_radius_cells: int,
     search_radius_cells: int = 12,
 ) -> Point:
@@ -883,7 +872,6 @@ def _vertical_center_point_for_xz(
             column_values,
             center=exact_column,
             radius=local_radius_cells,
-            y_bias=y_bias,
         )
         return target_x, y, target_z
 
@@ -906,7 +894,6 @@ def _vertical_center_point_for_xz(
                 column_values,
                 center=best_col,
                 radius=local_radius_cells,
-                y_bias=y_bias,
             )
             return (
                 (best_col[0] + 0.5) * chunk_size,
@@ -925,7 +912,6 @@ def _vertical_center_point_for_xz(
         column_values,
         center=closest_col,
         radius=local_radius_cells,
-        y_bias=y_bias,
     )
     return (
         (closest_col[0] + 0.5) * chunk_size,
@@ -939,7 +925,6 @@ def _vertical_center_y_for_local_columns(
     *,
     center: FootprintCell,
     radius: int,
-    y_bias: float,
 ) -> float:
     samples = [
         sample
@@ -951,7 +936,7 @@ def _vertical_center_y_for_local_columns(
         samples = list(column_values[center])
     min_y = min(sample.min_y for sample in samples)
     max_y = max(sample.max_y for sample in samples)
-    return min_y + (max_y - min_y) * y_bias
+    return min_y + (max_y - min_y) * CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION
 
 
 def _keyframes_for_points(

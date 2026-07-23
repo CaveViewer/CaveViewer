@@ -36,8 +36,8 @@ from caveviewer.gui.benchmark import (
     load_json_file,
 )
 from caveviewer.gui.benchmark_routes import (
+    CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
     DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
-    DEFAULT_CENTERLINE_ROUTE_Y_BIAS,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
     DEFAULT_DENSE_ROUTE_KEYFRAMES,
     DEFAULT_DENSE_ROUTE_PERCENTILE,
@@ -125,15 +125,6 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Target centerline segment length in meters. Defaults to a "
             "map-scaled length based on footprint cell size and keyframe count."
-        ),
-    )
-    parser.add_argument(
-        "--centerline-route-y-bias",
-        type=float,
-        default=DEFAULT_CENTERLINE_ROUTE_Y_BIAS,
-        help=(
-            "Vertical placement within local cave bounds: 0.5 is midpoint, "
-            "larger values bias toward the ceiling. Defaults to 0.65."
         ),
     )
     parser.add_argument(
@@ -352,7 +343,6 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
             if args.centerline_route_target_length_m is None
             else float(args.centerline_route_target_length_m)
         ),
-        "centerline_route_y_bias": float(args.centerline_route_y_bias),
         "centerline_route_y_search_radius_cells": max(
             0,
             int(args.centerline_route_y_search_radius_cells),
@@ -420,7 +410,7 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
             "  centerline_route: "
             f"keyframes={plan['centerline_route_keyframes']} "
             f"target_length={target_text} "
-            f"y_bias={plan['centerline_route_y_bias']:g} "
+            f"vertical_fraction={CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION:g} "
             f"y_search_radius_cells={plan['centerline_route_y_search_radius_cells']}",
             "  dense_route: disabled",
         ]
@@ -491,7 +481,6 @@ def _prepare_scenario(plan: dict[str, Any]) -> None:
             plan["scenario_template"],
             keyframe_count=int(plan["centerline_route_keyframes"]),
             target_length_m=plan["centerline_route_target_length_m"],
-            y_bias=float(plan["centerline_route_y_bias"]),
             y_search_radius_cells=int(
                 plan["centerline_route_y_search_radius_cells"]
             ),
@@ -546,7 +535,7 @@ def _centerline_route_summary(centerline_route, scenario_path: Path) -> str:
         f"footprint_component_size={metadata['footprint_component_size']} "
         f"route_source={metadata['route_source']} "
         f"y_strategy={metadata['y_strategy']} "
-        f"y_bias={metadata['y_bias']:.2f} "
+        f"vertical_fraction={metadata['vertical_position_fraction']:.2f} "
         f"route_y={metadata['min_route_y']:.1f}..{metadata['max_route_y']:.1f} "
         f"max_clearance_m={metadata['max_clearance_m']:.1f} "
         f"mean_route_clearance_m={metadata['mean_route_clearance_m']:.1f}"
@@ -888,7 +877,7 @@ def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
             f"path_cells={metadata.get('path_cell_count', '<missing>')}, "
             f"route_source={metadata.get('route_source', '<missing>')}, "
             f"y_strategy={metadata.get('y_strategy', '<missing>')}, "
-            f"y_bias={_format_metric(metadata.get('y_bias'))}, "
+            f"vertical_fraction={_format_metric(metadata.get('vertical_position_fraction'))}, "
             f"route_y={_format_metric(metadata.get('min_route_y'))}..{_format_metric(metadata.get('max_route_y'))}, "
             f"max_clearance_m={_format_metric(metadata.get('max_clearance_m'))}, "
             f"mean_route_clearance_m={_format_metric(metadata.get('mean_route_clearance_m'))}"
