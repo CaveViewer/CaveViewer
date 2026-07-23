@@ -9,6 +9,7 @@ coverage.xml
 htmlcov/
 benchmark-results/
 benchmark-artifacts/
+.benchmark-data/
 *.swp
 *.swo
 *.swn

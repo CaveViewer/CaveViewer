@@ -77,6 +77,56 @@ python scripts/benchmark/compare_benchmark_results.py \
   --thresholds benchmarks/viewer-thresholds.v1.json
 ```
 
+## Machine-local Devil's Eye XL run
+
+The current local gold-map benchmark is hardwired to your machine and must not
+be uploaded. The wrapper uses:
+
+- source map: `~/Downloads/Maps/Devil's Eye XL`
+- ignored local copy: `.benchmark-data/maps/devils-eye-xl`
+- ignored local results/history: `.benchmark-data/results/devils-eye-xl`
+
+First validate the plan:
+
+```bash
+python scripts/benchmark/run_devils_eye_xl_benchmark.py --dry-run
+```
+
+Then run it:
+
+```bash
+python scripts/benchmark/run_devils_eye_xl_benchmark.py
+```
+
+The first real run copies the map into `.benchmark-data` if needed. If the
+local copy does not contain `_cache/manifest.json`, the wrapper compiles the
+cache with:
+
+```bash
+python -m caveviewer.chunker --source .benchmark-data/maps/devils-eye-xl
+```
+
+The wrapper clears `CAVEVIEWER_MAP_CACHE_DIR` for the chunker and benchmark
+subprocesses so the gold cache stays adjacent to the local map copy. Each run
+tees wrapper, chunker, and benchmark-wrapper output into that run's
+`orchestration.log`. Each successful benchmark also appends
+`.benchmark-data/results/devils-eye-xl/history.jsonl` and writes
+`.benchmark-data/results/devils-eye-xl/latest-summary.txt`. When a previous
+local record exists, the new run is compared against it with
+`benchmarks/viewer-thresholds.v1.json`; a regression returns a non-zero exit
+code and still leaves all artifacts for inspection.
+
+To make this run automatically before local pushes to `main`, install the
+tracked pre-push hook template on this machine:
+
+```bash
+ln -sf ../../scripts/benchmark/hooks/pre-push-devils-eye-xl .git/hooks/pre-push
+```
+
+The hook only runs when the destination ref is `refs/heads/main`. It uses
+`$PYTHON` when set, otherwise `.venv-dev/bin/python` when present, then falls
+back to `python3`.
+
 ## Scenario file
 
 Scenario files are versioned JSON. `benchmarks/gold-route-v1.json` is the

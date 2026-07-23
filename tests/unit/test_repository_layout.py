@@ -62,6 +62,15 @@ def test_application_uses_src_package_layout():
         / "benchmark"
         / "compare_benchmark_results.py",
         REPOSITORY_ROOT / "scripts" / "benchmark" / "run_local_benchmark.py",
+        REPOSITORY_ROOT
+        / "scripts"
+        / "benchmark"
+        / "run_devils_eye_xl_benchmark.py",
+        REPOSITORY_ROOT
+        / "scripts"
+        / "benchmark"
+        / "hooks"
+        / "pre-push-devils-eye-xl",
         REPOSITORY_ROOT / "packaging" / "pyinstaller" / "CaveViewer.spec",
     )
 
@@ -153,3 +162,4 @@ def test_pyproject_declares_src_package_and_entry_point():
     assert 'pythonpath = ["src"]' in pyproject
     assert '"caveviewer.resources"' in pyproject
     assert "*.egg-info/" in gitignore
+    assert ".benchmark-data/" in gitignore

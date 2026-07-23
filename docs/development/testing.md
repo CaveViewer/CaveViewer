@@ -96,6 +96,11 @@ threshold policy. The workflow compares a candidate ref with a baseline ref and
 uploads logs plus per-frame metrics so failures can be inspected without
 re-running the viewer immediately.
 
+For the machine-local Devil's Eye XL gate, use
+`scripts/benchmark/run_devils_eye_xl_benchmark.py`. It keeps the large gold map
+and all benchmark history under ignored `.benchmark-data/` paths and can be
+installed as a local pre-push hook for pushes to `main`.
+
 ## Release gates
 
 An individually dispatched platform release workflow calls the Essential Tests

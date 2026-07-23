@@ -1,0 +1,668 @@
+#!/usr/bin/env python3
+"""Run the machine-local Devil's Eye XL streaming FPS benchmark.
+
+The gold map is intentionally local-only. A real run copies
+``~/Downloads/Maps/Devil's Eye XL`` into the ignored repository-local
+``.benchmark-data`` tree when needed, compiles a map-local ``_cache`` when the
+manifest is missing, runs the existing benchmark wrapper, compares with the
+latest local history record, and writes a human-readable summary.
+"""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+from typing import Any, Mapping, Sequence
+
+
+_SCRIPT_PATH = Path(__file__).resolve()
+_REPOSITORY_ROOT = _SCRIPT_PATH.parents[2]
+_SOURCE_ROOT = _REPOSITORY_ROOT / "src"
+if str(_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SOURCE_ROOT))
+
+from caveviewer.gui.benchmark import (
+    BenchmarkConfigurationError,
+    BenchmarkScenario,
+    BenchmarkThresholds,
+    compare_summaries,
+    load_json_file,
+)
+
+
+LOCAL_BENCHMARK_ID = "devils-eye-xl"
+DEFAULT_SOURCE_MAP_DIR = Path.home() / "Downloads" / "Maps" / "Devil's Eye XL"
+DEFAULT_LOCAL_MAP_DIR = (
+    _REPOSITORY_ROOT / ".benchmark-data" / "maps" / LOCAL_BENCHMARK_ID
+)
+DEFAULT_RESULTS_DIR = (
+    _REPOSITORY_ROOT / ".benchmark-data" / "results" / LOCAL_BENCHMARK_ID
+)
+DEFAULT_SCENARIO_PATH = _REPOSITORY_ROOT / "benchmarks" / "gold-route-v1.json"
+DEFAULT_THRESHOLDS_PATH = (
+    _REPOSITORY_ROOT / "benchmarks" / "viewer-thresholds.v1.json"
+)
+CACHE_DIRNAME = "_cache"
+MANIFEST_NAME = "manifest.json"
+MAP_SOURCE_SUFFIXES = {".glb", ".gltf", ".obj"}
+LOCAL_HISTORY_SCHEMA_VERSION = 1
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the local-only Devil's Eye XL FPS benchmark, compare with the "
+            "previous local record, and write a text summary."
+        )
+    )
+    parser.add_argument(
+        "--source-map-dir",
+        default=str(DEFAULT_SOURCE_MAP_DIR),
+        help=(
+            "Original gold map directory. Defaults to "
+            "~/Downloads/Maps/Devil's Eye XL."
+        ),
+    )
+    parser.add_argument(
+        "--local-map-dir",
+        default=str(DEFAULT_LOCAL_MAP_DIR),
+        help=(
+            "Ignored repository-local copy of the gold map. Defaults to "
+            ".benchmark-data/maps/devils-eye-xl."
+        ),
+    )
+    parser.add_argument(
+        "--results-dir",
+        default=str(DEFAULT_RESULTS_DIR),
+        help=(
+            "Ignored repository-local benchmark result/history directory. "
+            "Defaults to .benchmark-data/results/devils-eye-xl."
+        ),
+    )
+    parser.add_argument(
+        "--scenario",
+        default=str(DEFAULT_SCENARIO_PATH),
+        help="Benchmark scenario JSON. Defaults to benchmarks/gold-route-v1.json.",
+    )
+    parser.add_argument(
+        "--thresholds",
+        default=str(DEFAULT_THRESHOLDS_PATH),
+        help=(
+            "Benchmark threshold JSON. Defaults to "
+            "benchmarks/viewer-thresholds.v1.json."
+        ),
+    )
+    parser.add_argument(
+        "--label",
+        help="Run label used as the artifact subdirectory name.",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="DEBUG",
+        help="Benchmark log level. Defaults to DEBUG for inspectable local output.",
+    )
+    parser.add_argument(
+        "--vsync",
+        choices=("off", "on", "unchanged"),
+        default="off",
+        help="Forwarded caveviewer-benchmark vsync policy.",
+    )
+    parser.add_argument(
+        "--xvfb",
+        action="store_true",
+        help="Forward the benchmark through xvfb-run -a on Linux/headless systems.",
+    )
+    parser.add_argument(
+        "--force-compile",
+        action="store_true",
+        help="Rebuild the gold map _cache even when manifest.json already exists.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate inputs and print planned work without copying or running.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        plan = _build_plan(args)
+    except BenchmarkConfigurationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+    _print_plan(plan)
+    if args.dry_run:
+        return 0
+
+    try:
+        _prepare_orchestration_log(plan)
+        _ensure_local_map_copy(plan)
+        _ensure_cache(plan)
+        benchmark_returncode = _run_benchmark(plan)
+        if benchmark_returncode != 0:
+            return benchmark_returncode
+
+        summary = load_json_file(plan["summary_path"])
+        previous_record = _latest_history_record(plan["history_path"])
+        previous_summary = _summary_from_record(previous_record)
+        thresholds = BenchmarkThresholds.load(plan["thresholds_path"])
+        comparison = (
+            compare_summaries(previous_summary, summary, thresholds)
+            if previous_summary is not None
+            else None
+        )
+        comparison_path = _write_comparison(plan["comparison_path"], comparison)
+        record = _record_for_run(
+            plan,
+            summary=summary,
+            comparison=comparison,
+            comparison_path=comparison_path,
+        )
+        _append_history(plan["history_path"], record)
+        text_summary = _human_summary(
+            plan,
+            summary=summary,
+            previous_record=previous_record,
+            comparison=comparison,
+            comparison_path=comparison_path,
+        )
+        plan["latest_summary_path"].parent.mkdir(parents=True, exist_ok=True)
+        plan["latest_summary_path"].write_text(text_summary, encoding="utf-8")
+        _append_orchestration_log(plan, text_summary)
+        print(text_summary, end="")
+        return 0 if comparison is None or comparison["passed"] else 1
+    except BenchmarkConfigurationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
+    source_map_dir = Path(args.source_map_dir).expanduser().resolve()
+    local_map_dir = Path(args.local_map_dir).expanduser().resolve()
+    results_dir = Path(args.results_dir).expanduser().resolve()
+    scenario_path = _existing_file(args.scenario, "scenario")
+    threshold_path = _existing_file(args.thresholds, "thresholds")
+    scenario = BenchmarkScenario.load(scenario_path)
+    BenchmarkThresholds.load(threshold_path)
+
+    source_copy_needed = not _has_map_source(local_map_dir)
+    if source_copy_needed:
+        _validate_source_map_dir(source_map_dir)
+        if local_map_dir.exists():
+            raise BenchmarkConfigurationError(
+                "local-map-dir exists but does not contain a supported map "
+                f"source file: {local_map_dir}"
+            )
+
+    cache_dir = local_map_dir / CACHE_DIRNAME
+    manifest_path = cache_dir / MANIFEST_NAME
+    compile_needed = bool(args.force_compile or not manifest_path.is_file())
+    label = _safe_label(args.label or _default_label())
+    run_dir = results_dir / "runs" / label
+
+    compile_command = [
+        sys.executable,
+        "-m",
+        "caveviewer.chunker",
+        "--source",
+        str(local_map_dir),
+    ]
+    if args.force_compile:
+        compile_command.append("--force")
+
+    benchmark_command = [
+        sys.executable,
+        str(_REPOSITORY_ROOT / "scripts" / "benchmark" / "run_local_benchmark.py"),
+        "--cache-dir",
+        str(cache_dir),
+        "--textures-dir",
+        str(local_map_dir),
+        "--scenario",
+        str(scenario_path),
+        "--thresholds",
+        str(threshold_path),
+        "--output-root",
+        str(results_dir / "runs"),
+        "--label",
+        label,
+        "--log-level",
+        args.log_level,
+        "--vsync",
+        args.vsync,
+    ]
+    if args.xvfb:
+        benchmark_command.append("--xvfb")
+
+    return {
+        "source_map_dir": source_map_dir,
+        "local_map_dir": local_map_dir,
+        "cache_dir": cache_dir,
+        "manifest_path": manifest_path,
+        "results_dir": results_dir,
+        "history_path": results_dir / "history.jsonl",
+        "latest_summary_path": results_dir / "latest-summary.txt",
+        "scenario_path": scenario_path,
+        "scenario_fingerprint": scenario.fingerprint,
+        "thresholds_path": threshold_path,
+        "label": label,
+        "run_dir": run_dir,
+        "summary_path": run_dir / "summary.json",
+        "comparison_path": run_dir / "comparison.json",
+        "orchestration_log_path": run_dir / "orchestration.log",
+        "source_copy_needed": source_copy_needed,
+        "compile_needed": compile_needed,
+        "force_compile": bool(args.force_compile),
+        "compile_command": compile_command,
+        "benchmark_command": benchmark_command,
+    }
+
+
+def _print_plan(plan: Mapping[str, Any]) -> None:
+    print(_plan_text(plan), end="")
+
+
+def _plan_text(plan: Mapping[str, Any]) -> str:
+    lines = [
+        "Devil's Eye XL local benchmark plan:",
+        f"  source_map_dir: {plan['source_map_dir']}",
+        f"  local_map_dir: {plan['local_map_dir']}",
+        f"  cache_dir: {plan['cache_dir']}",
+        f"  scenario: {plan['scenario_path']}",
+        f"  scenario_fingerprint: {plan['scenario_fingerprint']}",
+        f"  thresholds: {plan['thresholds_path']}",
+        f"  history: {plan['history_path']}",
+        f"  output_dir: {plan['run_dir']}",
+        f"  orchestration_log: {plan['orchestration_log_path']}",
+        f"  copy_map: {_yes_no(plan['source_copy_needed'])}",
+        f"  compile_cache: {_yes_no(plan['compile_needed'])}",
+    ]
+    if plan["compile_needed"]:
+        lines.extend(
+            [
+                "  compile_command:",
+                f"    {_format_command(plan['compile_command'])}",
+            ]
+        )
+    lines.extend(
+        [
+            "  benchmark_command:",
+            f"    {_format_command(plan['benchmark_command'])}",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _prepare_orchestration_log(plan: Mapping[str, Any]) -> None:
+    Path(plan["run_dir"]).mkdir(parents=True, exist_ok=True)
+    log_path = Path(plan["orchestration_log_path"])
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(_plan_text(plan) + "\n", encoding="utf-8")
+
+
+def _ensure_local_map_copy(plan: Mapping[str, Any]) -> None:
+    if not plan["source_copy_needed"]:
+        return
+    source_map_dir = plan["source_map_dir"]
+    local_map_dir = plan["local_map_dir"]
+    assert isinstance(source_map_dir, Path)
+    assert isinstance(local_map_dir, Path)
+    _log_message(
+        plan,
+        f"Copying gold map into ignored local benchmark data: {local_map_dir}",
+    )
+    local_map_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_map_dir, local_map_dir, symlinks=True)
+
+
+def _ensure_cache(plan: Mapping[str, Any]) -> None:
+    manifest_path = plan["manifest_path"]
+    assert isinstance(manifest_path, Path)
+    if manifest_path.is_file() and not plan["force_compile"]:
+        return
+    _log_message(plan, "Compiling Devil's Eye XL map cache with caveviewer.chunker.")
+    returncode = _run_logged_subprocess(
+        plan["compile_command"],
+        plan,
+        cwd=_REPOSITORY_ROOT,
+        env=_subprocess_env_for_local_cache(),
+    )
+    if returncode != 0:
+        raise BenchmarkConfigurationError(
+            f"chunker failed with exit code {returncode}"
+        )
+    if not manifest_path.is_file():
+        raise BenchmarkConfigurationError(
+            f"chunker completed but did not create {manifest_path}"
+        )
+
+
+def _run_benchmark(plan: Mapping[str, Any]) -> int:
+    _log_message(plan, "Running Devil's Eye XL FPS benchmark.")
+    return _run_logged_subprocess(
+        plan["benchmark_command"],
+        plan,
+        cwd=_REPOSITORY_ROOT,
+        env=_subprocess_env_for_local_cache(),
+    )
+
+
+def _run_logged_subprocess(
+    command: Sequence[object],
+    plan: Mapping[str, Any],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+) -> int:
+    command_text = _format_command(command)
+    _append_orchestration_log(plan, f"$ {command_text}\n")
+    process = subprocess.Popen(
+        [str(part) for part in command],
+        cwd=cwd,
+        env=dict(env),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert process.stdout is not None
+    with open(plan["orchestration_log_path"], "a", encoding="utf-8") as log:
+        for line in process.stdout:
+            print(line, end="")
+            log.write(line)
+            log.flush()
+    return int(process.wait())
+
+
+def _validate_source_map_dir(source_map_dir: Path) -> None:
+    if not source_map_dir.is_dir():
+        raise BenchmarkConfigurationError(
+            f"source-map-dir does not exist: {source_map_dir}"
+        )
+    if not _has_map_source(source_map_dir):
+        raise BenchmarkConfigurationError(
+            "source-map-dir does not contain a supported map source file "
+            f"({', '.join(sorted(MAP_SOURCE_SUFFIXES))}): {source_map_dir}"
+        )
+
+
+def _has_map_source(map_dir: Path) -> bool:
+    if not map_dir.is_dir():
+        return False
+    for child in map_dir.iterdir():
+        if child.is_file() and child.suffix.lower() in MAP_SOURCE_SUFFIXES:
+            return True
+    return False
+
+
+def _latest_history_record(path: Path) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    if not path.is_file():
+        return None
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                latest = payload
+    return latest
+
+
+def _summary_from_record(record: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if record is None:
+        return None
+    summary = record.get("summary")
+    if isinstance(summary, dict):
+        return dict(summary)
+    summary_path = record.get("summary_path")
+    if not summary_path:
+        return None
+    path = Path(str(summary_path)).expanduser()
+    if not path.is_file():
+        return None
+    return load_json_file(path)
+
+
+def _write_comparison(
+    path: Path,
+    comparison: Mapping[str, Any] | None,
+) -> Path | None:
+    if comparison is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _append_history(path: Path, record: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def _record_for_run(
+    plan: Mapping[str, Any],
+    *,
+    summary: Mapping[str, Any],
+    comparison: Mapping[str, Any] | None,
+    comparison_path: Path | None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": LOCAL_HISTORY_SCHEMA_VERSION,
+        "timestamp_utc": _utc_timestamp(),
+        "benchmark_id": LOCAL_BENCHMARK_ID,
+        "label": plan["label"],
+        "git_sha": _git_sha(),
+        "local_map_dir": str(plan["local_map_dir"]),
+        "cache_dir": str(plan["cache_dir"]),
+        "summary_path": str(plan["summary_path"]),
+        "comparison_path": None if comparison_path is None else str(comparison_path),
+        "comparison_passed": None if comparison is None else bool(comparison["passed"]),
+        "summary": _compact_summary(summary),
+    }
+
+
+def _compact_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": summary.get("schema_version"),
+        "scenario": dict(summary.get("scenario", {})),
+        "reason": summary.get("reason"),
+        "measured_frames": summary.get("measured_frames"),
+        "metrics": dict(summary.get("metrics", {})),
+        "environment": dict(summary.get("environment", {})),
+    }
+
+
+def _human_summary(
+    plan: Mapping[str, Any],
+    *,
+    summary: Mapping[str, Any],
+    previous_record: Mapping[str, Any] | None,
+    comparison: Mapping[str, Any] | None,
+    comparison_path: Path | None,
+) -> str:
+    metrics = summary.get("metrics", {})
+    lines = [
+        "CaveViewer Devil's Eye XL local benchmark",
+        f"Status: {_status_text(comparison)}",
+        f"Run: {plan['label']}",
+        f"Git SHA: {_git_sha()}",
+        (
+            "Current: "
+            f"median_fps={_format_metric(metrics.get('median_fps'))}, "
+            f"mean_fps={_format_metric(metrics.get('mean_fps'))}, "
+            f"one_percent_low_fps={_format_metric(metrics.get('one_percent_low_fps'))}, "
+            f"p95_frame_ms={_format_metric(metrics.get('p95_frame_ms'))}"
+        ),
+    ]
+    if previous_record is None:
+        lines.append("Previous: none; this run seeds the local baseline history.")
+    else:
+        previous_summary = _summary_from_record(previous_record) or {}
+        previous_metrics = previous_summary.get("metrics", {})
+        lines.append(
+            "Previous: "
+            f"{previous_record.get('label', '<unknown>')} "
+            f"median_fps={_format_metric(previous_metrics.get('median_fps'))}"
+        )
+    if comparison is not None:
+        lines.append("Comparison checks:")
+        for check in comparison.get("checks", []):
+            lines.append(f"  - {_format_check(check)}")
+    lines.extend(
+        [
+            f"Artifacts: {plan['run_dir']}",
+            f"Summary JSON: {plan['summary_path']}",
+            f"Frame log: {Path(plan['run_dir']) / 'frames.jsonl'}",
+            f"Benchmark log: {Path(plan['run_dir']) / 'benchmark.log'}",
+            f"Orchestration log: {plan['orchestration_log_path']}",
+            f"History: {plan['history_path']}",
+            f"Latest text summary: {plan['latest_summary_path']}",
+        ]
+    )
+    if comparison_path is not None:
+        lines.append(f"Comparison JSON: {comparison_path}")
+    return "\n".join(lines) + "\n"
+
+
+def _status_text(comparison: Mapping[str, Any] | None) -> str:
+    if comparison is None:
+        return "BASELINE RECORDED"
+    return "PASS" if comparison["passed"] else "FAIL"
+
+
+def _format_check(check: Mapping[str, Any]) -> str:
+    status = "PASS" if check.get("passed") else "FAIL"
+    metric = check.get("metric", "<unknown>")
+    baseline = _format_metric(check.get("baseline"))
+    candidate = _format_metric(check.get("candidate"))
+    delta = _format_metric(check.get("delta_pct"))
+    if check.get("kind") == "compatibility":
+        return f"{status} {metric}: baseline={baseline}, candidate={candidate}"
+    if "allowed_drop_pct" in check:
+        allowed = _format_metric(check.get("allowed_drop_pct"))
+        return (
+            f"{status} {metric}: baseline={baseline}, candidate={candidate}, "
+            f"delta={delta}%, allowed_drop={allowed}%"
+        )
+    allowed = _format_metric(check.get("allowed_increase_pct"))
+    return (
+        f"{status} {metric}: baseline={baseline}, candidate={candidate}, "
+        f"delta={delta}%, allowed_increase={allowed}%"
+    )
+
+
+def _existing_file(path: str | os.PathLike[str], label: str) -> Path:
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_file():
+        raise BenchmarkConfigurationError(f"{label} does not exist: {resolved}")
+    return resolved
+
+
+def _default_label() -> str:
+    return f"{_utc_timestamp().replace(':', '').replace('-', '')}-{_git_short_sha()}"
+
+
+def _git_sha() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=_REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode == 0:
+        value = completed.stdout.strip()
+        if value:
+            return value
+    return "unknown"
+
+
+def _git_short_sha() -> str:
+    sha = _git_sha()
+    return sha[:12] if sha != "unknown" else "unknown"
+
+
+def _safe_label(label: str) -> str:
+    cleaned = "".join(
+        character if character.isalnum() or character in "._-" else "-"
+        for character in str(label).strip()
+    ).strip(".-")
+    if not cleaned:
+        raise BenchmarkConfigurationError(
+            "label must contain at least one safe character"
+        )
+    return cleaned
+
+
+def _subprocess_env_for_local_cache() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = _pythonpath_with_src(env)
+    env.pop("CAVEVIEWER_MAP_CACHE_DIR", None)
+    return env
+
+
+def _log_message(plan: Mapping[str, Any], message: str) -> None:
+    print(message)
+    _append_orchestration_log(plan, message + "\n")
+
+
+def _append_orchestration_log(plan: Mapping[str, Any], message: str) -> None:
+    log_path = Path(plan["orchestration_log_path"])
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as handle:
+        handle.write(message)
+
+
+def _pythonpath_with_src(env: Mapping[str, str]) -> str:
+    src_path = str(_SOURCE_ROOT)
+    existing = env.get("PYTHONPATH", "")
+    return src_path if not existing else os.pathsep.join((src_path, existing))
+
+
+def _format_command(command: Sequence[object]) -> str:
+    return " ".join(shlex.quote(str(part)) for part in command)
+
+
+def _format_metric(value: object) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value):.2f}"
+    return str(value if value is not None else "<missing>")
+
+
+def _utc_timestamp() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _yes_no(value: object) -> str:
+    return "yes" if value else "no"
+
+
+if __name__ == "__main__":
+    sys.exit(main())
