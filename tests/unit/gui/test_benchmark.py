@@ -195,6 +195,10 @@ def test_summarize_samples_reports_stutter_counts():
     assert summary["metrics"]["median_fps"] == 25.0
     assert summary["metrics"]["wall_clock_fps"] == 3.0
     assert summary["metrics"]["median_frame_interval_ms"] == 16.666667
+    assert summary["metrics"]["median_drawn_chunks"] == 4.0
+    assert summary["metrics"]["max_wanted_chunks"] == 6.0
+    assert summary["metrics"]["total_chunks_uploaded"] == 3
+    assert summary["metrics"]["total_bytes_uploaded"] == 12288
     assert summary["metrics"]["stutter_counts"] == {
         "over_33_3ms": 2,
         "over_50ms": 1,

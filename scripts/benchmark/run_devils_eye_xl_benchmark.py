@@ -38,8 +38,7 @@ from caveviewer.gui.benchmark import (
 from caveviewer.gui.benchmark_routes import (
     CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
     DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
-    DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE,
-    DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
+    DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
     DEFAULT_DENSE_ROUTE_KEYFRAMES,
     DEFAULT_DENSE_ROUTE_PERCENTILE,
@@ -125,8 +124,8 @@ def _parser() -> argparse.ArgumentParser:
         "--centerline-route-target-length-m",
         type=float,
         help=(
-            "Target centerline segment length in meters. Defaults to route "
-            "duration times the 50 ft/min virtual-diver speed."
+            "Target centerline segment length in meters. Defaults to three "
+            "chunk widths through the most complex local route segment."
         ),
     )
     parser.add_argument(
@@ -408,7 +407,7 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
     if plan["route_mode"] == "auto-centerline":
         target_length = plan["centerline_route_target_length_m"]
         target_text = (
-            f"auto({DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE:g}ft/min)"
+            f"auto({DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS:g} chunks)"
             if target_length is None
             else f"{target_length:g}m"
         )
@@ -416,7 +415,8 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
             "  centerline_route: "
             f"keyframes={plan['centerline_route_keyframes']} "
             f"target_length={target_text} "
-            f"target_speed={DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND:g}m/s "
+            "selection=max_chunk_texture_complexity "
+            "movement=after_warmup "
             f"vertical_fraction={CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION:g} "
             f"y_search_radius_cells={plan['centerline_route_y_search_radius_cells']}",
             "  dense_route: disabled",
@@ -536,12 +536,17 @@ def _centerline_route_summary(centerline_route, scenario_path: Path) -> str:
         f"scenario={scenario_path} "
         f"route_length_m={metadata['route_length_m']:.1f} "
         f"target_route_length_m={metadata['target_route_length_m']:.1f} "
-        "target_speed_ft_per_min="
-        f"{metadata['target_route_speed_ft_per_minute']:.1f} "
+        f"target_speed_m_per_s={metadata['target_route_speed_m_per_second']:.2f} "
+        f"actual_speed_m_per_s={metadata['actual_route_speed_m_per_second']:.2f} "
+        f"travel={metadata['route_travel_start_s']:.1f}s.."
+        f"{metadata['route_travel_start_s'] + metadata['route_travel_duration_s']:.1f}s "
         f"keyframes={metadata['route_keyframe_count']} "
         f"path_cells={metadata['path_cell_count']} "
         f"full_path_cells={metadata['full_path_cell_count']} "
         f"footprint_component_size={metadata['footprint_component_size']} "
+        f"selection={metadata['route_selection_strategy']} "
+        f"max_route_chunks={metadata['max_route_neighborhood_chunks']} "
+        f"max_route_textures={metadata['max_route_unique_textures']} "
         f"route_source={metadata['route_source']} "
         f"y_strategy={metadata['y_strategy']} "
         f"vertical_fraction={metadata['vertical_position_fraction']:.2f} "
@@ -718,6 +723,16 @@ def _human_summary(
             f"one_percent_low_render_fps={_format_metric(metrics.get('one_percent_low_fps'))}, "
             f"p95_frame_ms={_format_metric(metrics.get('p95_frame_ms'))}"
         ),
+        (
+            "Runtime load: "
+            f"median_drawn_chunks={_format_metric(metrics.get('median_drawn_chunks'))}, "
+            f"max_drawn_chunks={_format_metric(metrics.get('max_drawn_chunks'))}, "
+            f"median_wanted_chunks={_format_metric(metrics.get('median_wanted_chunks'))}, "
+            f"max_pending_chunks={_format_metric(metrics.get('max_pending_chunks'))}, "
+            f"chunks_uploaded={_format_metric(metrics.get('total_chunks_uploaded'))}, "
+            f"bytes_uploaded={_format_metric(metrics.get('total_bytes_uploaded'))}, "
+            f"upload_stalls={_format_metric(metrics.get('total_upload_stalls'))}"
+        ),
     ]
     route_line = _route_summary_for_summary(summary)
     if route_line:
@@ -882,10 +897,17 @@ def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
             "Route: auto_centerline "
             f"length_m={_format_metric(metadata.get('route_length_m'))}, "
             f"target_length_m={_format_metric(metadata.get('target_route_length_m'))}, "
-            "target_speed_ft_per_min="
-            f"{_format_metric(metadata.get('target_route_speed_ft_per_minute'))}, "
+            f"target_speed_m_per_s={_format_metric(metadata.get('target_route_speed_m_per_second'))}, "
+            f"actual_speed_m_per_s={_format_metric(metadata.get('actual_route_speed_m_per_second'))}, "
+            f"travel_start_s={_format_metric(metadata.get('route_travel_start_s'))}, "
+            f"travel_duration_s={_format_metric(metadata.get('route_travel_duration_s'))}, "
             f"keyframes={metadata.get('route_keyframe_count', '<missing>')}, "
             f"path_cells={metadata.get('path_cell_count', '<missing>')}, "
+            f"selection={metadata.get('route_selection_strategy', '<missing>')}, "
+            f"max_route_chunks={metadata.get('max_route_neighborhood_chunks', '<missing>')}, "
+            f"mean_route_chunks={_format_metric(metadata.get('mean_route_neighborhood_chunks'))}, "
+            f"max_route_textures={metadata.get('max_route_unique_textures', '<missing>')}, "
+            f"mean_route_textures={_format_metric(metadata.get('mean_route_unique_textures'))}, "
             f"route_source={metadata.get('route_source', '<missing>')}, "
             f"y_strategy={metadata.get('y_strategy', '<missing>')}, "
             f"vertical_fraction={_format_metric(metadata.get('vertical_position_fraction'))}, "

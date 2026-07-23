@@ -20,13 +20,10 @@ FootprintCell = tuple[int, int]
 Point = tuple[float, float, float]
 PointXZ = tuple[float, float]
 
-DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE = 50.0
-DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND = (
-    DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE * 0.3048 / 60.0
-)
 DEFAULT_CENTERLINE_ROUTE_KEYFRAMES = 8
 DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT = 96
 DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE = 70.0
+DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS = 3.0
 DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS = 1
 CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.65
 DEFAULT_DENSE_ROUTE_KEYFRAMES = 8
@@ -67,6 +64,21 @@ class CenterlineRoute:
     clearance_scores: dict[FootprintCell, int]
 
 
+@dataclass(frozen=True)
+class _ChunkLoadInfo:
+    center: Point
+    materials: frozenset[str]
+    textures: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _RouteComplexityScore:
+    score: float
+    chunk_count: int
+    material_count: int
+    texture_count: int
+
+
 def generate_centerline_route_scenario(
     manifest: Mapping[str, Any],
     template: BenchmarkScenario,
@@ -102,18 +114,30 @@ def generate_centerline_route_scenario(
         for cell in full_path_cells
     }
     full_path_length_m = _footprint_path_length(full_path_cells, full_path_centers)
-    resolved_target_length_m = _target_centerline_route_length_m(
-        duration_s=template.total_duration_seconds,
-        target_length_m=target_length_m,
-    )
-    resolved_target_speed_m_per_second = (
-        resolved_target_length_m / template.total_duration_seconds
-    )
-    path_cells, segment_start_m, segment_end_m = _select_footprint_path_segment(
+    route_complexity_scores = _route_complexity_scores(
         full_path_cells,
         centers=full_path_centers,
-        clearance_scores=clearance_scores,
-        target_length_m=resolved_target_length_m,
+        manifest=manifest,
+        render_distance=template.render_distance,
+        y_search_radius_cells=max(0, int(y_search_radius_cells)),
+    )
+    resolved_target_length_m = _target_centerline_route_length_m(
+        chunk_size=_positive_float(manifest.get("chunk_size"), "chunk_size"),
+        measurement_duration_s=template.measurement_seconds,
+        target_length_m=target_length_m,
+    )
+    target_length_is_override = target_length_m is not None
+    resolved_target_speed_m_per_second = (
+        resolved_target_length_m / template.measurement_seconds
+    )
+    path_cells, segment_start_m, segment_end_m, pivot_cell = (
+        _select_footprint_path_segment(
+            full_path_cells,
+            centers=full_path_centers,
+            clearance_scores=clearance_scores,
+            complexity_scores=route_complexity_scores,
+            target_length_m=resolved_target_length_m,
+        )
     )
     route_xz_points = _sample_footprint_route_points(
         full_path_cells,
@@ -134,10 +158,15 @@ def generate_centerline_route_scenario(
     )
     route_scores = [clearance_scores[cell] for cell in route_cells]
     path_scores = [clearance_scores[cell] for cell in path_cells]
+    route_complexities = [route_complexity_scores[cell] for cell in route_cells]
+    path_complexities = [route_complexity_scores[cell] for cell in path_cells]
     route_length_m = _path_length(route_points)
+    actual_route_speed_m_per_second = route_length_m / template.measurement_seconds
     route = _keyframes_for_points(
         route_points,
-        duration_s=template.total_duration_seconds,
+        duration_s=template.measurement_seconds,
+        start_time_s=template.warmup_seconds,
+        hold_start=True,
     )
     payload = {
         "version": SCENARIO_VERSION,
@@ -155,12 +184,20 @@ def generate_centerline_route_scenario(
             "route_mode": "auto_centerline_v1",
             "route_source": footprint.source,
             "centerline_definition": (
-                "representative high-clearance segment through the "
-                "vertex-derived cave footprint"
+                "highest chunk/texture complexity segment through the "
+                "vertex-derived cave footprint centerline"
             ),
             "clearance_definition": (
                 "grid distance from the footprint boundary in footprint cells"
             ),
+            "complexity_definition": (
+                "normalized sum of render-distance x/z column chunk count "
+                "and unique texture count across occupied vertical layers"
+            ),
+            "route_selection_strategy": "max_chunk_texture_complexity_v1",
+            "warmup_behavior": "hold_first_keyframe_until_measurement",
+            "route_travel_start_s": round(template.warmup_seconds, 3),
+            "route_travel_duration_s": round(template.measurement_seconds, 3),
             "y_strategy": "local_vertical_center_v1",
             "vertical_position_fraction": (
                 CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION
@@ -172,18 +209,38 @@ def generate_centerline_route_scenario(
             "endpoint_clearance_percentile": float(endpoint_percentile),
             "endpoint_threshold_clearance_cells": int(endpoint_threshold),
             "target_route_length_m": round(resolved_target_length_m, 3),
+            "target_route_length_source": (
+                "explicit_meters"
+                if target_length_is_override
+                else "default_chunk_widths"
+            ),
+            "target_route_length_chunks": (
+                None
+                if target_length_is_override
+                else DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS
+            ),
             "target_route_speed_m_per_second": round(
                 resolved_target_speed_m_per_second,
                 6,
             ),
-            "target_route_speed_ft_per_minute": round(
-                resolved_target_speed_m_per_second * 60.0 / 0.3048,
+            "target_route_speed_m_per_minute": round(
+                resolved_target_speed_m_per_second * 60.0,
+                3,
+            ),
+            "actual_route_speed_m_per_second": round(
+                actual_route_speed_m_per_second,
+                6,
+            ),
+            "actual_route_speed_m_per_minute": round(
+                actual_route_speed_m_per_second * 60.0,
                 3,
             ),
             "full_path_cell_count": len(full_path_cells),
             "full_path_length_m": round(full_path_length_m, 3),
             "segment_start_m": round(segment_start_m, 3),
             "segment_end_m": round(segment_end_m, 3),
+            "complexity_render_distance_chunks": template.render_distance,
+            "complexity_pivot_cell": list(pivot_cell),
             "path_cell_count": len(path_cells),
             "route_keyframe_count": len(route),
             "route_length_m": round(route_length_m, 3),
@@ -207,6 +264,49 @@ def generate_centerline_route_scenario(
             "mean_path_clearance_cells": round(
                 sum(path_scores) / len(path_scores),
                 3,
+            ),
+            "max_route_complexity_score": round(
+                max(item.score for item in route_complexities),
+                3,
+            ),
+            "mean_route_complexity_score": round(
+                sum(item.score for item in route_complexities)
+                / len(route_complexities),
+                3,
+            ),
+            "max_route_neighborhood_chunks": max(
+                item.chunk_count for item in route_complexities
+            ),
+            "mean_route_neighborhood_chunks": round(
+                sum(item.chunk_count for item in route_complexities)
+                / len(route_complexities),
+                3,
+            ),
+            "max_route_unique_textures": max(
+                item.texture_count for item in route_complexities
+            ),
+            "mean_route_unique_textures": round(
+                sum(item.texture_count for item in route_complexities)
+                / len(route_complexities),
+                3,
+            ),
+            "max_route_unique_materials": max(
+                item.material_count for item in route_complexities
+            ),
+            "mean_route_unique_materials": round(
+                sum(item.material_count for item in route_complexities)
+                / len(route_complexities),
+                3,
+            ),
+            "max_path_complexity_score": round(
+                max(item.score for item in path_complexities),
+                3,
+            ),
+            "max_path_neighborhood_chunks": max(
+                item.chunk_count for item in path_complexities
+            ),
+            "max_path_unique_textures": max(
+                item.texture_count for item in path_complexities
             ),
         },
         "route": route,
@@ -408,6 +508,137 @@ def _parse_chunks(manifest: Mapping[str, Any]) -> dict[Cell, Point]:
     return parsed
 
 
+def _chunk_load_infos(manifest: Mapping[str, Any]) -> dict[Cell, _ChunkLoadInfo]:
+    chunks = manifest.get("chunks")
+    if not isinstance(chunks, Mapping) or not chunks:
+        raise BenchmarkConfigurationError("manifest contains no chunks")
+    material_textures = _material_texture_map(manifest)
+    parsed: dict[Cell, _ChunkLoadInfo] = {}
+    for cell_key, info in chunks.items():
+        cell = _parse_cell_key(str(cell_key))
+        if not isinstance(info, Mapping):
+            raise BenchmarkConfigurationError(f"invalid chunk metadata for {cell_key}")
+        try:
+            bounds_min = tuple(float(value) for value in info["bounds_min"])
+            bounds_max = tuple(float(value) for value in info["bounds_max"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BenchmarkConfigurationError(
+                f"chunk {cell_key} is missing valid bounds"
+            ) from exc
+        if len(bounds_min) != 3 or len(bounds_max) != 3:
+            raise BenchmarkConfigurationError(f"chunk {cell_key} bounds must be 3D")
+        materials = frozenset(
+            material_name
+            for material in info.get("materials", ())
+            if (material_name := str(material).strip())
+        )
+        textures = frozenset(
+            material_textures[material]
+            for material in materials
+            if material_textures.get(material)
+        )
+        parsed[cell] = _ChunkLoadInfo(
+            center=tuple(
+                (bounds_min[index] + bounds_max[index]) / 2.0
+                for index in range(3)
+            ),
+            materials=materials,
+            textures=textures,
+        )
+    return parsed
+
+
+def _material_texture_map(manifest: Mapping[str, Any]) -> dict[str, str]:
+    raw_materials = manifest.get("mtl_materials", {})
+    if not isinstance(raw_materials, Mapping):
+        return {}
+    material_textures: dict[str, str] = {}
+    for material, texture in raw_materials.items():
+        if not isinstance(texture, str) or not texture.strip():
+            continue
+        material_textures[str(material)] = texture.strip()
+    return material_textures
+
+
+def _route_complexity_scores(
+    path_cells: tuple[FootprintCell, ...],
+    *,
+    centers: Mapping[FootprintCell, PointXZ],
+    manifest: Mapping[str, Any],
+    render_distance: int,
+    y_search_radius_cells: int,
+) -> dict[FootprintCell, _RouteComplexityScore]:
+    if not path_cells:
+        raise BenchmarkConfigurationError("cannot score an empty centerline path")
+    chunk_infos = _chunk_load_infos(manifest)
+    columns = _chunk_columns(manifest)
+    chunk_size = columns[0]
+    load_columns: dict[FootprintCell, list[_ChunkLoadInfo]] = {}
+    for chunk_cell, info in chunk_infos.items():
+        load_columns.setdefault((chunk_cell[0], chunk_cell[2]), []).append(info)
+    raw_scores: dict[FootprintCell, _RouteComplexityScore] = {}
+    radius = max(0, int(render_distance))
+
+    for path_cell in path_cells:
+        target_x, target_z = centers[path_cell]
+        route_point = _vertical_center_point_for_xz(
+            columns,
+            target_x=target_x,
+            target_z=target_z,
+            local_radius_cells=y_search_radius_cells,
+        )
+        center_chunk = _chunk_cell_for_point(route_point, chunk_size)
+        materials: set[str] = set()
+        textures: set[str] = set()
+        chunk_count = 0
+        for neighbor in _footprint_column_neighborhood(
+            (center_chunk[0], center_chunk[2]),
+            radius=radius,
+        ):
+            for info in load_columns.get(neighbor, ()):
+                chunk_count += 1
+                materials.update(info.materials)
+                textures.update(info.textures)
+        raw_scores[path_cell] = _RouteComplexityScore(
+            score=0.0,
+            chunk_count=chunk_count,
+            material_count=len(materials),
+            texture_count=len(textures),
+        )
+
+    max_chunks = max(1, max(item.chunk_count for item in raw_scores.values()))
+    max_textures = max(item.texture_count for item in raw_scores.values())
+    use_materials_as_texture_proxy = max_textures <= 0
+    texture_denominator = max(
+        1,
+        max(
+            (
+                item.material_count
+                if use_materials_as_texture_proxy
+                else item.texture_count
+            )
+            for item in raw_scores.values()
+        ),
+    )
+    return {
+        cell: _RouteComplexityScore(
+            score=(
+                score.chunk_count / max_chunks
+                + (
+                    score.material_count
+                    if use_materials_as_texture_proxy
+                    else score.texture_count
+                )
+                / texture_denominator
+            ),
+            chunk_count=score.chunk_count,
+            material_count=score.material_count,
+            texture_count=score.texture_count,
+        )
+        for cell, score in raw_scores.items()
+    }
+
+
 def _parse_cell_key(value: str) -> Cell:
     parts = value.split("_")
     if len(parts) != 3:
@@ -564,7 +795,8 @@ def _clearance_threshold(
 
 def _target_centerline_route_length_m(
     *,
-    duration_s: float,
+    chunk_size: float,
+    measurement_duration_s: float,
     target_length_m: float | None,
 ) -> float:
     if target_length_m is not None:
@@ -574,12 +806,12 @@ def _target_centerline_route_length_m(
                 "centerline target route length must be a positive number"
             )
         return target
-    duration = float(duration_s)
+    duration = float(measurement_duration_s)
     if not math.isfinite(duration) or duration <= 0.0:
         raise BenchmarkConfigurationError(
             "centerline route duration must be a positive number"
         )
-    return DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * duration
+    return float(chunk_size) * DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS
 
 
 def _select_footprint_path_segment(
@@ -587,25 +819,32 @@ def _select_footprint_path_segment(
     *,
     centers: Mapping[FootprintCell, PointXZ],
     clearance_scores: Mapping[FootprintCell, int],
+    complexity_scores: Mapping[FootprintCell, _RouteComplexityScore],
     target_length_m: float,
-) -> tuple[tuple[FootprintCell, ...], float, float]:
+) -> tuple[tuple[FootprintCell, ...], float, float, FootprintCell]:
     if len(path_cells) <= 2:
         distances = _footprint_cumulative_distances(path_cells, centers)
-        return path_cells, 0.0, distances[-1]
+        pivot = path_cells[
+            _centerline_segment_pivot_index(
+                path_cells,
+                distances=distances,
+                clearance_scores=clearance_scores,
+                complexity_scores=complexity_scores,
+            )
+        ]
+        return path_cells, 0.0, distances[-1], pivot
     distances = _footprint_cumulative_distances(path_cells, centers)
     total = distances[-1]
-    if total <= target_length_m:
-        return path_cells, 0.0, total
-
-    midpoint = total / 2.0
-    pivot_index = max(
-        range(len(path_cells)),
-        key=lambda index: (
-            clearance_scores[path_cells[index]],
-            -abs(distances[index] - midpoint),
-            -index,
-        ),
+    pivot_index = _centerline_segment_pivot_index(
+        path_cells,
+        distances=distances,
+        clearance_scores=clearance_scores,
+        complexity_scores=complexity_scores,
     )
+    pivot_cell = path_cells[pivot_index]
+    if total <= target_length_m:
+        return path_cells, 0.0, total, pivot_cell
+
     start_distance = max(0.0, distances[pivot_index] - target_length_m / 2.0)
     end_distance = start_distance + target_length_m
     if end_distance > total:
@@ -626,7 +865,33 @@ def _select_footprint_path_segment(
 
     if end_index <= start_index:
         end_index = min(len(path_cells) - 1, start_index + 1)
-    return tuple(path_cells[start_index : end_index + 1]), start_distance, end_distance
+    return (
+        tuple(path_cells[start_index : end_index + 1]),
+        start_distance,
+        end_distance,
+        pivot_cell,
+    )
+
+
+def _centerline_segment_pivot_index(
+    path_cells: tuple[FootprintCell, ...],
+    *,
+    distances: list[float],
+    clearance_scores: Mapping[FootprintCell, int],
+    complexity_scores: Mapping[FootprintCell, _RouteComplexityScore],
+) -> int:
+    midpoint = distances[-1] / 2.0
+    return max(
+        range(len(path_cells)),
+        key=lambda index: (
+            complexity_scores[path_cells[index]].score,
+            complexity_scores[path_cells[index]].texture_count,
+            complexity_scores[path_cells[index]].chunk_count,
+            clearance_scores[path_cells[index]],
+            -abs(distances[index] - midpoint),
+            -index,
+        ),
+    )
 
 
 def _lowest_cost_centerline_path(
@@ -1019,6 +1284,8 @@ def _keyframes_for_points(
     points: tuple[Point, ...],
     *,
     duration_s: float,
+    start_time_s: float = 0.0,
+    hold_start: bool = False,
 ) -> list[dict[str, Any]]:
     if not points:
         raise BenchmarkConfigurationError("generated route has no points")
@@ -1027,9 +1294,15 @@ def _keyframes_for_points(
     keyframes: list[dict[str, Any]] = []
     for index, point in enumerate(points):
         if total_distance > 0:
-            time_s = float(duration_s) * distances[index] / total_distance
+            time_s = (
+                float(start_time_s)
+                + float(duration_s) * distances[index] / total_distance
+            )
         else:
-            time_s = float(duration_s) * index / max(1, len(points) - 1)
+            time_s = (
+                float(start_time_s)
+                + float(duration_s) * index / max(1, len(points) - 1)
+            )
         yaw_deg, pitch_deg = _look_angles(points, index)
         keyframes.append(
             {
@@ -1039,17 +1312,30 @@ def _keyframes_for_points(
                 "pitch_deg": round(pitch_deg, 6),
             }
         )
-    keyframes[0]["time_s"] = 0.0
+    if hold_start and start_time_s > 0.0:
+        first = dict(keyframes[0])
+        first["time_s"] = 0.0
+        keyframes.insert(0, first)
+        keyframes[1]["time_s"] = round(float(start_time_s), 6)
+    else:
+        keyframes[0]["time_s"] = round(float(start_time_s), 6)
     if len(keyframes) > 1:
-        keyframes[-1]["time_s"] = round(float(duration_s), 6)
+        keyframes[-1]["time_s"] = round(
+            float(start_time_s) + float(duration_s),
+            6,
+        )
     return keyframes
 
 
 def _look_angles(points: tuple[Point, ...], index: int) -> tuple[float, float]:
     if len(points) == 1:
         return 0.0, 0.0
-    source = points[index]
-    target = points[index + 1] if index < len(points) - 1 else points[index - 1]
+    if index < len(points) - 1:
+        source = points[index]
+        target = points[index + 1]
+    else:
+        source = points[index - 1]
+        target = points[index]
     dx = target[0] - source[0]
     dy = target[1] - source[1]
     dz = target[2] - source[2]
@@ -1078,6 +1364,24 @@ def _path_length(points: tuple[Point, ...]) -> float:
 
 def _point_distance(first: Point, second: Point) -> float:
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(first, second)))
+
+
+def _chunk_cell_for_point(point: Point, chunk_size: float) -> Cell:
+    return tuple(
+        int(math.floor(coordinate / chunk_size))
+        for coordinate in point
+    )  # type: ignore[return-value]
+
+
+def _footprint_column_neighborhood(
+    cell: FootprintCell,
+    *,
+    radius: int,
+) -> Iterable[FootprintCell]:
+    cx, cz = cell
+    for dx in range(-radius, radius + 1):
+        for dz in range(-radius, radius + 1):
+            yield cx + dx, cz + dz
 
 
 def _cell_distance(first: Cell, second: Cell) -> float:

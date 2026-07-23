@@ -6,8 +6,7 @@ import pytest
 
 from caveviewer.gui.benchmark import BenchmarkScenario
 from caveviewer.gui.benchmark_routes import (
-    DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE,
-    DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
+    DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS,
     generate_centerline_route_scenario,
     generate_dense_chunk_route_scenario,
 )
@@ -41,21 +40,33 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     assert metadata["vertical_position_fraction"] == 0.65
     assert metadata["footprint_cell_size_m"] == 2.0
     assert metadata["max_clearance_cells"] >= 3
-    assert metadata["target_route_speed_ft_per_minute"] == (
-        DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE
+    assert metadata["route_selection_strategy"] == "max_chunk_texture_complexity_v1"
+    assert metadata["warmup_behavior"] == "hold_first_keyframe_until_measurement"
+    assert metadata["target_route_length_source"] == "default_chunk_widths"
+    assert metadata["target_route_length_chunks"] == DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS
+    assert metadata["target_route_length_m"] == pytest.approx(6.0)
+    assert metadata["target_route_speed_m_per_second"] == pytest.approx(0.75)
+    assert metadata["actual_route_speed_m_per_second"] == pytest.approx(
+        0.712,
+        abs=0.001,
     )
-    assert metadata["target_route_speed_m_per_second"] == pytest.approx(
-        DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND
-    )
-    assert metadata["target_route_length_m"] == pytest.approx(2.54)
-    assert metadata["route_length_m"] == pytest.approx(2.54, abs=0.01)
-    assert metadata["route_keyframe_count"] >= 2
+    assert metadata["route_travel_start_s"] == 2.0
+    assert metadata["route_travel_duration_s"] == 8.0
+    assert metadata["route_length_m"] == pytest.approx(5.696, abs=0.01)
+    assert metadata["route_keyframe_count"] == 5
+    assert metadata["max_route_neighborhood_chunks"] > 0
+    assert metadata["max_route_unique_textures"] > 0
     assert all(cell[1] in {1, 2, 3} for cell in centerline_route.route_cells)
-    assert centerline_route.scenario_payload["route"][0]["time_s"] == 0.0
-    assert centerline_route.scenario_payload["route"][-1]["time_s"] == 10.0
+    route = centerline_route.scenario_payload["route"]
+    assert route[0]["time_s"] == 0.0
+    assert route[1]["time_s"] == 2.0
+    assert route[-1]["time_s"] == 10.0
+    assert route[0]["position"] == route[1]["position"]
+    assert route[-1]["yaw_deg"] == route[-2]["yaw_deg"]
+    assert route[-1]["pitch_deg"] == route[-2]["pitch_deg"]
     assert all(
         keyframe["position"][1] == 6.5
-        for keyframe in centerline_route.scenario_payload["route"]
+        for keyframe in route
     )
 
 
@@ -109,8 +120,11 @@ def test_centerline_route_target_length_override_controls_route_speed():
     metadata = centerline_route.scenario_payload["metadata"]
 
     assert metadata["target_route_length_m"] == 4.0
-    assert metadata["target_route_speed_m_per_second"] == 0.4
-    assert metadata["target_route_speed_ft_per_minute"] == pytest.approx(78.74)
+    assert metadata["target_route_length_source"] == "explicit_meters"
+    assert metadata["target_route_length_chunks"] is None
+    assert metadata["target_route_speed_m_per_second"] == 0.5
+    assert metadata["target_route_speed_m_per_minute"] == 30.0
+    assert metadata["actual_route_speed_m_per_second"] == pytest.approx(0.5)
     assert metadata["route_length_m"] == pytest.approx(4.0, abs=0.01)
 
 
@@ -186,5 +200,6 @@ def _centerline_manifest(
         "chunk_size": 2.0,
         "footprint_cell_size": 2.0,
         "footprint_cells": footprint_cells,
+        "mtl_materials": {"rock": "rock.jpg"},
         "chunks": chunks,
     }

@@ -648,6 +648,10 @@ def summarize_samples(
         max(1e-9, (current.elapsed_s - previous.elapsed_s) * 1000.0)
         for previous, current in zip(sample_list, sample_list[1:])
     ]
+    drawn_chunk_values = [sample.drawn_chunks for sample in sample_list]
+    resident_chunk_values = [sample.resident_chunks for sample in sample_list]
+    wanted_chunk_values = [sample.wanted_chunks for sample in sample_list]
+    pending_chunk_values = [sample.pending_chunks for sample in sample_list]
     wall_clock_seconds = _wall_clock_seconds(
         sample_list,
         scenario=scenario,
@@ -680,6 +684,26 @@ def summarize_samples(
         "max_frame_interval_ms": _round_metric(
             max(frame_interval_ms_values) if frame_interval_ms_values else 0.0
         ),
+        "median_drawn_chunks": _round_metric(_median(drawn_chunk_values)),
+        "max_drawn_chunks": _round_metric(
+            max(drawn_chunk_values) if drawn_chunk_values else 0.0
+        ),
+        "median_resident_chunks": _round_metric(_median(resident_chunk_values)),
+        "max_resident_chunks": _round_metric(
+            max(resident_chunk_values) if resident_chunk_values else 0.0
+        ),
+        "median_wanted_chunks": _round_metric(_median(wanted_chunk_values)),
+        "max_wanted_chunks": _round_metric(
+            max(wanted_chunk_values) if wanted_chunk_values else 0.0
+        ),
+        "median_pending_chunks": _round_metric(_median(pending_chunk_values)),
+        "max_pending_chunks": _round_metric(
+            max(pending_chunk_values) if pending_chunk_values else 0.0
+        ),
+        "total_chunks_uploaded": sum(sample.chunks_uploaded for sample in sample_list),
+        "total_chunks_unloaded": sum(sample.chunks_unloaded for sample in sample_list),
+        "total_bytes_uploaded": sum(sample.bytes_uploaded for sample in sample_list),
+        "total_upload_stalls": sum(sample.upload_stalls for sample in sample_list),
         "stutter_counts": stutter_counts,
     }
     return {

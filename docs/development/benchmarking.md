@@ -135,21 +135,22 @@ inside the run artifact directory after the cache exists. It uses the
 fine-grained `footprint_cells` manifest field, which the chunker derives from
 source vertex positions, to estimate the middle of the cave passage. The
 generator computes a high-clearance path through that footprint, where clearance
-means grid distance from the footprint boundary, then selects a representative
-segment instead of sweeping the entire cave. It estimates Y from the nearest
-occupied chunk columns by placing the camera slightly above the midpoint of the
-local min/max chunk bounds. That fixed vertical placement makes tall passages
-more likely to stream and show ceiling geometry. This better approximates what
-virtual divers tend to look at: a route through the middle of the visible
-passage at a reasonable traversal rate.
+means grid distance from the footprint boundary, then scores candidate positions
+by render-distance x/z column load across occupied vertical layers: occupied
+chunk count plus unique texture count from the manifest material-to-texture map.
+The route segment is centered on the highest-scoring position instead of
+sweeping the entire cave.
 
-The default centerline route length is based on virtual-diver speed, not cave
-size. The generator uses 50 ft/min, which is 15.24 m/min or 0.254 m/s, and
-multiplies that by the scenario's total route duration. For the default
-35-second Devil's Eye XL scenario, the generated route targets about 8.9 meters
-of camera travel. This intentionally slow route gives the streamer time to fill
-the visible cave around the camera so the benchmark reflects steady rendering
-quality instead of how badly the camera can outrun chunk loading.
+The generated route holds the first camera pose through warmup, then travels
+only during the measurement window. For the default Devil's Eye XL scenario that
+means 5 seconds stationary for loading, followed by 30 seconds of measured
+travel. The default travel distance is three chunk widths. With the current
+50-meter gold-map chunks, that is about 150 meters over the measured 30 seconds:
+slow enough for render-distance streaming to fill the view, but large enough to
+avoid measuring a static screen. It estimates Y from the nearest occupied chunk
+columns by placing the camera slightly above the midpoint of the local min/max
+chunk bounds, making tall passages more likely to stream and show ceiling
+geometry.
 
 This remains a deterministic benchmark route, not a collision-checked
 navigation mesh. The cache describes surface geometry and chunk bounds; it does
@@ -164,8 +165,8 @@ python scripts/benchmark/run_devils_eye_xl_benchmark.py \
 ```
 
 Use `--centerline-route-target-length-m` only when deliberately recalibrating
-the route. Overriding it changes the scenario fingerprint and starts a new
-local comparison history for that route.
+the route. Overriding it changes the measured travel distance, scenario
+fingerprint, and local comparison history for that route.
 
 To run the older dense-streaming-load proxy instead:
 

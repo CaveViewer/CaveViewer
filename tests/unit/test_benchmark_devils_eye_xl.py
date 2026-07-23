@@ -56,8 +56,9 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert "Devil's Eye XL local benchmark plan:" in output
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=8" in output
-    assert "target_length=auto(50ft/min)" in output
-    assert "target_speed=0.254m/s" in output
+    assert "target_length=auto(3 chunks)" in output
+    assert "selection=max_chunk_texture_complexity" in output
+    assert "movement=after_warmup" in output
     assert "copy_map: yes" in output
     assert "compile_cache: yes" in output
     assert str(local_map_dir / "_cache") in output
@@ -156,8 +157,11 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     latest_text = (results_dir / "latest-summary.txt").read_text(encoding="utf-8")
     assert "Status: FAIL" in latest_text
     assert "wall_clock_fps=90.00" in latest_text
+    assert "Runtime load:" in latest_text
+    assert "median_drawn_chunks=40.00" in latest_text
     assert "Route: auto_centerline" in latest_text
-    assert "target_speed_ft_per_min=50.00" in latest_text
+    assert "selection=max_chunk_texture_complexity_v1" in latest_text
+    assert "target_speed_m_per_s=1.00" in latest_text
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
     assert "Previous local runs compared to current" in latest_text
@@ -221,6 +225,13 @@ def _summary(
         "median_fps": median_fps,
         "one_percent_low_fps": 80.0,
         "p95_frame_ms": 20.0,
+        "median_drawn_chunks": 40.0,
+        "max_drawn_chunks": 45.0,
+        "median_wanted_chunks": 70.0,
+        "max_pending_chunks": 3.0,
+        "total_chunks_uploaded": 20,
+        "total_bytes_uploaded": 1048576,
+        "total_upload_stalls": 0,
         "stutter_counts": {"over_50ms": 0},
     }
     if wall_clock_fps is not None:
@@ -241,7 +252,11 @@ def _manifest() -> dict:
         for y in range(2):
             for z in range(4):
                 chunks[f"{x}_{y}_{z}"] = _chunk(x, y, z)
-    return {"chunk_size": 10.0, "chunks": chunks}
+    return {
+        "chunk_size": 10.0,
+        "mtl_materials": {"rock": "rock.jpg"},
+        "chunks": chunks,
+    }
 
 
 def _chunk(x: int, y: int, z: int) -> dict:
