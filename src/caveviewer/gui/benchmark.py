@@ -466,6 +466,12 @@ class BenchmarkController:
         if self._frames_handle is None:
             self._frames_handle = open(self._frames_path, "w", encoding="utf-8")
 
+    def update_environment(self, values: Mapping[str, Any]) -> None:
+        """Merge benchmark environment details and refresh the artifact."""
+        self.environment.update(dict(values))
+        if self._prepared_at is not None:
+            self._write_json(self._environment_path, self.environment)
+
     def set_position_origin(self, origin: Iterable[float]) -> None:
         """Set the map-relative origin used by offset-based scenarios."""
         if self.scenario.position_mode == "first_chunk_center_offset":
@@ -830,6 +836,17 @@ def _compatibility_checks(
         ),
     ]
     for key in ("actual_window_size", "actual_framebuffer_size"):
+        baseline_value = baseline_environment.get(key)
+        candidate_value = candidate_environment.get(key)
+        if baseline_value is not None or candidate_value is not None:
+            checks.append(
+                _matching_value_check(
+                    f"environment.{key}",
+                    baseline_value,
+                    candidate_value,
+                )
+            )
+    for key in ("streaming_settings_fingerprint",):
         baseline_value = baseline_environment.get(key)
         candidate_value = candidate_environment.get(key)
         if baseline_value is not None or candidate_value is not None:

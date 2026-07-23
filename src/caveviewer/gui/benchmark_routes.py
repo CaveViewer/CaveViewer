@@ -23,7 +23,10 @@ PointXZ = tuple[float, float]
 DEFAULT_CENTERLINE_ROUTE_KEYFRAMES = 8
 DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT = 96
 DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE = 70.0
-DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS = 3.0
+DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE = 50.0
+DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND = (
+    DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE * 0.3048 / 60.0
+)
 DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS = 1
 CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.65
 DEFAULT_DENSE_ROUTE_KEYFRAMES = 8
@@ -212,13 +215,9 @@ def generate_centerline_route_scenario(
             "target_route_length_source": (
                 "explicit_meters"
                 if target_length_is_override
-                else "default_chunk_widths"
+                else "default_diver_speed"
             ),
-            "target_route_length_chunks": (
-                None
-                if target_length_is_override
-                else DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS
-            ),
+            "target_route_length_chunks": None,
             "target_route_speed_m_per_second": round(
                 resolved_target_speed_m_per_second,
                 6,
@@ -226,6 +225,15 @@ def generate_centerline_route_scenario(
             "target_route_speed_m_per_minute": round(
                 resolved_target_speed_m_per_second * 60.0,
                 3,
+            ),
+            "target_route_speed_feet_per_minute": round(
+                resolved_target_speed_m_per_second * 60.0 / 0.3048,
+                3,
+            ),
+            "target_route_speed_source": (
+                "explicit_length"
+                if target_length_is_override
+                else "default_50_ft_per_minute"
             ),
             "actual_route_speed_m_per_second": round(
                 actual_route_speed_m_per_second,
@@ -845,7 +853,7 @@ def _target_centerline_route_length_m(
         raise BenchmarkConfigurationError(
             "centerline route duration must be a positive number"
         )
-    return float(chunk_size) * DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS
+    return DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * duration
 
 
 def _select_footprint_path_segment(

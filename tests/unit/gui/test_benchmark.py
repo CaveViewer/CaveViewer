@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from types import SimpleNamespace
@@ -137,6 +138,25 @@ def test_controller_writes_frame_artifacts_and_summary(tmp_path):
     assert summary["metrics"]["wall_clock_seconds"] == 0.02
     assert summary["scenario"]["fingerprint"] == scenario.fingerprint
     assert summary["environment"]["runner"] == "unit"
+
+
+def test_controller_update_environment_refreshes_artifact(tmp_path):
+    controller = BenchmarkController(
+        scenario=_scenario(),
+        output_dir=tmp_path,
+        logger=logging.getLogger("benchmark-test"),
+        perf_counter=lambda: 0.0,
+        environment={"runner": "unit"},
+    )
+
+    controller.prepare_output()
+    controller.update_environment({"streaming_worker_target": 4})
+
+    environment = json.loads(
+        (tmp_path / "environment.json").read_text(encoding="utf-8")
+    )
+    assert environment["runner"] == "unit"
+    assert environment["streaming_worker_target"] == 4
 
 
 def test_controller_completion_does_not_wait_for_next_sample_bucket(tmp_path):
@@ -385,6 +405,43 @@ def test_compare_summaries_fails_on_actual_window_mismatch():
     assert comparison["passed"] is False
     assert "environment.actual_window_size" in failed_metrics
     assert "environment.actual_framebuffer_size" in failed_metrics
+
+
+def test_compare_summaries_fails_on_streaming_settings_mismatch():
+    comparison = compare_summaries(
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {
+                "cache_manifest_sha256": "map-a",
+                "streaming_settings_fingerprint": "streaming-a",
+            },
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {
+                "cache_manifest_sha256": "map-a",
+                "streaming_settings_fingerprint": "streaming-b",
+            },
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+    )
+
+    failed_metrics = {
+        check["metric"] for check in comparison["checks"] if not check["passed"]
+    }
+    assert comparison["passed"] is False
+    assert "environment.streaming_settings_fingerprint" in failed_metrics
 
 
 def test_compare_summaries_allows_absent_actual_framebuffer_when_both_missing():

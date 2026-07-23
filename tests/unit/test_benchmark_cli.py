@@ -39,6 +39,21 @@ def test_benchmark_cli_runs_viewer_benchmark_and_prints_summary(
         encoding="utf-8",
     )
     monkeypatch.delenv("CAVEVIEWER_VSYNC", raising=False)
+    caveviewer_home = tmp_path / "caveviewer-home"
+    preferences_dir = caveviewer_home / "config"
+    preferences_dir.mkdir(parents=True)
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(caveviewer_home))
+    (preferences_dir / "advanced_settings.json").write_text(
+        json.dumps(
+            {
+                "io_workers": "4",
+                "upload_chunks_per_frame": "5",
+                "upload_groups_per_frame": "7",
+                "upload_time_budget_ms": "9.5",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     def fake_run_viewer_benchmark(cache, textures, scenario, output):
         assert cache == str(cache_dir)
@@ -46,6 +61,10 @@ def test_benchmark_cli_runs_viewer_benchmark_and_prints_summary(
         assert scenario.name == "cli"
         assert output == str(output_dir)
         assert os.environ["CAVEVIEWER_VSYNC"] == "0"
+        assert os.environ["CAVEVIEWER_IO_WORKERS"] == "4"
+        assert os.environ["CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME"] == "5"
+        assert os.environ["CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME"] == "7"
+        assert os.environ["CAVEVIEWER_UPLOAD_TIME_BUDGET_MS"] == "9.5"
         summary_path = Path(output) / "summary.json"
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(

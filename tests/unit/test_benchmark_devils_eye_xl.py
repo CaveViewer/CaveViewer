@@ -56,7 +56,7 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert "Devil's Eye XL local benchmark plan:" in output
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=8" in output
-    assert "target_length=auto(3 chunks)" in output
+    assert "target_length=auto(50 ft/min, 0.254 m/s)" in output
     assert "selection=max_visible_chunk_texture_complexity" in output
     assert "movement=after_warmup" in output
     assert "copy_map: yes" in output
@@ -159,9 +159,13 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "wall_clock_fps=90.00" in latest_text
     assert "Runtime load:" in latest_text
     assert "median_drawn_chunks=40.00" in latest_text
+    assert "Streaming request:" in latest_text
+    assert "distance=3 chunks" in latest_text
+    assert "Streaming effective:" in latest_text
+    assert "Texture residency:" in latest_text
     assert "Route: auto_centerline" in latest_text
     assert "selection=max_visible_chunk_texture_complexity_v1" in latest_text
-    assert "target_speed_m_per_s=1.00" in latest_text
+    assert "target_speed_m_per_s=0.25" in latest_text
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
     assert "Previous local run compared to current" in latest_text
@@ -262,6 +266,31 @@ def test_devils_eye_xl_treats_actual_window_size_changes_as_incompatible():
     assert "framebuffer size changed" in history_text
 
 
+def test_devils_eye_xl_treats_streaming_settings_changes_as_incompatible():
+    module = _load_script_module()
+    current_summary = _summary(median_fps=90.0, wall_clock_fps=90.0)
+    current_summary["environment"]["streaming_settings_fingerprint"] = "streaming-b"
+    previous_summary = _summary(median_fps=100.0, wall_clock_fps=100.0)
+    previous_summary["environment"]["streaming_settings_fingerprint"] = "streaming-a"
+
+    assert module._latest_compatible_record(
+        [{"label": "old-streaming", "summary": previous_summary}],
+        current_summary,
+    ) is None
+
+    history_text = "\n".join(
+        module._history_comparison_lines(
+            [{"label": "old-streaming", "summary": previous_summary}],
+            current_summary=current_summary,
+            thresholds=module.BenchmarkThresholds(),
+            limit=1,
+        )
+    )
+
+    assert "Gate: INCOMPATIBLE" in history_text
+    assert "streaming settings changed" in history_text
+
+
 def _summary(
     *,
     median_fps: float,
@@ -299,7 +328,35 @@ def _summary(
         "reason": "completed",
         "measured_frames": 120,
         "metrics": metrics,
-        "environment": {"cache_manifest_sha256": "map-a"},
+        "environment": {
+            "cache_manifest_sha256": "map-a",
+            "streaming_settings_fingerprint": "streaming-a",
+            "streaming_settings": {
+                "render_distance_chunks": 3,
+                "system_ram_target_percent": "8",
+                "gpu_memory_target_percent": "70",
+                "gpu_memory_override_gb": "",
+                "io_workers": "2",
+                "io_reserved_cpus": "3",
+                "upload_chunks_per_frame": "1",
+                "upload_groups_per_frame": "1",
+                "upload_time_budget_ms": "3.0",
+            },
+            "effective_render_distance_chunks": 3,
+            "streaming_chunk_size_m": 50.0,
+            "streaming_max_loaded_chunks": 488,
+            "streaming_ready_backlog_capacity": 16,
+            "streaming_worker_target": 2,
+            "startup_upload_chunks_per_frame": 4,
+            "startup_upload_groups_per_frame": 8,
+            "startup_upload_time_budget_ms": 12.0,
+            "catchup_upload_chunks_per_frame": 2,
+            "catchup_upload_groups_per_frame": 8,
+            "catchup_upload_time_budget_ms": 8.0,
+            "texture_max_dimension": 2048,
+            "texture_resident_budget_bytes": 1720 * 1024 * 1024,
+            "texture_decoded_cache_budget_bytes": 304 * 1024 * 1024,
+        },
     }
 
 

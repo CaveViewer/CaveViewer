@@ -38,7 +38,8 @@ from caveviewer.gui.benchmark import (
 from caveviewer.gui.benchmark_routes import (
     CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
     DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
-    DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS,
+    DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE,
+    DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
     DEFAULT_DENSE_ROUTE_KEYFRAMES,
     DEFAULT_DENSE_ROUTE_PERCENTILE,
@@ -407,7 +408,12 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
     if plan["route_mode"] == "auto-centerline":
         target_length = plan["centerline_route_target_length_m"]
         target_text = (
-            f"auto({DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS:g} chunks)"
+            (
+                "auto("
+                f"{DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE:g} ft/min, "
+                f"{DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND:.3f} m/s"
+                ")"
+            )
             if target_length is None
             else f"{target_length:g}m"
         )
@@ -741,6 +747,7 @@ def _human_summary(
             f"ui_surface={_format_size(environment.get('actual_ui_surface_size'))}, "
             f"backend={environment.get('window_backend') or '<missing>'}"
         ),
+        *_streaming_summary_lines(environment),
     ]
     route_line = _route_summary_for_summary(summary)
     if route_line:
@@ -786,6 +793,68 @@ def _human_summary(
     if comparison_path is not None:
         lines.append(f"Comparison JSON: {comparison_path}")
     return "\n".join(lines) + "\n"
+
+
+def _streaming_summary_lines(environment: Mapping[str, Any]) -> list[str]:
+    settings = environment.get("streaming_settings")
+    if not isinstance(settings, Mapping):
+        settings = {}
+    has_effective_values = any(
+        key in environment
+        for key in (
+            "streaming_chunk_size_m",
+            "streaming_max_loaded_chunks",
+            "streaming_ready_backlog_capacity",
+            "texture_max_dimension",
+        )
+    )
+    if not settings and not has_effective_values:
+        return []
+
+    return [
+        (
+            "Streaming request: "
+            f"distance={_format_setting(settings.get('render_distance_chunks'))} chunks, "
+            f"RAM target={_format_percent_setting(settings.get('system_ram_target_percent'))}, "
+            f"GPU target={_format_percent_setting(settings.get('gpu_memory_target_percent'))}, "
+            f"GPU override={_format_setting(settings.get('gpu_memory_override_gb'), suffix=' GB')}, "
+            f"workers={_format_setting(settings.get('io_workers'))}, "
+            f"reserved_cpus={_format_setting(settings.get('io_reserved_cpus'))}, "
+            "upload="
+            f"{_format_setting(settings.get('upload_chunks_per_frame'))} chunks/frame, "
+            f"{_format_setting(settings.get('upload_groups_per_frame'))} groups/chunk, "
+            f"{_format_setting(settings.get('upload_time_budget_ms'))} ms/frame"
+        ),
+        (
+            "Streaming effective: "
+            f"distance={_format_setting(environment.get('effective_render_distance_chunks'))} chunks, "
+            f"chunk_size={_format_setting(environment.get('streaming_chunk_size_m'), suffix=' m')}, "
+            f"max_loaded_chunks={_format_setting(environment.get('streaming_max_loaded_chunks'))}, "
+            f"ready_backlog={_format_setting(environment.get('streaming_ready_backlog_capacity'))}, "
+            f"worker_target={_format_setting(environment.get('streaming_worker_target'))}, "
+            f"startup_upload={_format_upload_policy(environment, 'startup')}, "
+            f"catchup_upload={_format_upload_policy(environment, 'catchup')}"
+        ),
+        (
+            "Texture residency: "
+            f"max_dimension={_format_setting(environment.get('texture_max_dimension'), suffix=' px')}, "
+            f"resident_budget={_format_bytes_mb(environment.get('texture_resident_budget_bytes'))}, "
+            f"decoded_cache={_format_bytes_mb(environment.get('texture_decoded_cache_budget_bytes'))}"
+        ),
+    ]
+
+
+def _format_upload_policy(
+    environment: Mapping[str, Any],
+    prefix: str,
+) -> str:
+    return (
+        f"{_format_setting(environment.get(f'{prefix}_upload_chunks_per_frame'))} "
+        "chunks/frame, "
+        f"{_format_setting(environment.get(f'{prefix}_upload_groups_per_frame'))} "
+        "groups/chunk, "
+        f"{_format_setting(environment.get(f'{prefix}_upload_time_budget_ms'))} ms/frame"
+    )
 
 
 def _history_comparison_lines(
@@ -939,6 +1008,7 @@ def _incompatibility_reasons(
     for key, reason in (
         ("actual_window_size", "window size changed"),
         ("actual_framebuffer_size", "framebuffer size changed"),
+        ("streaming_settings_fingerprint", "streaming settings changed"),
     ):
         previous_value = previous_environment.get(key)
         current_value = current_environment.get(key)
@@ -1004,6 +1074,13 @@ def _summaries_are_comparable(
             and previous_value != current_value
         ):
             return False
+    previous_streaming = previous_environment.get("streaming_settings_fingerprint")
+    current_streaming = current_environment.get("streaming_settings_fingerprint")
+    if (
+        (previous_streaming is not None or current_streaming is not None)
+        and previous_streaming != current_streaming
+    ):
+        return False
     return True
 
 
@@ -1156,6 +1233,37 @@ def _format_metric(value: object) -> str:
     if isinstance(value, (int, float)):
         return f"{float(value):.2f}"
     return str(value if value is not None else "<missing>")
+
+
+def _format_setting(value: object, *, suffix: str = "") -> str:
+    if value is None or value == "":
+        return "<missing>"
+    if isinstance(value, bool):
+        text = str(value)
+    elif isinstance(value, int):
+        text = str(value)
+    elif isinstance(value, float):
+        text = str(int(value)) if value.is_integer() else f"{value:.2f}"
+    else:
+        text = str(value)
+    if text == "<missing>" or not suffix:
+        return text
+    return f"{text}{suffix}"
+
+
+def _format_percent_setting(value: object) -> str:
+    if value is None or value == "":
+        return "<missing>"
+    text = str(value).strip()
+    if not text:
+        return "<missing>"
+    return text if text.endswith("%") else f"{text}%"
+
+
+def _format_bytes_mb(value: object) -> str:
+    if not isinstance(value, (int, float)):
+        return "<missing>"
+    return f"{float(value) / (1024 ** 2):.1f} MB"
 
 
 def _format_size(value: object) -> str:

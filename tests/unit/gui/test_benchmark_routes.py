@@ -6,7 +6,8 @@ import pytest
 
 from caveviewer.gui.benchmark import BenchmarkScenario
 from caveviewer.gui.benchmark_routes import (
-    DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS,
+    DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE,
+    DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
     generate_centerline_route_scenario,
     generate_dense_chunk_route_scenario,
 )
@@ -44,17 +45,29 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
         "max_visible_chunk_texture_complexity_v1"
     )
     assert metadata["warmup_behavior"] == "hold_first_keyframe_until_measurement"
-    assert metadata["target_route_length_source"] == "default_chunk_widths"
-    assert metadata["target_route_length_chunks"] == DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS
-    assert metadata["target_route_length_m"] == pytest.approx(6.0)
-    assert metadata["target_route_speed_m_per_second"] == pytest.approx(0.75)
+    assert metadata["target_route_length_source"] == "default_diver_speed"
+    assert metadata["target_route_length_chunks"] is None
+    assert metadata["target_route_length_m"] == pytest.approx(
+        DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * 8.0,
+        abs=0.001,
+    )
+    assert metadata["target_route_speed_m_per_second"] == pytest.approx(
+        DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND
+    )
+    assert metadata["target_route_speed_feet_per_minute"] == pytest.approx(
+        DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE
+    )
+    assert metadata["target_route_speed_source"] == "default_50_ft_per_minute"
     assert metadata["actual_route_speed_m_per_second"] == pytest.approx(
-        0.712,
+        DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
         abs=0.001,
     )
     assert metadata["route_travel_start_s"] == 2.0
     assert metadata["route_travel_duration_s"] == 8.0
-    assert metadata["route_length_m"] == pytest.approx(5.696, abs=0.01)
+    assert metadata["route_length_m"] == pytest.approx(
+        DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * 8.0,
+        abs=0.01,
+    )
     assert metadata["route_keyframe_count"] == 5
     assert metadata["max_route_visible_chunks"] > 0
     assert metadata["max_route_unique_textures"] > 0

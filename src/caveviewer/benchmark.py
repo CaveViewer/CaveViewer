@@ -22,6 +22,7 @@ from caveviewer.gui.benchmark import (
     BenchmarkConfigurationError,
     BenchmarkScenario,
 )
+from caveviewer.gui.preferences import apply_preferences_to_env, load_preferences
 from caveviewer.version import APP_NAME, APP_VERSION
 
 
@@ -83,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     log_file = Path(args.log_file) if args.log_file else output_dir / "benchmark.log"
     _configure_benchmark_logging(args.log_level, log_file)
     _route_moderngl_window_logging()
+    _apply_saved_preferences_to_env()
 
     if args.vsync != "unchanged":
         os.environ["CAVEVIEWER_VSYNC"] = "1" if args.vsync == "on" else "0"
@@ -140,6 +142,12 @@ def _configure_benchmark_logging(level: str, log_file: Path) -> None:
         )
     )
     logging.getLogger().addHandler(file_handler)
+
+
+def _apply_saved_preferences_to_env() -> None:
+    preferences = load_preferences()
+    apply_preferences_to_env(preferences)
+    _LOG.info("Applied saved CaveViewer preferences for benchmark runtime settings.")
 
 
 def run() -> None:

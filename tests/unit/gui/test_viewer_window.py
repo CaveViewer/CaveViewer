@@ -1052,8 +1052,17 @@ def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monk
         name="gold",
         fingerprint="scenario-sha",
         window_size=(640, 480),
+        render_distance=4,
     )
     calls = []
+    monkeypatch.setenv("CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "12")
+    monkeypatch.setenv("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET", "65")
+    monkeypatch.delenv("CAVEVIEWER_GPU_MEMORY_GB", raising=False)
+    monkeypatch.setenv("CAVEVIEWER_IO_WORKERS", "3")
+    monkeypatch.setenv("CAVEVIEWER_IO_RESERVED_CPUS", "2")
+    monkeypatch.setenv("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "5")
+    monkeypatch.setenv("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", "7")
+    monkeypatch.setenv("CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", "9.5")
 
     monkeypatch.setattr(
         viewer_window.chunker,
@@ -1086,6 +1095,18 @@ def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monk
     assert config["environment"]["cache_manifest_sha256"] == hashlib.sha256(
         manifest_bytes
     ).hexdigest()
+    assert config["environment"]["streaming_settings"] == {
+        "render_distance_chunks": 4,
+        "system_ram_target_percent": "12",
+        "gpu_memory_target_percent": "65",
+        "gpu_memory_override_gb": "",
+        "io_workers": "3",
+        "io_reserved_cpus": "2",
+        "upload_chunks_per_frame": "5",
+        "upload_groups_per_frame": "7",
+        "upload_time_budget_ms": "9.5",
+    }
+    assert len(config["environment"]["streaming_settings_fingerprint"]) == 64
     assert viewer_window.CaveViewerWindow.cave_benchmark_config is None
 
 

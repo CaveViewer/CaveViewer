@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 import hashlib
+import json
 import logging
 import math
 import os
@@ -80,6 +81,16 @@ _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
 _VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
+_BENCHMARK_STREAMING_ENV_FIELDS = (
+    ("system_ram_target_percent", "CAVEVIEWER_MEMORY_UTILIZATION_TARGET"),
+    ("gpu_memory_target_percent", "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET"),
+    ("gpu_memory_override_gb", "CAVEVIEWER_GPU_MEMORY_GB"),
+    ("io_workers", "CAVEVIEWER_IO_WORKERS"),
+    ("io_reserved_cpus", "CAVEVIEWER_IO_RESERVED_CPUS"),
+    ("upload_chunks_per_frame", "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME"),
+    ("upload_groups_per_frame", "CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME"),
+    ("upload_time_budget_ms", "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS"),
+)
 
 
 _RecordingStopResult = recording.RecordingStopResult
@@ -235,6 +246,37 @@ def _benchmark_environment_size(value) -> list[int] | None:
     if width <= 0 or height <= 0:
         return None
     return [width, height]
+
+
+def _benchmark_render_distance_value(scenario) -> int | str:
+    """Return the scenario render distance in a JSON-stable form."""
+    value = getattr(scenario, "render_distance", "")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _benchmark_streaming_settings_snapshot(scenario) -> dict[str, object]:
+    """Return requested benchmark streaming settings that affect comparability."""
+    settings: dict[str, object] = {
+        "render_distance_chunks": _benchmark_render_distance_value(scenario),
+    }
+    for key, env_var in _BENCHMARK_STREAMING_ENV_FIELDS:
+        settings[key] = os.environ.get(env_var, "")
+    return settings
+
+
+def _benchmark_streaming_settings_fingerprint(
+    settings: Mapping[str, object],
+) -> str:
+    payload = json.dumps(
+        dict(settings),
+        default=str,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _viewer_ui_scale_for_window_size(
@@ -642,7 +684,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 perf_counter=lambda: time.perf_counter(),
                 environment=benchmark_config.get("environment", {}),
             )
-            self._benchmark_controller.environment.update(
+            self._benchmark_controller.update_environment(
                 {
                     "gl_vendor": str(self.ctx.info.get("GL_VENDOR", "")),
                     "gl_renderer": str(self.ctx.info.get("GL_RENDERER", "")),
@@ -1247,6 +1289,86 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_prep_complete_until = None
         self._chunk_prep_completion_armed = False
         self.import_progress_panel.reset_progress()
+        self._record_benchmark_streaming_environment()
+
+    def _record_benchmark_streaming_environment(self) -> None:
+        """Persist effective Streaming/texture settings for benchmark artifacts."""
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        world = getattr(self, "world", None)
+        if benchmark_controller is None or world is None:
+            return
+
+        config = getattr(world, "config", None)
+        texture_manager = getattr(self, "texture_manager", None)
+        ready_backlog_capacity = getattr(world, "_ready_backlog_capacity", None)
+        worker_target = getattr(world, "_worker_pool_size", None)
+        active_workers = getattr(world, "_workers", ())
+        update = {
+            "effective_render_distance_chunks": int(
+                getattr(config, "load_radius_cells", 0) or 0
+            ),
+            "streaming_chunk_size_m": float(
+                getattr(config, "chunk_size", 0.0) or 0.0
+            ),
+            "streaming_unload_radius_margin": int(
+                getattr(config, "unload_radius_margin", 0) or 0
+            ),
+            "streaming_max_loaded_chunks": int(
+                getattr(config, "max_loaded_chunks", 0) or 0
+            ),
+            "streaming_ready_backlog_capacity": (
+                None
+                if ready_backlog_capacity is None
+                else int(ready_backlog_capacity)
+            ),
+            "streaming_worker_target": (
+                None if worker_target is None else int(worker_target)
+            ),
+            "streaming_active_workers_at_load": len(tuple(active_workers or ())),
+            "upload_chunks_per_frame_effective": int(self._upload_chunks_per_frame),
+            "upload_groups_per_frame_effective": int(self._upload_groups_per_frame),
+            "upload_time_budget_ms_effective": float(self._upload_time_budget_ms),
+            "startup_upload_chunks_per_frame": max(
+                self._upload_chunks_per_frame,
+                _STARTUP_UPLOAD_CHUNKS_PER_FRAME,
+            ),
+            "startup_upload_groups_per_frame": max(
+                self._upload_groups_per_frame,
+                _STARTUP_UPLOAD_OPERATIONS_PER_CHUNK,
+            ),
+            "startup_upload_time_budget_ms": max(
+                self._upload_time_budget_ms,
+                _STARTUP_UPLOAD_TIME_BUDGET_MS,
+            ),
+            "catchup_upload_chunks_per_frame": max(
+                self._upload_chunks_per_frame,
+                _CATCHUP_UPLOAD_CHUNKS_PER_FRAME,
+            ),
+            "catchup_upload_groups_per_frame": max(
+                self._upload_groups_per_frame,
+                _CATCHUP_UPLOAD_OPERATIONS_PER_CHUNK,
+            ),
+            "catchup_upload_time_budget_ms": max(
+                self._upload_time_budget_ms,
+                _CATCHUP_UPLOAD_TIME_BUDGET_MS,
+            ),
+            "texture_max_dimension": (
+                None
+                if texture_manager is None
+                else texture_manager.max_texture_dimension
+            ),
+            "texture_resident_budget_bytes": (
+                None
+                if texture_manager is None
+                else texture_manager.max_resident_texture_bytes
+            ),
+            "texture_decoded_cache_budget_bytes": (
+                None
+                if texture_manager is None
+                else texture_manager.max_decoded_cache_bytes
+            ),
+        }
+        benchmark_controller.update_environment(update)
 
     def _navigation_position_is_allowed(self, position: np.ndarray) -> bool:
         """
@@ -4475,6 +4597,10 @@ def run_viewer_benchmark(
 
     summary_path = os.path.join(output_dir, "summary.json")
     manifest = chunker.load_manifest(cache_dir)
+    streaming_settings = _benchmark_streaming_settings_snapshot(scenario)
+    streaming_fingerprint = _benchmark_streaming_settings_fingerprint(
+        streaming_settings
+    )
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
     CaveViewerWindow.cave_manifest = manifest
@@ -4494,6 +4620,16 @@ def run_viewer_benchmark(
             "source_sha": os.environ.get("GITHUB_SHA")
             or os.environ.get("CAVEVIEWER_COMMIT", ""),
             "vsync_env": os.environ.get("CAVEVIEWER_VSYNC", ""),
+            "streaming_settings": streaming_settings,
+            "streaming_settings_fingerprint": streaming_fingerprint,
+            "render_distance_chunks": streaming_settings["render_distance_chunks"],
+            "memory_target_percent": streaming_settings["system_ram_target_percent"],
+            "gpu_memory_target_percent": streaming_settings[
+                "gpu_memory_target_percent"
+            ],
+            "gpu_memory_override_gb": streaming_settings["gpu_memory_override_gb"],
+            "io_workers": streaming_settings["io_workers"],
+            "io_reserved_cpus": streaming_settings["io_reserved_cpus"],
             "upload_chunks_per_frame": os.environ.get(
                 "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", ""
             ),
