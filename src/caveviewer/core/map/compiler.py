@@ -17,8 +17,6 @@ from typing import TYPE_CHECKING, Literal
 
 from caveviewer.core.preferences.schema import (
     PREFERENCE_FIELDS,
-    Preferences,
-    require_validated_preferences,
     validate_preference,
 )
 from caveviewer.core.diagnostics.logging import (
@@ -365,13 +363,13 @@ def _result_from_manifest(
 def _resolve_preferences(
     settings_file: str | None,
     parsing_overrides: Mapping[str, str] | None,
-) -> Preferences:
+) -> Mapping[str, str]:
     preferences = (
         _built_in_preferences()
         if settings_file is None
         else _load_explicit_preferences(settings_file)
     )
-    values = preferences.as_dict()
+    values = dict(preferences)
     for key, value in dict(parsing_overrides or {}).items():
         if key not in PARSING_PREFERENCE_KEYS:
             raise MapCompileConfigurationError(
@@ -379,13 +377,10 @@ def _resolve_preferences(
             )
         values[key] = str(value)
 
-    try:
-        return require_validated_preferences(values)
-    except Exception as exc:
-        raise MapCompileConfigurationError(str(exc)) from exc
+    return _validate_parsing_preferences(values)
 
 
-def _load_explicit_preferences(settings_file: str) -> Preferences:
+def _load_explicit_preferences(settings_file: str) -> Mapping[str, str]:
     path = Path(settings_file).expanduser()
     if not path.exists():
         raise MapCompileConfigurationError(
@@ -405,40 +400,50 @@ def _load_explicit_preferences(settings_file: str) -> Preferences:
         raise MapCompileConfigurationError(
             f"--settings-file must contain a JSON object: {path}"
         )
-    values = _built_in_preferences().as_dict()
+    values = dict(_built_in_preferences())
     for key, value in payload.items():
         key = str(key)
         if key not in PREFERENCE_KEYS:
             raise MapCompileConfigurationError(
                 f"--settings-file contains an unknown preference: {key}"
             )
-        values[key] = str(value).strip() if value is not None else ""
-    try:
-        return require_validated_preferences(values)
-    except Exception as exc:
-        raise MapCompileConfigurationError(str(exc)) from exc
+        if key in PARSING_PREFERENCE_KEYS:
+            values[key] = str(value).strip() if value is not None else ""
+    return _validate_parsing_preferences(values)
 
 
-def _built_in_preferences() -> Preferences:
+def _built_in_preferences() -> Mapping[str, str]:
     values: dict[str, str] = {}
-    for field in PREFERENCE_FIELDS:
+    for field in PARSING_PREFERENCE_FIELDS:
         result = validate_preference(field, field.built_in_default())
         if not result.is_valid:
             raise MapCompileConfigurationError(
                 f"Invalid built-in default for {field.key}: {result.message}"
             )
         values[field.key] = result.normalized_value
-    return Preferences(values)
+    return values
 
 
-def _float_preference(preferences: Preferences, key: str) -> float:
+def _validate_parsing_preferences(values: Mapping[str, str]) -> Mapping[str, str]:
+    normalized: dict[str, str] = {}
+    for field in PARSING_PREFERENCE_FIELDS:
+        result = validate_preference(field, values.get(field.key, ""))
+        if not result.is_valid:
+            raise MapCompileConfigurationError(
+                result.message or f"Invalid value for {field.key}"
+            )
+        normalized[field.key] = result.normalized_value
+    return normalized
+
+
+def _float_preference(preferences: Mapping[str, str], key: str) -> float:
     try:
         return float(preferences[key])
     except Exception as exc:
         raise MapCompileConfigurationError(f"Invalid numeric preference: {key}") from exc
 
 
-def _obj_face_batch_size(preferences: Preferences) -> int:
+def _obj_face_batch_size(preferences: Mapping[str, str]) -> int:
     try:
         return int(preferences["obj_import_batch_thousands"]) * 1000
     except Exception as exc:

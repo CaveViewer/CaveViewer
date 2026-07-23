@@ -254,6 +254,31 @@ def test_compile_ignores_saved_gui_preferences_by_default(tmp_path):
     assert result.chunk_size == 50.0
 
 
+def test_compile_default_cache_root_ignores_downloaded_maps_folder(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "cave.glb"
+    source.write_bytes(b"glTF")
+    downloads_dir = tmp_path / "Downloads"
+    storage_root = tmp_path / "caveviewer-home"
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(storage_root))
+    monkeypatch.setenv("CAVEVIEWER_MAP_LIBRARY_DIR", str(downloads_dir))
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
+
+    result = map_compiler.compile_map(
+        map_compiler.CompileOptions(
+            source=str(source),
+            dry_run=True,
+        )
+    )
+
+    expected_cache_root = storage_root / "cache" / "maps"
+    assert result.status == "planned"
+    assert result.cache_root == str(expected_cache_root)
+    assert result.cache_dir.startswith(str(expected_cache_root))
+    assert not result.cache_dir.startswith(str(downloads_dir))
+
+
 def test_compile_uses_explicit_partial_settings_file(tmp_path):
     source = tmp_path / "cave.glb"
     source.write_bytes(b"glTF")
@@ -261,6 +286,37 @@ def test_compile_uses_explicit_partial_settings_file(tmp_path):
     settings_file = tmp_path / "chunker-settings.json"
     settings_file.write_text(
         json.dumps({"chunk_size_meters": "72"}),
+        encoding="utf-8",
+    )
+
+    result = map_compiler.compile_map(
+        map_compiler.CompileOptions(
+            source=str(source),
+            cache_root=str(cache_root),
+            settings_file=str(settings_file),
+            dry_run=True,
+        )
+    )
+
+    assert result.status == "planned"
+    assert result.chunk_size == 72.0
+
+
+def test_compile_ignores_storage_values_in_explicit_settings_file(tmp_path):
+    source = tmp_path / "cave.glb"
+    source.write_bytes(b"glTF")
+    cache_root = tmp_path / "cache-root"
+    not_a_directory = tmp_path / "not-a-directory"
+    not_a_directory.write_text("not a folder", encoding="utf-8")
+    settings_file = tmp_path / "chunker-settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "chunk_size_meters": "72",
+                "recording_dir": str(not_a_directory),
+                "map_library_dir": str(not_a_directory),
+            }
+        ),
         encoding="utf-8",
     )
 
