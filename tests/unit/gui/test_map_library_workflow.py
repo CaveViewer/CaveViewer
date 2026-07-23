@@ -38,6 +38,7 @@ class _FakePanel:
     def __init__(self) -> None:
         self.standard_rows = {}
         self.standard_actions = {}
+        self.standard_menu_factories = {}
         self.metadata = {}
         self.progress = []
         self.closed_menus = 0
@@ -63,6 +64,7 @@ class _FakePanel:
     def add_standard_row(self, row, *, action, menu_actions_factory=None):
         self.standard_rows[row.key] = row
         self.standard_actions[row.key] = (row.action_text, action, row.enabled)
+        self.standard_menu_factories[row.key] = menu_actions_factory
         return SimpleNamespace(row_shell=object())
 
     def has_standard_row(self, key: str) -> bool:
@@ -72,6 +74,7 @@ class _FakePanel:
         self.removed_standard_key = key
         self.standard_rows.pop(key, None)
         self.standard_actions.pop(key, None)
+        self.standard_menu_factories.pop(key, None)
 
     def set_standard_row_action(
         self,
@@ -167,6 +170,8 @@ def _workflow(
     start_download_worker=None,
     start_catalog_worker=None,
     remove_recent_path=None,
+    has_cache=None,
+    remove_cache=None,
 ):
     root = _FakeRoot()
     panel = _FakePanel()
@@ -189,6 +194,11 @@ def _workflow(
             (message, kwargs)
         ),
         logger=_FakeLogger(),
+        has_cache=has_cache or (lambda _path: False),
+        remove_cache=(
+            remove_cache
+            or (lambda _path: SimpleNamespace(error=None, removed=False))
+        ),
         remove_recent_path=remove_recent_path or (lambda _path: None),
         is_downloaded=is_downloaded or (lambda _root, _map: False),
         existing_path=existing_path or (lambda _root, _map: None),
@@ -226,6 +236,56 @@ def test_populate_panel_creates_rows_and_starts_catalog_fetch():
     assert "Test Cave" in state.panel.standard_rows
     assert state.controller.catalog_fetch.loading
     assert state.root.after_calls[-1][1] == 120
+
+
+def test_downloaded_standard_library_menu_omits_cache_action_without_cache():
+    """Downloaded standard maps without generated cache expose one cleanup action."""
+    library_map = _library_map()
+    state = _workflow(
+        [library_map],
+        is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: "/library/Test Cave",
+        has_cache=lambda _path: False,
+    )
+
+    state.workflow.add_standard_row(library_map)
+    menu_factory = state.panel.standard_menu_factories["Test Cave"]
+
+    actions = menu_factory(SimpleNamespace(row_shell=object()))
+
+    assert [label for label, _command in actions] == ["Remove downloaded files"]
+
+
+def test_downloaded_standard_library_menu_includes_remove_cache_when_cache_exists():
+    """Downloaded standard maps with generated cache expose both cleanup actions."""
+    library_map = _library_map()
+    removed_cache_paths = []
+    state = _workflow(
+        [library_map],
+        is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: "/library/Test Cave",
+        has_cache=lambda path: path == "/library/Test Cave",
+        remove_cache=lambda path: (
+            removed_cache_paths.append(path)
+            or SimpleNamespace(error=None, removed=True)
+        ),
+    )
+    row_widgets = SimpleNamespace(row_shell=object())
+
+    state.workflow.add_standard_row(library_map)
+    menu_factory = state.panel.standard_menu_factories["Test Cave"]
+    actions = menu_factory(row_widgets)
+
+    assert [label for label, _command in actions] == [
+        "Remove downloaded files",
+        "Remove cache",
+    ]
+
+    actions[1][1]()
+
+    assert removed_cache_paths == ["/library/Test Cave"]
+    assert state.panel.status == (row_widgets, "Cache removed", False)
+    assert state.panel.last_row_overflow is row_widgets
 
 
 def test_download_success_applies_progress_and_open_action():
