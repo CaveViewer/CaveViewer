@@ -933,6 +933,7 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     window._stop_recording(show_message=True)
 
     assert window._recording_status_message == "Finishing recording"
+    assert window._recording_status_detail is None
     assert window._recording_stop_thread is not None
     window._recording_stop_thread.join(timeout=1.0)
     assert not window._recording_stop_thread.is_alive()
