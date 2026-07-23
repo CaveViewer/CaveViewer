@@ -107,14 +107,16 @@ maximum texture dimension from detected GPU memory, target percentage, and
 unique texture count, then workers decode Pillow image data into CPU bytes.
 `gui.texture_manager` consumes those decoded payloads on the render thread,
 creates/reuses/releases OpenGL textures, and enforces render-thread ownership
-for GPU work. Runtime uploads advance through render-thread operation queues:
-texture allocation is separated from row-band writes, and dense material groups
-are split into triangle-aligned VBO slices whose storage reservation and data
-writes advance separately where the OpenGL context supports it. Texture and VBO
-slice sizes start conservatively and shrink automatically after measured upload
-stalls. This keeps the visible cave geometry from collapsing to only the few
-chunks whose original texture tiles fit in VRAM, while still preventing
-obviously oversized texture uploads. GPU memory detection is platform-specific:
+for texture GPU work. `gui.chunk_upload` owns resident chunk GPU bookkeeping,
+partial upload state, unload cleanup, and shade-mode VBO rewrites. Runtime
+uploads advance through render-thread operation queues: texture allocation is
+separated from row-band writes, and dense material groups are split into
+triangle-aligned VBO slices whose storage reservation and data writes advance
+separately where the OpenGL context supports it. Texture and VBO slice sizes
+start conservatively and shrink automatically after measured upload stalls.
+This keeps the visible cave geometry from collapsing to only the few chunks
+whose original texture tiles fit in VRAM, while still preventing obviously
+oversized texture uploads. GPU memory detection is platform-specific:
 NVIDIA uses `nvidia-smi` when available, Linux AMD uses DRM sysfs, low-VRAM AMD
 integrated GPUs add 50% of reported GTT/shared memory capped at 2 GB, Windows
 AMD/Intel currently use an 8 GB fallback budget, and macOS currently uses a
