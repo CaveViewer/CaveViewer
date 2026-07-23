@@ -288,6 +288,21 @@ read-only and reveals its `.app` in Finder, Windows selects the package in
 Explorer, and Linux uses `OpenURI.OpenDirectory` with `xdg-open` fallback.
 Adapters must never launch an installer or execute a downloaded package.
 
+### Saved Files
+**When**: A workflow creates a user-owned output file, such as an MP4 recording,
+and should show the file in the native file manager after a user-visible
+completion.
+
+**How**:
+- `reveal_file()` exposes a saved file without opening or executing it.
+- macOS reveals the file in Finder.
+- Windows selects the file in Explorer.
+- Linux uses desktop-service reveal, with portal support and fallback behavior
+  centralized outside viewer code.
+
+Callers should treat reveal as best-effort and keep the primary success state
+intact if the file manager cannot be launched.
+
 ### UI Framework & Fonts
 **When**: Native UI elements (menus, fonts, dialogs) behave differently per-platform
 

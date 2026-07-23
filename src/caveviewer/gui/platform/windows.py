@@ -75,6 +75,11 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
         normalized_path = os.path.normpath(os.path.abspath(payload_path))
         subprocess.Popen(["explorer", f"/select,{normalized_path}"])
 
+    def reveal_file(self, path: str) -> None:
+        """Reveal a saved user file in Explorer without opening the file."""
+        normalized_path = os.path.normpath(os.path.abspath(path))
+        subprocess.Popen(["explorer", f"/select,{normalized_path}"])
+
     def font_candidates(self) -> list[str]:
         """Return Windows-specific font file paths in priority order."""
         return [

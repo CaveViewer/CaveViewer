@@ -58,6 +58,11 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
             f"{payload_path}"
         )
 
+    def reveal_file(self, path: str) -> None:
+        raise RuntimeError(
+            f"Revealing files is unsupported on this platform: {path}"
+        )
+
     def default_update_repo(self) -> str:
         return "CaveViewer/CaveViewer"
 

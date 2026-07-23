@@ -1491,6 +1491,18 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._apply_recording_stop_result(result)
             self._recording_stop_thread = None
 
+    def _reveal_recording_output(self, output_path: str | None) -> None:
+        if not output_path:
+            return
+        try:
+            self._active_platform_adapter().reveal_file(output_path)
+        except Exception as exc:
+            _LOG.warning(
+                "Could not reveal saved recording %s: %s",
+                output_path,
+                exc,
+            )
+
     def _apply_recording_stop_result(self, result: _RecordingStopResult) -> None:
         self._ensure_recording_controller().reset_after_stop_result()
 
@@ -1505,6 +1517,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     kind="success",
                     duration=3.2,
                 )
+                self._reveal_recording_output(result.output_path)
         else:
             if result.stderr_text and result.writer_error:
                 detail = f": {result.stderr_text}; writer_error={result.writer_error}"
