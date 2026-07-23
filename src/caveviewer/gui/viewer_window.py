@@ -50,6 +50,7 @@ from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import render_upload
+from caveviewer.gui import view_culling
 from caveviewer.gui import viewer_input
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
@@ -700,9 +701,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # tuples in the same order as _chunk_gpu_objects, so toggling shading
         # can zip the two lists and rewrite each VBO in place via vbo.write().
         self._chunk_normal_cache: dict[tuple, list] = {}
-        # Per-cell world-space AABBs for frustum culling, populated in
-        # _load_map from the manifest's pre-computed bounding boxes.
+        # Per-cell world-space AABBs for frustum culling, populated as chunks
+        # become resident.
         self._chunk_aabbs: dict[tuple, tuple] = {}
+        self._view_culling_cache = view_culling.FrustumCullingCache()
+        self._chunk_visibility_generation = 0
         self._navigation_guard_cells: set[tuple[int, int, int]] = set()
         self._navigation_guard_chunk_size: float | None = None
         self._has_map_loaded = False
@@ -1099,6 +1102,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_upload_states = {}
         self._chunk_normal_cache = {}
         self._chunk_aabbs = {}
+        self._view_culling_cache = view_culling.FrustumCullingCache()
+        self._chunk_visibility_generation = 0
         self._chunk_upload_manager = ChunkUploadManager(
             ctx=self.ctx,
             program=self.program,
@@ -1790,6 +1795,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_normal_cache.clear()
         self._chunk_aabbs.clear()
         self._chunk_upload_manager = None
+        self._invalidate_visible_chunk_cache()
         self._navigation_guard_cells = set()
         self._navigation_guard_chunk_size = None
 
@@ -2191,6 +2197,50 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_normal_cache = manager.normal_cache
         self._chunk_aabbs = manager.aabbs
 
+    def _ensure_view_culling_cache(self) -> view_culling.FrustumCullingCache:
+        cache = getattr(self, "_view_culling_cache", None)
+        if cache is None:
+            cache = view_culling.FrustumCullingCache()
+            self._view_culling_cache = cache
+        if not hasattr(self, "_chunk_visibility_generation"):
+            self._chunk_visibility_generation = 0
+        return cache
+
+    def _invalidate_visible_chunk_cache(self) -> None:
+        self._chunk_visibility_generation = int(
+            getattr(self, "_chunk_visibility_generation", 0)
+        ) + 1
+        cache = getattr(self, "_view_culling_cache", None)
+        if cache is not None:
+            cache.invalidate()
+
+    @staticmethod
+    def _resident_chunk_signature(
+        manager: ChunkUploadManager,
+        cell,
+    ) -> tuple[int, int, bool]:
+        vao_list = manager.gpu_objects.get(cell)
+        aabb = manager.aabbs.get(cell)
+        return (
+            id(vao_list) if vao_list is not None else 0,
+            len(vao_list) if vao_list is not None else 0,
+            aabb is not None,
+        )
+
+    def _visible_chunk_gpu_objects(
+        self,
+        view: np.ndarray,
+        projection: np.ndarray,
+    ) -> list[tuple[tuple, list]]:
+        cache = self._ensure_view_culling_cache()
+        return cache.visible_chunks(
+            view=view,
+            projection=projection,
+            chunk_gpu_objects=self._chunk_gpu_objects,
+            chunk_aabbs=self._chunk_aabbs,
+            generation=self._chunk_visibility_generation,
+        )
+
     def _render_upload_slice_vertices(self) -> int:
         return render_upload.render_upload_slice_vertices(
             getattr(
@@ -2229,6 +2279,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _on_chunk_ready(self, chunk_data):
         manager = self._ensure_chunk_upload_manager()
+        before_signature = self._resident_chunk_signature(manager, chunk_data.cell)
         manager.set_frame_limits(
             operations_per_chunk=getattr(
                 self,
@@ -2245,10 +2296,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         try:
             return manager.on_chunk_ready(chunk_data)
         finally:
+            after_signature = self._resident_chunk_signature(manager, chunk_data.cell)
+            if after_signature != before_signature:
+                self._invalidate_visible_chunk_cache()
             self._sync_chunk_upload_state_from_manager(manager)
 
     def _on_chunk_unload(self, cell):
         manager = self._ensure_chunk_upload_manager()
+        before_signature = self._resident_chunk_signature(manager, cell)
         manager.set_frame_limits(
             operations_per_chunk=getattr(
                 self,
@@ -2265,6 +2320,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         try:
             manager.on_chunk_unload(cell)
         finally:
+            if before_signature != self._resident_chunk_signature(manager, cell):
+                self._invalidate_visible_chunk_cache()
             self._sync_chunk_upload_state_from_manager(manager)
 
     def _apply_shading_toggle_to_cell(self, cell) -> None:
@@ -2558,42 +2615,12 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     @staticmethod
     def _frustum_planes(view: np.ndarray, proj: np.ndarray) -> np.ndarray:
-        """
-        Extract the 6 view-frustum planes in world space from the row-major
-        view and projection matrices using the Gribb-Hartmann method.
-        The combined clip matrix M = proj @ view maps world-space column
-        vectors to clip space; summing/differencing rows of M gives the 6
-        plane equations. Returns a (6, 4) float64 array where each row
-        (a, b, c, d) satisfies a*x + b*y + c*z + d >= 0 for inside points.
-        """
-        vp = (proj @ view).astype(np.float64)
-        planes = np.empty((6, 4), dtype=np.float64)
-        planes[0] = vp[3] + vp[0]   # left
-        planes[1] = vp[3] - vp[0]   # right
-        planes[2] = vp[3] + vp[1]   # bottom
-        planes[3] = vp[3] - vp[1]   # top
-        planes[4] = vp[3] + vp[2]   # near
-        planes[5] = vp[3] - vp[2]   # far
-        lengths = np.linalg.norm(planes[:, :3], axis=1, keepdims=True)
-        planes /= np.maximum(lengths, 1e-9)
-        return planes
+        return view_culling.frustum_planes(view, proj)
 
     @staticmethod
     def _aabb_inside_frustum(planes: np.ndarray,
                               bmin: np.ndarray, bmax: np.ndarray) -> bool:
-        """
-        Positive-vertex frustum-AABB test. For each plane, pick the AABB
-        corner furthest along the plane normal (the 'positive vertex'). If
-        that corner is outside the plane, the entire AABB is outside the
-        frustum (conservative -- produces no false culls).
-        """
-        for a, b, c, d in planes:
-            px = bmax[0] if a >= 0 else bmin[0]
-            py = bmax[1] if b >= 0 else bmin[1]
-            pz = bmax[2] if c >= 0 else bmin[2]
-            if a * px + b * py + c * pz + d < 0:
-                return False
-        return True
+        return view_culling.aabb_inside_frustum(planes, bmin, bmax)
 
     def _right_column_ui_scale(self) -> float:
         return float(getattr(self, "_viewer_ui_scale", 1.0))
@@ -3265,12 +3292,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Build _visible_cells once so both solid and wireframe passes share
         # the same culled set without repeating the test.
         t_cull = time.perf_counter()
-        _vp_planes = self._frustum_planes(view, proj)
-        _visible_cells = []
-        for cell, vao_list in self._chunk_gpu_objects.items():
-            aabb = self._chunk_aabbs.get(cell)
-            if aabb is None or self._aabb_inside_frustum(_vp_planes, aabb[0], aabb[1]):
-                _visible_cells.append((cell, vao_list))
+        _visible_cells = self._visible_chunk_gpu_objects(view, proj)
         _chunks_drawn = len(_visible_cells)
         mesh_cull_ms = (time.perf_counter() - t_cull) * 1000.0
 

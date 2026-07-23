@@ -63,6 +63,7 @@ src/caveviewer/gui/recording_controller.py    recording countdown/status/timing 
 src/caveviewer/gui/recording_capture.py       render-thread recording readback resources
 src/caveviewer/gui/chunk_upload.py            render-thread chunk upload state and cleanup
 src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
+src/caveviewer/gui/view_culling.py            resident chunk frustum-culling cache
 src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
 src/caveviewer/resources/                     shaders, images, and public key
 tests/                                        unit and integration tests
