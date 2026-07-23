@@ -137,9 +137,11 @@ source vertex positions, to estimate the middle of the cave passage. The
 generator computes a high-clearance path through that footprint, where clearance
 means grid distance from the footprint boundary, then selects a representative
 segment instead of sweeping the entire cave. It estimates Y from the nearest
-occupied chunk column. This better approximates what virtual divers tend to look
-at: a route through the middle of the visible passage at a reasonable traversal
-rate.
+occupied chunk columns by placing the camera at a configurable vertical bias
+inside the local min/max chunk bounds. The default bias is `0.65`, slightly
+above the midpoint, so tall passages are more likely to stream and show ceiling
+geometry. This better approximates what virtual divers tend to look at: a route
+through the middle of the visible passage at a reasonable traversal rate.
 
 This remains a deterministic benchmark route, not a collision-checked
 navigation mesh. The cache describes surface geometry and chunk bounds; it does
@@ -150,7 +152,8 @@ Use these controls when calibrating the route:
 ```bash
 python scripts/benchmark/run_devils_eye_xl_benchmark.py \
   --centerline-route-keyframes 10 \
-  --centerline-route-target-length-m 1000
+  --centerline-route-target-length-m 1000 \
+  --centerline-route-y-bias 0.65
 ```
 
 To run the older dense-streaming-load proxy instead:

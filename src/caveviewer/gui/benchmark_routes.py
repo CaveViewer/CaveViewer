@@ -24,6 +24,8 @@ DEFAULT_CENTERLINE_ROUTE_KEYFRAMES = 8
 DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT = 96
 DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE = 70.0
 DEFAULT_CENTERLINE_ROUTE_TARGET_CELLS = 24
+DEFAULT_CENTERLINE_ROUTE_Y_BIAS = 0.65
+DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS = 1
 DEFAULT_DENSE_ROUTE_KEYFRAMES = 8
 DEFAULT_DENSE_ROUTE_PERCENTILE = 90.0
 DEFAULT_DENSE_ROUTE_CANDIDATE_LIMIT = 64
@@ -71,6 +73,8 @@ def generate_centerline_route_scenario(
     candidate_limit: int = DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT,
     endpoint_percentile: float = DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE,
     target_length_m: float | None = None,
+    y_bias: float = DEFAULT_CENTERLINE_ROUTE_Y_BIAS,
+    y_search_radius_cells: int = DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
 ) -> CenterlineRoute:
     """Generate a deterministic virtual route through the passage center.
 
@@ -119,6 +123,8 @@ def generate_centerline_route_scenario(
         route_cells,
         manifest=manifest,
         footprint_cell_size=footprint.cell_size,
+        y_bias=float(y_bias),
+        y_search_radius_cells=max(0, int(y_search_radius_cells)),
     )
     route_scores = [clearance_scores[cell] for cell in route_cells]
     path_scores = [clearance_scores[cell] for cell in path_cells]
@@ -149,6 +155,9 @@ def generate_centerline_route_scenario(
             "clearance_definition": (
                 "grid distance from the footprint boundary in footprint cells"
             ),
+            "y_strategy": "local_vertical_center_v1",
+            "y_bias": float(y_bias),
+            "y_search_radius_cells": max(0, int(y_search_radius_cells)),
             "footprint_cell_size_m": round(footprint.cell_size, 3),
             "footprint_cell_count": len(footprint.cells),
             "footprint_component_size": len(component),
@@ -160,6 +169,8 @@ def generate_centerline_route_scenario(
             "path_cell_count": len(path_cells),
             "route_keyframe_count": len(route),
             "route_length_m": round(route_length_m, 3),
+            "min_route_y": round(min(point[1] for point in route_points), 3),
+            "max_route_y": round(max(point[1] for point in route_points), 3),
             "max_clearance_cells": max(clearance_scores.values()),
             "max_clearance_m": round(
                 max(clearance_scores.values()) * footprint.cell_size,
@@ -286,6 +297,12 @@ class _Footprint:
     cells: frozenset[FootprintCell]
     cell_size: float
     source: str
+
+
+@dataclass(frozen=True)
+class _ChunkColumnSample:
+    min_y: float
+    max_y: float
 
 
 def _parse_footprint(manifest: Mapping[str, Any]) -> _Footprint:
@@ -791,31 +808,40 @@ def _route_points_for_footprint_cells(
     *,
     manifest: Mapping[str, Any],
     footprint_cell_size: float,
+    y_bias: float,
+    y_search_radius_cells: int,
 ) -> tuple[Point, ...]:
+    _validate_y_bias(y_bias)
     columns = _chunk_columns(manifest)
-    preferred_y = _median_chunk_center_y(columns)
     points: list[Point] = []
     for cell in route_cells:
         x, z = _footprint_world_center(cell, footprint_cell_size)
-        x, y, z = _landing_point_for_xz(
+        x, y, z = _vertical_center_point_for_xz(
             columns,
             target_x=x,
             target_z=z,
-            preferred_y=preferred_y,
+            y_bias=y_bias,
+            local_radius_cells=y_search_radius_cells,
         )
         points.append((x, y, z))
-        preferred_y = y
     return tuple(points)
+
+
+def _validate_y_bias(value: float) -> None:
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise BenchmarkConfigurationError(
+            "centerline Y bias must be a finite value between 0.0 and 1.0"
+        )
 
 
 def _chunk_columns(
     manifest: Mapping[str, Any],
-) -> tuple[float, dict[FootprintCell, list[float]]]:
+) -> tuple[float, dict[FootprintCell, list[_ChunkColumnSample]]]:
     chunk_size = _positive_float(manifest.get("chunk_size"), "chunk_size")
     chunks = manifest.get("chunks")
     if not isinstance(chunks, Mapping) or not chunks:
         raise BenchmarkConfigurationError("manifest contains no chunks")
-    columns: dict[FootprintCell, list[float]] = {}
+    columns: dict[FootprintCell, list[_ChunkColumnSample]] = {}
     for cell_key, info in chunks.items():
         cell = _parse_cell_key(str(cell_key))
         if not isinstance(info, Mapping):
@@ -829,68 +855,62 @@ def _chunk_columns(
             ) from exc
         if len(bounds_min) != 3 or len(bounds_max) != 3:
             raise BenchmarkConfigurationError(f"chunk {cell_key} bounds must be 3D")
-        y_center = (bounds_min[1] + bounds_max[1]) / 2.0
-        columns.setdefault((cell[0], cell[2]), []).append(y_center)
+        columns.setdefault((cell[0], cell[2]), []).append(
+            _ChunkColumnSample(
+                min_y=min(bounds_min[1], bounds_max[1]),
+                max_y=max(bounds_min[1], bounds_max[1]),
+            )
+        )
     return chunk_size, columns
 
 
-def _median_chunk_center_y(
-    columns: tuple[float, Mapping[FootprintCell, list[float]]],
-) -> float:
-    _chunk_size, column_values = columns
-    values = sorted(
-        y_center
-        for y_centers in column_values.values()
-        for y_center in y_centers
-    )
-    if not values:
-        raise BenchmarkConfigurationError("manifest contains no chunk Y centers")
-    return values[len(values) // 2]
-
-
-def _landing_point_for_xz(
-    columns: tuple[float, Mapping[FootprintCell, list[float]]],
+def _vertical_center_point_for_xz(
+    columns: tuple[float, Mapping[FootprintCell, list[_ChunkColumnSample]]],
     *,
     target_x: float,
     target_z: float,
-    preferred_y: float,
+    y_bias: float,
+    local_radius_cells: int,
     search_radius_cells: int = 12,
 ) -> Point:
     chunk_size, column_values = columns
     target_cx = int(math.floor(target_x / chunk_size))
     target_cz = int(math.floor(target_z / chunk_size))
 
-    def best_y_in_column(cx: int, cz: int) -> float | None:
-        candidates = column_values.get((cx, cz))
-        if not candidates:
-            return None
-        return min(candidates, key=lambda candidate: abs(candidate - preferred_y))
-
-    y = best_y_in_column(target_cx, target_cz)
-    if y is not None:
+    exact_column = (target_cx, target_cz)
+    if exact_column in column_values:
+        y = _vertical_center_y_for_local_columns(
+            column_values,
+            center=exact_column,
+            radius=local_radius_cells,
+            y_bias=y_bias,
+        )
         return target_x, y, target_z
 
     for radius in range(1, search_radius_cells + 1):
         best_dist = math.inf
         best_col: FootprintCell | None = None
-        best_y_val: float | None = None
         for dx in range(-radius, radius + 1):
             for dz in range(-radius, radius + 1):
                 if max(abs(dx), abs(dz)) != radius:
                     continue
                 col = (target_cx + dx, target_cz + dz)
-                y_val = best_y_in_column(*col)
-                if y_val is None:
+                if col not in column_values:
                     continue
                 dist = dx * dx + dz * dz
                 if dist < best_dist:
                     best_dist = dist
                     best_col = col
-                    best_y_val = y_val
-        if best_col is not None and best_y_val is not None:
+        if best_col is not None:
+            y = _vertical_center_y_for_local_columns(
+                column_values,
+                center=best_col,
+                radius=local_radius_cells,
+                y_bias=y_bias,
+            )
             return (
                 (best_col[0] + 0.5) * chunk_size,
-                best_y_val,
+                y,
                 (best_col[1] + 0.5) * chunk_size,
             )
 
@@ -901,13 +921,37 @@ def _landing_point_for_xz(
             col,
         ),
     )
-    best_y_val = best_y_in_column(*closest_col)
-    assert best_y_val is not None
+    y = _vertical_center_y_for_local_columns(
+        column_values,
+        center=closest_col,
+        radius=local_radius_cells,
+        y_bias=y_bias,
+    )
     return (
         (closest_col[0] + 0.5) * chunk_size,
-        best_y_val,
+        y,
         (closest_col[1] + 0.5) * chunk_size,
     )
+
+
+def _vertical_center_y_for_local_columns(
+    column_values: Mapping[FootprintCell, list[_ChunkColumnSample]],
+    *,
+    center: FootprintCell,
+    radius: int,
+    y_bias: float,
+) -> float:
+    samples = [
+        sample
+        for dx in range(-radius, radius + 1)
+        for dz in range(-radius, radius + 1)
+        for sample in column_values.get((center[0] + dx, center[1] + dz), ())
+    ]
+    if not samples:
+        samples = list(column_values[center])
+    min_y = min(sample.min_y for sample in samples)
+    max_y = max(sample.max_y for sample in samples)
+    return min_y + (max_y - min_y) * y_bias
 
 
 def _keyframes_for_points(
