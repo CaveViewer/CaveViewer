@@ -14,6 +14,7 @@ simple lookup-and-release.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import hashlib
 import logging
 import math
 import os
@@ -4396,6 +4397,15 @@ def run_viewer(cache_dir: str, textures_dir: str):
     _launch_viewer_window()
 
 
+def _cache_manifest_sha256(cache_dir: str) -> str:
+    manifest_path = os.path.join(cache_dir, chunker.MANIFEST_NAME)
+    digest = hashlib.sha256()
+    with open(manifest_path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def run_viewer_benchmark(
     cache_dir: str,
     textures_dir: str,
@@ -4420,7 +4430,9 @@ def run_viewer_benchmark(
             "platform": _platform.platform(),
             "cache_dir": os.path.abspath(cache_dir),
             "textures_dir": os.path.abspath(textures_dir),
+            "cache_manifest_sha256": _cache_manifest_sha256(cache_dir),
             "scenario": scenario.name,
+            "scenario_fingerprint": scenario.fingerprint,
             "source_sha": os.environ.get("GITHUB_SHA")
             or os.environ.get("CAVEVIEWER_COMMIT", ""),
             "vsync_env": os.environ.get("CAVEVIEWER_VSYNC", ""),

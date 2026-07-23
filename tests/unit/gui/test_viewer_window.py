@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import logging
 import queue
@@ -1034,6 +1035,52 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     assert calls[0][1]["window_size_fraction"] == 0.8
     assert calls[0][1]["fallback_window_size"] == (1600, 1000)
     assert calls[0][1]["force_resizable_window"] is True
+
+
+def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    manifest_bytes = b'{"chunks": {}, "mtl_materials": {}}\n'
+    (cache_dir / viewer_window.chunker.MANIFEST_NAME).write_bytes(manifest_bytes)
+    scenario = SimpleNamespace(
+        name="gold",
+        fingerprint="scenario-sha",
+        window_size=(640, 480),
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        viewer_window.chunker,
+        "load_manifest",
+        lambda cache: {"cache": cache},
+    )
+
+    def fake_launch(*, window_size_override=None):
+        calls.append(
+            (
+                window_size_override,
+                dict(viewer_window.CaveViewerWindow.cave_benchmark_config),
+            )
+        )
+
+    monkeypatch.setattr(viewer_window, "_launch_viewer_window", fake_launch)
+
+    summary_path = viewer_window.run_viewer_benchmark(
+        str(cache_dir),
+        str(cache_dir),
+        scenario,
+        str(tmp_path / "out"),
+    )
+
+    config = calls[0][1]
+    assert summary_path == str(tmp_path / "out" / "summary.json")
+    assert calls[0][0] == (640, 480)
+    assert config["scenario"] is scenario
+    assert config["environment"]["scenario_fingerprint"] == "scenario-sha"
+    assert config["environment"]["cache_manifest_sha256"] == hashlib.sha256(
+        manifest_bytes
+    ).hexdigest()
+    assert viewer_window.CaveViewerWindow.cave_benchmark_config is None
 
 
 def test_moderngl_runner_closes_and_destroys_window_on_keyboard_interrupt(monkeypatch):

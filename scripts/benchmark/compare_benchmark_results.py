@@ -22,16 +22,24 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline", required=True, help="Baseline summary.json path.")
     parser.add_argument("--candidate", required=True, help="Candidate summary.json path.")
     parser.add_argument("--output", required=True, help="Comparison JSON output path.")
-    parser.add_argument("--max-median-fps-drop-pct", type=float, default=5.0)
-    parser.add_argument("--max-one-percent-low-fps-drop-pct", type=float, default=10.0)
-    parser.add_argument("--max-p95-frame-ms-increase-pct", type=float, default=15.0)
-    parser.add_argument("--max-stutter-frame-increase-pct", type=float, default=20.0)
+    parser.add_argument(
+        "--thresholds",
+        help="Optional threshold config JSON. Defaults to built-in thresholds.",
+    )
+    parser.add_argument("--max-median-fps-drop-pct", type=float)
+    parser.add_argument("--max-one-percent-low-fps-drop-pct", type=float)
+    parser.add_argument("--max-p95-frame-ms-increase-pct", type=float)
+    parser.add_argument("--max-stutter-frame-increase-pct", type=float)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    thresholds = BenchmarkThresholds(
+    thresholds = (
+        BenchmarkThresholds.load(args.thresholds)
+        if args.thresholds
+        else BenchmarkThresholds()
+    ).with_overrides(
         max_median_fps_drop_pct=args.max_median_fps_drop_pct,
         max_one_percent_low_fps_drop_pct=args.max_one_percent_low_fps_drop_pct,
         max_p95_frame_ms_increase_pct=args.max_p95_frame_ms_increase_pct,

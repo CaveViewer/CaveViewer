@@ -8,17 +8,20 @@ here to drive and record real render-loop benchmark runs.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import numpy as np
 
 
 SCENARIO_VERSION = 1
+THRESHOLDS_VERSION = 1
 DEFAULT_WARMUP_SECONDS = 5.0
 DEFAULT_MEASUREMENT_SECONDS = 30.0
 DEFAULT_MAX_RUNTIME_MARGIN_SECONDS = 30.0
@@ -65,6 +68,16 @@ class BenchmarkKeyframe:
             roll_deg=roll_deg,
         )
 
+    def identity_payload(self) -> dict[str, Any]:
+        """Return the route content that affects benchmark comparability."""
+        return {
+            "time_s": self.time_s,
+            "position": list(self.position),
+            "yaw_deg": self.yaw_deg,
+            "pitch_deg": self.pitch_deg,
+            "roll_deg": self.roll_deg,
+        }
+
 
 @dataclass(frozen=True)
 class BenchmarkScenario:
@@ -91,6 +104,28 @@ class BenchmarkScenario:
         if self.max_runtime_seconds is not None:
             return self.max_runtime_seconds
         return self.total_duration_seconds + DEFAULT_MAX_RUNTIME_MARGIN_SECONDS
+
+    @property
+    def identity_payload(self) -> dict[str, Any]:
+        """Return normalized scenario fields that must match for comparison."""
+        return {
+            "version": SCENARIO_VERSION,
+            "name": self.name,
+            "warmup_seconds": self.warmup_seconds,
+            "measurement_seconds": self.measurement_seconds,
+            "max_runtime_seconds": self.max_runtime_seconds,
+            "window_size": list(self.window_size),
+            "render_distance": self.render_distance,
+            "sample_every_n_frames": self.sample_every_n_frames,
+            "stutter_thresholds_ms": list(self.stutter_thresholds_ms),
+            "position_mode": self.position_mode,
+            "route": [frame.identity_payload() for frame in self.route],
+        }
+
+    @property
+    def fingerprint(self) -> str:
+        """Stable SHA-256 of the benchmark-affecting scenario configuration."""
+        return _stable_json_sha256(self.identity_payload)
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "BenchmarkScenario":
@@ -299,16 +334,75 @@ class BenchmarkThresholds:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "BenchmarkThresholds":
-        return cls(
-            max_median_fps_drop_pct=float(payload.get("max_median_fps_drop_pct", 5.0)),
-            max_one_percent_low_fps_drop_pct=float(
-                payload.get("max_one_percent_low_fps_drop_pct", 10.0)
+        if "thresholds" in payload:
+            try:
+                version = int(payload.get("version", THRESHOLDS_VERSION))
+            except (TypeError, ValueError) as exc:
+                raise BenchmarkConfigurationError(
+                    "threshold version must be an integer"
+                ) from exc
+            if version != THRESHOLDS_VERSION:
+                raise BenchmarkConfigurationError(
+                    f"unsupported benchmark threshold version {version}; "
+                    f"expected {THRESHOLDS_VERSION}"
+                )
+            threshold_payload = payload["thresholds"]
+            if not isinstance(threshold_payload, Mapping):
+                raise BenchmarkConfigurationError("thresholds must be an object")
+            payload = threshold_payload
+        try:
+            return cls(
+                max_median_fps_drop_pct=float(
+                    payload.get("max_median_fps_drop_pct", 5.0)
+                ),
+                max_one_percent_low_fps_drop_pct=float(
+                    payload.get("max_one_percent_low_fps_drop_pct", 10.0)
+                ),
+                max_p95_frame_ms_increase_pct=float(
+                    payload.get("max_p95_frame_ms_increase_pct", 15.0)
+                ),
+                max_stutter_frame_increase_pct=float(
+                    payload.get("max_stutter_frame_increase_pct", 20.0)
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            raise BenchmarkConfigurationError(
+                "benchmark thresholds must contain numeric values"
+            ) from exc
+
+    @classmethod
+    def load(cls, path: str | os.PathLike[str]) -> "BenchmarkThresholds":
+        return cls.from_mapping(load_json_file(path))
+
+    def with_overrides(
+        self,
+        *,
+        max_median_fps_drop_pct: float | None = None,
+        max_one_percent_low_fps_drop_pct: float | None = None,
+        max_p95_frame_ms_increase_pct: float | None = None,
+        max_stutter_frame_increase_pct: float | None = None,
+    ) -> "BenchmarkThresholds":
+        """Return a copy with non-None command-line overrides applied."""
+        return BenchmarkThresholds(
+            max_median_fps_drop_pct=(
+                self.max_median_fps_drop_pct
+                if max_median_fps_drop_pct is None
+                else float(max_median_fps_drop_pct)
             ),
-            max_p95_frame_ms_increase_pct=float(
-                payload.get("max_p95_frame_ms_increase_pct", 15.0)
+            max_one_percent_low_fps_drop_pct=(
+                self.max_one_percent_low_fps_drop_pct
+                if max_one_percent_low_fps_drop_pct is None
+                else float(max_one_percent_low_fps_drop_pct)
             ),
-            max_stutter_frame_increase_pct=float(
-                payload.get("max_stutter_frame_increase_pct", 20.0)
+            max_p95_frame_ms_increase_pct=(
+                self.max_p95_frame_ms_increase_pct
+                if max_p95_frame_ms_increase_pct is None
+                else float(max_p95_frame_ms_increase_pct)
+            ),
+            max_stutter_frame_increase_pct=(
+                self.max_stutter_frame_increase_pct
+                if max_stutter_frame_increase_pct is None
+                else float(max_stutter_frame_increase_pct)
             ),
         )
 
@@ -563,6 +657,7 @@ def summarize_samples(
         "schema_version": 1,
         "scenario": {
             "name": scenario.name,
+            "fingerprint": scenario.fingerprint,
             "warmup_seconds": scenario.warmup_seconds,
             "measurement_seconds": scenario.measurement_seconds,
             "render_distance": scenario.render_distance,
@@ -586,7 +681,7 @@ def compare_summaries(
     thresholds = BenchmarkThresholds() if thresholds is None else thresholds
     baseline_metrics = baseline.get("metrics", {})
     candidate_metrics = candidate.get("metrics", {})
-    checks = [
+    checks = _compatibility_checks(baseline, candidate) + [
         _drop_check(
             "median_fps",
             baseline_metrics.get("median_fps", 0.0),
@@ -647,6 +742,46 @@ def load_json_file(path: str | os.PathLike[str]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise BenchmarkConfigurationError(f"{path} must contain a JSON object")
     return payload
+
+
+def _compatibility_checks(
+    baseline: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    baseline_scenario = baseline.get("scenario", {})
+    candidate_scenario = candidate.get("scenario", {})
+    baseline_environment = baseline.get("environment", {})
+    candidate_environment = candidate.get("environment", {})
+    return [
+        _matching_value_check(
+            "scenario.name",
+            baseline_scenario.get("name"),
+            candidate_scenario.get("name"),
+        ),
+        _matching_value_check(
+            "scenario.fingerprint",
+            baseline_scenario.get("fingerprint"),
+            candidate_scenario.get("fingerprint"),
+        ),
+        _matching_value_check(
+            "environment.cache_manifest_sha256",
+            baseline_environment.get("cache_manifest_sha256"),
+            candidate_environment.get("cache_manifest_sha256"),
+        ),
+    ]
+
+
+def _matching_value_check(name: str, baseline_value: Any, candidate_value: Any) -> dict[str, Any]:
+    baseline_text = str(baseline_value or "")
+    candidate_text = str(candidate_value or "")
+    passed = bool(baseline_text) and baseline_text == candidate_text
+    return {
+        "metric": name,
+        "kind": "compatibility",
+        "baseline": baseline_text or "<missing>",
+        "candidate": candidate_text or "<missing>",
+        "passed": passed,
+    }
 
 
 def _drop_check(name: str, baseline_value: Any, candidate_value: Any, max_drop_pct: float) -> dict[str, Any]:
@@ -769,3 +904,12 @@ def _threshold_label(threshold_ms: float) -> str:
 
 def _round_metric(value: float) -> float:
     return round(float(value), 6)
+
+
+def _stable_json_sha256(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

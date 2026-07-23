@@ -247,6 +247,8 @@ def test_viewer_benchmark_workflow_compares_refs_and_uploads_artifacts():
     assert "name: Viewer Benchmark" in workflow
     assert "workflow_dispatch:" in workflow
     assert "benchmark_map_url:" in workflow
+    assert "threshold_config_path:" in workflow
+    assert "default: benchmarks/viewer-thresholds.v1.json" in workflow
     assert "No benchmark_map_url was supplied." in workflow
     assert "ref: ${{ inputs.baseline_ref }}" in workflow
     assert "inputs.candidate_ref != '' && inputs.candidate_ref || github.sha" in workflow
@@ -254,6 +256,8 @@ def test_viewer_benchmark_workflow_compares_refs_and_uploads_artifacts():
     assert workflow.count("caveviewer-benchmark") >= 2
     assert "set -o pipefail" in workflow
     assert "scripts/benchmark/compare_benchmark_results.py" in workflow
+    assert "--thresholds \"$GITHUB_WORKSPACE/candidate/${{ inputs.threshold_config_path }}\"" in workflow
+    assert "compare_args+=(--max-median-fps-drop-pct" in workflow
     assert "actions/upload-artifact@v7" in workflow
     assert "benchmark-artifacts/" in workflow
 

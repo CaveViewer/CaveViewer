@@ -21,6 +21,11 @@ on:
         required: true
         default: benchmarks/gold-route-v1.json
         type: string
+      threshold_config_path:
+        description: Threshold config JSON path from the candidate checkout.
+        required: true
+        default: benchmarks/viewer-thresholds.v1.json
+        type: string
       baseline_ref:
         description: Baseline ref to compare against.
         required: true
@@ -42,24 +47,24 @@ on:
         default: true
         type: boolean
       max_median_fps_drop_pct:
-        description: Maximum allowed median FPS drop.
-        required: true
-        default: "5.0"
+        description: Optional override for maximum allowed median FPS drop.
+        required: false
+        default: ""
         type: string
       max_one_percent_low_fps_drop_pct:
-        description: Maximum allowed 1% low FPS drop.
-        required: true
-        default: "10.0"
+        description: Optional override for maximum allowed 1% low FPS drop.
+        required: false
+        default: ""
         type: string
       max_p95_frame_ms_increase_pct:
-        description: Maximum allowed p95 frame time increase.
-        required: true
-        default: "15.0"
+        description: Optional override for maximum allowed p95 frame time increase.
+        required: false
+        default: ""
         type: string
       max_stutter_frame_increase_pct:
-        description: Maximum allowed stutter-count increase.
-        required: true
-        default: "20.0"
+        description: Optional override for maximum allowed stutter-count increase.
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -191,14 +196,26 @@ jobs:
         if: ${{ inputs.benchmark_map_url != '' }}
         run: |
           . .venv-benchmark/bin/activate
-          python candidate/scripts/benchmark/compare_benchmark_results.py \
-            --baseline "$GITHUB_WORKSPACE/benchmark-artifacts/baseline/summary.json" \
-            --candidate "$GITHUB_WORKSPACE/benchmark-artifacts/candidate/summary.json" \
-            --output "$GITHUB_WORKSPACE/benchmark-artifacts/comparison.json" \
-            --max-median-fps-drop-pct "${{ inputs.max_median_fps_drop_pct }}" \
-            --max-one-percent-low-fps-drop-pct "${{ inputs.max_one_percent_low_fps_drop_pct }}" \
-            --max-p95-frame-ms-increase-pct "${{ inputs.max_p95_frame_ms_increase_pct }}" \
-            --max-stutter-frame-increase-pct "${{ inputs.max_stutter_frame_increase_pct }}"
+          compare_args=(
+            python candidate/scripts/benchmark/compare_benchmark_results.py
+            --baseline "$GITHUB_WORKSPACE/benchmark-artifacts/baseline/summary.json"
+            --candidate "$GITHUB_WORKSPACE/benchmark-artifacts/candidate/summary.json"
+            --output "$GITHUB_WORKSPACE/benchmark-artifacts/comparison.json"
+            --thresholds "$GITHUB_WORKSPACE/candidate/${{ inputs.threshold_config_path }}"
+          )
+          if [ -n "${{ inputs.max_median_fps_drop_pct }}" ]; then
+            compare_args+=(--max-median-fps-drop-pct "${{ inputs.max_median_fps_drop_pct }}")
+          fi
+          if [ -n "${{ inputs.max_one_percent_low_fps_drop_pct }}" ]; then
+            compare_args+=(--max-one-percent-low-fps-drop-pct "${{ inputs.max_one_percent_low_fps_drop_pct }}")
+          fi
+          if [ -n "${{ inputs.max_p95_frame_ms_increase_pct }}" ]; then
+            compare_args+=(--max-p95-frame-ms-increase-pct "${{ inputs.max_p95_frame_ms_increase_pct }}")
+          fi
+          if [ -n "${{ inputs.max_stutter_frame_increase_pct }}" ]; then
+            compare_args+=(--max-stutter-frame-increase-pct "${{ inputs.max_stutter_frame_increase_pct }}")
+          fi
+          "${compare_args[@]}"
 
       - name: Upload benchmark artifacts
         if: ${{ always() && inputs.benchmark_map_url != '' }}

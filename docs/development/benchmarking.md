@@ -17,6 +17,11 @@ The benchmark records:
 - `environment.json`: app, Python, platform, OpenGL, runner, and tuning details.
 - `benchmark.log` and workflow `console.log`: parse-friendly debug output.
 
+Each summary includes a scenario fingerprint and a SHA-256 of the cache
+`manifest.json`. The comparison step fails if either differs between baseline
+and candidate. That prevents accidental release decisions from comparing a
+different route or a different benchmark map.
+
 ## Local run
 
 Install the project in editable mode, then run against a precompiled map cache:
@@ -40,7 +45,8 @@ Compare two runs:
 python scripts/benchmark/compare_benchmark_results.py \
   --baseline benchmark-results/baseline/summary.json \
   --candidate benchmark-results/current/summary.json \
-  --output benchmark-results/comparison.json
+  --output benchmark-results/comparison.json \
+  --thresholds benchmarks/viewer-thresholds.v1.json
 ```
 
 ## Scenario file
@@ -54,6 +60,17 @@ finalized, replace the route with validated camera positions and use
 Keep scenario changes reviewable. A changed route changes the benchmark itself,
 so compare old and new thresholds deliberately instead of mixing results from
 different scenarios.
+
+## Threshold file
+
+`benchmarks/viewer-thresholds.v1.json` is the default threshold policy for local
+and workflow comparisons. Keep threshold changes separate from route changes
+where practical: a route change invalidates baseline data, while a threshold
+change changes release policy.
+
+The comparison script accepts one-off numeric overrides for calibration, but
+routine checks should use the tracked threshold file so local and GitHub Actions
+runs agree.
 
 ## CI workflow
 
@@ -72,6 +89,8 @@ Recommended inputs:
 - `baseline_ref`: `main` for PR-style checks, or the previous release tag for a
   release comparison.
 - `candidate_ref`: leave empty for the workflow SHA, or provide a branch/tag/SHA.
+- `threshold_config_path`: threshold JSON from the candidate checkout; defaults
+  to `benchmarks/viewer-thresholds.v1.json`.
 - `runner_label`: use a stable GPU/display runner when available.
 
 When `benchmark_map_url` is omitted, the workflow exits successfully after

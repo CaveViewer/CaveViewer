@@ -69,7 +69,7 @@ src/caveviewer/gui/view_culling.py            resident chunk frustum-culling cac
 src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
 src/caveviewer/resources/                     shaders, images, and public key
 tests/                                        unit and integration tests
-benchmarks/                                   versioned benchmark scenario files
+benchmarks/                                   versioned benchmark scenario/threshold files
 docs/                                         site and development documentation
 packaging/pyinstaller/CaveViewer.spec         PyInstaller configuration
 packaging/linux/                              desktop and AppStream metadata

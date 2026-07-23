@@ -49,6 +49,10 @@ def test_scenario_parses_and_interpolates_shortest_angle_route():
 
     assert scenario.position_mode == "first_chunk_center_offset"
     assert scenario.stutter_thresholds_ms == (33.3, 100.0)
+    assert len(scenario.fingerprint) == 64
+    assert scenario.fingerprint == BenchmarkScenario.from_mapping(
+        scenario.identity_payload
+    ).fingerprint
     assert pose.position == (5.0, 0.0, -10.0)
     assert math.isclose(pose.yaw_deg, 360.0)
     assert math.isclose(pose.pitch_deg, -5.0)
@@ -129,6 +133,7 @@ def test_controller_writes_frame_artifacts_and_summary(tmp_path):
     assert (tmp_path / "frames.jsonl").read_text(encoding="utf-8").count("\n") == 1
     assert summary["measured_frames"] == 1
     assert summary["metrics"]["median_fps"] == 50.0
+    assert summary["scenario"]["fingerprint"] == scenario.fingerprint
     assert summary["environment"]["runner"] == "unit"
 
 
@@ -192,12 +197,41 @@ def test_summarize_samples_reports_stutter_counts():
         "over_100ms": 0,
     }
     assert summary["scenario"]["position_mode"] == "absolute"
+    assert summary["scenario"]["fingerprint"] == scenario.fingerprint
+
+
+def test_thresholds_load_from_versioned_config_with_overrides(tmp_path):
+    threshold_path = tmp_path / "thresholds.json"
+    threshold_path.write_text(
+        """
+        {
+          "version": 1,
+          "thresholds": {
+            "max_median_fps_drop_pct": 2.0,
+            "max_one_percent_low_fps_drop_pct": 4.0,
+            "max_p95_frame_ms_increase_pct": 6.0,
+            "max_stutter_frame_increase_pct": 8.0
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    thresholds = BenchmarkThresholds.load(threshold_path).with_overrides(
+        max_p95_frame_ms_increase_pct=7.5
+    )
+
+    assert thresholds.max_median_fps_drop_pct == 2.0
+    assert thresholds.max_one_percent_low_fps_drop_pct == 4.0
+    assert thresholds.max_p95_frame_ms_increase_pct == 7.5
+    assert thresholds.max_stutter_frame_increase_pct == 8.0
 
 
 def test_compare_summaries_flags_fps_and_frame_time_regressions():
     comparison = compare_summaries(
         {
-            "scenario": {"name": "gold"},
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {"cache_manifest_sha256": "map-a"},
             "metrics": {
                 "median_fps": 100.0,
                 "one_percent_low_fps": 80.0,
@@ -206,7 +240,8 @@ def test_compare_summaries_flags_fps_and_frame_time_regressions():
             },
         },
         {
-            "scenario": {"name": "gold"},
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {"cache_manifest_sha256": "map-a"},
             "metrics": {
                 "median_fps": 94.0,
                 "one_percent_low_fps": 70.0,
@@ -232,6 +267,38 @@ def test_compare_summaries_flags_fps_and_frame_time_regressions():
         "p95_frame_ms",
         "stutter_counts.over_50ms",
     }
+
+
+def test_compare_summaries_fails_on_scenario_or_map_mismatch():
+    comparison = compare_summaries(
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {"cache_manifest_sha256": "map-a"},
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-b"},
+            "environment": {"cache_manifest_sha256": "map-b"},
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+    )
+
+    failed_metrics = {
+        check["metric"] for check in comparison["checks"] if not check["passed"]
+    }
+    assert comparison["passed"] is False
+    assert "scenario.fingerprint" in failed_metrics
+    assert "environment.cache_manifest_sha256" in failed_metrics
 
 
 def _scenario(
