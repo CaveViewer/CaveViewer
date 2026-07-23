@@ -702,10 +702,21 @@ def show_splash_screen(
     instruction_label.pack(pady=(0, _INSTRUCTION_BOTTOM_GAP))
 
     def _on_preferences_click():
+        def _on_preferences_applied(_preferences) -> None:
+            workflow = map_library_workflow_ref[0]
+            if workflow is None:
+                return
+            from caveviewer.gui.standard_library_maps import (
+                default_map_library_install_dir,
+            )
+
+            workflow.set_map_library_root_dir(default_map_library_install_dir())
+
         _show_preferences_dialog(
             root,
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
+            on_applied=_on_preferences_applied,
         )
 
     def _widget_exists(widget) -> bool:
@@ -774,6 +785,7 @@ def show_splash_screen(
         open_map=_open_library_map_from_splash,
         show_feedback=_show_map_library_feedback,
         logger=_LOG,
+        map_library_root_dir_provider=default_map_library_install_dir,
     )
     map_library_workflow_ref[0] = map_library_workflow
 

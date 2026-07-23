@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Callable
 
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.storage_paths import default_downloads_dir
 
 
 _LOG = get_logger("PreferencesSchema")
@@ -131,6 +132,10 @@ def _recording_directory_default() -> str:
     return os.path.abspath(
         os.path.expanduser(os.path.join("~", "Movies", "CaveViewer"))
     )
+
+
+def _map_library_directory_default() -> str:
+    return str(default_downloads_dir())
 
 
 def _scan_throttle_default() -> str:
@@ -328,6 +333,15 @@ PREFERENCE_FIELDS = (
         value_type=PreferenceValueType.PATH_CREATE,
         default=_recording_directory_default,
     ),
+    PreferenceSpec(
+        section="storage",
+        key="map_library_dir",
+        env_var="CAVEVIEWER_MAP_LIBRARY_DIR",
+        label="Downloaded maps folder",
+        hint="Where CaveViewer stores downloaded Map Library maps.",
+        value_type=PreferenceValueType.PATH_CREATE,
+        default=_map_library_directory_default,
+    ),
 )
 
 
@@ -338,6 +352,11 @@ def default_preferences() -> dict[str, str]:
 def default_recording_dir() -> str:
     configured = os.getenv("CAVEVIEWER_RECORDING_DIR", "").strip()
     return configured or _recording_directory_default()
+
+
+def default_map_library_dir() -> str:
+    configured = os.getenv("CAVEVIEWER_MAP_LIBRARY_DIR", "").strip()
+    return configured or _map_library_directory_default()
 
 
 def normalize_preferences(values: Mapping | None) -> dict[str, str]:

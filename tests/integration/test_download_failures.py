@@ -237,7 +237,7 @@ def test_failed_standard_library_download_preserves_existing_install(tmp_path, m
         "Test Cave", "test.zip", "https://invalid.example/test.zip", 50
     )
     destination = standard_library_maps.local_standard_library_map_path(str(tmp_path), sample)
-    marker = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / sample.display_name / "map.obj"
+    marker = tmp_path / sample.display_name / "map.obj"
     marker.parent.mkdir(parents=True)
     marker.write_text("existing map", encoding="utf-8")
 
@@ -258,7 +258,7 @@ def test_corrupt_standard_library_zip_preserves_existing_install(tmp_path, monke
     sample = standard_library_maps.StandardLibraryMapInfo(
         "Test Cave", "test.zip", "https://invalid.example/test.zip", None
     )
-    marker = tmp_path / standard_library_maps.MAP_LIBRARY_DIRNAME / sample.display_name / "map.obj"
+    marker = tmp_path / sample.display_name / "map.obj"
     marker.parent.mkdir(parents=True)
     marker.write_text("existing map", encoding="utf-8")
 

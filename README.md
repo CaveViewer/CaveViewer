@@ -81,18 +81,18 @@ library.
 1. Start CaveViewer and open the splash screen.
 2. Use the `Map Library` panel to reopen a recent map or pick an available
    standard library map.
-3. Click `Get` for a standard library map that is not downloaded yet, then
-   choose a folder to save it. The dialog stays responsive while CaveViewer
-   downloads and extracts the map in the background, and the row button can
-   cancel the active download.
+3. Click `Get` for a standard library map that is not downloaded yet. The
+   dialog stays responsive while CaveViewer downloads and extracts the map in
+   the background, and the row button can cancel the active download.
 4. When a map is already downloaded, click `Open` to load it.
 
 The map library is a good way to confirm that CaveViewer is working before you
-import your own data. CaveViewer stores the app-managed map library under
-`map_library`; older `sample_maps` directories are moved there automatically
-when possible. The CaveViewer Maps list is refreshed from CaveViewer's
-GitHub-hosted map catalog when the splash screen is online and falls back to
-the last cached or bundled catalog when it is offline.
+import your own data. By default, CaveViewer stores downloaded Map Library maps
+in `~/Downloads`; the Storage section in Preferences controls that folder, and
+older app-data `map_library` or `sample_maps` directories are moved there
+automatically when possible. The CaveViewer Maps list is refreshed from
+CaveViewer's GitHub-hosted map catalog when the splash screen is online and
+falls back to the last cached or bundled catalog when it is offline.
 
 ## Recording a Flight
 
@@ -130,7 +130,8 @@ filename; the UI and source APIs use Preferences terminology.
 
 - Streaming section controls runtime chunk loading and upload behavior.
 - Import section controls cache-build/import behavior.
-- Storage section controls folders used when saving recordings and other app data.
+- Storage section controls folders used when saving recordings and downloaded
+  map-library entries.
 
 ### Rendering, Import, and Streaming
 
@@ -143,11 +144,12 @@ For the full rendering philosophy, low-memory recommendations, runtime
 environment variables, and `caveviewer-chunker` CLI options, see
 [`docs/development/rendering.md`](docs/development/rendering.md).
 
-### Recordings
+### Storage
 
 | Preference | Environment variable | Default | Valid range | What it changes |
 |---|---|---:|---|---|
 | Recordings folder | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | writable folder, or a folder that can be created | Where saved recordings are stored. |
+| Downloaded maps folder | `CAVEVIEWER_MAP_LIBRARY_DIR` | `~/Downloads` | writable folder, or a folder that can be created | Where downloaded Map Library maps are stored. |
 
 ## Contributing
 
