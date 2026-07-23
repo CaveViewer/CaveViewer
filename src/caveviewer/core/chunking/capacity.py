@@ -402,8 +402,8 @@ def ensure_sufficient_disk_space(
     Cache construction expands indexed source geometry into render-ready
     chunks, so starting an import without this headroom is likely to fail
     after doing substantial work. The check targets the filesystem that will
-    hold the cache, which may be an XDG cache filesystem rather than the
-    source-map filesystem.
+    hold the cache, which is normally the source-map filesystem and may be an
+    explicit cache-root filesystem for advanced CLI or environment overrides.
     """
     source_path = os.path.abspath(source_path)
     source_size = os.path.getsize(source_path)

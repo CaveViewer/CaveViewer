@@ -145,7 +145,7 @@ def test_map_session_reports_prebuilt_viewer_failure(tmp_path, monkeypatch):
 def test_map_session_opens_obj_with_existing_cache(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     material = tmp_path / "map.mtl"
-    cache_dir = tmp_path / "managed-cache"
+    cache_dir = tmp_path / "built-cache"
     descriptor = {
         "format": "obj",
         "obj_path": str(source),

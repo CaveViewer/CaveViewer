@@ -49,18 +49,13 @@ def _set_available_space(monkeypatch, free_bytes: int) -> None:
     )
 
 
-def _use_managed_cache_root(tmp_path, monkeypatch) -> Path:
-    root = tmp_path / "managed"
-    monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(root))
-    return root
-
-
 def test_import_is_rejected_when_free_space_is_below_twice_map_size(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "map.obj"
     source.write_bytes(b"x" * 100)
-    managed_root = _use_managed_cache_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
+    cache_path = tmp_path / "_cache"
     _set_available_space(monkeypatch, 199)
 
     with pytest.raises(chunker.InsufficientDiskSpaceError) as raised:
@@ -69,7 +64,7 @@ def test_import_is_rejected_when_free_space_is_below_twice_map_size(
     assert raised.value.errno == errno.ENOSPC
     assert raised.value.required_bytes == 200
     assert raised.value.available_bytes == 199
-    assert not managed_root.exists()
+    assert not cache_path.exists()
 
 
 def test_exactly_twice_map_size_passes_disk_space_check(tmp_path, monkeypatch):
@@ -80,9 +75,9 @@ def test_exactly_twice_map_size_passes_disk_space_check(tmp_path, monkeypatch):
     chunker.ensure_sufficient_disk_space(str(source))
 
 
-def test_space_check_uses_managed_cache_filesystem(tmp_path, monkeypatch):
+def test_space_check_uses_explicit_cache_root_filesystem(tmp_path, monkeypatch):
     source_dir = tmp_path / "source"
-    managed_parent = tmp_path / "managed"
+    managed_parent = tmp_path / "cache-root"
     source_dir.mkdir()
     managed_parent.mkdir()
     source = source_dir / "map.obj"
@@ -107,7 +102,7 @@ def test_capacity_check_includes_staged_texture_bytes(tmp_path, monkeypatch):
     source.write_bytes(b"x" * 100)
     texture = tmp_path / "rock.jpg"
     texture.write_bytes(b"t" * 50)
-    _use_managed_cache_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
     _set_available_space(monkeypatch, 249)
 
     with pytest.raises(chunker.InsufficientDiskSpaceError) as raised:
@@ -130,7 +125,7 @@ def test_obj_import_checks_space_before_parsing(tmp_path, monkeypatch):
     material_file = tmp_path / "map.mtl"
     source.write_bytes(b"x" * 100)
     material_file.write_text("newmtl rock", encoding="utf-8")
-    _use_managed_cache_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
     _set_available_space(monkeypatch, 199)
     monkeypatch.setattr(
         obj_parser,
@@ -149,7 +144,7 @@ def test_obj_import_counts_texture_space_before_parsing(tmp_path, monkeypatch):
     source.write_bytes(b"x" * 100)
     texture.write_bytes(b"t" * 50)
     material_file.write_text("newmtl rock\nmap_Kd rock.jpg\n", encoding="utf-8")
-    _use_managed_cache_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
     _set_available_space(monkeypatch, 249)
     monkeypatch.setattr(
         obj_parser,
@@ -166,7 +161,7 @@ def test_obj_import_counts_texture_space_before_parsing(tmp_path, monkeypatch):
 def test_glb_import_checks_space_before_parsing(tmp_path, monkeypatch):
     source = tmp_path / "map.glb"
     source.write_bytes(b"x" * 100)
-    _use_managed_cache_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
     _set_available_space(monkeypatch, 199)
 
     with pytest.raises(chunker.InsufficientDiskSpaceError):
@@ -180,7 +175,7 @@ def test_disk_full_mid_build_removes_every_partial_cache_file(
 ):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small map")
-    managed_root = _use_managed_cache_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
     _set_available_space(monkeypatch, 10_000)
     cache_path = Path(chunker.get_cache_dir(str(source)))
     original_write = chunker._write_chunk_file
@@ -203,7 +198,7 @@ def test_disk_full_mid_build_removes_every_partial_cache_file(
     assert raised.value.errno == errno.ENOSPC
     assert writes == 2
     assert not cache_path.exists()
-    assert not list(managed_root.glob("*.tmp-*"))
+    assert not list(tmp_path.glob("._cache.tmp-*"))
 
 
 def test_successful_build_publishes_complete_cache_without_staging_files(
@@ -211,7 +206,7 @@ def test_successful_build_publishes_complete_cache_without_staging_files(
 ):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small map")
-    managed_root = _use_managed_cache_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
     _set_available_space(monkeypatch, 10_000)
     cache_path = Path(chunker.get_cache_dir(str(source)))
 
@@ -224,7 +219,7 @@ def test_successful_build_publishes_complete_cache_without_staging_files(
         chunker.CHUNKS_DIRNAME,
         chunker.MANIFEST_NAME,
     }
-    assert not list(managed_root.glob("*.tmp-*"))
+    assert not list(tmp_path.glob("._cache.tmp-*"))
 
 
 def test_cache_assets_are_published_in_the_same_atomic_tree(tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-"""GUI-facing helpers for removing managed map caches."""
+"""GUI-facing helpers for removing generated map caches."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from caveviewer.core.map.source_model import find_model_file
 
 @dataclass(frozen=True)
 class CacheRemovalResult:
-    """Result of a scoped managed-cache removal request."""
+    """Result of a scoped generated-cache removal request."""
 
     cache_dir: str | None
     removed: bool
@@ -21,7 +21,7 @@ class CacheRemovalResult:
 
 
 def managed_cache_dir_for_map_path(path: str | os.PathLike[str]) -> Path | None:
-    """Return the generated managed-cache path for a map folder or source file."""
+    """Return the generated cache path for a map folder or source file."""
     try:
         descriptor = find_model_file(os.fspath(path))
     except (FileNotFoundError, OSError, TypeError, ValueError):
@@ -31,11 +31,7 @@ def managed_cache_dir_for_map_path(path: str | os.PathLike[str]) -> Path | None:
     if not source_path:
         return None
 
-    locator = MapCacheLocator()
-    cache_dir = locator.managed_cache_dir(source_path)
-    if not locator.is_managed(cache_dir):
-        return None
-    return cache_dir
+    return MapCacheLocator().generated_cache_dir(source_path)
 
 
 def existing_managed_cache_dir_for_map_path(
@@ -59,7 +55,7 @@ def has_managed_map_cache(path: str | os.PathLike[str]) -> bool:
 
 
 def remove_managed_map_cache(path: str | os.PathLike[str]) -> CacheRemovalResult:
-    """Remove only CaveViewer's generated managed cache for ``path``."""
+    """Remove only CaveViewer's generated cache for ``path``."""
     cache_dir = managed_cache_dir_for_map_path(path)
     if cache_dir is None:
         return CacheRemovalResult(cache_dir=None, removed=False)

@@ -32,7 +32,7 @@ Required options:
   --source=<path>                    OBJ file, GLB file, or folder containing a map
 
 Options:
-  --cache-root=<path>                Root folder where compiled map caches are stored
+  --cache-root=<path>                Optional root for hashed compiled map caches
   --settings-file=<path>             Preferences JSON to use
   --chunk-size=<value>               Import chunk size for new/rebuilt caches
   --max-upload-group-mb=<value>      Maximum VBO payload size for dense chunk groups in MB
@@ -72,11 +72,10 @@ Built-in import defaults:
 Analysis defaults:
   --analyze-workers=2
 
-Cache root default:
-  --cache-root defaults to the same managed map-cache root used by the GUI:
-    Linux:   $XDG_CACHE_HOME/caveviewer/maps, or ~/.cache/caveviewer/maps
-    macOS:   ~/.caveviewer/maps
-    Windows: %USERPROFILE%\\.caveviewer\\maps
+Cache location default:
+  Without --cache-root, caches are written to _cache inside the source map
+  folder. Use --cache-root only when you need hashed caches under a separate
+  absolute directory.
 """
 
 

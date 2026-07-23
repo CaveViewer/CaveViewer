@@ -65,7 +65,7 @@ def _recent_map_source_title(path: str) -> str | None:
     Return a user-facing source model title for a recent-map entry.
 
     Normal recent entries point at the original selected map folder. Older
-    builds could accidentally persist the managed cache directory instead; for
+    builds could accidentally persist the generated cache directory instead; for
     those stale entries, recover the original source filename from the cache
     manifest without reading the full potentially-large manifest.
     """

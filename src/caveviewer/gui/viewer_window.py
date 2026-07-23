@@ -4745,7 +4745,7 @@ def run_viewer(cache_dir: str, textures_dir: str):
 def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     """
     Launches the viewer window for a map that needs FIRST-TIME import
-    (no managed cache yet) -- used by caveviewer.app's main() instead
+    (no generated cache yet) -- used by caveviewer.app's main() instead
     of run_viewer() specifically so the import can run AFTER the window
     is open, showing real progress in the same in-window panel the OPEN
     button already uses, rather than the old behavior of running the

@@ -26,11 +26,13 @@ GLB parser. `core.map.source_model` owns source selection,
 those services to console or Tk progress displays. Parsers produce CPU-side
 mesh and material data. `src/caveviewer/core/chunking/builder.py` partitions
 that data and builds a cache in a private staging directory. Cache locations are
-selected through `core.map.cache_paths` under the managed cache root; old
-adjacent `_cache` and `.caveviewer_cache` directories are not auto-discovered.
-Chunks, the manifest, and referenced texture assets are published in one atomic directory
-transaction. Failures must remove staging output and preserve any previously
-valid managed cache.
+selected through `core.map.cache_paths`; the default generated cache directory
+is `_cache` inside the source map folder. Explicit `CAVEVIEWER_MAP_CACHE_DIR`
+or CLI `--cache-root` callers use hashed cache directories under that separate
+root. The older `.caveviewer_cache` directory is not auto-discovered.
+Chunks, the manifest, and referenced texture assets are published in one atomic
+directory transaction. Failures must remove staging output and preserve any
+previously valid generated cache.
 
 First-time imports launched from the viewer run in a spawned child process
 through `src/caveviewer/gui/import_process.py`. The viewer process owns OpenGL,
@@ -67,7 +69,7 @@ The cache manifest records chunk metadata, spatial bounds, material references,
 and the minimap occupancy footprint. A cache-format change must either remain
 backward compatible or increment its version and force a deliberate rebuild.
 The render-chunk binary format remains at version 1: unknown manifest fields
-and extra subdirectories inside a selected managed cache are ignored, while
+and extra subdirectories inside a selected generated cache are ignored, while
 imports write only the active cache artifacts.
 
 ## Runtime streaming
@@ -205,20 +207,24 @@ the XDG configuration, data, cache, state, and runtime roots; macOS, Windows,
 and unsupported platforms currently preserve the historical `~/.caveviewer/`
 root until their storage conventions are migrated separately. Preferences
 are configuration; remembered chooser locations are state; generated map
-caches are rebuildable cache data. Downloaded map-library entries are ordinary
-user downloads by default, stored under the user's Downloads folder or the
-folder selected by `CAVEVIEWER_MAP_LIBRARY_DIR` or Preferences.
+caches are rebuildable cache data stored in the source map folder's `_cache`
+subdirectory by default. Downloaded map-library entries are ordinary user
+downloads by default, stored under the user's Downloads folder or the folder
+selected by `CAVEVIEWER_MAP_LIBRARY_DIR` or Preferences, and their generated
+caches live inside the downloaded map folder unless an explicit cache-root
+override is set.
 `CAVEVIEWER_HOME` creates isolated `config/`, `data/`, `cache/`, `state/`, and
-`runtime/` children for portable or test runs, and map caches are stored under
-that cache child unless `CAVEVIEWER_MAP_CACHE_DIR` overrides only the map-cache
-root. Relative XDG variables are ignored as required by the specification, and
-relative CaveViewer storage-root/cache overrides are rejected.
+`runtime/` children for portable or test runs, but map caches still default to
+adjacent `_cache` directories. `CAVEVIEWER_MAP_CACHE_DIR` overrides only the
+map-cache root for advanced runs that need generated caches on a separate
+filesystem. Relative XDG variables are ignored as required by the specification,
+and relative CaveViewer storage-root/cache overrides are rejected.
 
 On Linux, migration from `~/.caveviewer/` and older `~/.caveviewer_*` files is
 copy-once and non-destructive. Older app-data `map_library` and `sample_maps`
 directories are moved into the configured map-library location when possible.
-Managed map cache keys derive from the canonical source path without reading or
-hashing a multi-gigabyte map.
+Explicit-root map cache keys derive from the canonical source path without
+reading or hashing a multi-gigabyte map.
 
 The GUI process owns one `caveviewer.gui.update_manager.UpdateManager`, created
 by `caveviewer.app` before the splash/viewer session loop and shut down when

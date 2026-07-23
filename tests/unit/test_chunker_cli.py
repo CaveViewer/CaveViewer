@@ -81,9 +81,10 @@ def test_help_uses_public_command_name(capsys):
     assert "--analyze-workers=2" in output
     assert "--chunk-size=50" in output
     assert "--obj-bucket-workers=2" in output
-    assert "Cache root default:" in output
-    assert "$XDG_CACHE_HOME/caveviewer/maps" in output
-    assert "%USERPROFILE%\\.caveviewer\\maps" in output
+    assert "Cache location default:" in output
+    assert "_cache inside the source map" in output
+    assert "$XDG_CACHE_HOME/caveviewer/maps" not in output
+    assert "%USERPROFILE%\\.caveviewer\\maps" not in output
     assert "Env-only:" not in output
 
 

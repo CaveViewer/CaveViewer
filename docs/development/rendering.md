@@ -7,8 +7,9 @@ low-memory or unreliable-GPU systems.
 ## Rendering philosophy
 
 CaveViewer does not try to render a source model as one giant mesh. First-time
-import compiles the source map into a managed cache made of spatial chunks and
-staged texture assets. Runtime rendering then keeps only the nearby working set
+import compiles the source map into a generated cache made of spatial chunks
+and staged texture assets. By default that cache lives in `_cache` inside the
+source map folder. Runtime rendering then keeps only the nearby working set
 resident, uploads new GPU resources in bounded slices, and unloads old chunks as
 the camera moves.
 
@@ -33,9 +34,9 @@ Chunking and streaming are separate decisions:
 
 When you open a new OBJ or GLB map, CaveViewer builds a self-contained cache.
 The cache contains chunk files, manifest metadata, and any staged texture assets
-needed by the map. The cache is published atomically under the managed map-cache
-root so interrupted imports do not leave a half-valid cache visible to normal
-launches.
+needed by the map. The cache is published atomically as `_cache` inside the map
+folder by default, so interrupted imports do not leave a half-valid cache
+visible to normal launches.
 
 Chunk size is the most important import-time rendering choice:
 
@@ -277,7 +278,7 @@ caveviewer-chunker --source="C:\Maps\DevilsEye.obj" --chunk-size=64
 | Option | Purpose |
 |---|---|
 | `--source=<path>` | Required. OBJ file, GLB file, or folder containing a map. |
-| `--cache-root=<path>` | Root folder where compiled map caches are stored. Defaults to the same managed cache root used by the GUI. |
+| `--cache-root=<path>` | Optional absolute root where hashed compiled map caches are stored. Defaults to `_cache` inside the source map folder. |
 | `--settings-file=<path>` | Preferences JSON to use for import defaults. Saved GUI Preferences are not loaded by default. |
 | `--chunk-size=<value>` | Import chunk size for new or rebuilt caches. |
 | `--max-upload-group-mb=<value>` | Maximum VBO payload size for dense chunk groups, in MB. |
@@ -305,16 +306,13 @@ Built-in import defaults:
 | `--chunk-build-workers` / `CAVEVIEWER_CHUNK_BUILD_WORKERS` | `1` |
 | `--chunk-build-reserved-cpus` / `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | `2` |
 
-Cache root defaults:
+Cache location defaults:
 
-- Linux: `$XDG_CACHE_HOME/caveviewer/maps`, or `~/.cache/caveviewer/maps`
-  when `XDG_CACHE_HOME` is unset.
-- macOS: `~/.caveviewer/maps`.
-- Windows: `%USERPROFILE%\.caveviewer\maps`.
-
-`CAVEVIEWER_MAP_CACHE_DIR` and `--cache-root` both select the managed map-cache
-root. CaveViewer no longer auto-discovers adjacent `_cache` or
-`.caveviewer_cache` directories.
+- GUI and CLI imports write generated cache files to `_cache` inside the source
+  map folder.
+- `CAVEVIEWER_MAP_CACHE_DIR` and CLI `--cache-root` are advanced overrides for
+  placing hashed generated caches under a separate absolute root.
+- The older `.caveviewer_cache` directory is not auto-discovered.
 
 PowerShell session-only cache override:
 

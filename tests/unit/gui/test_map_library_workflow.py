@@ -7,7 +7,10 @@ from types import SimpleNamespace
 
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_library import recent_map_key
-from caveviewer.gui.map_library_workflow import MapLibraryWorkflow
+from caveviewer.gui.map_library_workflow import (
+    MapLibraryWorkflow,
+    _remaining_cache_error,
+)
 from caveviewer.gui.standard_library_download import (
     StandardLibraryDownloadProgress,
     StandardLibraryDownloadSucceeded,
@@ -313,7 +316,7 @@ def test_downloaded_standard_library_menu_omits_cache_action_without_cache():
 
     actions = menu_factory(SimpleNamespace(row_shell=object()))
 
-    assert [label for label, _command in actions] == ["Remove downloaded files"]
+    assert [label for label, _command in actions] == ["Remove downloaded maps"]
 
 
 def test_downloaded_standard_library_menu_includes_remove_cache_when_cache_exists():
@@ -337,7 +340,7 @@ def test_downloaded_standard_library_menu_includes_remove_cache_when_cache_exist
     actions = menu_factory(row_widgets)
 
     assert [label for label, _command in actions] == [
-        "Remove downloaded files",
+        "Remove downloaded maps",
         "Remove cache",
     ]
 
@@ -346,6 +349,26 @@ def test_downloaded_standard_library_menu_includes_remove_cache_when_cache_exist
     assert removed_cache_paths == ["/library/Test Cave"]
     assert state.panel.status == (row_widgets, "Cache removed", False)
     assert state.panel.last_row_overflow is row_widgets
+
+
+def test_downloaded_folder_removal_covers_adjacent_cache_error():
+    cache_result = SimpleNamespace(
+        cache_dir="/library/Test Cave/_cache",
+        error="cache path is not removable",
+    )
+
+    assert _remaining_cache_error(cache_result, ("/library/Test Cave",)) is None
+
+
+def test_external_cache_error_survives_downloaded_folder_removal():
+    cache_result = SimpleNamespace(
+        cache_dir="/external/cache/Test Cave",
+        error="cache path is not removable",
+    )
+
+    assert _remaining_cache_error(cache_result, ("/library/Test Cave",)) == (
+        "cache path is not removable"
+    )
 
 
 def test_download_success_applies_progress_and_open_action():

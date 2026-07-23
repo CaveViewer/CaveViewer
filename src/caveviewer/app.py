@@ -433,7 +433,7 @@ def _run_map_session(folder: str) -> None:
             _LOG.info(f"Found cache manifest in selected directory: {folder}")
             _LOG.info("Pre-compiled map detected -- launching viewer directly.")
             _LOG.info(
-                "(Delete the reported managed cache directory to force a rebuild.)"
+                "(Delete the reported cache directory to force a rebuild.)"
             )
             _LOG.info(f"Using cache directory: {_prebuilt_cache}")
             _log_cache_chunk_size(_prebuilt_cache, context="Pre-compiled map cache")

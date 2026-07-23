@@ -8,7 +8,7 @@ whole cave, we split the mesh into cells (default 50m cubes -- tune via
 CHUNK_SIZE for your cave's scale) and load only the cells near the camera
 at runtime (see caveviewer.core.streaming.world).
 
-Cache layout on disk, under the selected managed cache directory:
+Cache layout on disk, under the selected generated cache directory:
     manifest.json          - chunk grid metadata, bounds, cell size,
                               chunk_id -> required texture list, etc.
     chunks/<cx>_<cy>_<cz>.bin
@@ -194,7 +194,7 @@ def build_cache(
     """
     Partition `mesh` into spatial chunks and atomically publish the cache.
 
-    ``cache_dir`` defaults to the managed location selected by
+    ``cache_dir`` defaults to the generated location selected by
     ``cache_paths``. Assets are staged inside the same private directory, so the
     manifest can never become visible before all referenced textures.
 

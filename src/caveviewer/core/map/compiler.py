@@ -2,7 +2,7 @@
 
 This module sits above :mod:`caveviewer.core.chunking.builder`: it resolves source
 models, applies the same parsing preferences exposed by Preferences, selects the
-managed cache root, and delegates the actual OBJ/GLB cache build to the
+generated cache target, and delegates the actual OBJ/GLB cache build to the
 core import pipeline.
 """
 
@@ -187,7 +187,7 @@ def _compile_with_configuration(
     try:
         locator = _map_cache_locator(cache_root)
         cache_dir = os.path.abspath(str(locator.build_cache_dir(source_path)))
-        effective_cache_root = str(locator.managed_root)
+        effective_cache_root = str(locator.cache_root_for_source(source_path))
     except Exception as exc:
         raise MapCompileConfigurationError(str(exc)) from exc
 

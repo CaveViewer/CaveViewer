@@ -356,7 +356,7 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
 
     assert "Remove from this list" in source
     assert "Remove cache" in source
-    assert "Remove downloaded files" in source
+    assert "Remove downloaded maps" in source
     assert "Remove from Recent" not in source
     assert "_create_overflow_button" in panel_source
     assert "_create_recent_overflow_button" not in source
@@ -375,7 +375,7 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "Couldn’t remove files" in source
     assert "_cv_base_text" in source
     assert "_cv_status_after_id" in source
-    assert "Removed downloaded files for" not in source
+    assert "Removed downloaded maps for" not in source
     assert "Removed cache for" not in source
     assert "has_managed_map_cache(sample_path)" not in source
     assert "self._recent_container = tk.Frame(" in panel_source
