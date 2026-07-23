@@ -550,7 +550,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._bookmarks_path: str | None = None
         self._bookmarks: viewer_bookmarks.BookmarkSlots = {}
         self._recording_fps = _env_int("CAVEVIEWER_RECORDING_FPS", 30, 1, 60)
-        self._recording_max_height = _env_int("CAVEVIEWER_RECORDING_MAX_HEIGHT", 1080, 240, 4320)
+        self._recording_max_height = _env_int(
+            recording.RECORDING_MAX_HEIGHT_ENV_VAR,
+            recording.RECORDING_DEFAULT_MAX_HEIGHT,
+            recording.RECORDING_MIN_OUTPUT_HEIGHT,
+            recording.RECORDING_MAX_OUTPUT_HEIGHT,
+        )
         self._recording_crf = _env_int("CAVEVIEWER_RECORDING_CRF", 23, 0, 51)
         self._recording_output_dir = os.path.expanduser(
             os.getenv("CAVEVIEWER_RECORDING_DIR", os.path.join("~", "Movies", "CaveViewer"))

@@ -12,6 +12,14 @@ import threading
 from typing import Any
 
 
+RECORDING_MAX_HEIGHT_ENV_VAR = "CAVEVIEWER_RECORDING_MAX_HEIGHT"
+# Keep the default conservative until the 1080p render/readback path is fast
+# enough to avoid recording-frame skips. Set the env var to 1080 to opt back in.
+RECORDING_DEFAULT_MAX_HEIGHT = 720
+RECORDING_MIN_OUTPUT_HEIGHT = 240
+RECORDING_MAX_OUTPUT_HEIGHT = 4320
+
+
 @dataclass(frozen=True)
 class RecordingStopWork:
     """State needed to finalize an active recording encoder."""

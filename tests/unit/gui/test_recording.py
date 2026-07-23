@@ -14,6 +14,17 @@ def test_recording_output_size_preserves_aspect_and_even_dimensions():
     assert recording.recording_output_size(101, 51, 50) == (98, 50)
 
 
+def test_recording_default_max_height_targets_720p_with_1080p_opt_in():
+    """The default favors lower readback load, while explicit 1080p stays valid."""
+    assert recording.RECORDING_DEFAULT_MAX_HEIGHT == 720
+    assert recording.recording_output_size(
+        1920,
+        1080,
+        recording.RECORDING_DEFAULT_MAX_HEIGHT,
+    ) == (1280, 720)
+    assert recording.recording_output_size(1920, 1080, 1080) == (1920, 1080)
+
+
 def test_build_ffmpeg_command_uses_output_size_without_scale_filter():
     command = recording.build_ffmpeg_command(
         ffmpeg_path="/usr/bin/ffmpeg",
