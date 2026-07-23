@@ -191,7 +191,7 @@ class MapLibraryWorkflow:
             map_path = self.downloaded_library_map_path(library_map)
             if map_path is None:
                 return ()
-            return (
+            actions = [
                 (
                     "Remove downloaded files",
                     lambda map_path=map_path, library_map=library_map: (
@@ -202,7 +202,21 @@ class MapLibraryWorkflow:
                         )
                     ),
                 ),
-            )
+            ]
+            if self.has_cache(map_path):
+                actions.append(
+                    (
+                        "Remove cache",
+                        lambda map_path=map_path, library_map=library_map: (
+                            self.remove_map_cache(
+                                map_path,
+                                library_map.display_name,
+                                row_widgets,
+                            )
+                        ),
+                    )
+                )
+            return tuple(actions)
 
         self.panel.add_standard_row(
             row,
@@ -216,7 +230,7 @@ class MapLibraryWorkflow:
         title: str,
         row_widgets: MapLibraryRowWidgets | None,
     ) -> None:
-        """Remove managed cache data for a recent-map row."""
+        """Remove managed cache data for a map-library row."""
         result = self.remove_cache(path)
         if result.error:
             self.logger.warning("Unable to remove cache for %s: %s", title, result.error)
