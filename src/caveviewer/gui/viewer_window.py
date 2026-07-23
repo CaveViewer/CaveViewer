@@ -224,6 +224,19 @@ def _viewer_ui_surface_size(
     return fallback
 
 
+def _benchmark_environment_size(value) -> list[int] | None:
+    """Return a stable two-item size list for benchmark environment metadata."""
+    try:
+        width, height = value
+        width = int(width)
+        height = int(height)
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return [width, height]
+
+
 def _viewer_ui_scale_for_window_size(
     window_size: tuple[int, int] | None,
     environ: Mapping[str, str] | None = None,
@@ -607,6 +620,21 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         benchmark_config = CaveViewerWindow.cave_benchmark_config
         if benchmark_config is not None:
+            wnd = getattr(self, "wnd", None)
+            actual_window_size = _benchmark_environment_size(
+                getattr(wnd, "size", None)
+            )
+            actual_framebuffer_size = _benchmark_environment_size(
+                getattr(wnd, "buffer_size", None)
+            )
+            ui_surface_size = _benchmark_environment_size(
+                _viewer_ui_surface_size(
+                    wnd,
+                    tuple(actual_window_size)
+                    if actual_window_size is not None
+                    else _DEFAULT_WINDOW_SIZE,
+                )
+            )
             self._benchmark_controller = BenchmarkController(
                 scenario=benchmark_config["scenario"],
                 output_dir=benchmark_config["output_dir"],
@@ -622,6 +650,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "window_backend": str(
                         getattr(getattr(self, "wnd", None), "name", "")
                     ),
+                    "actual_window_size": actual_window_size,
+                    "actual_framebuffer_size": actual_framebuffer_size,
+                    "actual_ui_surface_size": ui_surface_size,
                     "vsync": bool(getattr(self, "vsync", False)),
                 }
             )
@@ -4476,7 +4507,7 @@ def run_viewer_benchmark(
     }
 
     try:
-        _launch_viewer_window(window_size_override=scenario.window_size)
+        _launch_viewer_window()
         return summary_path
     finally:
         CaveViewerWindow.cave_benchmark_config = None

@@ -184,8 +184,12 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
         for command in commands
         if any(str(part).endswith("run_local_benchmark.py") for part in command)
     )
-    assert str(local_map_dir / "_cache") in benchmark_command
-    assert str(local_map_dir) in benchmark_command
+    assert benchmark_command[benchmark_command.index("--cache-dir") + 1] == str(
+        local_map_dir / "_cache"
+    )
+    assert benchmark_command[benchmark_command.index("--textures-dir") + 1] == str(
+        local_map_dir / "_cache"
+    )
     assert str(run_dir / "auto-centerline-route-v1.json") in benchmark_command
 
 
@@ -228,6 +232,34 @@ def test_devils_eye_xl_uses_only_compatible_history_as_gate_baseline():
         "wall clock FPS: current=90.00 fps, previous=100.00 fps, delta=-10.00%"
         in history_text
     )
+
+
+def test_devils_eye_xl_treats_actual_window_size_changes_as_incompatible():
+    module = _load_script_module()
+    current_summary = _summary(median_fps=90.0, wall_clock_fps=90.0)
+    current_summary["environment"]["actual_window_size"] = [2048, 1280]
+    current_summary["environment"]["actual_framebuffer_size"] = [4096, 2560]
+    previous_summary = _summary(median_fps=100.0, wall_clock_fps=100.0)
+    previous_summary["environment"]["actual_window_size"] = [1600, 1000]
+    previous_summary["environment"]["actual_framebuffer_size"] = [1600, 1000]
+
+    assert module._latest_compatible_record(
+        [{"label": "old-size", "summary": previous_summary}],
+        current_summary,
+    ) is None
+
+    history_text = "\n".join(
+        module._history_comparison_lines(
+            [{"label": "old-size", "summary": previous_summary}],
+            current_summary=current_summary,
+            thresholds=module.BenchmarkThresholds(),
+            limit=1,
+        )
+    )
+
+    assert "Gate: INCOMPATIBLE" in history_text
+    assert "window size changed" in history_text
+    assert "framebuffer size changed" in history_text
 
 
 def _summary(

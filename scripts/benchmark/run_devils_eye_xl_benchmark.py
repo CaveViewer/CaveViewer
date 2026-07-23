@@ -308,7 +308,7 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "--cache-dir",
         str(cache_dir),
         "--textures-dir",
-        str(local_map_dir),
+        str(cache_dir),
         "--scenario",
         str(scenario_path),
         "--thresholds",
@@ -711,6 +711,7 @@ def _human_summary(
     thresholds: BenchmarkThresholds,
 ) -> str:
     metrics = summary.get("metrics", {})
+    environment = summary.get("environment", {})
     lines = [
         "CaveViewer Devil's Eye XL local benchmark",
         f"Status: {_status_text(comparison)}",
@@ -732,6 +733,13 @@ def _human_summary(
             f"chunks_uploaded={_format_metric(metrics.get('total_chunks_uploaded'))}, "
             f"bytes_uploaded={_format_metric(metrics.get('total_bytes_uploaded'))}, "
             f"upload_stalls={_format_metric(metrics.get('total_upload_stalls'))}"
+        ),
+        (
+            "Display: "
+            f"window={_format_size(environment.get('actual_window_size'))}, "
+            f"framebuffer={_format_size(environment.get('actual_framebuffer_size'))}, "
+            f"ui_surface={_format_size(environment.get('actual_ui_surface_size'))}, "
+            f"backend={environment.get('window_backend') or '<missing>'}"
         ),
     ]
     route_line = _route_summary_for_summary(summary)
@@ -928,6 +936,16 @@ def _incompatibility_reasons(
     elif previous_map != current_map:
         reasons.append("map manifest changed")
 
+    for key, reason in (
+        ("actual_window_size", "window size changed"),
+        ("actual_framebuffer_size", "framebuffer size changed"),
+    ):
+        previous_value = previous_environment.get(key)
+        current_value = current_environment.get(key)
+        if previous_value is not None or current_value is not None:
+            if previous_value != current_value:
+                reasons.append(reason)
+
     return reasons
 
 
@@ -967,7 +985,7 @@ def _summaries_are_comparable(
     current_scenario = current_summary.get("scenario", {})
     previous_environment = previous_summary.get("environment", {})
     current_environment = current_summary.get("environment", {})
-    return (
+    comparable = (
         bool(previous_scenario.get("name"))
         and previous_scenario.get("name") == current_scenario.get("name")
         and bool(previous_scenario.get("fingerprint"))
@@ -976,6 +994,17 @@ def _summaries_are_comparable(
         and previous_environment.get("cache_manifest_sha256")
         == current_environment.get("cache_manifest_sha256")
     )
+    if not comparable:
+        return False
+    for key in ("actual_window_size", "actual_framebuffer_size"):
+        previous_value = previous_environment.get(key)
+        current_value = current_environment.get(key)
+        if (
+            (previous_value is not None or current_value is not None)
+            and previous_value != current_value
+        ):
+            return False
+    return True
 
 
 def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
@@ -1127,6 +1156,21 @@ def _format_metric(value: object) -> str:
     if isinstance(value, (int, float)):
         return f"{float(value):.2f}"
     return str(value if value is not None else "<missing>")
+
+
+def _format_size(value: object) -> str:
+    if (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+        and len(value) == 2
+    ):
+        try:
+            width = int(value[0])
+            height = int(value[1])
+        except (TypeError, ValueError):
+            return "<missing>"
+        return f"{width}x{height}"
+    return "<missing>"
 
 
 def _utc_timestamp() -> str:

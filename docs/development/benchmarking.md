@@ -130,6 +130,19 @@ single latest run used as the gate baseline, detailed threshold checks, and a
 compact comparison against the most recent local history record. Use
 `--history-limit <n>` when deliberately inspecting more previous runs.
 
+The benchmark viewer launches through the same window-sizing path as the
+regular CaveViewer app: 80% of the detected desktop/work area using the active
+GLFW backend and DPI coordinate policy. The scenario's `window_size` remains in
+the JSON for historical compatibility, but it is not used to force the local
+Devil's Eye XL viewer window. The actual logical window size, framebuffer size,
+and UI surface size are recorded in the run environment and text summary; runs
+with different actual sizes are treated as incompatible local baselines.
+
+For an existing `_cache`, the wrapper also matches the regular app's cache-open
+path by using `.benchmark-data/maps/devils-eye-xl/_cache` as both the chunk cache
+and texture root. That keeps texture resolution aligned with maps compiled by
+`caveviewer.chunker`.
+
 By default the local wrapper generates an `auto-centerline-route-v1.json` file
 inside the run artifact directory after the cache exists. It uses the
 fine-grained `footprint_cells` manifest field, which the chunker derives from

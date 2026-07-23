@@ -347,6 +347,81 @@ def test_compare_summaries_fails_on_scenario_or_map_mismatch():
     assert "environment.cache_manifest_sha256" in failed_metrics
 
 
+def test_compare_summaries_fails_on_actual_window_mismatch():
+    comparison = compare_summaries(
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {
+                "cache_manifest_sha256": "map-a",
+                "actual_window_size": [1600, 1000],
+                "actual_framebuffer_size": [1600, 1000],
+            },
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {
+                "cache_manifest_sha256": "map-a",
+                "actual_window_size": [2048, 1280],
+                "actual_framebuffer_size": [4096, 2560],
+            },
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+    )
+
+    failed_metrics = {
+        check["metric"] for check in comparison["checks"] if not check["passed"]
+    }
+    assert comparison["passed"] is False
+    assert "environment.actual_window_size" in failed_metrics
+    assert "environment.actual_framebuffer_size" in failed_metrics
+
+
+def test_compare_summaries_allows_absent_actual_framebuffer_when_both_missing():
+    comparison = compare_summaries(
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {
+                "cache_manifest_sha256": "map-a",
+                "actual_framebuffer_size": None,
+            },
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+        {
+            "scenario": {"name": "gold", "fingerprint": "scenario-a"},
+            "environment": {
+                "cache_manifest_sha256": "map-a",
+                "actual_framebuffer_size": None,
+            },
+            "metrics": {
+                "median_fps": 100.0,
+                "one_percent_low_fps": 80.0,
+                "p95_frame_ms": 20.0,
+                "stutter_counts": {"over_50ms": 0},
+            },
+        },
+    )
+
+    metrics = {check["metric"] for check in comparison["checks"]}
+    assert "environment.actual_framebuffer_size" not in metrics
+    assert comparison["passed"] is True
+
+
 def _scenario(
     *,
     measurement_seconds: float = 1.0,

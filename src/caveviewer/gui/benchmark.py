@@ -812,7 +812,7 @@ def _compatibility_checks(
     candidate_scenario = candidate.get("scenario", {})
     baseline_environment = baseline.get("environment", {})
     candidate_environment = candidate.get("environment", {})
-    return [
+    checks = [
         _matching_value_check(
             "scenario.name",
             baseline_scenario.get("name"),
@@ -829,6 +829,18 @@ def _compatibility_checks(
             candidate_environment.get("cache_manifest_sha256"),
         ),
     ]
+    for key in ("actual_window_size", "actual_framebuffer_size"):
+        baseline_value = baseline_environment.get(key)
+        candidate_value = candidate_environment.get(key)
+        if baseline_value is not None or candidate_value is not None:
+            checks.append(
+                _matching_value_check(
+                    f"environment.{key}",
+                    baseline_value,
+                    candidate_value,
+                )
+            )
+    return checks
 
 
 def _matching_value_check(name: str, baseline_value: Any, candidate_value: Any) -> dict[str, Any]:

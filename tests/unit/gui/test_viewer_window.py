@@ -1080,7 +1080,7 @@ def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monk
 
     config = calls[0][1]
     assert summary_path == str(tmp_path / "out" / "summary.json")
-    assert calls[0][0] == (640, 480)
+    assert calls[0][0] is None
     assert config["scenario"] is scenario
     assert config["environment"]["scenario_fingerprint"] == "scenario-sha"
     assert config["environment"]["cache_manifest_sha256"] == hashlib.sha256(
