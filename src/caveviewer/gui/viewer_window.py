@@ -48,6 +48,7 @@ from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import render_upload
+from caveviewer.gui import viewer_input
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
 from caveviewer.gui.platform.factory import get_platform_adapter
@@ -4026,19 +4027,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if cache is None:
             cache = {}
             self._key_resolve_cache = cache
-        cache_key = candidate_names
-        if cache_key in cache:
-            return cache[cache_key]
-        for name in candidate_names:
-            if hasattr(keys, name):
-                value = getattr(keys, name)
-                cache[cache_key] = value
-                return value
-        raise AttributeError(
-            f"None of the key names {candidate_names} exist on this "
-            f"moderngl-window version's Keys class. Available attributes: "
-            f"{[a for a in dir(keys) if not a.startswith('_')]}"
-        )
+        return viewer_input.resolve_key(keys, *candidate_names, cache=cache)
 
     def _install_backend_modifier_probe(self) -> None:
         """Capture raw backend modifier bitmasks before they are reduced to shift/ctrl/alt."""
@@ -4057,156 +4046,56 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _raw_command_modifier_down(self) -> bool:
         raw_mods = int(getattr(self, "_last_raw_modifiers", 0) or 0)
-        if raw_mods == 0:
-            return False
-
-        backend_module = type(self.wnd).__module__.lower()
-
-        # pyglet: MOD_COMMAND is bit 6 (1 << 6)
-        if ".pyglet." in backend_module:
-            return (raw_mods & (1 << 6)) != 0
-
-        # glfw: MOD_SUPER is bit 3 (1 << 3)
-        if ".glfw." in backend_module:
-            return (raw_mods & (1 << 3)) != 0
-
-        # sdl2/pygame2: GUI modifiers are typically these bits.
-        if ".sdl2." in backend_module or ".pygame2." in backend_module:
-            return (raw_mods & 0x0C00) != 0
-
-        return False
+        backend_module = type(self.wnd).__module__
+        return viewer_input.raw_command_modifier_down(raw_mods, backend_module)
 
     def _key_is_down(self, keys, *candidate_names) -> bool:
         """Return True if any candidate key exists on this backend and is currently held."""
-        for name in candidate_names:
-            if hasattr(keys, name):
-                if getattr(keys, name) in self._keys_down:
-                    return True
-        return False
+        return viewer_input.key_is_down(keys, self._keys_down, *candidate_names)
 
     def _resolve_key_optional(self, keys, *candidate_names):
         """Return key code if present on this backend, else None."""
-        for name in candidate_names:
-            if hasattr(keys, name):
-                return getattr(keys, name)
-        return None
+        return viewer_input.resolve_key_optional(keys, *candidate_names)
 
     def _digit_for_key(self, keys, key) -> int | None:
         """Return bookmark slot (1..9) for a key press across backend key name variants."""
-        for digit in range(1, 10):
-            candidates = (
-                f"_{digit}",
-                f"KEY_{digit}",
-                f"NUMBER_{digit}",
-                f"NUM_{digit}",
-                f"NUMPAD_{digit}",
-            )
-            for name in candidates:
-                if hasattr(keys, name) and getattr(keys, name) == key:
-                    return digit
-
-        # Common fallback for top-row number keys on many backends.
-        if isinstance(key, int) and ord("1") <= key <= ord("9"):
-            return key - ord("0")
-
-        return None
+        return viewer_input.digit_for_key(keys, key)
 
     def _is_zero_key(self, keys, key) -> bool:
         """Check if the key is the 0 key across backend key name variants."""
-        candidates = (
-            "_0",
-            "KEY_0",
-            "NUMBER_0",
-            "NUM_0",
-            "NUMPAD_0",
-        )
-        for name in candidates:
-            if hasattr(keys, name) and getattr(keys, name) == key:
-                return True
-
-        # Common fallback for top-row 0 key on many backends.
-        if isinstance(key, int) and key == ord("0"):
-            return True
-
-        return False
+        return viewer_input.is_zero_key(keys, key)
 
     def _command_is_down(self, modifiers: KeyModifiers) -> bool:
         keys = self.wnd.keys
-
-        # Raw backend modifiers are the most reliable source on macOS-style
-        # command-key backends.
-        if (
-            self._active_platform_adapter().command_modifier_uses_control_fallback()
-            and self._raw_command_modifier_down()
-        ):
-            return True
-
-        # Prefer explicit modifier flags if available.
-        for attr in ("super", "command", "logo", "meta"):
-            if hasattr(modifiers, attr):
-                try:
-                    if bool(getattr(modifiers, attr)):
-                        return True
-                except Exception:
-                    pass
-
-        # Some macOS backends report Command through control-style flags.
-        if self._active_platform_adapter().command_modifier_uses_control_fallback():
-            for attr in ("ctrl", "control"):
-                if hasattr(modifiers, attr):
-                    try:
-                        if bool(getattr(modifiers, attr)):
-                            return True
-                    except Exception:
-                        pass
-
-        # Fallback to key-state checks across backend naming variants.
-        return self._key_is_down(
+        return viewer_input.command_is_down(
+            modifiers,
             keys,
-            "LEFT_SUPER", "RIGHT_SUPER",
-            "LEFT_COMMAND", "RIGHT_COMMAND",
-            "COMMAND", "LCOMMAND", "RCOMMAND", "CMD",
-            "LSUPER", "RSUPER", "LGUI", "RGUI",
-            "LEFT_WINDOWS", "RIGHT_WINDOWS", "LWIN", "RWIN",
+            self._keys_down,
+            command_modifier_uses_control_fallback=(
+                self._active_platform_adapter()
+                .command_modifier_uses_control_fallback()
+            ),
+            raw_command_down=self._raw_command_modifier_down(),
         )
 
     def _control_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if Control/Ctrl modifier key is currently down."""
         keys = self.wnd.keys
-        # Prefer explicit modifier flags if available.
-        for attr in ("ctrl", "control"):
-            if hasattr(modifiers, attr):
-                try:
-                    if bool(getattr(modifiers, attr)):
-                        return True
-                except Exception:
-                    pass
-        # Fallback to key-state checks.
-        return self._key_is_down(
-            keys,
-            "LEFT_CONTROL", "RIGHT_CONTROL",
-            "LCTRL", "RCTRL", "CONTROL", "LCONTROL", "RCONTROL",
-        )
+        return viewer_input.control_is_down(modifiers, keys, self._keys_down)
 
     def _shift_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if Shift modifier key is currently down."""
         keys = self.wnd.keys
-        if hasattr(modifiers, "shift"):
-            try:
-                if bool(getattr(modifiers, "shift")):
-                    return True
-            except Exception:
-                pass
-        return self._key_is_down(keys, "LEFT_SHIFT", "RIGHT_SHIFT", "LSHIFT", "RSHIFT", "SHIFT")
+        return viewer_input.shift_is_down(modifiers, keys, self._keys_down)
 
     def _bookmark_save_modifier_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if the platform-specific bookmark save modifier is down."""
         save_modifier = self._active_platform_adapter().bookmark_save_modifier()
-        if save_modifier == "command":
-            return self._command_is_down(modifiers)
-        elif save_modifier == "control":
-            return self._control_is_down(modifiers)
-        return False
+        return viewer_input.bookmark_save_modifier_is_down(
+            save_modifier=save_modifier,
+            command_down=self._command_is_down(modifiers),
+            control_down=self._control_is_down(modifiers),
+        )
 
     def _load_bookmarks(self) -> None:
         self._bookmarks = viewer_bookmarks.load_bookmarks(
@@ -4319,68 +4208,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _handle_continuous_input(self, dt: float):
-        keys = self.wnd.keys
-        forward_amt = 0.0
-        right_amt = 0.0
-        up_amt = 0.0
-        if keys.W in self._keys_down:
-            forward_amt += 1.0
-        if keys.S in self._keys_down:
-            forward_amt -= 1.0
-        if keys.D in self._keys_down:
-            right_amt += 1.0
-        if keys.A in self._keys_down:
-            right_amt -= 1.0
-        e_key = self._resolve_key(keys, "E")
-        q_key = self._resolve_key(keys, "Q")
-        if e_key in self._keys_down:
-            up_amt += 1.0
-        if q_key in self._keys_down:
-            up_amt -= 1.0
-
-        shift_key = self._resolve_key(keys, "LEFT_SHIFT", "LSHIFT")
-        speed_mult = 3.0 if shift_key in self._keys_down else 1.0
-        if forward_amt or right_amt or up_amt:
-            self._move_camera_guarded(forward_amt, right_amt, up_amt, dt, speed_mult)
-
-        # Keyboard look fallback: arrow keys and I/J/K/L.
-        # left/right or J/L = yaw, up/down or I/K = pitch.
-        left_key = self._resolve_key(keys, "LEFT", "ARROW_LEFT")
-        right_key = self._resolve_key(keys, "RIGHT", "ARROW_RIGHT")
-        up_key = self._resolve_key(keys, "UP", "ARROW_UP")
-        down_key = self._resolve_key(keys, "DOWN", "ARROW_DOWN")
-        i_key = self._resolve_key_optional(keys, "I")
-        j_key = self._resolve_key_optional(keys, "J")
-        k_key = self._resolve_key_optional(keys, "K")
-        l_key = self._resolve_key_optional(keys, "L")
-
-        yaw_dir = 0.0
-        if left_key in self._keys_down or (j_key is not None and j_key in self._keys_down):
-            yaw_dir -= 1.0
-        if right_key in self._keys_down or (l_key is not None and l_key in self._keys_down):
-            yaw_dir += 1.0
-
-        pitch_dir = 0.0
-        if up_key in self._keys_down or (i_key is not None and i_key in self._keys_down):
-            pitch_dir -= 1.0  # up arrow = look up
-        if down_key in self._keys_down or (k_key is not None and k_key in self._keys_down):
-            pitch_dir += 1.0  # down arrow = look down
-
-        if yaw_dir or pitch_dir:
-            look_amount = self._KEY_LOOK_PIXELS_PER_SECOND * dt
-            self.camera.look(yaw_dir * look_amount, pitch_dir * look_amount)
-
-        # Barrel roll: Z = counterclockwise (positive roll), X = clockwise (negative roll)
-        z_key = self._resolve_key_optional(keys, "Z")
-        x_key = self._resolve_key_optional(keys, "X")
-        roll_dir = 0.0
-        if z_key is not None and z_key in self._keys_down:
-            roll_dir += 1.0
-        if x_key is not None and x_key in self._keys_down:
-            roll_dir -= 1.0
-        if roll_dir:
-            roll_speed = 2.0  # radians per second
-            self.camera.barrel_roll(roll_dir * roll_speed * dt)
+        intent = viewer_input.continuous_input_intent(
+            keys=self.wnd.keys,
+            keys_down=self._keys_down,
+            dt=dt,
+            key_look_pixels_per_second=self._KEY_LOOK_PIXELS_PER_SECOND,
+        )
+        if intent.has_motion:
+            self._move_camera_guarded(
+                intent.forward_amount,
+                intent.right_amount,
+                intent.up_amount,
+                dt,
+                intent.speed_multiplier,
+            )
+        if intent.has_look:
+            self.camera.look(intent.yaw_delta, intent.pitch_delta)
+        if intent.has_roll:
+            self.camera.barrel_roll(intent.roll_delta)
 
     def on_key_event(self, key, action, modifiers: KeyModifiers):
         # Cocoa may dispatch key callbacks before viewer controls exist or
@@ -4469,11 +4314,11 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _handle_reset_view_shortcut(self, key, modifiers: KeyModifiers) -> bool:
         """Handle CMD+0 (macOS) or CTRL+0 (Windows/Linux) to reset view."""
         keys = self.wnd.keys
-        
+
         # Check if this is the 0 key
         if not self._is_zero_key(keys, key):
             return False
-        
+
         shortcut_down = (
             self._command_is_down(modifiers)
             if self._active_platform_adapter().tk_primary_modifier_name() == "Command"
@@ -4482,7 +4327,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if shortcut_down:
             self.camera.reset_view()
             return True
-        
+
         return False
 
     def _request_startup_focus_once(self) -> None:
