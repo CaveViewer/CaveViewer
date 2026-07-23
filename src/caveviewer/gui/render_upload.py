@@ -51,6 +51,8 @@ def new_streaming_frame_timing() -> dict[str, Any]:
         "texture_decoded_cache_hits": 0,
         "texture_sync_decodes": 0,
         "texture_placeholders": 0,
+        "texture_evictions": 0,
+        "texture_evicted_bytes": 0,
         "worst_texture_ms": 0.0,
         "worst_texture_material": None,
         "worst_texture_size": None,
@@ -112,6 +114,8 @@ def new_chunk_upload_counters() -> dict[str, Any]:
         "texture_decoded_cache_hits": 0,
         "texture_sync_decodes": 0,
         "texture_placeholders": 0,
+        "texture_evictions": 0,
+        "texture_evicted_bytes": 0,
         "chunk_bookkeeping_ms": 0.0,
         "groups": 0,
         "prepacked_groups": 0,
@@ -142,6 +146,10 @@ def add_texture_timing_counters(
     counters["texture_upload_ms"] += texture_write_ms
     counters["texture_mipmap_ms"] += texture_timing.get("mipmap_ms", 0.0)
     counters["texture_image_bytes"] += texture_timing.get("image_bytes", 0)
+    counters["texture_evictions"] += int(texture_timing.get("texture_evictions", 0))
+    counters["texture_evicted_bytes"] += int(
+        texture_timing.get("texture_evicted_bytes", 0)
+    )
     if texture_timing.get("material_cache_hit"):
         counters["texture_material_cache_hits"] += 1
     if texture_timing.get("file_cache_hit"):
@@ -257,6 +265,8 @@ def format_streaming_frame_timing(timing: dict) -> str:
         f"tex_decoded={timing['texture_decoded_cache_hits']} "
         f"tex_sync_decode={timing['texture_sync_decodes']} "
         f"tex_placeholder={timing['texture_placeholders']} "
+        f"tex_evict={timing.get('texture_evictions', 0)} "
+        f"tex_evict_mb={timing.get('texture_evicted_bytes', 0) / (1024**2):.1f} "
         f"book={timing['chunk_bookkeeping_ms']:.1f}ms"
     )
 

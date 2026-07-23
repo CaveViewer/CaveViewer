@@ -491,12 +491,14 @@ def test_idle_texture_lru_evicts_oldest_when_budget_needs_room(tmp_path):
     assert context.textures[0].released is False
     assert context.textures[1].released is False
 
-    manager.acquire("c")
+    _third_texture, timing = manager.acquire_with_timing("c")
 
     assert len(context.uploads) == 3
     assert context.textures[0].released is True
     assert context.textures[1].released is False
     assert context.textures[2].released is False
+    assert timing["texture_evictions"] == 1
+    assert timing["texture_evicted_bytes"] == math.ceil(4 * 4 * 4 * (4.0 / 3.0))
     assert manager.stats()["unique_files_resident"] == 2
     assert manager.stats()["idle_files_resident"] == 1
 

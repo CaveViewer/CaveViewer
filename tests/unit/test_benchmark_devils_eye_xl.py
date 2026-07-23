@@ -55,9 +55,11 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert exit_code == 0
     assert "Devil's Eye XL local benchmark plan:" in output
     assert "route_mode: auto-centerline" in output
-    assert "centerline_route: keyframes=8" in output
+    assert "centerline_route: keyframes=24" in output
     assert "render_distance: 6" in output
-    assert "target_length=auto(4 chunks, streaming exercise" in output
+    assert "measurement_seconds: 120" in output
+    assert "texture_resident_cache_mb: 768" in output
+    assert "target_length=auto(48 chunks, streaming exercise" in output
     assert "selection=max_visible_chunk_texture_complexity" in output
     assert "movement=after_warmup" in output
     assert "copy_map: yes" in output
@@ -121,13 +123,16 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     def fake_logged_subprocess(command, _plan, **_kwargs):
         commands.append(command)
         assert any(str(part).endswith("run_local_benchmark.py") for part in command)
+        assert _kwargs["env"]["CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB"] == "768"
         scenario_path = Path(command[command.index("--scenario") + 1])
         generated_scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
         assert generated_scenario["metadata"]["route_mode"] == "auto_centerline_v1"
         assert generated_scenario["metadata"]["target_route_length_source"] == (
             "devils_eye_streaming_default_chunks"
         )
-        assert generated_scenario["metadata"]["target_route_length_chunks"] == 4.0
+        assert generated_scenario["metadata"]["target_route_length_chunks"] == 48.0
+        assert generated_scenario["measurement_seconds"] == 120.0
+        assert generated_scenario["max_runtime_seconds"] == 215.0
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "summary.json").write_text(
             json.dumps(
@@ -164,6 +169,8 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "wall_clock_fps=90.00" in latest_text
     assert "Runtime load:" in latest_text
     assert "median_drawn_chunks=40.00" in latest_text
+    assert "Runtime texture:" in latest_text
+    assert "evictions=3.00" in latest_text
     assert "Startup readiness:" in latest_text
     assert "visible_chunks=40" in latest_text
     assert "textures=40/40 resident" in latest_text
@@ -171,9 +178,10 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "distance=6 chunks" in latest_text
     assert "Streaming effective:" in latest_text
     assert "Texture residency:" in latest_text
+    assert "requested_cache_cap=768 MB" in latest_text
     assert "Route: auto_centerline" in latest_text
     assert "selection=max_visible_chunk_texture_complexity_v1" in latest_text
-    assert "target_speed_m_per_s=1.33" in latest_text
+    assert "target_speed_m_per_s=4.00" in latest_text
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
     assert "Previous local run compared to current" in latest_text
@@ -328,6 +336,23 @@ def _summary(
         "total_chunks_uploaded": 20,
         "total_bytes_uploaded": 1048576,
         "total_upload_stalls": 0,
+        "max_ready_chunks": 2.0,
+        "frames_with_pending_chunks": 4,
+        "frames_with_ready_chunks": 3,
+        "frames_with_chunk_uploads": 5,
+        "frames_with_chunk_unloads": 2,
+        "frames_with_texture_uploads": 2,
+        "total_texture_upload_ms": 11.5,
+        "total_texture_decode_ms": 4.25,
+        "total_texture_mipmap_ms": 2.5,
+        "total_texture_bytes_uploaded": 64 * 1024 * 1024,
+        "total_texture_material_cache_hits": 12,
+        "total_texture_file_cache_hits": 4,
+        "total_texture_decoded_cache_hits": 5,
+        "total_texture_sync_decodes": 1,
+        "total_texture_placeholders": 0,
+        "total_texture_evictions": 3,
+        "total_texture_evicted_bytes": 48 * 1024 * 1024,
         "stutter_counts": {"over_50ms": 0},
     }
     if wall_clock_fps is not None:
@@ -346,6 +371,7 @@ def _summary(
                 "system_ram_target_percent": "8",
                 "gpu_memory_target_percent": "70",
                 "gpu_memory_override_gb": "",
+                "texture_resident_cache_mb": "768",
                 "io_workers": "2",
                 "io_reserved_cpus": "3",
                 "upload_chunks_per_frame": "1",

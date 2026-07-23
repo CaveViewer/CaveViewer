@@ -1058,6 +1058,7 @@ def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monk
     monkeypatch.setenv("CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "12")
     monkeypatch.setenv("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET", "65")
     monkeypatch.delenv("CAVEVIEWER_GPU_MEMORY_GB", raising=False)
+    monkeypatch.setenv("CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB", "768")
     monkeypatch.setenv("CAVEVIEWER_IO_WORKERS", "3")
     monkeypatch.setenv("CAVEVIEWER_IO_RESERVED_CPUS", "2")
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "5")
@@ -1100,6 +1101,7 @@ def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monk
         "system_ram_target_percent": "12",
         "gpu_memory_target_percent": "65",
         "gpu_memory_override_gb": "",
+        "texture_resident_cache_mb": "768",
         "io_workers": "3",
         "io_reserved_cpus": "2",
         "upload_chunks_per_frame": "5",
@@ -1968,6 +1970,8 @@ def test_streaming_timing_format_splits_drain_and_upload_details():
             "buffer_write_ms": 2.5,
             "texture_alloc_ms": 0.5,
             "texture_upload_ms": 3.5,
+            "texture_evictions": 2,
+            "texture_evicted_bytes": 3 * 1024 * 1024,
             "vbo_upload_slice_bytes": 256 * 1024,
             "texture_upload_slice_bytes": 128 * 1024,
             "upload_stalls": 1,
@@ -1986,6 +1990,8 @@ def test_streaming_timing_format_splits_drain_and_upload_details():
     assert "tex_upload=3.5ms" in detail
     assert "slices=vbo:256KB/tex:128KB" in detail
     assert "stalls=1" in detail
+    assert "tex_evict=2" in detail
+    assert "tex_evict_mb=3.0" in detail
 
 
 def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(

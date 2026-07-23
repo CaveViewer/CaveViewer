@@ -37,7 +37,6 @@ from caveviewer.gui.benchmark import (
 )
 from caveviewer.gui.benchmark_routes import (
     CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
-    DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
     DEFAULT_DENSE_ROUTE_KEYFRAMES,
     DEFAULT_DENSE_ROUTE_PERCENTILE,
@@ -63,7 +62,11 @@ MANIFEST_NAME = "manifest.json"
 MAP_SOURCE_SUFFIXES = {".glb", ".gltf", ".obj"}
 LOCAL_HISTORY_SCHEMA_VERSION = 1
 DEFAULT_DEVILS_EYE_RENDER_DISTANCE = 6
-DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS = 4.0
+DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS = 120.0
+DEFAULT_DEVILS_EYE_MAX_RUNTIME_MARGIN_SECONDS = 90.0
+DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_KEYFRAMES = 24
+DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS = 48.0
+DEFAULT_DEVILS_EYE_TEXTURE_RESIDENT_CACHE_MB = 768.0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -128,7 +131,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--centerline-route-keyframes",
         type=int,
-        default=DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
+        default=DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_KEYFRAMES,
         help="Target number of keyframes for the generated centerline route.",
     )
     parser.add_argument(
@@ -168,6 +171,35 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Benchmark threshold JSON. Defaults to "
             "benchmarks/viewer-thresholds.v1.json."
+        ),
+    )
+    parser.add_argument(
+        "--measurement-seconds",
+        type=float,
+        default=DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS,
+        help=(
+            "Measured route duration. Defaults to "
+            f"{DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS:g}s for the local "
+            "streaming stress benchmark."
+        ),
+    )
+    parser.add_argument(
+        "--max-runtime-seconds",
+        type=float,
+        help=(
+            "Maximum viewer benchmark runtime after output preparation. "
+            "Defaults to warmup + measurement + "
+            f"{DEFAULT_DEVILS_EYE_MAX_RUNTIME_MARGIN_SECONDS:g}s."
+        ),
+    )
+    parser.add_argument(
+        "--texture-resident-cache-mb",
+        type=float,
+        default=DEFAULT_DEVILS_EYE_TEXTURE_RESIDENT_CACHE_MB,
+        help=(
+            "Benchmark-only resident texture cache cap in MB. Defaults to "
+            f"{DEFAULT_DEVILS_EYE_TEXTURE_RESIDENT_CACHE_MB:g} MB so the "
+            "route exercises texture eviction/reload."
         ),
     )
     parser.add_argument(
@@ -279,9 +311,16 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
     results_dir = Path(args.results_dir).expanduser().resolve()
     scenario_template_path = _existing_file(args.scenario, "scenario")
     threshold_path = _existing_file(args.thresholds, "thresholds")
-    scenario_template = _scenario_with_render_distance(
-        BenchmarkScenario.load(scenario_template_path),
-        int(args.render_distance),
+    base_scenario_template = BenchmarkScenario.load(scenario_template_path)
+    scenario_template = _scenario_with_benchmark_policy(
+        base_scenario_template,
+        render_distance=int(args.render_distance),
+        measurement_seconds=float(args.measurement_seconds),
+        max_runtime_seconds=(
+            None
+            if args.max_runtime_seconds is None
+            else float(args.max_runtime_seconds)
+        ),
     )
     BenchmarkThresholds.load(threshold_path)
 
@@ -358,6 +397,9 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "scenario_template": scenario_template,
         "scenario_fingerprint": scenario_fingerprint,
         "render_distance": scenario_template.render_distance,
+        "measurement_seconds": scenario_template.measurement_seconds,
+        "max_runtime_seconds": scenario_template.max_runtime_seconds,
+        "texture_resident_cache_mb": float(args.texture_resident_cache_mb),
         "route_mode": route_mode,
         "centerline_route_keyframes": max(1, int(args.centerline_route_keyframes)),
         "centerline_route_target_length_m": (
@@ -403,6 +445,9 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
         f"  cache_dir: {plan['cache_dir']}",
         f"  route_mode: {plan['route_mode']}",
         f"  render_distance: {plan['render_distance']}",
+        f"  measurement_seconds: {plan['measurement_seconds']:g}",
+        f"  max_runtime_seconds: {plan['max_runtime_seconds']:g}",
+        f"  texture_resident_cache_mb: {plan['texture_resident_cache_mb']:g}",
         f"  scenario_template: {plan['scenario_template_path']}",
         f"  scenario: {plan['scenario_path']}",
         f"  scenario_fingerprint: {plan['scenario_fingerprint']}",
@@ -465,16 +510,35 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
     ]
 
 
-def _scenario_with_render_distance(
+def _scenario_with_benchmark_policy(
     scenario: BenchmarkScenario,
+    *,
     render_distance: int,
+    measurement_seconds: float,
+    max_runtime_seconds: float | None,
 ) -> BenchmarkScenario:
-    distance = max(1, int(render_distance))
-    if scenario.render_distance == distance:
-        return scenario
+    measurement = float(measurement_seconds)
+    if measurement <= 0.0:
+        raise BenchmarkConfigurationError("measurement-seconds must be positive")
+    max_runtime = (
+        float(max_runtime_seconds)
+        if max_runtime_seconds is not None
+        else (
+            float(scenario.warmup_seconds)
+            + measurement
+            + DEFAULT_DEVILS_EYE_MAX_RUNTIME_MARGIN_SECONDS
+        )
+    )
+    if max_runtime < scenario.warmup_seconds + measurement:
+        raise BenchmarkConfigurationError(
+            "max-runtime-seconds must be at least warmup + measurement"
+        )
+
     payload = scenario.identity_payload
     payload["metadata"] = dict(scenario.metadata)
-    payload["render_distance"] = distance
+    payload["render_distance"] = max(1, int(render_distance))
+    payload["measurement_seconds"] = measurement
+    payload["max_runtime_seconds"] = max_runtime
     return BenchmarkScenario.from_mapping(payload)
 
 
@@ -672,7 +736,7 @@ def _run_benchmark(plan: Mapping[str, Any]) -> int:
         plan["benchmark_command"],
         plan,
         cwd=_REPOSITORY_ROOT,
-        env=_subprocess_env_for_local_cache(),
+        env=_subprocess_env_for_local_cache(plan),
     )
 
 
@@ -840,9 +904,26 @@ def _human_summary(
             f"max_drawn_chunks={_format_metric(metrics.get('max_drawn_chunks'))}, "
             f"median_wanted_chunks={_format_metric(metrics.get('median_wanted_chunks'))}, "
             f"max_pending_chunks={_format_metric(metrics.get('max_pending_chunks'))}, "
+            f"max_ready_chunks={_format_metric(metrics.get('max_ready_chunks'))}, "
             f"chunks_uploaded={_format_metric(metrics.get('total_chunks_uploaded'))}, "
+            f"chunks_unloaded={_format_metric(metrics.get('total_chunks_unloaded'))}, "
             f"bytes_uploaded={_format_metric(metrics.get('total_bytes_uploaded'))}, "
-            f"upload_stalls={_format_metric(metrics.get('total_upload_stalls'))}"
+            f"upload_stalls={_format_metric(metrics.get('total_upload_stalls'))}, "
+            f"frames_with_pending={_format_metric(metrics.get('frames_with_pending_chunks'))}, "
+            f"frames_with_uploads={_format_metric(metrics.get('frames_with_chunk_uploads'))}"
+        ),
+        (
+            "Runtime texture: "
+            f"bytes_uploaded={_format_bytes_mb(metrics.get('total_texture_bytes_uploaded'))}, "
+            f"upload_ms={_format_metric(metrics.get('total_texture_upload_ms'))}, "
+            f"decode_ms={_format_metric(metrics.get('total_texture_decode_ms'))}, "
+            f"evictions={_format_metric(metrics.get('total_texture_evictions'))}, "
+            f"evicted={_format_bytes_mb(metrics.get('total_texture_evicted_bytes'))}, "
+            f"decoded_cache_hits={_format_metric(metrics.get('total_texture_decoded_cache_hits'))}, "
+            f"file_cache_hits={_format_metric(metrics.get('total_texture_file_cache_hits'))}, "
+            f"sync_decodes={_format_metric(metrics.get('total_texture_sync_decodes'))}, "
+            f"placeholders={_format_metric(metrics.get('total_texture_placeholders'))}, "
+            f"frames_with_texture_uploads={_format_metric(metrics.get('frames_with_texture_uploads'))}"
         ),
         (
             "Display: "
@@ -960,6 +1041,7 @@ def _streaming_summary_lines(environment: Mapping[str, Any]) -> list[str]:
         (
             "Texture residency: "
             f"max_dimension={_format_setting(environment.get('texture_max_dimension'), suffix=' px')}, "
+            f"requested_cache_cap={_format_setting(settings.get('texture_resident_cache_mb'), suffix=' MB')}, "
             f"resident_budget={_format_bytes_mb(environment.get('texture_resident_budget_bytes'))}, "
             f"decoded_cache={_format_bytes_mb(environment.get('texture_decoded_cache_budget_bytes'))}"
         ),
@@ -1321,11 +1403,19 @@ def _safe_label(label: str) -> str:
     return cleaned
 
 
-def _subprocess_env_for_local_cache() -> dict[str, str]:
+def _subprocess_env_for_local_cache(
+    plan: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPATH"] = _pythonpath_with_src(env)
     env.pop("CAVEVIEWER_MAP_CACHE_DIR", None)
+    if plan is not None:
+        texture_cache_mb = float(plan["texture_resident_cache_mb"])
+        if texture_cache_mb > 0.0:
+            env["CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB"] = (
+                f"{texture_cache_mb:g}"
+            )
     return env
 
 

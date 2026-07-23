@@ -294,6 +294,17 @@ class BenchmarkFrameSample:
     chunks_unloaded: int
     bytes_uploaded: int
     upload_stalls: int
+    texture_upload_ms: float
+    texture_decode_ms: float
+    texture_mipmap_ms: float
+    texture_bytes_uploaded: int
+    texture_material_cache_hits: int
+    texture_file_cache_hits: int
+    texture_decoded_cache_hits: int
+    texture_sync_decodes: int
+    texture_placeholders: int
+    texture_evictions: int
+    texture_evicted_bytes: int
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -320,6 +331,17 @@ class BenchmarkFrameSample:
             "chunks_unloaded": self.chunks_unloaded,
             "bytes_uploaded": self.bytes_uploaded,
             "upload_stalls": self.upload_stalls,
+            "texture_upload_ms": round(self.texture_upload_ms, 6),
+            "texture_decode_ms": round(self.texture_decode_ms, 6),
+            "texture_mipmap_ms": round(self.texture_mipmap_ms, 6),
+            "texture_bytes_uploaded": self.texture_bytes_uploaded,
+            "texture_material_cache_hits": self.texture_material_cache_hits,
+            "texture_file_cache_hits": self.texture_file_cache_hits,
+            "texture_decoded_cache_hits": self.texture_decoded_cache_hits,
+            "texture_sync_decodes": self.texture_sync_decodes,
+            "texture_placeholders": self.texture_placeholders,
+            "texture_evictions": self.texture_evictions,
+            "texture_evicted_bytes": self.texture_evicted_bytes,
         }
 
 
@@ -561,6 +583,31 @@ class BenchmarkController:
             chunks_unloaded=int(streaming_timing.get("chunks_unloaded", 0)),
             bytes_uploaded=int(streaming_timing.get("bytes_uploaded", 0)),
             upload_stalls=int(streaming_timing.get("upload_stalls", 0)),
+            texture_upload_ms=float(streaming_timing.get("texture_upload_ms", 0.0)),
+            texture_decode_ms=float(streaming_timing.get("texture_decode_ms", 0.0)),
+            texture_mipmap_ms=float(streaming_timing.get("texture_mipmap_ms", 0.0)),
+            texture_bytes_uploaded=int(
+                streaming_timing.get("texture_image_bytes", 0)
+            ),
+            texture_material_cache_hits=int(
+                streaming_timing.get("texture_material_cache_hits", 0)
+            ),
+            texture_file_cache_hits=int(
+                streaming_timing.get("texture_file_cache_hits", 0)
+            ),
+            texture_decoded_cache_hits=int(
+                streaming_timing.get("texture_decoded_cache_hits", 0)
+            ),
+            texture_sync_decodes=int(
+                streaming_timing.get("texture_sync_decodes", 0)
+            ),
+            texture_placeholders=int(
+                streaming_timing.get("texture_placeholders", 0)
+            ),
+            texture_evictions=int(streaming_timing.get("texture_evictions", 0)),
+            texture_evicted_bytes=int(
+                streaming_timing.get("texture_evicted_bytes", 0)
+            ),
         )
         self._samples.append(sample)
         if self._frames_handle is None:
@@ -658,6 +705,7 @@ def summarize_samples(
     resident_chunk_values = [sample.resident_chunks for sample in sample_list]
     wanted_chunk_values = [sample.wanted_chunks for sample in sample_list]
     pending_chunk_values = [sample.pending_chunks for sample in sample_list]
+    ready_chunk_values = [sample.ready_chunks for sample in sample_list]
     wall_clock_seconds = _wall_clock_seconds(
         sample_list,
         scenario=scenario,
@@ -706,10 +754,62 @@ def summarize_samples(
         "max_pending_chunks": _round_metric(
             max(pending_chunk_values) if pending_chunk_values else 0.0
         ),
+        "median_ready_chunks": _round_metric(_median(ready_chunk_values)),
+        "max_ready_chunks": _round_metric(
+            max(ready_chunk_values) if ready_chunk_values else 0.0
+        ),
+        "frames_with_pending_chunks": sum(
+            1 for sample in sample_list if sample.pending_chunks > 0
+        ),
+        "frames_with_ready_chunks": sum(
+            1 for sample in sample_list if sample.ready_chunks > 0
+        ),
+        "frames_with_chunk_uploads": sum(
+            1 for sample in sample_list if sample.chunks_uploaded > 0
+        ),
+        "frames_with_chunk_unloads": sum(
+            1 for sample in sample_list if sample.chunks_unloaded > 0
+        ),
         "total_chunks_uploaded": sum(sample.chunks_uploaded for sample in sample_list),
         "total_chunks_unloaded": sum(sample.chunks_unloaded for sample in sample_list),
         "total_bytes_uploaded": sum(sample.bytes_uploaded for sample in sample_list),
         "total_upload_stalls": sum(sample.upload_stalls for sample in sample_list),
+        "frames_with_texture_uploads": sum(
+            1 for sample in sample_list if sample.texture_bytes_uploaded > 0
+        ),
+        "total_texture_upload_ms": _round_metric(
+            sum(sample.texture_upload_ms for sample in sample_list)
+        ),
+        "total_texture_decode_ms": _round_metric(
+            sum(sample.texture_decode_ms for sample in sample_list)
+        ),
+        "total_texture_mipmap_ms": _round_metric(
+            sum(sample.texture_mipmap_ms for sample in sample_list)
+        ),
+        "total_texture_bytes_uploaded": sum(
+            sample.texture_bytes_uploaded for sample in sample_list
+        ),
+        "total_texture_material_cache_hits": sum(
+            sample.texture_material_cache_hits for sample in sample_list
+        ),
+        "total_texture_file_cache_hits": sum(
+            sample.texture_file_cache_hits for sample in sample_list
+        ),
+        "total_texture_decoded_cache_hits": sum(
+            sample.texture_decoded_cache_hits for sample in sample_list
+        ),
+        "total_texture_sync_decodes": sum(
+            sample.texture_sync_decodes for sample in sample_list
+        ),
+        "total_texture_placeholders": sum(
+            sample.texture_placeholders for sample in sample_list
+        ),
+        "total_texture_evictions": sum(
+            sample.texture_evictions for sample in sample_list
+        ),
+        "total_texture_evicted_bytes": sum(
+            sample.texture_evicted_bytes for sample in sample_list
+        ),
         "stutter_counts": stutter_counts,
     }
     return {

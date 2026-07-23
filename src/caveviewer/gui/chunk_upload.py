@@ -108,13 +108,37 @@ class ChunkUploadManager:
         if texture_task is not None and callable(cancel_acquire_task):
             cancel_acquire_task(texture_task)
         if job.get("texture") is not None:
-            self.texture_manager.release(job["group"].material_name)
+            self._release_material_texture(job["group"].material_name)
             job["texture"] = None
         pending_vbo = job.get("pending_vbo")
         if pending_vbo is not None and hasattr(pending_vbo, "release"):
             pending_vbo.release()
         job["pending_vbo"] = None
         job["pending_vbo_payload"] = None
+
+    def _release_material_texture(self, material_name: str) -> None:
+        timing = self._streaming_frame_timing
+        before_stats = (
+            self.texture_manager.stats()
+            if timing is not None and hasattr(self.texture_manager, "stats")
+            else None
+        )
+        self.texture_manager.release(material_name)
+        if timing is None or before_stats is None:
+            return
+        after_stats = self.texture_manager.stats()
+        evicted = max(
+            0,
+            int(before_stats.get("unique_files_resident", 0))
+            - int(after_stats.get("unique_files_resident", 0)),
+        )
+        evicted_bytes = max(
+            0,
+            int(before_stats.get("resident_texture_bytes", 0))
+            - int(after_stats.get("resident_texture_bytes", 0)),
+        )
+        timing["texture_evictions"] += evicted
+        timing["texture_evicted_bytes"] += evicted_bytes
 
     def _advance_texture_upload_job(
         self,
@@ -497,7 +521,7 @@ class ChunkUploadManager:
             for vao, vbo, mat_name, _texture in partial_state.get("vao_list", []):
                 vao.release()
                 vbo.release()
-                self.texture_manager.release(mat_name)
+                self._release_material_texture(mat_name)
         if partial_was_published:
             self.gpu_objects.pop(cell, None)
         else:
@@ -505,7 +529,7 @@ class ChunkUploadManager:
             for vao, vbo, mat_name, _texture in vao_list:
                 vao.release()
                 vbo.release()
-                self.texture_manager.release(mat_name)
+                self._release_material_texture(mat_name)
         self.normal_cache.pop(cell, None)
         self.aabbs.pop(cell, None)
         timing = self._streaming_frame_timing

@@ -92,6 +92,8 @@ def test_texture_timing_updates_worst_texture_frame_summary():
             "image_bytes": 1024,
             "image_total_bytes": 2048,
             "image_size": (32, 16),
+            "texture_evictions": 2,
+            "texture_evicted_bytes": 4096,
             "material_cache_hit": True,
             "decoded_cache_hit": True,
         },
@@ -101,6 +103,8 @@ def test_texture_timing_updates_worst_texture_frame_summary():
     assert counters["texture_material_cache_hits"] == 1
     assert counters["texture_decoded_cache_hits"] == 1
     assert counters["texture_upload_ms"] == 3.0
+    assert counters["texture_evictions"] == 2
+    assert counters["texture_evicted_bytes"] == 4096
     assert frame_timing["worst_texture_material"] == "limestone"
     assert frame_timing["worst_texture_size"] == (32, 16)
     assert frame_timing["worst_texture_bytes"] == 2048

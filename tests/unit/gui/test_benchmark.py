@@ -219,6 +219,13 @@ def test_summarize_samples_reports_stutter_counts():
     assert summary["metrics"]["max_wanted_chunks"] == 6.0
     assert summary["metrics"]["total_chunks_uploaded"] == 3
     assert summary["metrics"]["total_bytes_uploaded"] == 12288
+    assert summary["metrics"]["frames_with_pending_chunks"] == 3
+    assert summary["metrics"]["frames_with_ready_chunks"] == 3
+    assert summary["metrics"]["frames_with_chunk_uploads"] == 3
+    assert summary["metrics"]["frames_with_texture_uploads"] == 3
+    assert summary["metrics"]["total_texture_bytes_uploaded"] == 6144
+    assert summary["metrics"]["total_texture_evictions"] == 3
+    assert summary["metrics"]["total_texture_sync_decodes"] == 3
     assert summary["metrics"]["stutter_counts"] == {
         "over_33_3ms": 2,
         "over_50ms": 1,
@@ -532,6 +539,17 @@ def _record_frame(
             "chunks_unloaded": 0,
             "bytes_uploaded": 4096,
             "upload_stalls": 0,
+            "texture_upload_ms": 1.5,
+            "texture_decode_ms": 0.5,
+            "texture_mipmap_ms": 0.25,
+            "texture_image_bytes": 2048,
+            "texture_material_cache_hits": 2,
+            "texture_file_cache_hits": 1,
+            "texture_decoded_cache_hits": 1,
+            "texture_sync_decodes": 1,
+            "texture_placeholders": 0,
+            "texture_evictions": 1,
+            "texture_evicted_bytes": 1024,
         },
     )
 
@@ -561,4 +579,15 @@ def _sample(*, frame_index: int, frame_ms: float):
         chunks_unloaded=0,
         bytes_uploaded=4096,
         upload_stalls=0,
+        texture_upload_ms=1.5,
+        texture_decode_ms=0.5,
+        texture_mipmap_ms=0.25,
+        texture_bytes_uploaded=2048,
+        texture_material_cache_hits=2,
+        texture_file_cache_hits=1,
+        texture_decoded_cache_hits=1,
+        texture_sync_decodes=1,
+        texture_placeholders=0,
+        texture_evictions=1,
+        texture_evicted_bytes=1024,
     )

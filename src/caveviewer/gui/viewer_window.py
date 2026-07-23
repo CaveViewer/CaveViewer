@@ -70,6 +70,7 @@ _DESKTOP_WINDOW_SCALE = 0.80
 _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
+_TEXTURE_RESIDENT_CACHE_MB_ENV = "CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB"
 _GPU_RESIDENCY_SAFETY_SHARE = 0.05
 _RENDER_UPLOAD_INITIAL_SLICE_BYTES = render_upload.RENDER_UPLOAD_INITIAL_SLICE_BYTES
 _CATCHUP_UPLOAD_CHUNKS_PER_FRAME = 2
@@ -85,6 +86,7 @@ _BENCHMARK_STREAMING_ENV_FIELDS = (
     ("system_ram_target_percent", "CAVEVIEWER_MEMORY_UTILIZATION_TARGET"),
     ("gpu_memory_target_percent", "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET"),
     ("gpu_memory_override_gb", "CAVEVIEWER_GPU_MEMORY_GB"),
+    ("texture_resident_cache_mb", _TEXTURE_RESIDENT_CACHE_MB_ENV),
     ("io_workers", "CAVEVIEWER_IO_WORKERS"),
     ("io_reserved_cpus", "CAVEVIEWER_IO_RESERVED_CPUS"),
     ("upload_chunks_per_frame", "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME"),
@@ -377,6 +379,21 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _env_optional_mebibytes(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        _LOG.warning("Ignoring invalid %s=%r; expected a positive MB value.", name, raw)
+        return None
+    if not math.isfinite(value) or value <= 0.0:
+        _LOG.warning("Ignoring invalid %s=%r; expected a positive MB value.", name, raw)
+        return None
+    return max(1, int(value * 1024 ** 2))
 
 
 SHADER_DIR = str(resource_path("shaders"))
@@ -1126,6 +1143,20 @@ class CaveViewerWindow(mglw.WindowConfig):
                 gpu_target_fraction,
             )
         )
+        resident_texture_cap_bytes = _env_optional_mebibytes(
+            _TEXTURE_RESIDENT_CACHE_MB_ENV
+        )
+        if resident_texture_cap_bytes is not None:
+            max_resident_texture_bytes = min(
+                max_resident_texture_bytes,
+                resident_texture_cap_bytes,
+            )
+            _LOG.info(
+                "Texture resident GPU LRU cache capped by %s=%s MB: %.1f MB.",
+                _TEXTURE_RESIDENT_CACHE_MB_ENV,
+                os.environ.get(_TEXTURE_RESIDENT_CACHE_MB_ENV, "").strip(),
+                max_resident_texture_bytes / (1024 ** 2),
+            )
         gpu_geometry_budget_bytes = None
         if gpu_memory_bytes is not None and gpu_memory_bytes > 0:
             total_gpu_residency_budget_bytes = int(
