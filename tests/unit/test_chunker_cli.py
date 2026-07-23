@@ -124,6 +124,7 @@ def test_cli_passes_named_options_to_compiler(monkeypatch, capsys):
             "--source",
             "/maps/cave.glb",
             "--cache-root=/cache/maps",
+            "--settings-file=/settings/chunker.json",
             "--chunk-size=64",
             "--max-upload-group-mb=24",
             "--obj-scan-throttle-ms=2",
@@ -139,6 +140,7 @@ def test_cli_passes_named_options_to_compiler(monkeypatch, capsys):
     options = received[0]
     assert options.source == "/maps/cave.glb"
     assert options.cache_root == "/cache/maps"
+    assert options.settings_file == "/settings/chunker.json"
     assert options.force_rebuild is True
     assert options.obj_bucket_workers == "4"
     assert options.parsing_overrides == {
