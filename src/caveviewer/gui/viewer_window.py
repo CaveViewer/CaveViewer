@@ -48,6 +48,7 @@ from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import render_upload
+from caveviewer.gui import streaming_frame_timing
 from caveviewer.gui import viewer_input
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
