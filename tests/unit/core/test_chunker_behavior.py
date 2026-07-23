@@ -1520,7 +1520,7 @@ def test_cache_validity_rejects_stale_corrupt_and_incomplete_caches(
 ):
     source = tmp_path / "map.obj"
     source.write_text("map", encoding="utf-8")
-    monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(tmp_path / "managed"))
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
     assert not chunker.cache_is_valid(str(source))
 
     cache_dir = Path(chunker.get_cache_dir(str(source)))
@@ -1537,40 +1537,36 @@ def test_cache_validity_rejects_stale_corrupt_and_incomplete_caches(
     assert not chunker.cache_is_valid(str(source))
 
 
-def test_cache_validity_ignores_old_adjacent_cache_directories(tmp_path, monkeypatch):
+def test_cache_validity_uses_adjacent_cache_directory_by_default(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     source.write_text("map", encoding="utf-8")
-    managed_root = tmp_path / "managed"
-    monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(managed_root))
-    old_adjacent = tmp_path / "_cache"
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
+    adjacent_cache = tmp_path / "_cache"
     old_legacy = tmp_path / ".caveviewer_cache"
-    manifest_path = _write_manifest(old_adjacent, _current_manifest())
-    (old_adjacent / chunker.CHUNKS_DIRNAME).mkdir()
+    manifest_path = _write_manifest(adjacent_cache, _current_manifest())
+    (adjacent_cache / chunker.CHUNKS_DIRNAME).mkdir()
     legacy_manifest_path = _write_manifest(old_legacy, _current_manifest())
     (old_legacy / chunker.CHUNKS_DIRNAME).mkdir()
     os.utime(source, (100, 100))
     os.utime(manifest_path, (200, 200))
     os.utime(legacy_manifest_path, (200, 200))
 
-    assert not chunker.cache_is_valid(str(source))
-    assert Path(chunker.get_cache_dir(str(source))).parent == managed_root
+    assert chunker.cache_is_valid(str(source))
+    assert Path(chunker.get_cache_dir(str(source))) == adjacent_cache
 
 
-def test_get_cache_dir_uses_managed_manifest_only(tmp_path, monkeypatch):
+def test_get_cache_dir_uses_adjacent_manifest_by_default(tmp_path, monkeypatch):
     source = tmp_path / "map.obj"
     source.touch()
-    managed_root = tmp_path / "managed"
-    monkeypatch.setenv("CAVEVIEWER_MAP_CACHE_DIR", str(managed_root))
-    managed = Path(chunker.get_cache_dir(str(source)))
-    old_adjacent = tmp_path / "_cache"
+    monkeypatch.delenv("CAVEVIEWER_MAP_CACHE_DIR", raising=False)
+    adjacent = tmp_path / "_cache"
     old_legacy = tmp_path / ".caveviewer_cache"
 
-    assert managed.parent == managed_root
-    _write_manifest(old_adjacent, {})
+    assert chunker.get_cache_dir(str(source)) == str(adjacent)
     _write_manifest(old_legacy, {})
-    assert chunker.get_cache_dir(str(source)) == str(managed)
-    _write_manifest(managed, {})
-    assert chunker.get_cache_dir(str(source)) == str(managed)
+    assert chunker.get_cache_dir(str(source)) == str(adjacent)
+    _write_manifest(adjacent, {})
+    assert chunker.get_cache_dir(str(source)) == str(adjacent)
 
 
 def test_landing_position_uses_nearest_level_in_exact_column():

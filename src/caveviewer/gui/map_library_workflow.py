@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import tkinter as tk
@@ -38,6 +39,30 @@ from caveviewer.gui.standard_library_maps import (
 
 
 FeedbackCallback = Callable[..., None]
+
+
+def _remaining_cache_error(
+    cache_result: Any, removed_paths: Sequence[str]
+) -> str | None:
+    """Return cache-removal errors not made irrelevant by removing the map folder."""
+    error = getattr(cache_result, "error", None)
+    if not error:
+        return None
+    cache_dir = getattr(cache_result, "cache_dir", None)
+    if not cache_dir:
+        return str(error)
+
+    cache_dir_abs = os.path.abspath(os.fspath(cache_dir))
+    for removed_path in removed_paths:
+        removed_abs = os.path.abspath(os.fspath(removed_path))
+        try:
+            if os.path.commonpath((removed_abs, cache_dir_abs)) == removed_abs:
+                return None
+        except ValueError:
+            continue
+    return str(error)
+
+
 OpenMapCallback = Callable[[str], None]
 
 
@@ -221,7 +246,7 @@ class MapLibraryWorkflow:
                 return ()
             actions = [
                 (
-                    "Remove downloaded files",
+                    "Remove downloaded maps",
                     lambda map_path=map_path, library_map=library_map: (
                         self.remove_standard_download(
                             library_map,
@@ -258,7 +283,7 @@ class MapLibraryWorkflow:
         title: str,
         row_widgets: MapLibraryRowWidgets | None,
     ) -> None:
-        """Remove managed cache data for a map-library row."""
+        """Remove generated cache data for a map-library row."""
         result = self.remove_cache(path)
         if result.error:
             self.logger.warning("Unable to remove cache for %s: %s", title, result.error)
@@ -283,36 +308,24 @@ class MapLibraryWorkflow:
         map_path: str,
         row_widgets: MapLibraryRowWidgets | None,
     ) -> None:
-        """Remove a downloaded standard-library map and its managed cache."""
+        """Remove a downloaded standard-library map and its generated cache."""
         cache_result = self.remove_cache(map_path)
-        if cache_result.error:
-            self.logger.warning(
-                "Unable to remove downloaded files for %s: %s",
-                library_map.display_name,
-                cache_result.error,
-            )
-            if not self.panel.show_row_status(
-                row_widgets,
-                "Couldn’t remove files",
-                error=True,
-            ):
-                self._show_error(
-                    "Unable to remove downloaded files for "
-                    f"{library_map.display_name}: {cache_result.error}"
-                )
-            self.panel.refresh_row_overflow(row_widgets)
-            return
-
         removal_result = self.remove_downloaded(
             self.map_library_root_dir,
             library_map,
         )
         self.refresh_standard_row(library_map)
-        if removal_result.error:
+
+        cache_error = _remaining_cache_error(cache_result, removal_result.removed_paths)
+        removal_error = removal_result.error
+        if cache_error or removal_error:
+            error = "; ".join(
+                item for item in (cache_error, removal_error) if item
+            )
             self.logger.warning(
-                "Unable to remove downloaded files for %s: %s",
+                "Unable to remove downloaded maps for %s: %s",
                 library_map.display_name,
-                removal_result.error,
+                error,
             )
             if not self.panel.show_row_status(
                 row_widgets,
@@ -320,12 +333,13 @@ class MapLibraryWorkflow:
                 error=True,
             ):
                 self._show_error(
-                    "Unable to remove downloaded files for "
-                    f"{library_map.display_name}: {removal_result.error}"
+                    "Unable to remove downloaded maps for "
+                    f"{library_map.display_name}: {error}"
                 )
+            self.panel.refresh_row_overflow(row_widgets)
             return
 
-        if removal_result.removed_paths or cache_result.removed:
+        if removal_result.removed_paths or getattr(cache_result, "removed", False):
             self.panel.show_row_status(row_widgets, "Removed")
             return
 

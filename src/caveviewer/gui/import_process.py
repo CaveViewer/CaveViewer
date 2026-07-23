@@ -86,7 +86,7 @@ def source_path_from_descriptor(model_descriptor: dict) -> str:
 
 
 def cache_dir_for_descriptor(model_descriptor: dict) -> str:
-    """Return the managed cache directory that an import will publish into."""
+    """Return the generated cache directory that an import will publish into."""
     from caveviewer.core.map.cache_paths import map_cache_build_dir
 
     return map_cache_build_dir(source_path_from_descriptor(model_descriptor))
@@ -171,7 +171,7 @@ def cleanup_import_staging_dirs(
     *,
     process_id: int | None = None,
 ) -> int:
-    """Remove abandoned private staging directories for one managed cache."""
+    """Remove abandoned private staging directories for one generated cache."""
     cache_dir = os.path.abspath(cache_dir)
     cache_parent = os.path.dirname(cache_dir)
     cache_name = os.path.basename(cache_dir)
@@ -324,8 +324,9 @@ def _actionable_import_failure(exc: BaseException) -> tuple[str, str] | None:
     if isinstance(exc, InsufficientDiskSpaceError):
         return (
             str(exc),
-            "Free space on the cache drive and retry, or move CaveViewer's map "
-            "cache to a larger drive with CAVEVIEWER_MAP_CACHE_DIR.",
+            "Free space on the map drive and retry, or set "
+            "CAVEVIEWER_MAP_CACHE_DIR to place generated caches on a larger "
+            "drive.",
         )
 
     return None

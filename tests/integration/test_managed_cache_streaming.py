@@ -1,4 +1,4 @@
-"""Build and stream a real chunk from a self-contained managed cache."""
+"""Build and stream a real chunk from a self-contained generated cache."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from caveviewer.core.streaming import world as streaming_world
 
 
 @pytest.mark.integration
-def test_managed_cache_build_is_consumed_by_runtime_streaming(tmp_path, monkeypatch):
+def test_generated_cache_build_is_consumed_by_runtime_streaming(tmp_path, monkeypatch):
     source = tmp_path / "source" / "map.obj"
     source.parent.mkdir()
     source.write_bytes(b"small map")

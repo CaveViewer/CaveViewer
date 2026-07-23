@@ -1,4 +1,4 @@
-"""Exercise managed cache selection."""
+"""Exercise generated cache selection."""
 
 from __future__ import annotations
 
@@ -23,25 +23,47 @@ def _paths(root: Path) -> ApplicationPaths:
     )
 
 
-def test_candidates_use_only_managed_cache_dir(tmp_path):
-    source = tmp_path / "maps" / "survey.obj"
+def test_candidates_default_to_adjacent_cache_dir(tmp_path):
+    map_dir = tmp_path / "maps" / "survey"
+    source = map_dir / "survey.obj"
     locator = MapCacheLocator(paths=_paths(tmp_path), environ={}, platform_name="linux")
 
     candidates = locator.candidates(source)
 
-    assert candidates == (locator.managed_cache_dir(source),)
-    assert candidates[0].parent == tmp_path / "cache" / "maps"
+    assert candidates == (map_dir / "_cache",)
     assert locator.build_cache_dir(source) == candidates[0]
+    assert locator.cache_root_for_source(source) == map_dir
 
 
-def test_default_managed_root_uses_application_cache_dir(tmp_path):
+def test_legacy_managed_root_uses_application_cache_dir(tmp_path):
     locator = MapCacheLocator(paths=_paths(tmp_path), environ={}, platform_name="linux")
 
     assert locator.managed_root == tmp_path / "cache" / "maps"
 
 
+def test_explicit_managed_root_uses_hashed_cache_dir(tmp_path):
+    managed_root = tmp_path / "managed"
+    source = tmp_path / "maps" / "survey.obj"
+    locator = MapCacheLocator(
+        paths=_paths(tmp_path),
+        environ={"CAVEVIEWER_MAP_CACHE_DIR": str(managed_root)},
+        platform_name="linux",
+    )
+
+    candidates = locator.candidates(source)
+
+    assert candidates == (locator.managed_cache_dir(source),)
+    assert candidates[0].parent == managed_root
+    assert locator.build_cache_dir(source) == candidates[0]
+    assert locator.cache_root_for_source(source) == managed_root
+
+
 def test_managed_keys_are_stable_and_distinguish_same_named_sources(tmp_path):
-    locator = MapCacheLocator(paths=_paths(tmp_path), environ={}, platform_name="linux")
+    locator = MapCacheLocator(
+        paths=_paths(tmp_path),
+        environ={"CAVEVIEWER_MAP_CACHE_DIR": str(tmp_path / "managed")},
+        platform_name="linux",
+    )
     first = tmp_path / "one" / "map.obj"
     second = tmp_path / "two" / "map.obj"
 
@@ -49,14 +71,14 @@ def test_managed_keys_are_stable_and_distinguish_same_named_sources(tmp_path):
     assert locator.managed_cache_dir(first) != locator.managed_cache_dir(second)
 
 
-def test_old_adjacent_cache_does_not_change_managed_cache_target(tmp_path):
+def test_adjacent_cache_is_the_default_target(tmp_path):
     source = tmp_path / "map.obj"
-    old_adjacent = tmp_path / "_cache"
-    old_adjacent.mkdir()
-    (old_adjacent / "manifest.json").write_text("{}", encoding="utf-8")
+    adjacent_cache = tmp_path / "_cache"
+    adjacent_cache.mkdir()
+    (adjacent_cache / "manifest.json").write_text("{}", encoding="utf-8")
     locator = MapCacheLocator(paths=_paths(tmp_path), environ={}, platform_name="linux")
 
-    assert locator.build_cache_dir(source) == locator.managed_cache_dir(source)
+    assert locator.build_cache_dir(source) == adjacent_cache
 
 
 def test_explicit_managed_root_must_be_absolute(tmp_path):

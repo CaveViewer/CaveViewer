@@ -92,7 +92,10 @@ in `~/Downloads`; the Storage section in Preferences controls that folder, and
 older app-data `map_library` or `sample_maps` directories are moved there
 automatically when possible. The CaveViewer Maps list is refreshed from
 CaveViewer's GitHub-hosted map catalog when the splash screen is online and
-falls back to the last cached or bundled catalog when it is offline.
+falls back to the last cached or bundled catalog when it is offline. Generated
+caches for downloaded maps live in each map's `_cache` subdirectory.
+Use `Remove downloaded maps` to remove the downloaded map folder and its cache,
+or `Remove cache` to remove only the generated `_cache` folder.
 
 ## Recording a Flight
 
@@ -135,10 +138,10 @@ filename; the UI and source APIs use Preferences terminology.
 
 ### Rendering, Import, and Streaming
 
-CaveViewer imports large maps into managed chunk caches, then streams only the
-nearby working set while you move. Import settings change future cache builds;
-streaming settings tune runtime loading and GPU upload behavior without
-re-importing the map.
+CaveViewer imports large maps into generated chunk caches, stored in `_cache`
+inside the map folder by default, then streams only the nearby working set while
+you move. Import settings change future cache builds; streaming settings tune
+runtime loading and GPU upload behavior without re-importing the map.
 
 For the full rendering philosophy, low-memory recommendations, runtime
 environment variables, and `caveviewer-chunker` CLI options, see

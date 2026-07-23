@@ -524,6 +524,8 @@ def test_remove_downloaded_standard_library_map_removes_current_and_legacy_files
     for folder in (current, legacy_library, legacy_samples, unrelated):
         folder.mkdir(parents=True)
         (folder / "map.obj").write_text("mesh", encoding="utf-8")
+    (current / "_cache").mkdir()
+    (current / "_cache" / "manifest.json").write_text("{}", encoding="utf-8")
 
     result = standard_library_maps.remove_downloaded_standard_library_map(str(tmp_path), sample)
 

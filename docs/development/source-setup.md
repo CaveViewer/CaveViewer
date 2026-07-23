@@ -327,7 +327,7 @@ CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 | `CAVEVIEWER_LINUX_BUILD_VENV` | _(none)_ | Path to the venv used by the Linux build scripts. |
 | `CAVEVIEWER_PROJECT_ROOT` | _(set by `scripts/dev/env_setup.sh`)_ | Source checkout root used only by development shell helpers; it is not a user-storage location. |
 | `CAVEVIEWER_HOME` | _(none)_ | Absolute portable-storage root. CaveViewer derives `config`, `data`, `cache`, `state`, and `runtime` children beneath it. |
-| `CAVEVIEWER_MAP_CACHE_DIR` | Platform cache root + `/maps` | Absolute root for generated map caches. Defaults to `$XDG_CACHE_HOME/caveviewer/maps` on Linux (`~/.cache/...` fallback) and `~/.caveviewer/maps` on macOS/Windows; `CAVEVIEWER_HOME` uses `<root>/cache/maps`. CaveViewer no longer auto-discovers adjacent `_cache` or `.caveviewer_cache` directories. |
+| `CAVEVIEWER_MAP_CACHE_DIR` | _(none)_ | Advanced override for generated map caches. When unset, CaveViewer writes `_cache` inside the source map folder. When set, it must be an absolute root for hashed generated caches. |
 | `CAVEVIEWER_APP_ICON` | _(bundled icon)_ | Path to a custom application icon file. |
 | `CAVEVIEWER_FORCE_STARTUP_FOCUS` | `0` | Set to `1` to force the main window to the front on startup. Disabled by default on frozen macOS builds to avoid window-placement jumps. |
 | `CAVEVIEWER_LOG_LEVEL` | `INFO` | Logging verbosity. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
@@ -626,9 +626,9 @@ spatial selection, and eviction policy; and
 `src/caveviewer/core/streaming/world.py` coordinates worker lifecycle and
 render-thread callbacks. Map imports now write only the cache artifacts used by
 runtime streaming and the minimap. Caches and their texture assets are
-atomically published under the managed map-cache root selected by
-`CAVEVIEWER_MAP_CACHE_DIR` or the platform cache default; old adjacent `_cache`
-and `.caveviewer_cache` directories are not auto-discovered.
+atomically published to `_cache` inside the source map folder by default.
+`CAVEVIEWER_MAP_CACHE_DIR` can place hashed generated caches under a separate
+absolute root; the older `.caveviewer_cache` directory is not auto-discovered.
 
 Runtime rendering variables, import tuning variables, low-memory launch
 examples, and `caveviewer-chunker` CLI options are listed in
@@ -642,21 +642,22 @@ Unless overridden, CaveViewer stores files in these locations:
 |---|---|---|
 | Preferences | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback; legacy-compatible filename) | `~/.caveviewer/advanced_settings.json` |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
-| Map caches | `$XDG_CACHE_HOME/caveviewer/maps/` (`~/.cache/...` fallback) | `~/.caveviewer/maps/` |
+| Map caches | Source map folder `/_cache` | Source map folder `/_cache` |
 | Downloaded map library | `$XDG_DOWNLOAD_DIR/` (`~/Downloads/` fallback) | `~/Downloads/` |
 
 `CAVEVIEWER_HOME` creates isolated `config`, `data`, `cache`, `state`, and
-`runtime` children and places map caches under `<root>/cache/maps`.
-`CAVEVIEWER_MAP_CACHE_DIR` overrides only the generated map-cache root.
+`runtime` children; map caches still default to each source map folder's
+`_cache` subdirectory. `CAVEVIEWER_MAP_CACHE_DIR` overrides only the generated
+map-cache root for advanced runs that need caches on a separate filesystem.
 `CAVEVIEWER_MAP_LIBRARY_DIR` overrides the folder used for downloaded
 map-library entries. Older child `map_library` and `sample_maps` layouts remain
 readable as legacy locations. On Linux, old `~/.caveviewer/` and
 `~/.caveviewer_*` files are copied once and left in place, and older app-data
 `map_library` or `sample_maps` directories are moved into the configured
-map-library location when possible. A managed cache is self-contained: texture
-files are staged beside its chunks before the manifest becomes visible.
-Disk-space checks therefore target the cache filesystem rather than assuming
-the map's filesystem is writable.
+map-library location when possible. A generated cache is self-contained:
+texture files are staged beside its chunks before the manifest becomes visible.
+Disk-space checks therefore target the filesystem that will hold the cache,
+which is normally the map's filesystem unless an explicit cache root is set.
 
 ### Map Library
 

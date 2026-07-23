@@ -11,7 +11,6 @@ from caveviewer.core.mesh import glb as glb_parser
 from caveviewer.core.mesh import obj as obj_parser
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.map import importer as map_importer
-from caveviewer.storage_paths import resolve_application_paths
 
 
 def _mesh(*material_names):
@@ -43,7 +42,7 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
     material_file.write_text("materials", encoding="utf-8")
     (tmp_path / "copy.jpg").write_bytes(b"copy")
     (tmp_path / "existing.jpg").write_bytes(b"source-existing")
-    cache_dir = tmp_path / "managed-cache"
+    cache_dir = tmp_path / "built-cache"
     cache_dir.mkdir()
     progress = []
     build_options = {}
@@ -91,9 +90,7 @@ def test_obj_import_builds_cache_reports_progress_and_stages_only_existing_textu
         ("copy.jpg", str(tmp_path / "copy.jpg")),
         ("existing.jpg", str(tmp_path / "existing.jpg")),
     ]
-    assert build_options["cache_dir"].startswith(
-        str(resolve_application_paths().cache_dir / "maps")
-    )
+    assert build_options["cache_dir"] == str(tmp_path / "_cache")
     assert progress == [
         ("incremental-low", 0.0),
         ("incremental-high", 1.0),
@@ -121,7 +118,7 @@ def test_obj_import_handles_large_or_unreadable_source_size(
     source.write_bytes(b"mesh")
     material_file = tmp_path / "map.mtl"
     material_file.write_text("material", encoding="utf-8")
-    cache_dir = tmp_path / "managed-cache"
+    cache_dir = tmp_path / "built-cache"
     cache_dir.mkdir()
 
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
@@ -203,7 +200,7 @@ def test_glb_import_stages_embedded_texture_without_writing_source_directory(
     source = tmp_path / "map.glb"
     source.write_bytes(b"glTF")
     textures_dir = tmp_path / "textures"
-    cache_dir = tmp_path / "managed-cache"
+    cache_dir = tmp_path / "built-cache"
     cache_dir.mkdir()
     mesh = _mesh("embedded", "plain")
     progress = []
@@ -250,6 +247,7 @@ def test_glb_import_stages_embedded_texture_without_writing_source_directory(
 
     assert result == str(cache_dir)
     assert not textures_dir.exists()
+    assert build_options["cache_dir"] == str(tmp_path / "_cache")
     assert [asset.relative_path for asset in build_options["assets"]] == [
         "embedded.png"
     ]

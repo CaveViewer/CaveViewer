@@ -254,7 +254,7 @@ def test_compile_ignores_saved_gui_preferences_by_default(tmp_path):
     assert result.chunk_size == 50.0
 
 
-def test_compile_default_cache_root_ignores_downloaded_maps_folder(
+def test_compile_default_cache_is_adjacent_to_source_folder(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "cave.glb"
@@ -272,11 +272,11 @@ def test_compile_default_cache_root_ignores_downloaded_maps_folder(
         )
     )
 
-    expected_cache_root = storage_root / "cache" / "maps"
     assert result.status == "planned"
-    assert result.cache_root == str(expected_cache_root)
-    assert result.cache_dir.startswith(str(expected_cache_root))
+    assert result.cache_root == str(tmp_path)
+    assert result.cache_dir == str(tmp_path / "_cache")
     assert not result.cache_dir.startswith(str(downloads_dir))
+    assert not result.cache_dir.startswith(str(storage_root))
 
 
 def test_compile_uses_explicit_partial_settings_file(tmp_path):

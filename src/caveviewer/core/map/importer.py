@@ -1,7 +1,7 @@
 """Core model import and cache-build orchestration.
 
 The app/GUI layer supplies progress rendering and pause signals; this module
-owns the non-UI workflow that turns supported model descriptors into managed
+owns the non-UI workflow that turns supported model descriptors into generated
 chunk caches.
 """
 
