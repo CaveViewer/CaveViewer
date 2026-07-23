@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "name": "gold-route-v1",
+  "position_mode": "first_chunk_center_offset",
+  "warmup_seconds": 5.0,
+  "measurement_seconds": 30.0,
+  "max_runtime_seconds": 75.0,
+  "window_size": [1600, 1000],
+  "render_distance": 3,
+  "sample_every_n_frames": 1,
+  "stutter_thresholds_ms": [33.3, 50.0, 100.0],
+  "metadata": {
+    "description": "Default deterministic route for viewer FPS regression testing. Replace offsets with validated gold-map camera coordinates once the benchmark map is finalized."
+  },
+  "route": [
+    {
+      "time_s": 0.0,
+      "position": [0.0, 0.0, 0.0],
+      "yaw_deg": 0.0,
+      "pitch_deg": 0.0
+    },
+    {
+      "time_s": 8.0,
+      "position": [35.0, 0.0, -20.0],
+      "yaw_deg": 30.0,
+      "pitch_deg": -3.0
+    },
+    {
+      "time_s": 16.0,
+      "position": [70.0, 8.0, -40.0],
+      "yaw_deg": 65.0,
+      "pitch_deg": -7.0
+    },
+    {
+      "time_s": 24.0,
+      "position": [35.0, 16.0, -70.0],
+      "yaw_deg": 110.0,
+      "pitch_deg": -4.0
+    },
+    {
+      "time_s": 35.0,
+      "position": [0.0, 0.0, -40.0],
+      "yaw_deg": 180.0,
+      "pitch_deg": 0.0
+    }
+  ]
+}

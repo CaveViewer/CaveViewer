@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 caveviewer = "caveviewer.__main__:run"
+caveviewer-benchmark = "caveviewer.benchmark:run"
 caveviewer-chunker = "caveviewer.chunker:main"
 
 [tool.setuptools.dynamic]

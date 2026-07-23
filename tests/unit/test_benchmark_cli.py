@@ -1,0 +1,92 @@
+"""Unit tests for the CaveViewer benchmark CLI wrapper."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+from caveviewer import benchmark
+from caveviewer.gui import viewer_window
+
+
+def test_benchmark_cli_runs_viewer_benchmark_and_prints_summary(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    cache_dir = tmp_path / "cache"
+    scenario_path = tmp_path / "scenario.json"
+    output_dir = tmp_path / "out"
+    cache_dir.mkdir()
+    scenario_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "name": "cli",
+                "warmup_seconds": 0.0,
+                "measurement_seconds": 1.0,
+                "route": [
+                    {
+                        "time_s": 0.0,
+                        "position": [0.0, 0.0, 0.0],
+                        "yaw_deg": 0.0,
+                        "pitch_deg": 0.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("CAVEVIEWER_VSYNC", raising=False)
+
+    def fake_run_viewer_benchmark(cache, textures, scenario, output):
+        assert cache == str(cache_dir)
+        assert textures == str(cache_dir)
+        assert scenario.name == "cli"
+        assert output == str(output_dir)
+        assert os.environ["CAVEVIEWER_VSYNC"] == "0"
+        summary_path = Path(output) / "summary.json"
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(
+            json.dumps({"metrics": {"median_fps": 60.0}}),
+            encoding="utf-8",
+        )
+        return str(summary_path)
+
+    monkeypatch.setattr(
+        viewer_window,
+        "run_viewer_benchmark",
+        fake_run_viewer_benchmark,
+    )
+
+    exit_code = benchmark.main(
+        [
+            "--cache-dir",
+            str(cache_dir),
+            "--scenario",
+            str(scenario_path),
+            "--output-dir",
+            str(output_dir),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (output_dir / "benchmark.log").exists()
+    assert '"median_fps": 60.0' in capsys.readouterr().out
+
+
+def test_benchmark_cli_reports_configuration_errors(tmp_path):
+    exit_code = benchmark.main(
+        [
+            "--cache-dir",
+            str(tmp_path / "missing-cache"),
+            "--scenario",
+            str(tmp_path / "missing-scenario.json"),
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+
+    assert exit_code == 2

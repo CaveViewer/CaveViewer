@@ -41,6 +41,7 @@ from caveviewer.gui.controls_overlay import ControlsOverlay
 from caveviewer.gui.stepper_control import StepperControl
 from caveviewer.gui.color_picker import ColorPicker
 from caveviewer.gui.import_progress_panel import ImportProgressPanel
+from caveviewer.gui.benchmark import BenchmarkController
 from caveviewer.gui.import_process import (
     start_import_process,
     terminate_import_process,
@@ -356,6 +357,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     cave_cache_dir: str = None
     cave_textures_dir: str = None
     cave_manifest: dict = None
+    cave_benchmark_config: dict | None = None
 
     # Alternative to the three attributes above: set THIS instead when the
     # map needs first-time import/chunking (no cache built yet) -- a dict
@@ -530,6 +532,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._last_gpu_draw_ms: float | None = None
         self._gpu_draw_timer_enabled = _env_bool("CAVEVIEWER_GPU_DRAW_TIMER", False)
         self._streaming_frame_timing: dict | None = None
+        self._benchmark_controller: BenchmarkController | None = None
         self._last_input_reset_log = 0.0
         self._layout_cache_size: tuple | None = None
         self._layout_cache_result: dict | None = None
@@ -575,6 +578,28 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_frame_queue: queue.Queue | None = None
         self._recording_stop_results: queue.Queue[_RecordingStopResult] = queue.Queue()
         self._recording_stop_thread: threading.Thread | None = None
+
+        benchmark_config = CaveViewerWindow.cave_benchmark_config
+        if benchmark_config is not None:
+            self._benchmark_controller = BenchmarkController(
+                scenario=benchmark_config["scenario"],
+                output_dir=benchmark_config["output_dir"],
+                logger=_LOG,
+                perf_counter=lambda: time.perf_counter(),
+                environment=benchmark_config.get("environment", {}),
+            )
+            self._benchmark_controller.environment.update(
+                {
+                    "gl_vendor": str(self.ctx.info.get("GL_VENDOR", "")),
+                    "gl_renderer": str(self.ctx.info.get("GL_RENDERER", "")),
+                    "gl_version": str(self.ctx.info.get("GL_VERSION", "")),
+                    "window_backend": str(
+                        getattr(getattr(self, "wnd", None), "name", "")
+                    ),
+                    "vsync": bool(getattr(self, "vsync", False)),
+                }
+            )
+            self._benchmark_controller.prepare_output()
 
         self._install_backend_modifier_probe()
 
@@ -1057,6 +1082,21 @@ class CaveViewerWindow(mglw.WindowConfig):
                 f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}, "
                 "but existing/prebuilt caches stream using the chunk size recorded in manifest.json."
             )
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        if benchmark_controller is not None:
+            benchmark_radius = int(benchmark_controller.scenario.render_distance)
+            clamped_radius = max(
+                self.render_distance_stepper.min_value,
+                min(self.render_distance_stepper.max_value, benchmark_radius),
+            )
+            if clamped_radius != benchmark_radius:
+                _LOG.warning(
+                    "Benchmark render_distance=%d exceeds viewer control range; "
+                    "using %d.",
+                    benchmark_radius,
+                    clamped_radius,
+                )
+            self.render_distance_stepper.value = clamped_radius
         config = StreamingConfig(
             chunk_size=chunk_size,
             load_radius_cells=self.render_distance_stepper.value,
@@ -1082,6 +1122,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         first_info = self.manifest["chunks"][first_cell_str]
         start_pos = (np.array(first_info["bounds_min"]) + np.array(first_info["bounds_max"])) / 2.0
         self.camera = FlyCamera(position=tuple(start_pos))
+        if benchmark_controller is not None:
+            benchmark_controller.set_position_origin(start_pos)
+            benchmark_controller.apply_initial_camera(self.camera)
         self._bookmarks_path = os.path.join(self.cache_dir, "camera_bookmarks.json")
         self._load_bookmarks()
 
@@ -3149,6 +3192,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         frame_start = time.perf_counter()
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        benchmark_active = (
+            benchmark_controller is not None
+            and not benchmark_controller.finished
+        )
 
         # Sleep/wake (or a debugger stop) can yield a very large frame_time
         # and leave input/capture state stale (e.g. key-release never seen).
@@ -3158,7 +3206,11 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         t_input = time.perf_counter()
         dt = max(frame_time, 1e-4)
-        self._handle_continuous_input(dt)
+        if benchmark_active:
+            if benchmark_controller.started:
+                benchmark_controller.update_camera(self.camera, time.perf_counter())
+        else:
+            self._handle_continuous_input(dt)
         input_ms = (time.perf_counter() - t_input) * 1000.0
 
         # Apply the render-distance control's current value before the
@@ -3232,6 +3284,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # can take several seconds on slow hardware or large maps.
         now = time.perf_counter()
         if not self._initial_chunks_loaded:
+            if benchmark_active and benchmark_controller.exceeded_max_runtime(now):
+                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self.close()
+                return
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
             raw_fraction = self._initial_chunk_load_progress(stats)
             target = min(self._CHUNK_PREP_MAX_FRACTION, raw_fraction * self._CHUNK_PREP_MAX_FRACTION)
@@ -3243,6 +3299,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         if self._chunk_prep_complete_until is not None and now < self._chunk_prep_complete_until:
+            if benchmark_active and benchmark_controller.exceeded_max_runtime(now):
+                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self.close()
+                return
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
             self.import_progress_panel.render(
                 self.wnd.size, _map_name, "opening cave", 1.0,
@@ -3251,6 +3311,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         self._chunk_prep_complete_until = None
+        if benchmark_active:
+            self.controls_overlay.update(stats)
+            self.controls_overlay.dismiss_begin_screen()
+            self._sync_render_mode_loading_policy()
+            if not benchmark_controller.started:
+                benchmark_controller.update_camera(self.camera, time.perf_counter())
 
         t_scene_setup = time.perf_counter()
         self.ctx.clear(*self.color_picker.color)  # background ("void") color, adjustable via the COLOR button
@@ -3455,12 +3521,48 @@ class CaveViewerWindow(mglw.WindowConfig):
             # other UI element -- while it's showing, it's meant to be the
             # thing you're looking at (it's explaining what the other UI
             # pieces do), so it should never be obscured by them.
-            self.controls_overlay.update(self.world.stats())
+            self.controls_overlay.update(stats)
             self.controls_overlay.render(self.wnd.size)
             self._render_recording_status_message(self.wnd.size)
             overlay_ms = (time.perf_counter() - t0) * 1000.0
 
         total_ms = (time.perf_counter() - frame_start) * 1000.0
+        other_ms = max(
+            0.0,
+            total_ms
+            - input_ms
+            - streaming_ms
+            - scene_setup_ms
+            - mesh_draw_ms
+            - recording_read_ms
+            - overlay_ms,
+        )
+
+        if benchmark_active:
+            benchmark_now = time.perf_counter()
+            benchmark_complete = benchmark_controller.record_frame(
+                now=benchmark_now,
+                frame_ms=total_ms,
+                streaming_ms=streaming_ms,
+                scene_setup_ms=scene_setup_ms,
+                mesh_draw_ms=mesh_draw_ms,
+                mesh_cull_ms=mesh_cull_ms,
+                mesh_submit_ms=mesh_submit_ms,
+                overlay_ms=overlay_ms,
+                other_ms=other_ms,
+                drawn_chunks=_chunks_drawn,
+                resident_chunks=len(self._chunk_gpu_objects),
+                world_stats=stats,
+                streaming_timing=streaming_timing,
+            )
+            if benchmark_complete:
+                benchmark_controller.finish(reason="completed")
+                self.close()
+                return
+            if benchmark_controller.exceeded_max_runtime(benchmark_now):
+                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self.close()
+                return
 
         # Spike detection: track a short rolling average of frame times, and
         # if a frame comes in notably above that average, print a one-line
@@ -3477,16 +3579,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         if len(self._frame_time_history) >= 10 and total_ms > max(rolling_avg * 3, 25.0):
             stats = self.world.stats()
             gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
-            other_ms = max(
-                0.0,
-                total_ms
-                - input_ms
-                - streaming_ms
-                - scene_setup_ms
-                - mesh_draw_ms
-                - recording_read_ms
-                - overlay_ms,
-            )
             _LOG.warning(f"FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
                          f"input={input_ms:.1f}ms streaming={streaming_ms:.1f}ms "
                          f"scene_setup={scene_setup_ms:.1f}ms mesh_draw={mesh_draw_ms:.1f}ms "
@@ -4209,6 +4301,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if getattr(self, "_import_active", False):
             self._shutdown_active_import()
 
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        if benchmark_controller is not None and not benchmark_controller.finished:
+            benchmark_controller.finish(reason="viewer_closed")
+
         if self._has_map_loaded:
             self._teardown_current_map(final_shutdown=True)
         self._release_window_resources()
@@ -4257,19 +4353,29 @@ def _run_moderngl_window_config(config_class: type, args=None) -> None:
                     pass
 
 
-def _launch_viewer_window() -> None:
+def _launch_viewer_window(
+    *, window_size_override: tuple[int, int] | None = None
+) -> None:
     """Launch with dimensions expressed in the selected backend's coordinates."""
-    if get_platform_adapter().viewer_uses_glfw_native_initial_size():
+    if window_size_override is not None:
+        CaveViewerWindow.window_size = window_size_override
+        window_size_fraction = None
+        fallback_window_size = window_size_override
+    elif get_platform_adapter().viewer_uses_glfw_native_initial_size():
         # Linux GLFW sizing happens after the Wayland/X11 backend is selected,
         # using that backend's DPI-aware work-area coordinate system.
         CaveViewerWindow.window_size = _DEFAULT_WINDOW_SIZE
+        window_size_fraction = _DESKTOP_WINDOW_SCALE
+        fallback_window_size = _DEFAULT_WINDOW_SIZE
     else:
         CaveViewerWindow.window_size = _desktop_relative_window_size()
+        window_size_fraction = _DESKTOP_WINDOW_SCALE
+        fallback_window_size = _DEFAULT_WINDOW_SIZE
     run_window_config(
         CaveViewerWindow,
         runner=_run_moderngl_window_config,
-        window_size_fraction=_DESKTOP_WINDOW_SCALE,
-        fallback_window_size=_DEFAULT_WINDOW_SIZE,
+        window_size_fraction=window_size_fraction,
+        fallback_window_size=fallback_window_size,
         force_resizable_window=True,
     )
 
@@ -4284,8 +4390,57 @@ def run_viewer(cache_dir: str, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
     CaveViewerWindow.cave_manifest = manifest
+    CaveViewerWindow.cave_pending_import = None
+    CaveViewerWindow.cave_benchmark_config = None
 
     _launch_viewer_window()
+
+
+def run_viewer_benchmark(
+    cache_dir: str,
+    textures_dir: str,
+    scenario,
+    output_dir: str,
+):
+    """Run a deterministic viewer benchmark against an existing chunk cache."""
+    import platform as _platform
+
+    summary_path = os.path.join(output_dir, "summary.json")
+    manifest = chunker.load_manifest(cache_dir)
+    CaveViewerWindow.cave_cache_dir = cache_dir
+    CaveViewerWindow.cave_textures_dir = textures_dir
+    CaveViewerWindow.cave_manifest = manifest
+    CaveViewerWindow.cave_pending_import = None
+    CaveViewerWindow.cave_benchmark_config = {
+        "scenario": scenario,
+        "output_dir": output_dir,
+        "environment": {
+            "app_version": APP_VERSION,
+            "python": sys.version.split()[0],
+            "platform": _platform.platform(),
+            "cache_dir": os.path.abspath(cache_dir),
+            "textures_dir": os.path.abspath(textures_dir),
+            "scenario": scenario.name,
+            "source_sha": os.environ.get("GITHUB_SHA")
+            or os.environ.get("CAVEVIEWER_COMMIT", ""),
+            "vsync_env": os.environ.get("CAVEVIEWER_VSYNC", ""),
+            "upload_chunks_per_frame": os.environ.get(
+                "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", ""
+            ),
+            "upload_groups_per_frame": os.environ.get(
+                "CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", ""
+            ),
+            "upload_time_budget_ms": os.environ.get(
+                "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", ""
+            ),
+        },
+    }
+
+    try:
+        _launch_viewer_window(window_size_override=scenario.window_size)
+        return summary_path
+    finally:
+        CaveViewerWindow.cave_benchmark_config = None
 
 
 def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
@@ -4312,6 +4467,7 @@ def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = None
     CaveViewerWindow.cave_textures_dir = None
     CaveViewerWindow.cave_manifest = None
+    CaveViewerWindow.cave_benchmark_config = None
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,

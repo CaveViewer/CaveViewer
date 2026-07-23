@@ -84,6 +84,18 @@ When moving modules, update CI include/source paths without lowering these
 thresholds. New concurrency, cleanup, cache-format, and security-sensitive code
 should receive direct tests even when the aggregate floor already passes.
 
+## Viewer FPS benchmark
+
+Streaming FPS regressions are measured by the manual Viewer Benchmark workflow
+and the `caveviewer-benchmark` CLI. This benchmark is intentionally separate
+from the always-on unit suite because it needs a real OpenGL/display stack and a
+large precompiled map cache.
+
+Use `docs/development/benchmarking.md` for setup, scenario, artifact, and
+threshold policy. The workflow compares a candidate ref with a baseline ref and
+uploads logs plus per-frame metrics so failures can be inspected without
+re-running the viewer immediately.
+
 ## Release gates
 
 An individually dispatched platform release workflow calls the Essential Tests

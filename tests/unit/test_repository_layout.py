@@ -31,6 +31,7 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "__init__.py",
         PACKAGE_ROOT / "__main__.py",
         PACKAGE_ROOT / "app.py",
+        PACKAGE_ROOT / "benchmark.py",
         PACKAGE_ROOT / "version.py",
         PACKAGE_ROOT / "core" / "chunking" / "buckets.py",
         PACKAGE_ROOT / "core" / "chunking" / "builder.py",
@@ -48,11 +49,17 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "gui" / "preferences.py",
         PACKAGE_ROOT / "gui" / "preferences_form.py",
         PACKAGE_ROOT / "gui" / "preferences_dialog.py",
+        PACKAGE_ROOT / "gui" / "benchmark.py",
         PACKAGE_ROOT / "gui" / "viewer_window.py",
         PACKAGE_ROOT / "resources" / "shaders" / "mesh.vert",
         PACKAGE_ROOT / "resources" / "images" / "app_mark_transparent.png",
         PACKAGE_ROOT / "resources" / "release_signing_public_key.pem",
         PACKAGE_ROOT / "resources" / "map_library_catalog.v1.json",
+        REPOSITORY_ROOT / "benchmarks" / "gold-route-v1.json",
+        REPOSITORY_ROOT
+        / "scripts"
+        / "benchmark"
+        / "compare_benchmark_results.py",
         REPOSITORY_ROOT / "packaging" / "pyinstaller" / "CaveViewer.spec",
     )
 
@@ -137,6 +144,7 @@ def test_pyproject_declares_src_package_and_entry_point():
 
     assert '[project.scripts]' in pyproject
     assert 'caveviewer = "caveviewer.__main__:run"' in pyproject
+    assert 'caveviewer-benchmark = "caveviewer.benchmark:run"' in pyproject
     assert 'caveviewer-chunker = "caveviewer.chunker:main"' in pyproject
     assert 'where = ["src"]' in pyproject
     assert 'pythonpath = ["src"]' in pyproject
