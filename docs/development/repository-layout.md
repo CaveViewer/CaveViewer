@@ -74,7 +74,7 @@ docs/                                         site and development documentation
 packaging/pyinstaller/CaveViewer.spec         PyInstaller configuration
 packaging/linux/                              desktop and AppStream metadata
 scripts/                                      development and release automation
-scripts/benchmark/                            benchmark comparison helpers
+scripts/benchmark/                            benchmark comparison/local validation helpers
 updates/                                      published update manifests/signatures
 ```
 

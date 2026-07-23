@@ -39,6 +39,34 @@ The default benchmark mode disables vsync by setting `CAVEVIEWER_VSYNC=0` before
 the OpenGL window module is imported. Use `--vsync unchanged` only when you are
 intentionally measuring a display-synchronized path.
 
+For pre-PR validation from a source checkout, use the local wrapper. First check
+that paths, scenario, thresholds, and generated commands are valid:
+
+```bash
+python scripts/benchmark/run_local_benchmark.py \
+  --cache-dir /path/to/precompiled-cache \
+  --dry-run
+```
+
+Then run the benchmark:
+
+```bash
+python scripts/benchmark/run_local_benchmark.py \
+  --cache-dir /path/to/precompiled-cache \
+  --label candidate-stack
+```
+
+The wrapper does not switch git branches. For a local baseline comparison, run
+it from a separate `main` worktree/checkout first, then run it from the
+candidate checkout with `--baseline-summary`:
+
+```bash
+python scripts/benchmark/run_local_benchmark.py \
+  --cache-dir /path/to/precompiled-cache \
+  --baseline-summary /path/to/main/benchmark-results/local/main/summary.json \
+  --label candidate-stack
+```
+
 Compare two runs:
 
 ```bash

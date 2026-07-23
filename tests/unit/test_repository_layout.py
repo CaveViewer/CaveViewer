@@ -61,6 +61,7 @@ def test_application_uses_src_package_layout():
         / "scripts"
         / "benchmark"
         / "compare_benchmark_results.py",
+        REPOSITORY_ROOT / "scripts" / "benchmark" / "run_local_benchmark.py",
         REPOSITORY_ROOT / "packaging" / "pyinstaller" / "CaveViewer.spec",
     )
 
@@ -128,6 +129,7 @@ def test_packaging_consumers_reference_migrated_paths():
     ).read_text(encoding="utf-8")
 
     assert "\n  src " in source_packager
+    assert "\n  benchmarks " in source_packager
     assert "\n  packaging " in source_packager
     assert 'packaging/pyinstaller/CaveViewer.spec' in linux_builder
     assert 'packaging/pyinstaller/CaveViewer.spec' in macos_builder

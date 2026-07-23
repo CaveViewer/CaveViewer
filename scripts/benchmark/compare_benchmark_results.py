@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from caveviewer.gui.benchmark import (
+    BenchmarkConfigurationError,
     BenchmarkThresholds,
     compare_summaries,
     load_json_file,
@@ -35,21 +36,25 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    thresholds = (
-        BenchmarkThresholds.load(args.thresholds)
-        if args.thresholds
-        else BenchmarkThresholds()
-    ).with_overrides(
-        max_median_fps_drop_pct=args.max_median_fps_drop_pct,
-        max_one_percent_low_fps_drop_pct=args.max_one_percent_low_fps_drop_pct,
-        max_p95_frame_ms_increase_pct=args.max_p95_frame_ms_increase_pct,
-        max_stutter_frame_increase_pct=args.max_stutter_frame_increase_pct,
-    )
-    comparison = compare_summaries(
-        load_json_file(args.baseline),
-        load_json_file(args.candidate),
-        thresholds,
-    )
+    try:
+        thresholds = (
+            BenchmarkThresholds.load(args.thresholds)
+            if args.thresholds
+            else BenchmarkThresholds()
+        ).with_overrides(
+            max_median_fps_drop_pct=args.max_median_fps_drop_pct,
+            max_one_percent_low_fps_drop_pct=args.max_one_percent_low_fps_drop_pct,
+            max_p95_frame_ms_increase_pct=args.max_p95_frame_ms_increase_pct,
+            max_stutter_frame_increase_pct=args.max_stutter_frame_increase_pct,
+        )
+        comparison = compare_summaries(
+            load_json_file(args.baseline),
+            load_json_file(args.candidate),
+            thresholds,
+        )
+    except (BenchmarkConfigurationError, OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
