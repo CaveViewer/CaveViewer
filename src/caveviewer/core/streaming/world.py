@@ -1408,3 +1408,8 @@ class StreamingWorld:
             "failed_wanted": failed_wanted_count,
             "total_available": len(self.available_cells),
         }
+
+    def wanted_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
+        """Return a thread-safe snapshot of the current streaming target cells."""
+        with self._lock:
+            return frozenset(self._last_wanted_cells)

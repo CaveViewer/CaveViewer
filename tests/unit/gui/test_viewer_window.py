@@ -1409,6 +1409,68 @@ def test_initial_visual_readiness_waits_for_pending_upload_state():
     assert window._initial_visual_ready_frames == 0
 
 
+def test_initial_visual_readiness_waits_for_startup_texture_residency():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(
+        config=SimpleNamespace(max_loaded_chunks=100),
+        wanted_cells_snapshot=lambda: frozenset({(1, 2, 3)}),
+    )
+    window.manifest = {
+        "chunks": {
+            "1_2_3": {
+                "materials": ["rock", "silt"],
+            },
+        },
+    }
+    window.texture_manager = SimpleNamespace(
+        material_to_file={
+            "rock": "rock.jpg",
+            "silt": "silt.jpg",
+        },
+        stats=lambda: {
+            "unique_files_resident": 1,
+            "resident_texture_bytes": 1024,
+            "resident_texture_budget_bytes": 4096,
+        },
+    )
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 2
+    window._initial_visual_ready_visible_chunks = 1
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {}
+
+    visual_stats = window._initial_visual_readiness_stats(
+        {
+            "loaded_wanted": 1,
+            "loaded": 1,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 1,
+            "total_available": 10,
+        },
+        1,
+    )
+
+    assert visual_stats["visual_ready"] is False
+    assert visual_stats["visual_ready_required_textures"] == 2
+    assert visual_stats["visual_ready_resident_textures"] == 1
+    assert window._initial_visual_ready_frames == 0
+
+
+def test_loading_render_mode_unlocks_after_initial_chunks_for_texture_settle():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+    window._initial_chunks_loaded = True
+    window.controls_overlay = SimpleNamespace(
+        is_active=True,
+        is_manual_mode=False,
+        is_fading=False,
+    )
+
+    assert window._buttons_locked_for_loading() is False
+
+
 def test_startup_upload_limits_are_boosted_until_initial_load_is_ready():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._upload_chunks_per_frame = 1

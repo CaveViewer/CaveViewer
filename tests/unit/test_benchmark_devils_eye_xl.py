@@ -57,7 +57,7 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=8" in output
     assert "render_distance: 6" in output
-    assert "target_length=auto(50 ft/min, 0.254 m/s, min 0.5 chunk)" in output
+    assert "target_length=auto(4 chunks, streaming exercise" in output
     assert "selection=max_visible_chunk_texture_complexity" in output
     assert "movement=after_warmup" in output
     assert "copy_map: yes" in output
@@ -124,6 +124,10 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
         scenario_path = Path(command[command.index("--scenario") + 1])
         generated_scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
         assert generated_scenario["metadata"]["route_mode"] == "auto_centerline_v1"
+        assert generated_scenario["metadata"]["target_route_length_source"] == (
+            "devils_eye_streaming_default_chunks"
+        )
+        assert generated_scenario["metadata"]["target_route_length_chunks"] == 4.0
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "summary.json").write_text(
             json.dumps(
@@ -162,13 +166,14 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "median_drawn_chunks=40.00" in latest_text
     assert "Startup readiness:" in latest_text
     assert "visible_chunks=40" in latest_text
+    assert "textures=40/40 resident" in latest_text
     assert "Streaming request:" in latest_text
     assert "distance=6 chunks" in latest_text
     assert "Streaming effective:" in latest_text
     assert "Texture residency:" in latest_text
     assert "Route: auto_centerline" in latest_text
     assert "selection=max_visible_chunk_texture_complexity_v1" in latest_text
-    assert "target_speed_m_per_s=0.25" in latest_text
+    assert "target_speed_m_per_s=1.33" in latest_text
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
     assert "Previous local run compared to current" in latest_text
@@ -361,6 +366,9 @@ def _summary(
             "initial_visual_ready_seconds": 12.5,
             "initial_visual_ready_frames": 3,
             "initial_visual_ready_visible_chunks": 40,
+            "initial_visual_ready_required_textures": 40,
+            "initial_visual_ready_resident_textures": 40,
+            "initial_visual_ready_visible_textures": 12,
             "texture_max_dimension": 2048,
             "texture_resident_budget_bytes": 1720 * 1024 * 1024,
             "texture_decoded_cache_budget_bytes": 304 * 1024 * 1024,

@@ -1371,3 +1371,14 @@ def test_stats_reads_mutable_streaming_sets_under_lock():
     assert stats["loaded_wanted"] == 1
     assert stats["pending"] == 1
     assert stats["wanted"] == 2
+
+
+def test_wanted_cells_snapshot_returns_thread_safe_copy():
+    cell = (1, 0, 0)
+    world = _world_with_ready_chunks(cell)
+    world._last_wanted_cells = {cell}
+
+    snapshot = world.wanted_cells_snapshot()
+    world._last_wanted_cells.clear()
+
+    assert snapshot == frozenset({cell})

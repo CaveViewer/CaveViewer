@@ -38,9 +38,6 @@ from caveviewer.gui.benchmark import (
 from caveviewer.gui.benchmark_routes import (
     CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
     DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
-    DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS,
-    DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE,
-    DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
     DEFAULT_DENSE_ROUTE_KEYFRAMES,
     DEFAULT_DENSE_ROUTE_PERCENTILE,
@@ -66,6 +63,7 @@ MANIFEST_NAME = "manifest.json"
 MAP_SOURCE_SUFFIXES = {".glb", ".gltf", ".obj"}
 LOCAL_HISTORY_SCHEMA_VERSION = 1
 DEFAULT_DEVILS_EYE_RENDER_DISTANCE = 6
+DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS = 4.0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -137,9 +135,10 @@ def _parser() -> argparse.ArgumentParser:
         "--centerline-route-target-length-m",
         type=float,
         help=(
-            "Target centerline segment length in map units. Defaults to "
-            "50 ft/min converted to metric units, with a half-chunk minimum "
-            "for visible movement on large maps."
+            "Target centerline segment length in map units. Defaults to a "
+            "Devil's Eye XL streaming exercise route of "
+            f"{DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS:g} chunks "
+            "so the measured window crosses chunk neighborhoods."
         ),
     )
     parser.add_argument(
@@ -366,6 +365,11 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
             if args.centerline_route_target_length_m is None
             else float(args.centerline_route_target_length_m)
         ),
+        "centerline_route_target_length_source": (
+            "devils_eye_streaming_default_chunks"
+            if args.centerline_route_target_length_m is None
+            else "cli_meters"
+        ),
         "centerline_route_y_search_radius_cells": max(
             0,
             int(args.centerline_route_y_search_radius_cells),
@@ -432,10 +436,8 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
         target_text = (
             (
                 "auto("
-                f"{DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE:g} ft/min, "
-                f"{DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND:.3f} m/s, "
-                f"min {DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS:g} chunk"
-                ")"
+                f"{DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS:g} chunks, "
+                "streaming exercise; meters computed after cache validation)"
             )
             if target_length is None
             else f"{target_length:g}m"
@@ -535,15 +537,24 @@ def _prepare_scenario(plan: dict[str, Any]) -> None:
         return
     manifest = load_json_file(plan["manifest_path"])
     if plan["route_mode"] == "auto-centerline":
+        target_length_m = plan["centerline_route_target_length_m"]
+        if target_length_m is None:
+            target_length_m = _devils_eye_centerline_route_target_length_m(
+                manifest
+            )
         route_result = generate_centerline_route_scenario(
             manifest,
             plan["scenario_template"],
             keyframe_count=int(plan["centerline_route_keyframes"]),
-            target_length_m=plan["centerline_route_target_length_m"],
+            target_length_m=target_length_m,
             y_search_radius_cells=int(
                 plan["centerline_route_y_search_radius_cells"]
             ),
         )
+        if plan["centerline_route_target_length_source"] != "cli_meters":
+            _mark_devils_eye_default_centerline_metadata(
+                route_result.scenario_payload,
+            )
         summary_text = _centerline_route_summary
         plan_key = "centerline_route"
     else:
@@ -565,6 +576,53 @@ def _prepare_scenario(plan: dict[str, Any]) -> None:
     plan["scenario_fingerprint"] = scenario.fingerprint
     plan[plan_key] = route_result
     _log_message(plan, summary_text(route_result, scenario_path))
+
+
+def _devils_eye_centerline_route_target_length_m(
+    manifest: Mapping[str, Any],
+) -> float:
+    return (
+        _manifest_chunk_size_m(manifest)
+        * DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS
+    )
+
+
+def _manifest_chunk_size_m(manifest: Mapping[str, Any]) -> float:
+    try:
+        chunk_size = float(manifest["chunk_size"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise BenchmarkConfigurationError(
+            "manifest chunk_size must be a positive number"
+        ) from exc
+    if chunk_size <= 0.0:
+        raise BenchmarkConfigurationError(
+            "manifest chunk_size must be a positive number"
+        )
+    return chunk_size
+
+
+def _mark_devils_eye_default_centerline_metadata(
+    scenario_payload: dict[str, Any],
+) -> None:
+    metadata = scenario_payload.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return
+    metadata["target_route_length_source"] = (
+        "devils_eye_streaming_default_chunks"
+    )
+    metadata["target_route_speed_source"] = (
+        "devils_eye_streaming_default_chunks"
+    )
+    metadata["target_route_length_chunks"] = (
+        DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS
+    )
+    metadata["target_route_minimum_length_chunks"] = (
+        DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS
+    )
+    metadata["streaming_exercise_definition"] = (
+        "route length is expressed in chunk widths so the measured window "
+        "crosses streaming neighborhoods and exercises runtime chunk uploads"
+    )
 
 
 def _dense_route_summary(dense_route, scenario_path: Path) -> str:
@@ -850,7 +908,11 @@ def _startup_readiness_summary_lines(environment: Mapping[str, Any]) -> list[str
             "Startup readiness: "
             f"visual_ready_after={_format_setting(environment.get('initial_visual_ready_seconds'), suffix=' s')}, "
             f"settle_frames={_format_setting(environment.get('initial_visual_ready_frames'))}, "
-            f"visible_chunks={_format_setting(environment.get('initial_visual_ready_visible_chunks'))}"
+            f"visible_chunks={_format_setting(environment.get('initial_visual_ready_visible_chunks'))}, "
+            "textures="
+            f"{_format_setting(environment.get('initial_visual_ready_resident_textures'))}/"
+            f"{_format_setting(environment.get('initial_visual_ready_required_textures'))} resident, "
+            f"visible_textures={_format_setting(environment.get('initial_visual_ready_visible_textures'))}"
         )
     ]
 

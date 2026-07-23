@@ -13,7 +13,7 @@ simple lookup-and-release.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 import hashlib
 import json
 import logging
@@ -838,6 +838,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_visual_ready = False
         self._initial_visual_ready_frames = 0
         self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_required_textures = 0
+        self._initial_visual_ready_resident_textures = 0
+        self._initial_visual_ready_visible_textures = 0
         self._initial_visual_ready_logged = False
         self._initial_compilation_started_at = None
         self._initial_compilation_logged = False
@@ -1292,6 +1295,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_visual_ready = False
         self._initial_visual_ready_frames = 0
         self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_required_textures = 0
+        self._initial_visual_ready_resident_textures = 0
+        self._initial_visual_ready_visible_textures = 0
         self._initial_visual_ready_logged = False
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
@@ -2571,12 +2577,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             return True
         if not self._initial_chunks_loaded:
             return True
-        # Don't lock during the fade-out: textures must be re-enabled before
-        # the dim overlay reveals the cave, otherwise the user sees gray
-        # (untextured) geometry through the fading dim for the full 0.5 s fade.
-        return (self.controls_overlay.is_active
-                and not self.controls_overlay.is_manual_mode
-                and not self.controls_overlay.is_fading)
+        # Once the initial chunks are resident, release the loading-time render
+        # mode lock while the startup help screen is still covering the view.
+        # That lets Texture turn back on and gives the renderer real textured
+        # frames to settle before the user dismisses the overlay.
+        return False
 
     def _sync_render_mode_loading_policy(self) -> None:
         """Apply loading-time button policy and post-load defaults exactly on transitions."""
@@ -2791,7 +2796,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         needed = self._initial_chunk_load_needed(stats, max_loaded)
         return loaded + failed_wanted >= needed
 
-    def _initial_visual_readiness_is_settled(self, stats: dict) -> bool:
+    def _initial_visual_readiness_is_settled(
+        self,
+        stats: dict,
+        texture_readiness: Mapping[str, object] | None = None,
+    ) -> bool:
         if not getattr(self, "_initial_chunks_loaded", False):
             return False
         if not self._initial_chunk_load_is_ready(stats):
@@ -2801,14 +2810,115 @@ class CaveViewerWindow(mglw.WindowConfig):
         if max(0, int(stats.get("ready", 0))) > 0:
             return False
         upload_states = getattr(self, "_chunk_upload_states", {})
-        return len(upload_states) == 0
+        if len(upload_states) > 0:
+            return False
+        if texture_readiness is not None and not bool(
+            texture_readiness.get("textures_ready", True)
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _texture_source_key(source: object) -> object:
+        try:
+            hash(source)
+        except TypeError:
+            return id(source)
+        return source
+
+    def _current_wanted_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
+        world = getattr(self, "world", None)
+        snapshot = getattr(world, "wanted_cells_snapshot", None)
+        if callable(snapshot):
+            return frozenset(snapshot())
+        return frozenset(getattr(world, "_last_wanted_cells", ()))
+
+    def _texture_sources_for_cells(
+        self,
+        cells: Iterable[tuple[int, int, int]],
+    ) -> set[object]:
+        texture_manager = getattr(self, "texture_manager", None)
+        material_to_file = getattr(texture_manager, "material_to_file", {})
+        if not isinstance(material_to_file, Mapping):
+            return set()
+        manifest = getattr(self, "manifest", {})
+        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
+        if not isinstance(chunks, Mapping):
+            return set()
+
+        sources: set[object] = set()
+        for cell in cells:
+            chunk_info = chunks.get(f"{cell[0]}_{cell[1]}_{cell[2]}")
+            if not isinstance(chunk_info, Mapping):
+                continue
+            materials = chunk_info.get("materials", ())
+            if not isinstance(materials, Iterable) or isinstance(materials, str):
+                materials = ()
+            for material in materials:
+                source = material_to_file.get(str(material))
+                if source:
+                    sources.add(self._texture_source_key(source))
+        return sources
+
+    def _texture_sources_for_visible_cells(
+        self,
+        visible_cells: Iterable[tuple[tuple, list]] | None,
+    ) -> set[object]:
+        texture_manager = getattr(self, "texture_manager", None)
+        material_to_file = getattr(texture_manager, "material_to_file", {})
+        if visible_cells is None or not isinstance(material_to_file, Mapping):
+            return set()
+        sources: set[object] = set()
+        for _cell, vao_list in visible_cells:
+            for _vao, _vbo, material_name, _texture in vao_list:
+                source = material_to_file.get(str(material_name))
+                if source:
+                    sources.add(self._texture_source_key(source))
+        return sources
+
+    def _initial_texture_readiness_stats(
+        self,
+        visible_cells: Iterable[tuple[tuple, list]] | None,
+    ) -> dict[str, object]:
+        texture_manager = getattr(self, "texture_manager", None)
+        manager_stats = (
+            texture_manager.stats()
+            if texture_manager is not None and hasattr(texture_manager, "stats")
+            else {}
+        )
+        wanted_sources = self._texture_sources_for_cells(
+            self._current_wanted_cells_snapshot()
+        )
+        visible_sources = self._texture_sources_for_visible_cells(visible_cells)
+        required_textures = (
+            len(wanted_sources) if wanted_sources else len(visible_sources)
+        )
+        resident_textures = max(
+            0,
+            int(manager_stats.get("unique_files_resident", required_textures)),
+        )
+        return {
+            "textures_ready": required_textures <= 0
+            or resident_textures >= required_textures,
+            "required_textures": required_textures,
+            "resident_textures": resident_textures,
+            "visible_textures": len(visible_sources),
+            "resident_texture_bytes": int(
+                manager_stats.get("resident_texture_bytes", 0)
+            ),
+            "resident_texture_budget_bytes": int(
+                manager_stats.get("resident_texture_budget_bytes", 0)
+            ),
+        }
 
     def _initial_visual_readiness_stats(
         self,
         stats: dict,
         visible_chunk_count: int,
+        visible_cells: Iterable[tuple[tuple, list]] | None = None,
     ) -> dict:
         """Update and return startup stats augmented with visual-ready state."""
+        texture_readiness = self._initial_texture_readiness_stats(visible_cells)
         if getattr(self, "_initial_visual_ready", False):
             visual_stats = dict(stats)
             visual_stats["visual_ready"] = True
@@ -2818,13 +2928,31 @@ class CaveViewerWindow(mglw.WindowConfig):
             visual_stats["visual_ready_visible_chunks"] = int(
                 getattr(self, "_initial_visual_ready_visible_chunks", 0)
             )
+            visual_stats["visual_ready_required_textures"] = int(
+                getattr(self, "_initial_visual_ready_required_textures", 0)
+            )
+            visual_stats["visual_ready_resident_textures"] = int(
+                getattr(self, "_initial_visual_ready_resident_textures", 0)
+            )
+            visual_stats["visual_ready_visible_textures"] = int(
+                getattr(self, "_initial_visual_ready_visible_textures", 0)
+            )
             return visual_stats
 
-        if self._initial_visual_readiness_is_settled(stats):
+        if self._initial_visual_readiness_is_settled(stats, texture_readiness):
             self._initial_visual_ready_frames = (
                 int(getattr(self, "_initial_visual_ready_frames", 0)) + 1
             )
             self._initial_visual_ready_visible_chunks = int(visible_chunk_count)
+            self._initial_visual_ready_required_textures = int(
+                texture_readiness["required_textures"]
+            )
+            self._initial_visual_ready_resident_textures = int(
+                texture_readiness["resident_textures"]
+            )
+            self._initial_visual_ready_visible_textures = int(
+                texture_readiness["visible_textures"]
+            )
             if (
                 self._initial_visual_ready_frames
                 >= self._INITIAL_VISUAL_READY_SETTLE_FRAMES
@@ -2837,6 +2965,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         else:
             self._initial_visual_ready_frames = 0
             self._initial_visual_ready_visible_chunks = 0
+            self._initial_visual_ready_required_textures = 0
+            self._initial_visual_ready_resident_textures = int(
+                texture_readiness["resident_textures"]
+            )
+            self._initial_visual_ready_visible_textures = int(
+                texture_readiness["visible_textures"]
+            )
 
         visual_stats = dict(stats)
         visual_stats["visual_ready"] = bool(
@@ -2846,6 +2981,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             getattr(self, "_initial_visual_ready_frames", 0)
         )
         visual_stats["visual_ready_visible_chunks"] = int(visible_chunk_count)
+        visual_stats["visual_ready_required_textures"] = int(
+            texture_readiness["required_textures"]
+        )
+        visual_stats["visual_ready_resident_textures"] = int(
+            texture_readiness["resident_textures"]
+        )
+        visual_stats["visual_ready_visible_textures"] = int(
+            texture_readiness["visible_textures"]
+        )
         return visual_stats
 
     def _log_initial_visual_ready_complete(
@@ -2864,9 +3008,19 @@ class CaveViewerWindow(mglw.WindowConfig):
             else max(0.0, time.perf_counter() - started_at)
         )
         upload_states = getattr(self, "_chunk_upload_states", {})
+        required_textures = int(
+            getattr(self, "_initial_visual_ready_required_textures", 0)
+        )
+        resident_textures = int(
+            getattr(self, "_initial_visual_ready_resident_textures", 0)
+        )
+        visible_textures = int(
+            getattr(self, "_initial_visual_ready_visible_textures", 0)
+        )
         _LOG.info(
             "Initial visual readiness completed in %.2fs "
-            "(visible=%d loaded=%d pending=%d ready=%d wanted=%d upload_states=%d).",
+            "(visible=%d loaded=%d pending=%d ready=%d wanted=%d "
+            "upload_states=%d textures=%d/%d visible_textures=%d).",
             elapsed_s,
             int(visible_chunk_count),
             int(stats.get("loaded", 0)),
@@ -2874,6 +3028,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             int(stats.get("ready", 0)),
             int(stats.get("wanted", 0)),
             len(upload_states),
+            resident_textures,
+            required_textures,
+            visible_textures,
         )
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         if benchmark_controller is not None:
@@ -2884,6 +3041,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "initial_visual_ready_frames": int(
                         getattr(self, "_initial_visual_ready_frames", 0)
                     ),
+                    "initial_visual_ready_required_textures": required_textures,
+                    "initial_visual_ready_resident_textures": resident_textures,
+                    "initial_visual_ready_visible_textures": visible_textures,
                 }
             )
 
@@ -3643,7 +3803,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         _visible_cells = self._visible_chunk_gpu_objects(view, proj)
         _chunks_drawn = len(_visible_cells)
         mesh_cull_ms = (time.perf_counter() - t_cull) * 1000.0
-        visual_stats = self._initial_visual_readiness_stats(stats, _chunks_drawn)
+        visual_stats = self._initial_visual_readiness_stats(
+            stats,
+            _chunks_drawn,
+            visible_cells=_visible_cells,
+        )
 
         # u_texture always refers to sampler unit 0 -- set it once before
         # the loop rather than redundantly on every single draw call.
@@ -3903,13 +4067,24 @@ class CaveViewerWindow(mglw.WindowConfig):
             if _LOG.isEnabledFor(logging.DEBUG):
                 stats = self.world.stats()
                 gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
+                speed_label = "manual_speed"
+                displayed_speed = float(self.camera.move_speed)
+                if benchmark_active:
+                    route_speed = getattr(
+                        benchmark_controller.scenario,
+                        "metadata",
+                        {},
+                    ).get("actual_route_speed_m_per_second")
+                    if isinstance(route_speed, (int, float)):
+                        speed_label = "route_speed"
+                        displayed_speed = float(route_speed)
                 _LOG.debug(f"rendered_fps={rendered_fps:.1f} wall_fps={wall_fps:.1f} "
                            f"frame_cost={rolling_avg:.1f}ms "
                            f"| chunks loaded={stats['loaded']} "
                            f"pending={stats['pending']} "
                            f"unload_pending={stats.get('unload_pending', 0)} "
                            f"drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
-                           f"| speed={self.camera.move_speed:.1f}m/s "
+                           f"| {speed_label}={displayed_speed:.1f}m/s "
                            f"| mesh_cull={mesh_cull_ms:.1f}ms "
                            f"mesh_submit={mesh_submit_ms:.1f}ms "
                            f"gpu_query_wait={mesh_gpu_query_wait_ms:.1f}ms "
