@@ -111,8 +111,9 @@ Videos are saved to:
 ```
 
 Frames are streamed directly to the video encoder while you fly. CaveViewer does
-not keep the recording in memory. Recordings are scaled to a 1080-pixel maximum
-height by default so they play back smoothly on normal video players.
+not keep the recording in memory. Recordings are scaled to a 720-pixel maximum
+height by default to keep render readback and encoding costs lower. Set
+`CAVEVIEWER_RECORDING_MAX_HEIGHT=1080` to opt back into 1080p recording.
 
 
 ## Importing and Streaming Preferences

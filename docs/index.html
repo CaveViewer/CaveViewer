@@ -1203,7 +1203,9 @@ section { position: relative; }
             a recording in progress.</p>
             <p>Files are saved as MP4 to <span class="mono" style="color: var(--amber);">~/Movies/CaveViewer/</span>
             (you can change this folder under Preferences → Storage), scaled to
-            1080p by default so they play smoothly anywhere. Each file is named
+            720p by default to reduce recording load. Set
+            <span class="mono">CAVEVIEWER_RECORDING_MAX_HEIGHT=1080</span> to opt
+            back into 1080p. Each file is named
             for the date and time it was captured, e.g.
             <span class="mono">CaveViewerDive-20260715-162609.mp4</span>.</p>
           </div>
