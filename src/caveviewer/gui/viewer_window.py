@@ -48,6 +48,7 @@ from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import streaming_frame_timing
+from caveviewer.gui import upload_slice_policy
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
 from caveviewer.gui.platform.factory import get_platform_adapter
@@ -64,11 +65,10 @@ _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
 _GPU_RESIDENCY_SAFETY_SHARE = 0.05
-_RENDER_UPLOAD_VERTEX_BYTES = 8 * np.dtype(np.float32).itemsize
-_RENDER_UPLOAD_MAX_SLICE_BYTES = 1 * 1024 ** 2
-_RENDER_UPLOAD_INITIAL_SLICE_BYTES = 512 * 1024
-_RENDER_UPLOAD_MIN_SLICE_BYTES = 256 * 1024
-_RENDER_UPLOAD_STALL_SHRINK_FACTOR = 0.5
+_RENDER_UPLOAD_VERTEX_BYTES = upload_slice_policy.RENDER_UPLOAD_VERTEX_BYTES
+_RENDER_UPLOAD_INITIAL_SLICE_BYTES = (
+    upload_slice_policy.RENDER_UPLOAD_INITIAL_SLICE_BYTES
+)
 _RENDER_UPLOAD_SLICE_BYTES = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
 _CATCHUP_UPLOAD_CHUNKS_PER_FRAME = 2
 _CATCHUP_UPLOAD_OPERATIONS_PER_CHUNK = 8
@@ -2152,44 +2152,44 @@ class CaveViewerWindow(mglw.WindowConfig):
             frame_timing,
         )
 
-    def _render_upload_slice_vertices(self) -> int:
-        slice_bytes = max(
-            3 * _RENDER_UPLOAD_VERTEX_BYTES,
-            min(
-                _RENDER_UPLOAD_MAX_SLICE_BYTES,
-                int(
-                    getattr(
-                        self,
-                        "_vbo_upload_slice_bytes",
-                        _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-                    )
-                ),
+    def _upload_slice_state(self) -> upload_slice_policy.UploadSliceState:
+        return upload_slice_policy.UploadSliceState(
+            vbo_upload_slice_bytes=int(
+                getattr(
+                    self,
+                    "_vbo_upload_slice_bytes",
+                    _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+                )
+            ),
+            texture_upload_slice_bytes=int(
+                getattr(
+                    self,
+                    "_texture_upload_slice_bytes",
+                    _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+                )
             ),
         )
-        vertices = max(3, slice_bytes // _RENDER_UPLOAD_VERTEX_BYTES)
-        vertices -= vertices % 3
-        return max(3, int(vertices))
+
+    def _set_upload_slice_state(
+        self,
+        state: upload_slice_policy.UploadSliceState,
+    ) -> None:
+        self._vbo_upload_slice_bytes = int(state.vbo_upload_slice_bytes)
+        self._texture_upload_slice_bytes = int(state.texture_upload_slice_bytes)
+
+    def _render_upload_slice_vertices(self) -> int:
+        return upload_slice_policy.render_upload_slice_vertices(
+            self._upload_slice_state().vbo_upload_slice_bytes,
+        )
 
     @staticmethod
     def _min_vbo_upload_slice_bytes() -> int:
-        return max(_RENDER_UPLOAD_MIN_SLICE_BYTES, 3 * _RENDER_UPLOAD_VERTEX_BYTES)
+        return upload_slice_policy.min_vbo_upload_slice_bytes()
 
     def _record_upload_slice_sizes(self, timing: dict | None) -> None:
-        if timing is None:
-            return
-        timing["vbo_upload_slice_bytes"] = int(
-            getattr(
-                self,
-                "_vbo_upload_slice_bytes",
-                _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-            )
-        )
-        timing["texture_upload_slice_bytes"] = int(
-            getattr(
-                self,
-                "_texture_upload_slice_bytes",
-                _RENDER_UPLOAD_INITIAL_SLICE_BYTES,
-            )
+        upload_slice_policy.record_upload_slice_sizes(
+            timing,
+            self._upload_slice_state(),
         )
 
     def _adapt_upload_slice_size(
@@ -2209,47 +2209,22 @@ class CaveViewerWindow(mglw.WindowConfig):
         later operations use a smaller byte budget instead of asking the user
         to keep tuning environment variables.
         """
-        target_ms = max(
-            0.5,
-            float(
+        adjustment = upload_slice_policy.adapt_upload_slice_size(
+            kind=kind,
+            elapsed_ms=elapsed_ms,
+            byte_count=byte_count,
+            target_ms=float(
                 getattr(
                     self,
                     "_current_upload_time_budget_ms",
                     getattr(self, "_upload_time_budget_ms", 3.0),
                 )
             ),
+            state=self._upload_slice_state(),
         )
-        if elapsed_ms <= target_ms:
-            self._record_upload_slice_sizes(timing)
-            return
-
-        if timing is not None:
+        self._set_upload_slice_state(adjustment.state)
+        if adjustment.stalled and timing is not None:
             timing["upload_stalls"] += 1
-
-        if kind == "texture":
-            attr = "_texture_upload_slice_bytes"
-            minimum = _RENDER_UPLOAD_MIN_SLICE_BYTES
-        elif kind == "vbo":
-            attr = "_vbo_upload_slice_bytes"
-            minimum = self._min_vbo_upload_slice_bytes()
-        else:
-            self._record_upload_slice_sizes(timing)
-            return
-
-        current = max(
-            minimum,
-            min(
-                _RENDER_UPLOAD_MAX_SLICE_BYTES,
-                int(getattr(self, attr, _RENDER_UPLOAD_INITIAL_SLICE_BYTES)),
-            ),
-        )
-        if byte_count > 0:
-            throughput_limited = int(byte_count * target_ms / max(elapsed_ms, 0.001))
-            conservative_target = int(throughput_limited * 0.75)
-            halved = int(current * _RENDER_UPLOAD_STALL_SHRINK_FACTOR)
-            next_size = max(minimum, min(halved, conservative_target))
-            if next_size < current:
-                setattr(self, attr, next_size)
 
         self._record_upload_slice_sizes(timing)
 
