@@ -14,6 +14,7 @@ def test_render_upload_slice_vertices_is_triangle_aligned():
 
 def test_adapt_upload_slice_size_shrinks_texture_after_stall():
     """Texture upload slices shrink when measured upload time exceeds budget."""
+    timing = {"upload_stalls": 0}
     state = upload_slice_policy.UploadSliceState(
         vbo_upload_slice_bytes=1024 * 1024,
         texture_upload_slice_bytes=1024 * 1024,
@@ -25,11 +26,16 @@ def test_adapt_upload_slice_size_shrinks_texture_after_stall():
         byte_count=1024 * 1024,
         target_ms=3.0,
         state=state,
+        timing=timing,
     )
 
     assert adjustment.stalled
     assert adjustment.state.texture_upload_slice_bytes < 1024 * 1024
     assert adjustment.state.vbo_upload_slice_bytes == 1024 * 1024
+    assert timing["upload_stalls"] == 1
+    assert timing["texture_upload_slice_bytes"] == (
+        adjustment.state.texture_upload_slice_bytes
+    )
 
 
 def test_adapt_upload_slice_size_uses_current_boosted_budget():

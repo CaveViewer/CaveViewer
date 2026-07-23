@@ -22,11 +22,14 @@ class UploadSliceState:
 
 
 @dataclass(frozen=True)
-class UploadSliceAdjustment:
+class UploadSliceDecision:
     """Result of adapting one upload slice size after a measured operation."""
 
     state: UploadSliceState
     stalled: bool
+
+
+UploadSliceAdjustment = UploadSliceDecision
 
 
 def min_vbo_upload_slice_bytes(
@@ -72,19 +75,23 @@ def adapt_upload_slice_size(
     byte_count: int,
     target_ms: float,
     state: UploadSliceState,
+    timing: dict[str, Any] | None = None,
     min_slice_bytes: int = RENDER_UPLOAD_MIN_SLICE_BYTES,
     max_slice_bytes: int = RENDER_UPLOAD_MAX_SLICE_BYTES,
     shrink_factor: float = RENDER_UPLOAD_STALL_SHRINK_FACTOR,
-) -> UploadSliceAdjustment:
+) -> UploadSliceDecision:
     """
     Shrink future upload slices when one measured operation exceeds budget.
 
-    The policy is pure: callers keep ownership of the mutable render-thread
-    state and decide where to record the stall in their diagnostics.
+    The policy is side-effect free except for optional diagnostics recording.
     """
     target_ms = max(0.5, float(target_ms))
     if elapsed_ms <= target_ms:
-        return UploadSliceAdjustment(state=state, stalled=False)
+        record_upload_slice_sizes(timing, state)
+        return UploadSliceDecision(state=state, stalled=False)
+
+    if timing is not None:
+        timing["upload_stalls"] = timing.get("upload_stalls", 0) + 1
 
     if kind == "texture":
         minimum = min_slice_bytes
@@ -93,7 +100,8 @@ def adapt_upload_slice_size(
         minimum = min_vbo_upload_slice_bytes(min_slice_bytes=min_slice_bytes)
         current = state.vbo_upload_slice_bytes
     else:
-        return UploadSliceAdjustment(state=state, stalled=True)
+        record_upload_slice_sizes(timing, state)
+        return UploadSliceDecision(state=state, stalled=True)
 
     current = max(minimum, min(max_slice_bytes, int(current)))
     next_size = current
@@ -114,4 +122,5 @@ def adapt_upload_slice_size(
             texture_upload_slice_bytes=state.texture_upload_slice_bytes,
         )
 
-    return UploadSliceAdjustment(state=state, stalled=True)
+    record_upload_slice_sizes(timing, state)
+    return UploadSliceDecision(state=state, stalled=True)
