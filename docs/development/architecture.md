@@ -191,12 +191,13 @@ OpenGL HUD text is rasterized at framebuffer scale for crispness, while the
 always-visible right-side viewer controls use a separate responsive HUD scale
 based on the current viewer surface size. That keeps maximized and AppImage
 windows legible without requiring user-provided environment variables.
-Viewer recording keeps OpenGL framebuffer readback in `viewer_window.py` on the
-render thread. `gui.recording` owns ffmpeg command construction, encoder
+Viewer recording keeps workflow decisions in `viewer_window.py` on the render
+thread. `gui.recording_capture` owns framebuffer readback resources and staged
+frame draining. `gui.recording` owns ffmpeg command construction, encoder
 writer/stderr workers, and asynchronous stop finalization.
-`gui.recording_controller` owns recording countdowns, transient status
-messages, capture timing, and dropped-frame accounting so those workflow
-decisions remain testable without constructing an OpenGL window.
+`gui.recording_controller` owns recording countdowns, transient status messages,
+capture timing, and dropped-frame accounting so those workflow decisions remain
+testable without constructing an OpenGL window.
 
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL

@@ -32,6 +32,7 @@ from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
 from caveviewer.gui.chunk_upload import ChunkUploadManager
+from caveviewer.gui.recording_capture import RecordingCaptureResources
 from caveviewer.gui.texture_manager import TextureManager
 from caveviewer.gui.camera import FlyCamera
 from caveviewer.gui.minimap import Minimap
@@ -563,6 +564,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._recording_session: recording.RecordingEncoderSession | None = None
         self._recording_output_path: str | None = None
+        self._recording_capture: RecordingCaptureResources | None = None
         self._recording_size: tuple[int, int] | None = None
         self._recording_viewport: tuple[int, int, int, int] | None = None
         self._recording_readback_framebuffer: moderngl.Framebuffer | None = None
@@ -786,6 +788,46 @@ class CaveViewerWindow(mglw.WindowConfig):
             controller = RecordingStateController()
             self.__dict__["_recording_controller"] = controller
         return controller
+
+    def _ensure_recording_capture(self) -> RecordingCaptureResources:
+        capture = self.__dict__.get("_recording_capture")
+        if capture is None:
+            capture = RecordingCaptureResources(
+                ctx=getattr(self, "ctx", None),
+                buffer_count=self.RECORDING_READBACK_BUFFER_COUNT,
+                readback_components=self.RECORDING_READBACK_COMPONENTS,
+                logger=_LOG,
+                perf_counter=lambda: time.perf_counter(),
+            )
+            self.__dict__["_recording_capture"] = capture
+        capture.ctx = getattr(self, "ctx", None)
+        capture.buffer_count = self.RECORDING_READBACK_BUFFER_COUNT
+        capture.readback_components = self.RECORDING_READBACK_COMPONENTS
+        capture.logger = _LOG
+        capture.output_size = getattr(self, "_recording_size", None)
+        capture.capture_viewport = getattr(self, "_recording_viewport", None)
+        capture.readback_framebuffer = getattr(
+            self,
+            "_recording_readback_framebuffer",
+            None,
+        )
+        capture.readback_slots = getattr(self, "_recording_readback_slots", [])
+        capture.readback_pending = getattr(self, "_recording_readback_pending", [])
+        capture.readback_byte_count = int(
+            getattr(self, "_recording_readback_byte_count", 0)
+        )
+        return capture
+
+    def _sync_recording_capture_state_from_manager(self) -> None:
+        capture = self.__dict__.get("_recording_capture")
+        if capture is None:
+            return
+        self._recording_size = capture.output_size
+        self._recording_viewport = capture.capture_viewport
+        self._recording_readback_framebuffer = capture.readback_framebuffer
+        self._recording_readback_slots = capture.readback_slots
+        self._recording_readback_pending = capture.readback_pending
+        self._recording_readback_byte_count = capture.readback_byte_count
 
     @property
     def _recording_countdown_started_at(self) -> float | None:
@@ -1260,72 +1302,34 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _release_recording_readback_framebuffer(self) -> None:
-        framebuffer = getattr(self, "_recording_readback_framebuffer", None)
-        self._recording_readback_framebuffer = None
-        if framebuffer is None:
-            return
-        try:
-            framebuffer.release()
-        except Exception:
-            pass
+        self._ensure_recording_capture().release_framebuffer()
+        self._sync_recording_capture_state_from_manager()
 
     def _discard_recording_staged_frames(self) -> int:
-        pending = getattr(self, "_recording_readback_pending", [])
-        dropped = len(pending)
-        for slot in pending:
-            slot.in_flight = False
-        pending.clear()
+        dropped = self._ensure_recording_capture().discard_staged_frames()
+        self._sync_recording_capture_state_from_manager()
         return dropped
 
     def _release_recording_readback_buffers(self) -> None:
-        self._discard_recording_staged_frames()
-        slots = getattr(self, "_recording_readback_slots", [])
-        self._recording_readback_slots = []
-        self._recording_readback_pending = []
-        self._recording_readback_byte_count = 0
+        self._ensure_recording_capture().release_buffers()
+        self._sync_recording_capture_state_from_manager()
         self._ensure_recording_controller().reset_frame_timings()
-        for slot in slots:
-            try:
-                slot.buffer.release()
-            except Exception:
-                pass
 
     def _create_recording_readback_framebuffer(
         self,
         capture_size: tuple[int, int],
         output_size: tuple[int, int],
     ) -> moderngl.Framebuffer | None:
-        self._release_recording_readback_framebuffer()
-        if output_size == capture_size:
-            return None
-
-        # Downscale on the GPU before readback. Reading the full high-DPI
-        # window framebuffer can block the render loop for tens of
-        # milliseconds per recorded frame; reading the output-sized buffer
-        # keeps the synchronized transfer much smaller.
-        framebuffer = self.ctx.simple_framebuffer(output_size, components=4)
-        framebuffer.viewport = (0, 0, output_size[0], output_size[1])
-        self._recording_readback_framebuffer = framebuffer
+        framebuffer = self._ensure_recording_capture().create_framebuffer(
+            capture_size,
+            output_size,
+        )
+        self._sync_recording_capture_state_from_manager()
         return framebuffer
 
     def _create_recording_readback_buffers(self, output_size: tuple[int, int]) -> None:
-        self._release_recording_readback_buffers()
-        width, height = output_size
-        byte_count = width * height * self.RECORDING_READBACK_COMPONENTS
-        slots = []
-        try:
-            for _ in range(self.RECORDING_READBACK_BUFFER_COUNT):
-                slots.append(_RecordingReadbackSlot(self.ctx.buffer(reserve=byte_count)))
-        except Exception:
-            for slot in slots:
-                try:
-                    slot.buffer.release()
-                except Exception:
-                    pass
-            raise
-        self._recording_readback_slots = slots
-        self._recording_readback_pending = []
-        self._recording_readback_byte_count = byte_count
+        self._ensure_recording_capture().create_buffers(output_size)
+        self._sync_recording_capture_state_from_manager()
 
     def _start_recording_encoder(self) -> bool:
         ffmpeg_path = self._resolve_ffmpeg_path()
@@ -1555,18 +1559,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         return recording.recording_failure_detail(stderr_text)
 
     def _recording_capture_state(self) -> tuple[tuple[int, int], tuple[int, int, int, int], int]:
-        if self._recording_size is None or self._recording_viewport is None:
-            raise OSError("recording capture state is not initialized")
-        byte_count = self._recording_readback_byte_count
-        if byte_count <= 0:
-            raise OSError("recording readback buffers are not initialized")
-        return self._recording_size, self._recording_viewport, byte_count
+        return self._ensure_recording_capture().capture_state()
 
     def _recording_free_readback_slot(self) -> _RecordingReadbackSlot | None:
-        for slot in self._recording_readback_slots:
-            if not slot.in_flight:
-                return slot
-        return None
+        return self._ensure_recording_capture().free_readback_slot()
 
     def _recording_copy_to_readback_framebuffer(
         self,
@@ -1574,96 +1570,32 @@ class CaveViewerWindow(mglw.WindowConfig):
         output_size: tuple[int, int],
         capture_viewport: tuple[int, int, int, int],
     ) -> None:
-        screen = self.ctx.screen
-        previous_screen_viewport = getattr(screen, "viewport", None)
-        previous_readback_viewport = getattr(readback_framebuffer, "viewport", None)
-        width, height = output_size
-        try:
-            screen.viewport = capture_viewport
-            readback_framebuffer.viewport = (0, 0, width, height)
-            self.ctx.copy_framebuffer(readback_framebuffer, screen)
-        finally:
-            if previous_screen_viewport is not None:
-                try:
-                    screen.viewport = previous_screen_viewport
-                except Exception:
-                    pass
-            if previous_readback_viewport is not None:
-                try:
-                    readback_framebuffer.viewport = previous_readback_viewport
-                except Exception:
-                    pass
+        self._ensure_recording_capture().copy_to_readback_framebuffer(
+            readback_framebuffer,
+            output_size,
+            capture_viewport,
+        )
 
     def _recording_stage_frame(
         self,
         render_frame: Callable[[moderngl.Framebuffer, tuple[int, int]], None] | None = None,
     ) -> bool:
-        output_size, capture_viewport, _byte_count = self._recording_capture_state()
-        slot = self._recording_free_readback_slot()
-        if slot is None:
-            return False
-
-        width, height = output_size
-        readback_framebuffer = self._recording_readback_framebuffer
-        if readback_framebuffer is None:
-            self.ctx.screen.read_into(
-                slot.buffer,
-                viewport=capture_viewport,
-                components=self.RECORDING_READBACK_COMPONENTS,
-                alignment=1,
+        try:
+            return self._ensure_recording_capture().stage_frame(
+                render_frame=render_frame,
             )
-        else:
-            if render_frame is None:
-                self._recording_copy_to_readback_framebuffer(
-                    readback_framebuffer,
-                    output_size,
-                    capture_viewport,
-                )
-            else:
-                render_frame(readback_framebuffer, output_size)
-            readback_framebuffer.read_into(
-                slot.buffer,
-                viewport=(0, 0, width, height),
-                components=self.RECORDING_READBACK_COMPONENTS,
-                alignment=1,
-            )
-
-        slot.in_flight = True
-        self._recording_readback_pending.append(slot)
-        return True
+        finally:
+            self._sync_recording_capture_state_from_manager()
 
     def _recording_drain_staged_frames(self) -> float:
-        pending = self._recording_readback_pending
-        slots = self._recording_readback_slots
-        frame_queue = self._recording_frame_queue
-        if (
-            not pending
-            or not slots
-            or len(pending) < len(slots)
-            or frame_queue is None
-            or frame_queue.full()
-        ):
-            return 0.0
-
-        _output_size, _capture_viewport, byte_count = self._recording_capture_state()
-        slot = pending.pop(0)
-        frame = None
-        t_read = time.perf_counter()
         try:
-            frame = slot.buffer.read(size=byte_count)
-            read_ms = (time.perf_counter() - t_read) * 1000.0
-            if len(frame) != byte_count:
-                _LOG.warning(
-                    "Recording stopped because framebuffer byte size changed: "
-                    f"actual={len(frame)} expected={byte_count}."
-                )
-                self._stop_recording()
-                return read_ms
-            self._recording_enqueue_frame(frame)
-            return read_ms
+            return self._ensure_recording_capture().drain_staged_frames(
+                frame_queue=self._recording_frame_queue,
+                enqueue_frame=self._recording_enqueue_frame,
+                stop_recording=self._stop_recording,
+            )
         finally:
-            slot.in_flight = False
-            frame = None
+            self._sync_recording_capture_state_from_manager()
 
     def _recording_update_after_scene(
         self,
