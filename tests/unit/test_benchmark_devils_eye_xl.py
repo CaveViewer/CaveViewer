@@ -56,6 +56,8 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert "Devil's Eye XL local benchmark plan:" in output
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=8" in output
+    assert "target_length=auto(50ft/min)" in output
+    assert "target_speed=0.254m/s" in output
     assert "copy_map: yes" in output
     assert "compile_cache: yes" in output
     assert str(local_map_dir / "_cache") in output
@@ -155,6 +157,7 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "Status: FAIL" in latest_text
     assert "wall_clock_fps=90.00" in latest_text
     assert "Route: auto_centerline" in latest_text
+    assert "target_speed_ft_per_min=50.00" in latest_text
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
     assert "Previous local runs compared to current" in latest_text

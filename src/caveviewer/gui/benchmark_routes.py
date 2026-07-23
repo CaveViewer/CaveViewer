@@ -20,10 +20,13 @@ FootprintCell = tuple[int, int]
 Point = tuple[float, float, float]
 PointXZ = tuple[float, float]
 
+DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE = 50.0
+DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND = (
+    DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE * 0.3048 / 60.0
+)
 DEFAULT_CENTERLINE_ROUTE_KEYFRAMES = 8
 DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT = 96
 DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE = 70.0
-DEFAULT_CENTERLINE_ROUTE_TARGET_CELLS = 24
 DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS = 1
 CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.65
 DEFAULT_DENSE_ROUTE_KEYFRAMES = 8
@@ -100,28 +103,33 @@ def generate_centerline_route_scenario(
     }
     full_path_length_m = _footprint_path_length(full_path_cells, full_path_centers)
     resolved_target_length_m = _target_centerline_route_length_m(
-        footprint.cell_size,
-        keyframe_count=int(keyframe_count),
+        duration_s=template.total_duration_seconds,
         target_length_m=target_length_m,
     )
-    path_cells = _limit_footprint_path_length(
+    resolved_target_speed_m_per_second = (
+        resolved_target_length_m / template.total_duration_seconds
+    )
+    path_cells, segment_start_m, segment_end_m = _select_footprint_path_segment(
         full_path_cells,
         centers=full_path_centers,
         clearance_scores=clearance_scores,
         target_length_m=resolved_target_length_m,
     )
-    route_cells = _sample_footprint_route_cells(
-        path_cells,
-        centers={
-            cell: _footprint_world_center(cell, footprint.cell_size)
-            for cell in path_cells
-        },
+    route_xz_points = _sample_footprint_route_points(
+        full_path_cells,
+        centers=full_path_centers,
+        start_distance_m=segment_start_m,
+        end_distance_m=segment_end_m,
         keyframe_count=max(1, int(keyframe_count)),
     )
-    route_points = _route_points_for_footprint_cells(
-        route_cells,
+    route_cells = _nearest_footprint_cells_for_points(
+        route_xz_points,
+        path_cells=path_cells,
+        centers=full_path_centers,
+    )
+    route_points = _route_points_for_xz_points(
+        route_xz_points,
         manifest=manifest,
-        footprint_cell_size=footprint.cell_size,
         y_search_radius_cells=max(0, int(y_search_radius_cells)),
     )
     route_scores = [clearance_scores[cell] for cell in route_cells]
@@ -164,8 +172,18 @@ def generate_centerline_route_scenario(
             "endpoint_clearance_percentile": float(endpoint_percentile),
             "endpoint_threshold_clearance_cells": int(endpoint_threshold),
             "target_route_length_m": round(resolved_target_length_m, 3),
+            "target_route_speed_m_per_second": round(
+                resolved_target_speed_m_per_second,
+                6,
+            ),
+            "target_route_speed_ft_per_minute": round(
+                resolved_target_speed_m_per_second * 60.0 / 0.3048,
+                3,
+            ),
             "full_path_cell_count": len(full_path_cells),
             "full_path_length_m": round(full_path_length_m, 3),
+            "segment_start_m": round(segment_start_m, 3),
+            "segment_end_m": round(segment_end_m, 3),
             "path_cell_count": len(path_cells),
             "route_keyframe_count": len(route),
             "route_length_m": round(route_length_m, 3),
@@ -545,9 +563,8 @@ def _clearance_threshold(
 
 
 def _target_centerline_route_length_m(
-    footprint_cell_size: float,
     *,
-    keyframe_count: int,
+    duration_s: float,
     target_length_m: float | None,
 ) -> float:
     if target_length_m is not None:
@@ -557,26 +574,28 @@ def _target_centerline_route_length_m(
                 "centerline target route length must be a positive number"
             )
         return target
-    target_cells = max(
-        DEFAULT_CENTERLINE_ROUTE_TARGET_CELLS,
-        max(1, int(keyframe_count)) * 3,
-    )
-    return footprint_cell_size * target_cells
+    duration = float(duration_s)
+    if not math.isfinite(duration) or duration <= 0.0:
+        raise BenchmarkConfigurationError(
+            "centerline route duration must be a positive number"
+        )
+    return DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * duration
 
 
-def _limit_footprint_path_length(
+def _select_footprint_path_segment(
     path_cells: tuple[FootprintCell, ...],
     *,
     centers: Mapping[FootprintCell, PointXZ],
     clearance_scores: Mapping[FootprintCell, int],
     target_length_m: float,
-) -> tuple[FootprintCell, ...]:
+) -> tuple[tuple[FootprintCell, ...], float, float]:
     if len(path_cells) <= 2:
-        return path_cells
+        distances = _footprint_cumulative_distances(path_cells, centers)
+        return path_cells, 0.0, distances[-1]
     distances = _footprint_cumulative_distances(path_cells, centers)
     total = distances[-1]
     if total <= target_length_m:
-        return path_cells
+        return path_cells, 0.0, total
 
     midpoint = total / 2.0
     pivot_index = max(
@@ -593,17 +612,21 @@ def _limit_footprint_path_length(
         end_distance = total
         start_distance = max(0.0, end_distance - target_length_m)
 
-    start_index = min(
-        range(len(distances)),
-        key=lambda index: (abs(distances[index] - start_distance), index),
-    )
-    end_index = min(
-        range(len(distances)),
-        key=lambda index: (abs(distances[index] - end_distance), -index),
-    )
+    start_index = 0
+    for index, distance in enumerate(distances):
+        if distance > start_distance:
+            break
+        start_index = index
+
+    end_index = len(path_cells) - 1
+    for index, distance in enumerate(distances):
+        if distance >= end_distance:
+            end_index = index
+            break
+
     if end_index <= start_index:
         end_index = min(len(path_cells) - 1, start_index + 1)
-    return tuple(path_cells[start_index : end_index + 1])
+    return tuple(path_cells[start_index : end_index + 1]), start_distance, end_distance
 
 
 def _lowest_cost_centerline_path(
@@ -762,30 +785,85 @@ def _sample_route_cells(
     return tuple(selected)
 
 
-def _sample_footprint_route_cells(
+def _sample_footprint_route_points(
     path_cells: tuple[FootprintCell, ...],
     *,
     centers: Mapping[FootprintCell, PointXZ],
+    start_distance_m: float,
+    end_distance_m: float,
     keyframe_count: int,
-) -> tuple[FootprintCell, ...]:
-    if len(path_cells) <= keyframe_count:
-        return path_cells
+) -> tuple[PointXZ, ...]:
+    if not path_cells:
+        raise BenchmarkConfigurationError("cannot sample an empty footprint path")
     distances = _footprint_cumulative_distances(path_cells, centers)
     total = distances[-1]
-    selected: list[FootprintCell] = []
-    for index in range(keyframe_count):
-        target = total * index / max(1, keyframe_count - 1)
-        closest_index = min(
-            range(len(distances)),
-            key=lambda candidate: (
-                abs(distances[candidate] - target),
-                candidate,
+    start = max(0.0, min(float(start_distance_m), total))
+    end = max(start, min(float(end_distance_m), total))
+    if keyframe_count <= 1 or len(path_cells) == 1 or end - start <= 1e-9:
+        return (_interpolated_footprint_point(path_cells, centers, distances, start),)
+
+    return tuple(
+        _interpolated_footprint_point(
+            path_cells,
+            centers,
+            distances,
+            start + (end - start) * index / max(1, keyframe_count - 1),
+        )
+        for index in range(keyframe_count)
+    )
+
+
+def _interpolated_footprint_point(
+    path_cells: tuple[FootprintCell, ...],
+    centers: Mapping[FootprintCell, PointXZ],
+    distances: list[float],
+    target_distance_m: float,
+) -> PointXZ:
+    if target_distance_m <= 0.0:
+        return centers[path_cells[0]]
+    if target_distance_m >= distances[-1]:
+        return centers[path_cells[-1]]
+
+    for index in range(1, len(distances)):
+        if distances[index] < target_distance_m:
+            continue
+        previous_distance = distances[index - 1]
+        segment_length = distances[index] - previous_distance
+        if segment_length <= 1e-9:
+            return centers[path_cells[index]]
+        ratio = (target_distance_m - previous_distance) / segment_length
+        first = centers[path_cells[index - 1]]
+        second = centers[path_cells[index]]
+        return (
+            first[0] + (second[0] - first[0]) * ratio,
+            first[1] + (second[1] - first[1]) * ratio,
+        )
+    return centers[path_cells[-1]]
+
+
+def _nearest_footprint_cells_for_points(
+    points: tuple[PointXZ, ...],
+    *,
+    path_cells: tuple[FootprintCell, ...],
+    centers: Mapping[FootprintCell, PointXZ],
+) -> tuple[FootprintCell, ...]:
+    if not points:
+        return ()
+    if not path_cells:
+        raise BenchmarkConfigurationError(
+            "cannot match route points against an empty footprint path"
+        )
+    return tuple(
+        min(
+            path_cells,
+            key=lambda cell: (
+                (centers[cell][0] - point[0]) ** 2
+                + (centers[cell][1] - point[1]) ** 2,
+                cell,
             ),
         )
-        cell = path_cells[closest_index]
-        if not selected or selected[-1] != cell:
-            selected.append(cell)
-    return tuple(selected)
+        for point in points
+    )
 
 
 def _footprint_path_length(
@@ -803,17 +881,15 @@ def _footprint_cumulative_distances(
     return _cumulative_distances(points)
 
 
-def _route_points_for_footprint_cells(
-    route_cells: tuple[FootprintCell, ...],
+def _route_points_for_xz_points(
+    route_xz_points: tuple[PointXZ, ...],
     *,
     manifest: Mapping[str, Any],
-    footprint_cell_size: float,
     y_search_radius_cells: int,
 ) -> tuple[Point, ...]:
     columns = _chunk_columns(manifest)
     points: list[Point] = []
-    for cell in route_cells:
-        x, z = _footprint_world_center(cell, footprint_cell_size)
+    for x, z in route_xz_points:
         x, y, z = _vertical_center_point_for_xz(
             columns,
             target_x=x,

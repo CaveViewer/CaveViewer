@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from caveviewer.gui.benchmark import BenchmarkScenario
 from caveviewer.gui.benchmark_routes import (
+    DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE,
+    DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
     generate_centerline_route_scenario,
     generate_dense_chunk_route_scenario,
 )
@@ -37,7 +41,14 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     assert metadata["vertical_position_fraction"] == 0.65
     assert metadata["footprint_cell_size_m"] == 2.0
     assert metadata["max_clearance_cells"] >= 3
-    assert metadata["route_length_m"] > 0.0
+    assert metadata["target_route_speed_ft_per_minute"] == (
+        DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE
+    )
+    assert metadata["target_route_speed_m_per_second"] == pytest.approx(
+        DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND
+    )
+    assert metadata["target_route_length_m"] == pytest.approx(2.54)
+    assert metadata["route_length_m"] == pytest.approx(2.54, abs=0.01)
     assert metadata["route_keyframe_count"] >= 2
     assert all(cell[1] in {1, 2, 3} for cell in centerline_route.route_cells)
     assert centerline_route.scenario_payload["route"][0]["time_s"] == 0.0
@@ -75,6 +86,32 @@ def test_centerline_route_uses_vertical_center_in_tall_columns():
     assert all(value == 78.0 for value in route_y_values)
     assert centerline_route.scenario_payload["metadata"]["min_route_y"] == 78.0
     assert centerline_route.scenario_payload["metadata"]["max_route_y"] == 78.0
+
+
+def test_centerline_route_target_length_override_controls_route_speed():
+    template = BenchmarkScenario.from_mapping(
+        {
+            "version": 1,
+            "name": "template",
+            "warmup_seconds": 2.0,
+            "measurement_seconds": 8.0,
+            "render_distance": 1,
+            "route": [{"time_s": 0.0, "position": [0.0, 0.0, 0.0]}],
+        }
+    )
+
+    centerline_route = generate_centerline_route_scenario(
+        _centerline_manifest(),
+        template,
+        keyframe_count=4,
+        target_length_m=4.0,
+    )
+    metadata = centerline_route.scenario_payload["metadata"]
+
+    assert metadata["target_route_length_m"] == 4.0
+    assert metadata["target_route_speed_m_per_second"] == 0.4
+    assert metadata["target_route_speed_ft_per_minute"] == pytest.approx(78.74)
+    assert metadata["route_length_m"] == pytest.approx(4.0, abs=0.01)
 
 
 def test_dense_chunk_route_uses_connected_high_density_manifest_region():

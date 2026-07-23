@@ -38,6 +38,8 @@ from caveviewer.gui.benchmark import (
 from caveviewer.gui.benchmark_routes import (
     CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
     DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
+    DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE,
+    DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
     DEFAULT_DENSE_ROUTE_KEYFRAMES,
     DEFAULT_DENSE_ROUTE_PERCENTILE,
@@ -123,8 +125,8 @@ def _parser() -> argparse.ArgumentParser:
         "--centerline-route-target-length-m",
         type=float,
         help=(
-            "Target centerline segment length in meters. Defaults to a "
-            "map-scaled length based on footprint cell size and keyframe count."
+            "Target centerline segment length in meters. Defaults to route "
+            "duration times the 50 ft/min virtual-diver speed."
         ),
     )
     parser.add_argument(
@@ -405,11 +407,16 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
 def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
     if plan["route_mode"] == "auto-centerline":
         target_length = plan["centerline_route_target_length_m"]
-        target_text = "auto" if target_length is None else f"{target_length:g}m"
+        target_text = (
+            f"auto({DEFAULT_CENTERLINE_ROUTE_SPEED_FT_PER_MINUTE:g}ft/min)"
+            if target_length is None
+            else f"{target_length:g}m"
+        )
         return [
             "  centerline_route: "
             f"keyframes={plan['centerline_route_keyframes']} "
             f"target_length={target_text} "
+            f"target_speed={DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND:g}m/s "
             f"vertical_fraction={CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION:g} "
             f"y_search_radius_cells={plan['centerline_route_y_search_radius_cells']}",
             "  dense_route: disabled",
@@ -529,6 +536,8 @@ def _centerline_route_summary(centerline_route, scenario_path: Path) -> str:
         f"scenario={scenario_path} "
         f"route_length_m={metadata['route_length_m']:.1f} "
         f"target_route_length_m={metadata['target_route_length_m']:.1f} "
+        "target_speed_ft_per_min="
+        f"{metadata['target_route_speed_ft_per_minute']:.1f} "
         f"keyframes={metadata['route_keyframe_count']} "
         f"path_cells={metadata['path_cell_count']} "
         f"full_path_cells={metadata['full_path_cell_count']} "
@@ -873,6 +882,8 @@ def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
             "Route: auto_centerline "
             f"length_m={_format_metric(metadata.get('route_length_m'))}, "
             f"target_length_m={_format_metric(metadata.get('target_route_length_m'))}, "
+            "target_speed_ft_per_min="
+            f"{_format_metric(metadata.get('target_route_speed_ft_per_minute'))}, "
             f"keyframes={metadata.get('route_keyframe_count', '<missing>')}, "
             f"path_cells={metadata.get('path_cell_count', '<missing>')}, "
             f"route_source={metadata.get('route_source', '<missing>')}, "

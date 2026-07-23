@@ -143,6 +143,14 @@ more likely to stream and show ceiling geometry. This better approximates what
 virtual divers tend to look at: a route through the middle of the visible
 passage at a reasonable traversal rate.
 
+The default centerline route length is based on virtual-diver speed, not cave
+size. The generator uses 50 ft/min, which is 15.24 m/min or 0.254 m/s, and
+multiplies that by the scenario's total route duration. For the default
+35-second Devil's Eye XL scenario, the generated route targets about 8.9 meters
+of camera travel. This intentionally slow route gives the streamer time to fill
+the visible cave around the camera so the benchmark reflects steady rendering
+quality instead of how badly the camera can outrun chunk loading.
+
 This remains a deterministic benchmark route, not a collision-checked
 navigation mesh. The cache describes surface geometry and chunk bounds; it does
 not encode free water volume or diver-swimmable constraints.
@@ -154,6 +162,10 @@ python scripts/benchmark/run_devils_eye_xl_benchmark.py \
   --centerline-route-keyframes 10 \
   --centerline-route-target-length-m 1000
 ```
+
+Use `--centerline-route-target-length-m` only when deliberately recalibrating
+the route. Overriding it changes the scenario fingerprint and starts a new
+local comparison history for that route.
 
 To run the older dense-streaming-load proxy instead:
 
