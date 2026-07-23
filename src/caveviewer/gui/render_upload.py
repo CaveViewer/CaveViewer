@@ -7,31 +7,21 @@ state, and adaptive slice-size decisions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
-
-RENDER_UPLOAD_VERTEX_BYTES = 8 * 4
-RENDER_UPLOAD_MAX_SLICE_BYTES = 1 * 1024**2
-RENDER_UPLOAD_INITIAL_SLICE_BYTES = 512 * 1024
-RENDER_UPLOAD_MIN_SLICE_BYTES = 256 * 1024
-RENDER_UPLOAD_STALL_SHRINK_FACTOR = 0.5
-
-
-@dataclass(frozen=True)
-class UploadSliceState:
-    """Current byte caps for resumable render-thread upload operations."""
-
-    vbo_upload_slice_bytes: int
-    texture_upload_slice_bytes: int
-
-
-@dataclass(frozen=True)
-class UploadSliceDecision:
-    """Result of applying one measured upload operation to slice policy."""
-
-    state: UploadSliceState
-    stalled: bool
+from caveviewer.gui.upload_slice_policy import (
+    RENDER_UPLOAD_INITIAL_SLICE_BYTES,
+    RENDER_UPLOAD_MAX_SLICE_BYTES,
+    RENDER_UPLOAD_MIN_SLICE_BYTES,
+    RENDER_UPLOAD_STALL_SHRINK_FACTOR,
+    RENDER_UPLOAD_VERTEX_BYTES,
+    UploadSliceDecision,
+    UploadSliceState,
+    adapt_upload_slice_size,
+    min_vbo_upload_slice_bytes,
+    record_upload_slice_sizes,
+    render_upload_slice_vertices,
+)
 
 
 def new_streaming_frame_timing() -> dict[str, Any]:
@@ -189,84 +179,6 @@ def add_texture_timing_counters(
         frame_timing["worst_texture_decoded_cache_hit"] = texture_timing.get(
             "decoded_cache_hit", False
         )
-
-
-def min_vbo_upload_slice_bytes() -> int:
-    return max(RENDER_UPLOAD_MIN_SLICE_BYTES, 3 * RENDER_UPLOAD_VERTEX_BYTES)
-
-
-def render_upload_slice_vertices(slice_bytes: int) -> int:
-    clamped_slice_bytes = max(
-        3 * RENDER_UPLOAD_VERTEX_BYTES,
-        min(RENDER_UPLOAD_MAX_SLICE_BYTES, int(slice_bytes)),
-    )
-    vertices = max(3, clamped_slice_bytes // RENDER_UPLOAD_VERTEX_BYTES)
-    vertices -= vertices % 3
-    return max(3, int(vertices))
-
-
-def record_upload_slice_sizes(
-    timing: dict | None,
-    state: UploadSliceState,
-) -> None:
-    if timing is None:
-        return
-    timing["vbo_upload_slice_bytes"] = int(state.vbo_upload_slice_bytes)
-    timing["texture_upload_slice_bytes"] = int(state.texture_upload_slice_bytes)
-
-
-def adapt_upload_slice_size(
-    *,
-    kind: str,
-    elapsed_ms: float,
-    byte_count: int,
-    target_ms: float,
-    state: UploadSliceState,
-    timing: dict | None = None,
-) -> UploadSliceDecision:
-    target_ms = max(0.5, float(target_ms))
-    if elapsed_ms <= target_ms:
-        record_upload_slice_sizes(timing, state)
-        return UploadSliceDecision(state=state, stalled=False)
-
-    if timing is not None:
-        timing["upload_stalls"] += 1
-
-    if kind == "texture":
-        current = state.texture_upload_slice_bytes
-        minimum = RENDER_UPLOAD_MIN_SLICE_BYTES
-        target_field = "texture"
-    elif kind == "vbo":
-        current = state.vbo_upload_slice_bytes
-        minimum = min_vbo_upload_slice_bytes()
-        target_field = "vbo"
-    else:
-        record_upload_slice_sizes(timing, state)
-        return UploadSliceDecision(state=state, stalled=True)
-
-    current = max(
-        minimum,
-        min(RENDER_UPLOAD_MAX_SLICE_BYTES, int(current)),
-    )
-    next_size = current
-    if byte_count > 0:
-        throughput_limited = int(byte_count * target_ms / max(elapsed_ms, 0.001))
-        conservative_target = int(throughput_limited * 0.75)
-        halved = int(current * RENDER_UPLOAD_STALL_SHRINK_FACTOR)
-        next_size = max(minimum, min(halved, conservative_target))
-
-    if target_field == "texture":
-        next_state = UploadSliceState(
-            vbo_upload_slice_bytes=state.vbo_upload_slice_bytes,
-            texture_upload_slice_bytes=next_size,
-        )
-    else:
-        next_state = UploadSliceState(
-            vbo_upload_slice_bytes=next_size,
-            texture_upload_slice_bytes=state.texture_upload_slice_bytes,
-        )
-    record_upload_slice_sizes(timing, next_state)
-    return UploadSliceDecision(state=next_state, stalled=True)
 
 
 def new_chunk_group_upload_job(group, smooth_shading: bool) -> dict[str, Any]:
