@@ -816,7 +816,7 @@ def test_recording_success_reveals_saved_file_after_user_visible_stop():
     )
 
     assert window._recording_status_message == "Recording saved"
-    assert window._recording_status_detail == "/recordings/cave.mp4"
+    assert window._recording_status_detail is None
     assert window._recording_status_kind == "success"
     assert revealed == ["/recordings/cave.mp4"]
 

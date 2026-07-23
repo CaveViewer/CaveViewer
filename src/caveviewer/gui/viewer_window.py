@@ -1513,7 +1513,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             if result.show_message:
                 self._show_recording_status(
                     "Recording saved",
-                    self._recording_display_path(result.output_path),
                     kind="success",
                     duration=3.2,
                 )
