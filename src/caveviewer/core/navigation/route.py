@@ -213,6 +213,7 @@ def route_keyframes_for_points(
     duration_s: float,
     start_time_s: float = 0.0,
     hold_start: bool = False,
+    lookahead_distance_m: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Create route keyframe dictionaries from 3D points."""
     if not points:
@@ -231,7 +232,12 @@ def route_keyframes_for_points(
                 float(start_time_s)
                 + float(duration_s) * index / max(1, len(points) - 1)
             )
-        yaw_deg, pitch_deg = look_angles(points, index)
+        yaw_deg, pitch_deg = look_angles(
+            points,
+            index,
+            cumulative_distance_m=distances,
+            lookahead_distance_m=lookahead_distance_m,
+        )
         keyframes.append(
             {
                 "time_s": round(time_s, 6),
@@ -258,10 +264,34 @@ def route_keyframes_for_points(
 def look_angles(
     points: tuple[tuple[float, float, float], ...],
     index: int,
+    *,
+    cumulative_distance_m: Sequence[float] | None = None,
+    lookahead_distance_m: float = 0.0,
 ) -> tuple[float, float]:
     if len(points) == 1:
         return 0.0, 0.0
-    if index < len(points) - 1:
+    target = None
+    if float(lookahead_distance_m) > 0.0 and index < len(points) - 1:
+        source = points[index]
+        distances = (
+            list(cumulative_distance_m)
+            if cumulative_distance_m is not None
+            else cumulative_distances(points)
+        )
+        if len(distances) == len(points):
+            target_distance = min(
+                distances[-1],
+                distances[index] + float(lookahead_distance_m),
+            )
+            target = _point_at_cumulative_distance(
+                points,
+                distances,
+                target_distance,
+                start_index=index,
+            )
+    if target is not None:
+        source = points[index]
+    elif index < len(points) - 1:
         source = points[index]
         target = points[index + 1]
     else:
@@ -277,6 +307,24 @@ def look_angles(
     yaw = math.degrees(math.atan2(dz, dx))
     pitch = math.degrees(math.atan2(dy, horizontal))
     return yaw, pitch
+
+
+def _point_at_cumulative_distance(
+    points: Sequence[tuple[float, float, float]],
+    distances: Sequence[float],
+    target_distance: float,
+    *,
+    start_index: int,
+) -> tuple[float, float, float]:
+    for index in range(max(0, int(start_index)), len(points) - 1):
+        if distances[index] <= target_distance <= distances[index + 1]:
+            span = max(1e-9, distances[index + 1] - distances[index])
+            t = (target_distance - distances[index]) / span
+            return tuple(
+                lerp(points[index][axis], points[index + 1][axis], t)
+                for axis in range(3)
+            )  # type: ignore[return-value]
+    return tuple(float(value) for value in points[-1])
 
 
 def cumulative_distances(points: tuple[tuple[float, float, float], ...]) -> list[float]:

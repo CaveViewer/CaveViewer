@@ -142,6 +142,10 @@ def _scan_throttle_default() -> str:
     return "1" if sys.platform.startswith("win") else "0"
 
 
+def _auto_dive_speed_default() -> str:
+    return "112.5"
+
+
 def _faces_env_to_thousands(raw_value: str) -> str:
     face_count = int(str(raw_value).strip())
     if not 1_000 <= face_count <= 2_000_000:
@@ -323,6 +327,62 @@ PREFERENCE_FIELDS = (
         minimum=2,
         maximum=32,
         units="logical CPUs",
+    ),
+    PreferenceSpec(
+        section="autodive",
+        key="auto_dive_speed_feet_per_minute",
+        env_var="CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE",
+        label="Speed",
+        hint=(
+            "Camera travel speed. The default is 225% of the baseline diver speed."
+        ),
+        value_type=PreferenceValueType.FLOAT,
+        default=_auto_dive_speed_default,
+        minimum=10.0,
+        maximum=500.0,
+        units="ft/min",
+    ),
+    PreferenceSpec(
+        section="autodive",
+        key="auto_dive_render_distance_cells",
+        env_var="CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS",
+        label="Auto Dive render distance",
+        hint="Temporary load radius used while Auto Dive prefetches route chunks.",
+        value_type=PreferenceValueType.INT,
+        default="10",
+        minimum=1,
+        maximum=64,
+        units="cells",
+    ),
+    PreferenceSpec(
+        section="autodive",
+        key="auto_dive_smoothing_radius_cells",
+        env_var="CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS",
+        label="Smoothing radius",
+        hint=(
+            "Cells ahead and behind used to smooth the path across all axes "
+            "while rejecting horizontal points or segments outside the cave. "
+            "Use 0 to disable smoothing."
+        ),
+        value_type=PreferenceValueType.INT,
+        default="5",
+        minimum=0,
+        maximum=25,
+        units="cells",
+    ),
+    PreferenceSpec(
+        section="autodive",
+        key="auto_dive_diagnostics",
+        env_var="CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS",
+        label="Diagnostics",
+        hint=(
+            "Write Auto Dive blackbox events to auto_dive_debug.jsonl "
+            "in the active map cache."
+        ),
+        value_type=PreferenceValueType.INT,
+        default="0",
+        minimum=0,
+        maximum=1,
     ),
     PreferenceSpec(
         section="storage",

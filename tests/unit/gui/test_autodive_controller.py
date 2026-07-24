@@ -9,9 +9,13 @@ import threading
 
 import numpy as np
 
-from caveviewer.core.navigation.autodive import AutoDivePlan
+from caveviewer.core.navigation.autodive import AutoDivePlan, AutoDiveSettings
 from caveviewer.core.navigation.route import CameraRoute, RouteKeyframe
-from caveviewer.gui.autodive_controller import AutoDiveController, AutoDiveState
+from caveviewer.gui.autodive_controller import (
+    AutoDiveController,
+    AutoDiveReplanner,
+    AutoDiveState,
+)
 
 
 @dataclass
@@ -61,6 +65,39 @@ class _FakeWorld:
         self._pending = self.prefetch - self.loaded_cells
 
 
+class _FakeReplanner:
+    def __init__(self, latest_plan=None):
+        self.latest_plan = latest_plan
+        self.requests = []
+        self.shutdown_called = False
+
+    def request(self, current_position):
+        self.requests.append(
+            tuple(float(value) for value in np.asarray(current_position))
+        )
+        return True
+
+    def take_latest_plan(self):
+        plan = self.latest_plan
+        self.latest_plan = None
+        return plan
+
+    def shutdown(self):
+        self.shutdown_called = True
+
+
+class _FakeBlackbox:
+    def __init__(self):
+        self.events = []
+        self.closed = False
+
+    def record(self, event, **payload):
+        self.events.append((event, payload))
+
+    def close(self):
+        self.closed = True
+
+
 def test_auto_dive_pauses_until_lookahead_cells_are_loaded():
     plan = _plan()
     clock = _FakeClock()
@@ -96,17 +133,216 @@ def test_auto_dive_pauses_until_lookahead_cells_are_loaded():
     assert camera.position[0] > 0.0
 
 
-def _plan() -> AutoDivePlan:
+def test_auto_dive_requests_replan_after_fractional_cell_travel():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+    )
+    controller.start(camera, world)
+
+    camera.position = np.array([0.1, 0.0, 0.0], dtype=np.float64)
+    assert controller.update_replan(camera, world, now=0.0) is False
+    assert replanner.requests == []
+
+    camera.position = np.array([0.25, 0.0, 0.0], dtype=np.float64)
+    assert controller.update_replan(camera, world, now=0.0) is False
+
+    assert replanner.requests == [(0.25, 0.0, 0.0)]
+
+
+def test_auto_dive_swaps_latest_nearby_replan_on_owner_thread():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.array([1.0, 0.0, 0.0], dtype=np.float64))
+    latest_plan = _plan(start=(1.0, 0.0, 0.0), end=(11.0, 0.0, 0.0))
+    replanner = _FakeReplanner(latest_plan)
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+    )
+    controller.start(camera, world)
+    camera.position = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+
+    assert controller.update_replan(camera, world, now=2.0) is True
+
+    assert controller.plan is latest_plan
+    assert controller.prefetch_cells
+
+
+def test_auto_dive_rejects_replan_that_points_backward_on_current_route():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.array([5.0, 0.0, 0.0], dtype=np.float64))
+    backward_plan = _plan(start=(5.0, 0.0, 0.0), end=(4.0, 0.0, 0.0))
+    replanner = _FakeReplanner(backward_plan)
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+    )
+    controller.start(camera, world)
+    controller._elapsed_s = 5.0
+    camera.position = np.array([5.0, 0.0, 0.0], dtype=np.float64)
+
+    assert controller.update_replan(camera, world, now=5.0) is False
+
+    assert controller.plan is not backward_plan
+    assert replanner.requests == []
+
+
+def test_auto_dive_blackbox_records_replan_rejection_reason():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    blackbox = _FakeBlackbox()
+    camera = _FakeCamera(position=np.array([5.0, 0.0, 0.0], dtype=np.float64))
+    backward_plan = _plan(start=(5.0, 0.0, 0.0), end=(4.0, 0.0, 0.0))
+    replanner = _FakeReplanner(backward_plan)
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    controller._elapsed_s = 5.0
+    camera.position = np.array([5.0, 0.0, 0.0], dtype=np.float64)
+
+    assert controller.update_replan(camera, world, now=5.0) is False
+
+    rejected = [
+        payload
+        for event, payload in blackbox.events
+        if event == "replan_rejected"
+    ]
+    assert rejected
+    assert rejected[-1]["reason"] == "moves_backward_from_current_route"
+
+
+def test_auto_dive_blackbox_records_stuck_detection():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    blackbox = _FakeBlackbox()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replan_distance_m=0.25,
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+    clock.now = 1.0
+    controller.update(camera, world)
+
+    controller.record_frame(camera, world, now=1.0)
+    controller.record_frame(camera, world, now=3.1)
+
+    stuck = [
+        payload
+        for event, payload in blackbox.events
+        if event == "stuck_detected"
+    ]
+    assert stuck
+    assert stuck[-1]["stuck_duration_s"] >= 2.0
+
+
+def test_auto_dive_discards_stale_replan_that_starts_too_far_from_camera():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.array([5.0, 0.0, 0.0], dtype=np.float64))
+    stale_plan = _plan(start=(0.0, 0.0, 0.0), end=(10.0, 0.0, 0.0))
+    replanner = _FakeReplanner(stale_plan)
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+    )
+    controller.start(camera, world)
+    camera.position = np.array([5.0, 0.0, 0.0], dtype=np.float64)
+
+    assert controller.update_replan(camera, world, now=2.0) is False
+
+    assert controller.plan is not stale_plan
+
+
+def test_auto_dive_rejects_stalled_replan_and_does_not_retry_same_pose():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    stalled_plan = _plan(start=(0.25, 0.0, 0.0), end=(0.26, 0.0, 0.0))
+    replanner = _FakeReplanner(stalled_plan)
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+    )
+    controller.start(camera, world)
+    camera.position = np.array([0.25, 0.0, 0.0], dtype=np.float64)
+
+    assert controller.update_replan(camera, world, now=2.0) is False
+    assert controller.plan is not stalled_plan
+    assert replanner.requests == []
+
+    assert controller.update_replan(camera, world, now=2.1) is False
+    assert replanner.requests == []
+
+    camera.position = np.array([0.5, 0.0, 0.0], dtype=np.float64)
+    assert controller.update_replan(camera, world, now=2.2) is False
+
+    assert replanner.requests == [(0.5, 0.0, 0.0)]
+
+
+def test_auto_dive_shutdown_stops_replanner():
+    replanner = _FakeReplanner()
+    blackbox = _FakeBlackbox()
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=_FakeClock(),
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+        blackbox=blackbox,
+    )
+
+    controller.stop(completed=True)
+
+    assert replanner.shutdown_called is True
+    assert blackbox.closed is True
+
+
+def test_auto_dive_replanner_can_be_constructed_and_shutdown():
+    replanner = AutoDiveReplanner({}, AutoDiveSettings())
+
+    replanner.shutdown()
+
+
+def _plan(
+    *,
+    start: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    end: tuple[float, float, float] = (10.0, 0.0, 0.0),
+) -> AutoDivePlan:
     route = CameraRoute.from_keyframes(
         (
-            RouteKeyframe(0.0, (0.0, 0.0, 0.0), 0.0, 0.0),
-            RouteKeyframe(10.0, (10.0, 0.0, 0.0), 0.0, 0.0),
+            RouteKeyframe(0.0, start, 0.0, 0.0),
+            RouteKeyframe(10.0, end, 0.0, 0.0),
         )
     )
     return AutoDivePlan(
         route=route,
         centerline_path=None,  # type: ignore[arg-type]
-        route_points=((0.0, 0.0, 0.0), (10.0, 0.0, 0.0)),
+        route_points=(start, end),
         route_cells=((0, 0), (10, 0)),
         circular_arc=False,
         route_length_m=10.0,
