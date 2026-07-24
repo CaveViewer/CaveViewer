@@ -18,7 +18,7 @@ from typing import Sequence
 
 from caveviewer.app import _route_moderngl_window_logging
 from caveviewer.core.diagnostics.logging import configure_logging, get_logger
-from caveviewer.gui.benchmark import (
+from caveviewer.benchmarking.results import (
     BenchmarkConfigurationError,
     BenchmarkScenario,
 )

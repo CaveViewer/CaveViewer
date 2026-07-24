@@ -46,7 +46,7 @@ from caveviewer.gui.controls_overlay import ControlsOverlay
 from caveviewer.gui.stepper_control import StepperControl
 from caveviewer.gui.color_picker import ColorPicker
 from caveviewer.gui.import_progress_panel import ImportProgressPanel
-from caveviewer.gui.benchmark import BenchmarkController
+from caveviewer.benchmarking.results import BenchmarkController
 from caveviewer.gui.import_process import (
     start_import_process,
     terminate_import_process,

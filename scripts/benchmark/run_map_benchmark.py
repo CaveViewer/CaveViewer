@@ -27,14 +27,14 @@ _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
 if str(_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SOURCE_ROOT))
 
-from caveviewer.gui.benchmark import (
+from caveviewer.benchmarking.results import (
     BenchmarkConfigurationError,
     BenchmarkScenario,
     BenchmarkThresholds,
     compare_summaries,
     load_json_file,
 )
-from caveviewer.gui.benchmark_routes import (
+from caveviewer.benchmarking.routes import (
     CENTERLINE_ROUTE_SELECTION_MAX_COMPLEXITY,
     CENTERLINE_ROUTE_SELECTION_MIDPOINT,
     CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,

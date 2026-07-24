@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from caveviewer.gui.benchmark import BenchmarkScenario
-from caveviewer.gui.benchmark_routes import (
+from caveviewer.benchmarking.results import BenchmarkScenario
+from caveviewer.benchmarking.routes import (
     CENTERLINE_ROUTE_SELECTION_MIDPOINT,
     DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS,
     DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE,

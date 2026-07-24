@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from caveviewer.gui.benchmark import (
+from caveviewer.benchmarking.results import (
     BenchmarkConfigurationError,
     BenchmarkController,
     BenchmarkScenario,

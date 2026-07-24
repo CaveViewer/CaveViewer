@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from caveviewer.gui.benchmark import (
+from caveviewer.benchmarking.results import (
     BenchmarkConfigurationError,
     BenchmarkThresholds,
     compare_summaries,

@@ -25,7 +25,7 @@ if str(_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SOURCE_ROOT))
 
 from caveviewer.core.chunking import builder as chunker
-from caveviewer.gui.benchmark import (
+from caveviewer.benchmarking.results import (
     BenchmarkConfigurationError,
     BenchmarkScenario,
     BenchmarkThresholds,
