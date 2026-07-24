@@ -175,12 +175,16 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--measurement-seconds",
+        "--duration-seconds",
+        "--duration",
+        dest="measurement_seconds",
         type=float,
         default=DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS,
         help=(
             "Measured route duration. Defaults to "
             f"{DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS:g}s for the local "
-            "streaming stress benchmark."
+            "streaming stress benchmark. --duration-seconds and --duration "
+            "are aliases."
         ),
     )
     parser.add_argument(

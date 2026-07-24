@@ -157,30 +157,36 @@ sweeping the entire cave.
 
 The generated route holds the first camera pose through warmup, then travels
 only during the measurement window. For the default Devil's Eye XL scenario that
-means 5 seconds stationary for loading, followed by 30 seconds of measured
-travel. The default travel distance is three chunk widths. With the current
-50-meter gold-map chunks, that is about 150 meters over the measured 30 seconds:
-slow enough for render-distance streaming to fill the view, but large enough to
-avoid measuring a static screen. It estimates Y from the nearest occupied chunk
-columns by placing the camera slightly above the midpoint of the local min/max
-chunk bounds, making tall passages more likely to stream and show ceiling
-geometry.
+means 5 seconds stationary for loading, followed by 120 seconds of measured
+travel at render distance 10. The default travel distance is 24 chunk widths.
+With the current 50-meter gold-map chunks, that is about 1.2 km over the
+measured 120 seconds: enough to exercise chunk loading/unloading and texture
+residency without intentionally outrunning the streamer. It estimates Y from
+the nearest occupied chunk columns by placing the camera at the midpoint of the
+local min/max chunk bounds, making tall passages more likely to stream and show
+ceiling geometry.
 
 This remains a deterministic benchmark route, not a collision-checked
 navigation mesh. The cache describes surface geometry and chunk bounds; it does
-not encode free water volume or diver-swimmable constraints.
+not encode free water volume or diver-swimmable constraints. The generator
+therefore uses footprint clearance as a proxy and pushes low-clearance sampled
+route points toward the selected centerline cell centers, but that is not the
+same as mesh collision.
 
 Use these controls when calibrating the route:
 
 ```bash
 python scripts/benchmark/run_devils_eye_xl_benchmark.py \
+  --duration-seconds 180 \
   --centerline-route-keyframes 10 \
   --centerline-route-target-length-m 1000
 ```
 
+Use `--duration-seconds` (or its aliases `--duration` and
+`--measurement-seconds`) when you want a longer or shorter measured window.
 Use `--centerline-route-target-length-m` only when deliberately recalibrating
-the route. Overriding it changes the measured travel distance, scenario
-fingerprint, and local comparison history for that route.
+the route. Overriding duration or route length changes the scenario fingerprint
+and local comparison history for that route.
 
 To run the older dense-streaming-load proxy instead:
 

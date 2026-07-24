@@ -70,6 +70,37 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert "candidate-stack" in output
 
 
+def test_devils_eye_xl_duration_alias_controls_measurement_window(
+    tmp_path,
+    capsys,
+):
+    module = _load_script_module()
+    source_map_dir = tmp_path / "Downloads" / "Maps" / "Devil's Eye XL"
+    local_map_dir = tmp_path / "repo" / ".benchmark-data" / "maps" / "devils-eye-xl"
+    results_dir = tmp_path / "repo" / ".benchmark-data" / "results" / "devils-eye-xl"
+    source_map_dir.mkdir(parents=True)
+    (source_map_dir / "gold.obj").write_text("o gold\n", encoding="utf-8")
+
+    exit_code = module.main(
+        [
+            "--source-map-dir",
+            str(source_map_dir),
+            "--local-map-dir",
+            str(local_map_dir),
+            "--results-dir",
+            str(results_dir),
+            "--duration-seconds",
+            "45",
+            "--dry-run",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "measurement_seconds: 45" in output
+    assert "max_runtime_seconds: 140" in output
+
+
 def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     tmp_path,
     monkeypatch,
