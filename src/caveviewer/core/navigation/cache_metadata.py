@@ -628,6 +628,7 @@ def _metadata_route_for_centerline_path(
     navigation_start_distance_m: float | None = None,
 ) -> dict[str, Any]:
     route_id = f"centerline-{index}"
+    component_cells = tuple(sorted(path.component_cells))
     route: dict[str, Any] = {
         "id": route_id,
         "kind": "centerline",
@@ -639,7 +640,7 @@ def _metadata_route_for_centerline_path(
         "footprint_cell_size": path.footprint_cell_size,
         "footprint_cell_count": path.footprint_cell_count,
         "component_size": path.component_size,
-        "component_cells": _flat_cells(tuple(sorted(path.component_cells))),
+        "component_cells": _flat_cells(component_cells),
         "cells": _flat_cells(path.cells),
         "endpoint_percentile": path.endpoint_percentile,
         "endpoint_threshold_clearance_cells": (
@@ -671,6 +672,13 @@ def _metadata_route_for_centerline_path(
         route["recommended_smoothing_radius_cells"] = (
             NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS
         )
+    component_y_ranges = _surface_component_y_ranges_for_path(
+        path,
+        component_cells=component_cells,
+        surface_profiles=surface_profiles,
+    )
+    if component_y_ranges:
+        route["component_y_ranges"] = _flat_y_ranges(component_y_ranges)
     return route
 
 
@@ -713,10 +721,20 @@ def _centerline_path_from_metadata_route(
             }
             for cell, point in zip(route_cells, route_points, strict=False):
                 centers[cell] = (point[0], point[2])
-        route_y_ranges = _parse_flat_y_ranges(route.get("y_ranges"))
+        component_y_ranges = _parse_flat_y_ranges(route.get("component_y_ranges"))
         cached_y_ranges = None
-        if len(route_y_ranges) == len(route_cells):
+        if len(component_y_ranges) == len(component_cells):
             cached_y_ranges = {
+                cell: y_range
+                for cell, y_range in zip(
+                    component_cells,
+                    component_y_ranges,
+                    strict=False,
+                )
+            }
+        route_y_ranges = _parse_flat_y_ranges(route.get("y_ranges"))
+        if len(route_y_ranges) == len(route_cells):
+            route_cell_y_ranges = {
                 cell: y_range
                 for cell, y_range in zip(
                     route_cells,
@@ -724,6 +742,10 @@ def _centerline_path_from_metadata_route(
                     strict=False,
                 )
             }
+            if cached_y_ranges is None:
+                cached_y_ranges = route_cell_y_ranges
+            else:
+                cached_y_ranges.update(route_cell_y_ranges)
         route_clearance_margins = _parse_float_sequence(route.get("clearance_margins"))
         cached_clearance_margins = None
         if len(route_clearance_margins) == len(route_cells):
@@ -1076,6 +1098,23 @@ def _surface_route_points_for_path(
         tuple((sample.low_y, sample.high_y) for sample in y_samples),
         tuple(clearance_margins),
     )
+
+
+def _surface_component_y_ranges_for_path(
+    path: CenterlinePath,
+    *,
+    component_cells: tuple[FootprintCell, ...],
+    surface_profiles: _SurfaceProfileIndex | None,
+) -> tuple[tuple[float, float], ...]:
+    if surface_profiles is None:
+        return ()
+    y_ranges: list[tuple[float, float]] = []
+    for cell in component_cells:
+        y_sample = _surface_medial_y_for_cell(cell, surface_profiles)
+        if y_sample is None:
+            return ()
+        y_ranges.append((y_sample.low_y, y_sample.high_y))
+    return tuple(y_ranges)
 
 
 def _surface_medial_xz_for_path_cell(

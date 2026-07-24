@@ -21,6 +21,17 @@ from caveviewer.core.navigation.autodive import (
 from caveviewer.core.navigation.route import apply_pose_to_camera
 
 
+DEFAULT_AUTO_DIVE_ROUTE_LOOKAHEAD_SECONDS = 6.0
+DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS = 1.0
+DEFAULT_AUTO_DIVE_ROUTE_PREFETCH_RADIUS_CELLS = 2
+DEFAULT_AUTO_DIVE_SURVEY_INTERVAL_SECONDS = 5.0
+DEFAULT_AUTO_DIVE_SURVEY_DURATION_SECONDS = 2.0
+DEFAULT_AUTO_DIVE_SURVEY_PREFETCH_LOOKAHEAD_MULTIPLIER = 2.0
+DEFAULT_AUTO_DIVE_SURVEY_PREFETCH_RADIUS_BONUS_CELLS = 1
+DEFAULT_AUTO_DIVE_SURVEY_YAW_SWEEP_DEGREES = 28.0
+DEFAULT_AUTO_DIVE_SURVEY_PITCH_SWEEP_DEGREES = 5.0
+
+
 class AutoDiveState(str, Enum):
     """Lifecycle states for user-facing Auto Dive."""
 
@@ -202,9 +213,14 @@ class AutoDiveController:
         plan: AutoDivePlan,
         *,
         perf_counter: Callable[[], float],
-        lookahead_seconds: float = 20.0,
+        lookahead_seconds: float = DEFAULT_AUTO_DIVE_ROUTE_LOOKAHEAD_SECONDS,
         replanner: AutoDiveReplanner | None = None,
         replan_distance_m: float = 0.0,
+        replan_min_interval_s: float = DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS,
+        replan_only_during_survey: bool = True,
+        route_prefetch_radius_cells: int | None = None,
+        survey_interval_s: float = DEFAULT_AUTO_DIVE_SURVEY_INTERVAL_SECONDS,
+        survey_duration_s: float = DEFAULT_AUTO_DIVE_SURVEY_DURATION_SECONDS,
         blackbox: Any | None = None,
     ) -> None:
         self.plan = plan
@@ -212,13 +228,36 @@ class AutoDiveController:
         self.lookahead_seconds = max(1.0, float(lookahead_seconds))
         self.replanner = replanner
         self.replan_distance_m = max(0.0, float(replan_distance_m))
+        self.replan_min_interval_s = max(0.0, float(replan_min_interval_s))
+        self.replan_only_during_survey = bool(replan_only_during_survey)
+        self.route_prefetch_radius_cells = max(
+            1,
+            int(
+                route_prefetch_radius_cells
+                if route_prefetch_radius_cells is not None
+                else min(
+                    int(plan.render_distance_cells),
+                    DEFAULT_AUTO_DIVE_ROUTE_PREFETCH_RADIUS_CELLS,
+                )
+            ),
+        )
+        self.survey_interval_s = max(0.0, float(survey_interval_s))
+        self.survey_duration_s = max(0.0, float(survey_duration_s))
         self.blackbox = blackbox
         self.state = AutoDiveState.IDLE
         self._started_at: float | None = None
         self._pause_started_at: float | None = None
+        self._survey_pause_started_at: float | None = None
+        self._survey_replan_requested = False
+        self._next_survey_elapsed_s = (
+            self.survey_interval_s
+            if self.survey_interval_s > 0.0 and self.survey_duration_s > 0.0
+            else math.inf
+        )
         self._paused_seconds = 0.0
         self._elapsed_s = 0.0
         self._last_replan_request_position: np.ndarray | None = None
+        self._last_replan_request_at: float | None = None
         self._last_rejected_replan_position: np.ndarray | None = None
         self._last_blackbox_frame_at: float | None = None
         self._stuck_reference_time: float | None = None
@@ -246,6 +285,8 @@ class AutoDiveController:
                 f"({self._readiness.loaded_cells}/"
                 f"{self._readiness.expected_cells} cells)"
             )
+        if self._survey_active():
+            return "Surveying next passage"
         if self.state == AutoDiveState.DIVING:
             return "Diving centerline"
         if self.state == AutoDiveState.COMPLETE:
@@ -278,10 +319,18 @@ class AutoDiveController:
         self._pause_started_at = now
         self._paused_seconds = 0.0
         self._elapsed_s = 0.0
+        self._survey_pause_started_at = None
+        self._survey_replan_requested = False
+        self._next_survey_elapsed_s = (
+            self.survey_interval_s
+            if self.survey_interval_s > 0.0 and self.survey_duration_s > 0.0
+            else math.inf
+        )
         self._last_replan_request_position = np.asarray(
             camera.position,
             dtype=np.float64,
         ).copy()
+        self._last_replan_request_at = now
         self.state = AutoDiveState.LOADING
         apply_pose_to_camera(camera, self.plan.route.pose_at(0.0))
         self.refresh_prefetch(world)
@@ -292,6 +341,9 @@ class AutoDiveController:
             camera=_camera_payload(camera),
             readiness=_readiness_payload(self._readiness),
             replan_distance_m=float(self.replan_distance_m),
+            route_prefetch_radius_cells=int(self.route_prefetch_radius_cells),
+            survey_interval_s=float(self.survey_interval_s),
+            survey_duration_s=float(self.survey_duration_s),
         )
 
     def stop(self, world=None, *, completed: bool = False) -> None:
@@ -332,6 +384,10 @@ class AutoDiveController:
         self.refresh_prefetch(world)
         self._readiness = self.readiness_for_world(world)
         if not self._readiness.ready:
+            if self._survey_active(now=now):
+                self._apply_survey_pose_to_camera(camera, now=now)
+                self.state = AutoDiveState.LOADING
+                return self.state
             if self._pause_started_at is None:
                 self._pause_started_at = now
             self.state = AutoDiveState.LOADING
@@ -343,10 +399,49 @@ class AutoDiveController:
 
         if self._started_at is None:
             self._started_at = now
+
+        if self._survey_active(now=now):
+            self._apply_survey_pose_to_camera(camera, now=now)
+            self.state = AutoDiveState.DIVING
+            return self.state
+
+        if self._survey_pause_started_at is not None:
+            survey_duration_s = max(0.0, now - self._survey_pause_started_at)
+            self._paused_seconds += survey_duration_s
+            self._record_blackbox(
+                "survey_completed",
+                duration_s=float(survey_duration_s),
+                elapsed_s=float(self._elapsed_s),
+                progress=float(self.progress),
+                readiness=_readiness_payload(self._readiness),
+            )
+            self._survey_pause_started_at = None
+            self._survey_replan_requested = False
+            self._advance_next_survey_elapsed()
+
         self._elapsed_s = min(
             self.plan.route.duration_s,
             max(0.0, now - self._started_at - self._paused_seconds),
         )
+        if self._should_start_survey():
+            self._survey_pause_started_at = now
+            self._survey_replan_requested = False
+            self._record_blackbox(
+                "survey_started",
+                elapsed_s=float(self._elapsed_s),
+                progress=float(self.progress),
+                readiness=_readiness_payload(self._readiness),
+                route_prefetch_radius_cells=int(
+                    self._effective_route_prefetch_radius_cells()
+                ),
+                lookahead_seconds=float(self._effective_lookahead_seconds()),
+            )
+            self.refresh_prefetch(world)
+            self._readiness = self.readiness_for_world(world)
+            self._apply_survey_pose_to_camera(camera, now=now)
+            self.state = AutoDiveState.DIVING
+            return self.state
+
         apply_pose_to_camera(camera, self.plan.route.pose_at(self._elapsed_s))
         if self._elapsed_s >= self.plan.route.duration_s:
             self.stop(world, completed=True)
@@ -369,22 +464,31 @@ class AutoDiveController:
         latest_plan = replanner.take_latest_plan()
         rejected_replan = False
         if latest_plan is not None:
-            rejection = self._replan_rejection_payload(
-                latest_plan,
-                current_position,
-            )
+            if self.replan_only_during_survey and not self._survey_active(now=now):
+                rejection = {"reason": "outside_survey_pause"}
+            else:
+                rejection = self._replan_rejection_payload(
+                    latest_plan,
+                    current_position,
+                )
             if rejection is None:
+                resume_elapsed_s = _route_elapsed_nearest_position(
+                    latest_plan,
+                    current_position,
+                )
                 self.plan = latest_plan
-                self._started_at = now
+                self._started_at = now - resume_elapsed_s
                 self._pause_started_at = None
                 self._paused_seconds = 0.0
-                self._elapsed_s = 0.0
+                self._elapsed_s = resume_elapsed_s
                 self._last_rejected_replan_position = None
                 self.refresh_prefetch(world)
                 self._readiness = self.readiness_for_world(world)
                 self._record_blackbox(
                     "replan_accepted",
                     camera_position=_vector_payload(current_position),
+                    resume_elapsed_s=float(resume_elapsed_s),
+                    resume_progress=float(self.progress),
                     plan=_plan_summary(latest_plan),
                     readiness=_readiness_payload(self._readiness),
                 )
@@ -399,9 +503,15 @@ class AutoDiveController:
                     **rejection,
                 )
 
-        if not rejected_replan and self._should_request_replan(current_position):
+        if not rejected_replan and self._should_request_replan(
+            current_position,
+            now=now,
+        ):
             if replanner.request(current_position):
                 self._last_replan_request_position = current_position.copy()
+                self._last_replan_request_at = now
+                if self._survey_active(now=now):
+                    self._survey_replan_requested = True
 
         return swapped
 
@@ -537,6 +647,7 @@ class AutoDiveController:
             nearest_route_distance_m=self._nearest_route_distance_m(position),
             next_pose=_next_pose_payload(self.plan, self._elapsed_s),
             readiness=_readiness_payload(self._readiness),
+            surveying=bool(self._survey_active(now=now)),
             navigation_clamped=bool(navigation_clamped),
         )
 
@@ -551,7 +662,13 @@ class AutoDiveController:
             self._stuck_reference_time = None
             self._stuck_reference_position = None
             return
-        movement_threshold_m = max(0.05, self.replan_distance_m * 0.5)
+        movement_threshold_m = max(
+            0.05,
+            min(
+                self.replan_distance_m * 0.5,
+                self._route_speed_m_per_second() * 0.75,
+            ),
+        )
         if self._stuck_reference_position is None:
             self._stuck_reference_position = position.copy()
             self._stuck_reference_time = now
@@ -662,9 +779,24 @@ class AutoDiveController:
                 return candidate
         return None
 
-    def _should_request_replan(self, current_position: np.ndarray) -> bool:
+    def _should_request_replan(
+        self,
+        current_position: np.ndarray,
+        *,
+        now: float | None = None,
+    ) -> bool:
         if self.replan_distance_m <= 0.0:
             return False
+        now = self.perf_counter() if now is None else float(now)
+        if (
+            self._last_replan_request_at is not None
+            and now - self._last_replan_request_at < self.replan_min_interval_s
+        ):
+            return False
+        if self.replan_only_during_survey:
+            if not self._survey_active(now=now):
+                return False
+            return not self._survey_replan_requested
         rejected_position = self._last_rejected_replan_position
         if rejected_position is not None:
             reject_radius = max(0.05, self.replan_distance_m * 0.5)
@@ -678,7 +810,7 @@ class AutoDiveController:
     def refresh_prefetch(self, world) -> frozenset[tuple[int, int, int]]:
         """Keep cells around the upcoming route segment wanted by streaming."""
         cells = set()
-        radius = max(1, int(self.plan.render_distance_cells))
+        radius = self._effective_route_prefetch_radius_cells()
         for position in self._lookahead_positions(world):
             route_cell = world.cell_for_position(np.asarray(position, dtype=np.float32))
             cells.update(world.available_cells_in_radius(route_cell, radius))
@@ -732,12 +864,75 @@ class AutoDiveController:
         start_s = self._elapsed_s
         end_s = min(
             self.plan.route.duration_s,
-            self._elapsed_s + self.lookahead_seconds,
+            self._elapsed_s + self._effective_lookahead_seconds(),
         )
         sample_count = max(1, int(math.ceil((end_s - start_s) / step_s)))
         for index in range(sample_count + 1):
             t = start_s + (end_s - start_s) * index / max(1, sample_count)
             yield self.plan.route.pose_at(t).position
+
+    def _survey_active(self, *, now: float | None = None) -> bool:
+        if self._survey_pause_started_at is None:
+            return False
+        if self.survey_duration_s <= 0.0:
+            return False
+        now = self.perf_counter() if now is None else float(now)
+        return now - self._survey_pause_started_at < self.survey_duration_s
+
+    def _should_start_survey(self) -> bool:
+        if self.survey_interval_s <= 0.0 or self.survey_duration_s <= 0.0:
+            return False
+        if self._survey_pause_started_at is not None:
+            return False
+        if self._elapsed_s + 1e-6 < self._next_survey_elapsed_s:
+            return False
+        return self._elapsed_s < self.plan.route.duration_s - 1e-6
+
+    def _advance_next_survey_elapsed(self) -> None:
+        if self.survey_interval_s <= 0.0:
+            self._next_survey_elapsed_s = math.inf
+            return
+        while self._next_survey_elapsed_s <= self._elapsed_s + 1e-6:
+            self._next_survey_elapsed_s += self.survey_interval_s
+
+    def _effective_lookahead_seconds(self) -> float:
+        lookahead_seconds = float(self.lookahead_seconds)
+        if self._survey_active():
+            lookahead_seconds *= max(
+                1.0,
+                DEFAULT_AUTO_DIVE_SURVEY_PREFETCH_LOOKAHEAD_MULTIPLIER,
+            )
+        return lookahead_seconds
+
+    def _effective_route_prefetch_radius_cells(self) -> int:
+        radius = max(1, int(self.route_prefetch_radius_cells))
+        if self._survey_active():
+            radius += max(0, DEFAULT_AUTO_DIVE_SURVEY_PREFETCH_RADIUS_BONUS_CELLS)
+        return max(1, int(radius))
+
+    def _apply_survey_pose_to_camera(self, camera, *, now: float) -> None:
+        pose = self.plan.route.pose_at(self._elapsed_s)
+        apply_pose_to_camera(camera, pose)
+        if self._survey_pause_started_at is None or self.survey_duration_s <= 1e-9:
+            return
+        phase = max(
+            0.0,
+            min(
+                1.0,
+                (float(now) - self._survey_pause_started_at)
+                / self.survey_duration_s,
+            ),
+        )
+        camera.yaw += math.radians(
+            DEFAULT_AUTO_DIVE_SURVEY_YAW_SWEEP_DEGREES
+        ) * math.sin(math.tau * phase)
+        camera.pitch += math.radians(
+            DEFAULT_AUTO_DIVE_SURVEY_PITCH_SWEEP_DEGREES
+        ) * math.sin(math.tau * phase * 2.0)
+        camera.pitch = max(math.radians(-55.0), min(math.radians(55.0), camera.pitch))
+
+    def _route_speed_m_per_second(self) -> float:
+        return float(self.plan.route_length_m) / max(1e-9, float(self.plan.duration_s))
 
 
 def _failed_cells_snapshot(world) -> set[tuple[int, int, int]]:
@@ -745,6 +940,45 @@ def _failed_cells_snapshot(world) -> set[tuple[int, int, int]]:
     if isinstance(failed_cells, dict):
         return set(failed_cells)
     return set(failed_cells or ())
+
+
+def _route_elapsed_nearest_position(
+    plan: AutoDivePlan,
+    position: np.ndarray,
+) -> float:
+    """Return route elapsed time closest to the current camera position."""
+    route_points = tuple(getattr(plan, "route_points", ()))
+    if len(route_points) < 2:
+        return 0.0
+    route_length = max(1e-9, float(getattr(plan, "route_length_m", 0.0)))
+    duration = max(0.0, float(getattr(plan, "duration_s", 0.0)))
+    if duration <= 1e-9:
+        return 0.0
+
+    current = np.asarray(position, dtype=np.float64).reshape(3)
+    cumulative_m = 0.0
+    best_distance_sq = math.inf
+    best_distance_m = 0.0
+    for first, second in zip(route_points, route_points[1:], strict=False):
+        start = np.asarray(first, dtype=np.float64)
+        end = np.asarray(second, dtype=np.float64)
+        segment = end - start
+        segment_len_sq = float(np.dot(segment, segment))
+        if segment_len_sq <= 1e-18:
+            continue
+        t = float(np.dot(current - start, segment) / segment_len_sq)
+        t = max(0.0, min(1.0, t))
+        projected = start + segment * t
+        distance_sq = float(np.sum((current - projected) ** 2))
+        segment_len = math.sqrt(segment_len_sq)
+        distance_m = cumulative_m + segment_len * t
+        if distance_sq < best_distance_sq:
+            best_distance_sq = distance_sq
+            best_distance_m = distance_m
+        cumulative_m += segment_len
+
+    progress = max(0.0, min(1.0, best_distance_m / route_length))
+    return duration * progress
 
 
 def _plan_summary(plan: AutoDivePlan) -> dict[str, Any]:

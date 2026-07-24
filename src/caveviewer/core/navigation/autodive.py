@@ -42,7 +42,7 @@ from caveviewer.core.navigation.route import (
 )
 
 
-DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS = 10
+DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS = 4
 DEFAULT_AUTO_DIVE_CLOSED_LOOP_GAP_FRACTION = 0.15
 DEFAULT_AUTO_DIVE_MAX_KEYFRAMES = 512
 DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND = (
@@ -83,8 +83,10 @@ class _AutoDiveCandidateSpec:
     name: str
     smoothing_radius_cells: int
     use_theta: bool
+    use_cone: bool
     use_weighted_smoothing: bool
     use_bspline: bool
+    use_repulsion: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,25 @@ class _AutoDiveRouteCandidate:
     name: str
     cells: tuple[FootprintCell, ...]
     points: tuple[Point, ...]
+
+
+@dataclass(frozen=True)
+class _ConeChainCandidate:
+    cells: tuple[FootprintCell, ...]
+    anchor_index: int
+    cost: float
+
+
+@dataclass(frozen=True)
+class _AutoDiveClearanceFailure:
+    kind: str
+    reason: str
+    index: int | None = None
+    segment_index: int | None = None
+    cell: FootprintCell | None = None
+    point: Point | None = None
+    first: Point | None = None
+    second: Point | None = None
 
 
 @dataclass(frozen=True)
@@ -106,8 +127,12 @@ class _AutoDiveRouteCandidateScore:
     pullback_penalty_m: float
     curvature_rad: float
     vertical_jerk_m: float
+    curvature_rad_per_m: float
+    vertical_jerk_m_per_m: float
+    total_change_per_m: float
     length_m: float
     point_count: int
+    first_clearance_failure: _AutoDiveClearanceFailure | None
 
     @property
     def sort_key(self) -> tuple[object, ...]:
@@ -117,10 +142,11 @@ class _AutoDiveRouteCandidateScore:
             int(self.min_lateral_clearance_cells),
             float(self.min_clearance_margin_m),
             float(self.mean_lateral_clearance_cells),
+            -float(self.total_change_per_m),
             float(self.forward_progress_m),
             -float(self.pullback_penalty_m),
-            -float(self.curvature_rad),
-            -float(self.vertical_jerk_m),
+            -float(self.curvature_rad_per_m),
+            -float(self.vertical_jerk_m_per_m),
             -float(self.length_m),
             -int(self.point_count),
         )
@@ -159,37 +185,101 @@ class _AutoDiveCollisionValidator:
         return bool(self.cached_clearance_margins)
 
     def point_is_clear(self, point: Point) -> bool:
+        return self.point_clearance_failure(point) is None
+
+    def point_clearance_failure(
+        self,
+        point: Point,
+        *,
+        index: int | None = None,
+        segment_index: int | None = None,
+        kind: str = "point",
+    ) -> _AutoDiveClearanceFailure | None:
         cell = _footprint_cell_for_xz((point[0], point[2]), self.cell_size)
         if cell not in self.component_cells:
-            return False
+            return _AutoDiveClearanceFailure(
+                kind=kind,
+                reason="outside_footprint",
+                index=index,
+                segment_index=segment_index,
+                cell=cell,
+                point=point,
+            )
         y_range = self.cached_y_ranges.get(cell)
         if y_range is not None:
             tolerance = max(1e-6, self.cell_size * 0.01)
             if not y_range[0] - tolerance <= point[1] <= y_range[1] + tolerance:
-                return False
+                return _AutoDiveClearanceFailure(
+                    kind=kind,
+                    reason="outside_y_range",
+                    index=index,
+                    segment_index=segment_index,
+                    cell=cell,
+                    point=point,
+                )
         if not self.has_route_clearance_metadata:
-            return True
-        return _lateral_clearance_score_at_point(
+            return None
+        lateral_clearance = _lateral_clearance_score_at_point(
             point,
             centerline_path=self.centerline_path,
-        ) >= _minimum_required_lateral_clearance_score(self.centerline_path)
+        )
+        if lateral_clearance < _minimum_required_lateral_clearance_score(
+            self.centerline_path
+        ):
+            return _AutoDiveClearanceFailure(
+                kind=kind,
+                reason="low_lateral_clearance",
+                index=index,
+                segment_index=segment_index,
+                cell=cell,
+                point=point,
+            )
+        return None
 
     def segment_is_clear(self, first: Point, second: Point) -> bool:
-        return _route_segment_is_clear(
+        return self.segment_clearance_failure(first, second) is None
+
+    def segment_clearance_failure(
+        self,
+        first: Point,
+        second: Point,
+        *,
+        segment_index: int | None = None,
+    ) -> _AutoDiveClearanceFailure | None:
+        return _route_segment_clearance_failure(
             first,
             second,
             collision_validator=self,
+            segment_index=segment_index,
         )
 
     def route_is_clear(self, route_points: tuple[Point, ...]) -> bool:
+        return self.route_clearance_failure(route_points) is None
+
+    def route_clearance_failure(
+        self,
+        route_points: tuple[Point, ...],
+    ) -> _AutoDiveClearanceFailure | None:
         if not route_points:
-            return False
-        if not all(self.point_is_clear(point) for point in route_points):
-            return False
-        return all(
-            self.segment_is_clear(first, second)
-            for first, second in zip(route_points, route_points[1:], strict=False)
-        )
+            return _AutoDiveClearanceFailure(
+                kind="route",
+                reason="empty_route",
+            )
+        for index, point in enumerate(route_points):
+            failure = self.point_clearance_failure(point, index=index)
+            if failure is not None:
+                return failure
+        for segment_index, (first, second) in enumerate(
+            zip(route_points, route_points[1:], strict=False)
+        ):
+            failure = self.segment_clearance_failure(
+                first,
+                second,
+                segment_index=segment_index,
+            )
+            if failure is not None:
+                return failure
+        return None
 
 
 @dataclass(frozen=True)
@@ -353,6 +443,13 @@ def build_centerline_auto_dive_plan(
         duration_s=duration_s,
         lookahead_distance_m=max(0.0, float(settings.lookahead_distance_m)),
     )
+    keyframe_payloads = _wall_aware_auto_dive_keyframe_payloads(
+        keyframe_payloads,
+        route_points=route_points,
+        centerline_path=centerline_path,
+        settings=settings,
+        collision_validator=collision_validator,
+    )
     keyframes = [
         RouteKeyframe.from_mapping(payload, index=index)
         for index, payload in enumerate(keyframe_payloads)
@@ -403,6 +500,231 @@ def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
         raise NavigationConfigurationError(
             "Auto Dive look-ahead distance cannot be negative"
         )
+
+
+def _wall_aware_auto_dive_keyframe_payloads(
+    keyframe_payloads: list[dict[str, Any]],
+    *,
+    route_points: tuple[Point, ...],
+    centerline_path: CenterlinePath,
+    settings: AutoDiveSettings,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> list[dict[str, Any]]:
+    if len(keyframe_payloads) != len(route_points):
+        return keyframe_payloads
+    if len(route_points) < 2 or not collision_validator.component_cells:
+        return keyframe_payloads
+
+    cell_size = float(centerline_path.footprint_cell_size)
+    steering_distance_m = max(
+        float(settings.lookahead_distance_m),
+        cell_size * 2.0,
+    )
+    steered: list[dict[str, Any]] = []
+    for index, payload in enumerate(keyframe_payloads):
+        try:
+            base_yaw = float(payload["yaw_deg"])
+            base_pitch = float(payload["pitch_deg"])
+        except (KeyError, TypeError, ValueError):
+            steered.append(dict(payload))
+            continue
+        yaw_deg, pitch_deg = _wall_aware_look_angles(
+            route_points[index],
+            base_yaw_deg=base_yaw,
+            base_pitch_deg=base_pitch,
+            distance_m=steering_distance_m,
+            collision_validator=collision_validator,
+        )
+        updated = dict(payload)
+        updated["yaw_deg"] = round(yaw_deg, 6)
+        updated["pitch_deg"] = round(pitch_deg, 6)
+        steered.append(updated)
+    return steered
+
+
+def _wall_aware_look_angles(
+    source: Point,
+    *,
+    base_yaw_deg: float,
+    base_pitch_deg: float,
+    distance_m: float,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> tuple[float, float]:
+    yaw_offsets = (0.0, -6.0, 6.0, -12.0, 12.0, -20.0, 20.0)
+    pitch_offsets = (0.0, -4.0, 4.0, -8.0, 8.0)
+    best_score: tuple[object, ...] | None = None
+    best_angles = (float(base_yaw_deg), float(base_pitch_deg))
+    default_score: tuple[object, ...] | None = None
+    for yaw_offset in yaw_offsets:
+        for pitch_offset in pitch_offsets:
+            yaw = float(base_yaw_deg) + yaw_offset
+            pitch = max(-55.0, min(55.0, float(base_pitch_deg) + pitch_offset))
+            direction = _direction_from_yaw_pitch(yaw, pitch)
+            score = _look_direction_clearance_score(
+                source,
+                direction=direction,
+                distance_m=distance_m,
+                yaw_offset_deg=yaw_offset,
+                pitch_offset_deg=pitch_offset,
+                collision_validator=collision_validator,
+            )
+            if yaw_offset == 0.0 and pitch_offset == 0.0:
+                default_score = score
+            if best_score is None or score > best_score:
+                best_score = score
+                best_angles = (yaw, pitch)
+    if default_score is not None and best_score is not None:
+        if not _steered_look_is_materially_better(best_score, default_score):
+            return float(base_yaw_deg), float(base_pitch_deg)
+    return best_angles
+
+
+def _steered_look_is_materially_better(
+    candidate_score: tuple[object, ...],
+    default_score: tuple[object, ...],
+) -> bool:
+    if bool(candidate_score[0]) and not bool(default_score[0]):
+        return True
+    if bool(candidate_score[0]) != bool(default_score[0]):
+        return False
+    candidate_clear_fraction = float(candidate_score[1])
+    default_clear_fraction = float(default_score[1])
+    if candidate_clear_fraction > default_clear_fraction + 0.10:
+        return True
+    if candidate_clear_fraction + 1e-9 < default_clear_fraction:
+        return False
+    candidate_margin = float(candidate_score[2])
+    default_margin = float(default_score[2])
+    if candidate_margin > default_margin + 0.25:
+        return True
+    if candidate_margin + 1e-9 < default_margin:
+        return False
+    candidate_lateral = int(candidate_score[3])
+    default_lateral = int(default_score[3])
+    if candidate_lateral > default_lateral:
+        return True
+    if candidate_lateral < default_lateral:
+        return False
+    return float(candidate_score[4]) > float(default_score[4]) + 0.5
+
+
+def _direction_from_yaw_pitch(
+    yaw_deg: float,
+    pitch_deg: float,
+) -> np.ndarray:
+    yaw = math.radians(float(yaw_deg))
+    pitch = math.radians(float(pitch_deg))
+    horizontal = math.cos(pitch)
+    return np.asarray(
+        (
+            math.cos(yaw) * horizontal,
+            math.sin(pitch),
+            math.sin(yaw) * horizontal,
+        ),
+        dtype=np.float64,
+    )
+
+
+def _look_direction_clearance_score(
+    source: Point,
+    *,
+    direction: np.ndarray,
+    distance_m: float,
+    yaw_offset_deg: float,
+    pitch_offset_deg: float,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> tuple[object, ...]:
+    norm = float(np.linalg.norm(direction))
+    if norm <= 1e-9:
+        return (False, 0.0, 0, 0.0, 0.0)
+    unit = direction / norm
+    cell_size = collision_validator.cell_size
+    distance = max(cell_size * 0.5, float(distance_m))
+    steps = max(2, int(math.ceil(distance / max(1e-9, cell_size * 0.25))))
+    source_array = np.asarray(source, dtype=np.float64)
+    clear = True
+    min_lateral_score = math.inf
+    total_lateral_score = 0.0
+    min_margin_m = math.inf
+    sample_count = 0
+    clear_prefix = 0
+    for step in range(1, steps + 1):
+        point_array = source_array + unit * (distance * step / steps)
+        point: Point = (
+            float(point_array[0]),
+            float(point_array[1]),
+            float(point_array[2]),
+        )
+        cell = _footprint_cell_for_xz(
+            (point[0], point[2]),
+            cell_size,
+        )
+        lateral_score = int(
+            collision_validator.centerline_path.clearance_scores.get(cell, 0)
+        )
+        margin = _look_point_clearance_margin_m(
+            point,
+            collision_validator=collision_validator,
+        )
+        point_clear = collision_validator.point_is_clear(point)
+        if not point_clear:
+            clear = False
+        else:
+            clear_prefix += 1
+        min_lateral_score = min(min_lateral_score, lateral_score)
+        total_lateral_score += lateral_score
+        min_margin_m = min(min_margin_m, margin)
+        sample_count += 1
+
+    if sample_count <= 0:
+        return (False, 0.0, 0, 0.0, 0.0)
+    avg_lateral_score = total_lateral_score / sample_count
+    clear_fraction = clear_prefix / sample_count
+    if not math.isfinite(min_margin_m):
+        min_margin_m = 0.0
+    if not math.isfinite(min_lateral_score):
+        min_lateral_score = 0
+    angle_penalty = abs(float(yaw_offset_deg)) + abs(float(pitch_offset_deg)) * 0.5
+    return (
+        bool(clear),
+        round(clear_fraction, 3),
+        round(float(min_margin_m), 3),
+        int(min_lateral_score),
+        round(float(avg_lateral_score), 3),
+        -round(angle_penalty, 3),
+    )
+
+
+def _look_point_clearance_margin_m(
+    point: Point,
+    *,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> float:
+    cell = _footprint_cell_for_xz(
+        (point[0], point[2]),
+        collision_validator.cell_size,
+    )
+    lateral_score = _lateral_clearance_score_at_point(
+        point,
+        centerline_path=collision_validator.centerline_path,
+    )
+    lateral_margin = collision_validator.cached_clearance_margins.get(cell)
+    if lateral_margin is None:
+        lateral_margin = max(
+            0.0,
+            (float(lateral_score) - 0.5) * collision_validator.cell_size,
+        )
+    y_range = collision_validator.cached_y_ranges.get(cell)
+    if y_range is None:
+        return float(lateral_margin)
+    low_y, high_y = float(y_range[0]), float(y_range[1])
+    y = float(point[1])
+    if y < low_y:
+        return min(float(lateral_margin), y - low_y)
+    if y > high_y:
+        return min(float(lateral_margin), high_y - y)
+    vertical_margin = min(y - low_y, high_y - y)
+    return min(float(lateral_margin), float(vertical_margin))
 
 
 def _nearest_centerline_index(
@@ -959,6 +1281,7 @@ def _select_best_auto_dive_route_candidate(
             ordinal=0,
             centerline_path=centerline_path,
             route_samples=route_samples,
+            current=current,
             settings=settings,
             collision_validator=collision_validator,
         )
@@ -981,7 +1304,7 @@ def _select_best_auto_dive_route_candidate(
 
     candidates: list[_AutoDiveRouteCandidate] = []
     failed_candidates: list[dict[str, Any]] = []
-    worker_count = min(4, len(specs))
+    worker_count = min(2, len(specs))
     with ThreadPoolExecutor(
         max_workers=worker_count,
         thread_name_prefix="AutoDiveCandidate",
@@ -993,6 +1316,7 @@ def _select_best_auto_dive_route_candidate(
                 ordinal=ordinal,
                 centerline_path=centerline_path,
                 route_samples=route_samples,
+                current=current,
                 settings=settings,
                 collision_validator=collision_validator,
             ): (ordinal, spec)
@@ -1055,8 +1379,26 @@ def _select_best_auto_dive_route_candidate(
         )
         return route_points
 
+    selectable = [
+        item
+        for item in scored
+        if item[0].route_clear
+    ]
+    if not selectable:
+        selectable = [
+            item
+            for item in scored
+            if item[0].entry_clear and not item[1].name.startswith("cone-")
+        ]
+    if not selectable:
+        selectable = [
+            item
+            for item in scored
+            if item[1].name == "raw"
+        ] or scored
+
     _best_score, best_candidate = max(
-        scored,
+        selectable,
         key=lambda item: (*item[0].sort_key, -item[1].ordinal),
     )
     _record_auto_dive_diagnostic(
@@ -1107,9 +1449,39 @@ def _auto_dive_candidate_score_payload(
         "pullback_penalty_m": float(score.pullback_penalty_m),
         "curvature_rad": float(score.curvature_rad),
         "vertical_jerk_m": float(score.vertical_jerk_m),
+        "curvature_rad_per_m": float(score.curvature_rad_per_m),
+        "vertical_jerk_m_per_m": float(score.vertical_jerk_m_per_m),
+        "total_change_per_m": float(score.total_change_per_m),
         "length_m": float(score.length_m),
         "point_count": int(score.point_count),
+        "first_clearance_failure": _auto_dive_clearance_failure_payload(
+            score.first_clearance_failure
+        ),
     }
+
+
+def _auto_dive_clearance_failure_payload(
+    failure: _AutoDiveClearanceFailure | None,
+) -> dict[str, Any] | None:
+    if failure is None:
+        return None
+    payload: dict[str, Any] = {
+        "kind": failure.kind,
+        "reason": failure.reason,
+    }
+    if failure.index is not None:
+        payload["index"] = int(failure.index)
+    if failure.segment_index is not None:
+        payload["segment_index"] = int(failure.segment_index)
+    if failure.cell is not None:
+        payload["cell"] = [int(failure.cell[0]), int(failure.cell[1])]
+    if failure.point is not None:
+        payload["point"] = [float(value) for value in failure.point]
+    if failure.first is not None:
+        payload["first"] = [float(value) for value in failure.first]
+    if failure.second is not None:
+        payload["second"] = [float(value) for value in failure.second]
+    return payload
 
 
 def _auto_dive_candidate_specs(
@@ -1121,6 +1493,7 @@ def _auto_dive_candidate_specs(
             name="raw",
             smoothing_radius_cells=0,
             use_theta=False,
+            use_cone=False,
             use_weighted_smoothing=False,
             use_bspline=False,
         )
@@ -1131,7 +1504,6 @@ def _auto_dive_candidate_specs(
     radii = tuple(
         sorted(
             {
-                max(1, radius // 2),
                 radius,
             }
         )
@@ -1143,6 +1515,7 @@ def _auto_dive_candidate_specs(
                     name=f"theta-{candidate_radius}",
                     smoothing_radius_cells=candidate_radius,
                     use_theta=True,
+                    use_cone=False,
                     use_weighted_smoothing=False,
                     use_bspline=False,
                 ),
@@ -1150,6 +1523,7 @@ def _auto_dive_candidate_specs(
                     name=f"weighted-{candidate_radius}",
                     smoothing_radius_cells=candidate_radius,
                     use_theta=False,
+                    use_cone=False,
                     use_weighted_smoothing=True,
                     use_bspline=False,
                 ),
@@ -1157,22 +1531,39 @@ def _auto_dive_candidate_specs(
                     name=f"theta-weighted-{candidate_radius}",
                     smoothing_radius_cells=candidate_radius,
                     use_theta=True,
+                    use_cone=False,
                     use_weighted_smoothing=True,
                     use_bspline=False,
                 ),
                 _AutoDiveCandidateSpec(
-                    name=f"weighted-bspline-{candidate_radius}",
-                    smoothing_radius_cells=candidate_radius,
-                    use_theta=False,
-                    use_weighted_smoothing=True,
-                    use_bspline=True,
-                ),
-                _AutoDiveCandidateSpec(
-                    name=f"theta-weighted-bspline-{candidate_radius}",
+                    name=f"theta-repel-{candidate_radius}",
                     smoothing_radius_cells=candidate_radius,
                     use_theta=True,
+                    use_cone=False,
+                    use_weighted_smoothing=False,
+                    use_bspline=False,
+                    use_repulsion=True,
+                ),
+            )
+        )
+        specs.extend(
+            (
+                _AutoDiveCandidateSpec(
+                    name=f"cone-theta-{candidate_radius}",
+                    smoothing_radius_cells=candidate_radius,
+                    use_theta=True,
+                    use_cone=True,
+                    use_weighted_smoothing=False,
+                    use_bspline=False,
+                ),
+                _AutoDiveCandidateSpec(
+                    name=f"cone-theta-weighted-repel-{candidate_radius}",
+                    smoothing_radius_cells=candidate_radius,
+                    use_theta=True,
+                    use_cone=True,
                     use_weighted_smoothing=True,
-                    use_bspline=True,
+                    use_bspline=False,
+                    use_repulsion=True,
                 ),
             )
         )
@@ -1185,6 +1576,7 @@ def _build_auto_dive_route_candidate(
     ordinal: int,
     centerline_path: CenterlinePath,
     route_samples: _AutoDiveRouteSamples,
+    current: np.ndarray,
     settings: AutoDiveSettings,
     collision_validator: _AutoDiveCollisionValidator,
 ) -> _AutoDiveRouteCandidate:
@@ -1193,6 +1585,15 @@ def _build_auto_dive_route_candidate(
         smoothing_radius_cells=max(0, int(spec.smoothing_radius_cells)),
     )
     samples = route_samples
+    if spec.use_cone:
+        samples = _cone_relaxed_auto_dive_samples(
+            centerline_path,
+            samples,
+            current=current,
+            settings=candidate_settings,
+            collision_validator=collision_validator,
+        )
+
     if spec.use_theta:
         samples = _theta_relaxed_auto_dive_samples(
             samples,
@@ -1216,6 +1617,15 @@ def _build_auto_dive_route_candidate(
             settings=candidate_settings,
         )
 
+    if spec.use_repulsion:
+        points = _repelled_auto_dive_points(
+            centerline_path,
+            waypoint_cells=samples.cells,
+            route_points=points,
+            settings=candidate_settings,
+            collision_validator=collision_validator,
+        )
+
     if spec.use_bspline:
         points = _bspline_smoothed_auto_dive_points(
             points,
@@ -1237,7 +1647,6 @@ def _score_auto_dive_route_candidate(
     current_point: Point,
     collision_validator: _AutoDiveCollisionValidator,
 ) -> _AutoDiveRouteCandidateScore:
-    route_clear = collision_validator.route_is_clear(candidate.points)
     entry_clear = _entry_segment_is_clear(
         current_point,
         candidate.points[0],
@@ -1247,6 +1656,10 @@ def _score_auto_dive_route_candidate(
         candidate.points,
         np.asarray(current_point, dtype=np.float64),
     )
+    first_clearance_failure = collision_validator.route_clearance_failure(
+        route_with_current
+    )
+    route_clear = first_clearance_failure is None
     lateral_scores = _sampled_lateral_clearance_scores(
         route_with_current,
         collision_validator=collision_validator,
@@ -1255,6 +1668,11 @@ def _score_auto_dive_route_candidate(
         route_with_current,
         collision_validator=collision_validator,
     )
+    length_m = path_length(route_with_current)
+    curvature_rad = _route_curvature_rad(route_with_current)
+    vertical_jerk_m = _route_vertical_jerk_m(route_with_current)
+    curvature_rad_per_m = curvature_rad / max(1e-9, length_m)
+    vertical_jerk_m_per_m = vertical_jerk_m / max(1e-9, length_m)
     return _AutoDiveRouteCandidateScore(
         route_clear=route_clear,
         entry_clear=entry_clear,
@@ -1271,10 +1689,14 @@ def _score_auto_dive_route_candidate(
         ),
         forward_progress_m=_candidate_forward_progress_m(route_with_current),
         pullback_penalty_m=_candidate_pullback_penalty_m(route_with_current),
-        curvature_rad=_route_curvature_rad(route_with_current),
-        vertical_jerk_m=_route_vertical_jerk_m(route_with_current),
-        length_m=path_length(route_with_current),
+        curvature_rad=curvature_rad,
+        vertical_jerk_m=vertical_jerk_m,
+        curvature_rad_per_m=curvature_rad_per_m,
+        vertical_jerk_m_per_m=vertical_jerk_m_per_m,
+        total_change_per_m=curvature_rad_per_m + vertical_jerk_m_per_m,
+        length_m=length_m,
         point_count=len(route_with_current),
+        first_clearance_failure=first_clearance_failure,
     )
 
 
@@ -1291,6 +1713,660 @@ def _entry_segment_is_clear(
         target_point,
         collision_validator=collision_validator,
     )
+
+
+def _cone_relaxed_auto_dive_samples(
+    centerline_path: CenterlinePath,
+    route_samples: _AutoDiveRouteSamples,
+    *,
+    current: np.ndarray,
+    settings: AutoDiveSettings,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> _AutoDiveRouteSamples:
+    """Return a local forward-cone route through the clearest nearby passage.
+
+    The cached centerline remains the long-range intent. This routine only
+    rewrites the local prefix: it searches a virtual cone ahead of the current
+    camera, tries several clear target cells near future route anchors, and
+    chooses the path with the best clearance and least change per meter.
+    """
+    if len(route_samples.cells) < 2 or len(route_samples.points) < 2:
+        return route_samples
+    component = collision_validator.component_cells
+    if not component:
+        return route_samples
+    radius = max(1, int(settings.smoothing_radius_cells))
+    cell_size = float(centerline_path.footprint_cell_size)
+    current_cell = _cone_start_cell(
+        centerline_path,
+        route_samples,
+        current=current,
+    )
+    if current_cell not in component:
+        current_cell = min(
+            component,
+            key=lambda cell: (
+                _cell_center_distance_squared(centerline_path, cell, current),
+                cell,
+            ),
+        )
+
+    current_point: Point = (
+        float(current[0]),
+        float(current[1]),
+        float(current[2]),
+    )
+    start_cells = (
+        (route_samples.cells[0],)
+        if _cone_should_keep_start_sample(
+            centerline_path,
+            route_samples,
+            current=current,
+        )
+        else ()
+    )
+    candidates = _chained_cone_candidate_samples(
+        centerline_path,
+        route_samples,
+        current_cell=current_cell,
+        current_point=current_point,
+        start_cells=start_cells,
+        radius_cells=radius,
+        cell_size=cell_size,
+        collision_validator=collision_validator,
+    )
+
+    if not candidates:
+        return route_samples
+    _score, samples = max(
+        candidates,
+        key=lambda item: item[0].sort_key,
+    )
+    return samples
+
+
+def _chained_cone_candidate_samples(
+    centerline_path: CenterlinePath,
+    route_samples: _AutoDiveRouteSamples,
+    *,
+    current_cell: FootprintCell,
+    current_point: Point,
+    start_cells: tuple[FootprintCell, ...],
+    radius_cells: int,
+    cell_size: float,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> list[tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteSamples]]:
+    """Build full route candidates from a beam of Dijkstra-planned cones."""
+    anchor_indices = _cone_chain_anchor_indices(
+        route_samples,
+        radius_cells=radius_cells,
+    )
+    if not anchor_indices:
+        return []
+
+    beam_width = _cone_chain_beam_width(radius_cells)
+    chains = [
+        _ConeChainCandidate(
+            cells=(current_cell,),
+            anchor_index=0,
+            cost=0.0,
+        )
+    ]
+    for anchor_index in anchor_indices:
+        expanded: list[tuple[tuple[object, ...], _ConeChainCandidate]] = []
+        for chain in chains:
+            expanded.extend(
+                _expand_cone_chain_candidate(
+                    centerline_path,
+                    route_samples,
+                    chain,
+                    anchor_index=anchor_index,
+                    current_point=current_point,
+                    radius_cells=radius_cells,
+                    cell_size=cell_size,
+                    collision_validator=collision_validator,
+                )
+            )
+        if not expanded:
+            break
+        chains = [
+            candidate
+            for _key, candidate in sorted(
+                expanded,
+                key=lambda item: item[0],
+                reverse=True,
+            )[:beam_width]
+        ]
+
+    candidates: list[tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteSamples]] = []
+    for chain in chains:
+        if chain.anchor_index <= 0 or len(chain.cells) < 2:
+            continue
+        candidate_cells = _dedupe_consecutive_cells(
+            (
+                *start_cells,
+                *chain.cells,
+                *route_samples.cells[chain.anchor_index + 1 :],
+            )
+        )
+        if len(candidate_cells) < 2:
+            continue
+        candidate_points = _points_for_cone_cells(
+            centerline_path,
+            candidate_cells,
+            route_samples=route_samples,
+            current=current_point,
+        )
+        candidate_points = _dedupe_consecutive_points(candidate_points)
+        if len(candidate_points) < 2:
+            continue
+        candidate = _AutoDiveRouteCandidate(
+            ordinal=0,
+            name="cone-chain",
+            cells=candidate_cells,
+            points=candidate_points,
+        )
+        score = _score_auto_dive_route_candidate(
+            candidate,
+            current_point=current_point,
+            collision_validator=collision_validator,
+        )
+        candidates.append(
+            (
+                score,
+                _AutoDiveRouteSamples(
+                    cells=candidate_cells,
+                    points=candidate_points,
+                ),
+            )
+        )
+    return candidates
+
+
+def _cone_chain_anchor_indices(
+    route_samples: _AutoDiveRouteSamples,
+    *,
+    radius_cells: int,
+) -> tuple[int, ...]:
+    last_index = len(route_samples.cells) - 1
+    if last_index < 1:
+        return ()
+    radius = max(1, int(radius_cells))
+    depth = max(2, min(3, 1 + radius // 4))
+    spacing = max(2, min(radius, 8))
+    return tuple(
+        sorted(
+            {
+                min(last_index, max(1, spacing * step))
+                for step in range(1, depth + 1)
+            }
+        )
+    )
+
+
+def _cone_chain_beam_width(radius_cells: int) -> int:
+    return max(1, min(2, 1 + int(radius_cells) // 8))
+
+
+def _expand_cone_chain_candidate(
+    centerline_path: CenterlinePath,
+    route_samples: _AutoDiveRouteSamples,
+    chain: _ConeChainCandidate,
+    *,
+    anchor_index: int,
+    current_point: Point,
+    radius_cells: int,
+    cell_size: float,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> list[tuple[tuple[object, ...], _ConeChainCandidate]]:
+    start_cell = chain.cells[-1]
+    start_point = _point_for_cone_cell(
+        centerline_path,
+        start_cell,
+        route_samples=route_samples,
+        current=current_point,
+    )
+    anchor_cell = route_samples.cells[anchor_index]
+    anchor_point = route_samples.points[anchor_index]
+    forward = _cone_forward_unit(start_point, anchor_point)
+    if forward is None:
+        return []
+    anchor_projection = _cone_projection_m(
+        centerline_path,
+        start_point,
+        anchor_cell,
+        forward,
+    )
+    cone_length_m = max(
+        cell_size * 2.0,
+        anchor_projection + cell_size * max(2.0, radius_cells * 0.35),
+    )
+    allowed_cells = _cone_allowed_cells(
+        centerline_path,
+        current=start_point,
+        forward=forward,
+        length_m=cone_length_m,
+        radius_cells=radius_cells,
+    )
+    if not allowed_cells:
+        return []
+    allowed_cells.add(start_cell)
+    allowed_cells.add(anchor_cell)
+    frozen_allowed = frozenset(allowed_cells)
+    expanded: list[tuple[tuple[object, ...], _ConeChainCandidate]] = []
+    for target_cell in _cone_target_cells(
+        centerline_path,
+        anchor_cell=anchor_cell,
+        allowed_cells=frozen_allowed,
+        current=start_point,
+        forward=forward,
+        anchor_projection_m=anchor_projection,
+        radius_cells=radius_cells,
+    )[:4]:
+        prefix_cells, prefix_cost = _lowest_change_cone_path_with_cost(
+            centerline_path,
+            start=start_cell,
+            target=target_cell,
+            allowed_cells=frozen_allowed,
+            forward=forward,
+        )
+        if len(prefix_cells) < 2:
+            continue
+        connector_cells: tuple[FootprintCell, ...] = ()
+        connector_cost = 0.0
+        if target_cell != anchor_cell:
+            connector_cells = lowest_cost_footprint_path(
+                collision_validator.component_cells,
+                target_cell,
+                anchor_cell,
+                centerline_path.clearance_scores,
+            )
+            if len(connector_cells) < 2:
+                continue
+            connector_cost = _footprint_path_change_cost(
+                centerline_path,
+                connector_cells,
+            )
+        cells = _dedupe_consecutive_cells(
+            (
+                *chain.cells,
+                *prefix_cells[1:],
+                *connector_cells[1:],
+            )
+        )
+        if len(cells) < 2:
+            continue
+        cost = chain.cost + prefix_cost + connector_cost
+        points = _points_for_cone_cells(
+            centerline_path,
+            cells,
+            route_samples=route_samples,
+            current=current_point,
+        )
+        candidate = _AutoDiveRouteCandidate(
+            ordinal=0,
+            name="cone-chain-prefix",
+            cells=cells,
+            points=_dedupe_consecutive_points(points),
+        )
+        score = _score_auto_dive_route_candidate(
+            candidate,
+            current_point=current_point,
+            collision_validator=collision_validator,
+        )
+        expanded.append(
+            (
+                _cone_chain_rank_key(score, cost),
+                _ConeChainCandidate(
+                    cells=cells,
+                    anchor_index=anchor_index,
+                    cost=cost,
+                ),
+            )
+        )
+    return expanded
+
+
+def _cone_chain_rank_key(
+    score: _AutoDiveRouteCandidateScore,
+    cost: float,
+) -> tuple[object, ...]:
+    return (*score.sort_key, -float(cost))
+
+
+def _cone_should_keep_start_sample(
+    centerline_path: CenterlinePath,
+    route_samples: _AutoDiveRouteSamples,
+    *,
+    current: np.ndarray,
+) -> bool:
+    if not route_samples.cells or not route_samples.points:
+        return False
+    first_point = np.asarray(route_samples.points[0], dtype=np.float64)
+    distance = float(np.linalg.norm(first_point - np.asarray(current, dtype=np.float64)))
+    return distance <= float(centerline_path.footprint_cell_size) * 0.05
+
+
+def _cone_start_cell(
+    centerline_path: CenterlinePath,
+    route_samples: _AutoDiveRouteSamples,
+    *,
+    current: np.ndarray,
+) -> FootprintCell:
+    current_cell = _current_footprint_cell(centerline_path, current)
+    if not route_samples.cells or not route_samples.points:
+        return current_cell
+    sample_limit = min(4, len(route_samples.cells), len(route_samples.points))
+    nearest_index = min(
+        range(sample_limit),
+        key=lambda index: (
+            float(
+                np.sum(
+                    (
+                        np.asarray(route_samples.points[index], dtype=np.float64)
+                        - np.asarray(current, dtype=np.float64)
+                    )
+                    ** 2
+                )
+            ),
+            index,
+        ),
+    )
+    nearest_point = np.asarray(route_samples.points[nearest_index], dtype=np.float64)
+    distance = float(np.linalg.norm(nearest_point - np.asarray(current, dtype=np.float64)))
+    if distance <= float(centerline_path.footprint_cell_size) * 0.5:
+        return route_samples.cells[nearest_index]
+    return current_cell
+
+
+def _cone_forward_unit(
+    current: Point,
+    target: Point,
+) -> np.ndarray | None:
+    vector = np.asarray(
+        (float(target[0]) - current[0], float(target[2]) - current[2]),
+        dtype=np.float64,
+    )
+    norm = float(np.linalg.norm(vector))
+    if norm <= 1e-9:
+        return None
+    return vector / norm
+
+
+def _cone_projection_m(
+    centerline_path: CenterlinePath,
+    current: Point,
+    cell: FootprintCell,
+    forward: np.ndarray,
+) -> float:
+    center = _center_for_route_cell(centerline_path, cell)
+    vector = np.asarray(
+        (center[0] - current[0], center[1] - current[2]),
+        dtype=np.float64,
+    )
+    return float(np.dot(vector, forward))
+
+
+def _cone_lateral_m(
+    centerline_path: CenterlinePath,
+    current: Point,
+    cell: FootprintCell,
+    forward: np.ndarray,
+) -> float:
+    center = _center_for_route_cell(centerline_path, cell)
+    vector = np.asarray(
+        (center[0] - current[0], center[1] - current[2]),
+        dtype=np.float64,
+    )
+    projection = float(np.dot(vector, forward))
+    lateral = vector - forward * projection
+    return float(np.linalg.norm(lateral))
+
+
+def _cone_allowed_cells(
+    centerline_path: CenterlinePath,
+    *,
+    current: Point,
+    forward: np.ndarray,
+    length_m: float,
+    radius_cells: int,
+) -> set[FootprintCell]:
+    cell_size = float(centerline_path.footprint_cell_size)
+    radius = max(1, int(radius_cells))
+    min_width_m = cell_size * max(2.0, min(6.0, radius * 0.5))
+    max_width_m = cell_size * max(3.0, float(radius))
+    allowed: set[FootprintCell] = set()
+    for cell in centerline_path.component_cells:
+        projection = _cone_projection_m(centerline_path, current, cell, forward)
+        if projection < -cell_size or projection > length_m:
+            continue
+        lateral = _cone_lateral_m(centerline_path, current, cell, forward)
+        cone_width = min(max_width_m, min_width_m + max(0.0, projection) * 0.75)
+        if lateral <= cone_width + cell_size * 0.5:
+            allowed.add(cell)
+    return allowed
+
+
+def _cone_target_cells(
+    centerline_path: CenterlinePath,
+    *,
+    anchor_cell: FootprintCell,
+    allowed_cells: frozenset[FootprintCell],
+    current: Point,
+    forward: np.ndarray,
+    anchor_projection_m: float,
+    radius_cells: int,
+) -> tuple[FootprintCell, ...]:
+    cell_size = float(centerline_path.footprint_cell_size)
+    radius = max(1, int(radius_cells))
+    projection_window_m = cell_size * max(1.5, radius * 0.35)
+    local_radius = max(1, radius // 2)
+    candidates = [
+        cell
+        for cell in allowed_cells
+        if footprint_cell_distance(cell, anchor_cell) <= local_radius
+        and abs(
+            _cone_projection_m(centerline_path, current, cell, forward)
+            - anchor_projection_m
+        )
+        <= projection_window_m
+    ]
+    if anchor_cell in allowed_cells:
+        candidates.append(anchor_cell)
+    deduped = tuple(sorted(set(candidates)))
+    ranked = sorted(
+        deduped,
+        key=lambda cell: (
+            centerline_path.clearance_scores.get(cell, 0),
+            -_cone_lateral_m(centerline_path, current, cell, forward),
+            -footprint_cell_distance(cell, anchor_cell),
+            cell,
+        ),
+        reverse=True,
+    )
+    return tuple(ranked[:8])
+
+
+def _lowest_change_cone_path(
+    centerline_path: CenterlinePath,
+    *,
+    start: FootprintCell,
+    target: FootprintCell,
+    allowed_cells: frozenset[FootprintCell],
+    forward: np.ndarray,
+) -> tuple[FootprintCell, ...]:
+    path, _cost = _lowest_change_cone_path_with_cost(
+        centerline_path,
+        start=start,
+        target=target,
+        allowed_cells=allowed_cells,
+        forward=forward,
+    )
+    return path
+
+
+def _lowest_change_cone_path_with_cost(
+    centerline_path: CenterlinePath,
+    *,
+    start: FootprintCell,
+    target: FootprintCell,
+    allowed_cells: frozenset[FootprintCell],
+    forward: np.ndarray,
+) -> tuple[tuple[FootprintCell, ...], float]:
+    if start not in allowed_cells or target not in allowed_cells:
+        return (), math.inf
+    if start == target:
+        return (start,), 0.0
+    max_clearance = max(
+        1,
+        max(
+            centerline_path.clearance_scores.get(cell, 1)
+            for cell in allowed_cells
+        ),
+    )
+    initial_step = _initial_cone_step(forward)
+    start_state = (start, initial_step)
+    frontier: list[tuple[float, int, tuple[FootprintCell, tuple[int, int]]]] = [
+        (0.0, 0, start_state)
+    ]
+    costs: dict[tuple[FootprintCell, tuple[int, int]], float] = {
+        start_state: 0.0,
+    }
+    previous: dict[
+        tuple[FootprintCell, tuple[int, int]],
+        tuple[FootprintCell, tuple[int, int]] | None,
+    ] = {start_state: None}
+    sequence = 0
+    target_state: tuple[FootprintCell, tuple[int, int]] | None = None
+    while frontier:
+        current_cost, _sequence, state = heapq.heappop(frontier)
+        cell, previous_step = state
+        if current_cost > costs[state]:
+            continue
+        if cell == target:
+            target_state = state
+            break
+        for neighbor in navigable_footprint_neighbors(cell, allowed_cells):
+            step = _footprint_step(cell, neighbor)
+            step_distance = footprint_cell_distance(cell, neighbor)
+            clearance = centerline_path.clearance_scores.get(neighbor, 1)
+            clearance_penalty = (max_clearance - clearance) / max_clearance
+            turn_penalty = _footprint_step_turn_rad(previous_step, step)
+            next_cost = (
+                current_cost
+                + step_distance * (1.0 + 1.5 * clearance_penalty)
+                + turn_penalty * 0.5
+            )
+            next_state = (neighbor, step)
+            if next_cost >= costs.get(next_state, math.inf):
+                continue
+            sequence += 1
+            costs[next_state] = next_cost
+            previous[next_state] = state
+            heapq.heappush(frontier, (next_cost, sequence, next_state))
+
+    if target_state is None:
+        return (), math.inf
+    path: list[FootprintCell] = []
+    state: tuple[FootprintCell, tuple[int, int]] | None = target_state
+    while state is not None:
+        path.append(state[0])
+        state = previous[state]
+    return tuple(reversed(path)), costs[target_state]
+
+
+def _footprint_path_change_cost(
+    centerline_path: CenterlinePath,
+    cells: tuple[FootprintCell, ...],
+) -> float:
+    if len(cells) < 2:
+        return 0.0
+    max_clearance = max(1, max(centerline_path.clearance_scores.values()))
+    cost = 0.0
+    previous_step = _footprint_step(cells[0], cells[1])
+    for first, second in zip(cells, cells[1:], strict=False):
+        step = _footprint_step(first, second)
+        step_distance = footprint_cell_distance(first, second)
+        clearance = centerline_path.clearance_scores.get(second, 1)
+        clearance_penalty = (max_clearance - clearance) / max_clearance
+        turn_penalty = _footprint_step_turn_rad(previous_step, step)
+        cost += step_distance * (1.0 + 1.5 * clearance_penalty) + turn_penalty * 0.5
+        previous_step = step
+    return cost
+
+
+def _initial_cone_step(forward: np.ndarray) -> tuple[int, int]:
+    x = int(math.copysign(1, float(forward[0]))) if abs(float(forward[0])) >= 0.25 else 0
+    z = int(math.copysign(1, float(forward[1]))) if abs(float(forward[1])) >= 0.25 else 0
+    if x == 0 and z == 0:
+        x = 1
+    return x, z
+
+
+def _footprint_step_turn_rad(
+    first: tuple[int, int],
+    second: tuple[int, int],
+) -> float:
+    first_vector = np.asarray(first, dtype=np.float64)
+    second_vector = np.asarray(second, dtype=np.float64)
+    first_norm = float(np.linalg.norm(first_vector))
+    second_norm = float(np.linalg.norm(second_vector))
+    if first_norm <= 1e-9 or second_norm <= 1e-9:
+        return 0.0
+    cosine = float(np.dot(first_vector, second_vector) / (first_norm * second_norm))
+    cosine = max(-1.0, min(1.0, cosine))
+    return math.acos(cosine)
+
+
+def _points_for_cone_cells(
+    centerline_path: CenterlinePath,
+    cells: tuple[FootprintCell, ...],
+    *,
+    route_samples: _AutoDiveRouteSamples,
+    current: Point,
+) -> tuple[Point, ...]:
+    return tuple(
+        _point_for_cone_cell(
+            centerline_path,
+            cell,
+            route_samples=route_samples,
+            current=current,
+        )
+        for cell in cells
+    )
+
+
+def _point_for_cone_cell(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+    *,
+    route_samples: _AutoDiveRouteSamples,
+    current: Point,
+) -> Point:
+    cached_points = getattr(centerline_path, "cached_points", None) or {}
+    cached_point = cached_points.get(cell)
+    if cached_point is not None:
+        return cached_point
+
+    x, z = _center_for_route_cell(centerline_path, cell)
+    y_ranges = getattr(centerline_path, "cached_y_ranges", None) or {}
+    y_range = y_ranges.get(cell)
+    if y_range is not None:
+        y = (float(y_range[0]) + float(y_range[1])) * 0.5
+    elif route_samples.cells and route_samples.points:
+        nearest_index = min(
+            range(len(route_samples.cells)),
+            key=lambda index: (
+                footprint_cell_distance(cell, route_samples.cells[index]),
+                index,
+            ),
+        )
+        y = float(route_samples.points[nearest_index][1])
+    else:
+        y = float(current[1])
+    if y_range is not None:
+        y = min(max(y, float(y_range[0])), float(y_range[1]))
+    return float(x), float(y), float(z)
 
 
 def _route_segment_is_clear_after_start(
@@ -1678,11 +2754,33 @@ def _route_segment_is_clear(
     *,
     collision_validator: _AutoDiveCollisionValidator,
 ) -> bool:
+    return _route_segment_clearance_failure(
+        first,
+        second,
+        collision_validator=collision_validator,
+    ) is None
+
+
+def _route_segment_clearance_failure(
+    first: Point,
+    second: Point,
+    *,
+    collision_validator: _AutoDiveCollisionValidator,
+    segment_index: int | None = None,
+) -> _AutoDiveClearanceFailure | None:
     distance = math.sqrt(
         (second[0] - first[0]) ** 2
         + (second[1] - first[1]) ** 2
         + (second[2] - first[2]) ** 2
     )
+    if distance <= 1e-9:
+        return _AutoDiveClearanceFailure(
+            kind="segment",
+            reason="zero_length_segment",
+            segment_index=segment_index,
+            first=first,
+            second=second,
+        )
     steps = max(
         1,
         int(math.ceil(distance / max(1e-9, collision_validator.cell_size * 0.25))),
@@ -1695,8 +2793,23 @@ def _route_segment_is_clear(
             first[1] + (second[1] - first[1]) * t,
             first[2] + (second[2] - first[2]) * t,
         )
-        if not collision_validator.point_is_clear(point):
-            return False
+        point_failure = collision_validator.point_clearance_failure(
+            point,
+            index=step,
+            segment_index=segment_index,
+            kind="segment_point",
+        )
+        if point_failure is not None:
+            return _AutoDiveClearanceFailure(
+                kind=point_failure.kind,
+                reason=point_failure.reason,
+                index=point_failure.index,
+                segment_index=segment_index,
+                cell=point_failure.cell,
+                point=point,
+                first=first,
+                second=second,
+            )
         cell = _footprint_cell_for_xz(
             (point[0], point[2]),
             collision_validator.cell_size,
@@ -1707,9 +2820,18 @@ def _route_segment_is_clear(
                 cell,
                 component_cells=collision_validator.component_cells,
             ):
-                return False
+                return _AutoDiveClearanceFailure(
+                    kind="segment",
+                    reason="invalid_footprint_transition",
+                    index=step,
+                    segment_index=segment_index,
+                    cell=cell,
+                    point=point,
+                    first=first,
+                    second=second,
+                )
         previous_cell = cell
-    return True
+    return None
 
 
 def _route_segment_stays_in_footprint(
@@ -1837,6 +2959,206 @@ def _smooth_cached_auto_dive_y_values(
             y = min(max(y, low_y), high_y)
         smoothed.append((point[0], y, point[2]))
     return tuple(smoothed)
+
+
+def _repelled_auto_dive_points(
+    centerline_path: CenterlinePath,
+    *,
+    waypoint_cells: tuple[FootprintCell, ...],
+    route_points: tuple[Point, ...],
+    settings: AutoDiveSettings,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> tuple[Point, ...]:
+    """Nudge interior route points toward locally clearer passage centers."""
+    if len(route_points) <= 2:
+        return route_points
+    if not collision_validator.component_cells:
+        return route_points
+
+    search_radius = _auto_dive_repulsion_search_radius_cells(settings)
+    repelled: list[Point] = list(route_points)
+    for index in range(1, len(route_points) - 1):
+        previous = repelled[index - 1]
+        point = route_points[index]
+        next_point = route_points[index + 1]
+        best_point = point
+        best_score = _repelled_auto_dive_point_score(
+            point,
+            previous=previous,
+            next_point=next_point,
+            original_point=point,
+            collision_validator=collision_validator,
+        )
+        for candidate in _repelled_auto_dive_point_candidates(
+            centerline_path,
+            waypoint_cells=waypoint_cells,
+            route_points=route_points,
+            index=index,
+            search_radius_cells=search_radius,
+            collision_validator=collision_validator,
+        ):
+            score = _repelled_auto_dive_point_score(
+                candidate,
+                previous=previous,
+                next_point=next_point,
+                original_point=point,
+                collision_validator=collision_validator,
+            )
+            if score > best_score:
+                best_score = score
+                best_point = candidate
+        repelled[index] = best_point
+    return tuple(repelled)
+
+
+def _auto_dive_repulsion_search_radius_cells(
+    settings: AutoDiveSettings,
+) -> int:
+    radius = max(1, int(settings.smoothing_radius_cells))
+    return max(1, min(2, radius // 2))
+
+
+def _repelled_auto_dive_point_candidates(
+    centerline_path: CenterlinePath,
+    *,
+    waypoint_cells: tuple[FootprintCell, ...],
+    route_points: tuple[Point, ...],
+    index: int,
+    search_radius_cells: int,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> tuple[Point, ...]:
+    point = route_points[index]
+    point_cell = _footprint_cell_for_xz(
+        (point[0], point[2]),
+        collision_validator.cell_size,
+    )
+    waypoint_cell = (
+        waypoint_cells[index]
+        if 0 <= index < len(waypoint_cells)
+        else point_cell
+    )
+    anchor_cells = {point_cell, waypoint_cell}
+    candidate_cells: set[FootprintCell] = set()
+    radius = max(1, int(search_radius_cells))
+    for anchor_cell in anchor_cells:
+        for dx in range(-radius, radius + 1):
+            for dz in range(-radius, radius + 1):
+                candidate_cell = (anchor_cell[0] + dx, anchor_cell[1] + dz)
+                if candidate_cell not in collision_validator.component_cells:
+                    continue
+                if footprint_cell_distance(anchor_cell, candidate_cell) > radius:
+                    continue
+                candidate_cells.add(candidate_cell)
+
+    if point_cell in collision_validator.component_cells:
+        candidate_cells.add(point_cell)
+    if waypoint_cell in collision_validator.component_cells:
+        candidate_cells.add(waypoint_cell)
+
+    ordered_cells = sorted(
+        candidate_cells,
+        key=lambda cell: (
+            -centerline_path.clearance_scores.get(cell, 1),
+            footprint_cell_distance(point_cell, cell),
+            cell,
+        ),
+    )
+    candidates: list[Point] = [point]
+    for cell in ordered_cells[:24]:
+        candidates.append(
+            _repelled_auto_dive_point_for_cell(
+                centerline_path,
+                cell,
+                fallback_y=point[1],
+            )
+        )
+    return _dedupe_consecutive_points(tuple(candidates), min_distance_m=1e-6)
+
+
+def _repelled_auto_dive_point_for_cell(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+    *,
+    fallback_y: float,
+) -> Point:
+    x, z = _center_for_route_cell(centerline_path, cell)
+    y = _medial_y_for_route_cell(
+        centerline_path,
+        cell,
+        fallback_y=fallback_y,
+    )
+    return (float(x), float(y), float(z))
+
+
+def _medial_y_for_route_cell(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+    *,
+    fallback_y: float,
+) -> float:
+    cached_y_ranges = getattr(centerline_path, "cached_y_ranges", None) or {}
+    y_range = cached_y_ranges.get(cell)
+    if y_range is not None:
+        return (float(y_range[0]) + float(y_range[1])) * 0.5
+    cached_points = getattr(centerline_path, "cached_points", None) or {}
+    cached_point = cached_points.get(cell)
+    if cached_point is not None:
+        return float(cached_point[1])
+    return float(fallback_y)
+
+
+def _repelled_auto_dive_point_score(
+    point: Point,
+    *,
+    previous: Point,
+    next_point: Point,
+    original_point: Point,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> tuple[object, ...]:
+    first_failure = collision_validator.segment_clearance_failure(previous, point)
+    second_failure = collision_validator.segment_clearance_failure(point, next_point)
+    clear_segment_count = int(first_failure is None) + int(second_failure is None)
+    point_clear = collision_validator.point_clearance_failure(point) is None
+    cell = _footprint_cell_for_xz(
+        (point[0], point[2]),
+        collision_validator.cell_size,
+    )
+    lateral_score = _lateral_clearance_score_at_point(
+        point,
+        centerline_path=collision_validator.centerline_path,
+    )
+    clearance_margin_m = _look_point_clearance_margin_m(
+        point,
+        collision_validator=collision_validator,
+    )
+    local_curvature = _route_curvature_rad((previous, point, next_point))
+    local_vertical_change = abs(next_point[1] - 2.0 * point[1] + previous[1])
+    midpoint = (
+        (previous[0] + next_point[0]) * 0.5,
+        (previous[1] + next_point[1]) * 0.5,
+        (previous[2] + next_point[2]) * 0.5,
+    )
+    midpoint_distance = math.sqrt(
+        (point[0] - midpoint[0]) ** 2
+        + (point[1] - midpoint[1]) ** 2
+        + (point[2] - midpoint[2]) ** 2
+    )
+    move_distance = math.sqrt(
+        (point[0] - original_point[0]) ** 2
+        + (point[1] - original_point[1]) ** 2
+        + (point[2] - original_point[2]) ** 2
+    )
+    return (
+        clear_segment_count,
+        bool(point_clear),
+        round(float(clearance_margin_m), 3),
+        int(lateral_score),
+        -round(float(local_curvature), 3),
+        -round(float(local_vertical_change), 3),
+        -round(float(midpoint_distance), 3),
+        -round(float(move_distance), 3),
+        cell,
+    )
 
 
 def _bspline_smoothed_auto_dive_points(

@@ -72,8 +72,13 @@ def test_navigation_metadata_uses_surface_cells_and_stores_3d_gap_points():
     assert any(cell[1] == 2 for cell in cells)
     points = _flat_points(metadata["routes"][0]["points"])
     y_ranges = _flat_y_ranges(metadata["routes"][0]["y_ranges"])
+    component_cells = _flat_pairs(metadata["routes"][0]["component_cells"])
+    component_y_ranges = _flat_y_ranges(
+        metadata["routes"][0]["component_y_ranges"]
+    )
     assert len(points) == len(cells)
     assert len(y_ranges) == len(cells)
+    assert len(component_y_ranges) == len(component_cells)
     assert all(point[1] == pytest.approx(2.0) for point in points)
     assert all(point[2] == pytest.approx(2.5) for point in points)
     assert all(0.5 < point[2] < 4.5 for point in points)
@@ -86,6 +91,7 @@ def test_navigation_metadata_uses_surface_cells_and_stores_3d_gap_points():
     assert cached_path.cached_points is not None
     assert cached_path.cached_y_ranges is not None
     assert cached_path.cached_clearance_margins is not None
+    assert set(component_cells) <= set(cached_path.cached_y_ranges)
     assert any(cell[1] == 2 for cell in cached_path.cells)
 
 

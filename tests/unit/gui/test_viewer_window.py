@@ -1659,6 +1659,28 @@ def test_guarded_camera_move_clamps_to_local_vertical_span():
     assert window.camera.position.tolist() == [5.0, 10.0, 5.0]
 
 
+def test_navigation_guard_preserves_position_inside_upper_vertical_span():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._navigation_guard_chunk_size = 40.0
+    window._navigation_guard_vertical_columns = {
+        (-3, 2): (
+            (-4.39140510559082, 0.33984100818634033),
+            (-0.418537, 26.631416),
+        ),
+    }
+    position = np.array([-91.522311, 5.510557, 101.700638], dtype=np.float64)
+
+    assert window._navigation_vertical_band_for_position(position) == (
+        -0.418537,
+        26.631416,
+    )
+    assert window._clamp_navigation_position_to_bounds(position).tolist() == [
+        -91.522311,
+        5.510557,
+        101.700638,
+    ]
+
+
 def test_auto_dive_update_clamps_route_pose_to_local_vertical_span():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._navigation_guard_enabled = True

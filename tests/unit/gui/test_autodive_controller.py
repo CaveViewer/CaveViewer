@@ -15,6 +15,11 @@ from caveviewer.gui.autodive_controller import (
     AutoDiveController,
     AutoDiveReplanner,
     AutoDiveState,
+    DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS,
+    DEFAULT_AUTO_DIVE_ROUTE_PREFETCH_RADIUS_CELLS,
+    DEFAULT_AUTO_DIVE_ROUTE_LOOKAHEAD_SECONDS,
+    DEFAULT_AUTO_DIVE_SURVEY_DURATION_SECONDS,
+    DEFAULT_AUTO_DIVE_SURVEY_INTERVAL_SECONDS,
 )
 
 
@@ -110,6 +115,10 @@ def test_auto_dive_pauses_until_lookahead_cells_are_loaded():
     assert controller.state is AutoDiveState.LOADING
     assert controller.prefetch_cells
     assert controller.readiness.ready is False
+    assert (
+        controller.route_prefetch_radius_cells
+        == DEFAULT_AUTO_DIVE_ROUTE_PREFETCH_RADIUS_CELLS
+    )
     assert camera.position.tolist() == [0.0, 0.0, 0.0]
 
     clock.now = 5.0
@@ -143,6 +152,8 @@ def test_auto_dive_requests_replan_after_fractional_cell_travel():
         perf_counter=clock,
         replanner=replanner,  # type: ignore[arg-type]
         replan_distance_m=0.25,
+        replan_min_interval_s=0.0,
+        replan_only_during_survey=False,
     )
     controller.start(camera, world)
 
@@ -156,6 +167,166 @@ def test_auto_dive_requests_replan_after_fractional_cell_travel():
     assert replanner.requests == [(0.25, 0.0, 0.0)]
 
 
+def test_auto_dive_route_prefetch_radius_is_narrower_than_render_radius():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    controller = AutoDiveController(
+        _plan(render_distance_cells=6),
+        perf_counter=clock,
+        lookahead_seconds=1.0,
+    )
+
+    controller.start(camera, world)
+
+    assert controller.route_prefetch_radius_cells == 2
+    assert controller.prefetch_cells
+    assert all(
+        abs(cell[1]) <= 2
+        for cell in controller.prefetch_cells
+    )
+
+
+def test_auto_dive_periodic_survey_pause_holds_position_and_scans_view():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        lookahead_seconds=1.0,
+        survey_interval_s=5.0,
+        survey_duration_s=2.0,
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 6.0
+    controller.update(camera, world)
+
+    survey_position = camera.position.copy()
+    survey_yaw = camera.yaw
+
+    assert controller.status_note == "Surveying next passage"
+    assert survey_position[0] == 5.0
+
+    clock.now = 6.5
+    controller.update(camera, world)
+
+    assert camera.position.tolist() == survey_position.tolist()
+    assert camera.yaw != survey_yaw
+
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+    clock.now = 9.1
+    controller.update(camera, world)
+    clock.now = 10.1
+    controller.update(camera, world)
+
+    assert camera.position[0] > survey_position[0]
+    assert any(event == "survey_started" for event, _payload in blackbox.events)
+    assert any(event == "survey_completed" for event, _payload in blackbox.events)
+
+
+def test_auto_dive_survey_pause_temporarily_widens_route_prefetch():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    controller = AutoDiveController(
+        _plan(render_distance_cells=6),
+        perf_counter=clock,
+        lookahead_seconds=1.0,
+        survey_interval_s=5.0,
+        survey_duration_s=2.0,
+    )
+    controller.start(camera, world)
+    normal_prefetch_count = len(controller.prefetch_cells)
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 6.0
+    controller.update(camera, world)
+
+    assert controller.route_prefetch_radius_cells == 2
+    assert len(controller.prefetch_cells) > normal_prefetch_count
+    assert any(
+        abs(cell[1]) == 3
+        for cell in controller.prefetch_cells
+    )
+
+
+def test_auto_dive_replan_defaults_to_bounded_runtime_cadence():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+        replan_only_during_survey=False,
+    )
+    controller.start(camera, world)
+
+    assert controller.lookahead_seconds == DEFAULT_AUTO_DIVE_ROUTE_LOOKAHEAD_SECONDS
+    assert controller.survey_interval_s == DEFAULT_AUTO_DIVE_SURVEY_INTERVAL_SECONDS
+    assert controller.survey_duration_s == DEFAULT_AUTO_DIVE_SURVEY_DURATION_SECONDS
+    assert (
+        controller.replan_min_interval_s
+        == DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS
+    )
+
+    camera.position = np.array([0.25, 0.0, 0.0], dtype=np.float64)
+    assert controller.update_replan(camera, world, now=0.5) is False
+    assert replanner.requests == []
+
+    assert controller.update_replan(
+        camera,
+        world,
+        now=DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS,
+    ) is False
+    assert replanner.requests == [(0.25, 0.0, 0.0)]
+
+
+def test_auto_dive_default_replanning_waits_for_survey_pause():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=10.0,
+        survey_interval_s=5.0,
+        survey_duration_s=2.0,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+
+    camera.position = np.array([4.0, 0.0, 0.0], dtype=np.float64)
+    assert controller.update_replan(camera, world, now=4.0) is False
+    assert replanner.requests == []
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 6.0
+    controller.update(camera, world)
+    camera.position = np.array([5.0, 0.0, 0.0], dtype=np.float64)
+
+    assert controller.update_replan(camera, world, now=6.0) is False
+    assert replanner.requests == [(5.0, 0.0, 0.0)]
+
+
 def test_auto_dive_swaps_latest_nearby_replan_on_owner_thread():
     clock = _FakeClock()
     world = _FakeWorld()
@@ -167,6 +338,7 @@ def test_auto_dive_swaps_latest_nearby_replan_on_owner_thread():
         perf_counter=clock,
         replanner=replanner,  # type: ignore[arg-type]
         replan_distance_m=0.25,
+        replan_only_during_survey=False,
     )
     controller.start(camera, world)
     camera.position = np.array([1.0, 0.0, 0.0], dtype=np.float64)
@@ -175,6 +347,29 @@ def test_auto_dive_swaps_latest_nearby_replan_on_owner_thread():
 
     assert controller.plan is latest_plan
     assert controller.prefetch_cells
+
+
+def test_auto_dive_replan_handoff_resumes_nearest_new_route_time():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.array([4.0, 0.0, 0.0], dtype=np.float64))
+    latest_plan = _plan(start=(3.0, 0.0, 0.0), end=(13.0, 0.0, 0.0))
+    replanner = _FakeReplanner(latest_plan)
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.5,
+        replan_only_during_survey=False,
+    )
+    controller.start(camera, world)
+    camera.position = np.array([4.0, 0.0, 0.0], dtype=np.float64)
+
+    assert controller.update_replan(camera, world, now=5.0) is True
+
+    assert controller.plan is latest_plan
+    assert controller._elapsed_s == 1.0
+    assert controller._started_at == 4.0
 
 
 def test_auto_dive_rejects_replan_that_points_backward_on_current_route():
@@ -188,6 +383,7 @@ def test_auto_dive_rejects_replan_that_points_backward_on_current_route():
         perf_counter=clock,
         replanner=replanner,  # type: ignore[arg-type]
         replan_distance_m=0.25,
+        replan_only_during_survey=False,
     )
     controller.start(camera, world)
     controller._elapsed_s = 5.0
@@ -211,6 +407,7 @@ def test_auto_dive_blackbox_records_replan_rejection_reason():
         perf_counter=clock,
         replanner=replanner,  # type: ignore[arg-type]
         replan_distance_m=0.25,
+        replan_only_during_survey=False,
         blackbox=blackbox,
     )
     controller.start(camera, world)
@@ -268,6 +465,7 @@ def test_auto_dive_discards_stale_replan_that_starts_too_far_from_camera():
         perf_counter=clock,
         replanner=replanner,  # type: ignore[arg-type]
         replan_distance_m=0.25,
+        replan_only_during_survey=False,
     )
     controller.start(camera, world)
     camera.position = np.array([5.0, 0.0, 0.0], dtype=np.float64)
@@ -288,6 +486,7 @@ def test_auto_dive_rejects_stalled_replan_and_does_not_retry_same_pose():
         perf_counter=clock,
         replanner=replanner,  # type: ignore[arg-type]
         replan_distance_m=0.25,
+        replan_only_during_survey=False,
     )
     controller.start(camera, world)
     camera.position = np.array([0.25, 0.0, 0.0], dtype=np.float64)
@@ -332,6 +531,7 @@ def _plan(
     *,
     start: tuple[float, float, float] = (0.0, 0.0, 0.0),
     end: tuple[float, float, float] = (10.0, 0.0, 0.0),
+    render_distance_cells: int = 2,
 ) -> AutoDivePlan:
     route = CameraRoute.from_keyframes(
         (
@@ -347,5 +547,5 @@ def _plan(
         circular_arc=False,
         route_length_m=10.0,
         duration_s=10.0,
-        render_distance_cells=2,
+        render_distance_cells=render_distance_cells,
     )

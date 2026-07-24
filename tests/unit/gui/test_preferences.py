@@ -191,7 +191,7 @@ def test_schema_is_typed_and_has_unique_runtime_mappings():
     assert settings.preference_defaults()["max_upload_group_mb"] == "16"
     assert settings.preference_defaults()["obj_import_batch_thousands"] == "200"
     assert settings.preference_defaults()["auto_dive_speed_feet_per_minute"] == "112.5"
-    assert settings.preference_defaults()["auto_dive_render_distance_cells"] == "10"
+    assert settings.preference_defaults()["auto_dive_render_distance_cells"] == "4"
     assert settings.preference_defaults()["auto_dive_smoothing_radius_cells"] == "5"
     assert settings.preference_defaults()["auto_dive_diagnostics"] == "0"
     assert settings.preference_defaults()["map_library_dir"].endswith(

@@ -1762,6 +1762,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             return None
 
         y = float(pos[1])
+        for span in spans:
+            if span[0] <= y <= span[1]:
+                return span
         return min(
             spans,
             key=lambda span: (abs(((span[0] + span[1]) * 0.5) - y), span),
@@ -2483,8 +2486,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self.world.config.load_radius_cells = self.render_distance_stepper.value
         replan_distance_m = max(
-            0.1,
-            float(plan.centerline_path.footprint_cell_size) * 0.25,
+            0.5,
+            float(plan.centerline_path.footprint_cell_size),
         )
         controller = AutoDiveController(
             plan,

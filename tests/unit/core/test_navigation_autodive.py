@@ -8,9 +8,13 @@ import pytest
 from caveviewer.core.navigation.autodive import (
     DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
     DEFAULT_AUTO_DIVE_VERTICAL_POSITION_FRACTION,
+    _AutoDiveCollisionValidator,
     AutoDiveSettings,
+    _AutoDiveRouteSamples,
     _centerline_cells_form_closed_loop,
+    _cone_chain_anchor_indices,
     _open_arc_from_closed_loop,
+    _repelled_auto_dive_points,
     _route_segment_stays_in_footprint,
     build_auto_dive_initial_camera_pose,
     build_centerline_auto_dive_plan,
@@ -22,6 +26,7 @@ from caveviewer.core.navigation.cache_metadata import (
     NAVIGATION_METADATA_METHOD,
     NAVIGATION_METADATA_VERSION,
     build_navigation_metadata,
+    cached_centerline_path,
 )
 
 
@@ -42,7 +47,7 @@ def test_auto_dive_uses_longest_centerline_component():
     assert plan.route.keyframes[0].position == current_position
     assert min(point[0] for point in plan.route_points[1:]) > 35.0
     assert plan.route.duration_s == pytest.approx(plan.route_length_m)
-    assert plan.render_distance_cells == 10
+    assert plan.render_distance_cells == 4
 
 
 def test_auto_dive_route_keeps_bend_waypoint_instead_of_cutting_wall():
@@ -369,7 +374,11 @@ def test_auto_dive_multicandidate_smoothing_prefers_central_line_of_sight_path()
         if 3.0 <= point[0] <= 7.0
     )
 
-    assert len(plan.route_points) > len(raw_route_points)
+    assert len(plan.route_points) == len(raw_route_points)
+    assert any(
+        _point_distance_xz(point, raw_point) > 1e-6
+        for point, raw_point in zip(plan.route_points, raw_route_points, strict=True)
+    )
     assert middle_points
     assert all(2.25 <= point[2] <= 2.55 for point in middle_points)
     assert _all_route_segments_stay_in_footprint(
@@ -406,7 +415,137 @@ def test_auto_dive_candidate_scores_are_available_for_diagnostics():
         "entry_clear",
         "forward_progress_m",
         "curvature_rad",
+        "total_change_per_m",
     } <= set(candidate_events[-1]["candidates"][0])
+    assert any(
+        str(candidate["name"]).startswith("cone-")
+        for candidate in candidate_events[-1]["candidates"]
+    )
+
+
+def test_auto_dive_candidate_diagnostics_report_first_clearance_failure():
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 1), (2, 1)),
+        route_cells=((0, 0), (1, 1), (2, 1)),
+        route_points=(
+            (0.5, 1.0, 0.5),
+            (1.5, 1.0, 1.5),
+            (2.5, 1.0, 1.5),
+        ),
+    )
+    events = []
+
+    build_centerline_auto_dive_plan(
+        manifest,
+        current_position=(0.5, 1.0, 0.5),
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=2,
+        ),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    candidate_events = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ]
+    failures = [
+        candidate["first_clearance_failure"]
+        for candidate in candidate_events[-1]["candidates"]
+        if candidate["first_clearance_failure"] is not None
+    ]
+
+    assert failures
+    assert any(
+        failure["reason"] == "invalid_footprint_transition"
+        for failure in failures
+    )
+
+
+def test_auto_dive_repulsion_uses_component_y_ranges_when_moving_off_wall():
+    component_cells = [
+        (x, z)
+        for x in range(8)
+        for z in range(5)
+    ]
+    route_cells = tuple((x, 0) for x in range(8))
+    route_points = tuple(
+        (float(x) + 0.5, 0.25, 0.5)
+        for x, _z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+    manifest["navigation"]["routes"][0]["component_y_ranges"] = [
+        value
+        for _cell in component_cells
+        for value in (0.0, 4.0)
+    ]
+    centerline_path = cached_centerline_path(manifest)
+
+    assert centerline_path is not None
+    repelled_points = _repelled_auto_dive_points(
+        centerline_path,
+        waypoint_cells=route_cells,
+        route_points=route_points,
+        settings=AutoDiveSettings(smoothing_radius_cells=4),
+        collision_validator=_AutoDiveCollisionValidator(centerline_path),
+    )
+    moved_points = tuple(
+        point for point in repelled_points[1:-1]
+        if point[2] > 0.5
+    )
+
+    assert moved_points
+    assert max(point[2] for point in moved_points) >= 2.5
+    assert all(point[1] == pytest.approx(2.0) for point in moved_points)
+
+
+def test_auto_dive_cone_chain_uses_bounded_forward_anchor_series():
+    samples = _AutoDiveRouteSamples(
+        cells=tuple((index, 0) for index in range(64)),
+        points=tuple((float(index), 1.0, 0.5) for index in range(64)),
+    )
+
+    anchors = _cone_chain_anchor_indices(samples, radius_cells=15)
+
+    assert 2 <= len(anchors) <= 5
+    assert anchors == tuple(sorted(anchors))
+    assert anchors[0] > 0
+    assert anchors[-1] > anchors[0]
+
+
+def test_auto_dive_camera_look_steers_slightly_away_from_side_wall():
+    component_cells = [
+        (x, z)
+        for x in range(12)
+        for z in range(5)
+    ]
+    route_cells = tuple((x, 0) for x in range(12))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, 0.5)
+        for x, _z in route_cells
+    )
+
+    plan = build_centerline_auto_dive_plan(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        ),
+        current_position=route_points[0],
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+            lookahead_distance_m=4.0,
+        ),
+    )
+
+    assert 0.0 < plan.route.keyframes[0].yaw_deg <= 20.0
+    assert plan.route.keyframes[0].pitch_deg == pytest.approx(0.0)
 
 
 def test_auto_dive_rejects_cached_xz_smoothing_that_would_cut_walls():
@@ -438,11 +577,16 @@ def test_auto_dive_rejects_cached_xz_smoothing_that_would_cut_walls():
         (point[0], point[2])
         for point in raw_route_points
     }
+    assert set(plan.route_points_xz) <= raw_route_xz
     assert any(
-        point not in raw_route_xz
-        for point in plan.route_points_xz[1:-1]
+        point in plan.route_points_xz
+        for point in ((6.5, 0.5), (6.5, 1.5))
     )
     assert any(
+        point in plan.route_points_xz
+        for point in ((6.5, 5.5), (6.5, 6.5))
+    )
+    assert not any(
         5.5 < point[0] < 6.5 and 0.5 < point[1] < 1.5
         for point in plan.route_points_xz
     )
