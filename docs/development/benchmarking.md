@@ -192,9 +192,18 @@ exists, the new run is compared against it with
 code and still leaves all artifacts for inspection.
 
 The console output and `latest-summary.txt` include the current metrics, the
-single latest run used as the gate baseline, detailed threshold checks, and a
-compact comparison against the most recent local history record. Use
-`--history-limit <n>` when deliberately inspecting more previous runs.
+single latest run used as the gate baseline, and a simple wall-clock FPS
+comparison against the previous local run:
+
+```text
+Wall FPS comparison (higher is better):
+  Current  [###########################---] 90.00 fps
+  Previous [##############################] 100.00 fps (previous-main)
+  Delta: -10.00%
+```
+
+Set `--history-limit 0` when deliberately hiding that previous-run comparison.
+Detailed threshold checks are still written to `comparison.json`.
 
 The benchmark viewer launches through the same window-sizing path as the
 regular CaveViewer app: 80% of the detected desktop/work area using the active

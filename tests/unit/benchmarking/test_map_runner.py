@@ -103,7 +103,7 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
                         "schema_version": 1,
                         "timestamp_utc": "2026-07-22T10:00:00Z",
                         "label": "older-release",
-                        "summary": _summary(median_fps=80.0),
+                        "summary": _summary(median_fps=80.0, wall_clock_fps=80.0),
                     },
                     sort_keys=True,
                 ),
@@ -112,7 +112,7 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
                         "schema_version": 1,
                         "timestamp_utc": "2026-07-23T10:00:00Z",
                         "label": "previous-main",
-                        "summary": _summary(median_fps=100.0),
+                        "summary": _summary(median_fps=100.0, wall_clock_fps=100.0),
                     },
                     sort_keys=True,
                 ),
@@ -196,14 +196,16 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
     assert "Route: auto_centerline" in latest_text
     assert "selection=max_visible_chunk_texture_complexity_v1" in latest_text
     assert "target_speed_m_per_s=2.00" in latest_text
-    assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
-    assert "FAIL median_fps" in latest_text
-    assert "Previous local run compared to current" in latest_text
-    assert "Run: previous-main" in latest_text
-    assert "Gate: FAIL" in latest_text
+    assert "Gate baseline: previous-main wall_clock_fps=100.00" in latest_text
+    assert "Comparison checks:" not in latest_text
+    assert "FAIL median_fps" not in latest_text
+    assert "Wall FPS comparison (higher is better):" in latest_text
+    assert "Current  [###########################---] 90.00 fps" in latest_text
+    assert "Previous [##############################] 100.00 fps (previous-main)" in latest_text
+    assert "Delta: -10.00%" in latest_text
     assert (
         "median render FPS: current=90.00 fps, previous=100.00 fps, delta=-10.00%"
-        in latest_text
+        not in latest_text
     )
     assert "Run: older-release" not in latest_text
     assert "Time:" not in latest_text
@@ -265,16 +267,15 @@ def test_map_benchmark_uses_only_compatible_history_as_gate_baseline():
                 }
             ],
             current_summary=current_summary,
-            thresholds=module.BenchmarkThresholds(),
             limit=5,
         )
     )
-    assert "Run: old-route" in history_text
-    assert "Gate: INCOMPATIBLE (route changed; not used as gate baseline)" in history_text
-    assert (
-        "wall clock FPS: current=90.00 fps, previous=100.00 fps, delta=-10.00%"
-        in history_text
-    )
+    assert "Wall FPS comparison (higher is better):" in history_text
+    assert "Current  [###########################---] 90.00 fps" in history_text
+    assert "Previous [##############################] 100.00 fps (old-route)" in history_text
+    assert "Delta: -10.00%" in history_text
+    assert "Gate: INCOMPATIBLE" not in history_text
+    assert "wall clock FPS: current=90.00 fps" not in history_text
 
 
 def test_map_benchmark_treats_actual_window_size_changes_as_incompatible():
@@ -295,14 +296,16 @@ def test_map_benchmark_treats_actual_window_size_changes_as_incompatible():
         module._history_comparison_lines(
             [{"label": "old-size", "summary": previous_summary}],
             current_summary=current_summary,
-            thresholds=module.BenchmarkThresholds(),
             limit=1,
         )
     )
 
-    assert "Gate: INCOMPATIBLE" in history_text
-    assert "window size changed" in history_text
-    assert "framebuffer size changed" in history_text
+    assert "Wall FPS comparison (higher is better):" in history_text
+    assert "Previous [##############################] 100.00 fps (old-size)" in history_text
+    assert "Delta: -10.00%" in history_text
+    assert "Gate: INCOMPATIBLE" not in history_text
+    assert "window size changed" not in history_text
+    assert "framebuffer size changed" not in history_text
 
 
 def test_map_benchmark_treats_streaming_settings_changes_as_incompatible():
@@ -321,13 +324,15 @@ def test_map_benchmark_treats_streaming_settings_changes_as_incompatible():
         module._history_comparison_lines(
             [{"label": "old-streaming", "summary": previous_summary}],
             current_summary=current_summary,
-            thresholds=module.BenchmarkThresholds(),
             limit=1,
         )
     )
 
-    assert "Gate: INCOMPATIBLE" in history_text
-    assert "streaming settings changed" in history_text
+    assert "Wall FPS comparison (higher is better):" in history_text
+    assert "Previous [##############################] 100.00 fps (old-streaming)" in history_text
+    assert "Delta: -10.00%" in history_text
+    assert "Gate: INCOMPATIBLE" not in history_text
+    assert "streaming settings changed" not in history_text
 
 
 def _summary(

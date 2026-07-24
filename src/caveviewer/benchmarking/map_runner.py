@@ -288,7 +288,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--history-limit",
         type=int,
-        help="Number of previous local runs to include in the text summary.",
+        help=(
+            "Set to 0 to hide the previous-run wall FPS comparison. "
+            "Defaults to 1."
+        ),
     )
     return parser
 
@@ -340,7 +343,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             previous_records=previous_records,
             comparison=comparison,
             comparison_path=comparison_path,
-            thresholds=thresholds,
         )
         plan["latest_summary_path"].parent.mkdir(parents=True, exist_ok=True)
         plan["latest_summary_path"].write_text(text_summary, encoding="utf-8")
@@ -1137,7 +1139,6 @@ def _human_summary(
     previous_records: Sequence[Mapping[str, Any]],
     comparison: Mapping[str, Any] | None,
     comparison_path: Path | None,
-    thresholds: BenchmarkThresholds,
 ) -> str:
     metrics = summary.get("metrics", {})
     environment = summary.get("environment", {})
@@ -1207,17 +1208,11 @@ def _human_summary(
         lines.append(
             "Gate baseline: "
             f"{previous_record.get('label', '<unknown>')} "
-            f"wall_clock_fps={_format_metric(previous_metrics.get('wall_clock_fps'))} "
-            f"median_render_fps={_format_metric(previous_metrics.get('median_fps'))}"
+            f"wall_clock_fps={_format_metric(previous_metrics.get('wall_clock_fps'))}"
         )
-    if comparison is not None:
-        lines.append("Comparison checks:")
-        for check in comparison.get("checks", []):
-            lines.append(f"  - {_format_check(check)}")
     lines.extend(_history_comparison_lines(
         previous_records,
         current_summary=summary,
-        thresholds=thresholds,
         limit=int(plan["history_limit"]),
     ))
     lines.extend(
@@ -1327,86 +1322,75 @@ def _history_comparison_lines(
     previous_records: Sequence[Mapping[str, Any]],
     *,
     current_summary: Mapping[str, Any],
-    thresholds: BenchmarkThresholds,
     limit: int,
 ) -> list[str]:
     if not previous_records:
-        return ["Previous local runs: none"]
+        return ["Wall FPS comparison: previous local run unavailable."]
     if limit <= 0:
         return []
 
-    if limit == 1:
-        lines = ["Previous local run compared to current:"]
-    else:
-        lines = [f"Previous local runs compared to current (most recent {limit}):"]
-    for record in reversed(previous_records[-limit:]):
-        previous_summary = _summary_from_record(record)
-        if previous_summary is None:
-            lines.append(
-                f"  - {record.get('label', '<unknown>')}: metrics unavailable"
-            )
-            continue
-        gate = _comparison_status(previous_summary, current_summary, thresholds)
-        lines.extend(
-            [
-                f"  - Run: {record.get('label', '<unknown>')}",
-                f"    Gate: {gate}{_compatibility_note(previous_summary, current_summary)}",
-                "    FPS (higher is better, current vs previous):",
-                _metric_change_line(
-                    "wall clock FPS",
-                    "wall_clock_fps",
-                    current_summary=current_summary,
-                    previous_summary=previous_summary,
-                    unit="fps",
-                ),
-                _metric_change_line(
-                    "median render FPS",
-                    "median_fps",
-                    current_summary=current_summary,
-                    previous_summary=previous_summary,
-                    unit="fps",
-                ),
-                _metric_change_line(
-                    "1% low render FPS",
-                    "one_percent_low_fps",
-                    current_summary=current_summary,
-                    previous_summary=previous_summary,
-                    unit="fps",
-                ),
-                "    Frame time (lower is better, current vs previous):",
-                _metric_change_line(
-                    "p95 frame time",
-                    "p95_frame_ms",
-                    current_summary=current_summary,
-                    previous_summary=previous_summary,
-                    unit="ms",
-                ),
-            ]
-        )
-    return lines
+    previous_record = previous_records[-1]
+    previous_summary = _summary_from_record(previous_record)
+    if previous_summary is None:
+        return [
+            "Wall FPS comparison: previous local run metrics unavailable "
+            f"({previous_record.get('label', '<unknown>')})."
+        ]
+    return _wall_fps_comparison_lines(
+        current_summary=current_summary,
+        previous_summary=previous_summary,
+        previous_label=str(previous_record.get("label", "<unknown>")),
+    )
 
 
-def _metric_change_line(
-    label: str,
-    metric_name: str,
+def _wall_fps_comparison_lines(
     *,
     current_summary: Mapping[str, Any],
     previous_summary: Mapping[str, Any],
-    unit: str,
-) -> str:
-    current_value = _metric_value(current_summary, metric_name)
-    previous_value = _metric_value(previous_summary, metric_name)
-    if current_value is None or previous_value is None:
-        return (
-            f"      {label}: current={_format_metric_with_unit(current_value, unit)}, "
-            f"previous={_format_metric_with_unit(previous_value, unit)} "
-            "(delta unavailable)"
-        )
-    return (
-        f"      {label}: current={_format_metric_with_unit(current_value, unit)}, "
-        f"previous={_format_metric_with_unit(previous_value, unit)}, "
-        f"delta={_percent_delta_text(previous_value, current_value)}"
+    previous_label: str,
+) -> list[str]:
+    current_value = _metric_value(current_summary, "wall_clock_fps")
+    previous_value = _metric_value(previous_summary, "wall_clock_fps")
+    max_value = max(
+        value
+        for value in (current_value, previous_value, 0.0)
+        if isinstance(value, (int, float))
     )
+    lines = [
+        "Wall FPS comparison (higher is better):",
+        (
+            "  Current  "
+            f"{_ascii_bar(current_value, max_value)} "
+            f"{_format_metric_with_unit(current_value, 'fps')}"
+        ),
+        (
+            "  Previous "
+            f"{_ascii_bar(previous_value, max_value)} "
+            f"{_format_metric_with_unit(previous_value, 'fps')} "
+            f"({previous_label})"
+        ),
+    ]
+    if current_value is None or previous_value is None:
+        lines.append("  Delta: unavailable")
+    else:
+        lines.append(f"  Delta: {_percent_delta_text(previous_value, current_value)}")
+    return lines
+
+
+def _ascii_bar(
+    value: float | None,
+    max_value: float,
+    *,
+    width: int = 30,
+) -> str:
+    if value is None:
+        return "[" + "?" * width + "]"
+    if max_value <= 0.0:
+        filled = 0
+    else:
+        filled = round((max(0.0, value) / max_value) * width)
+    filled = max(0, min(width, filled))
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
 
 
 def _format_metric_with_unit(value: float | None, unit: str) -> str:
@@ -1428,75 +1412,6 @@ def _percent_delta_text(baseline: float, candidate: float) -> str:
     else:
         delta = ((candidate - baseline) / abs(baseline)) * 100.0
     return f"{delta:+.2f}%"
-
-
-def _compatibility_note(
-    previous_summary: Mapping[str, Any],
-    current_summary: Mapping[str, Any],
-) -> str:
-    reasons = _incompatibility_reasons(previous_summary, current_summary)
-    if not reasons:
-        return ""
-    return f" ({'; '.join(reasons)}; not used as gate baseline)"
-
-
-def _incompatibility_reasons(
-    previous_summary: Mapping[str, Any],
-    current_summary: Mapping[str, Any],
-) -> list[str]:
-    previous_scenario = previous_summary.get("scenario", {})
-    current_scenario = current_summary.get("scenario", {})
-    previous_environment = previous_summary.get("environment", {})
-    current_environment = current_summary.get("environment", {})
-
-    reasons: list[str] = []
-    previous_name = previous_scenario.get("name")
-    current_name = current_scenario.get("name")
-    if not previous_name or not current_name:
-        reasons.append("scenario name missing")
-    elif previous_name != current_name:
-        reasons.append("scenario name changed")
-
-    previous_fingerprint = previous_scenario.get("fingerprint")
-    current_fingerprint = current_scenario.get("fingerprint")
-    if not previous_fingerprint or not current_fingerprint:
-        reasons.append("scenario fingerprint missing")
-    elif previous_fingerprint != current_fingerprint:
-        reasons.append("route changed")
-
-    previous_map = previous_environment.get("cache_manifest_sha256")
-    current_map = current_environment.get("cache_manifest_sha256")
-    if not previous_map or not current_map:
-        reasons.append("map manifest hash missing")
-    elif previous_map != current_map:
-        reasons.append("map manifest changed")
-
-    for key, reason in (
-        ("actual_window_size", "window size changed"),
-        ("actual_framebuffer_size", "framebuffer size changed"),
-        ("streaming_settings_fingerprint", "streaming settings changed"),
-    ):
-        previous_value = previous_environment.get(key)
-        current_value = current_environment.get(key)
-        if previous_value is not None or current_value is not None:
-            if previous_value != current_value:
-                reasons.append(reason)
-
-    return reasons
-
-
-def _comparison_status(
-    previous_summary: Mapping[str, Any],
-    current_summary: Mapping[str, Any],
-    thresholds: BenchmarkThresholds,
-) -> str:
-    if not _summaries_are_comparable(previous_summary, current_summary):
-        return "INCOMPATIBLE"
-    return (
-        "PASS"
-        if compare_summaries(previous_summary, current_summary, thresholds)["passed"]
-        else "FAIL"
-    )
 
 
 def _latest_compatible_record(
@@ -1596,34 +1511,6 @@ def _status_text(comparison: Mapping[str, Any] | None) -> str:
     if comparison is None:
         return "BASELINE RECORDED"
     return "PASS" if comparison["passed"] else "FAIL"
-
-
-def _format_check(check: Mapping[str, Any]) -> str:
-    status = "PASS" if check.get("passed") else "FAIL"
-    metric = check.get("metric", "<unknown>")
-    baseline = _format_metric(check.get("baseline"))
-    candidate = _format_metric(check.get("candidate"))
-    delta = _format_metric(check.get("delta_pct"))
-    if check.get("skipped"):
-        return (
-            f"{status} {metric}: skipped "
-            f"(baseline={baseline}, candidate={candidate}; {check.get('reason')})"
-        )
-    if check.get("kind") == "compatibility":
-        return f"{status} {metric}: baseline={baseline}, candidate={candidate}"
-    if "allowed_drop_pct" in check:
-        allowed = _format_metric(check.get("allowed_drop_pct"))
-        return (
-            f"{status} {metric}: baseline={baseline}, candidate={candidate}, "
-            f"delta={delta}%, allowed_drop={allowed}%"
-        )
-    allowed = _format_metric(check.get("allowed_increase_pct"))
-    return (
-        f"{status} {metric}: baseline={baseline}, candidate={candidate}, "
-        f"delta={delta}%, allowed_increase={allowed}%"
-    )
-
-
 def _existing_file(path: str | os.PathLike[str], label: str) -> Path:
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
