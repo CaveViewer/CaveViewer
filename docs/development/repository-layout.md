@@ -13,6 +13,9 @@ src/caveviewer/app.py                         startup, session loop, UI adapters
 src/caveviewer/benchmark.py                   viewer FPS benchmark CLI
 src/caveviewer/version.py                     release identity
 src/caveviewer/storage_paths.py               XDG/portable application roots
+src/caveviewer/benchmarking/                  benchmark scenarios, metrics, comparisons, and routes
+src/caveviewer/benchmarking/results.py        benchmark scenario/results model and controller
+src/caveviewer/benchmarking/routes.py         benchmark-specific route generation
 src/caveviewer/core/                          parsing, cache, streaming, and non-UI policy
 src/caveviewer/core/json_io.py                 bounded JSON loading for core inputs
 src/caveviewer/core/map/                      map discovery, cache, and import workflow
@@ -62,7 +65,8 @@ src/caveviewer/gui/preferences_dialog.py      Tk preference dialog presentation
 src/caveviewer/gui/recording.py               recording encoder process/thread helpers
 src/caveviewer/gui/recording_controller.py    recording countdown/status/timing state
 src/caveviewer/gui/recording_capture.py       render-thread recording readback resources
-src/caveviewer/gui/benchmark.py               benchmark scenarios, metrics, and comparisons
+src/caveviewer/gui/benchmark.py               compatibility wrapper for benchmark results
+src/caveviewer/gui/benchmark_routes.py        compatibility wrapper for benchmark route generation
 src/caveviewer/gui/chunk_upload.py            render-thread chunk upload state and cleanup
 src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
 src/caveviewer/gui/view_culling.py            resident chunk frustum-culling cache
@@ -96,6 +100,9 @@ CaveViewer/
 │       ├── app.py
 │       ├── benchmark.py
 │       ├── storage_paths.py
+│       ├── benchmarking/
+│       │   ├── results.py
+│       │   └── routes.py
 │       ├── core/
 │       │   ├── chunking/
 │       │   ├── diagnostics/

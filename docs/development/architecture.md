@@ -10,13 +10,29 @@ caveviewer.app
     ├── caveviewer.storage_paths XDG and portable storage roots
     ├── caveviewer.core       preferences, discovery, import/cache, streaming policy
     └── caveviewer.gui        dialogs, rendering, platform integration
-          └── caveviewer.core
+          ├── caveviewer.core
+          └── caveviewer.benchmarking benchmark controller adapter
+
+caveviewer.benchmark              benchmark CLI
+    ├── caveviewer.benchmarking    scenarios, metrics, comparisons, and routes
+    └── caveviewer.gui             viewer runtime adapter
+
+caveviewer.benchmarking
+    └── caveviewer.core.navigation reusable route and centerline primitives
 ```
 
-`caveviewer.core` must not import `caveviewer.gui` or `caveviewer.app`. GUI and
-application entry-point code may call core services, but concrete Tk and OpenGL
+`caveviewer.core` must not import `caveviewer.gui`, `caveviewer.app`, or
+benchmarking. GUI, benchmark, and application entry-point code may call core
+services. Benchmarking may call reusable core policy. Concrete Tk and OpenGL
 work stays in the GUI layer. Platform behavior is selected through
 `caveviewer.gui.platform` adapters.
+
+`caveviewer.benchmarking` owns benchmark scenario parsing, measurement
+summaries, regression comparisons, and benchmark-specific route selection. It
+may depend on reusable core navigation/streaming policy, but it must not own
+viewer presentation or render-thread OpenGL resources. `viewer_window.py`
+adapts a `BenchmarkController` into the real render loop when the benchmark CLI
+launches the viewer.
 
 ## Startup and map import
 

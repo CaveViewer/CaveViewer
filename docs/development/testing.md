@@ -7,6 +7,8 @@ file's commands, marker definitions, or coverage thresholds.
 ## Test layout
 
 - `tests/unit/core/`: parsing, cache, scheduling, memory, and other core policy.
+- `tests/unit/benchmarking/`: benchmark scenario, route-selection, summary, and
+  comparison policy that does not require Tk or OpenGL.
 - `tests/unit/gui/`: controllers, validation, dialogs, platform adapters, and
   GUI-adjacent logic that can run deterministically.
 - `tests/unit/`: application-level helpers that do not fit one package.

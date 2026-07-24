@@ -192,7 +192,7 @@ The shared centerline and camera-route primitives live under
 `caveviewer.core.navigation`. Keep generic navigation behavior there so future
 viewer features, such as an opt-in autopilot dive, can reuse it without pulling
 in benchmark measurement, threshold, or artifact-writing code. Keep benchmark
-load scoring and scenario metadata in `caveviewer.gui.benchmark_routes`.
+load scoring and scenario metadata in `caveviewer.benchmarking.routes`.
 
 The default benchmark selector then scores candidate centerline positions by
 render-distance forward-view load from the route camera direction: visible chunk
