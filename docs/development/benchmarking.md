@@ -88,21 +88,27 @@ python scripts/benchmark/compare_benchmark_results.py \
 ## Generic local map run
 
 Use `scripts/benchmark/run_map_benchmark.py` for machine-local benchmark maps
-that are too large or private to upload. The wrapper takes a map directory and
-an output directory from CLI flags or from a JSON config file. The map directory
-must contain either:
+that are too large or private to upload. The wrapper takes a map directory from
+CLI flags or from a JSON config file. By default it writes benchmark artifacts
+next to that map under `<map-dir>/_benchmarks`, which is ignored by Git. The map
+directory must contain either:
 
 - `_cache/manifest.json`; or
 - a supported source model (`.obj`, `.glb`, or `.gltf`) that the wrapper can
   compile with `python -m caveviewer.chunker --source <map-dir>`.
+
+Minimal CLI run:
+
+```bash
+python scripts/benchmark/run_map_benchmark.py \
+  --map-dir /path/to/local/map
+```
 
 Minimal config file:
 
 ```json
 {
   "map_dir": "/absolute/path/to/local/map",
-  "output_dir": "/absolute/path/to/benchmark-output",
-  "benchmark_id": "local-load-map",
   "render_distance": 10,
   "duration_seconds": 120,
   "centerline_route_target_length_chunks": 24,
@@ -131,18 +137,24 @@ CLI flags override config values:
 ```bash
 python scripts/benchmark/run_map_benchmark.py \
   --map-dir /path/to/local/map \
-  --output-dir /path/to/benchmark-output \
   --render-distance 10 \
   --duration-seconds 120 \
   --centerline-route-selection max-complexity \
   --vsync unchanged
 ```
 
+Use `--output-dir /path/to/benchmark-output` only when you want artifacts
+outside the map directory. Use `--benchmark-id <id>` only when you deliberately
+want to override the default identity.
+
 The wrapper clears `CAVEVIEWER_MAP_CACHE_DIR` for the chunker and benchmark
 subprocesses so the benchmark uses the map-local cache. Each run tees wrapper,
 chunker, and benchmark-wrapper output into that run's `orchestration.log`. Each
-successful benchmark also appends `<output-dir>/history.jsonl` and writes
-`<output-dir>/latest-summary.txt`. When a previous compatible local record
+successful benchmark also appends `<map-dir>/_benchmarks/history.jsonl` and
+writes `<map-dir>/_benchmarks/latest-summary.txt` unless `--output-dir` is set.
+The default `benchmark_id` is the SHA-256 of `_cache/manifest.json` after cache
+validation, so rebuilding or replacing the map cache creates a new local map
+identity. When a previous compatible local record
 exists, the new run is compared against it with
 `benchmarks/viewer-thresholds.v1.json`; a regression returns a non-zero exit
 code and still leaves all artifacts for inspection.

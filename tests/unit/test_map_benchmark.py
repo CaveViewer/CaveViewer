@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -32,7 +33,7 @@ def test_map_benchmark_dry_run_uses_config_file_and_plans_compile(
 ):
     module = _load_script_module()
     map_dir = tmp_path / "maps" / "load-test-map"
-    output_dir = tmp_path / "results" / "load-test-map"
+    output_dir = map_dir / "_benchmarks"
     config_path = tmp_path / "benchmark-config.json"
     map_dir.mkdir(parents=True)
     (map_dir / "model.obj").write_text("o map\n", encoding="utf-8")
@@ -40,8 +41,6 @@ def test_map_benchmark_dry_run_uses_config_file_and_plans_compile(
         json.dumps(
             {
                 "map_dir": str(map_dir),
-                "output_dir": str(output_dir),
-                "benchmark_id": "load-test-map",
                 "duration_seconds": 45,
                 "centerline_route_selection": "midpoint",
                 "label": "candidate stack",
@@ -56,6 +55,8 @@ def test_map_benchmark_dry_run_uses_config_file_and_plans_compile(
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "CaveViewer local map benchmark plan:" in output
+    assert "benchmark_id: <computed after cache validation>" in output
+    assert "benchmark_id_source: manifest_sha256" in output
     assert f"map_dir: {map_dir}" in output
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=24" in output
@@ -95,16 +96,18 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
 ):
     module = _load_script_module()
     map_dir = tmp_path / "map"
-    output_dir = tmp_path / "results"
+    output_dir = map_dir / "_benchmarks"
     run_dir = output_dir / "runs" / "candidate"
     history_path = output_dir / "history.jsonl"
     map_dir.mkdir()
     (map_dir / "model.obj").write_text("o map\n", encoding="utf-8")
     (map_dir / "_cache").mkdir()
-    (map_dir / "_cache" / "manifest.json").write_text(
+    manifest_path = map_dir / "_cache" / "manifest.json"
+    manifest_path.write_text(
         json.dumps(_manifest()),
         encoding="utf-8",
     )
+    expected_benchmark_id = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     history_path.parent.mkdir(parents=True)
     history_path.write_text(
         "\n".join(
@@ -176,8 +179,6 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
         [
             "--map-dir",
             str(map_dir),
-            "--output-dir",
-            str(output_dir),
             "--label",
             "candidate",
         ]
@@ -227,6 +228,7 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
     assert len(history_lines) == 3
     latest_record = json.loads(history_lines[-1])
     assert latest_record["comparison_passed"] is False
+    assert latest_record["benchmark_id"] == expected_benchmark_id
     assert latest_record["map_dir"] == str(map_dir)
     benchmark_command = next(
         command

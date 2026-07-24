@@ -10,6 +10,7 @@ htmlcov/
 benchmark-results/
 benchmark-artifacts/
 .benchmark-data/
+_benchmarks/
 *.swp
 *.swo
 *.swn

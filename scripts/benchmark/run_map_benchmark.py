@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -53,13 +54,13 @@ CACHE_DIRNAME = "_cache"
 MANIFEST_NAME = "manifest.json"
 MAP_SOURCE_SUFFIXES = {".glb", ".gltf", ".obj"}
 LOCAL_HISTORY_SCHEMA_VERSION = 1
-DEFAULT_BENCHMARK_ID = "local-map"
 DEFAULT_RENDER_DISTANCE = 10
 DEFAULT_MEASUREMENT_SECONDS = 120.0
 DEFAULT_MAX_RUNTIME_MARGIN_SECONDS = 90.0
 DEFAULT_CENTERLINE_ROUTE_KEYFRAMES = 24
 DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS = 24.0
 DEFAULT_TEXTURE_RESIDENT_CACHE_MB = 768.0
+DEFERRED_BENCHMARK_ID = "<computed after cache validation>"
 CENTERLINE_ROUTE_SELECTION_BY_CLI = {
     "max-complexity": CENTERLINE_ROUTE_SELECTION_MAX_COMPLEXITY,
     "midpoint": CENTERLINE_ROUTE_SELECTION_MIDPOINT,
@@ -94,7 +95,7 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Optional JSON config file. CLI options override config values. "
             "Use underscore keys matching option names, such as map_dir, "
-            "output_dir, render_distance, and duration_seconds."
+            "render_distance, and duration_seconds."
         ),
     )
     parser.add_argument(
@@ -103,11 +104,17 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output-dir",
-        help="Directory for benchmark runs, history, and latest-summary.txt.",
+        help=(
+            "Directory for benchmark runs, history, and latest-summary.txt. "
+            "Defaults to <map-dir>/_benchmarks."
+        ),
     )
     parser.add_argument(
         "--benchmark-id",
-        help="Stable local history identifier. Defaults to the map directory name.",
+        help=(
+            "Stable local history identifier. Defaults to the SHA-256 of "
+            "<map-dir>/_cache/manifest.json after cache validation."
+        ),
     )
     parser.add_argument(
         "--scenario",
@@ -283,6 +290,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         _prepare_orchestration_log(plan)
         _ensure_cache(plan)
+        _finalize_benchmark_identity(plan)
         _prepare_scenario(plan)
         benchmark_returncode = _run_benchmark(plan)
         if benchmark_returncode != 0:
@@ -389,6 +397,18 @@ def _required_path_option(
     return Path(str(value)).expanduser().resolve()
 
 
+def _path_option(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    name: str,
+    default: Path,
+) -> Path:
+    value = _option(args, config, name)
+    if value is None or str(value).strip() == "":
+        return default
+    return Path(str(value)).expanduser().resolve()
+
+
 def _choice_option(
     args: argparse.Namespace,
     config: Mapping[str, Any],
@@ -406,7 +426,7 @@ def _choice_option(
 
 def _build_plan(args: argparse.Namespace, config: Mapping[str, Any]) -> dict[str, Any]:
     map_dir = _required_path_option(args, config, "map_dir")
-    output_dir = _required_path_option(args, config, "output_dir")
+    output_dir = _path_option(args, config, "output_dir", map_dir / "_benchmarks")
     scenario_template_path = _existing_file(
         _option(args, config, "scenario", str(DEFAULT_SCENARIO_PATH)),
         "scenario",
@@ -414,9 +434,6 @@ def _build_plan(args: argparse.Namespace, config: Mapping[str, Any]) -> dict[str
     threshold_path = _existing_file(
         _option(args, config, "thresholds", str(DEFAULT_THRESHOLDS_PATH)),
         "thresholds",
-    )
-    benchmark_id = _safe_label(
-        str(_option(args, config, "benchmark_id", map_dir.name or DEFAULT_BENCHMARK_ID))
     )
     route_mode = _choice_option(
         args,
@@ -478,6 +495,12 @@ def _build_plan(args: argparse.Namespace, config: Mapping[str, Any]) -> dict[str
     compile_needed = bool(force_compile or not manifest_path.is_file())
     if compile_needed:
         _validate_map_dir_for_compile(map_dir)
+    benchmark_id, benchmark_id_source = _resolve_initial_benchmark_id(
+        args,
+        config,
+        manifest_path=manifest_path,
+        compile_needed=compile_needed,
+    )
     label = _safe_label(str(_option(args, config, "label", _default_label())))
     run_dir = output_dir / "runs" / label
     generated_scenario_paths = {
@@ -527,6 +550,7 @@ def _build_plan(args: argparse.Namespace, config: Mapping[str, Any]) -> dict[str
 
     return {
         "benchmark_id": benchmark_id,
+        "benchmark_id_source": benchmark_id_source,
         "map_dir": map_dir,
         "cache_dir": cache_dir,
         "manifest_path": manifest_path,
@@ -613,6 +637,7 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
     lines = [
         "CaveViewer local map benchmark plan:",
         f"  benchmark_id: {plan['benchmark_id']}",
+        f"  benchmark_id_source: {plan['benchmark_id_source']}",
         f"  map_dir: {plan['map_dir']}",
         f"  cache_dir: {plan['cache_dir']}",
         f"  route_mode: {plan['route_mode']}",
@@ -741,6 +766,48 @@ def _ensure_cache(plan: Mapping[str, Any]) -> None:
         raise BenchmarkConfigurationError(
             f"chunker completed but did not create {manifest_path}"
         )
+
+
+def _resolve_initial_benchmark_id(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    *,
+    manifest_path: Path,
+    compile_needed: bool,
+) -> tuple[str, str]:
+    configured_value = _option(args, config, "benchmark_id")
+    if configured_value is not None and str(configured_value).strip() != "":
+        return _safe_label(str(configured_value)), "configured"
+    if not compile_needed and manifest_path.is_file():
+        return _manifest_sha256(manifest_path), "manifest_sha256"
+    return DEFERRED_BENCHMARK_ID, "manifest_sha256"
+
+
+def _finalize_benchmark_identity(plan: dict[str, Any]) -> None:
+    if plan["benchmark_id_source"] != "manifest_sha256":
+        return
+    manifest_path = plan["manifest_path"]
+    assert isinstance(manifest_path, Path)
+    benchmark_id = _manifest_sha256(manifest_path)
+    if plan["benchmark_id"] != benchmark_id:
+        plan["benchmark_id"] = benchmark_id
+        _log_message(
+            plan,
+            "Resolved benchmark_id from cache manifest SHA-256: "
+            f"{benchmark_id}",
+        )
+
+
+def _manifest_sha256(manifest_path: Path) -> str:
+    if not manifest_path.is_file():
+        raise BenchmarkConfigurationError(
+            f"cache manifest does not exist: {manifest_path}"
+        )
+    digest = hashlib.sha256()
+    with open(manifest_path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _prepare_scenario(plan: dict[str, Any]) -> None:
