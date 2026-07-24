@@ -1068,6 +1068,55 @@ def test_target_streaming_load_radius_uses_auto_dive_distance():
     assert window._target_streaming_load_radius() == 10
 
 
+def test_minimap_centerline_overlay_is_opt_in(monkeypatch):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    manifest = {"footprint_cells": [], "footprint_cell_size": 1.0}
+    calls = []
+
+    def fake_generate_centerline_path(_manifest, *, component_selection):
+        calls.append(component_selection)
+        return SimpleNamespace(points_xz=((1.0, 2.0), (3.0, 4.0)))
+
+    monkeypatch.delenv("CAVEVIEWER_MINIMAP_CENTERLINE", raising=False)
+    monkeypatch.setattr(
+        viewer_window,
+        "generate_centerline_path",
+        fake_generate_centerline_path,
+    )
+
+    assert window._minimap_centerline_points_xz(manifest) == ()
+    assert calls == []
+
+    monkeypatch.setenv("CAVEVIEWER_MINIMAP_CENTERLINE", "1")
+
+    assert window._minimap_centerline_points_xz(manifest) == (
+        (1.0, 2.0),
+        (3.0, 4.0),
+    )
+    assert calls == [viewer_window.CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH]
+
+
+def test_auto_dive_progress_loader_hides_surrounding_text():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.manifest = {"source_obj": "/maps/devils_eye.obj"}
+    window._auto_dive_controller = SimpleNamespace(
+        state=viewer_window.AutoDiveState.LOADING,
+        progress=0.5,
+        status_note="Loading next passage (3/9 cells)",
+    )
+    renders = []
+
+    class FakeImportProgressPanel:
+        def render(self, window_size, map_name, stage, fraction, *, title, note):
+            renders.append((window_size, map_name, stage, fraction, title, note))
+
+    window.import_progress_panel = FakeImportProgressPanel()
+
+    window._render_auto_dive_progress((800, 600))
+
+    assert renders == [((800, 600), "devils_eye.obj", "", 0.5, "", "")]
+
+
 def test_continuous_input_detects_navigation_intent_for_auto_dive_cancel():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.wnd = SimpleNamespace(
@@ -1436,6 +1485,104 @@ def test_initial_chunk_readiness_counts_failed_wanted_chunks():
             "wanted": 3,
         }
     ) is True
+
+
+class _FakeMoveCamera:
+    def __init__(self, position, moved_position):
+        self.position = np.array(position, dtype=np.float64)
+        self._moved_position = np.array(moved_position, dtype=np.float64)
+
+    def move(
+        self,
+        _forward_amt,
+        _right_amt,
+        _up_amt,
+        _dt,
+        _speed_multiplier,
+    ):
+        self.position = self._moved_position.copy()
+
+
+class _FakeAutoDiveController:
+    state = viewer_window.AutoDiveState.DIVING
+
+    def __init__(self, pose_position):
+        self.pose_position = np.array(pose_position, dtype=np.float64)
+        self.update_calls = []
+
+    def update(self, camera, world, *, now):
+        self.update_calls.append((camera, world, now))
+        camera.position = self.pose_position.copy()
+        return self.state
+
+
+def test_navigation_guard_rejects_position_above_local_middle_band():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._navigation_guard_enabled = True
+    window._navigation_guard_cells = {(0, 0, 0)}
+    window._navigation_guard_chunk_size = 10.0
+    window._navigation_guard_radius_cells = 2
+    window._navigation_guard_bounds = (
+        np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        np.array([10.0, 10.0, 10.0], dtype=np.float64),
+    )
+    window._navigation_guard_vertical_columns = {
+        (0, 0): ((0.0, 10.0),),
+    }
+
+    assert window._navigation_position_is_allowed(
+        np.array([5.0, 8.0, 5.0], dtype=np.float64)
+    ) is False
+    assert window._navigation_position_is_allowed(
+        np.array([5.0, 5.0, 5.0], dtype=np.float64)
+    ) is True
+
+
+def test_guarded_camera_move_clamps_to_local_middle_band():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._navigation_guard_enabled = True
+    window._navigation_guard_cells = {(0, 0, 0)}
+    window._navigation_guard_chunk_size = 10.0
+    window._navigation_guard_radius_cells = 2
+    window._navigation_guard_bounds = (
+        np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        np.array([10.0, 10.0, 10.0], dtype=np.float64),
+    )
+    window._navigation_guard_vertical_columns = {
+        (0, 0): ((0.0, 10.0),),
+    }
+    window.camera = _FakeMoveCamera(
+        position=[5.0, 9.0, 5.0],
+        moved_position=[5.0, 25.0, 5.0],
+    )
+
+    window._move_camera_guarded(0.0, 0.0, 1.0, 1.0, 1.0)
+
+    assert window.camera.position.tolist() == [5.0, 6.5, 5.0]
+
+
+def test_auto_dive_update_clamps_route_pose_to_local_middle_band():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._navigation_guard_enabled = True
+    window._navigation_guard_bounds = (
+        np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        np.array([10.0, 10.0, 10.0], dtype=np.float64),
+    )
+    window._navigation_guard_chunk_size = 10.0
+    window._navigation_guard_vertical_columns = {
+        (0, 0): ((0.0, 10.0),),
+    }
+    window.camera = SimpleNamespace(
+        position=np.array([5.0, 5.0, 5.0], dtype=np.float64),
+    )
+    window.world = SimpleNamespace()
+    controller = _FakeAutoDiveController([5.0, 25.0, 5.0])
+    window._auto_dive_controller = controller
+
+    window._update_auto_dive(123.0)
+
+    assert controller.update_calls == [(window.camera, window.world, 123.0)]
+    assert window.camera.position.tolist() == [5.0, 6.5, 5.0]
 
 
 def test_initial_visual_readiness_waits_for_settled_scene_frames():

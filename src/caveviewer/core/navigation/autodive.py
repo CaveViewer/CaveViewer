@@ -11,20 +11,19 @@ import numpy as np
 
 from caveviewer.core.navigation.centerline import (
     CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
-    CENTERLINE_ROUTE_WALL_CLEARANCE_MIN_CELLS,
-    CENTERLINE_ROUTE_WALL_CLEARANCE_PUSH_FRACTION,
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
     CenterlinePath,
     FootprintCell,
     Point,
     PointXZ,
+    footprint_cell_distance,
     footprint_path_length,
     footprint_neighbors,
+    footprint_world_center,
     generate_centerline_path,
-    push_route_points_toward_path_centers,
+    lowest_cost_footprint_path,
     route_points_for_xz_points,
-    sample_footprint_route_points,
 )
 from caveviewer.core.navigation.route import (
     CameraRoute,
@@ -38,6 +37,10 @@ from caveviewer.core.navigation.route import (
 DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS = 10
 DEFAULT_AUTO_DIVE_CLOSED_LOOP_GAP_FRACTION = 0.15
 DEFAULT_AUTO_DIVE_MAX_KEYFRAMES = 512
+DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND = (
+    DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * 2.25
+)
+DEFAULT_AUTO_DIVE_VERTICAL_POSITION_FRACTION = 0.35
 
 
 @dataclass(frozen=True)
@@ -45,8 +48,9 @@ class AutoDiveSettings:
     """Configuration for user-facing centerline Auto Dive planning."""
 
     render_distance_cells: int = DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS
-    speed_m_per_second: float = DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND
+    speed_m_per_second: float = DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND
     y_search_radius_cells: int = DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS
+    vertical_position_fraction: float = DEFAULT_AUTO_DIVE_VERTICAL_POSITION_FRACTION
     closed_loop_gap_fraction: float = DEFAULT_AUTO_DIVE_CLOSED_LOOP_GAP_FRACTION
     max_keyframes: int = DEFAULT_AUTO_DIVE_MAX_KEYFRAMES
     keyframe_spacing_m: float | None = None
@@ -109,24 +113,23 @@ def build_centerline_auto_dive_plan(
     if len(route_cells) < 2:
         raise NavigationConfigurationError("Auto Dive route is too short")
 
-    route_xz = _sample_auto_dive_xz_points(
+    route_cells = _route_cells_connected_to_current_camera(
+        centerline_path,
+        route_cells=route_cells,
+        current=current,
+    )
+    route_xz = _auto_dive_xz_points_for_cells(
         centerline_path,
         route_cells=route_cells,
         settings=settings,
     )
-    wall_clearance = push_route_points_toward_path_centers(
-        route_xz,
-        path_cells=route_cells,
-        centers=centerline_path.centers,
-        clearance_scores=centerline_path.clearance_scores,
-        minimum_clearance_cells=CENTERLINE_ROUTE_WALL_CLEARANCE_MIN_CELLS,
-        push_fraction=CENTERLINE_ROUTE_WALL_CLEARANCE_PUSH_FRACTION,
-    )
     route_points = route_points_for_xz_points(
-        wall_clearance.points,
+        route_xz,
         manifest=manifest,
         y_search_radius_cells=max(0, int(settings.y_search_radius_cells)),
+        vertical_position_fraction=float(settings.vertical_position_fraction),
     )
+    route_points = _route_points_starting_at_current_camera(route_points, current)
     length_m = path_length(route_points)
     if length_m <= 1e-6:
         raise NavigationConfigurationError("Auto Dive route has no travel distance")
@@ -161,6 +164,14 @@ def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
     speed = float(settings.speed_m_per_second)
     if not math.isfinite(speed) or speed <= 0.0:
         raise NavigationConfigurationError("Auto Dive speed must be positive")
+    vertical_fraction = float(settings.vertical_position_fraction)
+    if (
+        not math.isfinite(vertical_fraction)
+        or not 0.0 <= vertical_fraction <= 1.0
+    ):
+        raise NavigationConfigurationError(
+            "Auto Dive vertical position fraction must be between 0 and 1"
+        )
     gap = float(settings.closed_loop_gap_fraction)
     if not math.isfinite(gap) or not 0.0 < gap < 1.0:
         raise NavigationConfigurationError(
@@ -249,28 +260,172 @@ def _open_arc_from_closed_loop(
     )
 
 
-def _sample_auto_dive_xz_points(
+def _route_cells_connected_to_current_camera(
+    centerline_path: CenterlinePath,
+    *,
+    route_cells: tuple[FootprintCell, ...],
+    current: np.ndarray,
+) -> tuple[FootprintCell, ...]:
+    """Connect the selected centerline route to the current camera footprint."""
+    component_cells = centerline_path.component_cells
+    if not route_cells or not component_cells:
+        return route_cells
+
+    current_cell = _current_footprint_cell(centerline_path, current)
+    if current_cell not in component_cells:
+        current_cell = min(
+            component_cells,
+            key=lambda cell: (
+                _cell_center_distance_squared(centerline_path, cell, current),
+                cell,
+            ),
+        )
+
+    connector = lowest_cost_footprint_path(
+        component_cells,
+        current_cell,
+        route_cells[0],
+        centerline_path.clearance_scores,
+    )
+    if not connector:
+        return route_cells
+    return _dedupe_consecutive_cells((*connector, *route_cells[1:]))
+
+
+def _auto_dive_xz_points_for_cells(
     centerline_path: CenterlinePath,
     *,
     route_cells: tuple[FootprintCell, ...],
     settings: AutoDiveSettings,
 ) -> tuple[PointXZ, ...]:
-    route_length = _footprint_cells_length(centerline_path, route_cells)
+    """Return bend-preserving X/Z waypoints for an occupied footprint route."""
+    waypoint_cells = _waypoint_cells_for_footprint_route(
+        route_cells,
+        cell_size=centerline_path.footprint_cell_size,
+        settings=settings,
+    )
+    return tuple(
+        _center_for_route_cell(centerline_path, cell)
+        for cell in waypoint_cells
+    )
+
+
+def _waypoint_cells_for_footprint_route(
+    route_cells: tuple[FootprintCell, ...],
+    *,
+    cell_size: float,
+    settings: AutoDiveSettings,
+) -> tuple[FootprintCell, ...]:
+    cells = _dedupe_consecutive_cells(route_cells)
+    if len(cells) <= 2:
+        return cells
+
     spacing = settings.keyframe_spacing_m
     if spacing is None:
-        spacing = max(centerline_path.footprint_cell_size * 4.0, 5.0)
-    spacing = max(1e-6, float(spacing))
-    keyframe_count = min(
-        int(settings.max_keyframes),
-        max(2, int(math.ceil(route_length / spacing)) + 1),
+        spacing = max(float(cell_size) * 4.0, 5.0)
+    spacing = max(float(cell_size), float(spacing))
+    spacing_since_waypoint = 0.0
+    waypoint_limit = max(2, int(settings.max_keyframes))
+    waypoints = [cells[0]]
+
+    for index in range(1, len(cells) - 1):
+        previous_cell = cells[index - 1]
+        cell = cells[index]
+        next_cell = cells[index + 1]
+        previous_direction = _footprint_step(previous_cell, cell)
+        next_direction = _footprint_step(cell, next_cell)
+        spacing_since_waypoint += (
+            footprint_cell_distance(previous_cell, cell) * float(cell_size)
+        )
+        must_keep_for_bend = previous_direction != next_direction
+        can_keep_for_spacing = len(waypoints) < waypoint_limit - 1
+        if must_keep_for_bend or (
+            can_keep_for_spacing and spacing_since_waypoint >= spacing
+        ):
+            waypoints.append(cell)
+            spacing_since_waypoint = 0.0
+
+    waypoints.append(cells[-1])
+    return tuple(waypoints)
+
+
+def _current_footprint_cell(
+    centerline_path: CenterlinePath,
+    current: np.ndarray,
+) -> FootprintCell:
+    cell_size = centerline_path.footprint_cell_size
+    return (
+        int(math.floor(float(current[0]) / cell_size)),
+        int(math.floor(float(current[2]) / cell_size)),
     )
-    return sample_footprint_route_points(
-        route_cells,
-        centers=centerline_path.centers,
-        start_distance_m=0.0,
-        end_distance_m=route_length,
-        keyframe_count=keyframe_count,
+
+
+def _center_for_route_cell(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+) -> PointXZ:
+    return centerline_path.centers.get(
+        cell,
+        footprint_world_center(cell, centerline_path.footprint_cell_size),
     )
+
+
+def _cell_center_distance_squared(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+    current: np.ndarray,
+) -> float:
+    center = _center_for_route_cell(centerline_path, cell)
+    return (
+        (center[0] - float(current[0])) ** 2
+        + (center[1] - float(current[2])) ** 2
+    )
+
+
+def _footprint_step(
+    first: FootprintCell,
+    second: FootprintCell,
+) -> tuple[int, int]:
+    return (
+        int(math.copysign(1, second[0] - first[0]))
+        if second[0] != first[0]
+        else 0,
+        int(math.copysign(1, second[1] - first[1]))
+        if second[1] != first[1]
+        else 0,
+    )
+
+
+def _dedupe_consecutive_cells(
+    cells: tuple[FootprintCell, ...],
+) -> tuple[FootprintCell, ...]:
+    deduped: list[FootprintCell] = []
+    for cell in cells:
+        if not deduped or deduped[-1] != cell:
+            deduped.append(cell)
+    return tuple(deduped)
+
+
+def _route_points_starting_at_current_camera(
+    route_points: tuple[Point, ...],
+    current: np.ndarray,
+) -> tuple[Point, ...]:
+    """Return route points with the current camera position as the first point."""
+    current_point: Point = (
+        float(current[0]),
+        float(current[1]),
+        float(current[2]),
+    )
+    if not route_points:
+        return (current_point,)
+    first_point = route_points[0]
+    distance_squared = sum(
+        (first_point[index] - current_point[index]) ** 2
+        for index in range(3)
+    )
+    if distance_squared <= 1e-12:
+        return route_points
+    return (current_point, *route_points)
 
 
 def _footprint_cells_length(
@@ -279,7 +434,11 @@ def _footprint_cells_length(
 ) -> float:
     if len(cells) < 2:
         return 0.0
-    return footprint_path_length(cells, centerline_path.centers)
+    centers = {
+        cell: _center_for_route_cell(centerline_path, cell)
+        for cell in cells
+    }
+    return footprint_path_length(cells, centers)
 
 
 def route_progress_fraction(route: CameraRoute, elapsed_s: float) -> float:

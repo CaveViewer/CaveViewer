@@ -53,6 +53,7 @@ class CenterlinePath:
     footprint_cell_size: float
     footprint_cell_count: int
     component_size: int
+    component_cells: frozenset[FootprintCell]
     cells: tuple[FootprintCell, ...]
     centers: Mapping[FootprintCell, PointXZ]
     clearance_scores: dict[FootprintCell, int]
@@ -123,18 +124,19 @@ def generate_centerline_path(
         component_selection=component_selection,
         cell_size=footprint.cell_size,
     )
-    full_path_centers = {
+    component_centers = {
         cell: footprint_world_center(cell, footprint.cell_size)
-        for cell in full_path_cells
+        for cell in component
     }
-    full_path_length_m = footprint_path_length(full_path_cells, full_path_centers)
+    full_path_length_m = footprint_path_length(full_path_cells, component_centers)
     return CenterlinePath(
         source=footprint.source,
         footprint_cell_size=footprint.cell_size,
         footprint_cell_count=len(footprint.cells),
         component_size=len(component),
+        component_cells=frozenset(component),
         cells=tuple(full_path_cells),
-        centers=full_path_centers,
+        centers=component_centers,
         clearance_scores=clearance_scores,
         endpoint_percentile=float(endpoint_percentile),
         endpoint_threshold_clearance_cells=int(endpoint_threshold),
@@ -395,6 +397,7 @@ def route_points_for_xz_points(
     *,
     manifest: Mapping[str, Any],
     y_search_radius_cells: int,
+    vertical_position_fraction: float = CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
 ) -> tuple[Point, ...]:
     """Lift X/Z route points to 3D using local vertical center sampling."""
     columns = chunk_columns(manifest)
@@ -405,6 +408,7 @@ def route_points_for_xz_points(
             target_x=x,
             target_z=z,
             local_radius_cells=y_search_radius_cells,
+            vertical_position_fraction=vertical_position_fraction,
         )
         points.append((x, y, z))
     return tuple(points)
@@ -474,6 +478,7 @@ def vertical_center_point_for_xz(
     target_z: float,
     local_radius_cells: int,
     search_radius_cells: int = 12,
+    vertical_position_fraction: float = CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
 ) -> Point:
     """Return a 3D point at the local vertical center near target X/Z."""
     chunk_size, column_values = columns
@@ -486,6 +491,7 @@ def vertical_center_point_for_xz(
             column_values,
             center=exact_column,
             radius=local_radius_cells,
+            vertical_position_fraction=vertical_position_fraction,
         )
         return target_x, y, target_z
 
@@ -508,6 +514,7 @@ def vertical_center_point_for_xz(
                 column_values,
                 center=best_col,
                 radius=local_radius_cells,
+                vertical_position_fraction=vertical_position_fraction,
             )
             return (
                 (best_col[0] + 0.5) * chunk_size,
@@ -526,6 +533,7 @@ def vertical_center_point_for_xz(
         column_values,
         center=closest_col,
         radius=local_radius_cells,
+        vertical_position_fraction=vertical_position_fraction,
     )
     return (
         (closest_col[0] + 0.5) * chunk_size,
@@ -539,6 +547,7 @@ def vertical_center_y_for_local_columns(
     *,
     center: FootprintCell,
     radius: int,
+    vertical_position_fraction: float = CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
 ) -> float:
     """Return local vertical center Y around a chunk column."""
     samples = [
@@ -551,7 +560,8 @@ def vertical_center_y_for_local_columns(
         samples = list(column_values[center])
     min_y = min(sample.min_y for sample in samples)
     max_y = max(sample.max_y for sample in samples)
-    return min_y + (max_y - min_y) * CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION
+    fraction = min(1.0, max(0.0, float(vertical_position_fraction)))
+    return min_y + (max_y - min_y) * fraction
 
 
 def footprint_path_length(
@@ -657,6 +667,36 @@ def footprint_neighbors(cell: FootprintCell) -> list[FootprintCell]:
     ]
 
 
+def navigable_footprint_neighbors(
+    cell: FootprintCell,
+    cells: set[FootprintCell] | frozenset[FootprintCell],
+) -> list[FootprintCell]:
+    """Return footprint neighbors without cutting diagonally through wall corners."""
+    navigable = []
+    for neighbor in footprint_neighbors(cell):
+        if neighbor not in cells:
+            continue
+        dx = neighbor[0] - cell[0]
+        dz = neighbor[1] - cell[1]
+        if abs(dx) == 1 and abs(dz) == 1:
+            if (cell[0] + dx, cell[1]) not in cells:
+                continue
+            if (cell[0], cell[1] + dz) not in cells:
+                continue
+        navigable.append(neighbor)
+    return navigable
+
+
+def lowest_cost_footprint_path(
+    component: set[FootprintCell] | frozenset[FootprintCell],
+    start: FootprintCell,
+    end: FootprintCell,
+    clearance_scores: Mapping[FootprintCell, int],
+) -> tuple[FootprintCell, ...]:
+    """Return a wall-safe low-cost path through occupied footprint cells."""
+    return _lowest_cost_centerline_path(set(component), start, end, clearance_scores)
+
+
 def _parse_footprint(manifest: Mapping[str, Any]) -> _Footprint:
     if "footprint_cells" in manifest and "footprint_cell_size" in manifest:
         return _parse_vertex_footprint(manifest)
@@ -732,7 +772,7 @@ def _centerline_components(cells: frozenset[FootprintCell]) -> list[set[Footprin
         while queue:
             current = queue.popleft()
             component.add(current)
-            for neighbor in footprint_neighbors(current):
+            for neighbor in navigable_footprint_neighbors(current, cells):
                 if neighbor in cells and neighbor not in seen:
                     seen.add(neighbor)
                     queue.append(neighbor)
@@ -868,7 +908,7 @@ def _lowest_cost_centerline_path(
             break
         if current_cost > costs[current]:
             continue
-        for neighbor in footprint_neighbors(current):
+        for neighbor in navigable_footprint_neighbors(current, component):
             if neighbor not in component:
                 continue
             step_distance = footprint_cell_distance(current, neighbor)
@@ -884,7 +924,7 @@ def _lowest_cost_centerline_path(
             heapq.heappush(frontier, (next_cost, neighbor))
 
     if end not in previous:
-        return (start, end)
+        return ()
     path: list[FootprintCell] = []
     current: FootprintCell | None = end
     while current is not None:

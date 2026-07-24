@@ -446,6 +446,7 @@ void main() {
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = APP_NAME
+    _NAVIGATION_VERTICAL_MIDDLE_FRACTION = 0.30
     # The launch helpers replace this fallback with an 80%-of-desktop size.
     # Keep aspect_ratio unlocked so manual resizing remains fully flexible.
     window_size = _DEFAULT_WINDOW_SIZE
@@ -860,6 +861,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_visibility_generation = 0
         self._navigation_guard_cells: set[tuple[int, int, int]] = set()
         self._navigation_guard_chunk_size: float | None = None
+        self._navigation_guard_bounds: tuple[np.ndarray, np.ndarray] | None = None
+        self._navigation_guard_vertical_columns: dict[
+            tuple[int, int],
+            tuple[tuple[float, float], ...],
+        ] = {}
         self._auto_dive_controller: AutoDiveController | None = None
         self._auto_dive_previous_render_distance: int | None = None
         self._has_map_loaded = False
@@ -1332,6 +1338,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._navigation_guard_cells = self.world.available_cells
         self._navigation_guard_chunk_size = chunk_size
+        self._navigation_guard_bounds = self._manifest_navigation_bounds(self.manifest)
+        self._navigation_guard_vertical_columns = (
+            self._manifest_navigation_vertical_columns(self.manifest)
+        )
         if self._navigation_guard_enabled:
             _LOG.info(
                 "Navigation guard enabled: "
@@ -1546,6 +1556,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return True
         if not self._navigation_guard_cells or self._navigation_guard_chunk_size is None:
             return True
+        if not self._navigation_position_is_within_bounds(position):
+            return False
+        if not self._navigation_position_is_within_vertical_band(position):
+            return False
 
         cell = chunker.world_to_cell(np.asarray(position, dtype=np.float32), self._navigation_guard_chunk_size)
         radius = self._navigation_guard_radius_cells
@@ -1556,12 +1570,103 @@ class CaveViewerWindow(mglw.WindowConfig):
                         return True
         return False
 
+    def _navigation_position_is_within_bounds(self, position: np.ndarray) -> bool:
+        bounds = getattr(self, "_navigation_guard_bounds", None)
+        if bounds is None:
+            return True
+        bounds_min, bounds_max = bounds
+        pos = np.asarray(position, dtype=np.float64)
+        return bool(np.all(pos >= bounds_min) and np.all(pos <= bounds_max))
+
+    def _navigation_position_is_within_vertical_band(self, position: np.ndarray) -> bool:
+        vertical_bounds = self._navigation_vertical_band_for_position(position)
+        if vertical_bounds is None:
+            return True
+        low_y, high_y = vertical_bounds
+        y = float(np.asarray(position, dtype=np.float64)[1])
+        return low_y <= y <= high_y
+
+    def _clamp_navigation_position_to_bounds(self, position: np.ndarray) -> np.ndarray:
+        bounds = getattr(self, "_navigation_guard_bounds", None)
+        pos = np.asarray(position, dtype=np.float64)
+        clamped = pos.copy()
+        if bounds is not None:
+            bounds_min, bounds_max = bounds
+            clamped = np.minimum(np.maximum(clamped, bounds_min), bounds_max)
+        vertical_bounds = self._navigation_vertical_band_for_position(clamped)
+        if vertical_bounds is not None:
+            clamped[1] = min(max(clamped[1], vertical_bounds[0]), vertical_bounds[1])
+        return clamped
+
+    def _navigation_vertical_band_for_position(
+        self,
+        position: np.ndarray,
+    ) -> tuple[float, float] | None:
+        span = self._navigation_vertical_span_for_position(position)
+        if span is None:
+            return None
+        low_y, high_y = span
+        center_y = (low_y + high_y) * 0.5
+        # Keep free flight in the middle band of the local passage bounds.
+        # The chunk AABB includes cave walls/floor/ceiling, so allowing the
+        # full span still lets the camera skim the roof/surface; the middle
+        # band keeps the view inside the navigable void.
+        half_band = max(
+            0.0,
+            (high_y - low_y) * self._NAVIGATION_VERTICAL_MIDDLE_FRACTION * 0.5,
+        )
+        return center_y - half_band, center_y + half_band
+
+    def _navigation_vertical_span_for_position(
+        self,
+        position: np.ndarray,
+    ) -> tuple[float, float] | None:
+        columns = getattr(self, "_navigation_guard_vertical_columns", {})
+        chunk_size = getattr(self, "_navigation_guard_chunk_size", None)
+        if not columns or chunk_size is None:
+            return None
+
+        pos = np.asarray(position, dtype=np.float64)
+        target_cx = int(math.floor(float(pos[0]) / float(chunk_size)))
+        target_cz = int(math.floor(float(pos[2]) / float(chunk_size)))
+
+        spans = columns.get((target_cx, target_cz))
+        if spans is None:
+            spans = self._nearest_navigation_vertical_column(target_cx, target_cz)
+        if not spans:
+            return None
+
+        y = float(pos[1])
+        return min(
+            spans,
+            key=lambda span: (abs(((span[0] + span[1]) * 0.5) - y), span),
+        )
+
+    def _nearest_navigation_vertical_column(
+        self,
+        target_cx: int,
+        target_cz: int,
+    ) -> tuple[tuple[float, float], ...] | None:
+        columns = getattr(self, "_navigation_guard_vertical_columns", {})
+        if not columns:
+            return None
+        best_col = min(
+            columns,
+            key=lambda col: (
+                (col[0] - target_cx) ** 2 + (col[1] - target_cz) ** 2,
+                col,
+            ),
+        )
+        return columns.get(best_col)
+
     def _nearest_navigation_guard_position(self, position: np.ndarray) -> np.ndarray | None:
         """Return the nearest occupied chunk center for rare invalid camera positions."""
         if not self._navigation_guard_cells or self._navigation_guard_chunk_size is None:
             return None
 
-        pos = np.asarray(position, dtype=np.float64)
+        pos = self._clamp_navigation_position_to_bounds(position)
+        if self._navigation_position_is_allowed(pos):
+            return pos
         best_cell = None
         best_dist_sq = None
         chunk_size = float(self._navigation_guard_chunk_size)
@@ -1591,6 +1696,10 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         old_position = self.camera.position.copy()
         self.camera.move(forward_amt, right_amt, up_amt, dt, speed_multiplier)
+        if self._navigation_guard_enabled:
+            self.camera.position = self._clamp_navigation_position_to_bounds(
+                self.camera.position
+            )
         if self._navigation_position_is_allowed(self.camera.position):
             return
 
@@ -2135,7 +2244,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         manifest: Mapping[str, Any],
     ) -> tuple[tuple[float, float], ...]:
         """Return an optional centerline overlay for the minimap."""
-        if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", True):
+        if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", False):
             return ()
         try:
             return generate_centerline_path(
@@ -2165,6 +2274,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         if benchmark_controller is not None and not benchmark_controller.finished:
             return False
+        if self._navigation_guard_enabled:
+            self.camera.position = self._clamp_navigation_position_to_bounds(
+                self.camera.position
+            )
         try:
             plan = build_centerline_auto_dive_plan(
                 self.manifest,
@@ -2234,6 +2347,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if controller is None or self.camera is None or self.world is None:
             return
         state = controller.update(self.camera, self.world, now=now)
+        if self._navigation_guard_enabled:
+            self.camera.position = self._clamp_navigation_position_to_bounds(
+                self.camera.position,
+            )
         if state is AutoDiveState.COMPLETE:
             self._stop_auto_dive(completed=True)
 
@@ -2245,10 +2362,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.import_progress_panel.render(
             window_size,
             map_name,
-            "auto dive",
+            "",
             controller.progress,
-            title="Auto Dive",
-            note=controller.status_note,
+            title="",
+            note="",
         )
 
     def _teardown_current_map(self, *, final_shutdown: bool = False) -> None:
@@ -2309,6 +2426,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._invalidate_visible_chunk_cache()
         self._navigation_guard_cells = set()
         self._navigation_guard_chunk_size = None
+        self._navigation_guard_bounds = None
+        self._navigation_guard_vertical_columns = {}
 
         if hasattr(self, "texture_manager") and self.texture_manager is not None:
             self.texture_manager.shutdown()
@@ -3329,6 +3448,70 @@ class CaveViewerWindow(mglw.WindowConfig):
         if bounds_min.shape != (3,) or bounds_max.shape != (3,):
             return None
         return bounds_min, bounds_max
+
+    def _manifest_navigation_bounds(
+        self,
+        manifest: Mapping[str, Any],
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
+        if not isinstance(chunks, Mapping):
+            return None
+
+        global_min: np.ndarray | None = None
+        global_max: np.ndarray | None = None
+        for chunk_info in chunks.values():
+            if not isinstance(chunk_info, Mapping):
+                continue
+            try:
+                bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
+                bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if bounds_min.shape != (3,) or bounds_max.shape != (3,):
+                continue
+            chunk_min = np.minimum(bounds_min, bounds_max)
+            chunk_max = np.maximum(bounds_min, bounds_max)
+            if global_min is None:
+                global_min = chunk_min.copy()
+                global_max = chunk_max.copy()
+            else:
+                np.minimum(global_min, chunk_min, out=global_min)
+                np.maximum(global_max, chunk_max, out=global_max)
+
+        if global_min is None or global_max is None:
+            return None
+        return global_min, global_max
+
+    def _manifest_navigation_vertical_columns(
+        self,
+        manifest: Mapping[str, Any],
+    ) -> dict[tuple[int, int], tuple[tuple[float, float], ...]]:
+        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
+        if not isinstance(chunks, Mapping):
+            return {}
+
+        columns: dict[tuple[int, int], list[tuple[float, float]]] = {}
+        for cell_key, chunk_info in chunks.items():
+            if not isinstance(chunk_info, Mapping):
+                continue
+            try:
+                cx, _cy, cz = (int(value) for value in str(cell_key).split("_"))
+                bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
+                bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if bounds_min.shape != (3,) or bounds_max.shape != (3,):
+                continue
+            low_y = float(min(bounds_min[1], bounds_max[1]))
+            high_y = float(max(bounds_min[1], bounds_max[1]))
+            columns.setdefault((cx, cz), []).append((low_y, high_y))
+
+        return {
+            column: tuple(
+                sorted(spans, key=lambda span: ((span[0] + span[1]) * 0.5, span))
+            )
+            for column, spans in columns.items()
+        }
 
     def _failed_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
         world = getattr(self, "world", None)
