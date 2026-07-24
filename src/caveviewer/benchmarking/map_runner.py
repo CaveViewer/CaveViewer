@@ -1234,7 +1234,7 @@ def _human_summary(
 def _startup_readiness_summary_lines(environment: Mapping[str, Any]) -> list[str]:
     if "initial_visual_ready_seconds" not in environment:
         return []
-    return [
+    lines = [
         (
             "Startup readiness: "
             f"visual_ready_after={_format_setting(environment.get('initial_visual_ready_seconds'), suffix=' s')}, "
@@ -1253,6 +1253,19 @@ def _startup_readiness_summary_lines(environment: Mapping[str, Any]) -> list[str
             f"startup_radius={_format_setting(environment.get('initial_visual_ready_load_radius_chunks'), suffix=' chunks')}"
         )
     ]
+    expected_prefetch = environment.get("initial_route_prefetch_expected_cells")
+    if isinstance(expected_prefetch, (int, float)) and expected_prefetch > 0:
+        lines.append(
+            "Route prefetch: "
+            f"loaded={_format_setting(environment.get('initial_route_prefetch_loaded_cells'))}/"
+            f"{_format_setting(expected_prefetch)} cells, "
+            f"pending={_format_setting(environment.get('initial_route_prefetch_pending_cells'))}, "
+            f"failed={_format_setting(environment.get('initial_route_prefetch_failed_cells'))}, "
+            f"missing={_format_setting(environment.get('initial_route_prefetch_missing_cells'))}, "
+            f"coverage_pct={_format_setting(environment.get('initial_route_prefetch_coverage_pct'), suffix='%')}, "
+            f"radius={_format_setting(environment.get('benchmark_route_prefetch_radius_chunks'), suffix=' chunks')}"
+        )
+    return lines
 
 
 def _streaming_summary_lines(environment: Mapping[str, Any]) -> list[str]:

@@ -188,6 +188,9 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
     assert "coverage=40/40 chunks" in latest_text
     assert "missing_chunks=0" in latest_text
     assert "startup_radius=10 chunks" in latest_text
+    assert "Route prefetch:" in latest_text
+    assert "loaded=120/120 cells" in latest_text
+    assert "missing=0" in latest_text
     assert "Streaming request:" in latest_text
     assert "distance=10 chunks" in latest_text
     assert "Streaming effective:" in latest_text
@@ -429,6 +432,13 @@ def _summary(
             "initial_visual_ready_missing_chunks": 0,
             "initial_visual_ready_coverage_pct": 100.0,
             "initial_visual_ready_load_radius_chunks": min(render_distance + 3, 10),
+            "benchmark_route_prefetch_radius_chunks": render_distance,
+            "initial_route_prefetch_expected_cells": 120,
+            "initial_route_prefetch_loaded_cells": 120,
+            "initial_route_prefetch_pending_cells": 0,
+            "initial_route_prefetch_failed_cells": 0,
+            "initial_route_prefetch_missing_cells": 0,
+            "initial_route_prefetch_coverage_pct": 100.0,
             "texture_max_dimension": 2048,
             "texture_resident_budget_bytes": 1720 * 1024 * 1024,
             "texture_decoded_cache_budget_bytes": 304 * 1024 * 1024,

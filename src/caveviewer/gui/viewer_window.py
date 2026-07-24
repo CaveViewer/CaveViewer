@@ -866,6 +866,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_visual_ready_covered_chunks = 0
         self._initial_visual_ready_missing_chunks = 0
         self._initial_visual_ready_coverage_pct = 100.0
+        self._initial_route_prefetch_expected_cells = 0
+        self._initial_route_prefetch_loaded_cells = 0
+        self._initial_route_prefetch_pending_cells = 0
+        self._initial_route_prefetch_failed_cells = 0
+        self._initial_route_prefetch_missing_cells = 0
+        self._initial_route_prefetch_coverage_pct = 100.0
         self._initial_visual_ready_logged = False
         self._initial_compilation_started_at = None
         self._initial_compilation_logged = False
@@ -1267,9 +1273,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         first_info = self.manifest["chunks"][first_cell_str]
         start_pos = (np.array(first_info["bounds_min"]) + np.array(first_info["bounds_max"])) / 2.0
         self.camera = FlyCamera(position=tuple(start_pos))
+        self._benchmark_route_prefetch_cells = frozenset()
         if benchmark_controller is not None:
             benchmark_controller.set_position_origin(start_pos)
             benchmark_controller.apply_initial_camera(self.camera)
+            self._configure_benchmark_route_prefetch(start_pos)
         self._bookmarks_path = os.path.join(self.cache_dir, "camera_bookmarks.json")
         self._load_bookmarks()
 
@@ -1353,6 +1361,86 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.import_progress_panel.reset_progress()
         self._record_benchmark_streaming_environment()
 
+    def _configure_benchmark_route_prefetch(self, origin: np.ndarray) -> None:
+        """Ask streaming to keep the benchmark route tube wanted during startup."""
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        world = getattr(self, "world", None)
+        if benchmark_controller is None or world is None:
+            return
+
+        radius = max(1, int(getattr(world.config, "load_radius_cells", 1)))
+        route_cells: set[tuple[int, int, int]] = set()
+        route_positions = tuple(
+            self._benchmark_route_sample_positions(
+                benchmark_controller.scenario,
+                origin,
+            )
+        )
+        for position in route_positions:
+            route_cell = world.cell_for_position(np.asarray(position, dtype=np.float32))
+            route_cells.update(world.available_cells_in_radius(route_cell, radius))
+
+        self._benchmark_route_prefetch_cells = frozenset(route_cells)
+        set_prefetch = getattr(world, "set_prefetch_wanted_cells", None)
+        if callable(set_prefetch):
+            set_prefetch(route_cells)
+        _LOG.info(
+            "Benchmark route prefetch enabled: %d cells from %d sampled route "
+            "position(s), radius=%d.",
+            len(route_cells),
+            len(route_positions),
+            radius,
+        )
+        benchmark_controller.update_environment(
+            {
+                "benchmark_route_prefetch_cells": len(route_cells),
+                "benchmark_route_prefetch_sample_positions": len(route_positions),
+                "benchmark_route_prefetch_radius_chunks": radius,
+            }
+        )
+
+    def _benchmark_route_sample_positions(
+        self,
+        scenario,
+        origin: np.ndarray,
+    ) -> Iterable[np.ndarray]:
+        """Yield absolute route positions densely enough to prefetch the route."""
+        world = getattr(self, "world", None)
+        chunk_size = max(
+            1e-6,
+            float(getattr(getattr(world, "config", None), "chunk_size", 1.0)),
+        )
+        origin_array = np.asarray(origin, dtype=np.float64)
+        route = tuple(getattr(scenario, "route", ()))
+        if not route:
+            return
+
+        absolute_positions = [
+            self._benchmark_absolute_route_position(scenario, keyframe, origin_array)
+            for keyframe in route
+        ]
+        previous = absolute_positions[0]
+        yield previous
+        for current in absolute_positions[1:]:
+            segment = current - previous
+            distance = float(np.linalg.norm(segment))
+            steps = max(1, int(math.ceil(distance / chunk_size)))
+            for step in range(1, steps + 1):
+                t = step / steps
+                yield previous + segment * t
+            previous = current
+
+    @staticmethod
+    def _benchmark_absolute_route_position(
+        scenario,
+        keyframe,
+        origin: np.ndarray,
+    ) -> np.ndarray:
+        position = np.asarray(keyframe.position, dtype=np.float64)
+        if getattr(scenario, "position_mode", "absolute") == "first_chunk_center_offset":
+            return origin + position
+        return position
+
     def _record_benchmark_streaming_environment(self) -> None:
         """Persist effective Streaming/texture settings for benchmark artifacts."""
         benchmark_controller = getattr(self, "_benchmark_controller", None)
@@ -1387,6 +1475,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                 None if worker_target is None else int(worker_target)
             ),
             "streaming_active_workers_at_load": len(tuple(active_workers or ())),
+            "benchmark_route_prefetch_cells": int(
+                len(getattr(self, "_benchmark_route_prefetch_cells", ()))
+            ),
             "upload_chunks_per_frame_effective": int(self._upload_chunks_per_frame),
             "upload_groups_per_frame_effective": int(self._upload_groups_per_frame),
             "upload_time_budget_ms_effective": float(self._upload_time_budget_ms),
@@ -2892,6 +2983,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         stats: dict,
         texture_readiness: Mapping[str, object] | None = None,
         visual_coverage: Mapping[str, object] | None = None,
+        route_prefetch: Mapping[str, object] | None = None,
     ) -> bool:
         if not getattr(self, "_initial_chunks_loaded", False):
             return False
@@ -2910,6 +3002,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         if visual_coverage is not None and not bool(
             visual_coverage.get("coverage_ready", True)
+        ):
+            return False
+        if route_prefetch is not None and not bool(
+            route_prefetch.get("ready", True)
         ):
             return False
         return True
@@ -2988,6 +3084,61 @@ class CaveViewerWindow(mglw.WindowConfig):
             for source in resident_sources
             if source
         }, known_exact
+
+    def _benchmark_route_prefetch_stats(self) -> dict[str, object]:
+        prefetch_cells = set(getattr(self, "_benchmark_route_prefetch_cells", ()))
+        if not prefetch_cells:
+            return {
+                "active": False,
+                "ready": True,
+                "expected_cells": 0,
+                "loaded_cells": 0,
+                "pending_cells": 0,
+                "failed_cells": 0,
+                "missing_cells": 0,
+                "coverage_pct": 100.0,
+            }
+
+        world = getattr(self, "world", None)
+        if world is None:
+            return {
+                "active": True,
+                "ready": False,
+                "expected_cells": len(prefetch_cells),
+                "loaded_cells": 0,
+                "pending_cells": 0,
+                "failed_cells": 0,
+                "missing_cells": len(prefetch_cells),
+                "coverage_pct": 0.0,
+            }
+
+        lock = getattr(world, "_lock", None)
+        if lock is None:
+            loaded_cells = set(getattr(world, "loaded_cells", set()))
+            pending_cells = set(getattr(world, "_pending", set()))
+            failed_cells = set(getattr(world, "_failed_cells", {}))
+        else:
+            with lock:
+                loaded_cells = set(getattr(world, "loaded_cells", set()))
+                pending_cells = set(getattr(world, "_pending", set()))
+                failed_cells = set(getattr(world, "_failed_cells", {}))
+
+        loaded_prefetch = prefetch_cells & loaded_cells
+        pending_prefetch = prefetch_cells & pending_cells
+        failed_prefetch = prefetch_cells & failed_cells
+        covered_count = len(loaded_prefetch | failed_prefetch)
+        missing_count = max(0, len(prefetch_cells) - covered_count)
+        coverage_pct = 100.0 * covered_count / max(1, len(prefetch_cells))
+        return {
+            "active": True,
+            "ready": missing_count == 0,
+            "expected_cells": len(prefetch_cells),
+            "loaded_cells": len(loaded_prefetch),
+            "pending_cells": len(pending_prefetch),
+            "failed_cells": len(failed_prefetch),
+            "missing_cells": missing_count,
+            "coverage_pct": coverage_pct,
+        }
 
     def _initial_texture_readiness_stats(
         self,
@@ -3131,6 +3282,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             view,
             projection,
         )
+        route_prefetch = self._benchmark_route_prefetch_stats()
         if getattr(self, "_initial_visual_ready", False):
             visual_stats = dict(stats)
             visual_stats["visual_ready"] = True
@@ -3164,12 +3316,31 @@ class CaveViewerWindow(mglw.WindowConfig):
             visual_stats["visual_ready_coverage_pct"] = float(
                 getattr(self, "_initial_visual_ready_coverage_pct", 100.0)
             )
+            visual_stats["route_prefetch_expected_cells"] = int(
+                getattr(self, "_initial_route_prefetch_expected_cells", 0)
+            )
+            visual_stats["route_prefetch_loaded_cells"] = int(
+                getattr(self, "_initial_route_prefetch_loaded_cells", 0)
+            )
+            visual_stats["route_prefetch_pending_cells"] = int(
+                getattr(self, "_initial_route_prefetch_pending_cells", 0)
+            )
+            visual_stats["route_prefetch_failed_cells"] = int(
+                getattr(self, "_initial_route_prefetch_failed_cells", 0)
+            )
+            visual_stats["route_prefetch_missing_cells"] = int(
+                getattr(self, "_initial_route_prefetch_missing_cells", 0)
+            )
+            visual_stats["route_prefetch_coverage_pct"] = float(
+                getattr(self, "_initial_route_prefetch_coverage_pct", 100.0)
+            )
             return visual_stats
 
         if self._initial_visual_readiness_is_settled(
             stats,
             texture_readiness,
             visual_coverage,
+            route_prefetch,
         ):
             self._initial_visual_ready_frames = (
                 int(getattr(self, "_initial_visual_ready_frames", 0)) + 1
@@ -3199,6 +3370,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._initial_visual_ready_coverage_pct = float(
                 visual_coverage["coverage_pct"]
             )
+            self._record_initial_route_prefetch_stats(route_prefetch)
             if (
                 self._initial_visual_ready_frames
                 >= self._INITIAL_VISUAL_READY_SETTLE_FRAMES
@@ -3233,6 +3405,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._initial_visual_ready_coverage_pct = float(
                 visual_coverage["coverage_pct"]
             )
+            self._record_initial_route_prefetch_stats(route_prefetch)
 
         visual_stats = dict(stats)
         visual_stats["visual_ready"] = bool(
@@ -3267,7 +3440,49 @@ class CaveViewerWindow(mglw.WindowConfig):
             float(visual_coverage["coverage_pct"]),
             3,
         )
+        visual_stats["route_prefetch_expected_cells"] = int(
+            route_prefetch["expected_cells"]
+        )
+        visual_stats["route_prefetch_loaded_cells"] = int(
+            route_prefetch["loaded_cells"]
+        )
+        visual_stats["route_prefetch_pending_cells"] = int(
+            route_prefetch["pending_cells"]
+        )
+        visual_stats["route_prefetch_failed_cells"] = int(
+            route_prefetch["failed_cells"]
+        )
+        visual_stats["route_prefetch_missing_cells"] = int(
+            route_prefetch["missing_cells"]
+        )
+        visual_stats["route_prefetch_coverage_pct"] = round(
+            float(route_prefetch["coverage_pct"]),
+            3,
+        )
         return visual_stats
+
+    def _record_initial_route_prefetch_stats(
+        self,
+        route_prefetch: Mapping[str, object],
+    ) -> None:
+        self._initial_route_prefetch_expected_cells = int(
+            route_prefetch["expected_cells"]
+        )
+        self._initial_route_prefetch_loaded_cells = int(
+            route_prefetch["loaded_cells"]
+        )
+        self._initial_route_prefetch_pending_cells = int(
+            route_prefetch["pending_cells"]
+        )
+        self._initial_route_prefetch_failed_cells = int(
+            route_prefetch["failed_cells"]
+        )
+        self._initial_route_prefetch_missing_cells = int(
+            route_prefetch["missing_cells"]
+        )
+        self._initial_route_prefetch_coverage_pct = float(
+            route_prefetch["coverage_pct"]
+        )
 
     def _log_initial_visual_ready_complete(
         self,
@@ -3309,6 +3524,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         coverage_pct = float(
             getattr(self, "_initial_visual_ready_coverage_pct", 100.0)
         )
+        route_prefetch_expected = int(
+            getattr(self, "_initial_route_prefetch_expected_cells", 0)
+        )
+        route_prefetch_loaded = int(
+            getattr(self, "_initial_route_prefetch_loaded_cells", 0)
+        )
+        route_prefetch_pending = int(
+            getattr(self, "_initial_route_prefetch_pending_cells", 0)
+        )
+        route_prefetch_failed = int(
+            getattr(self, "_initial_route_prefetch_failed_cells", 0)
+        )
+        route_prefetch_missing = int(
+            getattr(self, "_initial_route_prefetch_missing_cells", 0)
+        )
+        route_prefetch_coverage_pct = float(
+            getattr(self, "_initial_route_prefetch_coverage_pct", 100.0)
+        )
         world = getattr(self, "world", None)
         startup_radius = int(
             getattr(getattr(world, "config", None), "load_radius_cells", 0) or 0
@@ -3318,7 +3551,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             "(visible=%d loaded=%d pending=%d ready=%d wanted=%d "
             "upload_states=%d textures=%d/%d missing_textures=%d "
             "visible_textures=%d coverage=%d/%d missing_chunks=%d %.1f%% "
-            "startup_radius=%d).",
+            "startup_radius=%d route_prefetch=%d/%d pending=%d failed=%d "
+            "missing=%d %.1f%%).",
             elapsed_s,
             int(visible_chunk_count),
             int(stats.get("loaded", 0)),
@@ -3335,6 +3569,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             missing_chunks,
             coverage_pct,
             startup_radius,
+            route_prefetch_loaded,
+            route_prefetch_expected,
+            route_prefetch_pending,
+            route_prefetch_failed,
+            route_prefetch_missing,
+            route_prefetch_coverage_pct,
         )
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         if benchmark_controller is not None:
@@ -3354,6 +3594,15 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "initial_visual_ready_missing_chunks": missing_chunks,
                     "initial_visual_ready_coverage_pct": round(coverage_pct, 3),
                     "initial_visual_ready_load_radius_chunks": startup_radius,
+                    "initial_route_prefetch_expected_cells": route_prefetch_expected,
+                    "initial_route_prefetch_loaded_cells": route_prefetch_loaded,
+                    "initial_route_prefetch_pending_cells": route_prefetch_pending,
+                    "initial_route_prefetch_failed_cells": route_prefetch_failed,
+                    "initial_route_prefetch_missing_cells": route_prefetch_missing,
+                    "initial_route_prefetch_coverage_pct": round(
+                        route_prefetch_coverage_pct,
+                        3,
+                    ),
                 }
             )
 

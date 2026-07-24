@@ -876,6 +876,39 @@ def test_texture_budget_does_not_limit_geometry_wanted_set():
     assert world._work_queue.qsize() == 3
 
 
+def test_update_includes_prefetch_wanted_cells_outside_camera_radius():
+    world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
+    world._paused_event = threading.Event()
+    near_cell = (0, 0, 0)
+    route_cell = (5, 0, 0)
+    world.available_cells = {near_cell, route_cell}
+    world.config = streaming_world.StreamingConfig(
+        chunk_size=1.0,
+        load_radius_cells=0,
+        max_loaded_chunks=16,
+    )
+    world._last_camera_cell = None
+    world._last_load_radius = None
+    world.loaded_cells = set()
+    world._pending = set()
+    world._failed_cells = {}
+    world._lock = threading.Lock()
+    world._work_queue = queue.Queue(maxsize=16)
+    world._ready_backlog = streaming_scheduler.BoundedReadyBacklog(capacity=16)
+    world._last_wanted_cells = set()
+    world._last_cam_cell_for_priority = None
+    world._last_cell_priority_key = None
+    world._cells_to_unload_next_drain = set()
+
+    world.set_prefetch_wanted_cells({route_cell})
+    world.update(np.zeros(3, dtype=np.float32))
+
+    assert near_cell in world._last_wanted_cells
+    assert route_cell in world._last_wanted_cells
+    assert route_cell in set(world._work_queue.queue)
+    assert world.prefetch_wanted_cells_snapshot() == frozenset({route_cell})
+
+
 def test_update_dispatch_is_bounded_by_work_queue_capacity():
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     world._paused_event = threading.Event()

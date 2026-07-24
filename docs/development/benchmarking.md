@@ -217,6 +217,12 @@ For an existing `_cache`, the runner matches the regular app's cache-open path
 by using `<map-dir>/_cache` as both the chunk cache and texture root. That keeps
 texture resolution aligned with maps compiled by `caveviewer.chunker`.
 
+Before timing starts, benchmark mode prefetches the generated route tube using
+the benchmark render distance. Startup readiness waits for those route cells and
+their textures to become resident, so a route should not begin with an unloaded
+black void waiting at the far end. The run summary reports this as
+`Route prefetch: loaded=<n>/<n> cells`.
+
 By default the local runner generates an `auto-centerline-route-v1.json` file
 inside the run artifact directory after the cache exists. It uses the
 fine-grained `footprint_cells` manifest field, which the chunker derives from

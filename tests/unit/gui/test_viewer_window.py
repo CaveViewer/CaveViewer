@@ -79,6 +79,35 @@ class FakeLogger:
         self.debug_messages.append(self._format(message, args))
 
 
+def test_benchmark_route_prefetch_stats_reports_missing_route_cells():
+    window = viewer_window.CaveViewerWindow.__new__(viewer_window.CaveViewerWindow)
+    window._benchmark_route_prefetch_cells = frozenset(
+        {
+            (0, 0, 0),
+            (1, 0, 0),
+            (2, 0, 0),
+        }
+    )
+    window.world = SimpleNamespace(
+        loaded_cells={(0, 0, 0)},
+        _pending={(1, 0, 0)},
+        _failed_cells={},
+    )
+
+    stats = window._benchmark_route_prefetch_stats()
+
+    assert stats == {
+        "active": True,
+        "ready": False,
+        "expected_cells": 3,
+        "loaded_cells": 1,
+        "pending_cells": 1,
+        "failed_cells": 0,
+        "missing_cells": 2,
+        "coverage_pct": pytest.approx(100.0 / 3.0),
+    }
+
+
 class FakeImportThread:
     def __init__(self, alive=True):
         self._alive = alive
