@@ -36,6 +36,8 @@ from caveviewer.gui.benchmark import (
     load_json_file,
 )
 from caveviewer.gui.benchmark_routes import (
+    CENTERLINE_ROUTE_SELECTION_MAX_COMPLEXITY,
+    CENTERLINE_ROUTE_SELECTION_MIDPOINT,
     CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
     DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
     DEFAULT_DENSE_ROUTE_KEYFRAMES,
@@ -67,6 +69,10 @@ DEFAULT_DEVILS_EYE_MAX_RUNTIME_MARGIN_SECONDS = 90.0
 DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_KEYFRAMES = 24
 DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS = 24.0
 DEFAULT_DEVILS_EYE_TEXTURE_RESIDENT_CACHE_MB = 768.0
+CENTERLINE_ROUTE_SELECTION_BY_CLI = {
+    "max-complexity": CENTERLINE_ROUTE_SELECTION_MAX_COMPLEXITY,
+    "midpoint": CENTERLINE_ROUTE_SELECTION_MIDPOINT,
+}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -151,6 +157,17 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Neighboring chunk-column radius used to estimate centerline Y. "
             "Defaults to 1."
+        ),
+    )
+    parser.add_argument(
+        "--centerline-route-selection",
+        choices=tuple(CENTERLINE_ROUTE_SELECTION_BY_CLI),
+        default="max-complexity",
+        help=(
+            "Centerline segment selector. max-complexity preserves the gold "
+            "benchmark behavior by selecting the heaviest visible chunk/texture "
+            "region. midpoint moves through the centerline without using "
+            "chunk/texture complexity for selection."
         ),
     )
     parser.add_argument(
@@ -416,6 +433,9 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
             if args.centerline_route_target_length_m is None
             else "cli_meters"
         ),
+        "centerline_route_selection_strategy": CENTERLINE_ROUTE_SELECTION_BY_CLI[
+            str(args.centerline_route_selection)
+        ],
         "centerline_route_y_search_radius_cells": max(
             0,
             int(args.centerline_route_y_search_radius_cells),
@@ -495,7 +515,7 @@ def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
             "  centerline_route: "
             f"keyframes={plan['centerline_route_keyframes']} "
             f"target_length={target_text} "
-            "selection=max_visible_chunk_texture_complexity "
+            f"selection={plan['centerline_route_selection_strategy']} "
             "movement=after_warmup "
             f"vertical_fraction={CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION:g} "
             f"y_search_radius_cells={plan['centerline_route_y_search_radius_cells']}",
@@ -615,6 +635,7 @@ def _prepare_scenario(plan: dict[str, Any]) -> None:
             plan["scenario_template"],
             keyframe_count=int(plan["centerline_route_keyframes"]),
             target_length_m=target_length_m,
+            selection_strategy=str(plan["centerline_route_selection_strategy"]),
             y_search_radius_cells=int(
                 plan["centerline_route_y_search_radius_cells"]
             ),
@@ -723,8 +744,8 @@ def _centerline_route_summary(centerline_route, scenario_path: Path) -> str:
         f"full_path_cells={metadata['full_path_cell_count']} "
         f"footprint_component_size={metadata['footprint_component_size']} "
         f"selection={metadata['route_selection_strategy']} "
-        f"max_visible_chunks={metadata['max_route_visible_chunks']} "
-        f"max_route_textures={metadata['max_route_unique_textures']} "
+        f"max_visible_chunks={metadata.get('max_route_visible_chunks', 'n/a')} "
+        f"max_route_textures={metadata.get('max_route_unique_textures', 'n/a')} "
         f"route_source={metadata['route_source']} "
         f"y_strategy={metadata['y_strategy']} "
         f"vertical_fraction={metadata['vertical_position_fraction']:.2f} "

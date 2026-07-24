@@ -6,12 +6,37 @@ import pytest
 
 from caveviewer.gui.benchmark import BenchmarkScenario
 from caveviewer.gui.benchmark_routes import (
+    CENTERLINE_ROUTE_SELECTION_MIDPOINT,
     DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS,
     DEFAULT_CENTERLINE_ROUTE_SPEED_FEET_PER_MINUTE,
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
+    generate_centerline_path,
     generate_centerline_route_scenario,
     generate_dense_chunk_route_scenario,
 )
+
+
+def test_centerline_path_uses_vertex_footprint_without_load_complexity():
+    centerline_path = generate_centerline_path(
+        {
+            "footprint_cell_size": 2.0,
+            "footprint_cells": [
+                value
+                for x in range(7)
+                for z in range(5)
+                for value in (x, z)
+            ],
+        }
+    )
+
+    assert centerline_path.source == "vertex_footprint_manifest"
+    assert centerline_path.footprint_cell_size == 2.0
+    assert centerline_path.footprint_cell_count == 35
+    assert centerline_path.component_size == 35
+    assert centerline_path.cells
+    assert centerline_path.length_m > 0.0
+    assert centerline_path.clearance_scores
+    assert set(centerline_path.centers) == set(centerline_path.cells)
 
 
 def test_centerline_route_uses_vertex_footprint_middle_passage():
@@ -121,6 +146,38 @@ def test_centerline_route_uses_vertical_center_in_tall_columns():
     assert all(value == 60.0 for value in route_y_values)
     assert centerline_route.scenario_payload["metadata"]["min_route_y"] == 60.0
     assert centerline_route.scenario_payload["metadata"]["max_route_y"] == 60.0
+
+
+def test_centerline_route_can_select_plain_centerline_midpoint_segment():
+    template = BenchmarkScenario.from_mapping(
+        {
+            "version": 1,
+            "name": "template",
+            "warmup_seconds": 2.0,
+            "measurement_seconds": 8.0,
+            "render_distance": 1,
+            "route": [{"time_s": 0.0, "position": [0.0, 0.0, 0.0]}],
+        }
+    )
+
+    centerline_route = generate_centerline_route_scenario(
+        _centerline_manifest(),
+        template,
+        keyframe_count=4,
+        selection_strategy=CENTERLINE_ROUTE_SELECTION_MIDPOINT,
+    )
+    metadata = centerline_route.scenario_payload["metadata"]
+
+    assert metadata["route_selection_strategy"] == CENTERLINE_ROUTE_SELECTION_MIDPOINT
+    assert metadata["complexity_pivot_cell"] is None
+    assert metadata["complexity_render_distance_chunks"] is None
+    assert metadata["complexity_definition"] == (
+        "not used; route segment selected from centerline geometry only"
+    )
+    assert metadata["segment_pivot_cell"] is not None
+    assert metadata["route_keyframe_count"] == 5
+    assert "max_route_visible_chunks" not in metadata
+    assert "max_route_unique_textures" not in metadata
 
 
 def test_centerline_route_target_length_override_controls_route_speed():

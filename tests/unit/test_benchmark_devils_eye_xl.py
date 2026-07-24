@@ -91,6 +91,8 @@ def test_devils_eye_xl_duration_alias_controls_measurement_window(
             str(results_dir),
             "--duration-seconds",
             "45",
+            "--centerline-route-selection",
+            "midpoint",
             "--dry-run",
         ]
     )
@@ -99,6 +101,7 @@ def test_devils_eye_xl_duration_alias_controls_measurement_window(
     assert exit_code == 0
     assert "measurement_seconds: 45" in output
     assert "max_runtime_seconds: 140" in output
+    assert "selection=centerline_midpoint_v1" in output
 
 
 def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
@@ -158,6 +161,9 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
         scenario_path = Path(command[command.index("--scenario") + 1])
         generated_scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
         assert generated_scenario["metadata"]["route_mode"] == "auto_centerline_v1"
+        assert generated_scenario["metadata"]["route_selection_strategy"] == (
+            "max_visible_chunk_texture_complexity_v1"
+        )
         assert generated_scenario["metadata"]["target_route_length_source"] == (
             "devils_eye_streaming_default_chunks"
         )

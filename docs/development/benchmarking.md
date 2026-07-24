@@ -147,13 +147,19 @@ By default the local wrapper generates an `auto-centerline-route-v1.json` file
 inside the run artifact directory after the cache exists. It uses the
 fine-grained `footprint_cells` manifest field, which the chunker derives from
 source vertex positions, to estimate the middle of the cave passage. The
-generator computes a high-clearance path through that footprint, where clearance
-means grid distance from the footprint boundary, then scores candidate positions
-by render-distance forward-view load from the route camera direction: visible
-chunk count plus unique texture count from the manifest material-to-texture map.
-This avoids selecting a heavy area that is mostly behind or beside the camera.
-The route segment is centered on the highest-scoring position instead of
-sweeping the entire cave.
+generator first computes a reusable high-clearance centerline path through that
+footprint, where clearance means grid distance from the footprint boundary.
+That centerline step is separate from benchmark load selection and does not
+need texture or chunk-complexity data.
+
+The default benchmark selector then scores candidate centerline positions by
+render-distance forward-view load from the route camera direction: visible chunk
+count plus unique texture count from the manifest material-to-texture map. This
+avoids selecting a heavy area that is mostly behind or beside the camera. The
+route segment is centered on the highest-scoring position instead of sweeping
+the entire cave. Use `--centerline-route-selection midpoint` to move through
+the centerline midpoint without using chunk or texture complexity for segment
+selection.
 
 The generated route holds the first camera pose through warmup, then travels
 only during the measurement window. For the default Devil's Eye XL scenario that
@@ -178,12 +184,16 @@ Use these controls when calibrating the route:
 ```bash
 python scripts/benchmark/run_devils_eye_xl_benchmark.py \
   --duration-seconds 180 \
+  --centerline-route-selection midpoint \
   --centerline-route-keyframes 10 \
   --centerline-route-target-length-m 1000
 ```
 
 Use `--duration-seconds` (or its aliases `--duration` and
 `--measurement-seconds`) when you want a longer or shorter measured window.
+Use `--centerline-route-selection midpoint` when validating generic centerline
+movement instead of the load-focused gold benchmark segment. The default
+`max-complexity` selection preserves the current performance-regression target.
 Use `--centerline-route-target-length-m` only when deliberately recalibrating
 the route. Overriding duration or route length changes the scenario fingerprint
 and local comparison history for that route.
