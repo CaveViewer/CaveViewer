@@ -85,6 +85,31 @@ python scripts/benchmark/compare_benchmark_results.py \
   --thresholds benchmarks/viewer-thresholds.v1.json
 ```
 
+## Benchmark package and entry points
+
+`caveviewer.benchmarking` is a library package, not a direct command-line
+entry point. Keep benchmark-only code there when it does not need Tk, OpenGL,
+or viewer presentation:
+
+- `caveviewer.benchmarking.results`: scenario parsing, frame samples,
+  summaries, thresholds, comparisons, and the benchmark controller.
+- `caveviewer.benchmarking.routes`: benchmark-specific route generation and
+  load-focused route selection.
+
+Run benchmarks through one of the supported entry points:
+
+- `scripts/benchmark/run_map_benchmark.py` for local map directories. This is
+  the recommended path for private or oversized benchmark maps because it can
+  validate/build `_cache`, generate a route, run the viewer, record local
+  history, and write a human-readable summary.
+- `python -m caveviewer.benchmark` or `caveviewer-benchmark` for direct runs
+  against an existing cache and scenario JSON.
+- `scripts/benchmark/compare_benchmark_results.py` for comparing two existing
+  `summary.json` files without launching the viewer.
+
+Do not run `python -m caveviewer.benchmarking.results`; it has no CLI contract.
+Import it from tests, scripts, or viewer adapters instead.
+
 ## Generic local map run
 
 Use `scripts/benchmark/run_map_benchmark.py` for machine-local benchmark maps
