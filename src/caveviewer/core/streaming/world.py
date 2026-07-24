@@ -255,6 +255,7 @@ class StreamingWorld:
             if i < 128:
                 sampled_chunk_keys.append(cell_str)
         self._last_wanted_cells: set[tuple[int, int, int]] = set()
+        self._prefetch_wanted_cells: set[tuple[int, int, int]] = set()
 
         target_env = os.environ.get("CAVEVIEWER_MEMORY_UTILIZATION_TARGET")
         self._memory_target_fraction = _parse_memory_target_fraction(target_env)
@@ -1091,6 +1092,9 @@ class StreamingWorld:
             load_r,
             self.config.max_loaded_chunks,
         )
+        prefetch_wanted = set(getattr(self, "_prefetch_wanted_cells", set()))
+        if prefetch_wanted:
+            wanted.update(prefetch_wanted & self.available_cells)
         self._cancel_queued_unloads(wanted)
         with self._lock:
             self._last_wanted_cells = wanted
@@ -1271,6 +1275,42 @@ class StreamingWorld:
             max_loaded_chunks=len(self.available_cells),
         )
 
+    def available_cells_in_radius(
+        self,
+        center: tuple[int, int, int],
+        radius: int,
+    ) -> frozenset[tuple[int, int, int]]:
+        """Return available cells within ``radius`` of ``center``."""
+        return frozenset(self._available_cells_in_radius(center, radius))
+
+    def set_prefetch_wanted_cells(
+        self,
+        cells: Iterable[tuple[int, int, int]],
+    ) -> None:
+        """Keep extra cells wanted across camera updates until replaced.
+
+        The viewer uses this for deterministic benchmark route preflight.
+        Normal app navigation leaves the set empty, so current-camera streaming
+        behavior is unchanged.
+        """
+        normalized = {
+            tuple(int(component) for component in cell)
+            for cell in cells
+        } & self.available_cells
+        with self._lock:
+            current = set(getattr(self, "_prefetch_wanted_cells", set()))
+            if normalized == current:
+                return
+            self._prefetch_wanted_cells = normalized
+        # Force the next update to recalculate the wanted set even if the
+        # camera has not crossed a cell boundary.
+        self._last_camera_cell = None
+
+    def prefetch_wanted_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
+        """Return a thread-safe copy of benchmark prefetch cells."""
+        with self._lock:
+            return frozenset(getattr(self, "_prefetch_wanted_cells", set()))
+
     @staticmethod
     def _cell_in_cube_radius(cell: tuple[int, int, int], center: tuple[int, int, int], radius: int) -> bool:
         return cell_in_cube_radius(cell, center, radius)
@@ -1408,3 +1448,8 @@ class StreamingWorld:
             "failed_wanted": failed_wanted_count,
             "total_available": len(self.available_cells),
         }
+
+    def wanted_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
+        """Return a thread-safe snapshot of the current streaming target cells."""
+        with self._lock:
+            return frozenset(self._last_wanted_cells)

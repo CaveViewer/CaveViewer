@@ -216,6 +216,11 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
 def test_macos_dmg_smoke_script_exposes_bounded_architecture_interface():
     assert MACOS_DMG_SMOKE_SCRIPT.is_file()
     assert os.access(MACOS_DMG_SMOKE_SCRIPT, os.X_OK)
+    script_text = MACOS_DMG_SMOKE_SCRIPT.read_text(encoding="utf-8")
+    assert "detach_dmg()" in script_text
+    assert 'hdiutil detach "$mount_dir" -force -quiet' in script_text
+    assert "unable to detach DMG mount cleanly after successful validation" in script_text
+    assert 'hdiutil detach "$mount_dir" -quiet\nattached=0' not in script_text
 
     help_result = subprocess.run(
         [str(MACOS_DMG_SMOKE_SCRIPT), "--help"],
@@ -237,6 +242,29 @@ def test_macos_dmg_smoke_script_exposes_bounded_architecture_interface():
     )
     assert invalid_arch.returncode == 1
     assert "unsupported macOS architecture" in invalid_arch.stderr
+
+
+def test_viewer_benchmark_workflow_compares_refs_and_uploads_artifacts():
+    workflow = (WORKFLOWS_DIR / "viewer-benchmark.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "name: Viewer Benchmark" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "benchmark_map_url:" in workflow
+    assert "threshold_config_path:" in workflow
+    assert "default: benchmarks/viewer-thresholds.v1.json" in workflow
+    assert "No benchmark_map_url was supplied." in workflow
+    assert "ref: ${{ inputs.baseline_ref }}" in workflow
+    assert "inputs.candidate_ref != '' && inputs.candidate_ref || github.sha" in workflow
+    assert "python -m venv .venv-benchmark" in workflow
+    assert workflow.count("caveviewer-benchmark") >= 2
+    assert "set -o pipefail" in workflow
+    assert "scripts/benchmark/compare_benchmark_results.py" in workflow
+    assert "--thresholds \"$GITHUB_WORKSPACE/candidate/${{ inputs.threshold_config_path }}\"" in workflow
+    assert "compare_args+=(--max-median-fps-drop-pct" in workflow
+    assert "actions/upload-artifact@v7" in workflow
+    assert "benchmark-artifacts/" in workflow
 
 
 def test_pages_workflow_deploys_docs_independently_from_releases():

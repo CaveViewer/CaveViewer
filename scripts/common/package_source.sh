@@ -88,6 +88,7 @@ for item in \
   CONTRIBUTING.md \
   AGENTS.md \
   src \
+  benchmarks \
   packaging \
   scripts \
   updates \

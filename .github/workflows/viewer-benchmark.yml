@@ -1,0 +1,226 @@
+name: Viewer Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_map_url:
+        description: HTTPS URL to a zip file containing a precompiled chunk cache.
+        required: false
+        type: string
+      benchmark_map_sha256:
+        description: Optional SHA-256 for the benchmark map zip.
+        required: false
+        type: string
+      benchmark_cache_subdir:
+        description: Subdirectory inside the zip that contains manifest.json.
+        required: true
+        default: "."
+        type: string
+      scenario_path:
+        description: Scenario JSON path from the candidate checkout.
+        required: true
+        default: benchmarks/viewer-benchmark-scenario.v1.json
+        type: string
+      threshold_config_path:
+        description: Threshold config JSON path from the candidate checkout.
+        required: true
+        default: benchmarks/viewer-thresholds.v1.json
+        type: string
+      baseline_ref:
+        description: Baseline ref to compare against.
+        required: true
+        default: main
+        type: string
+      candidate_ref:
+        description: Candidate ref. Leave empty to use the workflow SHA.
+        required: false
+        default: ""
+        type: string
+      runner_label:
+        description: Runner label with a stable GPU/display stack.
+        required: true
+        default: ubuntu-latest
+        type: string
+      use_xvfb:
+        description: Run the viewer under xvfb-run.
+        required: true
+        default: true
+        type: boolean
+      max_median_fps_drop_pct:
+        description: Optional override for maximum allowed median FPS drop.
+        required: false
+        default: ""
+        type: string
+      max_one_percent_low_fps_drop_pct:
+        description: Optional override for maximum allowed 1% low FPS drop.
+        required: false
+        default: ""
+        type: string
+      max_p95_frame_ms_increase_pct:
+        description: Optional override for maximum allowed p95 frame time increase.
+        required: false
+        default: ""
+        type: string
+      max_stutter_frame_increase_pct:
+        description: Optional override for maximum allowed stutter-count increase.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Benchmark viewer FPS
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Explain missing benchmark map
+        if: ${{ inputs.benchmark_map_url == '' }}
+        run: |
+          echo "No benchmark_map_url was supplied."
+          echo "Provide a zip containing a precompiled chunk cache to run the FPS gate."
+
+      - name: Checkout baseline
+        if: ${{ inputs.benchmark_map_url != '' }}
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: baseline
+
+      - name: Checkout candidate
+        if: ${{ inputs.benchmark_map_url != '' }}
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_ref != '' && inputs.candidate_ref || github.sha }}
+          path: candidate
+
+      - name: Set up Python
+        if: ${{ inputs.benchmark_map_url != '' }}
+        uses: actions/setup-python@v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install xvfb
+        if: ${{ inputs.benchmark_map_url != '' && inputs.use_xvfb && runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Download benchmark map
+        if: ${{ inputs.benchmark_map_url != '' }}
+        env:
+          BENCHMARK_MAP_URL: ${{ inputs.benchmark_map_url }}
+          BENCHMARK_MAP_SHA256: ${{ inputs.benchmark_map_sha256 }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+          import urllib.request
+
+          url = os.environ["BENCHMARK_MAP_URL"]
+          expected_sha = os.environ.get("BENCHMARK_MAP_SHA256", "").strip().lower()
+          archive = pathlib.Path("benchmark-map.zip")
+          urllib.request.urlretrieve(url, archive)
+          actual_sha = hashlib.sha256(archive.read_bytes()).hexdigest()
+          print(f"benchmark_map_sha256={actual_sha}")
+          if expected_sha and actual_sha != expected_sha:
+              raise SystemExit(
+                  f"benchmark map SHA-256 mismatch: expected {expected_sha}, got {actual_sha}"
+              )
+          PY
+          python -m zipfile -e benchmark-map.zip benchmark-map
+
+      - name: Create benchmark environment
+        if: ${{ inputs.benchmark_map_url != '' }}
+        run: |
+          python -m venv .venv-benchmark
+          . .venv-benchmark/bin/activate
+          python -m pip install --upgrade pip
+
+      - name: Run baseline benchmark
+        if: ${{ inputs.benchmark_map_url != '' }}
+        env:
+          CAVEVIEWER_COMMIT: ${{ inputs.baseline_ref }}
+          CAVEVIEWER_LOG_LEVEL: DEBUG
+        run: |
+          set -o pipefail
+          . .venv-benchmark/bin/activate
+          python -m pip install -e baseline
+          mkdir -p "$GITHUB_WORKSPACE/benchmark-artifacts/baseline"
+          map_cache="$GITHUB_WORKSPACE/benchmark-map/${{ inputs.benchmark_cache_subdir }}"
+          scenario="$GITHUB_WORKSPACE/candidate/${{ inputs.scenario_path }}"
+          command_prefix=""
+          if [ "${{ inputs.use_xvfb }}" = "true" ]; then
+            command_prefix="xvfb-run -a"
+          fi
+          $command_prefix caveviewer-benchmark \
+            --cache-dir "$map_cache" \
+            --textures-dir "$map_cache" \
+            --scenario "$scenario" \
+            --output-dir "$GITHUB_WORKSPACE/benchmark-artifacts/baseline" \
+            --log-file "$GITHUB_WORKSPACE/benchmark-artifacts/baseline/benchmark.log" \
+            --log-level DEBUG \
+            2>&1 | tee "$GITHUB_WORKSPACE/benchmark-artifacts/baseline/console.log"
+
+      - name: Run candidate benchmark
+        if: ${{ inputs.benchmark_map_url != '' }}
+        env:
+          CAVEVIEWER_COMMIT: ${{ inputs.candidate_ref != '' && inputs.candidate_ref || github.sha }}
+          CAVEVIEWER_LOG_LEVEL: DEBUG
+        run: |
+          set -o pipefail
+          . .venv-benchmark/bin/activate
+          python -m pip install -e candidate
+          mkdir -p "$GITHUB_WORKSPACE/benchmark-artifacts/candidate"
+          map_cache="$GITHUB_WORKSPACE/benchmark-map/${{ inputs.benchmark_cache_subdir }}"
+          scenario="$GITHUB_WORKSPACE/candidate/${{ inputs.scenario_path }}"
+          command_prefix=""
+          if [ "${{ inputs.use_xvfb }}" = "true" ]; then
+            command_prefix="xvfb-run -a"
+          fi
+          $command_prefix caveviewer-benchmark \
+            --cache-dir "$map_cache" \
+            --textures-dir "$map_cache" \
+            --scenario "$scenario" \
+            --output-dir "$GITHUB_WORKSPACE/benchmark-artifacts/candidate" \
+            --log-file "$GITHUB_WORKSPACE/benchmark-artifacts/candidate/benchmark.log" \
+            --log-level DEBUG \
+            2>&1 | tee "$GITHUB_WORKSPACE/benchmark-artifacts/candidate/console.log"
+
+      - name: Compare benchmark results
+        if: ${{ inputs.benchmark_map_url != '' }}
+        run: |
+          . .venv-benchmark/bin/activate
+          compare_args=(
+            python candidate/scripts/benchmark/compare_benchmark_results.py
+            --baseline "$GITHUB_WORKSPACE/benchmark-artifacts/baseline/summary.json"
+            --candidate "$GITHUB_WORKSPACE/benchmark-artifacts/candidate/summary.json"
+            --output "$GITHUB_WORKSPACE/benchmark-artifacts/comparison.json"
+            --thresholds "$GITHUB_WORKSPACE/candidate/${{ inputs.threshold_config_path }}"
+          )
+          if [ -n "${{ inputs.max_median_fps_drop_pct }}" ]; then
+            compare_args+=(--max-median-fps-drop-pct "${{ inputs.max_median_fps_drop_pct }}")
+          fi
+          if [ -n "${{ inputs.max_one_percent_low_fps_drop_pct }}" ]; then
+            compare_args+=(--max-one-percent-low-fps-drop-pct "${{ inputs.max_one_percent_low_fps_drop_pct }}")
+          fi
+          if [ -n "${{ inputs.max_p95_frame_ms_increase_pct }}" ]; then
+            compare_args+=(--max-p95-frame-ms-increase-pct "${{ inputs.max_p95_frame_ms_increase_pct }}")
+          fi
+          if [ -n "${{ inputs.max_stutter_frame_increase_pct }}" ]; then
+            compare_args+=(--max-stutter-frame-increase-pct "${{ inputs.max_stutter_frame_increase_pct }}")
+          fi
+          "${compare_args[@]}"
+
+      - name: Upload benchmark artifacts
+        if: ${{ always() && inputs.benchmark_map_url != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: viewer-benchmark-${{ github.run_id }}
+          path: benchmark-artifacts/
+          if-no-files-found: error

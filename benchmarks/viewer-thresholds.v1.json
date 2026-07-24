@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "viewer-default-thresholds",
+  "thresholds": {
+    "max_wall_clock_fps_drop_pct": 5.0,
+    "max_median_fps_drop_pct": 5.0,
+    "max_one_percent_low_fps_drop_pct": 10.0,
+    "max_p95_frame_ms_increase_pct": 15.0,
+    "max_stutter_frame_increase_pct": 20.0
+  }
+}

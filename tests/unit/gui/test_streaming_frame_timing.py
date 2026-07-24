@@ -20,6 +20,8 @@ def test_texture_timing_counters_track_cache_hits_and_worst_texture():
             "texture_alloc_ms": 2.0,
             "texture_write_ms": 3.0,
             "mipmap_ms": 4.0,
+            "texture_evictions": 2,
+            "texture_evicted_bytes": 4096,
             "material_cache_hit": True,
             "file_cache_hit": True,
             "decoded_cache_hit": True,
@@ -37,6 +39,8 @@ def test_texture_timing_counters_track_cache_hits_and_worst_texture():
     assert counters["texture_file_cache_hits"] == 1
     assert counters["texture_decoded_cache_hits"] == 1
     assert counters["texture_sync_decodes"] == 1
+    assert counters["texture_evictions"] == 2
+    assert counters["texture_evicted_bytes"] == 4096
     assert timing["worst_texture_material"] == "limestone"
     assert timing["worst_texture_size"] == (1024, 512)
     assert timing["worst_texture_bytes"] == 200
@@ -68,6 +72,8 @@ def test_record_chunk_upload_timing_accumulates_counts_and_worst_chunk():
             "texture_decoded_cache_hits": 3,
             "texture_sync_decodes": 4,
             "texture_placeholders": 5,
+            "texture_evictions": 6,
+            "texture_evicted_bytes": 7,
             "chunk_bookkeeping_ms": 16.0,
             "groups": 17,
             "prepacked_groups": 18,
@@ -93,6 +99,8 @@ def test_record_chunk_upload_timing_accumulates_counts_and_worst_chunk():
     assert timing["fallback_pack_groups"] == 19
     assert timing["vertices_uploaded"] == 20
     assert timing["bytes_uploaded"] == 21
+    assert timing["texture_evictions"] == 6
+    assert timing["texture_evicted_bytes"] == 7
     assert timing["worst_chunk_cell"] == (1, 2, 3)
     assert timing["worst_chunk_ms"] == 30.0
     assert timing["worst_chunk_groups"] == 17
@@ -113,6 +121,8 @@ def test_format_streaming_frame_timing_includes_worst_records_and_slice_sizes():
             "buffer_write_ms": 2.5,
             "texture_alloc_ms": 0.5,
             "texture_upload_ms": 3.5,
+            "texture_evictions": 2,
+            "texture_evicted_bytes": 3 * 1024 * 1024,
             "vbo_upload_slice_bytes": 256 * 1024,
             "texture_upload_slice_bytes": 128 * 1024,
             "upload_stalls": 1,
@@ -138,6 +148,8 @@ def test_format_streaming_frame_timing_includes_worst_records_and_slice_sizes():
     assert "drain_other=1.0ms" in detail
     assert "slices=vbo:256KB/tex:128KB" in detail
     assert "stalls=1" in detail
+    assert "tex_evict=2" in detail
+    assert "tex_evict_mb=3.0" in detail
     assert "worst_texture='sandstone' 6.0ms size=unknown bytes=4.0MB" in detail
     assert "worst_chunk=(4, 5, 6) 7.0ms groups=8 verts=9 vbo=2.0MB" in detail
 

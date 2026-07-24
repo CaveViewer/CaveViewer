@@ -13,7 +13,9 @@ simple lookup-and-release.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+import hashlib
+import json
 import logging
 import math
 import os
@@ -21,6 +23,7 @@ import queue
 import sys
 import threading
 import time
+from typing import Any
 
 import numpy as np
 import moderngl
@@ -30,6 +33,8 @@ from moderngl_window.context.base import KeyModifiers
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.navigation.centerline import generate_centerline_path
+from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
@@ -41,6 +46,7 @@ from caveviewer.gui.controls_overlay import ControlsOverlay
 from caveviewer.gui.stepper_control import StepperControl
 from caveviewer.gui.color_picker import ColorPicker
 from caveviewer.gui.import_progress_panel import ImportProgressPanel
+from caveviewer.benchmarking.results import BenchmarkController
 from caveviewer.gui.import_process import (
     start_import_process,
     terminate_import_process,
@@ -67,6 +73,7 @@ _DESKTOP_WINDOW_SCALE = 0.80
 _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
+_TEXTURE_RESIDENT_CACHE_MB_ENV = "CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB"
 _GPU_RESIDENCY_SAFETY_SHARE = 0.05
 _RENDER_UPLOAD_INITIAL_SLICE_BYTES = render_upload.RENDER_UPLOAD_INITIAL_SLICE_BYTES
 _CATCHUP_UPLOAD_CHUNKS_PER_FRAME = 2
@@ -78,6 +85,17 @@ _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
 _VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
+_BENCHMARK_STREAMING_ENV_FIELDS = (
+    ("system_ram_target_percent", "CAVEVIEWER_MEMORY_UTILIZATION_TARGET"),
+    ("gpu_memory_target_percent", "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET"),
+    ("gpu_memory_override_gb", "CAVEVIEWER_GPU_MEMORY_GB"),
+    ("texture_resident_cache_mb", _TEXTURE_RESIDENT_CACHE_MB_ENV),
+    ("io_workers", "CAVEVIEWER_IO_WORKERS"),
+    ("io_reserved_cpus", "CAVEVIEWER_IO_RESERVED_CPUS"),
+    ("upload_chunks_per_frame", "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME"),
+    ("upload_groups_per_frame", "CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME"),
+    ("upload_time_budget_ms", "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS"),
+)
 
 
 _RecordingStopResult = recording.RecordingStopResult
@@ -197,6 +215,75 @@ def _window_pixel_ratio(window) -> float:
         return 1.0
 
 
+def _viewer_ui_surface_size(
+    window,
+    fallback_size: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Return the framebuffer-aware surface size used for HUD auto-scaling."""
+    fallback = fallback_size or _DEFAULT_WINDOW_SIZE
+    try:
+        buffer_width, buffer_height = window.buffer_size
+        buffer_width = int(buffer_width)
+        buffer_height = int(buffer_height)
+        if buffer_width > 0 and buffer_height > 0:
+            return buffer_width, buffer_height
+    except Exception:
+        pass
+    try:
+        width, height = window.size
+        width = int(width)
+        height = int(height)
+        if width > 0 and height > 0:
+            return width, height
+    except Exception:
+        pass
+    return fallback
+
+
+def _benchmark_environment_size(value) -> list[int] | None:
+    """Return a stable two-item size list for benchmark environment metadata."""
+    try:
+        width, height = value
+        width = int(width)
+        height = int(height)
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return [width, height]
+
+
+def _benchmark_render_distance_value(scenario) -> int | str:
+    """Return the scenario render distance in a JSON-stable form."""
+    value = getattr(scenario, "render_distance", "")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _benchmark_streaming_settings_snapshot(scenario) -> dict[str, object]:
+    """Return requested benchmark streaming settings that affect comparability."""
+    settings: dict[str, object] = {
+        "render_distance_chunks": _benchmark_render_distance_value(scenario),
+    }
+    for key, env_var in _BENCHMARK_STREAMING_ENV_FIELDS:
+        settings[key] = os.environ.get(env_var, "")
+    return settings
+
+
+def _benchmark_streaming_settings_fingerprint(
+    settings: Mapping[str, object],
+) -> str:
+    payload = json.dumps(
+        dict(settings),
+        default=str,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _viewer_ui_scale_for_window_size(
     window_size: tuple[int, int] | None,
     environ: Mapping[str, str] | None = None,
@@ -297,6 +384,21 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _env_optional_mebibytes(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        _LOG.warning("Ignoring invalid %s=%r; expected a positive MB value.", name, raw)
+        return None
+    if not math.isfinite(value) or value <= 0.0:
+        _LOG.warning("Ignoring invalid %s=%r; expected a positive MB value.", name, raw)
+        return None
+    return max(1, int(value * 1024 ** 2))
+
+
 SHADER_DIR = str(resource_path("shaders"))
 
 
@@ -356,6 +458,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     cave_cache_dir: str = None
     cave_textures_dir: str = None
     cave_manifest: dict = None
+    cave_benchmark_config: dict | None = None
 
     # Alternative to the three attributes above: set THIS instead when the
     # map needs first-time import/chunking (no cache built yet) -- a dict
@@ -456,7 +559,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
         bitmap_font.set_raster_scale(_window_pixel_ratio(getattr(self, "wnd", None)))
         self._viewer_ui_scale = _viewer_ui_scale_for_window_size(
-            getattr(getattr(self, "wnd", None), "size", _DEFAULT_WINDOW_SIZE)
+            _viewer_ui_surface_size(getattr(self, "wnd", None), _DEFAULT_WINDOW_SIZE)
         )
         self._right_column_panel_scale = (
             self.RIGHT_COLUMN_PANEL_SCALE * self._viewer_ui_scale
@@ -530,6 +633,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._last_gpu_draw_ms: float | None = None
         self._gpu_draw_timer_enabled = _env_bool("CAVEVIEWER_GPU_DRAW_TIMER", False)
         self._streaming_frame_timing: dict | None = None
+        self._benchmark_controller: BenchmarkController | None = None
         self._last_input_reset_log = 0.0
         self._layout_cache_size: tuple | None = None
         self._layout_cache_result: dict | None = None
@@ -575,6 +679,46 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_frame_queue: queue.Queue | None = None
         self._recording_stop_results: queue.Queue[_RecordingStopResult] = queue.Queue()
         self._recording_stop_thread: threading.Thread | None = None
+
+        benchmark_config = CaveViewerWindow.cave_benchmark_config
+        if benchmark_config is not None:
+            wnd = getattr(self, "wnd", None)
+            actual_window_size = _benchmark_environment_size(
+                getattr(wnd, "size", None)
+            )
+            actual_framebuffer_size = _benchmark_environment_size(
+                getattr(wnd, "buffer_size", None)
+            )
+            ui_surface_size = _benchmark_environment_size(
+                _viewer_ui_surface_size(
+                    wnd,
+                    tuple(actual_window_size)
+                    if actual_window_size is not None
+                    else _DEFAULT_WINDOW_SIZE,
+                )
+            )
+            self._benchmark_controller = BenchmarkController(
+                scenario=benchmark_config["scenario"],
+                output_dir=benchmark_config["output_dir"],
+                logger=_LOG,
+                perf_counter=lambda: time.perf_counter(),
+                environment=benchmark_config.get("environment", {}),
+            )
+            self._benchmark_controller.update_environment(
+                {
+                    "gl_vendor": str(self.ctx.info.get("GL_VENDOR", "")),
+                    "gl_renderer": str(self.ctx.info.get("GL_RENDERER", "")),
+                    "gl_version": str(self.ctx.info.get("GL_VERSION", "")),
+                    "window_backend": str(
+                        getattr(getattr(self, "wnd", None), "name", "")
+                    ),
+                    "actual_window_size": actual_window_size,
+                    "actual_framebuffer_size": actual_framebuffer_size,
+                    "actual_ui_surface_size": ui_surface_size,
+                    "vsync": bool(getattr(self, "vsync", False)),
+                }
+            )
+            self._benchmark_controller.prepare_output()
 
         self._install_backend_modifier_probe()
 
@@ -711,6 +855,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
+        self._initial_visual_ready = False
+        self._initial_visual_ready_frames = 0
+        self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_required_textures = 0
+        self._initial_visual_ready_resident_textures = 0
+        self._initial_visual_ready_visible_textures = 0
+        self._initial_visual_ready_missing_textures = 0
+        self._initial_visual_ready_expected_chunks = 0
+        self._initial_visual_ready_covered_chunks = 0
+        self._initial_visual_ready_missing_chunks = 0
+        self._initial_visual_ready_coverage_pct = 100.0
+        self._initial_route_prefetch_expected_cells = 0
+        self._initial_route_prefetch_loaded_cells = 0
+        self._initial_route_prefetch_pending_cells = 0
+        self._initial_route_prefetch_failed_cells = 0
+        self._initial_route_prefetch_missing_cells = 0
+        self._initial_route_prefetch_coverage_pct = 100.0
+        self._initial_visual_ready_logged = False
         self._initial_compilation_started_at = None
         self._initial_compilation_logged = False
         self._chunk_prep_progress = 0.0
@@ -995,6 +1157,20 @@ class CaveViewerWindow(mglw.WindowConfig):
                 gpu_target_fraction,
             )
         )
+        resident_texture_cap_bytes = _env_optional_mebibytes(
+            _TEXTURE_RESIDENT_CACHE_MB_ENV
+        )
+        if resident_texture_cap_bytes is not None:
+            max_resident_texture_bytes = min(
+                max_resident_texture_bytes,
+                resident_texture_cap_bytes,
+            )
+            _LOG.info(
+                "Texture resident GPU LRU cache capped by %s=%s MB: %.1f MB.",
+                _TEXTURE_RESIDENT_CACHE_MB_ENV,
+                os.environ.get(_TEXTURE_RESIDENT_CACHE_MB_ENV, "").strip(),
+                max_resident_texture_bytes / (1024 ** 2),
+            )
         gpu_geometry_budget_bytes = None
         if gpu_memory_bytes is not None and gpu_memory_bytes > 0:
             total_gpu_residency_budget_bytes = int(
@@ -1057,6 +1233,21 @@ class CaveViewerWindow(mglw.WindowConfig):
                 f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}, "
                 "but existing/prebuilt caches stream using the chunk size recorded in manifest.json."
             )
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        if benchmark_controller is not None:
+            benchmark_radius = int(benchmark_controller.scenario.render_distance)
+            clamped_radius = max(
+                self.render_distance_stepper.min_value,
+                min(self.render_distance_stepper.max_value, benchmark_radius),
+            )
+            if clamped_radius != benchmark_radius:
+                _LOG.warning(
+                    "Benchmark render_distance=%d exceeds viewer control range; "
+                    "using %d.",
+                    benchmark_radius,
+                    clamped_radius,
+                )
+            self.render_distance_stepper.value = clamped_radius
         config = StreamingConfig(
             chunk_size=chunk_size,
             load_radius_cells=self.render_distance_stepper.value,
@@ -1082,6 +1273,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         first_info = self.manifest["chunks"][first_cell_str]
         start_pos = (np.array(first_info["bounds_min"]) + np.array(first_info["bounds_max"])) / 2.0
         self.camera = FlyCamera(position=tuple(start_pos))
+        self._benchmark_route_prefetch_cells = frozenset()
+        if benchmark_controller is not None:
+            benchmark_controller.set_position_origin(start_pos)
+            benchmark_controller.apply_initial_camera(self.camera)
+            self._configure_benchmark_route_prefetch(start_pos)
         self._bookmarks_path = os.path.join(self.cache_dir, "camera_bookmarks.json")
         self._load_bookmarks()
 
@@ -1089,7 +1285,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # footprint with a live red dot for current position. Built once
         # from the manifest's chunk bounding boxes -- no extra rendering
         # pass or GPU cost beyond this tiny 2D overlay.
-        self.minimap = Minimap(self.ctx, self.manifest)
+        self.minimap = Minimap(
+            self.ctx,
+            self.manifest,
+            centerline_points_xz=self._minimap_centerline_points_xz(self.manifest),
+        )
 
         # One-time texture diagnostic: print material/texture summary to
         # console so atlas feasibility can be judged without guessing.
@@ -1143,10 +1343,185 @@ class CaveViewerWindow(mglw.WindowConfig):
         # Reset on each map load; set True when the initial view has enough
         # uploaded chunks to be usable, not merely when the first chunk arrives.
         self._initial_chunks_loaded = False
+        self._initial_visual_ready = False
+        self._initial_visual_ready_frames = 0
+        self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_required_textures = 0
+        self._initial_visual_ready_resident_textures = 0
+        self._initial_visual_ready_visible_textures = 0
+        self._initial_visual_ready_missing_textures = 0
+        self._initial_visual_ready_expected_chunks = 0
+        self._initial_visual_ready_covered_chunks = 0
+        self._initial_visual_ready_missing_chunks = 0
+        self._initial_visual_ready_coverage_pct = 100.0
+        self._initial_visual_ready_logged = False
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
         self._chunk_prep_completion_armed = False
         self.import_progress_panel.reset_progress()
+        self._record_benchmark_streaming_environment()
+
+    def _configure_benchmark_route_prefetch(self, origin: np.ndarray) -> None:
+        """Ask streaming to keep the benchmark route tube wanted during startup."""
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        world = getattr(self, "world", None)
+        if benchmark_controller is None or world is None:
+            return
+
+        radius = max(1, int(getattr(world.config, "load_radius_cells", 1)))
+        route_cells: set[tuple[int, int, int]] = set()
+        route_positions = tuple(
+            self._benchmark_route_sample_positions(
+                benchmark_controller.scenario,
+                origin,
+            )
+        )
+        for position in route_positions:
+            route_cell = world.cell_for_position(np.asarray(position, dtype=np.float32))
+            route_cells.update(world.available_cells_in_radius(route_cell, radius))
+
+        self._benchmark_route_prefetch_cells = frozenset(route_cells)
+        set_prefetch = getattr(world, "set_prefetch_wanted_cells", None)
+        if callable(set_prefetch):
+            set_prefetch(route_cells)
+        _LOG.info(
+            "Benchmark route prefetch enabled: %d cells from %d sampled route "
+            "position(s), radius=%d.",
+            len(route_cells),
+            len(route_positions),
+            radius,
+        )
+        benchmark_controller.update_environment(
+            {
+                "benchmark_route_prefetch_cells": len(route_cells),
+                "benchmark_route_prefetch_sample_positions": len(route_positions),
+                "benchmark_route_prefetch_radius_chunks": radius,
+            }
+        )
+
+    def _benchmark_route_sample_positions(
+        self,
+        scenario,
+        origin: np.ndarray,
+    ) -> Iterable[np.ndarray]:
+        """Yield absolute route positions densely enough to prefetch the route."""
+        world = getattr(self, "world", None)
+        chunk_size = max(
+            1e-6,
+            float(getattr(getattr(world, "config", None), "chunk_size", 1.0)),
+        )
+        origin_array = np.asarray(origin, dtype=np.float64)
+        route = tuple(getattr(scenario, "route", ()))
+        if not route:
+            return
+
+        absolute_positions = [
+            self._benchmark_absolute_route_position(scenario, keyframe, origin_array)
+            for keyframe in route
+        ]
+        previous = absolute_positions[0]
+        yield previous
+        for current in absolute_positions[1:]:
+            segment = current - previous
+            distance = float(np.linalg.norm(segment))
+            steps = max(1, int(math.ceil(distance / chunk_size)))
+            for step in range(1, steps + 1):
+                t = step / steps
+                yield previous + segment * t
+            previous = current
+
+    @staticmethod
+    def _benchmark_absolute_route_position(
+        scenario,
+        keyframe,
+        origin: np.ndarray,
+    ) -> np.ndarray:
+        position = np.asarray(keyframe.position, dtype=np.float64)
+        if getattr(scenario, "position_mode", "absolute") == "first_chunk_center_offset":
+            return origin + position
+        return position
+
+    def _record_benchmark_streaming_environment(self) -> None:
+        """Persist effective Streaming/texture settings for benchmark artifacts."""
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        world = getattr(self, "world", None)
+        if benchmark_controller is None or world is None:
+            return
+
+        config = getattr(world, "config", None)
+        texture_manager = getattr(self, "texture_manager", None)
+        ready_backlog_capacity = getattr(world, "_ready_backlog_capacity", None)
+        worker_target = getattr(world, "_worker_pool_size", None)
+        active_workers = getattr(world, "_workers", ())
+        update = {
+            "effective_render_distance_chunks": int(
+                getattr(config, "load_radius_cells", 0) or 0
+            ),
+            "streaming_chunk_size_m": float(
+                getattr(config, "chunk_size", 0.0) or 0.0
+            ),
+            "streaming_unload_radius_margin": int(
+                getattr(config, "unload_radius_margin", 0) or 0
+            ),
+            "streaming_max_loaded_chunks": int(
+                getattr(config, "max_loaded_chunks", 0) or 0
+            ),
+            "streaming_ready_backlog_capacity": (
+                None
+                if ready_backlog_capacity is None
+                else int(ready_backlog_capacity)
+            ),
+            "streaming_worker_target": (
+                None if worker_target is None else int(worker_target)
+            ),
+            "streaming_active_workers_at_load": len(tuple(active_workers or ())),
+            "benchmark_route_prefetch_cells": int(
+                len(getattr(self, "_benchmark_route_prefetch_cells", ()))
+            ),
+            "upload_chunks_per_frame_effective": int(self._upload_chunks_per_frame),
+            "upload_groups_per_frame_effective": int(self._upload_groups_per_frame),
+            "upload_time_budget_ms_effective": float(self._upload_time_budget_ms),
+            "startup_upload_chunks_per_frame": max(
+                self._upload_chunks_per_frame,
+                _STARTUP_UPLOAD_CHUNKS_PER_FRAME,
+            ),
+            "startup_upload_groups_per_frame": max(
+                self._upload_groups_per_frame,
+                _STARTUP_UPLOAD_OPERATIONS_PER_CHUNK,
+            ),
+            "startup_upload_time_budget_ms": max(
+                self._upload_time_budget_ms,
+                _STARTUP_UPLOAD_TIME_BUDGET_MS,
+            ),
+            "catchup_upload_chunks_per_frame": max(
+                self._upload_chunks_per_frame,
+                _CATCHUP_UPLOAD_CHUNKS_PER_FRAME,
+            ),
+            "catchup_upload_groups_per_frame": max(
+                self._upload_groups_per_frame,
+                _CATCHUP_UPLOAD_OPERATIONS_PER_CHUNK,
+            ),
+            "catchup_upload_time_budget_ms": max(
+                self._upload_time_budget_ms,
+                _CATCHUP_UPLOAD_TIME_BUDGET_MS,
+            ),
+            "texture_max_dimension": (
+                None
+                if texture_manager is None
+                else texture_manager.max_texture_dimension
+            ),
+            "texture_resident_budget_bytes": (
+                None
+                if texture_manager is None
+                else texture_manager.max_resident_texture_bytes
+            ),
+            "texture_decoded_cache_budget_bytes": (
+                None
+                if texture_manager is None
+                else texture_manager.max_decoded_cache_bytes
+            ),
+        }
+        benchmark_controller.update_environment(update)
 
     def _navigation_position_is_allowed(self, position: np.ndarray) -> bool:
         """
@@ -1740,6 +2115,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         atlas_side = 2 ** _math.ceil(_math.log2(_math.sqrt(total_px))) if total_px > 0 else 0
         _LOG.info(f"  Estimated atlas needed  : {atlas_side}x{atlas_side} px "
               f"({atlas_side*atlas_side*3/1024/1024:.0f} MB)")
+
+    def _minimap_centerline_points_xz(
+        self,
+        manifest: Mapping[str, Any],
+    ) -> tuple[tuple[float, float], ...]:
+        """Return an optional centerline overlay for the minimap."""
+        if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", True):
+            return ()
+        try:
+            return generate_centerline_path(manifest).points_xz
+        except NavigationConfigurationError as exc:
+            _LOG.debug("Minimap centerline unavailable: %s", exc)
+            return ()
 
     def _teardown_current_map(self, *, final_shutdown: bool = False) -> None:
         """
@@ -2341,12 +2729,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             return True
         if not self._initial_chunks_loaded:
             return True
-        # Don't lock during the fade-out: textures must be re-enabled before
-        # the dim overlay reveals the cave, otherwise the user sees gray
-        # (untextured) geometry through the fading dim for the full 0.5 s fade.
-        return (self.controls_overlay.is_active
-                and not self.controls_overlay.is_manual_mode
-                and not self.controls_overlay.is_fading)
+        # Once the initial chunks are resident, release the loading-time render
+        # mode lock while the startup help screen is still covering the view.
+        # That lets Texture turn back on and gives the renderer real textured
+        # frames to settle before the user dismisses the overlay.
+        return False
 
     def _sync_render_mode_loading_policy(self) -> None:
         """Apply loading-time button policy and post-load defaults exactly on transitions."""
@@ -2415,12 +2802,43 @@ class CaveViewerWindow(mglw.WindowConfig):
     _AMBIENT_MIN = 0.04
     _AMBIENT_MAX = 0.9
     _INITIAL_LOAD_MIN_CHUNKS = 6
+    _INITIAL_VISUAL_READY_SETTLE_FRAMES = 3
+    _STARTUP_VISUAL_RADIUS_EXTRA_CHUNKS = 3
+    _STARTUP_VISUAL_RADIUS_MAX_CHUNKS = 10
     _CHUNK_PREP_MAX_FRACTION = 0.97
     _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.85
     _STREAMING_FAILURES_PER_FRAME = 8
 
+    def _startup_visual_prefetch_is_active(self) -> bool:
+        overlay = getattr(self, "controls_overlay", None)
+        return (
+            overlay is not None
+            and bool(getattr(overlay, "is_waiting_for_begin", False))
+            and not getattr(self, "_initial_visual_ready", False)
+        )
+
     def _target_streaming_load_radius(self) -> int:
-        return int(self.render_distance_stepper.value)
+        base_radius = max(1, int(self.render_distance_stepper.value))
+        if not self._startup_visual_prefetch_is_active():
+            return base_radius
+        max_radius = max(
+            base_radius,
+            min(
+                int(
+                    getattr(
+                        self.render_distance_stepper,
+                        "max_value",
+                        self._STARTUP_VISUAL_RADIUS_MAX_CHUNKS,
+                    )
+                ),
+                self._STARTUP_VISUAL_RADIUS_MAX_CHUNKS,
+            ),
+        )
+        return min(
+            max_radius,
+            base_radius + self._STARTUP_VISUAL_RADIUS_EXTRA_CHUNKS,
+        )
+
 
     def _streaming_cell_priority_key(
         self,
@@ -2560,6 +2978,634 @@ class CaveViewerWindow(mglw.WindowConfig):
         needed = self._initial_chunk_load_needed(stats, max_loaded)
         return loaded + failed_wanted >= needed
 
+    def _initial_visual_readiness_is_settled(
+        self,
+        stats: dict,
+        texture_readiness: Mapping[str, object] | None = None,
+        visual_coverage: Mapping[str, object] | None = None,
+        route_prefetch: Mapping[str, object] | None = None,
+    ) -> bool:
+        if not getattr(self, "_initial_chunks_loaded", False):
+            return False
+        if not self._initial_chunk_load_is_ready(stats):
+            return False
+        if max(0, int(stats.get("pending", 0))) > 0:
+            return False
+        if max(0, int(stats.get("ready", 0))) > 0:
+            return False
+        upload_states = getattr(self, "_chunk_upload_states", {})
+        if len(upload_states) > 0:
+            return False
+        if texture_readiness is not None and not bool(
+            texture_readiness.get("textures_ready", True)
+        ):
+            return False
+        if visual_coverage is not None and not bool(
+            visual_coverage.get("coverage_ready", True)
+        ):
+            return False
+        if route_prefetch is not None and not bool(
+            route_prefetch.get("ready", True)
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _texture_source_key(source: object) -> object:
+        try:
+            hash(source)
+        except TypeError:
+            return id(source)
+        return source
+
+    def _current_wanted_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
+        world = getattr(self, "world", None)
+        snapshot = getattr(world, "wanted_cells_snapshot", None)
+        if callable(snapshot):
+            return frozenset(snapshot())
+        return frozenset(getattr(world, "_last_wanted_cells", ()))
+
+    def _texture_sources_for_cells(
+        self,
+        cells: Iterable[tuple[int, int, int]],
+    ) -> set[object]:
+        texture_manager = getattr(self, "texture_manager", None)
+        material_to_file = getattr(texture_manager, "material_to_file", {})
+        if not isinstance(material_to_file, Mapping):
+            return set()
+        manifest = getattr(self, "manifest", {})
+        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
+        if not isinstance(chunks, Mapping):
+            return set()
+
+        sources: set[object] = set()
+        for cell in cells:
+            chunk_info = chunks.get(f"{cell[0]}_{cell[1]}_{cell[2]}")
+            if not isinstance(chunk_info, Mapping):
+                continue
+            materials = chunk_info.get("materials", ())
+            if not isinstance(materials, Iterable) or isinstance(materials, str):
+                materials = ()
+            for material in materials:
+                source = material_to_file.get(str(material))
+                if source:
+                    sources.add(self._texture_source_key(source))
+        return sources
+
+    def _texture_sources_for_visible_cells(
+        self,
+        visible_cells: Iterable[tuple[tuple, list]] | None,
+    ) -> set[object]:
+        texture_manager = getattr(self, "texture_manager", None)
+        material_to_file = getattr(texture_manager, "material_to_file", {})
+        if visible_cells is None or not isinstance(material_to_file, Mapping):
+            return set()
+        sources: set[object] = set()
+        for _cell, vao_list in visible_cells:
+            for _vao, _vbo, material_name, _texture in vao_list:
+                source = material_to_file.get(str(material_name))
+                if source:
+                    sources.add(self._texture_source_key(source))
+        return sources
+
+    def _resident_texture_source_keys(self) -> tuple[set[object], bool]:
+        texture_manager = getattr(self, "texture_manager", None)
+        resident_sources = None
+        known_exact = False
+        if texture_manager is not None:
+            exact_sources = getattr(texture_manager, "resident_texture_sources", None)
+            if callable(exact_sources):
+                resident_sources = exact_sources()
+                known_exact = True
+        if resident_sources is None:
+            return set(), known_exact
+        return {
+            self._texture_source_key(source)
+            for source in resident_sources
+            if source
+        }, known_exact
+
+    def _benchmark_route_prefetch_stats(self) -> dict[str, object]:
+        prefetch_cells = set(getattr(self, "_benchmark_route_prefetch_cells", ()))
+        if not prefetch_cells:
+            return {
+                "active": False,
+                "ready": True,
+                "expected_cells": 0,
+                "loaded_cells": 0,
+                "pending_cells": 0,
+                "failed_cells": 0,
+                "missing_cells": 0,
+                "coverage_pct": 100.0,
+            }
+
+        world = getattr(self, "world", None)
+        if world is None:
+            return {
+                "active": True,
+                "ready": False,
+                "expected_cells": len(prefetch_cells),
+                "loaded_cells": 0,
+                "pending_cells": 0,
+                "failed_cells": 0,
+                "missing_cells": len(prefetch_cells),
+                "coverage_pct": 0.0,
+            }
+
+        lock = getattr(world, "_lock", None)
+        if lock is None:
+            loaded_cells = set(getattr(world, "loaded_cells", set()))
+            pending_cells = set(getattr(world, "_pending", set()))
+            failed_cells = set(getattr(world, "_failed_cells", {}))
+        else:
+            with lock:
+                loaded_cells = set(getattr(world, "loaded_cells", set()))
+                pending_cells = set(getattr(world, "_pending", set()))
+                failed_cells = set(getattr(world, "_failed_cells", {}))
+
+        loaded_prefetch = prefetch_cells & loaded_cells
+        pending_prefetch = prefetch_cells & pending_cells
+        failed_prefetch = prefetch_cells & failed_cells
+        covered_count = len(loaded_prefetch | failed_prefetch)
+        missing_count = max(0, len(prefetch_cells) - covered_count)
+        coverage_pct = 100.0 * covered_count / max(1, len(prefetch_cells))
+        return {
+            "active": True,
+            "ready": missing_count == 0,
+            "expected_cells": len(prefetch_cells),
+            "loaded_cells": len(loaded_prefetch),
+            "pending_cells": len(pending_prefetch),
+            "failed_cells": len(failed_prefetch),
+            "missing_cells": missing_count,
+            "coverage_pct": coverage_pct,
+        }
+
+    def _initial_texture_readiness_stats(
+        self,
+        visible_cells: Iterable[tuple[tuple, list]] | None,
+    ) -> dict[str, object]:
+        texture_manager = getattr(self, "texture_manager", None)
+        manager_stats = (
+            texture_manager.stats()
+            if texture_manager is not None and hasattr(texture_manager, "stats")
+            else {}
+        )
+        wanted_sources = self._texture_sources_for_cells(
+            self._current_wanted_cells_snapshot()
+        )
+        visible_sources = self._texture_sources_for_visible_cells(visible_cells)
+        required_sources = wanted_sources if wanted_sources else visible_sources
+        required_textures = len(required_sources)
+        resident_textures = max(
+            0,
+            int(manager_stats.get("unique_files_resident", required_textures)),
+        )
+        resident_sources, exact_sources_known = self._resident_texture_source_keys()
+        missing_sources = (
+            required_sources - resident_sources
+            if exact_sources_known and required_sources
+            else set()
+        )
+        textures_ready = (
+            not missing_sources
+            if exact_sources_known and required_sources
+            else required_textures <= 0 or resident_textures >= required_textures
+        )
+        return {
+            "textures_ready": textures_ready,
+            "required_textures": required_textures,
+            "resident_textures": resident_textures,
+            "missing_textures": len(missing_sources),
+            "visible_textures": len(visible_sources),
+            "resident_texture_bytes": int(
+                manager_stats.get("resident_texture_bytes", 0)
+            ),
+            "resident_texture_budget_bytes": int(
+                manager_stats.get("resident_texture_budget_bytes", 0)
+            ),
+        }
+
+    def _manifest_chunk_bounds(
+        self,
+        cell: tuple[int, int, int],
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        manifest = getattr(self, "manifest", {})
+        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
+        chunk_info = chunks.get(f"{cell[0]}_{cell[1]}_{cell[2]}")
+        if not isinstance(chunk_info, Mapping):
+            return None
+        try:
+            bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
+            bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
+        except (KeyError, TypeError, ValueError):
+            return None
+        if bounds_min.shape != (3,) or bounds_max.shape != (3,):
+            return None
+        return bounds_min, bounds_max
+
+    def _failed_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
+        world = getattr(self, "world", None)
+        failed_cells = getattr(world, "_failed_cells", {})
+        if isinstance(failed_cells, Mapping):
+            return frozenset(failed_cells.keys())
+        return frozenset(failed_cells or ())
+
+    def _startup_visual_coverage_stats(
+        self,
+        visible_cells: Iterable[tuple[tuple, list]] | None,
+        view: np.ndarray | None,
+        projection: np.ndarray | None,
+    ) -> dict[str, object]:
+        if view is None or projection is None:
+            return {
+                "coverage_ready": True,
+                "expected_chunks": 0,
+                "covered_chunks": 0,
+                "missing_chunks": 0,
+                "coverage_pct": 100.0,
+            }
+
+        wanted_cells = self._current_wanted_cells_snapshot()
+        if not wanted_cells:
+            return {
+                "coverage_ready": True,
+                "expected_chunks": 0,
+                "covered_chunks": 0,
+                "missing_chunks": 0,
+                "coverage_pct": 100.0,
+            }
+
+        planes = view_culling.frustum_planes(
+            np.asarray(view, dtype=np.float64),
+            np.asarray(projection, dtype=np.float64),
+        )
+        expected_cells = set()
+        for cell in wanted_cells:
+            bounds = self._manifest_chunk_bounds(cell)
+            if bounds is None:
+                continue
+            if view_culling.aabb_inside_frustum(planes, bounds[0], bounds[1]):
+                expected_cells.add(cell)
+
+        visible_loaded_cells = {
+            tuple(cell)
+            for cell, _vao_list in (visible_cells or ())
+        }
+        terminal_cells = visible_loaded_cells | self._failed_cells_snapshot()
+        covered_chunks = len(expected_cells & terminal_cells)
+        missing_chunks = max(0, len(expected_cells) - covered_chunks)
+        coverage_pct = (
+            100.0
+            if not expected_cells
+            else 100.0 * covered_chunks / len(expected_cells)
+        )
+        return {
+            "coverage_ready": missing_chunks == 0,
+            "expected_chunks": len(expected_cells),
+            "covered_chunks": covered_chunks,
+            "missing_chunks": missing_chunks,
+            "coverage_pct": coverage_pct,
+        }
+
+    def _initial_visual_readiness_stats(
+        self,
+        stats: dict,
+        visible_chunk_count: int,
+        visible_cells: Iterable[tuple[tuple, list]] | None = None,
+        view: np.ndarray | None = None,
+        projection: np.ndarray | None = None,
+    ) -> dict:
+        """Update and return startup stats augmented with visual-ready state."""
+        texture_readiness = self._initial_texture_readiness_stats(visible_cells)
+        visual_coverage = self._startup_visual_coverage_stats(
+            visible_cells,
+            view,
+            projection,
+        )
+        route_prefetch = self._benchmark_route_prefetch_stats()
+        if getattr(self, "_initial_visual_ready", False):
+            visual_stats = dict(stats)
+            visual_stats["visual_ready"] = True
+            visual_stats["visual_ready_frames"] = int(
+                getattr(self, "_initial_visual_ready_frames", 0)
+            )
+            visual_stats["visual_ready_visible_chunks"] = int(
+                getattr(self, "_initial_visual_ready_visible_chunks", 0)
+            )
+            visual_stats["visual_ready_required_textures"] = int(
+                getattr(self, "_initial_visual_ready_required_textures", 0)
+            )
+            visual_stats["visual_ready_resident_textures"] = int(
+                getattr(self, "_initial_visual_ready_resident_textures", 0)
+            )
+            visual_stats["visual_ready_visible_textures"] = int(
+                getattr(self, "_initial_visual_ready_visible_textures", 0)
+            )
+            visual_stats["visual_ready_missing_textures"] = int(
+                getattr(self, "_initial_visual_ready_missing_textures", 0)
+            )
+            visual_stats["visual_ready_expected_chunks"] = int(
+                getattr(self, "_initial_visual_ready_expected_chunks", 0)
+            )
+            visual_stats["visual_ready_covered_chunks"] = int(
+                getattr(self, "_initial_visual_ready_covered_chunks", 0)
+            )
+            visual_stats["visual_ready_missing_chunks"] = int(
+                getattr(self, "_initial_visual_ready_missing_chunks", 0)
+            )
+            visual_stats["visual_ready_coverage_pct"] = float(
+                getattr(self, "_initial_visual_ready_coverage_pct", 100.0)
+            )
+            visual_stats["route_prefetch_expected_cells"] = int(
+                getattr(self, "_initial_route_prefetch_expected_cells", 0)
+            )
+            visual_stats["route_prefetch_loaded_cells"] = int(
+                getattr(self, "_initial_route_prefetch_loaded_cells", 0)
+            )
+            visual_stats["route_prefetch_pending_cells"] = int(
+                getattr(self, "_initial_route_prefetch_pending_cells", 0)
+            )
+            visual_stats["route_prefetch_failed_cells"] = int(
+                getattr(self, "_initial_route_prefetch_failed_cells", 0)
+            )
+            visual_stats["route_prefetch_missing_cells"] = int(
+                getattr(self, "_initial_route_prefetch_missing_cells", 0)
+            )
+            visual_stats["route_prefetch_coverage_pct"] = float(
+                getattr(self, "_initial_route_prefetch_coverage_pct", 100.0)
+            )
+            return visual_stats
+
+        if self._initial_visual_readiness_is_settled(
+            stats,
+            texture_readiness,
+            visual_coverage,
+            route_prefetch,
+        ):
+            self._initial_visual_ready_frames = (
+                int(getattr(self, "_initial_visual_ready_frames", 0)) + 1
+            )
+            self._initial_visual_ready_visible_chunks = int(visible_chunk_count)
+            self._initial_visual_ready_required_textures = int(
+                texture_readiness["required_textures"]
+            )
+            self._initial_visual_ready_resident_textures = int(
+                texture_readiness["resident_textures"]
+            )
+            self._initial_visual_ready_visible_textures = int(
+                texture_readiness["visible_textures"]
+            )
+            self._initial_visual_ready_missing_textures = int(
+                texture_readiness["missing_textures"]
+            )
+            self._initial_visual_ready_expected_chunks = int(
+                visual_coverage["expected_chunks"]
+            )
+            self._initial_visual_ready_covered_chunks = int(
+                visual_coverage["covered_chunks"]
+            )
+            self._initial_visual_ready_missing_chunks = int(
+                visual_coverage["missing_chunks"]
+            )
+            self._initial_visual_ready_coverage_pct = float(
+                visual_coverage["coverage_pct"]
+            )
+            self._record_initial_route_prefetch_stats(route_prefetch)
+            if (
+                self._initial_visual_ready_frames
+                >= self._INITIAL_VISUAL_READY_SETTLE_FRAMES
+            ):
+                self._initial_visual_ready = True
+                self._log_initial_visual_ready_complete(
+                    stats,
+                    visible_chunk_count=visible_chunk_count,
+                )
+        else:
+            self._initial_visual_ready_frames = 0
+            self._initial_visual_ready_visible_chunks = 0
+            self._initial_visual_ready_required_textures = 0
+            self._initial_visual_ready_resident_textures = int(
+                texture_readiness["resident_textures"]
+            )
+            self._initial_visual_ready_visible_textures = int(
+                texture_readiness["visible_textures"]
+            )
+            self._initial_visual_ready_missing_textures = int(
+                texture_readiness["missing_textures"]
+            )
+            self._initial_visual_ready_expected_chunks = int(
+                visual_coverage["expected_chunks"]
+            )
+            self._initial_visual_ready_covered_chunks = int(
+                visual_coverage["covered_chunks"]
+            )
+            self._initial_visual_ready_missing_chunks = int(
+                visual_coverage["missing_chunks"]
+            )
+            self._initial_visual_ready_coverage_pct = float(
+                visual_coverage["coverage_pct"]
+            )
+            self._record_initial_route_prefetch_stats(route_prefetch)
+
+        visual_stats = dict(stats)
+        visual_stats["visual_ready"] = bool(
+            getattr(self, "_initial_visual_ready", False)
+        )
+        visual_stats["visual_ready_frames"] = int(
+            getattr(self, "_initial_visual_ready_frames", 0)
+        )
+        visual_stats["visual_ready_visible_chunks"] = int(visible_chunk_count)
+        visual_stats["visual_ready_required_textures"] = int(
+            texture_readiness["required_textures"]
+        )
+        visual_stats["visual_ready_resident_textures"] = int(
+            texture_readiness["resident_textures"]
+        )
+        visual_stats["visual_ready_visible_textures"] = int(
+            texture_readiness["visible_textures"]
+        )
+        visual_stats["visual_ready_missing_textures"] = int(
+            texture_readiness["missing_textures"]
+        )
+        visual_stats["visual_ready_expected_chunks"] = int(
+            visual_coverage["expected_chunks"]
+        )
+        visual_stats["visual_ready_covered_chunks"] = int(
+            visual_coverage["covered_chunks"]
+        )
+        visual_stats["visual_ready_missing_chunks"] = int(
+            visual_coverage["missing_chunks"]
+        )
+        visual_stats["visual_ready_coverage_pct"] = round(
+            float(visual_coverage["coverage_pct"]),
+            3,
+        )
+        visual_stats["route_prefetch_expected_cells"] = int(
+            route_prefetch["expected_cells"]
+        )
+        visual_stats["route_prefetch_loaded_cells"] = int(
+            route_prefetch["loaded_cells"]
+        )
+        visual_stats["route_prefetch_pending_cells"] = int(
+            route_prefetch["pending_cells"]
+        )
+        visual_stats["route_prefetch_failed_cells"] = int(
+            route_prefetch["failed_cells"]
+        )
+        visual_stats["route_prefetch_missing_cells"] = int(
+            route_prefetch["missing_cells"]
+        )
+        visual_stats["route_prefetch_coverage_pct"] = round(
+            float(route_prefetch["coverage_pct"]),
+            3,
+        )
+        return visual_stats
+
+    def _record_initial_route_prefetch_stats(
+        self,
+        route_prefetch: Mapping[str, object],
+    ) -> None:
+        self._initial_route_prefetch_expected_cells = int(
+            route_prefetch["expected_cells"]
+        )
+        self._initial_route_prefetch_loaded_cells = int(
+            route_prefetch["loaded_cells"]
+        )
+        self._initial_route_prefetch_pending_cells = int(
+            route_prefetch["pending_cells"]
+        )
+        self._initial_route_prefetch_failed_cells = int(
+            route_prefetch["failed_cells"]
+        )
+        self._initial_route_prefetch_missing_cells = int(
+            route_prefetch["missing_cells"]
+        )
+        self._initial_route_prefetch_coverage_pct = float(
+            route_prefetch["coverage_pct"]
+        )
+
+    def _log_initial_visual_ready_complete(
+        self,
+        stats: dict,
+        *,
+        visible_chunk_count: int,
+    ) -> None:
+        if getattr(self, "_initial_visual_ready_logged", False):
+            return
+        self._initial_visual_ready_logged = True
+        started_at = getattr(self, "_initial_compilation_started_at", None)
+        elapsed_s = (
+            0.0
+            if started_at is None
+            else max(0.0, time.perf_counter() - started_at)
+        )
+        upload_states = getattr(self, "_chunk_upload_states", {})
+        required_textures = int(
+            getattr(self, "_initial_visual_ready_required_textures", 0)
+        )
+        resident_textures = int(
+            getattr(self, "_initial_visual_ready_resident_textures", 0)
+        )
+        visible_textures = int(
+            getattr(self, "_initial_visual_ready_visible_textures", 0)
+        )
+        missing_textures = int(
+            getattr(self, "_initial_visual_ready_missing_textures", 0)
+        )
+        expected_chunks = int(
+            getattr(self, "_initial_visual_ready_expected_chunks", 0)
+        )
+        covered_chunks = int(
+            getattr(self, "_initial_visual_ready_covered_chunks", 0)
+        )
+        missing_chunks = int(
+            getattr(self, "_initial_visual_ready_missing_chunks", 0)
+        )
+        coverage_pct = float(
+            getattr(self, "_initial_visual_ready_coverage_pct", 100.0)
+        )
+        route_prefetch_expected = int(
+            getattr(self, "_initial_route_prefetch_expected_cells", 0)
+        )
+        route_prefetch_loaded = int(
+            getattr(self, "_initial_route_prefetch_loaded_cells", 0)
+        )
+        route_prefetch_pending = int(
+            getattr(self, "_initial_route_prefetch_pending_cells", 0)
+        )
+        route_prefetch_failed = int(
+            getattr(self, "_initial_route_prefetch_failed_cells", 0)
+        )
+        route_prefetch_missing = int(
+            getattr(self, "_initial_route_prefetch_missing_cells", 0)
+        )
+        route_prefetch_coverage_pct = float(
+            getattr(self, "_initial_route_prefetch_coverage_pct", 100.0)
+        )
+        world = getattr(self, "world", None)
+        startup_radius = int(
+            getattr(getattr(world, "config", None), "load_radius_cells", 0) or 0
+        )
+        _LOG.info(
+            "Initial visual readiness completed in %.2fs "
+            "(visible=%d loaded=%d pending=%d ready=%d wanted=%d "
+            "upload_states=%d textures=%d/%d missing_textures=%d "
+            "visible_textures=%d coverage=%d/%d missing_chunks=%d %.1f%% "
+            "startup_radius=%d route_prefetch=%d/%d pending=%d failed=%d "
+            "missing=%d %.1f%%).",
+            elapsed_s,
+            int(visible_chunk_count),
+            int(stats.get("loaded", 0)),
+            int(stats.get("pending", 0)),
+            int(stats.get("ready", 0)),
+            int(stats.get("wanted", 0)),
+            len(upload_states),
+            resident_textures,
+            required_textures,
+            missing_textures,
+            visible_textures,
+            covered_chunks,
+            expected_chunks,
+            missing_chunks,
+            coverage_pct,
+            startup_radius,
+            route_prefetch_loaded,
+            route_prefetch_expected,
+            route_prefetch_pending,
+            route_prefetch_failed,
+            route_prefetch_missing,
+            route_prefetch_coverage_pct,
+        )
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        if benchmark_controller is not None:
+            benchmark_controller.update_environment(
+                {
+                    "initial_visual_ready_seconds": round(elapsed_s, 6),
+                    "initial_visual_ready_visible_chunks": int(visible_chunk_count),
+                    "initial_visual_ready_frames": int(
+                        getattr(self, "_initial_visual_ready_frames", 0)
+                    ),
+                    "initial_visual_ready_required_textures": required_textures,
+                    "initial_visual_ready_resident_textures": resident_textures,
+                    "initial_visual_ready_visible_textures": visible_textures,
+                    "initial_visual_ready_missing_textures": missing_textures,
+                    "initial_visual_ready_expected_chunks": expected_chunks,
+                    "initial_visual_ready_covered_chunks": covered_chunks,
+                    "initial_visual_ready_missing_chunks": missing_chunks,
+                    "initial_visual_ready_coverage_pct": round(coverage_pct, 3),
+                    "initial_visual_ready_load_radius_chunks": startup_radius,
+                    "initial_route_prefetch_expected_cells": route_prefetch_expected,
+                    "initial_route_prefetch_loaded_cells": route_prefetch_loaded,
+                    "initial_route_prefetch_pending_cells": route_prefetch_pending,
+                    "initial_route_prefetch_failed_cells": route_prefetch_failed,
+                    "initial_route_prefetch_missing_cells": route_prefetch_missing,
+                    "initial_route_prefetch_coverage_pct": round(
+                        route_prefetch_coverage_pct,
+                        3,
+                    ),
+                }
+            )
+
     def _log_initial_compilation_complete(self, stats: dict) -> None:
         if getattr(self, "_initial_compilation_logged", False):
             return
@@ -2659,7 +3705,9 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _update_right_column_hud_scale(self, window_size: tuple[int, int]) -> None:
         """Keep the always-visible HUD legible as the viewer is resized."""
-        viewer_ui_scale = _viewer_ui_scale_for_window_size(window_size)
+        viewer_ui_scale = _viewer_ui_scale_for_window_size(
+            _viewer_ui_surface_size(getattr(self, "wnd", None), window_size)
+        )
         geometry_scale = self.RIGHT_COLUMN_PANEL_SCALE * viewer_ui_scale
         text_scale = (
             self.RIGHT_COLUMN_PANEL_TEXT_SCALE
@@ -3149,6 +4197,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         frame_start = time.perf_counter()
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        benchmark_active = (
+            benchmark_controller is not None
+            and not benchmark_controller.finished
+        )
 
         # Sleep/wake (or a debugger stop) can yield a very large frame_time
         # and leave input/capture state stale (e.g. key-release never seen).
@@ -3158,7 +4211,11 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         t_input = time.perf_counter()
         dt = max(frame_time, 1e-4)
-        self._handle_continuous_input(dt)
+        if benchmark_active:
+            if benchmark_controller.started:
+                benchmark_controller.update_camera(self.camera, time.perf_counter())
+        else:
+            self._handle_continuous_input(dt)
         input_ms = (time.perf_counter() - t_input) * 1000.0
 
         # Apply the render-distance control's current value before the
@@ -3232,6 +4289,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # can take several seconds on slow hardware or large maps.
         now = time.perf_counter()
         if not self._initial_chunks_loaded:
+            if benchmark_active and benchmark_controller.exceeded_max_runtime(now):
+                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self.close()
+                return
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
             raw_fraction = self._initial_chunk_load_progress(stats)
             target = min(self._CHUNK_PREP_MAX_FRACTION, raw_fraction * self._CHUNK_PREP_MAX_FRACTION)
@@ -3243,6 +4304,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         if self._chunk_prep_complete_until is not None and now < self._chunk_prep_complete_until:
+            if benchmark_active and benchmark_controller.exceeded_max_runtime(now):
+                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self.close()
+                return
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
             self.import_progress_panel.render(
                 self.wnd.size, _map_name, "opening cave", 1.0,
@@ -3251,6 +4316,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         self._chunk_prep_complete_until = None
+        if benchmark_active:
+            self._sync_render_mode_loading_policy()
 
         t_scene_setup = time.perf_counter()
         self.ctx.clear(*self.color_picker.color)  # background ("void") color, adjustable via the COLOR button
@@ -3295,6 +4362,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         _visible_cells = self._visible_chunk_gpu_objects(view, proj)
         _chunks_drawn = len(_visible_cells)
         mesh_cull_ms = (time.perf_counter() - t_cull) * 1000.0
+        visual_stats = self._initial_visual_readiness_stats(
+            stats,
+            _chunks_drawn,
+            visible_cells=_visible_cells,
+            view=view,
+            projection=proj,
+        )
 
         # u_texture always refers to sampler unit 0 -- set it once before
         # the loop rather than redundantly on every single draw call.
@@ -3455,12 +4529,57 @@ class CaveViewerWindow(mglw.WindowConfig):
             # other UI element -- while it's showing, it's meant to be the
             # thing you're looking at (it's explaining what the other UI
             # pieces do), so it should never be obscured by them.
-            self.controls_overlay.update(self.world.stats())
+            self.controls_overlay.update(visual_stats)
             self.controls_overlay.render(self.wnd.size)
             self._render_recording_status_message(self.wnd.size)
             overlay_ms = (time.perf_counter() - t0) * 1000.0
 
         total_ms = (time.perf_counter() - frame_start) * 1000.0
+        other_ms = max(
+            0.0,
+            total_ms
+            - input_ms
+            - streaming_ms
+            - scene_setup_ms
+            - mesh_draw_ms
+            - recording_read_ms
+            - overlay_ms,
+        )
+
+        if benchmark_active:
+            benchmark_now = time.perf_counter()
+            if not getattr(self, "_initial_visual_ready", False):
+                if benchmark_controller.exceeded_max_runtime(benchmark_now):
+                    benchmark_controller.finish(reason="max_runtime_exceeded")
+                    self.close()
+                return
+            if not benchmark_controller.started:
+                self.controls_overlay.dismiss_begin_screen()
+                benchmark_controller.update_camera(self.camera, benchmark_now)
+                return
+            benchmark_complete = benchmark_controller.record_frame(
+                now=benchmark_now,
+                frame_ms=total_ms,
+                streaming_ms=streaming_ms,
+                scene_setup_ms=scene_setup_ms,
+                mesh_draw_ms=mesh_draw_ms,
+                mesh_cull_ms=mesh_cull_ms,
+                mesh_submit_ms=mesh_submit_ms,
+                overlay_ms=overlay_ms,
+                other_ms=other_ms,
+                drawn_chunks=_chunks_drawn,
+                resident_chunks=len(self._chunk_gpu_objects),
+                world_stats=stats,
+                streaming_timing=streaming_timing,
+            )
+            if benchmark_complete:
+                benchmark_controller.finish(reason="completed")
+                self.close()
+                return
+            if benchmark_controller.exceeded_max_runtime(benchmark_now):
+                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self.close()
+                return
 
         # Spike detection: track a short rolling average of frame times, and
         # if a frame comes in notably above that average, print a one-line
@@ -3477,16 +4596,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         if len(self._frame_time_history) >= 10 and total_ms > max(rolling_avg * 3, 25.0):
             stats = self.world.stats()
             gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
-            other_ms = max(
-                0.0,
-                total_ms
-                - input_ms
-                - streaming_ms
-                - scene_setup_ms
-                - mesh_draw_ms
-                - recording_read_ms
-                - overlay_ms,
-            )
             _LOG.warning(f"FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
                          f"input={input_ms:.1f}ms streaming={streaming_ms:.1f}ms "
                          f"scene_setup={scene_setup_ms:.1f}ms mesh_draw={mesh_draw_ms:.1f}ms "
@@ -3519,13 +4628,24 @@ class CaveViewerWindow(mglw.WindowConfig):
             if _LOG.isEnabledFor(logging.DEBUG):
                 stats = self.world.stats()
                 gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
+                speed_label = "manual_speed"
+                displayed_speed = float(self.camera.move_speed)
+                if benchmark_active:
+                    route_speed = getattr(
+                        benchmark_controller.scenario,
+                        "metadata",
+                        {},
+                    ).get("actual_route_speed_m_per_second")
+                    if isinstance(route_speed, (int, float)):
+                        speed_label = "route_speed"
+                        displayed_speed = float(route_speed)
                 _LOG.debug(f"rendered_fps={rendered_fps:.1f} wall_fps={wall_fps:.1f} "
                            f"frame_cost={rolling_avg:.1f}ms "
                            f"| chunks loaded={stats['loaded']} "
                            f"pending={stats['pending']} "
                            f"unload_pending={stats.get('unload_pending', 0)} "
                            f"drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
-                           f"| speed={self.camera.move_speed:.1f}m/s "
+                           f"| {speed_label}={displayed_speed:.1f}m/s "
                            f"| mesh_cull={mesh_cull_ms:.1f}ms "
                            f"mesh_submit={mesh_submit_ms:.1f}ms "
                            f"gpu_query_wait={mesh_gpu_query_wait_ms:.1f}ms "
@@ -4209,6 +5329,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if getattr(self, "_import_active", False):
             self._shutdown_active_import()
 
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        if benchmark_controller is not None and not benchmark_controller.finished:
+            benchmark_controller.finish(reason="viewer_closed")
+
         if self._has_map_loaded:
             self._teardown_current_map(final_shutdown=True)
         self._release_window_resources()
@@ -4257,19 +5381,29 @@ def _run_moderngl_window_config(config_class: type, args=None) -> None:
                     pass
 
 
-def _launch_viewer_window() -> None:
+def _launch_viewer_window(
+    *, window_size_override: tuple[int, int] | None = None
+) -> None:
     """Launch with dimensions expressed in the selected backend's coordinates."""
-    if get_platform_adapter().viewer_uses_glfw_native_initial_size():
+    if window_size_override is not None:
+        CaveViewerWindow.window_size = window_size_override
+        window_size_fraction = None
+        fallback_window_size = window_size_override
+    elif get_platform_adapter().viewer_uses_glfw_native_initial_size():
         # Linux GLFW sizing happens after the Wayland/X11 backend is selected,
         # using that backend's DPI-aware work-area coordinate system.
         CaveViewerWindow.window_size = _DEFAULT_WINDOW_SIZE
+        window_size_fraction = _DESKTOP_WINDOW_SCALE
+        fallback_window_size = _DEFAULT_WINDOW_SIZE
     else:
         CaveViewerWindow.window_size = _desktop_relative_window_size()
+        window_size_fraction = _DESKTOP_WINDOW_SCALE
+        fallback_window_size = _DEFAULT_WINDOW_SIZE
     run_window_config(
         CaveViewerWindow,
         runner=_run_moderngl_window_config,
-        window_size_fraction=_DESKTOP_WINDOW_SCALE,
-        fallback_window_size=_DEFAULT_WINDOW_SIZE,
+        window_size_fraction=window_size_fraction,
+        fallback_window_size=fallback_window_size,
         force_resizable_window=True,
     )
 
@@ -4284,8 +5418,82 @@ def run_viewer(cache_dir: str, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
     CaveViewerWindow.cave_manifest = manifest
+    CaveViewerWindow.cave_pending_import = None
+    CaveViewerWindow.cave_benchmark_config = None
 
     _launch_viewer_window()
+
+
+def _cache_manifest_sha256(cache_dir: str) -> str:
+    manifest_path = os.path.join(cache_dir, chunker.MANIFEST_NAME)
+    digest = hashlib.sha256()
+    with open(manifest_path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def run_viewer_benchmark(
+    cache_dir: str,
+    textures_dir: str,
+    scenario,
+    output_dir: str,
+):
+    """Run a deterministic viewer benchmark against an existing chunk cache."""
+    import platform as _platform
+
+    summary_path = os.path.join(output_dir, "summary.json")
+    manifest = chunker.load_manifest(cache_dir)
+    streaming_settings = _benchmark_streaming_settings_snapshot(scenario)
+    streaming_fingerprint = _benchmark_streaming_settings_fingerprint(
+        streaming_settings
+    )
+    CaveViewerWindow.cave_cache_dir = cache_dir
+    CaveViewerWindow.cave_textures_dir = textures_dir
+    CaveViewerWindow.cave_manifest = manifest
+    CaveViewerWindow.cave_pending_import = None
+    CaveViewerWindow.cave_benchmark_config = {
+        "scenario": scenario,
+        "output_dir": output_dir,
+        "environment": {
+            "app_version": APP_VERSION,
+            "python": sys.version.split()[0],
+            "platform": _platform.platform(),
+            "cache_dir": os.path.abspath(cache_dir),
+            "textures_dir": os.path.abspath(textures_dir),
+            "cache_manifest_sha256": _cache_manifest_sha256(cache_dir),
+            "scenario": scenario.name,
+            "scenario_fingerprint": scenario.fingerprint,
+            "source_sha": os.environ.get("GITHUB_SHA")
+            or os.environ.get("CAVEVIEWER_COMMIT", ""),
+            "vsync_env": os.environ.get("CAVEVIEWER_VSYNC", ""),
+            "streaming_settings": streaming_settings,
+            "streaming_settings_fingerprint": streaming_fingerprint,
+            "render_distance_chunks": streaming_settings["render_distance_chunks"],
+            "memory_target_percent": streaming_settings["system_ram_target_percent"],
+            "gpu_memory_target_percent": streaming_settings[
+                "gpu_memory_target_percent"
+            ],
+            "gpu_memory_override_gb": streaming_settings["gpu_memory_override_gb"],
+            "io_workers": streaming_settings["io_workers"],
+            "io_reserved_cpus": streaming_settings["io_reserved_cpus"],
+            "upload_chunks_per_frame": os.environ.get(
+                "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", ""
+            ),
+            "upload_groups_per_frame": os.environ.get(
+                "CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", ""
+            ),
+            "upload_time_budget_ms": os.environ.get(
+                "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", ""
+            ),
+        },
+    }
+
+    try:
+        _launch_viewer_window()
+        return summary_path
+    finally:
+        CaveViewerWindow.cave_benchmark_config = None
 
 
 def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
@@ -4312,6 +5520,7 @@ def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     CaveViewerWindow.cave_cache_dir = None
     CaveViewerWindow.cave_textures_dir = None
     CaveViewerWindow.cave_manifest = None
+    CaveViewerWindow.cave_benchmark_config = None
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,

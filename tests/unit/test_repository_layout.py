@@ -31,7 +31,12 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "__init__.py",
         PACKAGE_ROOT / "__main__.py",
         PACKAGE_ROOT / "app.py",
+        PACKAGE_ROOT / "benchmark.py",
         PACKAGE_ROOT / "version.py",
+        PACKAGE_ROOT / "benchmarking" / "__init__.py",
+        PACKAGE_ROOT / "benchmarking" / "map_runner.py",
+        PACKAGE_ROOT / "benchmarking" / "results.py",
+        PACKAGE_ROOT / "benchmarking" / "routes.py",
         PACKAGE_ROOT / "core" / "chunking" / "buckets.py",
         PACKAGE_ROOT / "core" / "chunking" / "builder.py",
         PACKAGE_ROOT / "core" / "chunking" / "capacity.py",
@@ -42,17 +47,34 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "core" / "diagnostics" / "logging.py",
         PACKAGE_ROOT / "core" / "mesh" / "obj.py",
         PACKAGE_ROOT / "core" / "mesh" / "glb.py",
+        PACKAGE_ROOT / "core" / "navigation" / "__init__.py",
+        PACKAGE_ROOT / "core" / "navigation" / "centerline.py",
+        PACKAGE_ROOT / "core" / "navigation" / "route.py",
         PACKAGE_ROOT / "core" / "preferences" / "schema.py",
         PACKAGE_ROOT / "core" / "textures" / "decoding.py",
         PACKAGE_ROOT / "core" / "workers" / "allocation.py",
         PACKAGE_ROOT / "gui" / "preferences.py",
         PACKAGE_ROOT / "gui" / "preferences_form.py",
         PACKAGE_ROOT / "gui" / "preferences_dialog.py",
+        PACKAGE_ROOT / "gui" / "benchmark.py",
+        PACKAGE_ROOT / "gui" / "benchmark_routes.py",
         PACKAGE_ROOT / "gui" / "viewer_window.py",
         PACKAGE_ROOT / "resources" / "shaders" / "mesh.vert",
         PACKAGE_ROOT / "resources" / "images" / "app_mark_transparent.png",
         PACKAGE_ROOT / "resources" / "release_signing_public_key.pem",
         PACKAGE_ROOT / "resources" / "map_library_catalog.v1.json",
+        REPOSITORY_ROOT / "benchmarks" / "viewer-benchmark-scenario.v1.json",
+        REPOSITORY_ROOT / "benchmarks" / "viewer-thresholds.v1.json",
+        REPOSITORY_ROOT
+        / "scripts"
+        / "benchmark"
+        / "compare_benchmark_results.py",
+        REPOSITORY_ROOT / "scripts" / "benchmark" / "run_local_benchmark.py",
+        REPOSITORY_ROOT
+        / "scripts"
+        / "benchmark"
+        / "hooks"
+        / "pre-push-map-benchmark",
         REPOSITORY_ROOT / "packaging" / "pyinstaller" / "CaveViewer.spec",
     )
 
@@ -120,6 +142,7 @@ def test_packaging_consumers_reference_migrated_paths():
     ).read_text(encoding="utf-8")
 
     assert "\n  src " in source_packager
+    assert "\n  benchmarks " in source_packager
     assert "\n  packaging " in source_packager
     assert 'packaging/pyinstaller/CaveViewer.spec' in linux_builder
     assert 'packaging/pyinstaller/CaveViewer.spec' in macos_builder
@@ -137,8 +160,14 @@ def test_pyproject_declares_src_package_and_entry_point():
 
     assert '[project.scripts]' in pyproject
     assert 'caveviewer = "caveviewer.__main__:run"' in pyproject
+    assert 'caveviewer-benchmark = "caveviewer.benchmark:run"' in pyproject
+    assert (
+        'caveviewer-map-benchmark = "caveviewer.benchmarking.map_runner:run"'
+        in pyproject
+    )
     assert 'caveviewer-chunker = "caveviewer.chunker:main"' in pyproject
     assert 'where = ["src"]' in pyproject
     assert 'pythonpath = ["src"]' in pyproject
     assert '"caveviewer.resources"' in pyproject
     assert "*.egg-info/" in gitignore
+    assert ".benchmark-data/" in gitignore

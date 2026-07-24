@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import logging
 import queue
@@ -76,6 +77,35 @@ class FakeLogger:
 
     def debug(self, message, *args):
         self.debug_messages.append(self._format(message, args))
+
+
+def test_benchmark_route_prefetch_stats_reports_missing_route_cells():
+    window = viewer_window.CaveViewerWindow.__new__(viewer_window.CaveViewerWindow)
+    window._benchmark_route_prefetch_cells = frozenset(
+        {
+            (0, 0, 0),
+            (1, 0, 0),
+            (2, 0, 0),
+        }
+    )
+    window.world = SimpleNamespace(
+        loaded_cells={(0, 0, 0)},
+        _pending={(1, 0, 0)},
+        _failed_cells={},
+    )
+
+    stats = window._benchmark_route_prefetch_stats()
+
+    assert stats == {
+        "active": True,
+        "ready": False,
+        "expected_cells": 3,
+        "loaded_cells": 1,
+        "pending_cells": 1,
+        "failed_cells": 0,
+        "missing_cells": 2,
+        "coverage_pct": pytest.approx(100.0 / 3.0),
+    }
 
 
 class FakeImportThread:
@@ -291,6 +321,12 @@ def test_window_pixel_ratio_uses_framebuffer_size():
 
 def test_window_pixel_ratio_falls_back_for_missing_backend_data():
     assert viewer_window._window_pixel_ratio(SimpleNamespace(size=(1000, 700))) == 1.0
+
+
+def test_viewer_ui_surface_size_prefers_framebuffer_size_for_scaled_dpi():
+    window = SimpleNamespace(size=(1600, 1000), buffer_size=(2048, 1280))
+
+    assert viewer_window._viewer_ui_surface_size(window) == (2048, 1280)
 
 
 def test_viewer_ui_scale_grows_on_large_viewer_surfaces():
@@ -1036,6 +1072,75 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     assert calls[0][1]["force_resizable_window"] is True
 
 
+def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    manifest_bytes = b'{"chunks": {}, "mtl_materials": {}}\n'
+    (cache_dir / viewer_window.chunker.MANIFEST_NAME).write_bytes(manifest_bytes)
+    scenario = SimpleNamespace(
+        name="gold",
+        fingerprint="scenario-sha",
+        window_size=(640, 480),
+        render_distance=4,
+    )
+    calls = []
+    monkeypatch.setenv("CAVEVIEWER_MEMORY_UTILIZATION_TARGET", "12")
+    monkeypatch.setenv("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET", "65")
+    monkeypatch.delenv("CAVEVIEWER_GPU_MEMORY_GB", raising=False)
+    monkeypatch.setenv("CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB", "768")
+    monkeypatch.setenv("CAVEVIEWER_IO_WORKERS", "3")
+    monkeypatch.setenv("CAVEVIEWER_IO_RESERVED_CPUS", "2")
+    monkeypatch.setenv("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "5")
+    monkeypatch.setenv("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", "7")
+    monkeypatch.setenv("CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", "9.5")
+
+    monkeypatch.setattr(
+        viewer_window.chunker,
+        "load_manifest",
+        lambda cache: {"cache": cache},
+    )
+
+    def fake_launch(*, window_size_override=None):
+        calls.append(
+            (
+                window_size_override,
+                dict(viewer_window.CaveViewerWindow.cave_benchmark_config),
+            )
+        )
+
+    monkeypatch.setattr(viewer_window, "_launch_viewer_window", fake_launch)
+
+    summary_path = viewer_window.run_viewer_benchmark(
+        str(cache_dir),
+        str(cache_dir),
+        scenario,
+        str(tmp_path / "out"),
+    )
+
+    config = calls[0][1]
+    assert summary_path == str(tmp_path / "out" / "summary.json")
+    assert calls[0][0] is None
+    assert config["scenario"] is scenario
+    assert config["environment"]["scenario_fingerprint"] == "scenario-sha"
+    assert config["environment"]["cache_manifest_sha256"] == hashlib.sha256(
+        manifest_bytes
+    ).hexdigest()
+    assert config["environment"]["streaming_settings"] == {
+        "render_distance_chunks": 4,
+        "system_ram_target_percent": "12",
+        "gpu_memory_target_percent": "65",
+        "gpu_memory_override_gb": "",
+        "texture_resident_cache_mb": "768",
+        "io_workers": "3",
+        "io_reserved_cpus": "2",
+        "upload_chunks_per_frame": "5",
+        "upload_groups_per_frame": "7",
+        "upload_time_budget_ms": "9.5",
+    }
+    assert len(config["environment"]["streaming_settings_fingerprint"]) == 64
+    assert viewer_window.CaveViewerWindow.cave_benchmark_config is None
+
+
 def test_moderngl_runner_closes_and_destroys_window_on_keyboard_interrupt(monkeypatch):
     calls = []
 
@@ -1219,6 +1324,21 @@ def test_right_column_panel_scales_up_on_large_viewer_surfaces():
     assert 0 <= large_rect[1] < large_rect[3] <= 1152
 
 
+def test_right_column_panel_scales_from_framebuffer_on_scaled_dpi():
+    window = _right_column_probe_window()
+    window.wnd = SimpleNamespace(size=(1600, 1000), buffer_size=(2048, 1280))
+
+    column = window._right_column_layout((1600, 1000))
+    rect = window._right_column_panel_rect((1600, 1000), column)
+
+    assert window._right_column_ui_scale() == pytest.approx(4 / 3)
+    assert window.light_stepper._geometry_scale == pytest.approx(
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SCALE * 4 / 3
+    )
+    assert 0 <= rect[0] < rect[2] <= 1600
+    assert 0 <= rect[1] < rect[3] <= 1000
+
+
 def test_initial_chunk_readiness_respects_budget_limited_wanted_count():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.world = SimpleNamespace(config=SimpleNamespace(max_loaded_chunks=100))
@@ -1263,6 +1383,230 @@ def test_initial_chunk_readiness_counts_failed_wanted_chunks():
             "wanted": 3,
         }
     ) is True
+
+
+def test_initial_visual_readiness_waits_for_settled_scene_frames():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(config=SimpleNamespace(max_loaded_chunks=100))
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 0
+    window._initial_visual_ready_visible_chunks = 0
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {}
+
+    stats = {
+        "loaded_wanted": 27,
+        "loaded": 27,
+        "pending": 0,
+        "ready": 0,
+        "wanted": 27,
+        "total_available": 1655,
+    }
+
+    first = window._initial_visual_readiness_stats(stats, 12)
+    second = window._initial_visual_readiness_stats(stats, 12)
+    third = window._initial_visual_readiness_stats(stats, 12)
+
+    assert first["visual_ready"] is False
+    assert second["visual_ready"] is False
+    assert third["visual_ready"] is True
+    assert window._initial_visual_ready_frames == 3
+
+
+def test_initial_visual_readiness_waits_for_pending_upload_state():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(config=SimpleNamespace(max_loaded_chunks=100))
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 2
+    window._initial_visual_ready_visible_chunks = 12
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {(1, 2, 3): {"next_group_index": 0}}
+
+    visual_stats = window._initial_visual_readiness_stats(
+        {
+            "loaded_wanted": 27,
+            "loaded": 27,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 27,
+            "total_available": 1655,
+        },
+        12,
+    )
+
+    assert visual_stats["visual_ready"] is False
+    assert window._initial_visual_ready_frames == 0
+
+
+def test_initial_visual_readiness_waits_for_startup_texture_residency():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(
+        config=SimpleNamespace(max_loaded_chunks=100),
+        wanted_cells_snapshot=lambda: frozenset({(1, 2, 3)}),
+    )
+    window.manifest = {
+        "chunks": {
+            "1_2_3": {
+                "materials": ["rock", "silt"],
+            },
+        },
+    }
+    window.texture_manager = SimpleNamespace(
+        material_to_file={
+            "rock": "rock.jpg",
+            "silt": "silt.jpg",
+        },
+        stats=lambda: {
+            "unique_files_resident": 1,
+            "resident_texture_bytes": 1024,
+            "resident_texture_budget_bytes": 4096,
+        },
+    )
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 2
+    window._initial_visual_ready_visible_chunks = 1
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {}
+
+    visual_stats = window._initial_visual_readiness_stats(
+        {
+            "loaded_wanted": 1,
+            "loaded": 1,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 1,
+            "total_available": 10,
+        },
+        1,
+    )
+
+    assert visual_stats["visual_ready"] is False
+    assert visual_stats["visual_ready_required_textures"] == 2
+    assert visual_stats["visual_ready_resident_textures"] == 1
+    assert window._initial_visual_ready_frames == 0
+
+
+def test_initial_visual_readiness_uses_exact_texture_sources_when_available():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(
+        config=SimpleNamespace(max_loaded_chunks=100),
+        wanted_cells_snapshot=lambda: frozenset({(1, 2, 3)}),
+    )
+    window.manifest = {
+        "chunks": {
+            "1_2_3": {
+                "materials": ["rock", "silt"],
+            },
+        },
+    }
+    window.texture_manager = SimpleNamespace(
+        material_to_file={
+            "rock": "rock.jpg",
+            "silt": "silt.jpg",
+        },
+        resident_texture_sources=lambda: ("rock.jpg",),
+        stats=lambda: {
+            "unique_files_resident": 2,
+            "resident_texture_bytes": 1024,
+            "resident_texture_budget_bytes": 4096,
+        },
+    )
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 2
+    window._initial_visual_ready_visible_chunks = 1
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {}
+
+    visual_stats = window._initial_visual_readiness_stats(
+        {
+            "loaded_wanted": 1,
+            "loaded": 1,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 1,
+            "total_available": 10,
+        },
+        1,
+    )
+
+    assert visual_stats["visual_ready"] is False
+    assert visual_stats["visual_ready_required_textures"] == 2
+    assert visual_stats["visual_ready_resident_textures"] == 2
+    assert visual_stats["visual_ready_missing_textures"] == 1
+    assert window._initial_visual_ready_frames == 0
+
+
+def test_startup_visual_readiness_waits_for_frustum_coverage():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.world = SimpleNamespace(
+        config=SimpleNamespace(max_loaded_chunks=100),
+        wanted_cells_snapshot=lambda: frozenset({(0, 0, 0), (1, 0, 0)}),
+        _failed_cells={},
+    )
+    window.manifest = {
+        "chunks": {
+            "0_0_0": {
+                "bounds_min": [-0.8, -0.8, -0.8],
+                "bounds_max": [-0.2, 0.8, 0.8],
+                "materials": [],
+            },
+            "1_0_0": {
+                "bounds_min": [0.2, -0.8, -0.8],
+                "bounds_max": [0.8, 0.8, 0.8],
+                "materials": [],
+            },
+        },
+    }
+    window.texture_manager = SimpleNamespace(
+        material_to_file={},
+        resident_texture_sources=lambda: (),
+        stats=lambda: {"unique_files_resident": 0},
+    )
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = False
+    window._initial_visual_ready_frames = 2
+    window._initial_visual_ready_visible_chunks = 1
+    window._initial_visual_ready_logged = True
+    window._chunk_upload_states = {}
+
+    visual_stats = window._initial_visual_readiness_stats(
+        {
+            "loaded_wanted": 2,
+            "loaded": 2,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 2,
+            "total_available": 10,
+        },
+        1,
+        visible_cells=[((0, 0, 0), [(object(), object(), "rock", object())])],
+        view=np.eye(4),
+        projection=np.eye(4),
+    )
+
+    assert visual_stats["visual_ready"] is False
+    assert visual_stats["visual_ready_expected_chunks"] == 2
+    assert visual_stats["visual_ready_covered_chunks"] == 1
+    assert visual_stats["visual_ready_missing_chunks"] == 1
+    assert visual_stats["visual_ready_coverage_pct"] == pytest.approx(50.0)
+    assert window._initial_visual_ready_frames == 0
+
+
+def test_loading_render_mode_unlocks_after_initial_chunks_for_texture_settle():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+    window._initial_chunks_loaded = True
+    window.controls_overlay = SimpleNamespace(
+        is_active=True,
+        is_manual_mode=False,
+        is_fading=False,
+    )
+
+    assert window._buttons_locked_for_loading() is False
 
 
 def test_startup_upload_limits_are_boosted_until_initial_load_is_ready():
@@ -1359,20 +1703,22 @@ def test_initial_compilation_completion_is_logged_once(monkeypatch):
     ]
 
 
-def test_startup_streaming_radius_matches_revealed_render_distance():
+def test_startup_streaming_radius_prefetches_beyond_revealed_render_distance():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window.render_distance_stepper = SimpleNamespace(value=6)
+    window.render_distance_stepper = SimpleNamespace(value=6, max_value=10)
     window.controls_overlay = SimpleNamespace(is_waiting_for_begin=True)
     window._initial_chunks_loaded = False
+    window._initial_visual_ready = False
 
-    assert window._target_streaming_load_radius() == 6
+    assert window._target_streaming_load_radius() == 9
 
 
 def test_streaming_radius_uses_stepper_after_begin_screen_is_dismissed():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window.render_distance_stepper = SimpleNamespace(value=6)
+    window.render_distance_stepper = SimpleNamespace(value=6, max_value=10)
     window.controls_overlay = SimpleNamespace(is_waiting_for_begin=False)
     window._initial_chunks_loaded = True
+    window._initial_visual_ready = True
 
     assert window._target_streaming_load_radius() == 6
 
@@ -1762,6 +2108,8 @@ def test_streaming_timing_format_splits_drain_and_upload_details():
             "buffer_write_ms": 2.5,
             "texture_alloc_ms": 0.5,
             "texture_upload_ms": 3.5,
+            "texture_evictions": 2,
+            "texture_evicted_bytes": 3 * 1024 * 1024,
             "vbo_upload_slice_bytes": 256 * 1024,
             "texture_upload_slice_bytes": 128 * 1024,
             "upload_stalls": 1,
@@ -1780,6 +2128,8 @@ def test_streaming_timing_format_splits_drain_and_upload_details():
     assert "tex_upload=3.5ms" in detail
     assert "slices=vbo:256KB/tex:128KB" in detail
     assert "stalls=1" in detail
+    assert "tex_evict=2" in detail
+    assert "tex_evict_mb=3.0" in detail
 
 
 def test_uncached_import_holds_desktop_inhibitor_until_import_finishes(

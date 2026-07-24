@@ -375,7 +375,8 @@ class ControlsOverlay:
             # when pending work is reprioritized across frames.
             self._progress_fraction = max(self._progress_fraction, frac)
 
-        if self._awaiting_begin and settled >= chunks_needed:
+        visual_ready = bool(streaming_stats.get("visual_ready", True))
+        if self._awaiting_begin and settled >= chunks_needed and visual_ready:
             self._ready_to_begin = True
 
         if self._manual_mode or self._awaiting_begin:

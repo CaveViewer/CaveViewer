@@ -150,6 +150,8 @@ class TextureManager:
             "mipmap_ms": 0.0,
             "image_bytes": 0,
             "image_size": None,
+            "texture_evictions": 0,
+            "texture_evicted_bytes": 0,
         }
 
     @staticmethod
@@ -258,7 +260,8 @@ class TextureManager:
                     textures_to_release,
                     sources_to_mark_nonresident,
                 ) = self._evict_idle_texture_objects_locked(
-                    incoming_bytes=incoming_bytes
+                    incoming_bytes=incoming_bytes,
+                    timing=timing,
                 )
             for source in sources_to_mark_nonresident:
                 self.decoder.mark_texture_nonresident(source)
@@ -295,7 +298,7 @@ class TextureManager:
                     (
                         textures_to_release,
                         sources_to_mark_nonresident,
-                    ) = self._evict_idle_texture_objects_locked()
+                    ) = self._evict_idle_texture_objects_locked(timing=timing)
                 else:
                     uploaded_texture_to_release = tex
                     tex = cached_tex
@@ -404,7 +407,8 @@ class TextureManager:
                     textures_to_release,
                     sources_to_mark_nonresident,
                 ) = self._evict_idle_texture_objects_locked(
-                    incoming_bytes=incoming_bytes
+                    incoming_bytes=incoming_bytes,
+                    timing=timing,
                 )
             for source in sources_to_mark_nonresident:
                 self.decoder.mark_texture_nonresident(source)
@@ -465,6 +469,8 @@ class TextureManager:
                 "placeholder",
                 "decode_ms",
                 "image_size",
+                "texture_evictions",
+                "texture_evicted_bytes",
             ):
                 step_timing[key] = task.timing[key]
             step_timing["image_total_bytes"] = len(decoded.data)
@@ -522,7 +528,11 @@ class TextureManager:
                 elapsed = (time.perf_counter() - t_mipmap) * 1000.0
                 step_timing["mipmap_ms"] += elapsed
                 task.timing["mipmap_ms"] += elapsed
-            task.result_texture = self._commit_acquired_texture(task, task.texture)
+            task.result_texture = self._commit_acquired_texture(
+                task,
+                task.texture,
+                timing=step_timing,
+            )
             task.texture = None
             task.decoded = None
             task.complete = True
@@ -563,6 +573,8 @@ class TextureManager:
         self,
         task: TextureAcquireTask,
         tex: object,
+        *,
+        timing: dict | None = None,
     ) -> object:
         """Publish a freshly acquired texture into material/file caches."""
         file_or_bytes = task.file_or_bytes
@@ -597,7 +609,7 @@ class TextureManager:
                     (
                         textures_to_release,
                         sources_to_mark_nonresident,
-                    ) = self._evict_idle_texture_objects_locked()
+                    ) = self._evict_idle_texture_objects_locked(timing=timing)
                 else:
                     uploaded_texture_to_release = tex
                     tex = cached_tex
@@ -644,9 +656,12 @@ class TextureManager:
     def _evict_idle_texture_objects_locked(
         self,
         incoming_bytes: int | None = None,
+        *,
+        timing: dict | None = None,
     ) -> tuple[list[object], list[object]]:
         textures_to_release: list[object] = []
         sources_to_mark_nonresident: list[object] = []
+        evicted_bytes = 0
         projected_bytes = self._file_cache_total_bytes + max(0, incoming_bytes or 0)
         while (
             projected_bytes > self.max_resident_texture_bytes
@@ -654,11 +669,19 @@ class TextureManager:
         ):
             file_or_bytes, _ = self._idle_file_lru.popitem(last=False)
             released_bytes = self._file_cache_bytes.get(file_or_bytes, 0)
+            evicted_bytes += released_bytes
             tex = self._pop_cached_texture_locked(file_or_bytes)
             sources_to_mark_nonresident.append(file_or_bytes)
             if tex is not None:
                 textures_to_release.append(tex)
             projected_bytes = max(0, projected_bytes - released_bytes)
+        if timing is not None and sources_to_mark_nonresident:
+            timing["texture_evictions"] = int(
+                timing.get("texture_evictions", 0)
+            ) + len(sources_to_mark_nonresident)
+            timing["texture_evicted_bytes"] = int(
+                timing.get("texture_evicted_bytes", 0)
+            ) + evicted_bytes
         return textures_to_release, sources_to_mark_nonresident
 
     def _upload_for_material(
@@ -786,6 +809,11 @@ class TextureManager:
             }
         gpu_stats.update(self.decoder.stats())
         return gpu_stats
+
+    def resident_texture_sources(self) -> tuple[object, ...]:
+        """Return the exact texture source keys currently resident on the GPU."""
+        with self._state_lock:
+            return tuple(self._file_cache.keys())
 
 
 __all__ = [

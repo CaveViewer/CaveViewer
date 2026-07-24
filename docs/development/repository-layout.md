@@ -10,8 +10,13 @@ been removed rather than kept as compatibility copies.
 
 ```text
 src/caveviewer/app.py                         startup, session loop, UI adapters
+src/caveviewer/benchmark.py                   viewer FPS benchmark CLI
 src/caveviewer/version.py                     release identity
 src/caveviewer/storage_paths.py               XDG/portable application roots
+src/caveviewer/benchmarking/                  benchmark scenarios, metrics, comparisons, and routes
+src/caveviewer/benchmarking/map_runner.py     local map benchmark orchestration CLI
+src/caveviewer/benchmarking/results.py        benchmark scenario/results model and controller
+src/caveviewer/benchmarking/routes.py         benchmark-specific route generation
 src/caveviewer/core/                          parsing, cache, streaming, and non-UI policy
 src/caveviewer/core/json_io.py                 bounded JSON loading for core inputs
 src/caveviewer/core/map/                      map discovery, cache, and import workflow
@@ -61,16 +66,20 @@ src/caveviewer/gui/preferences_dialog.py      Tk preference dialog presentation
 src/caveviewer/gui/recording.py               recording encoder process/thread helpers
 src/caveviewer/gui/recording_controller.py    recording countdown/status/timing state
 src/caveviewer/gui/recording_capture.py       render-thread recording readback resources
+src/caveviewer/gui/benchmark.py               compatibility wrapper for benchmark results
+src/caveviewer/gui/benchmark_routes.py        compatibility wrapper for benchmark route generation
 src/caveviewer/gui/chunk_upload.py            render-thread chunk upload state and cleanup
 src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
 src/caveviewer/gui/view_culling.py            resident chunk frustum-culling cache
 src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
 src/caveviewer/resources/                     shaders, images, and public key
 tests/                                        unit and integration tests
+benchmarks/                                   versioned benchmark scenario/threshold files
 docs/                                         site and development documentation
 packaging/pyinstaller/CaveViewer.spec         PyInstaller configuration
 packaging/linux/                              desktop and AppStream metadata
 scripts/                                      development and release automation
+scripts/benchmark/                            benchmark comparison helpers and compatibility wrappers
 updates/                                      published update manifests/signatures
 ```
 
@@ -90,7 +99,12 @@ CaveViewer/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── app.py
+│       ├── benchmark.py
 │       ├── storage_paths.py
+│       ├── benchmarking/
+│       │   ├── map_runner.py
+│       │   ├── results.py
+│       │   └── routes.py
 │       ├── core/
 │       │   ├── chunking/
 │       │   ├── diagnostics/
@@ -110,6 +124,7 @@ CaveViewer/
 ├── tests/
 │   ├── unit/
 │   └── integration/
+├── benchmarks/
 ├── docs/
 │   ├── index.html
 │   ├── images/
@@ -118,6 +133,7 @@ CaveViewer/
 │   ├── linux/
 │   └── pyinstaller/
 ├── scripts/
+│   └── benchmark/
 ├── updates/
 └── .github/
     └── workflows/
@@ -139,6 +155,9 @@ tests and review.
   aliases.
 - Keep `scripts/` organized by `dev`, `common`, and platform; it already has
   documented standards.
+- Keep `benchmarks/` limited to versioned scenario/configuration files.
+  Precompiled benchmark maps and generated benchmark results are external
+  artifacts and must stay untracked.
 - Keep root `README.md`, `CHANGELOG.md`, `LICENSE`, and third-party notices.
 
 ## Completed migration sequence

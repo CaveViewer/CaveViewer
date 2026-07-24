@@ -7,6 +7,8 @@
 - [Coding standards](coding-standards.md): implementation conventions and
   safety rules.
 - [Testing](testing.md): test placement, commands, markers, and coverage policy.
+- [Viewer benchmarking](benchmarking.md): automated FPS regression benchmark
+  design, artifacts, workflow inputs, and calibration policy.
 - [Releases](releases.md): platform matrix, GitHub workflow, channels,
   signing, resume behavior, and post-release verification.
 - [Rendering](rendering.md): import/chunking model, runtime streaming, tuning,

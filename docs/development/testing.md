@@ -7,6 +7,8 @@ file's commands, marker definitions, or coverage thresholds.
 ## Test layout
 
 - `tests/unit/core/`: parsing, cache, scheduling, memory, and other core policy.
+- `tests/unit/benchmarking/`: benchmark scenario, route-selection, summary, and
+  comparison policy that does not require Tk or OpenGL.
 - `tests/unit/gui/`: controllers, validation, dialogs, platform adapters, and
   GUI-adjacent logic that can run deterministically.
 - `tests/unit/`: application-level helpers that do not fit one package.
@@ -83,6 +85,23 @@ event-driven and bounded rather than depending on thread timing.
 When moving modules, update CI include/source paths without lowering these
 thresholds. New concurrency, cleanup, cache-format, and security-sensitive code
 should receive direct tests even when the aggregate floor already passes.
+
+## Viewer FPS benchmark
+
+Streaming FPS regressions are measured by the manual Viewer Benchmark workflow
+and the `caveviewer-benchmark` CLI. This benchmark is intentionally separate
+from the always-on unit suite because it needs a real OpenGL/display stack and a
+large precompiled map cache.
+
+Use `docs/development/benchmarking.md` for setup, scenario, artifact, and
+threshold policy. The workflow compares a candidate ref with a baseline ref and
+uploads logs plus per-frame metrics so failures can be inspected without
+re-running the viewer immediately.
+
+For machine-local private or oversized benchmark maps, use
+`caveviewer-map-benchmark`. It keeps benchmark history under the map-local
+ignored `_benchmarks/` directory by default and can be installed through the
+tracked local pre-push hook template for pushes to `main`.
 
 ## Release gates
 

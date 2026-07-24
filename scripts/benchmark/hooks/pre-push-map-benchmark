@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+should_run=0
+target_sha=""
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [[ "$remote_ref" == "refs/heads/main" && "$local_sha" != "0000000000000000000000000000000000000000" ]]; then
+    should_run=1
+    target_sha="$local_sha"
+  fi
+done
+
+if [[ "$should_run" != "1" ]]; then
+  exit 0
+fi
+
+python_bin="${PYTHON:-}"
+if [[ -z "$python_bin" ]]; then
+  if [[ -x "$repo_root/.venv-dev/bin/python" ]]; then
+    python_bin="$repo_root/.venv-dev/bin/python"
+  else
+    python_bin="python3"
+  fi
+fi
+
+config_path="${CAVEVIEWER_BENCHMARK_CONFIG:-}"
+if [[ -z "$config_path" ]]; then
+  echo "Error: CAVEVIEWER_BENCHMARK_CONFIG must point to a local benchmark JSON config." >&2
+  exit 2
+fi
+
+export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
+
+exec "$python_bin" \
+  -m caveviewer.benchmarking.map_runner \
+  --config "$config_path" \
+  --label "main-push-${target_sha:0:12}"

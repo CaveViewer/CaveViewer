@@ -91,6 +91,41 @@ def test_fullscreen_begin_prompt_waits_for_current_wanted_cells():
     assert overlay.is_ready_to_begin is True
 
 
+def test_fullscreen_begin_prompt_waits_for_visual_ready_signal():
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._active = True
+    overlay._awaiting_begin = True
+    overlay._ready_to_begin = False
+    overlay._manual_mode = False
+    overlay._progress_fraction = 0.0
+
+    overlay.update(
+        {
+            "loaded_wanted": 27,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 27,
+            "total_available": 1655,
+            "visual_ready": False,
+        }
+    )
+
+    assert overlay.is_ready_to_begin is False
+
+    overlay.update(
+        {
+            "loaded_wanted": 27,
+            "pending": 0,
+            "ready": 0,
+            "wanted": 27,
+            "total_available": 1655,
+            "visual_ready": True,
+        }
+    )
+
+    assert overlay.is_ready_to_begin is True
+
+
 def test_recording_help_copy_is_format_neutral():
     rows = dict(controls_overlay._get_platform_control_rows())
 
