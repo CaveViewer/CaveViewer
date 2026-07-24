@@ -69,17 +69,6 @@ does not switch git branches. To compare `main` with a candidate checkout, run
 the same map benchmark from separate worktrees and let the map-local history
 provide the baseline.
 
-The older source-checkout wrapper is retained for compatibility with existing
-automation that already has a cache and explicitly wants to pass a baseline
-summary:
-
-```bash
-python scripts/benchmark/run_local_benchmark.py \
-  --cache-dir /path/to/precompiled-cache \
-  --baseline-summary /path/to/main/benchmark-results/local/main/summary.json \
-  --label candidate-stack
-```
-
 Compare two runs:
 
 ```bash
