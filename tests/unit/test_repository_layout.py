@@ -65,12 +65,12 @@ def test_application_uses_src_package_layout():
         REPOSITORY_ROOT
         / "scripts"
         / "benchmark"
-        / "run_devils_eye_xl_benchmark.py",
+        / "run_map_benchmark.py",
         REPOSITORY_ROOT
         / "scripts"
         / "benchmark"
         / "hooks"
-        / "pre-push-devils-eye-xl",
+        / "pre-push-map-benchmark",
         REPOSITORY_ROOT / "packaging" / "pyinstaller" / "CaveViewer.spec",
     )
 

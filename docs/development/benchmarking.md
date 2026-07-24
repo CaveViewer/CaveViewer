@@ -85,43 +85,65 @@ python scripts/benchmark/compare_benchmark_results.py \
   --thresholds benchmarks/viewer-thresholds.v1.json
 ```
 
-## Machine-local Devil's Eye XL run
+## Generic local map run
 
-The current local gold-map benchmark is hardwired to your machine and must not
-be uploaded. The wrapper uses:
+Use `scripts/benchmark/run_map_benchmark.py` for machine-local benchmark maps
+that are too large or private to upload. The wrapper takes a map directory and
+an output directory from CLI flags or from a JSON config file. The map directory
+must contain either:
 
-- source map: `~/Downloads/Maps/Devil's Eye XL`
-- ignored local copy: `.benchmark-data/maps/devils-eye-xl`
-- ignored local results/history: `.benchmark-data/results/devils-eye-xl`
-- default route mode: vertex-footprint centerline route
+- `_cache/manifest.json`; or
+- a supported source model (`.obj`, `.glb`, or `.gltf`) that the wrapper can
+  compile with `python -m caveviewer.chunker --source <map-dir>`.
+
+Minimal config file:
+
+```json
+{
+  "map_dir": "/absolute/path/to/local/map",
+  "output_dir": "/absolute/path/to/benchmark-output",
+  "benchmark_id": "local-load-map",
+  "render_distance": 10,
+  "duration_seconds": 120,
+  "centerline_route_target_length_chunks": 24,
+  "centerline_route_selection": "max-complexity",
+  "vsync": "unchanged"
+}
+```
 
 First validate the plan:
 
 ```bash
-python scripts/benchmark/run_devils_eye_xl_benchmark.py --dry-run
+python scripts/benchmark/run_map_benchmark.py \
+  --config /path/to/local-benchmark.json \
+  --dry-run
 ```
 
 Then run it:
 
 ```bash
-python scripts/benchmark/run_devils_eye_xl_benchmark.py
+python scripts/benchmark/run_map_benchmark.py \
+  --config /path/to/local-benchmark.json
 ```
 
-The first real run copies the map into `.benchmark-data` if needed. If the
-local copy does not contain `_cache/manifest.json`, the wrapper compiles the
-cache with:
+CLI flags override config values:
 
 ```bash
-python -m caveviewer.chunker --source .benchmark-data/maps/devils-eye-xl
+python scripts/benchmark/run_map_benchmark.py \
+  --map-dir /path/to/local/map \
+  --output-dir /path/to/benchmark-output \
+  --render-distance 10 \
+  --duration-seconds 120 \
+  --centerline-route-selection max-complexity \
+  --vsync unchanged
 ```
 
 The wrapper clears `CAVEVIEWER_MAP_CACHE_DIR` for the chunker and benchmark
-subprocesses so the gold cache stays adjacent to the local map copy. Each run
-tees wrapper, chunker, and benchmark-wrapper output into that run's
-`orchestration.log`. Each successful benchmark also appends
-`.benchmark-data/results/devils-eye-xl/history.jsonl` and writes
-`.benchmark-data/results/devils-eye-xl/latest-summary.txt`. When a previous
-local record exists, the new run is compared against it with
+subprocesses so the benchmark uses the map-local cache. Each run tees wrapper,
+chunker, and benchmark-wrapper output into that run's `orchestration.log`. Each
+successful benchmark also appends `<output-dir>/history.jsonl` and writes
+`<output-dir>/latest-summary.txt`. When a previous compatible local record
+exists, the new run is compared against it with
 `benchmarks/viewer-thresholds.v1.json`; a regression returns a non-zero exit
 code and still leaves all artifacts for inspection.
 
@@ -134,14 +156,13 @@ The benchmark viewer launches through the same window-sizing path as the
 regular CaveViewer app: 80% of the detected desktop/work area using the active
 GLFW backend and DPI coordinate policy. The scenario's `window_size` remains in
 the JSON for historical compatibility, but it is not used to force the local
-Devil's Eye XL viewer window. The actual logical window size, framebuffer size,
-and UI surface size are recorded in the run environment and text summary; runs
-with different actual sizes are treated as incompatible local baselines.
+benchmark viewer window. The actual logical window size, framebuffer size, and
+UI surface size are recorded in the run environment and text summary; runs with
+different actual sizes are treated as incompatible local baselines.
 
-For an existing `_cache`, the wrapper also matches the regular app's cache-open
-path by using `.benchmark-data/maps/devils-eye-xl/_cache` as both the chunk cache
-and texture root. That keeps texture resolution aligned with maps compiled by
-`caveviewer.chunker`.
+For an existing `_cache`, the wrapper matches the regular app's cache-open path
+by using `<map-dir>/_cache` as both the chunk cache and texture root. That keeps
+texture resolution aligned with maps compiled by `caveviewer.chunker`.
 
 By default the local wrapper generates an `auto-centerline-route-v1.json` file
 inside the run artifact directory after the cache exists. It uses the
@@ -162,15 +183,13 @@ the centerline midpoint without using chunk or texture complexity for segment
 selection.
 
 The generated route holds the first camera pose through warmup, then travels
-only during the measurement window. For the default Devil's Eye XL scenario that
-means 5 seconds stationary for loading, followed by 120 seconds of measured
-travel at render distance 10. The default travel distance is 24 chunk widths.
-With the current 50-meter gold-map chunks, that is about 1.2 km over the
-measured 120 seconds: enough to exercise chunk loading/unloading and texture
-residency without intentionally outrunning the streamer. It estimates Y from
-the nearest occupied chunk columns by placing the camera at the midpoint of the
-local min/max chunk bounds, making tall passages more likely to stream and show
-ceiling geometry.
+only during the measurement window. The default measured window is 120 seconds
+at render distance 10, and the default travel distance is 24 chunk widths. For
+a 50-meter chunk cache, that is about 1.2 km over the measured 120 seconds:
+enough to exercise chunk loading/unloading and texture residency without
+intentionally outrunning the streamer. It estimates Y from the nearest occupied
+chunk columns by placing the camera at the midpoint of the local min/max chunk
+bounds, making tall passages more likely to stream and show ceiling geometry.
 
 This remains a deterministic benchmark route, not a collision-checked
 navigation mesh. The cache describes surface geometry and chunk bounds; it does
@@ -182,7 +201,8 @@ same as mesh collision.
 Use these controls when calibrating the route:
 
 ```bash
-python scripts/benchmark/run_devils_eye_xl_benchmark.py \
+python scripts/benchmark/run_map_benchmark.py \
+  --config /path/to/local-benchmark.json \
   --duration-seconds 180 \
   --centerline-route-selection midpoint \
   --centerline-route-keyframes 10 \
@@ -192,8 +212,8 @@ python scripts/benchmark/run_devils_eye_xl_benchmark.py \
 Use `--duration-seconds` (or its aliases `--duration` and
 `--measurement-seconds`) when you want a longer or shorter measured window.
 Use `--centerline-route-selection midpoint` when validating generic centerline
-movement instead of the load-focused gold benchmark segment. The default
-`max-complexity` selection preserves the current performance-regression target.
+movement instead of the load-focused benchmark segment. The default
+`max-complexity` selection preserves the performance-regression target.
 Use `--centerline-route-target-length-m` only when deliberately recalibrating
 the route. Overriding duration or route length changes the scenario fingerprint
 and local comparison history for that route.
@@ -201,7 +221,8 @@ and local comparison history for that route.
 To run the older dense-streaming-load proxy instead:
 
 ```bash
-python scripts/benchmark/run_devils_eye_xl_benchmark.py \
+python scripts/benchmark/run_map_benchmark.py \
+  --config /path/to/local-benchmark.json \
   --route-mode auto-dense \
   --dense-route-keyframes 10 \
   --dense-route-percentile 85
@@ -210,26 +231,29 @@ python scripts/benchmark/run_devils_eye_xl_benchmark.py \
 To run the checked-in scenario exactly as written instead:
 
 ```bash
-python scripts/benchmark/run_devils_eye_xl_benchmark.py --route-mode static
+python scripts/benchmark/run_map_benchmark.py \
+  --config /path/to/local-benchmark.json \
+  --route-mode static
 ```
 
 To make this run automatically before local pushes to `main`, install the
 tracked pre-push hook template on this machine:
 
 ```bash
-ln -sf ../../scripts/benchmark/hooks/pre-push-devils-eye-xl .git/hooks/pre-push
+ln -sf ../../scripts/benchmark/hooks/pre-push-map-benchmark .git/hooks/pre-push
 ```
 
 The hook only runs when the destination ref is `refs/heads/main`. It uses
 `$PYTHON` when set, otherwise `.venv-dev/bin/python` when present, then falls
-back to `python3`.
+back to `python3`. Set `CAVEVIEWER_BENCHMARK_CONFIG` to the local JSON config
+path before pushing.
 
 ## Scenario file
 
 Scenario files are versioned JSON. `benchmarks/gold-route-v1.json` is the
 default route contract. It uses `position_mode: "first_chunk_center_offset"` so
-the checked-in sample can run on any precompiled cache. Once the gold map is
-finalized, replace the route with validated camera positions and use
+the checked-in sample can run on any precompiled cache. For a finalized local
+benchmark route, replace the route with validated camera positions and use
 `position_mode: "absolute"` if exact map coordinates are preferable.
 
 Keep scenario changes reviewable. A changed route changes the benchmark itself,
@@ -269,13 +293,13 @@ Recommended inputs:
 - `runner_label`: use a stable GPU/display runner when available.
 
 When `benchmark_map_url` is omitted, the workflow exits successfully after
-printing setup guidance. This keeps the workflow available before the gold map
-artifact is published without creating noisy CI failures.
+printing setup guidance. This keeps the workflow available before a benchmark
+map artifact is published without creating noisy CI failures.
 
 ## Calibration policy
 
 Do not make first-run benchmark numbers release-blocking. Calibrate on the same
-runner class with the same gold map:
+runner class with the same benchmark map:
 
 1. Run the current release or `main` three or more times.
 2. Inspect `summary.json`, `frames.jsonl`, and `benchmark.log` for warmup,

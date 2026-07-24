@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Run the machine-local Devil's Eye XL streaming FPS benchmark.
+"""Run a local streaming FPS benchmark for a user-provided CaveViewer map.
 
-The gold map is intentionally local-only. A real run copies
-``~/Downloads/Maps/Devil's Eye XL`` into the ignored repository-local
-``.benchmark-data`` tree when needed, compiles a map-local ``_cache`` when the
-manifest is missing, runs the existing benchmark wrapper, compares with the
-latest local history record, and writes a human-readable summary.
+The runner opens or compiles a map-local ``_cache`` directory, generates a
+benchmark route when requested, runs the viewer benchmark, compares the result
+with compatible local history, and writes machine-readable and human-readable
+artifacts under the requested output directory.
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ import json
 import os
 from pathlib import Path
 import shlex
-import shutil
 import subprocess
 import sys
 from typing import Any, Mapping, Sequence
@@ -47,14 +45,6 @@ from caveviewer.gui.benchmark_routes import (
 )
 
 
-LOCAL_BENCHMARK_ID = "devils-eye-xl"
-DEFAULT_SOURCE_MAP_DIR = Path.home() / "Downloads" / "Maps" / "Devil's Eye XL"
-DEFAULT_LOCAL_MAP_DIR = (
-    _REPOSITORY_ROOT / ".benchmark-data" / "maps" / LOCAL_BENCHMARK_ID
-)
-DEFAULT_RESULTS_DIR = (
-    _REPOSITORY_ROOT / ".benchmark-data" / "results" / LOCAL_BENCHMARK_ID
-)
 DEFAULT_SCENARIO_PATH = _REPOSITORY_ROOT / "benchmarks" / "gold-route-v1.json"
 DEFAULT_THRESHOLDS_PATH = (
     _REPOSITORY_ROOT / "benchmarks" / "viewer-thresholds.v1.json"
@@ -63,52 +53,64 @@ CACHE_DIRNAME = "_cache"
 MANIFEST_NAME = "manifest.json"
 MAP_SOURCE_SUFFIXES = {".glb", ".gltf", ".obj"}
 LOCAL_HISTORY_SCHEMA_VERSION = 1
-DEFAULT_DEVILS_EYE_RENDER_DISTANCE = 10
-DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS = 120.0
-DEFAULT_DEVILS_EYE_MAX_RUNTIME_MARGIN_SECONDS = 90.0
-DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_KEYFRAMES = 24
-DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS = 24.0
-DEFAULT_DEVILS_EYE_TEXTURE_RESIDENT_CACHE_MB = 768.0
+DEFAULT_BENCHMARK_ID = "local-map"
+DEFAULT_RENDER_DISTANCE = 10
+DEFAULT_MEASUREMENT_SECONDS = 120.0
+DEFAULT_MAX_RUNTIME_MARGIN_SECONDS = 90.0
+DEFAULT_CENTERLINE_ROUTE_KEYFRAMES = 24
+DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS = 24.0
+DEFAULT_TEXTURE_RESIDENT_CACHE_MB = 768.0
 CENTERLINE_ROUTE_SELECTION_BY_CLI = {
     "max-complexity": CENTERLINE_ROUTE_SELECTION_MAX_COMPLEXITY,
     "midpoint": CENTERLINE_ROUTE_SELECTION_MIDPOINT,
 }
+ROUTE_MODES = ("auto-centerline", "auto-dense", "static")
+VSYNC_POLICIES = ("off", "on", "unchanged")
+
+
+class _ScriptArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        if message.startswith("unrecognized arguments: "):
+            argument = message.removeprefix("unrecognized arguments: ").split()[0]
+            if argument.startswith("-"):
+                self.exit(2, f"Error: unknown option '{argument}'\n")
+            self.exit(2, f"Error: unexpected positional argument '{argument}'\n")
+        if message.startswith("argument ") and "expected one argument" in message:
+            option = message.split(":", 1)[0].removeprefix("argument ").split("/")[0]
+            self.exit(2, f"Error: {option} requires a value.\n")
+        self.exit(2, f"Error: {message}\n")
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _ScriptArgumentParser(
         description=(
-            "Run the local-only Devil's Eye XL FPS benchmark, compare with the "
-            "previous local record, and write a text summary."
+            "Run a local CaveViewer map FPS benchmark, compare with compatible "
+            "local history, and write a text summary."
         )
     )
     parser.add_argument(
-        "--source-map-dir",
-        default=str(DEFAULT_SOURCE_MAP_DIR),
+        "--config",
         help=(
-            "Original gold map directory. Defaults to "
-            "~/Downloads/Maps/Devil's Eye XL."
+            "Optional JSON config file. CLI options override config values. "
+            "Use underscore keys matching option names, such as map_dir, "
+            "output_dir, render_distance, and duration_seconds."
         ),
     )
     parser.add_argument(
-        "--local-map-dir",
-        default=str(DEFAULT_LOCAL_MAP_DIR),
-        help=(
-            "Ignored repository-local copy of the gold map. Defaults to "
-            ".benchmark-data/maps/devils-eye-xl."
-        ),
+        "--map-dir",
+        help="Map directory containing source files and/or a _cache directory.",
     )
     parser.add_argument(
-        "--results-dir",
-        default=str(DEFAULT_RESULTS_DIR),
-        help=(
-            "Ignored repository-local benchmark result/history directory. "
-            "Defaults to .benchmark-data/results/devils-eye-xl."
-        ),
+        "--output-dir",
+        help="Directory for benchmark runs, history, and latest-summary.txt.",
+    )
+    parser.add_argument(
+        "--benchmark-id",
+        help="Stable local history identifier. Defaults to the map directory name.",
     )
     parser.add_argument(
         "--scenario",
-        default=str(DEFAULT_SCENARIO_PATH),
         help=(
             "Benchmark scenario JSON. In generated route modes this is used as "
             "the timing/control template. Defaults to benchmarks/gold-route-v1.json."
@@ -116,8 +118,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--route-mode",
-        choices=("auto-centerline", "auto-dense", "static"),
-        default="auto-centerline",
+        choices=ROUTE_MODES,
         help=(
             "Use a vertex-footprint centerline route, use a manifest-derived "
             "dense route, or run the scenario file exactly as written. Defaults "
@@ -127,33 +128,38 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--render-distance",
         type=int,
-        default=DEFAULT_DEVILS_EYE_RENDER_DISTANCE,
         help=(
-            "Render-distance chunk radius for the local gold benchmark. "
-            f"Defaults to {DEFAULT_DEVILS_EYE_RENDER_DISTANCE} to exercise "
-            "a visually fuller Devil's Eye XL load."
+            "Render-distance chunk radius. Defaults to "
+            f"{DEFAULT_RENDER_DISTANCE}."
         ),
     )
     parser.add_argument(
         "--centerline-route-keyframes",
         type=int,
-        default=DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_KEYFRAMES,
-        help="Target number of keyframes for the generated centerline route.",
+        help=(
+            "Target number of keyframes for the generated centerline route. "
+            f"Defaults to {DEFAULT_CENTERLINE_ROUTE_KEYFRAMES}."
+        ),
     )
     parser.add_argument(
         "--centerline-route-target-length-m",
         type=float,
         help=(
-            "Target centerline segment length in map units. Defaults to a "
-            "Devil's Eye XL streaming exercise route of "
-            f"{DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS:g} chunks "
-            "so the measured window crosses chunk neighborhoods."
+            "Target centerline segment length in map units. Overrides "
+            "--centerline-route-target-length-chunks."
+        ),
+    )
+    parser.add_argument(
+        "--centerline-route-target-length-chunks",
+        type=float,
+        help=(
+            "Target centerline segment length in chunk widths. Defaults to "
+            f"{DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS:g} chunks."
         ),
     )
     parser.add_argument(
         "--centerline-route-y-search-radius-cells",
         type=int,
-        default=DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
         help=(
             "Neighboring chunk-column radius used to estimate centerline Y. "
             "Defaults to 1."
@@ -162,29 +168,30 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--centerline-route-selection",
         choices=tuple(CENTERLINE_ROUTE_SELECTION_BY_CLI),
-        default="max-complexity",
         help=(
-            "Centerline segment selector. max-complexity preserves the gold "
-            "benchmark behavior by selecting the heaviest visible chunk/texture "
-            "region. midpoint moves through the centerline without using "
-            "chunk/texture complexity for selection."
+            "Centerline segment selector. max-complexity selects the heaviest "
+            "visible chunk/texture region. midpoint uses centerline geometry "
+            "without chunk/texture complexity."
         ),
     )
     parser.add_argument(
         "--dense-route-keyframes",
         type=int,
-        default=DEFAULT_DENSE_ROUTE_KEYFRAMES,
-        help="Target number of keyframes for the generated dense route.",
+        help=(
+            "Target number of keyframes for the generated dense route. "
+            f"Defaults to {DEFAULT_DENSE_ROUTE_KEYFRAMES}."
+        ),
     )
     parser.add_argument(
         "--dense-route-percentile",
         type=float,
-        default=DEFAULT_DENSE_ROUTE_PERCENTILE,
-        help="Chunk-density percentile used to select dense route cells.",
+        help=(
+            "Chunk-density percentile used to select dense route cells. "
+            f"Defaults to {DEFAULT_DENSE_ROUTE_PERCENTILE:g}."
+        ),
     )
     parser.add_argument(
         "--thresholds",
-        default=str(DEFAULT_THRESHOLDS_PATH),
         help=(
             "Benchmark threshold JSON. Defaults to "
             "benchmarks/viewer-thresholds.v1.json."
@@ -196,12 +203,10 @@ def _parser() -> argparse.ArgumentParser:
         "--duration",
         dest="measurement_seconds",
         type=float,
-        default=DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS,
         help=(
             "Measured route duration. Defaults to "
-            f"{DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS:g}s for the local "
-            "streaming stress benchmark. --duration-seconds and --duration "
-            "are aliases."
+            f"{DEFAULT_MEASUREMENT_SECONDS:g}s. --duration-seconds and "
+            "--duration are aliases."
         ),
     )
     parser.add_argument(
@@ -210,17 +215,15 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Maximum viewer benchmark runtime after output preparation. "
             "Defaults to warmup + measurement + "
-            f"{DEFAULT_DEVILS_EYE_MAX_RUNTIME_MARGIN_SECONDS:g}s."
+            f"{DEFAULT_MAX_RUNTIME_MARGIN_SECONDS:g}s."
         ),
     )
     parser.add_argument(
         "--texture-resident-cache-mb",
         type=float,
-        default=DEFAULT_DEVILS_EYE_TEXTURE_RESIDENT_CACHE_MB,
         help=(
             "Benchmark-only resident texture cache cap in MB. Defaults to "
-            f"{DEFAULT_DEVILS_EYE_TEXTURE_RESIDENT_CACHE_MB:g} MB so the "
-            "route exercises texture eviction/reload."
+            f"{DEFAULT_TEXTURE_RESIDENT_CACHE_MB:g} MB."
         ),
     )
     parser.add_argument(
@@ -229,37 +232,36 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--log-level",
-        default="DEBUG",
         help="Benchmark log level. Defaults to DEBUG for inspectable local output.",
     )
     parser.add_argument(
         "--vsync",
-        choices=("off", "on", "unchanged"),
-        default="unchanged",
+        choices=VSYNC_POLICIES,
         help=(
             "Forwarded caveviewer-benchmark vsync policy. Defaults to unchanged "
-            "so the local gold benchmark starts like the regular app."
+            "so the local benchmark starts like the regular app."
         ),
     )
     parser.add_argument(
         "--xvfb",
         action="store_true",
+        default=None,
         help="Forward the benchmark through xvfb-run -a on Linux/headless systems.",
     )
     parser.add_argument(
         "--force-compile",
         action="store_true",
-        help="Rebuild the gold map _cache even when manifest.json already exists.",
+        default=None,
+        help="Rebuild the map _cache even when manifest.json already exists.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate inputs and print planned work without copying or running.",
+        help="Validate inputs and print planned work without running.",
     )
     parser.add_argument(
         "--history-limit",
         type=int,
-        default=1,
         help="Number of previous local runs to include in the text summary.",
     )
     return parser
@@ -268,7 +270,8 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        plan = _build_plan(args)
+        config = _load_config(args.config)
+        plan = _build_plan(args, config)
     except BenchmarkConfigurationError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
@@ -279,7 +282,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         _prepare_orchestration_log(plan)
-        _ensure_local_map_copy(plan)
         _ensure_cache(plan)
         _prepare_scenario(plan)
         benchmark_returncode = _run_benchmark(plan)
@@ -326,40 +328,158 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
 
-def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
-    source_map_dir = Path(args.source_map_dir).expanduser().resolve()
-    local_map_dir = Path(args.local_map_dir).expanduser().resolve()
-    results_dir = Path(args.results_dir).expanduser().resolve()
-    scenario_template_path = _existing_file(args.scenario, "scenario")
-    threshold_path = _existing_file(args.thresholds, "thresholds")
+def _load_config(config_path: str | None) -> dict[str, Any]:
+    if not config_path:
+        return {}
+    path = Path(config_path).expanduser().resolve()
+    if not path.is_file():
+        raise BenchmarkConfigurationError(f"config file does not exist: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BenchmarkConfigurationError(f"config file is not valid JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise BenchmarkConfigurationError("config file root must be a JSON object")
+    return payload
+
+
+def _option(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    name: str,
+    default: Any = None,
+) -> Any:
+    value = getattr(args, name, None)
+    if value is not None:
+        return value
+    if name in config:
+        return config[name]
+    return default
+
+
+def _bool_option(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    name: str,
+    default: bool = False,
+) -> bool:
+    value = _option(args, config, name, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _required_path_option(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    name: str,
+) -> Path:
+    value = _option(args, config, name)
+    if value is None or str(value).strip() == "":
+        raise BenchmarkConfigurationError(
+            f"{name.replace('_', '-')} is required; pass --{name.replace('_', '-')} "
+            "or set it in the JSON config file"
+        )
+    return Path(str(value)).expanduser().resolve()
+
+
+def _choice_option(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    name: str,
+    default: str,
+    choices: Sequence[str],
+) -> str:
+    value = str(_option(args, config, name, default))
+    if value not in choices:
+        raise BenchmarkConfigurationError(
+            f"{name.replace('_', '-')} must be one of: {', '.join(choices)}"
+        )
+    return value
+
+
+def _build_plan(args: argparse.Namespace, config: Mapping[str, Any]) -> dict[str, Any]:
+    map_dir = _required_path_option(args, config, "map_dir")
+    output_dir = _required_path_option(args, config, "output_dir")
+    scenario_template_path = _existing_file(
+        _option(args, config, "scenario", str(DEFAULT_SCENARIO_PATH)),
+        "scenario",
+    )
+    threshold_path = _existing_file(
+        _option(args, config, "thresholds", str(DEFAULT_THRESHOLDS_PATH)),
+        "thresholds",
+    )
+    benchmark_id = _safe_label(
+        str(_option(args, config, "benchmark_id", map_dir.name or DEFAULT_BENCHMARK_ID))
+    )
+    route_mode = _choice_option(
+        args,
+        config,
+        "route_mode",
+        "auto-centerline",
+        ROUTE_MODES,
+    )
+    centerline_route_selection = _choice_option(
+        args,
+        config,
+        "centerline_route_selection",
+        "max-complexity",
+        tuple(CENTERLINE_ROUTE_SELECTION_BY_CLI),
+    )
+    vsync = _choice_option(args, config, "vsync", "unchanged", VSYNC_POLICIES)
+    measurement_seconds = float(
+        _option(
+            args,
+            config,
+            "measurement_seconds",
+            _option(args, config, "duration_seconds", DEFAULT_MEASUREMENT_SECONDS),
+        )
+    )
+    centerline_target_length_m = _option(
+        args,
+        config,
+        "centerline_route_target_length_m",
+    )
+    centerline_target_length_chunks = _option(
+        args,
+        config,
+        "centerline_route_target_length_chunks",
+        DEFAULT_CENTERLINE_ROUTE_TARGET_CHUNKS,
+    )
+    if centerline_target_length_m is not None and centerline_target_length_chunks is not None:
+        if getattr(args, "centerline_route_target_length_m", None) is not None:
+            centerline_target_length_chunks = None
+        elif "centerline_route_target_length_m" in config:
+            centerline_target_length_chunks = None
     base_scenario_template = BenchmarkScenario.load(scenario_template_path)
     scenario_template = _scenario_with_benchmark_policy(
         base_scenario_template,
-        render_distance=int(args.render_distance),
-        measurement_seconds=float(args.measurement_seconds),
+        render_distance=int(_option(args, config, "render_distance", DEFAULT_RENDER_DISTANCE)),
+        measurement_seconds=measurement_seconds,
         max_runtime_seconds=(
             None
-            if args.max_runtime_seconds is None
-            else float(args.max_runtime_seconds)
+            if _option(args, config, "max_runtime_seconds") is None
+            else float(_option(args, config, "max_runtime_seconds"))
         ),
     )
     BenchmarkThresholds.load(threshold_path)
 
-    source_copy_needed = not _has_map_source(local_map_dir)
-    if source_copy_needed:
-        _validate_source_map_dir(source_map_dir)
-        if local_map_dir.exists():
-            raise BenchmarkConfigurationError(
-                "local-map-dir exists but does not contain a supported map "
-                f"source file: {local_map_dir}"
-            )
-
-    cache_dir = local_map_dir / CACHE_DIRNAME
+    if not map_dir.is_dir():
+        raise BenchmarkConfigurationError(f"map-dir does not exist: {map_dir}")
+    cache_dir = map_dir / CACHE_DIRNAME
     manifest_path = cache_dir / MANIFEST_NAME
-    compile_needed = bool(args.force_compile or not manifest_path.is_file())
-    label = _safe_label(args.label or _default_label())
-    run_dir = results_dir / "runs" / label
-    route_mode = str(args.route_mode)
+    force_compile = _bool_option(args, config, "force_compile")
+    compile_needed = bool(force_compile or not manifest_path.is_file())
+    if compile_needed:
+        _validate_map_dir_for_compile(map_dir)
+    label = _safe_label(str(_option(args, config, "label", _default_label())))
+    run_dir = output_dir / "runs" / label
     generated_scenario_paths = {
         "auto-centerline": run_dir / "auto-centerline-route-v1.json",
         "auto-dense": run_dir / "auto-dense-route-v1.json",
@@ -377,9 +497,9 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "-m",
         "caveviewer.chunker",
         "--source",
-        str(local_map_dir),
+        str(map_dir),
     ]
-    if args.force_compile:
+    if force_compile:
         compile_command.append("--force")
 
     benchmark_command = [
@@ -394,25 +514,25 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "--thresholds",
         str(threshold_path),
         "--output-root",
-        str(results_dir / "runs"),
+        str(output_dir / "runs"),
         "--label",
         label,
         "--log-level",
-        args.log_level,
+        str(_option(args, config, "log_level", "DEBUG")),
         "--vsync",
-        args.vsync,
+        vsync,
     ]
-    if args.xvfb:
+    if _bool_option(args, config, "xvfb"):
         benchmark_command.append("--xvfb")
 
     return {
-        "source_map_dir": source_map_dir,
-        "local_map_dir": local_map_dir,
+        "benchmark_id": benchmark_id,
+        "map_dir": map_dir,
         "cache_dir": cache_dir,
         "manifest_path": manifest_path,
-        "results_dir": results_dir,
-        "history_path": results_dir / "history.jsonl",
-        "latest_summary_path": results_dir / "latest-summary.txt",
+        "output_dir": output_dir,
+        "history_path": output_dir / "history.jsonl",
+        "latest_summary_path": output_dir / "latest-summary.txt",
         "scenario_path": scenario_path,
         "scenario_template_path": scenario_template_path,
         "scenario_template": scenario_template,
@@ -420,38 +540,66 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "render_distance": scenario_template.render_distance,
         "measurement_seconds": scenario_template.measurement_seconds,
         "max_runtime_seconds": scenario_template.max_runtime_seconds,
-        "texture_resident_cache_mb": float(args.texture_resident_cache_mb),
+        "texture_resident_cache_mb": float(
+            _option(args, config, "texture_resident_cache_mb", DEFAULT_TEXTURE_RESIDENT_CACHE_MB)
+        ),
         "route_mode": route_mode,
-        "centerline_route_keyframes": max(1, int(args.centerline_route_keyframes)),
+        "centerline_route_keyframes": max(
+            1,
+            int(
+                _option(
+                    args,
+                    config,
+                    "centerline_route_keyframes",
+                    DEFAULT_CENTERLINE_ROUTE_KEYFRAMES,
+                )
+            ),
+        ),
         "centerline_route_target_length_m": (
             None
-            if args.centerline_route_target_length_m is None
-            else float(args.centerline_route_target_length_m)
+            if centerline_target_length_m is None
+            else float(centerline_target_length_m)
+        ),
+        "centerline_route_target_length_chunks": (
+            None
+            if centerline_target_length_m is not None
+            else float(centerline_target_length_chunks)
         ),
         "centerline_route_target_length_source": (
-            "devils_eye_streaming_default_chunks"
-            if args.centerline_route_target_length_m is None
-            else "cli_meters"
+            "configured_chunks"
+            if centerline_target_length_m is None
+            else "configured_meters"
         ),
         "centerline_route_selection_strategy": CENTERLINE_ROUTE_SELECTION_BY_CLI[
-            str(args.centerline_route_selection)
+            centerline_route_selection
         ],
         "centerline_route_y_search_radius_cells": max(
             0,
-            int(args.centerline_route_y_search_radius_cells),
+            int(
+                _option(
+                    args,
+                    config,
+                    "centerline_route_y_search_radius_cells",
+                    DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS,
+                )
+            ),
         ),
-        "dense_route_keyframes": max(1, int(args.dense_route_keyframes)),
-        "dense_route_percentile": float(args.dense_route_percentile),
+        "dense_route_keyframes": max(
+            1,
+            int(_option(args, config, "dense_route_keyframes", DEFAULT_DENSE_ROUTE_KEYFRAMES)),
+        ),
+        "dense_route_percentile": float(
+            _option(args, config, "dense_route_percentile", DEFAULT_DENSE_ROUTE_PERCENTILE)
+        ),
         "thresholds_path": threshold_path,
         "label": label,
         "run_dir": run_dir,
         "summary_path": run_dir / "summary.json",
         "comparison_path": run_dir / "comparison.json",
         "orchestration_log_path": run_dir / "orchestration.log",
-        "source_copy_needed": source_copy_needed,
         "compile_needed": compile_needed,
-        "force_compile": bool(args.force_compile),
-        "history_limit": max(0, int(args.history_limit)),
+        "force_compile": force_compile,
+        "history_limit": max(0, int(_option(args, config, "history_limit", 1))),
         "compile_command": compile_command,
         "benchmark_command": benchmark_command,
     }
@@ -463,9 +611,9 @@ def _print_plan(plan: Mapping[str, Any]) -> None:
 
 def _plan_text(plan: Mapping[str, Any]) -> str:
     lines = [
-        "Devil's Eye XL local benchmark plan:",
-        f"  source_map_dir: {plan['source_map_dir']}",
-        f"  local_map_dir: {plan['local_map_dir']}",
+        "CaveViewer local map benchmark plan:",
+        f"  benchmark_id: {plan['benchmark_id']}",
+        f"  map_dir: {plan['map_dir']}",
         f"  cache_dir: {plan['cache_dir']}",
         f"  route_mode: {plan['route_mode']}",
         f"  render_distance: {plan['render_distance']}",
@@ -480,7 +628,6 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
         f"  history: {plan['history_path']}",
         f"  output_dir: {plan['run_dir']}",
         f"  orchestration_log: {plan['orchestration_log_path']}",
-        f"  copy_map: {_yes_no(plan['source_copy_needed'])}",
         f"  compile_cache: {_yes_no(plan['compile_needed'])}",
     ]
     if plan["compile_needed"]:
@@ -502,10 +649,11 @@ def _plan_text(plan: Mapping[str, Any]) -> str:
 def _route_generation_plan_lines(plan: Mapping[str, Any]) -> list[str]:
     if plan["route_mode"] == "auto-centerline":
         target_length = plan["centerline_route_target_length_m"]
+        target_chunks = plan["centerline_route_target_length_chunks"]
         target_text = (
             (
                 "auto("
-                f"{DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS:g} chunks, "
+                f"{target_chunks:g} chunks, "
                 "streaming exercise; meters computed after cache validation)"
             )
             if target_length is None
@@ -550,7 +698,7 @@ def _scenario_with_benchmark_policy(
         else (
             float(scenario.warmup_seconds)
             + measurement
-            + DEFAULT_DEVILS_EYE_MAX_RUNTIME_MARGIN_SECONDS
+            + DEFAULT_MAX_RUNTIME_MARGIN_SECONDS
         )
     )
     if max_runtime < scenario.warmup_seconds + measurement:
@@ -573,27 +721,12 @@ def _prepare_orchestration_log(plan: Mapping[str, Any]) -> None:
     log_path.write_text(_plan_text(plan) + "\n", encoding="utf-8")
 
 
-def _ensure_local_map_copy(plan: Mapping[str, Any]) -> None:
-    if not plan["source_copy_needed"]:
-        return
-    source_map_dir = plan["source_map_dir"]
-    local_map_dir = plan["local_map_dir"]
-    assert isinstance(source_map_dir, Path)
-    assert isinstance(local_map_dir, Path)
-    _log_message(
-        plan,
-        f"Copying gold map into ignored local benchmark data: {local_map_dir}",
-    )
-    local_map_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_map_dir, local_map_dir, symlinks=True)
-
-
 def _ensure_cache(plan: Mapping[str, Any]) -> None:
     manifest_path = plan["manifest_path"]
     assert isinstance(manifest_path, Path)
     if manifest_path.is_file() and not plan["force_compile"]:
         return
-    _log_message(plan, "Compiling Devil's Eye XL map cache with caveviewer.chunker.")
+    _log_message(plan, "Compiling map cache with caveviewer.chunker.")
     returncode = _run_logged_subprocess(
         plan["compile_command"],
         plan,
@@ -627,8 +760,9 @@ def _prepare_scenario(plan: dict[str, Any]) -> None:
     if plan["route_mode"] == "auto-centerline":
         target_length_m = plan["centerline_route_target_length_m"]
         if target_length_m is None:
-            target_length_m = _devils_eye_centerline_route_target_length_m(
-                manifest
+            target_length_m = _centerline_route_target_length_m_from_chunks(
+                manifest,
+                target_chunks=float(plan["centerline_route_target_length_chunks"]),
             )
         route_result = generate_centerline_route_scenario(
             manifest,
@@ -640,9 +774,10 @@ def _prepare_scenario(plan: dict[str, Any]) -> None:
                 plan["centerline_route_y_search_radius_cells"]
             ),
         )
-        if plan["centerline_route_target_length_source"] != "cli_meters":
-            _mark_devils_eye_default_centerline_metadata(
+        if plan["centerline_route_target_length_source"] == "configured_chunks":
+            _mark_configured_chunk_centerline_metadata(
                 route_result.scenario_payload,
+                target_chunks=float(plan["centerline_route_target_length_chunks"]),
             )
         summary_text = _centerline_route_summary
         plan_key = "centerline_route"
@@ -667,13 +802,16 @@ def _prepare_scenario(plan: dict[str, Any]) -> None:
     _log_message(plan, summary_text(route_result, scenario_path))
 
 
-def _devils_eye_centerline_route_target_length_m(
+def _centerline_route_target_length_m_from_chunks(
     manifest: Mapping[str, Any],
+    *,
+    target_chunks: float,
 ) -> float:
-    return (
-        _manifest_chunk_size_m(manifest)
-        * DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS
-    )
+    if target_chunks <= 0.0:
+        raise BenchmarkConfigurationError(
+            "centerline-route-target-length-chunks must be positive"
+        )
+    return _manifest_chunk_size_m(manifest) * target_chunks
 
 
 def _manifest_chunk_size_m(manifest: Mapping[str, Any]) -> float:
@@ -690,24 +828,18 @@ def _manifest_chunk_size_m(manifest: Mapping[str, Any]) -> float:
     return chunk_size
 
 
-def _mark_devils_eye_default_centerline_metadata(
+def _mark_configured_chunk_centerline_metadata(
     scenario_payload: dict[str, Any],
+    *,
+    target_chunks: float,
 ) -> None:
     metadata = scenario_payload.get("metadata", {})
     if not isinstance(metadata, dict):
         return
-    metadata["target_route_length_source"] = (
-        "devils_eye_streaming_default_chunks"
-    )
-    metadata["target_route_speed_source"] = (
-        "devils_eye_streaming_default_chunks"
-    )
-    metadata["target_route_length_chunks"] = (
-        DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS
-    )
-    metadata["target_route_minimum_length_chunks"] = (
-        DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS
-    )
+    metadata["target_route_length_source"] = "configured_chunks"
+    metadata["target_route_speed_source"] = "configured_chunks"
+    metadata["target_route_length_chunks"] = target_chunks
+    metadata["target_route_minimum_length_chunks"] = target_chunks
     metadata["streaming_exercise_definition"] = (
         "route length is expressed in chunk widths so the measured window "
         "crosses streaming neighborhoods and exercises runtime chunk uploads"
@@ -758,7 +890,7 @@ def _centerline_route_summary(centerline_route, scenario_path: Path) -> str:
 
 
 def _run_benchmark(plan: Mapping[str, Any]) -> int:
-    _log_message(plan, "Running Devil's Eye XL FPS benchmark.")
+    _log_message(plan, "Running CaveViewer map FPS benchmark.")
     return _run_logged_subprocess(
         plan["benchmark_command"],
         plan,
@@ -794,15 +926,15 @@ def _run_logged_subprocess(
     return int(process.wait())
 
 
-def _validate_source_map_dir(source_map_dir: Path) -> None:
-    if not source_map_dir.is_dir():
+def _validate_map_dir_for_compile(map_dir: Path) -> None:
+    if not map_dir.is_dir():
         raise BenchmarkConfigurationError(
-            f"source-map-dir does not exist: {source_map_dir}"
+            f"map-dir does not exist: {map_dir}"
         )
-    if not _has_map_source(source_map_dir):
+    if not _has_map_source(map_dir):
         raise BenchmarkConfigurationError(
-            "source-map-dir does not contain a supported map source file "
-            f"({', '.join(sorted(MAP_SOURCE_SUFFIXES))}): {source_map_dir}"
+            "map-dir does not contain a supported map source file "
+            f"({', '.join(sorted(MAP_SOURCE_SUFFIXES))}): {map_dir}"
         )
 
 
@@ -878,10 +1010,10 @@ def _record_for_run(
     return {
         "schema_version": LOCAL_HISTORY_SCHEMA_VERSION,
         "timestamp_utc": _utc_timestamp(),
-        "benchmark_id": LOCAL_BENCHMARK_ID,
+        "benchmark_id": plan["benchmark_id"],
         "label": plan["label"],
         "git_sha": _git_sha(),
-        "local_map_dir": str(plan["local_map_dir"]),
+        "map_dir": str(plan["map_dir"]),
         "cache_dir": str(plan["cache_dir"]),
         "summary_path": str(plan["summary_path"]),
         "comparison_path": None if comparison_path is None else str(comparison_path),
@@ -914,7 +1046,7 @@ def _human_summary(
     metrics = summary.get("metrics", {})
     environment = summary.get("environment", {})
     lines = [
-        "CaveViewer Devil's Eye XL local benchmark",
+        "CaveViewer local map benchmark",
         f"Status: {_status_text(comparison)}",
         f"Run: {plan['label']}",
         f"Git SHA: {_git_sha()}",

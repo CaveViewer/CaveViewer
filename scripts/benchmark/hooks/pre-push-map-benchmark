@@ -25,6 +25,13 @@ if [[ -z "$python_bin" ]]; then
   fi
 fi
 
+config_path="${CAVEVIEWER_BENCHMARK_CONFIG:-}"
+if [[ -z "$config_path" ]]; then
+  echo "Error: CAVEVIEWER_BENCHMARK_CONFIG must point to a local benchmark JSON config." >&2
+  exit 2
+fi
+
 exec "$python_bin" \
-  "$repo_root/scripts/benchmark/run_devils_eye_xl_benchmark.py" \
+  "$repo_root/scripts/benchmark/run_map_benchmark.py" \
+  --config "$config_path" \
   --label "main-push-${target_sha:0:12}"

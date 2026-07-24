@@ -1,4 +1,4 @@
-"""Unit tests for the machine-local Devil's Eye XL benchmark wrapper."""
+"""Unit tests for the generic local map benchmark wrapper."""
 
 from __future__ import annotations
 
@@ -7,16 +7,16 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = (
-    REPOSITORY_ROOT / "scripts" / "benchmark" / "run_devils_eye_xl_benchmark.py"
-)
+SCRIPT_PATH = REPOSITORY_ROOT / "scripts" / "benchmark" / "run_map_benchmark.py"
 
 
 def _load_script_module():
     spec = importlib.util.spec_from_file_location(
-        "run_devils_eye_xl_benchmark_for_tests",
+        "run_map_benchmark_for_tests",
         SCRIPT_PATH,
     )
     assert spec is not None
@@ -26,97 +26,82 @@ def _load_script_module():
     return module
 
 
-def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
+def test_map_benchmark_dry_run_uses_config_file_and_plans_compile(
     tmp_path,
     capsys,
 ):
     module = _load_script_module()
-    source_map_dir = tmp_path / "Downloads" / "Maps" / "Devil's Eye XL"
-    local_map_dir = tmp_path / "repo" / ".benchmark-data" / "maps" / "devils-eye-xl"
-    results_dir = tmp_path / "repo" / ".benchmark-data" / "results" / "devils-eye-xl"
-    source_map_dir.mkdir(parents=True)
-    (source_map_dir / "gold.obj").write_text("o gold\n", encoding="utf-8")
-
-    exit_code = module.main(
-        [
-            "--source-map-dir",
-            str(source_map_dir),
-            "--local-map-dir",
-            str(local_map_dir),
-            "--results-dir",
-            str(results_dir),
-            "--label",
-            "candidate stack",
-            "--dry-run",
-        ]
+    map_dir = tmp_path / "maps" / "load-test-map"
+    output_dir = tmp_path / "results" / "load-test-map"
+    config_path = tmp_path / "benchmark-config.json"
+    map_dir.mkdir(parents=True)
+    (map_dir / "model.obj").write_text("o map\n", encoding="utf-8")
+    config_path.write_text(
+        json.dumps(
+            {
+                "map_dir": str(map_dir),
+                "output_dir": str(output_dir),
+                "benchmark_id": "load-test-map",
+                "duration_seconds": 45,
+                "centerline_route_selection": "midpoint",
+                "label": "candidate stack",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
     )
+
+    exit_code = module.main(["--config", str(config_path), "--dry-run"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert "Devil's Eye XL local benchmark plan:" in output
+    assert "CaveViewer local map benchmark plan:" in output
+    assert f"map_dir: {map_dir}" in output
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=24" in output
     assert "render_distance: 10" in output
-    assert "measurement_seconds: 120" in output
+    assert "measurement_seconds: 45" in output
+    assert "max_runtime_seconds: 140" in output
     assert "texture_resident_cache_mb: 768" in output
     assert "target_length=auto(24 chunks, streaming exercise" in output
-    assert "selection=max_visible_chunk_texture_complexity" in output
+    assert "selection=centerline_midpoint_v1" in output
     assert "movement=after_warmup" in output
-    assert "copy_map: yes" in output
     assert "compile_cache: yes" in output
-    assert str(local_map_dir / "_cache") in output
-    assert str(results_dir / "history.jsonl") in output
+    assert str(map_dir / "_cache") in output
+    assert str(output_dir / "history.jsonl") in output
     assert "run_local_benchmark.py" in output
     assert "candidate-stack" in output
 
 
-def test_devils_eye_xl_duration_alias_controls_measurement_window(
-    tmp_path,
-    capsys,
-):
+def test_map_benchmark_reports_standard_cli_errors(capsys):
     module = _load_script_module()
-    source_map_dir = tmp_path / "Downloads" / "Maps" / "Devil's Eye XL"
-    local_map_dir = tmp_path / "repo" / ".benchmark-data" / "maps" / "devils-eye-xl"
-    results_dir = tmp_path / "repo" / ".benchmark-data" / "results" / "devils-eye-xl"
-    source_map_dir.mkdir(parents=True)
-    (source_map_dir / "gold.obj").write_text("o gold\n", encoding="utf-8")
 
-    exit_code = module.main(
-        [
-            "--source-map-dir",
-            str(source_map_dir),
-            "--local-map-dir",
-            str(local_map_dir),
-            "--results-dir",
-            str(results_dir),
-            "--duration-seconds",
-            "45",
-            "--centerline-route-selection",
-            "midpoint",
-            "--dry-run",
-        ]
-    )
+    with pytest.raises(SystemExit) as unknown_exc:
+        module._parser().parse_args(["--unknown-option"])
+    unknown_err = capsys.readouterr().err
+    assert unknown_exc.value.code == 2
+    assert "Error: unknown option '--unknown-option'" in unknown_err
 
-    output = capsys.readouterr().out
-    assert exit_code == 0
-    assert "measurement_seconds: 45" in output
-    assert "max_runtime_seconds: 140" in output
-    assert "selection=centerline_midpoint_v1" in output
+    with pytest.raises(SystemExit) as missing_exc:
+        module._parser().parse_args(["--map-dir"])
+    missing_err = capsys.readouterr().err
+    assert missing_exc.value.code == 2
+    assert "Error: --map-dir requires a value." in missing_err
 
 
-def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
+def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
     tmp_path,
     monkeypatch,
 ):
     module = _load_script_module()
-    local_map_dir = tmp_path / "map"
-    results_dir = tmp_path / "results"
-    run_dir = results_dir / "runs" / "candidate"
-    history_path = results_dir / "history.jsonl"
-    local_map_dir.mkdir()
-    (local_map_dir / "gold.obj").write_text("o gold\n", encoding="utf-8")
-    (local_map_dir / "_cache").mkdir()
-    (local_map_dir / "_cache" / "manifest.json").write_text(
+    map_dir = tmp_path / "map"
+    output_dir = tmp_path / "results"
+    run_dir = output_dir / "runs" / "candidate"
+    history_path = output_dir / "history.jsonl"
+    map_dir.mkdir()
+    (map_dir / "model.obj").write_text("o map\n", encoding="utf-8")
+    (map_dir / "_cache").mkdir()
+    (map_dir / "_cache" / "manifest.json").write_text(
         json.dumps(_manifest()),
         encoding="utf-8",
     )
@@ -165,7 +150,7 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
             "max_visible_chunk_texture_complexity_v1"
         )
         assert generated_scenario["metadata"]["target_route_length_source"] == (
-            "devils_eye_streaming_default_chunks"
+            "configured_chunks"
         )
         assert generated_scenario["metadata"]["target_route_length_chunks"] == 24.0
         assert generated_scenario["measurement_seconds"] == 120.0
@@ -189,10 +174,10 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
 
     exit_code = module.main(
         [
-            "--local-map-dir",
-            str(local_map_dir),
-            "--results-dir",
-            str(results_dir),
+            "--map-dir",
+            str(map_dir),
+            "--output-dir",
+            str(output_dir),
             "--label",
             "candidate",
         ]
@@ -201,7 +186,8 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert exit_code == 1
     assert (run_dir / "comparison.json").is_file()
     assert (run_dir / "auto-centerline-route-v1.json").is_file()
-    latest_text = (results_dir / "latest-summary.txt").read_text(encoding="utf-8")
+    latest_text = (output_dir / "latest-summary.txt").read_text(encoding="utf-8")
+    assert "CaveViewer local map benchmark" in latest_text
     assert "Status: FAIL" in latest_text
     assert "wall_clock_fps=90.00" in latest_text
     assert "Runtime load:" in latest_text
@@ -235,26 +221,28 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "Run: older-release" not in latest_text
     assert "Time:" not in latest_text
     orchestration_log = (run_dir / "orchestration.log").read_text(encoding="utf-8")
-    assert "Devil's Eye XL local benchmark plan:" in orchestration_log
+    assert "CaveViewer local map benchmark plan:" in orchestration_log
     assert "Status: FAIL" in orchestration_log
     history_lines = history_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(history_lines) == 3
-    assert json.loads(history_lines[-1])["comparison_passed"] is False
+    latest_record = json.loads(history_lines[-1])
+    assert latest_record["comparison_passed"] is False
+    assert latest_record["map_dir"] == str(map_dir)
     benchmark_command = next(
         command
         for command in commands
         if any(str(part).endswith("run_local_benchmark.py") for part in command)
     )
     assert benchmark_command[benchmark_command.index("--cache-dir") + 1] == str(
-        local_map_dir / "_cache"
+        map_dir / "_cache"
     )
     assert benchmark_command[benchmark_command.index("--textures-dir") + 1] == str(
-        local_map_dir / "_cache"
+        map_dir / "_cache"
     )
     assert str(run_dir / "auto-centerline-route-v1.json") in benchmark_command
 
 
-def test_devils_eye_xl_uses_only_compatible_history_as_gate_baseline():
+def test_map_benchmark_uses_only_compatible_history_as_gate_baseline():
     module = _load_script_module()
     current_summary = _summary(median_fps=90.0, wall_clock_fps=90.0)
     incompatible_summary = _summary(median_fps=100.0, wall_clock_fps=100.0)
@@ -295,7 +283,7 @@ def test_devils_eye_xl_uses_only_compatible_history_as_gate_baseline():
     )
 
 
-def test_devils_eye_xl_treats_actual_window_size_changes_as_incompatible():
+def test_map_benchmark_treats_actual_window_size_changes_as_incompatible():
     module = _load_script_module()
     current_summary = _summary(median_fps=90.0, wall_clock_fps=90.0)
     current_summary["environment"]["actual_window_size"] = [2048, 1280]
@@ -323,7 +311,7 @@ def test_devils_eye_xl_treats_actual_window_size_changes_as_incompatible():
     assert "framebuffer size changed" in history_text
 
 
-def test_devils_eye_xl_treats_streaming_settings_changes_as_incompatible():
+def test_map_benchmark_treats_streaming_settings_changes_as_incompatible():
     module = _load_script_module()
     current_summary = _summary(median_fps=90.0, wall_clock_fps=90.0)
     current_summary["environment"]["streaming_settings_fingerprint"] = "streaming-b"
@@ -355,10 +343,10 @@ def _summary(
     scenario: dict | None = None,
 ) -> dict:
     scenario_payload = (
-        {"name": "gold", "fingerprint": "scenario-a"}
+        {"name": "benchmark-route", "fingerprint": "scenario-a"}
         if scenario is None
         else {
-            "name": "gold",
+            "name": "benchmark-route",
             "fingerprint": "scenario-a",
             "metadata": scenario.get("metadata", {}),
             "render_distance": scenario.get("render_distance", 3),
