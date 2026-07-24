@@ -1289,9 +1289,9 @@ class StreamingWorld:
     ) -> None:
         """Keep extra cells wanted across camera updates until replaced.
 
-        The viewer uses this for deterministic benchmark route preflight.
-        Normal app navigation leaves the set empty, so current-camera streaming
-        behavior is unchanged.
+        Benchmarks and user-facing route navigation use this for route
+        preflight/lookahead. Normal free-fly navigation leaves the set empty,
+        so current-camera streaming behavior is unchanged.
         """
         normalized = {
             tuple(int(component) for component in cell)
@@ -1307,7 +1307,7 @@ class StreamingWorld:
         self._last_camera_cell = None
 
     def prefetch_wanted_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
-        """Return a thread-safe copy of benchmark prefetch cells."""
+        """Return a thread-safe copy of extra route prefetch cells."""
         with self._lock:
             return frozenset(getattr(self, "_prefetch_wanted_cells", set()))
 

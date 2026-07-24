@@ -33,9 +33,17 @@ from moderngl_window.context.base import KeyModifiers
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.core.navigation.centerline import generate_centerline_path
+from caveviewer.core.navigation.autodive import (
+    AutoDiveSettings,
+    build_centerline_auto_dive_plan,
+)
+from caveviewer.core.navigation.centerline import (
+    CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
+    generate_centerline_path,
+)
 from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
+from caveviewer.gui.autodive_controller import AutoDiveController, AutoDiveState
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
 from caveviewer.gui.texture_manager import TextureManager
@@ -852,6 +860,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_visibility_generation = 0
         self._navigation_guard_cells: set[tuple[int, int, int]] = set()
         self._navigation_guard_chunk_size: float | None = None
+        self._auto_dive_controller: AutoDiveController | None = None
+        self._auto_dive_previous_render_distance: int | None = None
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
@@ -1339,6 +1349,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if hasattr(self, "render_distance_stepper"):
             self.world.config.load_radius_cells = self.render_distance_stepper.value
 
+        self._auto_dive_controller = None
+        self._auto_dive_previous_render_distance = None
+        if self.minimap is not None:
+            self.minimap.set_active_route_points_xz(())
         self.controls_overlay.show_fullscreen()
         # Reset on each map load; set True when the initial view has enough
         # uploaded chunks to be usable, not merely when the first chunk arrives.
@@ -2124,10 +2138,118 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", True):
             return ()
         try:
-            return generate_centerline_path(manifest).points_xz
+            return generate_centerline_path(
+                manifest,
+                component_selection=CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
+            ).points_xz
         except NavigationConfigurationError as exc:
             _LOG.debug("Minimap centerline unavailable: %s", exc)
             return ()
+
+    def _auto_dive_is_active(self) -> bool:
+        controller = getattr(self, "_auto_dive_controller", None)
+        return controller is not None and controller.active
+
+    def _toggle_auto_dive(self) -> bool:
+        if not self._has_map_loaded or self.camera is None or self.world is None:
+            return False
+        if self._auto_dive_is_active():
+            self._stop_auto_dive()
+            return True
+        return self._start_auto_dive()
+
+    def _start_auto_dive(self) -> bool:
+        """Plan and start user-facing centerline Auto Dive."""
+        if self.manifest is None or self.camera is None or self.world is None:
+            return False
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        if benchmark_controller is not None and not benchmark_controller.finished:
+            return False
+        try:
+            plan = build_centerline_auto_dive_plan(
+                self.manifest,
+                current_position=self.camera.position,
+                settings=AutoDiveSettings(render_distance_cells=10),
+            )
+        except NavigationConfigurationError as exc:
+            _LOG.info("Auto Dive unavailable: %s", exc)
+            return True
+
+        self._auto_dive_previous_render_distance = int(
+            getattr(self.render_distance_stepper, "value", 10)
+        )
+        self.render_distance_stepper.value = min(
+            int(getattr(self.render_distance_stepper, "max_value", 10)),
+            max(
+                int(getattr(self.render_distance_stepper, "min_value", 1)),
+                int(plan.render_distance_cells),
+            ),
+        )
+        self.world.config.load_radius_cells = self.render_distance_stepper.value
+        controller = AutoDiveController(
+            plan,
+            perf_counter=lambda: time.perf_counter(),
+        )
+        controller.start(self.camera, self.world, now=time.perf_counter())
+        self._auto_dive_controller = controller
+        if self.minimap is not None:
+            self.minimap.set_active_route_points_xz(plan.route_points_xz)
+        if self.controls_overlay.is_waiting_for_begin:
+            self.controls_overlay.dismiss_begin_screen()
+        _LOG.info(
+            "Auto Dive started: length=%.1fm duration=%.1fs "
+            "render_distance=%d circular_arc=%s.",
+            plan.route_length_m,
+            plan.duration_s,
+            plan.render_distance_cells,
+            bool(plan.circular_arc),
+        )
+        return True
+
+    def _stop_auto_dive(self, *, completed: bool = False) -> None:
+        controller = getattr(self, "_auto_dive_controller", None)
+        had_auto_dive_state = controller is not None or (
+            getattr(self, "_auto_dive_previous_render_distance", None) is not None
+        )
+        if controller is not None:
+            controller.stop(self.world, completed=completed)
+        self._auto_dive_controller = None
+        previous_distance = getattr(
+            self,
+            "_auto_dive_previous_render_distance",
+            None,
+        )
+        if previous_distance is not None and hasattr(self, "render_distance_stepper"):
+            self.render_distance_stepper.value = int(previous_distance)
+            if self.world is not None:
+                self.world.config.load_radius_cells = int(previous_distance)
+        self._auto_dive_previous_render_distance = None
+        if self.minimap is not None:
+            self.minimap.set_active_route_points_xz(())
+        if had_auto_dive_state:
+            _LOG.info("Auto Dive %s.", "completed" if completed else "stopped")
+
+    def _update_auto_dive(self, now: float) -> None:
+        controller = getattr(self, "_auto_dive_controller", None)
+        if controller is None or self.camera is None or self.world is None:
+            return
+        state = controller.update(self.camera, self.world, now=now)
+        if state is AutoDiveState.COMPLETE:
+            self._stop_auto_dive(completed=True)
+
+    def _render_auto_dive_progress(self, window_size: tuple[int, int]) -> None:
+        controller = getattr(self, "_auto_dive_controller", None)
+        if controller is None or controller.state is not AutoDiveState.LOADING:
+            return
+        map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+        self.import_progress_panel.render(
+            window_size,
+            map_name,
+            "auto dive",
+            controller.progress,
+            title="Auto Dive",
+            note=controller.status_note,
+        )
 
     def _teardown_current_map(self, *, final_shutdown: bool = False) -> None:
         """
@@ -2158,6 +2280,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not self._has_map_loaded:
             return
 
+        self._stop_auto_dive()
         self._stop_recording()
         # Keep this callback bounded: on_close() runs inside the window/render
         # event path, and an unbounded join here can leave the viewer visually
@@ -2819,6 +2942,10 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _target_streaming_load_radius(self) -> int:
         base_radius = max(1, int(self.render_distance_stepper.value))
+        if self._auto_dive_is_active():
+            controller = getattr(self, "_auto_dive_controller", None)
+            if controller is not None:
+                return max(base_radius, int(controller.plan.render_distance_cells))
         if not self._startup_visual_prefetch_is_active():
             return base_radius
         max_radius = max(
@@ -4214,6 +4341,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         if benchmark_active:
             if benchmark_controller.started:
                 benchmark_controller.update_camera(self.camera, time.perf_counter())
+        elif self._auto_dive_is_active():
+            if self._continuous_input_has_navigation_intent(dt):
+                self._stop_auto_dive()
+                self._handle_continuous_input(dt)
+            else:
+                self._update_auto_dive(time.perf_counter())
         else:
             self._handle_continuous_input(dt)
         input_ms = (time.perf_counter() - t_input) * 1000.0
@@ -4531,6 +4664,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             # pieces do), so it should never be obscured by them.
             self.controls_overlay.update(visual_stats)
             self.controls_overlay.render(self.wnd.size)
+            self._render_auto_dive_progress(self.wnd.size)
             self._render_recording_status_message(self.wnd.size)
             overlay_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -4851,13 +4985,25 @@ class CaveViewerWindow(mglw.WindowConfig):
             "LEFT_ALT", "RIGHT_ALT", "LEFT_OPTION", "RIGHT_OPTION", "LALT", "RALT",
         )
 
-    def _handle_continuous_input(self, dt: float):
-        intent = viewer_input.continuous_input_intent(
+    def _continuous_input_intent(self, dt: float) -> viewer_input.ContinuousInputIntent:
+        return viewer_input.continuous_input_intent(
             keys=self.wnd.keys,
             keys_down=self._keys_down,
             dt=dt,
             key_look_pixels_per_second=self._KEY_LOOK_PIXELS_PER_SECOND,
         )
+
+    def _continuous_input_has_navigation_intent(self, dt: float) -> bool:
+        intent = self._continuous_input_intent(dt)
+        return bool(intent.has_motion or intent.has_look or intent.has_roll)
+
+    def _handle_continuous_input(self, dt: float):
+        intent = self._continuous_input_intent(dt)
+        if (
+            self._auto_dive_is_active()
+            and (intent.has_motion or intent.has_look or intent.has_roll)
+        ):
+            self._stop_auto_dive()
         if intent.has_motion:
             self._move_camera_guarded(
                 intent.forward_amount,
@@ -4937,6 +5083,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             if self._has_map_loaded and not self._import_active:
                 self._handle_open_button_click()
             return True
+
+        auto_dive_key = self._resolve_key_optional(self.wnd.keys, "A")
+        if auto_dive_key is not None and key == auto_dive_key:
+            return self._toggle_auto_dive()
 
         return False
 

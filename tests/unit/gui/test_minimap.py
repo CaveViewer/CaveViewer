@@ -94,3 +94,23 @@ def test_minimap_static_geometry_can_include_centerline_overlay():
     _, plain_vert_count = plain_minimap._build_static_geom((800, 600))
 
     assert centerline_vert_count > plain_vert_count
+
+
+def test_minimap_active_route_overlay_invalidates_static_geometry():
+    manifest = {
+        "chunk_size": 10.0,
+        "chunks": {"0_0_0": {"bounds_min": [0, 0, 0], "bounds_max": [10, 10, 10]}},
+    }
+    minimap = Minimap(
+        _TrackingContext(),
+        manifest,
+        centerline_points_xz=((0.0, 0.0), (10.0, 0.0)),
+    )
+
+    _, baseline_vert_count = minimap._build_static_geom((800, 600))
+    minimap._static_geom_window_size = (800, 600)
+    minimap.set_active_route_points_xz(((0.0, 0.0), (10.0, 10.0), (20.0, 10.0)))
+    _, active_vert_count = minimap._build_static_geom((800, 600))
+
+    assert minimap._static_geom_window_size is None
+    assert active_vert_count > baseline_vert_count

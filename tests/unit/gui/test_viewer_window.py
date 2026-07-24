@@ -1027,6 +1027,19 @@ def test_window_shortcut_opens_map_only_when_loaded():
     assert calls == ["open"]
 
 
+def test_window_shortcut_toggles_auto_dive_on_control_a():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = DefaultSplashPlatformAdapter()
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79, A=65))
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    calls = []
+    window._toggle_auto_dive = lambda: calls.append("auto") or True
+
+    assert window._handle_window_shortcut(65, SimpleNamespace(ctrl=True)) is True
+    assert calls == ["auto"]
+
+
 def test_window_shortcut_uses_command_modifier_on_macos():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._platform_adapter = MacOSSplashPlatformAdapter()
@@ -1040,6 +1053,46 @@ def test_window_shortcut_uses_command_modifier_on_macos():
     assert window._handle_window_shortcut(87, SimpleNamespace(command=True)) is True
     assert window._handle_window_shortcut(87, SimpleNamespace()) is False
     assert closed == ["closed"]
+
+
+def test_target_streaming_load_radius_uses_auto_dive_distance():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.render_distance_stepper = SimpleNamespace(value=5)
+    window._initial_visual_ready = True
+    window.controls_overlay = SimpleNamespace(is_waiting_for_begin=False)
+    window._auto_dive_controller = SimpleNamespace(
+        active=True,
+        plan=SimpleNamespace(render_distance_cells=10),
+    )
+
+    assert window._target_streaming_load_radius() == 10
+
+
+def test_continuous_input_detects_navigation_intent_for_auto_dive_cancel():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(
+        keys=SimpleNamespace(
+            W=87,
+            S=83,
+            A=65,
+            D=68,
+            E=69,
+            Q=81,
+            LEFT_SHIFT=340,
+            LEFT=263,
+            RIGHT=262,
+            UP=265,
+            DOWN=264,
+        )
+    )
+    window._keys_down = {87}
+    window._KEY_LOOK_PIXELS_PER_SECOND = 120.0
+
+    assert window._continuous_input_has_navigation_intent(1.0 / 60.0) is True
+
+    window._keys_down = set()
+
+    assert window._continuous_input_has_navigation_intent(1.0 / 60.0) is False
 
 
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):

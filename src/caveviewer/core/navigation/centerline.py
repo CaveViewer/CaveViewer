@@ -34,6 +34,8 @@ CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.50
 CENTERLINE_ROUTE_WALL_CLEARANCE_MIN_CELLS = 2
 CENTERLINE_ROUTE_WALL_CLEARANCE_PUSH_FRACTION = 0.85
 CENTERLINE_ROUTE_SELECTION_MIDPOINT = "centerline_midpoint_v1"
+CENTERLINE_COMPONENT_SELECTION_CLEAREST = "clearest_component_v1"
+CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH = "longest_path_v1"
 
 _NEIGHBOR_OFFSETS_8 = tuple(
     (dx, dz)
@@ -103,6 +105,7 @@ def generate_centerline_path(
     *,
     candidate_limit: int = DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT,
     endpoint_percentile: float = DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE,
+    component_selection: str = CENTERLINE_COMPONENT_SELECTION_CLEAREST,
 ) -> CenterlinePath:
     """Generate the cave passage centerline from footprint geometry only.
 
@@ -112,12 +115,13 @@ def generate_centerline_path(
     """
     footprint = _parse_footprint(manifest)
     clearance_scores = clearance_scores_for_footprint(footprint.cells)
-    component = _select_centerline_component(footprint.cells, clearance_scores)
-    full_path_cells, endpoint_threshold = _centerline_component_path(
-        component,
+    component, full_path_cells, endpoint_threshold = _select_centerline_path(
+        footprint.cells,
         clearance_scores,
         candidate_limit=max(2, int(candidate_limit)),
         endpoint_percentile=float(endpoint_percentile),
+        component_selection=component_selection,
+        cell_size=footprint.cell_size,
     )
     full_path_centers = {
         cell: footprint_world_center(cell, footprint.cell_size)
@@ -703,6 +707,20 @@ def _select_centerline_component(
     cells: frozenset[FootprintCell],
     clearance_scores: Mapping[FootprintCell, int],
 ) -> set[FootprintCell]:
+    components = _centerline_components(cells)
+    if not components:
+        raise NavigationConfigurationError("could not select a centerline component")
+    return max(
+        components,
+        key=lambda component: (
+            max(clearance_scores[cell] for cell in component),
+            sum(clearance_scores[cell] for cell in component),
+            len(component),
+        ),
+    )
+
+
+def _centerline_components(cells: frozenset[FootprintCell]) -> list[set[FootprintCell]]:
     components: list[set[FootprintCell]] = []
     seen: set[FootprintCell] = set()
     for cell in sorted(cells):
@@ -719,16 +737,62 @@ def _select_centerline_component(
                     seen.add(neighbor)
                     queue.append(neighbor)
         components.append(component)
-    if not components:
+    return components
+
+
+def _select_centerline_path(
+    cells: frozenset[FootprintCell],
+    clearance_scores: Mapping[FootprintCell, int],
+    *,
+    candidate_limit: int,
+    endpoint_percentile: float,
+    component_selection: str,
+    cell_size: float,
+) -> tuple[set[FootprintCell], tuple[FootprintCell, ...], int]:
+    normalized_selection = str(component_selection).strip().lower()
+    if normalized_selection == CENTERLINE_COMPONENT_SELECTION_CLEAREST:
+        component = _select_centerline_component(cells, clearance_scores)
+        path_cells, threshold = _centerline_component_path(
+            component,
+            clearance_scores,
+            candidate_limit=candidate_limit,
+            endpoint_percentile=endpoint_percentile,
+        )
+        return component, path_cells, threshold
+    if normalized_selection != CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH:
+        raise NavigationConfigurationError(
+            f"unsupported centerline component selection: {component_selection}"
+        )
+
+    candidates = []
+    for component in _centerline_components(cells):
+        path_cells, threshold = _centerline_component_path(
+            component,
+            clearance_scores,
+            candidate_limit=candidate_limit,
+            endpoint_percentile=endpoint_percentile,
+        )
+        centers = {
+            cell: footprint_world_center(cell, cell_size)
+            for cell in path_cells
+        }
+        candidates.append(
+            (
+                footprint_path_length(path_cells, centers),
+                len(path_cells),
+                len(component),
+                component,
+                path_cells,
+                threshold,
+            )
+        )
+    if not candidates:
         raise NavigationConfigurationError("could not select a centerline component")
-    return max(
-        components,
-        key=lambda component: (
-            max(clearance_scores[cell] for cell in component),
-            sum(clearance_scores[cell] for cell in component),
-            len(component),
-        ),
+    _, _, _, component, path_cells, threshold = max(
+        candidates,
+        key=lambda item: (item[0], item[1], item[2]),
     )
+    return component, path_cells, threshold
 
 
 def _centerline_component_path(
