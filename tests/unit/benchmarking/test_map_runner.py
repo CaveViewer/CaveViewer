@@ -1,37 +1,22 @@
-"""Unit tests for the generic local map benchmark wrapper."""
+"""Unit tests for the generic local map benchmark runner."""
 
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPOSITORY_ROOT / "scripts" / "benchmark" / "run_map_benchmark.py"
-
-
-def _load_script_module():
-    spec = importlib.util.spec_from_file_location(
-        "run_map_benchmark_for_tests",
-        SCRIPT_PATH,
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from caveviewer.benchmarking import map_runner
 
 
 def test_map_benchmark_dry_run_uses_config_file_and_plans_compile(
     tmp_path,
     capsys,
 ):
-    module = _load_script_module()
+    module = map_runner
     map_dir = tmp_path / "maps" / "load-test-map"
     output_dir = map_dir / "_benchmarks"
     config_path = tmp_path / "benchmark-config.json"
@@ -70,12 +55,13 @@ def test_map_benchmark_dry_run_uses_config_file_and_plans_compile(
     assert "compile_cache: yes" in output
     assert str(map_dir / "_cache") in output
     assert str(output_dir / "history.jsonl") in output
-    assert "run_local_benchmark.py" in output
+    assert "python" in output
+    assert "caveviewer.benchmark" in output
     assert "candidate-stack" in output
 
 
 def test_map_benchmark_reports_standard_cli_errors(capsys):
-    module = _load_script_module()
+    module = map_runner
 
     with pytest.raises(SystemExit) as unknown_exc:
         module._parser().parse_args(["--unknown-option"])
@@ -94,7 +80,7 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
     tmp_path,
     monkeypatch,
 ):
-    module = _load_script_module()
+    module = map_runner
     map_dir = tmp_path / "map"
     output_dir = map_dir / "_benchmarks"
     run_dir = output_dir / "runs" / "candidate"
@@ -144,7 +130,7 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
 
     def fake_logged_subprocess(command, _plan, **_kwargs):
         commands.append(command)
-        assert any(str(part).endswith("run_local_benchmark.py") for part in command)
+        assert command[:3] == [module.sys.executable, "-m", "caveviewer.benchmark"]
         assert _kwargs["env"]["CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB"] == "768"
         scenario_path = Path(command[command.index("--scenario") + 1])
         generated_scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
@@ -233,7 +219,7 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
     benchmark_command = next(
         command
         for command in commands
-        if any(str(part).endswith("run_local_benchmark.py") for part in command)
+        if command[:3] == [module.sys.executable, "-m", "caveviewer.benchmark"]
     )
     assert benchmark_command[benchmark_command.index("--cache-dir") + 1] == str(
         map_dir / "_cache"
@@ -242,10 +228,16 @@ def test_map_benchmark_run_compares_with_previous_record_and_writes_summary(
         map_dir / "_cache"
     )
     assert str(run_dir / "auto-centerline-route-v1.json") in benchmark_command
+    assert benchmark_command[benchmark_command.index("--output-dir") + 1] == str(
+        run_dir
+    )
+    assert benchmark_command[benchmark_command.index("--log-file") + 1] == str(
+        run_dir / "benchmark.log"
+    )
 
 
 def test_map_benchmark_uses_only_compatible_history_as_gate_baseline():
-    module = _load_script_module()
+    module = map_runner
     current_summary = _summary(median_fps=90.0, wall_clock_fps=90.0)
     incompatible_summary = _summary(median_fps=100.0, wall_clock_fps=100.0)
     incompatible_summary["scenario"]["fingerprint"] = "old-route"
@@ -286,7 +278,7 @@ def test_map_benchmark_uses_only_compatible_history_as_gate_baseline():
 
 
 def test_map_benchmark_treats_actual_window_size_changes_as_incompatible():
-    module = _load_script_module()
+    module = map_runner
     current_summary = _summary(median_fps=90.0, wall_clock_fps=90.0)
     current_summary["environment"]["actual_window_size"] = [2048, 1280]
     current_summary["environment"]["actual_framebuffer_size"] = [4096, 2560]
@@ -314,7 +306,7 @@ def test_map_benchmark_treats_actual_window_size_changes_as_incompatible():
 
 
 def test_map_benchmark_treats_streaming_settings_changes_as_incompatible():
-    module = _load_script_module()
+    module = map_runner
     current_summary = _summary(median_fps=90.0, wall_clock_fps=90.0)
     current_summary["environment"]["streaming_settings_fingerprint"] = "streaming-b"
     previous_summary = _summary(median_fps=100.0, wall_clock_fps=100.0)

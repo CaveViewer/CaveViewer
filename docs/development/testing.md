@@ -99,9 +99,9 @@ uploads logs plus per-frame metrics so failures can be inspected without
 re-running the viewer immediately.
 
 For machine-local private or oversized benchmark maps, use
-`scripts/benchmark/run_map_benchmark.py`. It keeps benchmark history under the
-map-local ignored `_benchmarks/` directory by default and can be installed as a
-local pre-push hook for pushes to `main`.
+`caveviewer-map-benchmark`. It keeps benchmark history under the map-local
+ignored `_benchmarks/` directory by default and can be installed through the
+tracked local pre-push hook template for pushes to `main`.
 
 ## Release gates
 

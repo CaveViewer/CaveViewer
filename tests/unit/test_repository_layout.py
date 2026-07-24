@@ -34,6 +34,7 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "benchmark.py",
         PACKAGE_ROOT / "version.py",
         PACKAGE_ROOT / "benchmarking" / "__init__.py",
+        PACKAGE_ROOT / "benchmarking" / "map_runner.py",
         PACKAGE_ROOT / "benchmarking" / "results.py",
         PACKAGE_ROOT / "benchmarking" / "routes.py",
         PACKAGE_ROOT / "core" / "chunking" / "buckets.py",
@@ -164,6 +165,10 @@ def test_pyproject_declares_src_package_and_entry_point():
     assert '[project.scripts]' in pyproject
     assert 'caveviewer = "caveviewer.__main__:run"' in pyproject
     assert 'caveviewer-benchmark = "caveviewer.benchmark:run"' in pyproject
+    assert (
+        'caveviewer-map-benchmark = "caveviewer.benchmarking.map_runner:run"'
+        in pyproject
+    )
     assert 'caveviewer-chunker = "caveviewer.chunker:main"' in pyproject
     assert 'where = ["src"]' in pyproject
     assert 'pythonpath = ["src"]' in pyproject

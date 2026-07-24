@@ -30,7 +30,7 @@ Each summary includes a scenario fingerprint and a SHA-256 of the cache
 and candidate. That prevents accidental release decisions from comparing a
 different route or a different benchmark map.
 
-## Local run
+## Existing-cache run
 
 Install the project in editable mode, then run against a precompiled map cache:
 
@@ -47,26 +47,31 @@ The default benchmark mode disables vsync by setting `CAVEVIEWER_VSYNC=0` before
 the OpenGL window module is imported. Use `--vsync unchanged` only when you are
 intentionally measuring a display-synchronized path.
 
-For pre-PR validation from a source checkout, use the local wrapper. First check
-that paths, scenario, thresholds, and generated commands are valid:
+For local maps that need cache creation, route generation, history, and a text
+summary, use the generic local map runner instead:
 
 ```bash
-python scripts/benchmark/run_local_benchmark.py \
-  --cache-dir /path/to/precompiled-cache \
+caveviewer-map-benchmark \
+  --map-dir /path/to/local/map \
   --dry-run
 ```
 
-Then run the benchmark:
+Then run it:
 
 ```bash
-python scripts/benchmark/run_local_benchmark.py \
-  --cache-dir /path/to/precompiled-cache \
-  --label candidate-stack
+caveviewer-map-benchmark \
+  --map-dir /path/to/local/map
 ```
 
-The wrapper does not switch git branches. For a local baseline comparison, run
-it from a separate `main` worktree/checkout first, then run it from the
-candidate checkout with `--baseline-summary`:
+The local map runner stores history in `<map-dir>/_benchmarks` by default and
+compares the current result with the latest compatible previous local run. It
+does not switch git branches. To compare `main` with a candidate checkout, run
+the same map benchmark from separate worktrees and let the map-local history
+provide the baseline.
+
+The older source-checkout wrapper is retained for compatibility with existing
+automation that already has a cache and explicitly wants to pass a baseline
+summary:
 
 ```bash
 python scripts/benchmark/run_local_benchmark.py \
@@ -95,10 +100,12 @@ or viewer presentation:
   summaries, thresholds, comparisons, and the benchmark controller.
 - `caveviewer.benchmarking.routes`: benchmark-specific route generation and
   load-focused route selection.
+- `caveviewer.benchmarking.map_runner`: local map benchmark orchestration
+  exposed as `caveviewer-map-benchmark`.
 
 Run benchmarks through one of the supported entry points:
 
-- `scripts/benchmark/run_map_benchmark.py` for local map directories. This is
+- `caveviewer-map-benchmark` for local map directories. This is
   the recommended path for private or oversized benchmark maps because it can
   validate/build `_cache`, generate a route, run the viewer, record local
   history, and write a human-readable summary.
@@ -109,23 +116,33 @@ Run benchmarks through one of the supported entry points:
 
 Do not run `python -m caveviewer.benchmarking.results`; it has no CLI contract.
 Import it from tests, scripts, or viewer adapters instead.
+`scripts/benchmark/run_map_benchmark.py` remains only as a source-checkout
+compatibility wrapper around `caveviewer.benchmarking.map_runner`.
 
 ## Generic local map run
 
-Use `scripts/benchmark/run_map_benchmark.py` for machine-local benchmark maps
-that are too large or private to upload. The wrapper takes a map directory from
-CLI flags or from a JSON config file. By default it writes benchmark artifacts
-next to that map under `<map-dir>/_benchmarks`, which is ignored by Git. The map
-directory must contain either:
+Use `caveviewer-map-benchmark` for machine-local benchmark maps that are too
+large or private to upload. The runner takes a map directory from CLI flags or
+from a JSON config file. By default it writes benchmark artifacts next to that
+map under `<map-dir>/_benchmarks`, which is ignored by Git. The map directory
+must contain either:
 
 - `_cache/manifest.json`; or
-- a supported source model (`.obj`, `.glb`, or `.gltf`) that the wrapper can
+- a supported source model (`.obj`, `.glb`, or `.gltf`) that the runner can
   compile with `python -m caveviewer.chunker --source <map-dir>`.
+
+If an existing editable environment was installed before
+`caveviewer-map-benchmark` existed, refresh the dev install or run the equivalent
+module form:
+
+```bash
+python -m caveviewer.benchmarking.map_runner --help
+```
 
 Minimal CLI run:
 
 ```bash
-python scripts/benchmark/run_map_benchmark.py \
+caveviewer-map-benchmark \
   --map-dir /path/to/local/map
 ```
 
@@ -145,7 +162,7 @@ Minimal config file:
 First validate the plan:
 
 ```bash
-python scripts/benchmark/run_map_benchmark.py \
+caveviewer-map-benchmark \
   --config /path/to/local-benchmark.json \
   --dry-run
 ```
@@ -153,14 +170,14 @@ python scripts/benchmark/run_map_benchmark.py \
 Then run it:
 
 ```bash
-python scripts/benchmark/run_map_benchmark.py \
+caveviewer-map-benchmark \
   --config /path/to/local-benchmark.json
 ```
 
 CLI flags override config values:
 
 ```bash
-python scripts/benchmark/run_map_benchmark.py \
+caveviewer-map-benchmark \
   --map-dir /path/to/local/map \
   --render-distance 10 \
   --duration-seconds 120 \
@@ -175,9 +192,9 @@ Use `--scenario-template` or the `scenario_template` config key when selecting
 a different timing/control template for generated map routes. The older
 `--scenario` option and `scenario` config key remain supported aliases.
 
-The wrapper clears `CAVEVIEWER_MAP_CACHE_DIR` for the chunker and benchmark
-subprocesses so the benchmark uses the map-local cache. Each run tees wrapper,
-chunker, and benchmark-wrapper output into that run's `orchestration.log`. Each
+The runner clears `CAVEVIEWER_MAP_CACHE_DIR` for the chunker and benchmark
+subprocesses so the benchmark uses the map-local cache. Each run tees runner,
+chunker, and benchmark output into that run's `orchestration.log`. Each
 successful benchmark also appends `<map-dir>/_benchmarks/history.jsonl` and
 writes `<map-dir>/_benchmarks/latest-summary.txt` unless `--output-dir` is set.
 The default `benchmark_id` is the SHA-256 of `_cache/manifest.json` after cache
@@ -200,11 +217,11 @@ benchmark viewer window. The actual logical window size, framebuffer size, and
 UI surface size are recorded in the run environment and text summary; runs with
 different actual sizes are treated as incompatible local baselines.
 
-For an existing `_cache`, the wrapper matches the regular app's cache-open path
+For an existing `_cache`, the runner matches the regular app's cache-open path
 by using `<map-dir>/_cache` as both the chunk cache and texture root. That keeps
 texture resolution aligned with maps compiled by `caveviewer.chunker`.
 
-By default the local wrapper generates an `auto-centerline-route-v1.json` file
+By default the local runner generates an `auto-centerline-route-v1.json` file
 inside the run artifact directory after the cache exists. It uses the
 fine-grained `footprint_cells` manifest field, which the chunker derives from
 source vertex positions, to estimate the middle of the cave passage. The
@@ -247,7 +264,7 @@ same as mesh collision.
 Use these controls when calibrating the route:
 
 ```bash
-python scripts/benchmark/run_map_benchmark.py \
+caveviewer-map-benchmark \
   --config /path/to/local-benchmark.json \
   --duration-seconds 180 \
   --centerline-route-selection midpoint \
@@ -267,7 +284,7 @@ and local comparison history for that route.
 To run the older dense-streaming-load proxy instead:
 
 ```bash
-python scripts/benchmark/run_map_benchmark.py \
+caveviewer-map-benchmark \
   --config /path/to/local-benchmark.json \
   --route-mode auto-dense \
   --dense-route-keyframes 10 \
@@ -277,7 +294,7 @@ python scripts/benchmark/run_map_benchmark.py \
 To run the checked-in scenario exactly as written instead:
 
 ```bash
-python scripts/benchmark/run_map_benchmark.py \
+caveviewer-map-benchmark \
   --config /path/to/local-benchmark.json \
   --route-mode static
 ```

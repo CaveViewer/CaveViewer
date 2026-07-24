@@ -13,11 +13,12 @@ caveviewer.app
           ├── caveviewer.core
           └── caveviewer.benchmarking benchmark controller adapter
 
-caveviewer.benchmark              benchmark CLI
+caveviewer.benchmark              direct cache/scenario benchmark CLI
     ├── caveviewer.benchmarking    scenarios, metrics, comparisons, and routes
     └── caveviewer.gui             viewer runtime adapter
 
 caveviewer.benchmarking
+    ├── map_runner                 local map benchmark CLI orchestration
     └── caveviewer.core.navigation reusable route and centerline primitives
 ```
 
@@ -28,11 +29,12 @@ work stays in the GUI layer. Platform behavior is selected through
 `caveviewer.gui.platform` adapters.
 
 `caveviewer.benchmarking` owns benchmark scenario parsing, measurement
-summaries, regression comparisons, and benchmark-specific route selection. It
-may depend on reusable core navigation/streaming policy, but it must not own
-viewer presentation or render-thread OpenGL resources. `viewer_window.py`
-adapts a `BenchmarkController` into the real render loop when the benchmark CLI
-launches the viewer.
+summaries, regression comparisons, benchmark-specific route selection, and the
+generic local map benchmark runner exposed as `caveviewer-map-benchmark`. It may
+depend on reusable core navigation/streaming policy, but it must not own viewer
+presentation or render-thread OpenGL resources. `viewer_window.py` adapts a
+`BenchmarkController` into the real render loop when the benchmark CLI launches
+the viewer.
 
 ## Startup and map import
 

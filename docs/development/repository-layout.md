@@ -14,6 +14,7 @@ src/caveviewer/benchmark.py                   viewer FPS benchmark CLI
 src/caveviewer/version.py                     release identity
 src/caveviewer/storage_paths.py               XDG/portable application roots
 src/caveviewer/benchmarking/                  benchmark scenarios, metrics, comparisons, and routes
+src/caveviewer/benchmarking/map_runner.py     local map benchmark orchestration CLI
 src/caveviewer/benchmarking/results.py        benchmark scenario/results model and controller
 src/caveviewer/benchmarking/routes.py         benchmark-specific route generation
 src/caveviewer/core/                          parsing, cache, streaming, and non-UI policy
@@ -78,7 +79,7 @@ docs/                                         site and development documentation
 packaging/pyinstaller/CaveViewer.spec         PyInstaller configuration
 packaging/linux/                              desktop and AppStream metadata
 scripts/                                      development and release automation
-scripts/benchmark/                            benchmark comparison/local validation helpers
+scripts/benchmark/                            benchmark comparison helpers and compatibility wrappers
 updates/                                      published update manifests/signatures
 ```
 
@@ -101,6 +102,7 @@ CaveViewer/
 │       ├── benchmark.py
 │       ├── storage_paths.py
 │       ├── benchmarking/
+│       │   ├── map_runner.py
 │       │   ├── results.py
 │       │   └── routes.py
 │       ├── core/

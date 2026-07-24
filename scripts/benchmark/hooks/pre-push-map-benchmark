@@ -31,7 +31,9 @@ if [[ -z "$config_path" ]]; then
   exit 2
 fi
 
+export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
+
 exec "$python_bin" \
-  "$repo_root/scripts/benchmark/run_map_benchmark.py" \
+  -m caveviewer.benchmarking.map_runner \
   --config "$config_path" \
   --label "main-push-${target_sha:0:12}"
