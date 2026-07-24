@@ -63,7 +63,13 @@ class Minimap:
     CELL_PIXEL_SIZE = 3.0  # how big each occupied chunk-cell renders as, in panel pixels
     _MAX_STATIC_OCCUPANCY_PIXELS = PANEL_SIZE * PANEL_SIZE
 
-    def __init__(self, ctx: moderngl.Context, manifest: dict):
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        manifest: dict,
+        *,
+        centerline_points_xz: Iterable[tuple[float, float]] | None = None,
+    ):
         """
         manifest: the same chunk manifest produced by caveviewer.core.chunking.builder
         (build_cache) / loaded via chunker.load_manifest(). Used once here
@@ -77,6 +83,7 @@ class Minimap:
         self._footprint_cells_flat = None
         self.occupied_xz = set()
         self._footprint_cell_count = 0
+        self._centerline_points_xz = tuple(centerline_points_xz or ())
         self._compute_footprint(manifest)
 
         # Static geometry (background + footprint + border) and dynamic
@@ -363,6 +370,8 @@ class Minimap:
         for px, py in self._visible_footprint_pixels(window_size):
             add_quad(px - half, py - half, px + half, py + half, (0.45, 0.52, 0.64, 0.85))
 
+        self._add_centerline_geom(verts, window_size)
+
         border = 1.5
         border_color = (0.42, 0.54, 0.72, 0.70)
         add_quad(x0, y0, x1, y0 + border, border_color)
@@ -371,6 +380,67 @@ class Minimap:
         add_quad(x1 - border, y0, x1, y1, border_color)
 
         return np.array(verts, dtype=np.float32).tobytes(), len(verts)
+
+    def _add_centerline_geom(
+        self,
+        verts: list,
+        window_size: tuple[int, int],
+    ) -> None:
+        """Add an optional centerline route overlay to static minimap geometry."""
+        if len(self._centerline_points_xz) < 2:
+            return
+
+        panel_x0, panel_y0, panel_x1, panel_y1 = self._panel_rect_px(window_size)
+        color = (0.10, 0.90, 0.78, 0.90)
+        thickness_px = 2.4
+        half_thickness = thickness_px / 2.0
+
+        def clamp_point(px: float, py: float) -> tuple[float, float]:
+            return (
+                max(panel_x0, min(panel_x1, px)),
+                max(panel_y0, min(panel_y1, py)),
+            )
+
+        def add_segment(first: tuple[float, float], second: tuple[float, float]) -> None:
+            x0, y0 = first
+            x1, y1 = second
+            dx = x1 - x0
+            dy = y1 - y0
+            length = math.hypot(dx, dy)
+            if length <= 1e-6:
+                return
+            normal_x = -dy / length * half_thickness
+            normal_y = dx / length * half_thickness
+            corners = (
+                (x0 + normal_x, y0 + normal_y),
+                (x1 + normal_x, y1 + normal_y),
+                (x1 - normal_x, y1 - normal_y),
+                (x0 - normal_x, y0 - normal_y),
+            )
+            ndc_corners = [
+                self._px_to_ndc(
+                    max(panel_x0, min(panel_x1, px)),
+                    max(panel_y0, min(panel_y1, py)),
+                    window_size,
+                )
+                for px, py in corners
+            ]
+            for xy in (
+                ndc_corners[0],
+                ndc_corners[1],
+                ndc_corners[2],
+                ndc_corners[0],
+                ndc_corners[2],
+                ndc_corners[3],
+            ):
+                verts.append((*xy, *color))
+
+        panel_points = tuple(
+            clamp_point(*self._world_to_panel_px(x, z, window_size))
+            for x, z in self._centerline_points_xz
+        )
+        for first, second in zip(panel_points, panel_points[1:]):
+            add_segment(first, second)
 
     def _visible_footprint_pixels(
         self, window_size: tuple[int, int]

@@ -5,4 +5,3 @@ benchmarking. They describe camera routes, route following, and manifest-derived
 centerlines that can be used by benchmarks today and by user-facing autopilot
 features later.
 """
-

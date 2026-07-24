@@ -75,3 +75,22 @@ def test_minimap_static_geometry_is_deduplicated_to_visible_pixels():
     minimap = Minimap(_TrackingContext(), manifest)
 
     assert len(list(minimap._visible_footprint_pixels((800, 600)))) == 1
+
+
+def test_minimap_static_geometry_can_include_centerline_overlay():
+    manifest = {
+        "chunk_size": 10.0,
+        "chunks": {"0_0_0": {"bounds_min": [0, 0, 0], "bounds_max": [10, 10, 10]}},
+    }
+    context = _TrackingContext()
+    minimap = Minimap(
+        context,
+        manifest,
+        centerline_points_xz=((0.0, 0.0), (10.0, 0.0), (20.0, 10.0)),
+    )
+    plain_minimap = Minimap(_TrackingContext(), manifest)
+
+    _, centerline_vert_count = minimap._build_static_geom((800, 600))
+    _, plain_vert_count = plain_minimap._build_static_geom((800, 600))
+
+    assert centerline_vert_count > plain_vert_count

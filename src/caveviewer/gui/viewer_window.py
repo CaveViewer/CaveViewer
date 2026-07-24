@@ -23,6 +23,7 @@ import queue
 import sys
 import threading
 import time
+from typing import Any
 
 import numpy as np
 import moderngl
@@ -32,6 +33,8 @@ from moderngl_window.context.base import KeyModifiers
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.navigation.centerline import generate_centerline_path
+from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
@@ -1274,7 +1277,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # footprint with a live red dot for current position. Built once
         # from the manifest's chunk bounding boxes -- no extra rendering
         # pass or GPU cost beyond this tiny 2D overlay.
-        self.minimap = Minimap(self.ctx, self.manifest)
+        self.minimap = Minimap(
+            self.ctx,
+            self.manifest,
+            centerline_points_xz=self._minimap_centerline_points_xz(self.manifest),
+        )
 
         # One-time texture diagnostic: print material/texture summary to
         # console so atlas feasibility can be judged without guessing.
@@ -2017,6 +2024,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         atlas_side = 2 ** _math.ceil(_math.log2(_math.sqrt(total_px))) if total_px > 0 else 0
         _LOG.info(f"  Estimated atlas needed  : {atlas_side}x{atlas_side} px "
               f"({atlas_side*atlas_side*3/1024/1024:.0f} MB)")
+
+    def _minimap_centerline_points_xz(
+        self,
+        manifest: Mapping[str, Any],
+    ) -> tuple[tuple[float, float], ...]:
+        """Return an optional centerline overlay for the minimap."""
+        if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", True):
+            return ()
+        try:
+            return generate_centerline_path(manifest).points_xz
+        except NavigationConfigurationError as exc:
+            _LOG.debug("Minimap centerline unavailable: %s", exc)
+            return ()
 
     def _teardown_current_map(self, *, final_shutdown: bool = False) -> None:
         """
