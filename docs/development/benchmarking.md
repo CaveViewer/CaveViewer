@@ -38,7 +38,7 @@ Install the project in editable mode, then run against a precompiled map cache:
 caveviewer-benchmark \
   --cache-dir /path/to/precompiled-cache \
   --textures-dir /path/to/precompiled-cache \
-  --scenario benchmarks/gold-route-v1.json \
+  --scenario benchmarks/viewer-benchmark-scenario.v1.json \
   --output-dir benchmark-results/current \
   --log-level DEBUG
 ```
@@ -146,6 +146,9 @@ python scripts/benchmark/run_map_benchmark.py \
 Use `--output-dir /path/to/benchmark-output` only when you want artifacts
 outside the map directory. Use `--benchmark-id <id>` only when you deliberately
 want to override the default identity.
+Use `--scenario-template` or the `scenario_template` config key when selecting
+a different timing/control template for generated map routes. The older
+`--scenario` option and `scenario` config key remain supported aliases.
 
 The wrapper clears `CAVEVIEWER_MAP_CACHE_DIR` for the chunker and benchmark
 subprocesses so the benchmark uses the map-local cache. Each run tees wrapper,
@@ -262,11 +265,13 @@ path before pushing.
 
 ## Scenario file
 
-Scenario files are versioned JSON. `benchmarks/gold-route-v1.json` is the
-default route contract. It uses `position_mode: "first_chunk_center_offset"` so
-the checked-in sample can run on any precompiled cache. For a finalized local
-benchmark route, replace the route with validated camera positions and use
-`position_mode: "absolute"` if exact map coordinates are preferable.
+Scenario files are versioned JSON.
+`benchmarks/viewer-benchmark-scenario.v1.json` is the default viewer benchmark
+scenario. Direct benchmark runs use its route as written. Generic map runs use
+it as a timing/control template, then write a generated map-specific scenario
+inside the run artifact directory. The default file uses
+`position_mode: "first_chunk_center_offset"` so it can run on any precompiled
+cache.
 
 Keep scenario changes reviewable. A changed route changes the benchmark itself,
 so compare old and new thresholds deliberately instead of mixing results from

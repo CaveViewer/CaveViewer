@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "name": "gold-route-v1",
+  "name": "viewer-benchmark-scenario-v1",
   "position_mode": "first_chunk_center_offset",
   "warmup_seconds": 5.0,
   "measurement_seconds": 30.0,
@@ -10,7 +10,7 @@
   "sample_every_n_frames": 1,
   "stutter_thresholds_ms": [33.3, 50.0, 100.0],
   "metadata": {
-    "description": "Default deterministic route for viewer FPS regression testing. Replace offsets with validated gold-map camera coordinates once the benchmark map is finalized."
+    "description": "Default deterministic viewer FPS benchmark scenario. Generic map benchmarks use this as a timing/control template before generating a map-specific route."
   },
   "route": [
     {

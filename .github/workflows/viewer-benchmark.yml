@@ -19,7 +19,7 @@ on:
       scenario_path:
         description: Scenario JSON path from the candidate checkout.
         required: true
-        default: benchmarks/gold-route-v1.json
+        default: benchmarks/viewer-benchmark-scenario.v1.json
         type: string
       threshold_config_path:
         description: Threshold config JSON path from the candidate checkout.

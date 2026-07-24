@@ -55,7 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--scenario",
-        default=str(root / "benchmarks" / "gold-route-v1.json"),
+        default=str(root / "benchmarks" / "viewer-benchmark-scenario.v1.json"),
         help="Benchmark scenario JSON.",
     )
     parser.add_argument(

@@ -46,7 +46,9 @@ from caveviewer.gui.benchmark_routes import (
 )
 
 
-DEFAULT_SCENARIO_PATH = _REPOSITORY_ROOT / "benchmarks" / "gold-route-v1.json"
+DEFAULT_SCENARIO_TEMPLATE_PATH = (
+    _REPOSITORY_ROOT / "benchmarks" / "viewer-benchmark-scenario.v1.json"
+)
 DEFAULT_THRESHOLDS_PATH = (
     _REPOSITORY_ROOT / "benchmarks" / "viewer-thresholds.v1.json"
 )
@@ -117,10 +119,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--scenario-template",
         "--scenario",
+        dest="scenario",
         help=(
-            "Benchmark scenario JSON. In generated route modes this is used as "
-            "the timing/control template. Defaults to benchmarks/gold-route-v1.json."
+            "Benchmark scenario template JSON. In generated route modes this "
+            "is used as the timing/control template. Defaults to "
+            "benchmarks/viewer-benchmark-scenario.v1.json. --scenario remains "
+            "a compatibility alias."
         ),
     )
     parser.add_argument(
@@ -427,8 +433,19 @@ def _choice_option(
 def _build_plan(args: argparse.Namespace, config: Mapping[str, Any]) -> dict[str, Any]:
     map_dir = _required_path_option(args, config, "map_dir")
     output_dir = _path_option(args, config, "output_dir", map_dir / "_benchmarks")
+    scenario_template_option = _option(
+        args,
+        config,
+        "scenario",
+        _option(
+            args,
+            config,
+            "scenario_template",
+            str(DEFAULT_SCENARIO_TEMPLATE_PATH),
+        ),
+    )
     scenario_template_path = _existing_file(
-        _option(args, config, "scenario", str(DEFAULT_SCENARIO_PATH)),
+        scenario_template_option,
         "scenario",
     )
     threshold_path = _existing_file(

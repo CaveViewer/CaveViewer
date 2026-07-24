@@ -55,7 +55,7 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "resources" / "images" / "app_mark_transparent.png",
         PACKAGE_ROOT / "resources" / "release_signing_public_key.pem",
         PACKAGE_ROOT / "resources" / "map_library_catalog.v1.json",
-        REPOSITORY_ROOT / "benchmarks" / "gold-route-v1.json",
+        REPOSITORY_ROOT / "benchmarks" / "viewer-benchmark-scenario.v1.json",
         REPOSITORY_ROOT / "benchmarks" / "viewer-thresholds.v1.json",
         REPOSITORY_ROOT
         / "scripts"
