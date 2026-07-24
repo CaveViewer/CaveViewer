@@ -139,12 +139,23 @@ PY
 
 mount_dir="$(mktemp -d /tmp/caveviewer_dmg_smoke.XXXXXX)"
 attached=0
-cleanup() {
+detach_dmg() {
   if [ "$attached" = "1" ]; then
-    hdiutil detach "$mount_dir" -quiet \
-      || hdiutil detach "$mount_dir" -force -quiet \
-      || true
+    if hdiutil detach "$mount_dir" -quiet; then
+      attached=0
+      return 0
+    fi
+    if hdiutil detach "$mount_dir" -force -quiet; then
+      attached=0
+      return 0
+    fi
+    return 1
   fi
+  return 0
+}
+
+cleanup() {
+  detach_dmg || true
   rm -rf "$mount_dir"
 }
 trap cleanup EXIT
@@ -238,7 +249,8 @@ if ! grep -Fq "Error:" <<<"$cli_output"; then
   exit 1
 fi
 
-hdiutil detach "$mount_dir" -quiet
-attached=0
+if ! detach_dmg; then
+  echo "Warning: unable to detach DMG mount cleanly after successful validation: $mount_dir" >&2
+fi
 
 echo "Validated macOS $macos_arch DMG: $artifact_name"

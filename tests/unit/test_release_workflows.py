@@ -216,6 +216,11 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
 def test_macos_dmg_smoke_script_exposes_bounded_architecture_interface():
     assert MACOS_DMG_SMOKE_SCRIPT.is_file()
     assert os.access(MACOS_DMG_SMOKE_SCRIPT, os.X_OK)
+    script_text = MACOS_DMG_SMOKE_SCRIPT.read_text(encoding="utf-8")
+    assert "detach_dmg()" in script_text
+    assert 'hdiutil detach "$mount_dir" -force -quiet' in script_text
+    assert "unable to detach DMG mount cleanly after successful validation" in script_text
+    assert 'hdiutil detach "$mount_dir" -quiet\nattached=0' not in script_text
 
     help_result = subprocess.run(
         [str(MACOS_DMG_SMOKE_SCRIPT), "--help"],
