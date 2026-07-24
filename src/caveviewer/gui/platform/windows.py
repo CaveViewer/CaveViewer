@@ -100,6 +100,7 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             destroy_root_on_close=True,
             windows_layout=True,
             linux_layout=False,
+            window_width=940,
             min_height=560,
             extra_bottom_slack=0,
             secondary_link_row_bottom_gap=36,

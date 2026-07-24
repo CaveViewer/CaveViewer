@@ -519,10 +519,18 @@ geometry and labels grow together.
 For development-only visual tuning, `CAVEVIEWER_UI_TEXT_SCALE` adjusts
 adaptable full-screen overlay text and `CAVEVIEWER_VIEWER_UI_SCALE` overrides
 the automatic right-side HUD scale. These are not required for normal users.
+macOS uses a slightly larger default overlay text scale because the viewer HUD
+is rendered through FreeType/OpenGL and does not inherit macOS Accessibility
+Text Size preferences the way compatible native controls can.
+Tk startup fonts are also scaled from Tk's runtime `TkDefaultFont` point size,
+with a 1.4x macOS readability floor, before the splash screen and map library
+create their labels and buttons. The macOS splash uses a larger baseline window
+than Windows/Linux so the larger startup fonts are not forced back into the old
+compact layout.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` | Development override for adaptable in-app overlay text such as loading screens, controls/help overlay, and status readouts. Right-side viewer controls use `CAVEVIEWER_VIEWER_UI_SCALE` instead so labels and button geometry stay matched. |
+| `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` (`1.472` on macOS) | Development override for adaptable in-app overlay text such as loading screens, controls/help overlay, and status readouts. Right-side viewer controls use `CAVEVIEWER_VIEWER_UI_SCALE` instead so labels and button geometry stay matched. |
 | `CAVEVIEWER_VIEWER_UI_SCALE` | `auto` | Development override for the always-visible viewer HUD scale. By default CaveViewer keeps the compact baseline at 1536x864 and grows the right-side controls on larger viewer surfaces. |
 | `CAVEVIEWER_TK_SCALE` | _(display DPI)_ | Windows/Linux override for Tk dialog scaling, clamped to `0.75` through `4.0`. The Linux AppImage launcher normally derives this value from the desktop Xft DPI setting. |
 | `CAVEVIEWER_APPRUN_INSTALL_ONLY` | `0` | Linux AppImage launcher smoke mode. Set to `1` to install/update the desktop file, AppStream metadata, and hicolor icons in the user's XDG data home, print the installed paths, and exit without launching the GUI. |

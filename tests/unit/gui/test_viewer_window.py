@@ -346,6 +346,24 @@ def test_viewer_ui_scale_env_override_is_developer_only_escape_hatch():
     ) == 1.0
 
 
+def test_viewer_overlay_text_scale_uses_platform_default():
+    assert viewer_window._viewer_overlay_text_scale(
+        DefaultSplashPlatformAdapter(), 1.28, {}
+    ) == 1.28
+    assert viewer_window._viewer_overlay_text_scale(
+        MacOSSplashPlatformAdapter(), 1.28, {}
+    ) == pytest.approx(1.472)
+
+
+def test_viewer_overlay_text_scale_env_override_still_wins():
+    assert viewer_window._viewer_overlay_text_scale(
+        MacOSSplashPlatformAdapter(), 1.28, {"CAVEVIEWER_UI_TEXT_SCALE": "1.1"}
+    ) == 1.1
+    assert viewer_window._viewer_overlay_text_scale(
+        MacOSSplashPlatformAdapter(), 1.28, {"CAVEVIEWER_UI_TEXT_SCALE": "bad"}
+    ) == pytest.approx(1.472)
+
+
 def test_optional_ms_formatter_reports_disabled_timer():
     assert viewer_window.CaveViewerWindow._format_optional_ms(None) == "n/a"
     assert viewer_window.CaveViewerWindow._format_optional_ms(9.34) == "9.3ms"

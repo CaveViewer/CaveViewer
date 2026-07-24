@@ -256,6 +256,49 @@ def test_splash_font_configuration_does_not_wait_on_fontconfig():
     assert "_fontconfig_sans_family" not in source
 
 
+def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
+    font_globals = (
+        "_UI_FONT_FAMILY",
+        "_TK_TEXT_SCALE",
+        "_TITLE_FONT",
+        "_VERSION_FONT",
+        "_BODY_FONT",
+        "_SMALL_FONT",
+        "_LIBRARY_SECTION_FONT",
+        "_LIBRARY_METADATA_FONT",
+        "_INSTRUCTION_FONT",
+        "_FOOTER_FONT",
+        "_LINK_FONT",
+        "_BUTTON_FONT",
+        "_LIBRARY_OVERFLOW_FONT",
+    )
+    original_values = {name: getattr(splash_screen, name) for name in font_globals}
+
+    class FakeDefaultFont:
+        def actual(self, key):
+            return {"family": "Helvetica Neue", "size": 15}[key]
+
+    import tkinter.font as tkfont
+
+    monkeypatch.setattr(tkfont, "families", lambda _root: ["Helvetica Neue"])
+    monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
+    monkeypatch.setattr(splash_screen, "_PLATFORM_ADAPTER", MacOSSplashPlatformAdapter())
+    monkeypatch.setattr(splash_screen, "_LINUX_SPLASH_LAYOUT", False)
+    monkeypatch.setattr(splash_screen, "_ROOMY_SPLASH_LAYOUT", False)
+
+    try:
+        splash_screen._configure_runtime_tk_fonts(object())
+
+        assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.4)
+        assert splash_screen._BODY_FONT == ("Helvetica Neue", 17)
+        assert splash_screen._SMALL_FONT == ("Helvetica Neue", 14)
+        assert splash_screen._LIBRARY_METADATA_FONT == ("Helvetica Neue", 13)
+        assert splash_screen._BUTTON_FONT == ("Helvetica Neue", 18)
+    finally:
+        for name, value in original_values.items():
+            setattr(splash_screen, name, value)
+
+
 def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
@@ -383,8 +426,9 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "self._recent_empty_note = self._create_empty_note" in panel_source
     assert "_LIBRARY_OVERFLOW_TEXT" in source
     assert "Open" in source
-
-
+    assert "width=1" in panel_source
+    assert 'button.pack(side="left", padx=(0, self._px(4))' in panel_source
+    assert "padx=(self._px(6), self._px(8))" in panel_source
 
 
 def test_library_action_buttons_use_normalized_dimensions():

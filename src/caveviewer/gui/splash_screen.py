@@ -150,17 +150,30 @@ _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _ROOMY_SPLASH_LAYOUT = _WINDOWS_SPLASH_LAYOUT or _LINUX_SPLASH_LAYOUT
 _UI_FONT_FAMILY = _PLATFORM_ADAPTER.ui_font_family()
-_TITLE_FONT = (_UI_FONT_FAMILY, 24, "bold")
-_VERSION_FONT = (_UI_FONT_FAMILY, 12)
-_BODY_FONT = (_UI_FONT_FAMILY, 12)
-_SMALL_FONT = (_UI_FONT_FAMILY, 10)
-_LIBRARY_SECTION_FONT = (_UI_FONT_FAMILY, 10, "bold")
-_LIBRARY_METADATA_FONT = (_UI_FONT_FAMILY, 9)
-_INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
-_FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
-_LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
-_BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-_SPLASH_WINDOW_WIDTH = 940
+_TK_TEXT_SCALE = 1.0
+
+
+def _scaled_tk_font_size(points: float) -> int:
+    """Return a runtime-scaled Tk point size for fixed splash font tokens."""
+    return max(1, int(round(float(points) * _TK_TEXT_SCALE)))
+
+
+def _tk_font(points: float, *styles: str) -> tuple:
+    """Return a Tk font tuple using the resolved family and runtime text scale."""
+    return (_UI_FONT_FAMILY, _scaled_tk_font_size(points), *styles)
+
+
+_TITLE_FONT = _tk_font(24, "bold")
+_VERSION_FONT = _tk_font(12)
+_BODY_FONT = _tk_font(12)
+_SMALL_FONT = _tk_font(10)
+_LIBRARY_SECTION_FONT = _tk_font(10, "bold")
+_LIBRARY_METADATA_FONT = _tk_font(9)
+_INSTRUCTION_FONT = _tk_font(11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
+_FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
+_LINK_FONT = _tk_font(10, "underline")
+_BUTTON_FONT = _tk_font(13)
+_SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
 _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
 _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
 _SECONDARY_LINK_ROW_BOTTOM_GAP = (
@@ -198,7 +211,7 @@ _LIBRARY_ACTION_BUTTON_WIDTH = 8
 _LIBRARY_ACTION_BUTTON_PAD_X = 10
 _LIBRARY_ACTION_BUTTON_PAD_Y = 5
 _LIBRARY_OVERFLOW_TEXT = "⋮"
-_LIBRARY_OVERFLOW_FONT = (_UI_FONT_FAMILY, 14, "bold")
+_LIBRARY_OVERFLOW_FONT = _tk_font(14, "bold")
 _LIBRARY_OVERFLOW_FG = "#606370"
 _LIBRARY_OVERFLOW_HOVER_FG = _INSTRUCTION_COLOR
 _LIBRARY_OVERFLOW_HOVER_BG = DARK_THEME.secondary_button
@@ -241,10 +254,11 @@ def _select_tk_font_family(
 
 def _configure_runtime_tk_fonts(root) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
-    global _UI_FONT_FAMILY, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
+    global _UI_FONT_FAMILY, _TK_TEXT_SCALE, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
     global _SMALL_FONT, _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
     global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT, _LIBRARY_OVERFLOW_FONT
 
+    default_font_points = 12.0
     try:
         import tkinter.font as tkfont
 
@@ -255,7 +269,9 @@ def _configure_runtime_tk_fonts(root) -> None:
             # Prefer families Tk already knows instead of asking fontconfig.
             preferred.extend(_LINUX_TK_SANS_FAMILIES)
 
-        fallback_family = tkfont.nametofont("TkDefaultFont").actual("family")
+        default_font = tkfont.nametofont("TkDefaultFont")
+        fallback_family = default_font.actual("family")
+        default_font_points = abs(float(default_font.actual("size") or default_font_points))
         resolved_family = _select_tk_font_family(
             available,
             fallback_family,
@@ -270,17 +286,18 @@ def _configure_runtime_tk_fonts(root) -> None:
     except Exception as exc:
         _LOG.warning(f"could not resolve Tk UI font family ({exc}); using {_UI_FONT_FAMILY}.")
 
-    _TITLE_FONT = (_UI_FONT_FAMILY, 24, "bold")
-    _VERSION_FONT = (_UI_FONT_FAMILY, 12)
-    _BODY_FONT = (_UI_FONT_FAMILY, 12)
-    _SMALL_FONT = (_UI_FONT_FAMILY, 10)
-    _LIBRARY_SECTION_FONT = (_UI_FONT_FAMILY, 10, "bold")
-    _LIBRARY_METADATA_FONT = (_UI_FONT_FAMILY, 9)
-    _INSTRUCTION_FONT = (_UI_FONT_FAMILY, 11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
-    _FOOTER_FONT = (_UI_FONT_FAMILY, 9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
-    _LINK_FONT = (_UI_FONT_FAMILY, 10, "underline")
-    _BUTTON_FONT = (_UI_FONT_FAMILY, 13)
-    _LIBRARY_OVERFLOW_FONT = (_UI_FONT_FAMILY, 14, "bold")
+    _TK_TEXT_SCALE = _PLATFORM_ADAPTER.tk_text_scale(default_font_points)
+    _TITLE_FONT = _tk_font(24, "bold")
+    _VERSION_FONT = _tk_font(12)
+    _BODY_FONT = _tk_font(12)
+    _SMALL_FONT = _tk_font(10)
+    _LIBRARY_SECTION_FONT = _tk_font(10, "bold")
+    _LIBRARY_METADATA_FONT = _tk_font(9)
+    _INSTRUCTION_FONT = _tk_font(11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
+    _FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
+    _LINK_FONT = _tk_font(10, "underline")
+    _BUTTON_FONT = _tk_font(13)
+    _LIBRARY_OVERFLOW_FONT = _tk_font(14, "bold")
 
 
 def _map_library_panel_style() -> MapLibraryPanelStyle:

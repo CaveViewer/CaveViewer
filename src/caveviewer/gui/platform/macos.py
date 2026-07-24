@@ -272,14 +272,15 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             destroy_root_on_close=False,
             windows_layout=False,
             linux_layout=False,
-            min_height=480,
-            extra_bottom_slack=24,
-            secondary_link_row_bottom_gap=18,
-            footer_credits_bottom_pad=18,
-            title_to_action_gap=28,
-            browse_button_bottom_gap=16,
-            instruction_bottom_gap=0,
-            secondary_link_row_top_gap=16,
+            window_width=1100,
+            min_height=680,
+            extra_bottom_slack=36,
+            secondary_link_row_bottom_gap=28,
+            footer_credits_bottom_pad=24,
+            title_to_action_gap=48,
+            browse_button_bottom_gap=28,
+            instruction_bottom_gap=16,
+            secondary_link_row_top_gap=24,
         )
 
     def preferences_dialog_layout_policy(self) -> PreferencesDialogLayoutPolicy:
@@ -315,6 +316,20 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def default_text_antialiasing_mode(self) -> str:
         """Return the macOS default FreeType anti-aliasing mode."""
         return "light"
+
+    def viewer_overlay_text_scale(self, base_scale: float) -> float:
+        """Return the macOS OpenGL overlay text scale.
+
+        CaveViewer draws the viewer HUD through FreeType instead of native
+        AppKit controls, so it does not inherit macOS text-size preferences.
+        A modest platform bump keeps the default closer to native Mac UI sizes
+        while preserving explicit user/developer text-scale overrides.
+        """
+        return float(base_scale) * 1.15
+
+    def tk_text_scale(self, default_font_points: float) -> float:
+        """Return the macOS Tk text scale for splash and dialog fonts."""
+        return max(super().tk_text_scale(default_font_points), 1.4)
 
     def suppress_forced_startup_focus(
         self, *, is_frozen: bool, force_requested: bool

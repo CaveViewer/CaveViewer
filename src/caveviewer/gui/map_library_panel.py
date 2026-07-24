@@ -519,7 +519,7 @@ class MapLibraryPanel:
             side="left",
             fill="x",
             expand=True,
-            padx=(self._px(12), self._px(8)),
+            padx=(self._px(6), self._px(8)),
             pady=self._px(5),
         )
 
@@ -903,7 +903,7 @@ class MapLibraryPanel:
             font=style.overflow_font,
             bg=style.panel_color,
             fg=style.panel_color,
-            width=2,
+            width=1,
             padx=0,
             pady=0,
             cursor="arrow",
@@ -941,7 +941,7 @@ class MapLibraryPanel:
         self._bind_activation(button, lambda: self._show_row_menu(button))
         button.bind("<Enter>", show_hover)
         button.bind("<Leave>", clear_hover)
-        button.pack(side="left", padx=(self._px(6), 0), pady=self._px(5))
+        button.pack(side="left", padx=(0, self._px(4)), pady=self._px(5))
         self._refresh_overflow_button(button)
         return button
 

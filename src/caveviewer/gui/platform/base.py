@@ -15,6 +15,7 @@ class SplashLayoutPolicy:
     destroy_root_on_close: bool
     windows_layout: bool
     linux_layout: bool
+    window_width: int
     min_height: int
     extra_bottom_slack: int
     secondary_link_row_bottom_gap: int
@@ -148,6 +149,12 @@ class SplashPlatformAdapter(Protocol):
         ...
 
     def default_text_antialiasing_mode(self) -> str:
+        ...
+
+    def viewer_overlay_text_scale(self, base_scale: float) -> float:
+        ...
+
+    def tk_text_scale(self, default_font_points: float) -> float:
         ...
 
     def supports_tk_display_scaling(self) -> bool:

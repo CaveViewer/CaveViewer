@@ -93,6 +93,7 @@ _LOG = get_logger("CaveViewer")
 _DEFAULT_WINDOW_SIZE = (1600, 1000)
 _DESKTOP_WINDOW_SCALE = 0.80
 _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
+_UI_TEXT_SCALE_ENV = "CAVEVIEWER_UI_TEXT_SCALE"
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
 _FEET_PER_MINUTE_TO_METERS_PER_SECOND = 0.3048 / 60.0
@@ -236,6 +237,22 @@ def _window_pixel_ratio(window) -> float:
         return max(1.0, min(4.0, max(buffer_width / width, buffer_height / height)))
     except Exception:
         return 1.0
+
+
+def _viewer_overlay_text_scale(
+    platform_adapter,
+    base_scale: float,
+    environ: Mapping[str, str] | None = None,
+) -> float:
+    """Return the startup text scale for FreeType-rendered viewer overlays."""
+    environment = os.environ if environ is None else environ
+    raw_override = str(environment.get(_UI_TEXT_SCALE_ENV, "")).strip()
+    if raw_override:
+        try:
+            return float(raw_override)
+        except ValueError:
+            pass
+    return platform_adapter.viewer_overlay_text_scale(float(base_scale))
 
 
 def _viewer_ui_surface_size(
@@ -674,14 +691,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._startup_focus_enabled = False
 
         # Optional env override for quick testing/tuning without code edits.
-        text_scale_env = os.getenv("CAVEVIEWER_UI_TEXT_SCALE")
-        if text_scale_env:
-            try:
-                bitmap_font.set_text_scale(float(text_scale_env))
-            except ValueError:
-                bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
-        else:
-            bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
+        bitmap_font.set_text_scale(
+            _viewer_overlay_text_scale(self._platform_adapter, self.UI_TEXT_SCALE)
+        )
         bitmap_font.set_raster_scale(_window_pixel_ratio(getattr(self, "wnd", None)))
         self._viewer_ui_scale = _viewer_ui_scale_for_window_size(
             _viewer_ui_surface_size(getattr(self, "wnd", None), _DEFAULT_WINDOW_SIZE)
