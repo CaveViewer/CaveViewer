@@ -84,6 +84,7 @@ class Minimap:
         self.occupied_xz = set()
         self._footprint_cell_count = 0
         self._centerline_points_xz = tuple(centerline_points_xz or ())
+        self._active_route_points_xz: tuple[tuple[float, float], ...] = ()
         self._compute_footprint(manifest)
 
         # Static geometry (background + footprint + border) and dynamic
@@ -121,6 +122,24 @@ class Minimap:
         )
         self._static_future: concurrent.futures.Future | None = None
         self._static_future_window_size: tuple | None = None
+
+    def set_active_route_points_xz(
+        self,
+        points: Iterable[tuple[float, float]] | None,
+    ) -> None:
+        """Set the highlighted route overlay shown on top of the centerline."""
+        normalized = tuple(
+            (float(point[0]), float(point[1]))
+            for point in (points or ())
+        )
+        if normalized == self._active_route_points_xz:
+            return
+        self._active_route_points_xz = normalized
+        if self._static_future is not None:
+            self._static_future.cancel()
+            self._static_future = None
+            self._static_future_window_size = None
+        self._static_geom_window_size = None
 
     # -- footprint computation (done once, at startup) -----------------------
 
@@ -370,7 +389,20 @@ class Minimap:
         for px, py in self._visible_footprint_pixels(window_size):
             add_quad(px - half, py - half, px + half, py + half, (0.45, 0.52, 0.64, 0.85))
 
-        self._add_centerline_geom(verts, window_size)
+        self._add_route_geom(
+            verts,
+            window_size,
+            self._centerline_points_xz,
+            color=(0.10, 0.90, 0.78, 0.72),
+            thickness_px=2.0,
+        )
+        self._add_route_geom(
+            verts,
+            window_size,
+            self._active_route_points_xz,
+            color=(1.0, 0.78, 0.20, 0.95),
+            thickness_px=3.4,
+        )
 
         border = 1.5
         border_color = (0.42, 0.54, 0.72, 0.70)
@@ -381,18 +413,20 @@ class Minimap:
 
         return np.array(verts, dtype=np.float32).tobytes(), len(verts)
 
-    def _add_centerline_geom(
+    def _add_route_geom(
         self,
         verts: list,
         window_size: tuple[int, int],
+        points_xz: tuple[tuple[float, float], ...],
+        *,
+        color: tuple[float, float, float, float],
+        thickness_px: float,
     ) -> None:
-        """Add an optional centerline route overlay to static minimap geometry."""
-        if len(self._centerline_points_xz) < 2:
+        """Add a clipped route polyline overlay to static minimap geometry."""
+        if len(points_xz) < 2:
             return
 
         panel_x0, panel_y0, panel_x1, panel_y1 = self._panel_rect_px(window_size)
-        color = (0.10, 0.90, 0.78, 0.90)
-        thickness_px = 2.4
         half_thickness = thickness_px / 2.0
 
         def clamp_point(px: float, py: float) -> tuple[float, float]:
@@ -437,7 +471,7 @@ class Minimap:
 
         panel_points = tuple(
             clamp_point(*self._world_to_panel_px(x, z, window_size))
-            for x, z in self._centerline_points_xz
+            for x, z in points_xz
         )
         for first, second in zip(panel_points, panel_points[1:]):
             add_segment(first, second)

@@ -33,9 +33,17 @@ from moderngl_window.context.base import KeyModifiers
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.core.navigation.centerline import generate_centerline_path
+from caveviewer.core.navigation.autodive import (
+    AutoDiveSettings,
+    build_centerline_auto_dive_plan,
+)
+from caveviewer.core.navigation.centerline import (
+    CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
+    generate_centerline_path,
+)
 from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
+from caveviewer.gui.autodive_controller import AutoDiveController, AutoDiveState
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
 from caveviewer.gui.texture_manager import TextureManager
@@ -438,6 +446,7 @@ void main() {
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = APP_NAME
+    _NAVIGATION_VERTICAL_MIDDLE_FRACTION = 0.30
     # The launch helpers replace this fallback with an 80%-of-desktop size.
     # Keep aspect_ratio unlocked so manual resizing remains fully flexible.
     window_size = _DEFAULT_WINDOW_SIZE
@@ -852,6 +861,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_visibility_generation = 0
         self._navigation_guard_cells: set[tuple[int, int, int]] = set()
         self._navigation_guard_chunk_size: float | None = None
+        self._navigation_guard_bounds: tuple[np.ndarray, np.ndarray] | None = None
+        self._navigation_guard_vertical_columns: dict[
+            tuple[int, int],
+            tuple[tuple[float, float], ...],
+        ] = {}
+        self._auto_dive_controller: AutoDiveController | None = None
+        self._auto_dive_previous_render_distance: int | None = None
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
@@ -1322,6 +1338,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._navigation_guard_cells = self.world.available_cells
         self._navigation_guard_chunk_size = chunk_size
+        self._navigation_guard_bounds = self._manifest_navigation_bounds(self.manifest)
+        self._navigation_guard_vertical_columns = (
+            self._manifest_navigation_vertical_columns(self.manifest)
+        )
         if self._navigation_guard_enabled:
             _LOG.info(
                 "Navigation guard enabled: "
@@ -1339,6 +1359,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if hasattr(self, "render_distance_stepper"):
             self.world.config.load_radius_cells = self.render_distance_stepper.value
 
+        self._auto_dive_controller = None
+        self._auto_dive_previous_render_distance = None
+        if self.minimap is not None:
+            self.minimap.set_active_route_points_xz(())
         self.controls_overlay.show_fullscreen()
         # Reset on each map load; set True when the initial view has enough
         # uploaded chunks to be usable, not merely when the first chunk arrives.
@@ -1532,6 +1556,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return True
         if not self._navigation_guard_cells or self._navigation_guard_chunk_size is None:
             return True
+        if not self._navigation_position_is_within_bounds(position):
+            return False
+        if not self._navigation_position_is_within_vertical_band(position):
+            return False
 
         cell = chunker.world_to_cell(np.asarray(position, dtype=np.float32), self._navigation_guard_chunk_size)
         radius = self._navigation_guard_radius_cells
@@ -1542,12 +1570,103 @@ class CaveViewerWindow(mglw.WindowConfig):
                         return True
         return False
 
+    def _navigation_position_is_within_bounds(self, position: np.ndarray) -> bool:
+        bounds = getattr(self, "_navigation_guard_bounds", None)
+        if bounds is None:
+            return True
+        bounds_min, bounds_max = bounds
+        pos = np.asarray(position, dtype=np.float64)
+        return bool(np.all(pos >= bounds_min) and np.all(pos <= bounds_max))
+
+    def _navigation_position_is_within_vertical_band(self, position: np.ndarray) -> bool:
+        vertical_bounds = self._navigation_vertical_band_for_position(position)
+        if vertical_bounds is None:
+            return True
+        low_y, high_y = vertical_bounds
+        y = float(np.asarray(position, dtype=np.float64)[1])
+        return low_y <= y <= high_y
+
+    def _clamp_navigation_position_to_bounds(self, position: np.ndarray) -> np.ndarray:
+        bounds = getattr(self, "_navigation_guard_bounds", None)
+        pos = np.asarray(position, dtype=np.float64)
+        clamped = pos.copy()
+        if bounds is not None:
+            bounds_min, bounds_max = bounds
+            clamped = np.minimum(np.maximum(clamped, bounds_min), bounds_max)
+        vertical_bounds = self._navigation_vertical_band_for_position(clamped)
+        if vertical_bounds is not None:
+            clamped[1] = min(max(clamped[1], vertical_bounds[0]), vertical_bounds[1])
+        return clamped
+
+    def _navigation_vertical_band_for_position(
+        self,
+        position: np.ndarray,
+    ) -> tuple[float, float] | None:
+        span = self._navigation_vertical_span_for_position(position)
+        if span is None:
+            return None
+        low_y, high_y = span
+        center_y = (low_y + high_y) * 0.5
+        # Keep free flight in the middle band of the local passage bounds.
+        # The chunk AABB includes cave walls/floor/ceiling, so allowing the
+        # full span still lets the camera skim the roof/surface; the middle
+        # band keeps the view inside the navigable void.
+        half_band = max(
+            0.0,
+            (high_y - low_y) * self._NAVIGATION_VERTICAL_MIDDLE_FRACTION * 0.5,
+        )
+        return center_y - half_band, center_y + half_band
+
+    def _navigation_vertical_span_for_position(
+        self,
+        position: np.ndarray,
+    ) -> tuple[float, float] | None:
+        columns = getattr(self, "_navigation_guard_vertical_columns", {})
+        chunk_size = getattr(self, "_navigation_guard_chunk_size", None)
+        if not columns or chunk_size is None:
+            return None
+
+        pos = np.asarray(position, dtype=np.float64)
+        target_cx = int(math.floor(float(pos[0]) / float(chunk_size)))
+        target_cz = int(math.floor(float(pos[2]) / float(chunk_size)))
+
+        spans = columns.get((target_cx, target_cz))
+        if spans is None:
+            spans = self._nearest_navigation_vertical_column(target_cx, target_cz)
+        if not spans:
+            return None
+
+        y = float(pos[1])
+        return min(
+            spans,
+            key=lambda span: (abs(((span[0] + span[1]) * 0.5) - y), span),
+        )
+
+    def _nearest_navigation_vertical_column(
+        self,
+        target_cx: int,
+        target_cz: int,
+    ) -> tuple[tuple[float, float], ...] | None:
+        columns = getattr(self, "_navigation_guard_vertical_columns", {})
+        if not columns:
+            return None
+        best_col = min(
+            columns,
+            key=lambda col: (
+                (col[0] - target_cx) ** 2 + (col[1] - target_cz) ** 2,
+                col,
+            ),
+        )
+        return columns.get(best_col)
+
     def _nearest_navigation_guard_position(self, position: np.ndarray) -> np.ndarray | None:
         """Return the nearest occupied chunk center for rare invalid camera positions."""
         if not self._navigation_guard_cells or self._navigation_guard_chunk_size is None:
             return None
 
-        pos = np.asarray(position, dtype=np.float64)
+        pos = self._clamp_navigation_position_to_bounds(position)
+        if self._navigation_position_is_allowed(pos):
+            return pos
         best_cell = None
         best_dist_sq = None
         chunk_size = float(self._navigation_guard_chunk_size)
@@ -1577,6 +1696,10 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         old_position = self.camera.position.copy()
         self.camera.move(forward_amt, right_amt, up_amt, dt, speed_multiplier)
+        if self._navigation_guard_enabled:
+            self.camera.position = self._clamp_navigation_position_to_bounds(
+                self.camera.position
+            )
         if self._navigation_position_is_allowed(self.camera.position):
             return
 
@@ -2121,13 +2244,129 @@ class CaveViewerWindow(mglw.WindowConfig):
         manifest: Mapping[str, Any],
     ) -> tuple[tuple[float, float], ...]:
         """Return an optional centerline overlay for the minimap."""
-        if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", True):
+        if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", False):
             return ()
         try:
-            return generate_centerline_path(manifest).points_xz
+            return generate_centerline_path(
+                manifest,
+                component_selection=CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
+            ).points_xz
         except NavigationConfigurationError as exc:
             _LOG.debug("Minimap centerline unavailable: %s", exc)
             return ()
+
+    def _auto_dive_is_active(self) -> bool:
+        controller = getattr(self, "_auto_dive_controller", None)
+        return controller is not None and controller.active
+
+    def _toggle_auto_dive(self) -> bool:
+        if not self._has_map_loaded or self.camera is None or self.world is None:
+            return False
+        if self._auto_dive_is_active():
+            self._stop_auto_dive()
+            return True
+        return self._start_auto_dive()
+
+    def _start_auto_dive(self) -> bool:
+        """Plan and start user-facing centerline Auto Dive."""
+        if self.manifest is None or self.camera is None or self.world is None:
+            return False
+        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        if benchmark_controller is not None and not benchmark_controller.finished:
+            return False
+        if self._navigation_guard_enabled:
+            self.camera.position = self._clamp_navigation_position_to_bounds(
+                self.camera.position
+            )
+        try:
+            plan = build_centerline_auto_dive_plan(
+                self.manifest,
+                current_position=self.camera.position,
+                settings=AutoDiveSettings(render_distance_cells=10),
+            )
+        except NavigationConfigurationError as exc:
+            _LOG.info("Auto Dive unavailable: %s", exc)
+            return True
+
+        self._auto_dive_previous_render_distance = int(
+            getattr(self.render_distance_stepper, "value", 10)
+        )
+        self.render_distance_stepper.value = min(
+            int(getattr(self.render_distance_stepper, "max_value", 10)),
+            max(
+                int(getattr(self.render_distance_stepper, "min_value", 1)),
+                int(plan.render_distance_cells),
+            ),
+        )
+        self.world.config.load_radius_cells = self.render_distance_stepper.value
+        controller = AutoDiveController(
+            plan,
+            perf_counter=lambda: time.perf_counter(),
+        )
+        controller.start(self.camera, self.world, now=time.perf_counter())
+        self._auto_dive_controller = controller
+        if self.minimap is not None:
+            self.minimap.set_active_route_points_xz(plan.route_points_xz)
+        if self.controls_overlay.is_waiting_for_begin:
+            self.controls_overlay.dismiss_begin_screen()
+        _LOG.info(
+            "Auto Dive started: length=%.1fm duration=%.1fs "
+            "render_distance=%d circular_arc=%s.",
+            plan.route_length_m,
+            plan.duration_s,
+            plan.render_distance_cells,
+            bool(plan.circular_arc),
+        )
+        return True
+
+    def _stop_auto_dive(self, *, completed: bool = False) -> None:
+        controller = getattr(self, "_auto_dive_controller", None)
+        had_auto_dive_state = controller is not None or (
+            getattr(self, "_auto_dive_previous_render_distance", None) is not None
+        )
+        if controller is not None:
+            controller.stop(self.world, completed=completed)
+        self._auto_dive_controller = None
+        previous_distance = getattr(
+            self,
+            "_auto_dive_previous_render_distance",
+            None,
+        )
+        if previous_distance is not None and hasattr(self, "render_distance_stepper"):
+            self.render_distance_stepper.value = int(previous_distance)
+            if self.world is not None:
+                self.world.config.load_radius_cells = int(previous_distance)
+        self._auto_dive_previous_render_distance = None
+        if self.minimap is not None:
+            self.minimap.set_active_route_points_xz(())
+        if had_auto_dive_state:
+            _LOG.info("Auto Dive %s.", "completed" if completed else "stopped")
+
+    def _update_auto_dive(self, now: float) -> None:
+        controller = getattr(self, "_auto_dive_controller", None)
+        if controller is None or self.camera is None or self.world is None:
+            return
+        state = controller.update(self.camera, self.world, now=now)
+        if self._navigation_guard_enabled:
+            self.camera.position = self._clamp_navigation_position_to_bounds(
+                self.camera.position,
+            )
+        if state is AutoDiveState.COMPLETE:
+            self._stop_auto_dive(completed=True)
+
+    def _render_auto_dive_progress(self, window_size: tuple[int, int]) -> None:
+        controller = getattr(self, "_auto_dive_controller", None)
+        if controller is None or controller.state is not AutoDiveState.LOADING:
+            return
+        map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+        self.import_progress_panel.render(
+            window_size,
+            map_name,
+            "",
+            controller.progress,
+            title="",
+            note="",
+        )
 
     def _teardown_current_map(self, *, final_shutdown: bool = False) -> None:
         """
@@ -2158,6 +2397,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not self._has_map_loaded:
             return
 
+        self._stop_auto_dive()
         self._stop_recording()
         # Keep this callback bounded: on_close() runs inside the window/render
         # event path, and an unbounded join here can leave the viewer visually
@@ -2186,6 +2426,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._invalidate_visible_chunk_cache()
         self._navigation_guard_cells = set()
         self._navigation_guard_chunk_size = None
+        self._navigation_guard_bounds = None
+        self._navigation_guard_vertical_columns = {}
 
         if hasattr(self, "texture_manager") and self.texture_manager is not None:
             self.texture_manager.shutdown()
@@ -2819,6 +3061,10 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _target_streaming_load_radius(self) -> int:
         base_radius = max(1, int(self.render_distance_stepper.value))
+        if self._auto_dive_is_active():
+            controller = getattr(self, "_auto_dive_controller", None)
+            if controller is not None:
+                return max(base_radius, int(controller.plan.render_distance_cells))
         if not self._startup_visual_prefetch_is_active():
             return base_radius
         max_radius = max(
@@ -3202,6 +3448,70 @@ class CaveViewerWindow(mglw.WindowConfig):
         if bounds_min.shape != (3,) or bounds_max.shape != (3,):
             return None
         return bounds_min, bounds_max
+
+    def _manifest_navigation_bounds(
+        self,
+        manifest: Mapping[str, Any],
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
+        if not isinstance(chunks, Mapping):
+            return None
+
+        global_min: np.ndarray | None = None
+        global_max: np.ndarray | None = None
+        for chunk_info in chunks.values():
+            if not isinstance(chunk_info, Mapping):
+                continue
+            try:
+                bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
+                bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if bounds_min.shape != (3,) or bounds_max.shape != (3,):
+                continue
+            chunk_min = np.minimum(bounds_min, bounds_max)
+            chunk_max = np.maximum(bounds_min, bounds_max)
+            if global_min is None:
+                global_min = chunk_min.copy()
+                global_max = chunk_max.copy()
+            else:
+                np.minimum(global_min, chunk_min, out=global_min)
+                np.maximum(global_max, chunk_max, out=global_max)
+
+        if global_min is None or global_max is None:
+            return None
+        return global_min, global_max
+
+    def _manifest_navigation_vertical_columns(
+        self,
+        manifest: Mapping[str, Any],
+    ) -> dict[tuple[int, int], tuple[tuple[float, float], ...]]:
+        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
+        if not isinstance(chunks, Mapping):
+            return {}
+
+        columns: dict[tuple[int, int], list[tuple[float, float]]] = {}
+        for cell_key, chunk_info in chunks.items():
+            if not isinstance(chunk_info, Mapping):
+                continue
+            try:
+                cx, _cy, cz = (int(value) for value in str(cell_key).split("_"))
+                bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
+                bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if bounds_min.shape != (3,) or bounds_max.shape != (3,):
+                continue
+            low_y = float(min(bounds_min[1], bounds_max[1]))
+            high_y = float(max(bounds_min[1], bounds_max[1]))
+            columns.setdefault((cx, cz), []).append((low_y, high_y))
+
+        return {
+            column: tuple(
+                sorted(spans, key=lambda span: ((span[0] + span[1]) * 0.5, span))
+            )
+            for column, spans in columns.items()
+        }
 
     def _failed_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
         world = getattr(self, "world", None)
@@ -4214,6 +4524,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         if benchmark_active:
             if benchmark_controller.started:
                 benchmark_controller.update_camera(self.camera, time.perf_counter())
+        elif self._auto_dive_is_active():
+            if self._continuous_input_has_navigation_intent(dt):
+                self._stop_auto_dive()
+                self._handle_continuous_input(dt)
+            else:
+                self._update_auto_dive(time.perf_counter())
         else:
             self._handle_continuous_input(dt)
         input_ms = (time.perf_counter() - t_input) * 1000.0
@@ -4531,6 +4847,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             # pieces do), so it should never be obscured by them.
             self.controls_overlay.update(visual_stats)
             self.controls_overlay.render(self.wnd.size)
+            self._render_auto_dive_progress(self.wnd.size)
             self._render_recording_status_message(self.wnd.size)
             overlay_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -4851,13 +5168,25 @@ class CaveViewerWindow(mglw.WindowConfig):
             "LEFT_ALT", "RIGHT_ALT", "LEFT_OPTION", "RIGHT_OPTION", "LALT", "RALT",
         )
 
-    def _handle_continuous_input(self, dt: float):
-        intent = viewer_input.continuous_input_intent(
+    def _continuous_input_intent(self, dt: float) -> viewer_input.ContinuousInputIntent:
+        return viewer_input.continuous_input_intent(
             keys=self.wnd.keys,
             keys_down=self._keys_down,
             dt=dt,
             key_look_pixels_per_second=self._KEY_LOOK_PIXELS_PER_SECOND,
         )
+
+    def _continuous_input_has_navigation_intent(self, dt: float) -> bool:
+        intent = self._continuous_input_intent(dt)
+        return bool(intent.has_motion or intent.has_look or intent.has_roll)
+
+    def _handle_continuous_input(self, dt: float):
+        intent = self._continuous_input_intent(dt)
+        if (
+            self._auto_dive_is_active()
+            and (intent.has_motion or intent.has_look or intent.has_roll)
+        ):
+            self._stop_auto_dive()
         if intent.has_motion:
             self._move_camera_guarded(
                 intent.forward_amount,
@@ -4937,6 +5266,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             if self._has_map_loaded and not self._import_active:
                 self._handle_open_button_click()
             return True
+
+        auto_dive_key = self._resolve_key_optional(self.wnd.keys, "A")
+        if auto_dive_key is not None and key == auto_dive_key:
+            return self._toggle_auto_dive()
 
         return False
 

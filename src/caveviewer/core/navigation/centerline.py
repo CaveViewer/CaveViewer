@@ -34,6 +34,8 @@ CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.50
 CENTERLINE_ROUTE_WALL_CLEARANCE_MIN_CELLS = 2
 CENTERLINE_ROUTE_WALL_CLEARANCE_PUSH_FRACTION = 0.85
 CENTERLINE_ROUTE_SELECTION_MIDPOINT = "centerline_midpoint_v1"
+CENTERLINE_COMPONENT_SELECTION_CLEAREST = "clearest_component_v1"
+CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH = "longest_path_v1"
 
 _NEIGHBOR_OFFSETS_8 = tuple(
     (dx, dz)
@@ -51,6 +53,7 @@ class CenterlinePath:
     footprint_cell_size: float
     footprint_cell_count: int
     component_size: int
+    component_cells: frozenset[FootprintCell]
     cells: tuple[FootprintCell, ...]
     centers: Mapping[FootprintCell, PointXZ]
     clearance_scores: dict[FootprintCell, int]
@@ -103,6 +106,7 @@ def generate_centerline_path(
     *,
     candidate_limit: int = DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT,
     endpoint_percentile: float = DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE,
+    component_selection: str = CENTERLINE_COMPONENT_SELECTION_CLEAREST,
 ) -> CenterlinePath:
     """Generate the cave passage centerline from footprint geometry only.
 
@@ -112,25 +116,27 @@ def generate_centerline_path(
     """
     footprint = _parse_footprint(manifest)
     clearance_scores = clearance_scores_for_footprint(footprint.cells)
-    component = _select_centerline_component(footprint.cells, clearance_scores)
-    full_path_cells, endpoint_threshold = _centerline_component_path(
-        component,
+    component, full_path_cells, endpoint_threshold = _select_centerline_path(
+        footprint.cells,
         clearance_scores,
         candidate_limit=max(2, int(candidate_limit)),
         endpoint_percentile=float(endpoint_percentile),
+        component_selection=component_selection,
+        cell_size=footprint.cell_size,
     )
-    full_path_centers = {
+    component_centers = {
         cell: footprint_world_center(cell, footprint.cell_size)
-        for cell in full_path_cells
+        for cell in component
     }
-    full_path_length_m = footprint_path_length(full_path_cells, full_path_centers)
+    full_path_length_m = footprint_path_length(full_path_cells, component_centers)
     return CenterlinePath(
         source=footprint.source,
         footprint_cell_size=footprint.cell_size,
         footprint_cell_count=len(footprint.cells),
         component_size=len(component),
+        component_cells=frozenset(component),
         cells=tuple(full_path_cells),
-        centers=full_path_centers,
+        centers=component_centers,
         clearance_scores=clearance_scores,
         endpoint_percentile=float(endpoint_percentile),
         endpoint_threshold_clearance_cells=int(endpoint_threshold),
@@ -391,6 +397,7 @@ def route_points_for_xz_points(
     *,
     manifest: Mapping[str, Any],
     y_search_radius_cells: int,
+    vertical_position_fraction: float = CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
 ) -> tuple[Point, ...]:
     """Lift X/Z route points to 3D using local vertical center sampling."""
     columns = chunk_columns(manifest)
@@ -401,6 +408,7 @@ def route_points_for_xz_points(
             target_x=x,
             target_z=z,
             local_radius_cells=y_search_radius_cells,
+            vertical_position_fraction=vertical_position_fraction,
         )
         points.append((x, y, z))
     return tuple(points)
@@ -470,6 +478,7 @@ def vertical_center_point_for_xz(
     target_z: float,
     local_radius_cells: int,
     search_radius_cells: int = 12,
+    vertical_position_fraction: float = CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
 ) -> Point:
     """Return a 3D point at the local vertical center near target X/Z."""
     chunk_size, column_values = columns
@@ -482,6 +491,7 @@ def vertical_center_point_for_xz(
             column_values,
             center=exact_column,
             radius=local_radius_cells,
+            vertical_position_fraction=vertical_position_fraction,
         )
         return target_x, y, target_z
 
@@ -504,6 +514,7 @@ def vertical_center_point_for_xz(
                 column_values,
                 center=best_col,
                 radius=local_radius_cells,
+                vertical_position_fraction=vertical_position_fraction,
             )
             return (
                 (best_col[0] + 0.5) * chunk_size,
@@ -522,6 +533,7 @@ def vertical_center_point_for_xz(
         column_values,
         center=closest_col,
         radius=local_radius_cells,
+        vertical_position_fraction=vertical_position_fraction,
     )
     return (
         (closest_col[0] + 0.5) * chunk_size,
@@ -535,6 +547,7 @@ def vertical_center_y_for_local_columns(
     *,
     center: FootprintCell,
     radius: int,
+    vertical_position_fraction: float = CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION,
 ) -> float:
     """Return local vertical center Y around a chunk column."""
     samples = [
@@ -547,7 +560,8 @@ def vertical_center_y_for_local_columns(
         samples = list(column_values[center])
     min_y = min(sample.min_y for sample in samples)
     max_y = max(sample.max_y for sample in samples)
-    return min_y + (max_y - min_y) * CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION
+    fraction = min(1.0, max(0.0, float(vertical_position_fraction)))
+    return min_y + (max_y - min_y) * fraction
 
 
 def footprint_path_length(
@@ -653,6 +667,36 @@ def footprint_neighbors(cell: FootprintCell) -> list[FootprintCell]:
     ]
 
 
+def navigable_footprint_neighbors(
+    cell: FootprintCell,
+    cells: set[FootprintCell] | frozenset[FootprintCell],
+) -> list[FootprintCell]:
+    """Return footprint neighbors without cutting diagonally through wall corners."""
+    navigable = []
+    for neighbor in footprint_neighbors(cell):
+        if neighbor not in cells:
+            continue
+        dx = neighbor[0] - cell[0]
+        dz = neighbor[1] - cell[1]
+        if abs(dx) == 1 and abs(dz) == 1:
+            if (cell[0] + dx, cell[1]) not in cells:
+                continue
+            if (cell[0], cell[1] + dz) not in cells:
+                continue
+        navigable.append(neighbor)
+    return navigable
+
+
+def lowest_cost_footprint_path(
+    component: set[FootprintCell] | frozenset[FootprintCell],
+    start: FootprintCell,
+    end: FootprintCell,
+    clearance_scores: Mapping[FootprintCell, int],
+) -> tuple[FootprintCell, ...]:
+    """Return a wall-safe low-cost path through occupied footprint cells."""
+    return _lowest_cost_centerline_path(set(component), start, end, clearance_scores)
+
+
 def _parse_footprint(manifest: Mapping[str, Any]) -> _Footprint:
     if "footprint_cells" in manifest and "footprint_cell_size" in manifest:
         return _parse_vertex_footprint(manifest)
@@ -703,6 +747,20 @@ def _select_centerline_component(
     cells: frozenset[FootprintCell],
     clearance_scores: Mapping[FootprintCell, int],
 ) -> set[FootprintCell]:
+    components = _centerline_components(cells)
+    if not components:
+        raise NavigationConfigurationError("could not select a centerline component")
+    return max(
+        components,
+        key=lambda component: (
+            max(clearance_scores[cell] for cell in component),
+            sum(clearance_scores[cell] for cell in component),
+            len(component),
+        ),
+    )
+
+
+def _centerline_components(cells: frozenset[FootprintCell]) -> list[set[FootprintCell]]:
     components: list[set[FootprintCell]] = []
     seen: set[FootprintCell] = set()
     for cell in sorted(cells):
@@ -714,21 +772,67 @@ def _select_centerline_component(
         while queue:
             current = queue.popleft()
             component.add(current)
-            for neighbor in footprint_neighbors(current):
+            for neighbor in navigable_footprint_neighbors(current, cells):
                 if neighbor in cells and neighbor not in seen:
                     seen.add(neighbor)
                     queue.append(neighbor)
         components.append(component)
-    if not components:
+    return components
+
+
+def _select_centerline_path(
+    cells: frozenset[FootprintCell],
+    clearance_scores: Mapping[FootprintCell, int],
+    *,
+    candidate_limit: int,
+    endpoint_percentile: float,
+    component_selection: str,
+    cell_size: float,
+) -> tuple[set[FootprintCell], tuple[FootprintCell, ...], int]:
+    normalized_selection = str(component_selection).strip().lower()
+    if normalized_selection == CENTERLINE_COMPONENT_SELECTION_CLEAREST:
+        component = _select_centerline_component(cells, clearance_scores)
+        path_cells, threshold = _centerline_component_path(
+            component,
+            clearance_scores,
+            candidate_limit=candidate_limit,
+            endpoint_percentile=endpoint_percentile,
+        )
+        return component, path_cells, threshold
+    if normalized_selection != CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH:
+        raise NavigationConfigurationError(
+            f"unsupported centerline component selection: {component_selection}"
+        )
+
+    candidates = []
+    for component in _centerline_components(cells):
+        path_cells, threshold = _centerline_component_path(
+            component,
+            clearance_scores,
+            candidate_limit=candidate_limit,
+            endpoint_percentile=endpoint_percentile,
+        )
+        centers = {
+            cell: footprint_world_center(cell, cell_size)
+            for cell in path_cells
+        }
+        candidates.append(
+            (
+                footprint_path_length(path_cells, centers),
+                len(path_cells),
+                len(component),
+                component,
+                path_cells,
+                threshold,
+            )
+        )
+    if not candidates:
         raise NavigationConfigurationError("could not select a centerline component")
-    return max(
-        components,
-        key=lambda component: (
-            max(clearance_scores[cell] for cell in component),
-            sum(clearance_scores[cell] for cell in component),
-            len(component),
-        ),
+    _, _, _, component, path_cells, threshold = max(
+        candidates,
+        key=lambda item: (item[0], item[1], item[2]),
     )
+    return component, path_cells, threshold
 
 
 def _centerline_component_path(
@@ -804,7 +908,7 @@ def _lowest_cost_centerline_path(
             break
         if current_cost > costs[current]:
             continue
-        for neighbor in footprint_neighbors(current):
+        for neighbor in navigable_footprint_neighbors(current, component):
             if neighbor not in component:
                 continue
             step_distance = footprint_cell_distance(current, neighbor)
@@ -820,7 +924,7 @@ def _lowest_cost_centerline_path(
             heapq.heappush(frontier, (next_cost, neighbor))
 
     if end not in previous:
-        return (start, end)
+        return ()
     path: list[FootprintCell] = []
     current: FootprintCell | None = end
     while current is not None:

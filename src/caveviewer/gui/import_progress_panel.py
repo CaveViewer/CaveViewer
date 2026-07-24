@@ -493,4 +493,4 @@ class ImportProgressPanel:
             return labels[normalized]
         if normalized:
             return normalized[:1].upper() + normalized[1:] + "…"
-        return "Working…"
+        return ""
