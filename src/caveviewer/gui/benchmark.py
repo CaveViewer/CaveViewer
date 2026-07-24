@@ -17,7 +17,14 @@ import os
 from pathlib import Path
 from typing import Any
 
-import numpy as np
+from caveviewer.core.navigation.route import (
+    CameraRoute,
+    NavigationConfigurationError as BenchmarkConfigurationError,
+    RouteFollower,
+    RouteKeyframe as BenchmarkKeyframe,
+    apply_pose_to_camera,
+    interpolated_route_pose,
+)
 
 
 SCENARIO_VERSION = 1
@@ -28,55 +35,6 @@ DEFAULT_MAX_RUNTIME_MARGIN_SECONDS = 30.0
 DEFAULT_WINDOW_SIZE = (1600, 1000)
 DEFAULT_RENDER_DISTANCE = 3
 DEFAULT_STUTTER_THRESHOLDS_MS = (33.3, 50.0, 100.0)
-
-
-class BenchmarkConfigurationError(ValueError):
-    """Raised when benchmark inputs are missing or invalid."""
-
-
-@dataclass(frozen=True)
-class BenchmarkKeyframe:
-    """One camera pose in a benchmark route."""
-
-    time_s: float
-    position: tuple[float, float, float]
-    yaw_deg: float
-    pitch_deg: float
-    roll_deg: float = 0.0
-
-    @classmethod
-    def from_mapping(cls, payload: Mapping[str, Any], *, index: int) -> "BenchmarkKeyframe":
-        try:
-            time_s = float(payload["time_s"])
-            position = _float_tuple(payload["position"], length=3, field=f"route[{index}].position")
-            yaw_deg = float(payload.get("yaw_deg", payload.get("yaw", 0.0)))
-            pitch_deg = float(payload.get("pitch_deg", payload.get("pitch", 0.0)))
-            roll_deg = float(payload.get("roll_deg", payload.get("roll", 0.0)))
-        except KeyError as exc:
-            raise BenchmarkConfigurationError(
-                f"route[{index}] is missing required field {exc.args[0]!r}"
-            ) from exc
-        except (TypeError, ValueError) as exc:
-            raise BenchmarkConfigurationError(f"route[{index}] contains invalid values") from exc
-        if time_s < 0:
-            raise BenchmarkConfigurationError(f"route[{index}].time_s must be non-negative")
-        return cls(
-            time_s=time_s,
-            position=position,
-            yaw_deg=yaw_deg,
-            pitch_deg=pitch_deg,
-            roll_deg=roll_deg,
-        )
-
-    def identity_payload(self) -> dict[str, Any]:
-        """Return the route content that affects benchmark comparability."""
-        return {
-            "time_s": self.time_s,
-            "position": list(self.position),
-            "yaw_deg": self.yaw_deg,
-            "pitch_deg": self.pitch_deg,
-            "roll_deg": self.roll_deg,
-        }
 
 
 @dataclass(frozen=True)
@@ -242,29 +200,7 @@ class BenchmarkScenario:
 
     def pose_at(self, elapsed_s: float) -> BenchmarkKeyframe:
         """Return the interpolated camera pose for a benchmark elapsed time."""
-        elapsed_s = max(0.0, float(elapsed_s))
-        if elapsed_s <= self.route[0].time_s or len(self.route) == 1:
-            return self.route[0]
-        if elapsed_s >= self.route[-1].time_s:
-            return self.route[-1]
-
-        for previous, current in zip(self.route, self.route[1:]):
-            if previous.time_s <= elapsed_s <= current.time_s:
-                span = max(1e-9, current.time_s - previous.time_s)
-                t = (elapsed_s - previous.time_s) / span
-                position = tuple(
-                    _lerp(previous.position[index], current.position[index], t)
-                    for index in range(3)
-                )
-                return BenchmarkKeyframe(
-                    time_s=elapsed_s,
-                    position=position,
-                    yaw_deg=_lerp_angle_degrees(previous.yaw_deg, current.yaw_deg, t),
-                    pitch_deg=_lerp(previous.pitch_deg, current.pitch_deg, t),
-                    roll_deg=_lerp_angle_degrees(previous.roll_deg, current.roll_deg, t),
-                )
-
-        return self.route[-1]
+        return interpolated_route_pose(self.route, elapsed_s)
 
 
 @dataclass(frozen=True)
@@ -462,7 +398,13 @@ class BenchmarkController:
         self._samples: list[BenchmarkFrameSample] = []
         self._frames_handle = None
         self._finished = False
-        self._position_origin = np.zeros(3, dtype=np.float64)
+        self._route_follower = RouteFollower(
+            CameraRoute.from_keyframes(
+                scenario.route,
+                position_mode=scenario.position_mode,
+            ),
+            perf_counter=perf_counter,
+        )
         self._summary_path = self.output_dir / "summary.json"
         self._frames_path = self.output_dir / "frames.jsonl"
         self._environment_path = self.output_dir / "environment.json"
@@ -496,16 +438,11 @@ class BenchmarkController:
 
     def set_position_origin(self, origin: Iterable[float]) -> None:
         """Set the map-relative origin used by offset-based scenarios."""
-        if self.scenario.position_mode == "first_chunk_center_offset":
-            self._position_origin = np.asarray(tuple(origin), dtype=np.float64)
+        self._route_follower.set_position_origin(origin)
 
     def apply_initial_camera(self, camera) -> None:
         """Place the camera at the first scenario keyframe before streaming starts."""
-        apply_pose_to_camera(
-            camera,
-            self.scenario.route[0],
-            position_origin=self._position_origin,
-        )
+        self._route_follower.apply_initial_camera(camera)
 
     def update_camera(self, camera, now: float | None = None) -> float:
         """Apply the current route pose to the viewer camera."""
@@ -520,12 +457,7 @@ class BenchmarkController:
                 self.scenario.measurement_seconds,
                 self.output_dir,
             )
-        elapsed_s = now - self._started_at
-        apply_pose_to_camera(
-            camera,
-            self.scenario.pose_at(elapsed_s),
-            position_origin=self._position_origin,
-        )
+        elapsed_s = self._route_follower.update_camera(camera, now)
         return elapsed_s
 
     def record_frame(
@@ -664,24 +596,6 @@ class BenchmarkController:
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
-
-
-def apply_pose_to_camera(
-    camera,
-    pose: BenchmarkKeyframe,
-    *,
-    position_origin: Iterable[float] | None = None,
-) -> None:
-    """Apply one benchmark pose to a FlyCamera-like object."""
-    origin = (
-        np.zeros(3, dtype=np.float64)
-        if position_origin is None
-        else np.asarray(tuple(position_origin), dtype=np.float64)
-    )
-    camera.position = np.array(pose.position, dtype=np.float64) + origin
-    camera.yaw = math.radians(pose.yaw_deg)
-    camera.pitch = math.radians(pose.pitch_deg)
-    camera.roll = math.radians(pose.roll_deg)
 
 
 def summarize_samples(
@@ -1077,11 +991,6 @@ def _positive_float(value: Any, field: str) -> float:
 
 def _lerp(start: float, end: float, t: float) -> float:
     return float(start) + (float(end) - float(start)) * float(t)
-
-
-def _lerp_angle_degrees(start: float, end: float, t: float) -> float:
-    delta = ((float(end) - float(start) + 180.0) % 360.0) - 180.0
-    return float(start) + delta * float(t)
 
 
 def _median(values: list[float]) -> float:

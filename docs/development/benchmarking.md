@@ -188,6 +188,12 @@ footprint, where clearance means grid distance from the footprint boundary.
 That centerline step is separate from benchmark load selection and does not
 need texture or chunk-complexity data.
 
+The shared centerline and camera-route primitives live under
+`caveviewer.core.navigation`. Keep generic navigation behavior there so future
+viewer features, such as an opt-in autopilot dive, can reuse it without pulling
+in benchmark measurement, threshold, or artifact-writing code. Keep benchmark
+load scoring and scenario metadata in `caveviewer.gui.benchmark_routes`.
+
 The default benchmark selector then scores candidate centerline positions by
 render-distance forward-view load from the route camera direction: visible chunk
 count plus unique texture count from the manifest material-to-texture map. This
