@@ -61,11 +61,11 @@ CACHE_DIRNAME = "_cache"
 MANIFEST_NAME = "manifest.json"
 MAP_SOURCE_SUFFIXES = {".glb", ".gltf", ".obj"}
 LOCAL_HISTORY_SCHEMA_VERSION = 1
-DEFAULT_DEVILS_EYE_RENDER_DISTANCE = 6
+DEFAULT_DEVILS_EYE_RENDER_DISTANCE = 10
 DEFAULT_DEVILS_EYE_MEASUREMENT_SECONDS = 120.0
 DEFAULT_DEVILS_EYE_MAX_RUNTIME_MARGIN_SECONDS = 90.0
 DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_KEYFRAMES = 24
-DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS = 48.0
+DEFAULT_DEVILS_EYE_CENTERLINE_ROUTE_TARGET_CHUNKS = 24.0
 DEFAULT_DEVILS_EYE_TEXTURE_RESIDENT_CACHE_MB = 768.0
 
 
@@ -726,7 +726,9 @@ def _centerline_route_summary(centerline_route, scenario_path: Path) -> str:
         f"vertical_fraction={metadata['vertical_position_fraction']:.2f} "
         f"route_y={metadata['min_route_y']:.1f}..{metadata['max_route_y']:.1f} "
         f"max_clearance_m={metadata['max_clearance_m']:.1f} "
-        f"mean_route_clearance_m={metadata['mean_route_clearance_m']:.1f}"
+        f"mean_route_clearance_m={metadata['mean_route_clearance_m']:.1f} "
+        f"wall_clearance_adjusted_points={metadata['wall_clearance_adjusted_points']} "
+        f"wall_clearance_max_adjustment_m={metadata['wall_clearance_max_adjustment_m']:.1f}"
     )
 
 
@@ -1321,7 +1323,9 @@ def _route_summary_for_summary(summary: Mapping[str, Any]) -> str | None:
             f"vertical_fraction={_format_metric(metadata.get('vertical_position_fraction'))}, "
             f"route_y={_format_metric(metadata.get('min_route_y'))}..{_format_metric(metadata.get('max_route_y'))}, "
             f"max_clearance_m={_format_metric(metadata.get('max_clearance_m'))}, "
-            f"mean_route_clearance_m={_format_metric(metadata.get('mean_route_clearance_m'))}"
+            f"mean_route_clearance_m={_format_metric(metadata.get('mean_route_clearance_m'))}, "
+            f"wall_clearance_adjusted_points={metadata.get('wall_clearance_adjusted_points', '<missing>')}, "
+            f"wall_clearance_max_adjustment_m={_format_metric(metadata.get('wall_clearance_max_adjustment_m'))}"
         )
     if route_mode == "auto_dense_chunks_v1":
         return (

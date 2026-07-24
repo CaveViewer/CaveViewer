@@ -56,10 +56,10 @@ def test_devils_eye_xl_dry_run_plans_copy_compile_and_local_history(
     assert "Devil's Eye XL local benchmark plan:" in output
     assert "route_mode: auto-centerline" in output
     assert "centerline_route: keyframes=24" in output
-    assert "render_distance: 6" in output
+    assert "render_distance: 10" in output
     assert "measurement_seconds: 120" in output
     assert "texture_resident_cache_mb: 768" in output
-    assert "target_length=auto(48 chunks, streaming exercise" in output
+    assert "target_length=auto(24 chunks, streaming exercise" in output
     assert "selection=max_visible_chunk_texture_complexity" in output
     assert "movement=after_warmup" in output
     assert "copy_map: yes" in output
@@ -130,7 +130,7 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
         assert generated_scenario["metadata"]["target_route_length_source"] == (
             "devils_eye_streaming_default_chunks"
         )
-        assert generated_scenario["metadata"]["target_route_length_chunks"] == 48.0
+        assert generated_scenario["metadata"]["target_route_length_chunks"] == 24.0
         assert generated_scenario["measurement_seconds"] == 120.0
         assert generated_scenario["max_runtime_seconds"] == 215.0
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -177,15 +177,15 @@ def test_devils_eye_xl_run_compares_with_previous_record_and_writes_summary(
     assert "missing_textures=0" in latest_text
     assert "coverage=40/40 chunks" in latest_text
     assert "missing_chunks=0" in latest_text
-    assert "startup_radius=9 chunks" in latest_text
+    assert "startup_radius=10 chunks" in latest_text
     assert "Streaming request:" in latest_text
-    assert "distance=6 chunks" in latest_text
+    assert "distance=10 chunks" in latest_text
     assert "Streaming effective:" in latest_text
     assert "Texture residency:" in latest_text
     assert "requested_cache_cap=768 MB" in latest_text
     assert "Route: auto_centerline" in latest_text
     assert "selection=max_visible_chunk_texture_complexity_v1" in latest_text
-    assert "target_speed_m_per_s=4.00" in latest_text
+    assert "target_speed_m_per_s=2.00" in latest_text
     assert "Gate baseline: previous-main wall_clock_fps=<missing> median_render_fps=100.00" in latest_text
     assert "FAIL median_fps" in latest_text
     assert "Previous local run compared to current" in latest_text

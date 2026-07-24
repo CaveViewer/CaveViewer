@@ -45,6 +45,11 @@ def test_centerline_route_uses_vertex_footprint_middle_passage():
     assert metadata["route_selection_strategy"] == (
         "max_visible_chunk_texture_complexity_v1"
     )
+    assert metadata["wall_clearance_strategy"] == (
+        "push_low_clearance_xz_toward_nearest_centerline_cell_center_v1"
+    )
+    assert metadata["wall_clearance_adjusted_points"] >= 0
+    assert metadata["wall_clearance_max_adjustment_m"] >= 0.0
     assert metadata["warmup_behavior"] == "hold_first_keyframe_until_measurement"
     assert metadata["target_route_length_source"] == "default_diver_speed"
     assert metadata["target_route_length_chunks"] == pytest.approx(1.016)

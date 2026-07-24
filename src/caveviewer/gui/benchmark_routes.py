@@ -30,6 +30,8 @@ DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND = (
 DEFAULT_CENTERLINE_ROUTE_MIN_CHUNKS = 0.5
 DEFAULT_CENTERLINE_ROUTE_Y_SEARCH_RADIUS_CELLS = 1
 CENTERLINE_ROUTE_VERTICAL_POSITION_FRACTION = 0.50
+CENTERLINE_ROUTE_WALL_CLEARANCE_MIN_CELLS = 2
+CENTERLINE_ROUTE_WALL_CLEARANCE_PUSH_FRACTION = 0.85
 DEFAULT_DENSE_ROUTE_KEYFRAMES = 8
 DEFAULT_DENSE_ROUTE_PERCENTILE = 90.0
 DEFAULT_DENSE_ROUTE_CANDIDATE_LIMIT = 64
@@ -81,6 +83,14 @@ class _RouteComplexityScore:
     chunk_count: int
     material_count: int
     texture_count: int
+
+
+@dataclass(frozen=True)
+class _WallClearanceAdjustment:
+    points: tuple[PointXZ, ...]
+    adjusted_count: int
+    max_adjustment_m: float
+    mean_adjustment_m: float
 
 
 def generate_centerline_route_scenario(
@@ -147,13 +157,22 @@ def generate_centerline_route_scenario(
             target_length_m=resolved_target_length_m,
         )
     )
-    route_xz_points = _sample_footprint_route_points(
+    sampled_route_xz_points = _sample_footprint_route_points(
         full_path_cells,
         centers=full_path_centers,
         start_distance_m=segment_start_m,
         end_distance_m=segment_end_m,
         keyframe_count=max(1, int(keyframe_count)),
     )
+    wall_clearance_adjustment = _push_route_points_toward_path_centers(
+        sampled_route_xz_points,
+        path_cells=path_cells,
+        centers=full_path_centers,
+        clearance_scores=clearance_scores,
+        minimum_clearance_cells=CENTERLINE_ROUTE_WALL_CLEARANCE_MIN_CELLS,
+        push_fraction=CENTERLINE_ROUTE_WALL_CLEARANCE_PUSH_FRACTION,
+    )
+    route_xz_points = wall_clearance_adjustment.points
     route_cells = _nearest_footprint_cells_for_points(
         route_xz_points,
         path_cells=path_cells,
@@ -197,6 +216,26 @@ def generate_centerline_route_scenario(
             ),
             "clearance_definition": (
                 "grid distance from the footprint boundary in footprint cells"
+            ),
+            "wall_clearance_strategy": (
+                "push_low_clearance_xz_toward_nearest_centerline_cell_center_v1"
+            ),
+            "wall_clearance_minimum_cells": (
+                CENTERLINE_ROUTE_WALL_CLEARANCE_MIN_CELLS
+            ),
+            "wall_clearance_push_fraction": (
+                CENTERLINE_ROUTE_WALL_CLEARANCE_PUSH_FRACTION
+            ),
+            "wall_clearance_adjusted_points": (
+                wall_clearance_adjustment.adjusted_count
+            ),
+            "wall_clearance_max_adjustment_m": round(
+                wall_clearance_adjustment.max_adjustment_m,
+                3,
+            ),
+            "wall_clearance_mean_adjustment_m": round(
+                wall_clearance_adjustment.mean_adjustment_m,
+                3,
             ),
             "complexity_definition": (
                 "normalized sum of render-distance forward-view chunk count "
@@ -1167,6 +1206,57 @@ def _interpolated_footprint_point(
             first[1] + (second[1] - first[1]) * ratio,
         )
     return centers[path_cells[-1]]
+
+
+def _push_route_points_toward_path_centers(
+    points: tuple[PointXZ, ...],
+    *,
+    path_cells: tuple[FootprintCell, ...],
+    centers: Mapping[FootprintCell, PointXZ],
+    clearance_scores: Mapping[FootprintCell, int],
+    minimum_clearance_cells: int,
+    push_fraction: float,
+) -> _WallClearanceAdjustment:
+    if not points:
+        return _WallClearanceAdjustment((), 0, 0.0, 0.0)
+    if not path_cells:
+        raise BenchmarkConfigurationError(
+            "cannot adjust route wall clearance against an empty footprint path"
+        )
+    fraction = max(0.0, min(1.0, float(push_fraction)))
+    adjusted: list[PointXZ] = []
+    adjustments: list[float] = []
+
+    for point in points:
+        nearest_cell = min(
+            path_cells,
+            key=lambda cell: (
+                (centers[cell][0] - point[0]) ** 2
+                + (centers[cell][1] - point[1]) ** 2,
+                cell,
+            ),
+        )
+        if clearance_scores[nearest_cell] >= minimum_clearance_cells:
+            adjusted_point = point
+        else:
+            center = centers[nearest_cell]
+            adjusted_point = (
+                point[0] + (center[0] - point[0]) * fraction,
+                point[1] + (center[1] - point[1]) * fraction,
+            )
+        adjustment = math.hypot(
+            adjusted_point[0] - point[0],
+            adjusted_point[1] - point[1],
+        )
+        adjustments.append(adjustment)
+        adjusted.append(adjusted_point)
+
+    return _WallClearanceAdjustment(
+        points=tuple(adjusted),
+        adjusted_count=sum(1 for adjustment in adjustments if adjustment > 1e-6),
+        max_adjustment_m=max(adjustments),
+        mean_adjustment_m=sum(adjustments) / len(adjustments),
+    )
 
 
 def _nearest_footprint_cells_for_points(
