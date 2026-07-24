@@ -116,8 +116,6 @@ Run benchmarks through one of the supported entry points:
 
 Do not run `python -m caveviewer.benchmarking.results`; it has no CLI contract.
 Import it from tests, scripts, or viewer adapters instead.
-`scripts/benchmark/run_map_benchmark.py` remains only as a source-checkout
-compatibility wrapper around `caveviewer.benchmarking.map_runner`.
 
 ## Generic local map run
 

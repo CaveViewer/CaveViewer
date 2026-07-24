@@ -73,10 +73,6 @@ def test_application_uses_src_package_layout():
         REPOSITORY_ROOT
         / "scripts"
         / "benchmark"
-        / "run_map_benchmark.py",
-        REPOSITORY_ROOT
-        / "scripts"
-        / "benchmark"
         / "hooks"
         / "pre-push-map-benchmark",
         REPOSITORY_ROOT / "packaging" / "pyinstaller" / "CaveViewer.spec",
