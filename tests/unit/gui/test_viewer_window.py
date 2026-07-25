@@ -714,8 +714,8 @@ def test_auto_dive_start_queues_initial_plan_without_blocking(monkeypatch):
     assert kwargs["current_position"] == (1.0, 2.0, 3.0)
     assert kwargs["current_yaw"] == pytest.approx(0.25)
     assert kwargs["current_pitch"] == pytest.approx(-0.1)
-    assert kwargs["current_travel_yaw"] == pytest.approx(0.25)
-    assert kwargs["current_travel_pitch"] == pytest.approx(-0.1)
+    assert "current_travel_yaw" not in kwargs
+    assert "current_travel_pitch" not in kwargs
     assert kwargs["settings"] is settings
     assert kwargs["cache_dir"] == "/cache/devils-eye"
     assert callable(kwargs["diagnostics"])

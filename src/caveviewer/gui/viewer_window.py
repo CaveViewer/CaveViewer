@@ -2851,8 +2851,6 @@ class CaveViewerWindow(mglw.WindowConfig):
                 current_position=tuple(float(value) for value in start_position),
                 current_yaw=float(self.camera.yaw),
                 current_pitch=float(self.camera.pitch),
-                current_travel_yaw=float(self.camera.yaw),
-                current_travel_pitch=float(self.camera.pitch),
                 settings=auto_dive_settings,
                 cache_dir=self.cache_dir,
                 diagnostics=_auto_dive_diagnostic_sink(blackbox),

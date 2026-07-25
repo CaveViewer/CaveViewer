@@ -786,6 +786,47 @@ def test_auto_dive_replan_rejects_centerline_behind_travel_direction():
     assert candidate_payload["travel_filter"]["rejected"]
 
 
+def test_auto_dive_initial_start_ignores_sideways_travel_cone():
+    route_cells = tuple((0, z) for z in range(6))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=route_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+
+    with pytest.raises(NavigationConfigurationError, match="forward travel cone"):
+        build_centerline_auto_dive_plan(
+            manifest,
+            current_position=route_points[0],
+            current_yaw=0.0,
+            current_pitch=0.0,
+            current_travel_yaw=0.0,
+            current_travel_pitch=0.0,
+            settings=AutoDiveSettings(
+                speed_m_per_second=1.0,
+                smoothing_radius_cells=0,
+            ),
+        )
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=route_points[0],
+        current_yaw=0.0,
+        current_pitch=0.0,
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+        ),
+    )
+
+    assert plan.route_points[0] == route_points[0]
+    assert plan.route_length_m > 0.0
+
+
 def test_auto_dive_uses_view_pitch_to_choose_upward_forward_direction():
     component_cells = [(x, 0) for x in range(4)]
     route_cells = tuple(component_cells)
