@@ -1,10 +1,10 @@
 {
-  "latest_version": "1.0.70",
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.70/CaveViewer-1.0.70-x86_64.AppImage",
-  "download_size_bytes": 80718328,
-  "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.70/CaveViewer-1.0.70-x86_64.AppImage",
-  "download_size_bytes_linux_appimage": 80718328,
+  "latest_version": "1.0.71",
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.71/CaveViewer-1.0.71-x86_64.AppImage",
+  "download_size_bytes": 80976376,
+  "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.71/CaveViewer-1.0.71-x86_64.AppImage",
+  "download_size_bytes_linux_appimage": 80976376,
   "release_notes": "CaveViewer release",
-  "sha256": "9f348ca866e6b4b727c1cb957cf9e2047853153a79934bc151936ba6be13f5cd",
-  "sha256_linux_appimage": "9f348ca866e6b4b727c1cb957cf9e2047853153a79934bc151936ba6be13f5cd"
+  "sha256": "c6f461347564fcb1e21c33d38e2eb4dfff894cb562e9cabc29f10bcd536c1a60",
+  "sha256_linux_appimage": "c6f461347564fcb1e21c33d38e2eb4dfff894cb562e9cabc29f10bcd536c1a60"
 }
