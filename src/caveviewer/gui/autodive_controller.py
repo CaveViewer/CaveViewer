@@ -47,6 +47,7 @@ class AutoDiveState(str, Enum):
     IDLE = "idle"
     LOADING = "loading"
     DIVING = "diving"
+    WAITING_FOR_USER = "waiting_for_user"
     COMPLETE = "complete"
     CANCELLED = "cancelled"
 
@@ -351,10 +352,15 @@ class AutoDiveController:
         self._last_stuck_event_at: float | None = None
         self._prefetch_cells: frozenset[tuple[int, int, int]] = frozenset()
         self._readiness = AutoDiveReadiness(0, 0, 0, 0, 0, 1.0)
+        self._user_assist_reason: str | None = None
 
     @property
     def active(self) -> bool:
         return self.state in {AutoDiveState.LOADING, AutoDiveState.DIVING}
+
+    @property
+    def waiting_for_user_input(self) -> bool:
+        return self.state is AutoDiveState.WAITING_FOR_USER
 
     @property
     def progress(self) -> float:
@@ -365,13 +371,20 @@ class AutoDiveController:
 
     @property
     def show_loading_indicator(self) -> bool:
-        return bool(
-            self.state is AutoDiveState.LOADING
-            and not self._mesh_recovery_active()
-        )
+        return self.state is AutoDiveState.LOADING
+
+    @property
+    def loading_progress_fraction(self) -> float | None:
+        if self.state is not AutoDiveState.LOADING:
+            return None
+        if self._mesh_recovery_active():
+            return None
+        return self.progress
 
     @property
     def status_note(self) -> str:
+        if self.state is AutoDiveState.WAITING_FOR_USER:
+            return "Auto Dive needs input"
         if self._mesh_recovery_active():
             return "Thinking"
         if self.state == AutoDiveState.LOADING:
@@ -430,6 +443,7 @@ class AutoDiveController:
         self._mesh_recovery_replan_pending = False
         self._mesh_recovery_attempts = 0
         self._mesh_recovery_boundary_positions = []
+        self._user_assist_reason = None
         self.state = AutoDiveState.LOADING
         apply_pose_to_camera(camera, self.plan.route.pose_at(0.0))
         self.refresh_prefetch(world)
@@ -475,6 +489,7 @@ class AutoDiveController:
         now = self.perf_counter() if now is None else float(now)
         if self.state in {
             AutoDiveState.IDLE,
+            AutoDiveState.WAITING_FOR_USER,
             AutoDiveState.COMPLETE,
             AutoDiveState.CANCELLED,
         }:
@@ -537,9 +552,11 @@ class AutoDiveController:
             apply_pose_to_camera(camera, self.plan.route.pose_at(self._elapsed_s))
             if self._maybe_start_mesh_recovery_scan(
                 now=now,
+                world=world,
                 reason="mesh_truncated_standoff",
             ):
-                self.state = AutoDiveState.LOADING
+                if self.state is not AutoDiveState.WAITING_FOR_USER:
+                    self.state = AutoDiveState.LOADING
                 return self.state
         if self._should_start_survey():
             self._survey_pause_started_at = now
@@ -564,9 +581,11 @@ class AutoDiveController:
         if self._elapsed_s >= self.plan.route.duration_s:
             if self._maybe_start_mesh_recovery_scan(
                 now=now,
+                world=world,
                 reason="route_boundary",
             ):
-                self.state = AutoDiveState.LOADING
+                if self.state is not AutoDiveState.WAITING_FOR_USER:
+                    self.state = AutoDiveState.LOADING
                 return self.state
             self.stop(world, completed=True)
             return self.state
@@ -637,6 +656,13 @@ class AutoDiveController:
                     plan=_plan_summary(latest_plan),
                     **rejection,
                 )
+                if mesh_recovery:
+                    self._enter_user_assist(
+                        world,
+                        reason=str(rejection.get("reason", "replan_rejected")),
+                        position=current_position,
+                        details=rejection,
+                    )
         elif self._mesh_recovery_replan_pending:
             has_pending = getattr(replanner, "has_pending", None)
             if callable(has_pending) and not has_pending():
@@ -647,6 +673,11 @@ class AutoDiveController:
                     position=_vector_payload(current_position),
                     elapsed_s=float(self._elapsed_s),
                     progress=float(self.progress),
+                )
+                self._enter_user_assist(
+                    world,
+                    reason="mesh_recovery_replan_finished_without_plan",
+                    position=current_position,
                 )
 
         if not rejected_replan and self._should_request_replan(
@@ -705,7 +736,6 @@ class AutoDiveController:
         if (
             alignment is not None
             and alignment < -0.05
-            and not self._allow_backward_mesh_recovery_replan()
         ):
             return {
                 "reason": "moves_backward_from_current_route",
@@ -1077,30 +1107,36 @@ class AutoDiveController:
         self,
         *,
         now: float,
+        world=None,
         reason: str = "route_boundary",
     ) -> bool:
         if not _plan_needs_boundary_replan(self.plan):
             return False
+        route_position = np.asarray(
+            self.plan.route.pose_at(self._elapsed_s).position,
+            dtype=np.float64,
+        )
         if self.replanner is None:
-            return False
+            self._enter_user_assist(
+                world,
+                reason="mesh_recovery_unavailable",
+                position=route_position,
+            )
+            return True
         if self._mesh_recovery_replan_pending:
             return True
         if self._mesh_recovery_attempts >= DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_ATTEMPTS:
-            self._record_blackbox(
-                "mesh_recovery_exhausted",
-                attempts=int(self._mesh_recovery_attempts),
-                elapsed_s=float(self._elapsed_s),
-                progress=float(self.progress),
+            self._enter_user_assist(
+                world,
+                reason="mesh_recovery_exhausted",
+                position=route_position,
+                details={"attempts": int(self._mesh_recovery_attempts)},
             )
-            return False
+            return True
 
         if self._mesh_recovery_started_at is None:
             self._mesh_recovery_started_at = now
-            route_end = np.asarray(
-                self.plan.route.pose_at(self._elapsed_s).position,
-                dtype=np.float64,
-            )
-            self._remember_mesh_recovery_boundary(route_end)
+            self._remember_mesh_recovery_boundary(route_position)
             self._record_blackbox(
                 "mesh_recovery_scan_started",
                 reason=str(reason),
@@ -1190,12 +1226,6 @@ class AutoDiveController:
             return ()
         return tuple(self._mesh_recovery_boundary_positions[:-1])
 
-    def _allow_backward_mesh_recovery_replan(self) -> bool:
-        return bool(
-            self._mesh_recovery_replan_pending
-            and _plan_needs_boundary_replan(self.plan)
-        )
-
     def _should_start_survey(self) -> bool:
         if self.survey_interval_s <= 0.0 or self.survey_duration_s <= 0.0:
             return False
@@ -1254,6 +1284,43 @@ class AutoDiveController:
 
     def _route_speed_m_per_second(self) -> float:
         return float(self.plan.route_length_m) / max(1e-9, float(self.plan.duration_s))
+
+    def _enter_user_assist(
+        self,
+        world,
+        *,
+        reason: str,
+        position: np.ndarray,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        if self.state is AutoDiveState.WAITING_FOR_USER:
+            return
+        position = np.asarray(position, dtype=np.float64).reshape(3)
+        set_prefetch = getattr(world, "set_prefetch_wanted_cells", None)
+        if callable(set_prefetch):
+            set_prefetch(())
+        if self.replanner is not None:
+            self.replanner.shutdown()
+            self.replanner = None
+        self._prefetch_cells = frozenset()
+        self._readiness = AutoDiveReadiness(0, 0, 0, 0, 0, 1.0)
+        self._pause_started_at = None
+        self._survey_pause_started_at = None
+        self._survey_replan_requested = False
+        self._mesh_recovery_started_at = None
+        self._mesh_recovery_replan_pending = False
+        self._last_rejected_replan_position = position.copy()
+        self._user_assist_reason = str(reason)
+        self.state = AutoDiveState.WAITING_FOR_USER
+        self._record_blackbox(
+            "user_assist_requested",
+            reason=str(reason),
+            position=_vector_payload(position),
+            elapsed_s=float(self._elapsed_s),
+            progress=float(self.progress),
+            readiness=_readiness_payload(self._readiness),
+            details=dict(details or {}),
+        )
 
 
 def _failed_cells_snapshot(world) -> set[tuple[int, int, int]]:

@@ -14,6 +14,8 @@ events stay responsive while the cache is built.
 
 from __future__ import annotations
 
+import time
+
 import moderngl
 import numpy as np
 from PIL import Image
@@ -58,6 +60,8 @@ _LOGO_FRAG_SRC = """
 uniform sampler2D u_texture;
 uniform float u_alpha;
 uniform float u_progress;
+uniform float u_indeterminate;
+uniform float u_spinner_phase;
 uniform float u_logo_alpha;
 in vec2 v_uv;
 out vec4 f_color;
@@ -94,11 +98,19 @@ void main() {
         angle += 6.28318530718;
     }
     float pixel_progress = angle / 6.28318530718;
-    float fill_active = step(pixel_progress, clamp(u_progress, 0.0, 1.0));
+    float fill_strength = step(pixel_progress, clamp(u_progress, 0.0, 1.0));
+    if (u_indeterminate > 0.5) {
+        float phase = fract(u_spinner_phase);
+        float arc_offset = fract(pixel_progress - phase + 1.0);
+        float arc_span = 0.24 + 0.04 * sin(phase * 12.56637061436);
+        float arc_mask = 1.0 - smoothstep(arc_span - 0.012, arc_span + 0.012, arc_offset);
+        float leading_taper = 1.0 - smoothstep(0.0, arc_span, arc_offset);
+        fill_strength = arc_mask * mix(0.48, 1.0, leading_taper);
+    }
 
     vec3 track_rgb = vec3(0.315, 0.325, 0.360);
     vec3 fill_rgb = vec3(0.8980, 0.6314, 0.1216);
-    vec4 ring_color = vec4(mix(track_rgb, fill_rgb, fill_active), ring_alpha * mix(0.58, 1.0, fill_active));
+    vec4 ring_color = vec4(mix(track_rgb, fill_rgb, fill_strength), ring_alpha * mix(0.58, 1.0, fill_strength));
 
     float out_alpha = tex_color.a + ring_color.a * (1.0 - tex_color.a);
     vec3 out_rgb = vec3(0.0);
@@ -173,7 +185,7 @@ class ImportProgressPanel:
         self._display_fraction = 0.0
         self._progress_token = None
 
-    def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float,
+    def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float | None,
                title: str = "Preparing Map",
                note: str = "First-time setup in progress. Next time, this map will open much faster.") -> None:
         verts = []
@@ -224,8 +236,9 @@ class ImportProgressPanel:
         panel_h = 310.0
         panel_y0 = h * 0.33
 
-        fraction_clamped = max(0.0, min(1.0, fraction))
-        token = (map_name, title, stage)
+        indeterminate = fraction is None
+        fraction_clamped = 0.0 if indeterminate else max(0.0, min(1.0, fraction))
+        token = (map_name, title, stage, indeterminate)
         if self._progress_token != token:
             self.reset_progress()
             self._progress_token = token
@@ -235,7 +248,8 @@ class ImportProgressPanel:
         if fraction_clamped <= 0.05 and self._display_fraction >= 0.95:
             self._display_fraction = 0.0
 
-        self._display_fraction = max(self._display_fraction, fraction_clamped)
+        if not indeterminate:
+            self._display_fraction = max(self._display_fraction, fraction_clamped)
 
         logo_cx = w / 2.0
         logo_cy = panel_y0 + panel_h * 0.50
@@ -271,7 +285,12 @@ class ImportProgressPanel:
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self._render_logo(logo_cx, logo_cy, window_size, self._display_fraction)
+        self._render_logo(
+            logo_cx,
+            logo_cy,
+            window_size,
+            None if indeterminate else self._display_fraction,
+        )
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
@@ -281,7 +300,7 @@ class ImportProgressPanel:
         center_x: float,
         center_y: float,
         window_size: tuple[int, int],
-        progress: float,
+        progress: float | None,
         alpha: float = 1.0,
         logo_alpha: float = 1.0,
     ) -> None:
@@ -317,7 +336,13 @@ class ImportProgressPanel:
         self._logo_texture.use(location=0)
         self.logo_program["u_texture"].value = 0
         self.logo_program["u_alpha"].value = alpha
-        self.logo_program["u_progress"].value = max(0.0, min(1.0, progress))
+        self.logo_program["u_progress"].value = (
+            0.0 if progress is None else max(0.0, min(1.0, progress))
+        )
+        self.logo_program["u_indeterminate"].value = 1.0 if progress is None else 0.0
+        self.logo_program["u_spinner_phase"].value = (
+            time.perf_counter() * 0.72
+        ) % 1.0
         self.logo_program["u_logo_alpha"].value = max(0.0, min(1.0, logo_alpha))
         self._logo_vao.render(moderngl.TRIANGLES, vertices=6)
 
@@ -487,6 +512,9 @@ class ImportProgressPanel:
             "resume point saved": "Resume point saved",
             "loading chunks": "Opening cave…",
             "opening cave": "Opening cave…",
+            "planning auto dive": "Planning Auto Dive…",
+            "looking for a path": "Looking for a path…",
+            "thinking": "Looking for a path…",
             "done": "Finishing…",
         }
         if normalized in labels:

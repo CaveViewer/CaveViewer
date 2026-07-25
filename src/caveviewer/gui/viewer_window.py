@@ -113,6 +113,10 @@ _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
 _VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
+_MAIN_THREAD_STALL_LOG_THRESHOLD_S = 0.5
+_MAIN_THREAD_STALL_LOG_MIN_INTERVAL_S = 2.0
+_INITIAL_AUTO_DIVE_POSE_POSITION_TOLERANCE_M = 1e-3
+_INITIAL_AUTO_DIVE_POSE_ANGLE_TOLERANCE_RAD = math.radians(0.1)
 _BENCHMARK_STREAMING_ENV_FIELDS = (
     ("system_ram_target_percent", "CAVEVIEWER_MEMORY_UTILIZATION_TARGET"),
     ("gpu_memory_target_percent", "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET"),
@@ -1035,6 +1039,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._auto_dive_start_manifest: dict | None = None
         self._auto_dive_start_cache_dir: str | None = None
         self._auto_dive_start_position: np.ndarray | None = None
+        self._initial_auto_dive_pose_executor: ThreadPoolExecutor | None = None
+        self._initial_auto_dive_pose_future: Future | None = None
+        self._initial_auto_dive_pose_manifest: dict | None = None
+        self._initial_auto_dive_pose_cache_dir: str | None = None
+        self._initial_auto_dive_pose_start_position: np.ndarray | None = None
+        self._initial_auto_dive_pose_start_yaw: float | None = None
+        self._initial_auto_dive_pose_start_pitch: float | None = None
+        self._initial_auto_dive_pose_start_roll: float | None = None
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
@@ -1061,6 +1073,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
         self._chunk_prep_completion_armed = False
+        self._main_thread_stall_last_log_at: dict[str, float] = {}
         self._window_resources_released = False
 
         # Background import state.  Import runs on a worker thread so the
@@ -1086,14 +1099,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._import_pause_notice_title: str = "Import paused"
         self._import_pause_notice_stage: str = "resume point saved"
         self._import_pause_notice_note: str = ""
+        self._startup_map_load_pending: tuple[str, str, dict] | None = None
+        self._startup_map_load_splash_rendered = False
 
         if have_ready_cache:
-            self._load_map(
+            self._startup_map_load_pending = (
                 CaveViewerWindow.cave_cache_dir,
                 CaveViewerWindow.cave_textures_dir,
                 CaveViewerWindow.cave_manifest,
             )
-            self._has_map_loaded = True
         # else: have_pending_import is true instead -- the actual import
         # is deliberately NOT run here, before the window has rendered
         # even one frame. It's triggered from inside on_render() instead
@@ -1312,6 +1326,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         be called first in that second case, to cleanly release the
         previous map's GPU/thread resources before this builds new ones.
         """
+        load_started_at = time.perf_counter()
         self.cache_dir = cache_dir
         self.textures_dir = textures_dir
         self.manifest = manifest
@@ -1383,6 +1398,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 gpu_geometry_budget_bytes / (1024 ** 2),
                 gpu_residency_safety_bytes / (1024 ** 2),
             )
+        texture_setup_started_at = time.perf_counter()
         self.texture_manager = TextureManager(
             self.ctx,
             self.textures_dir,
@@ -1391,7 +1407,18 @@ class CaveViewerWindow(mglw.WindowConfig):
             max_decoded_cache_bytes=max_decoded_cache_bytes,
             max_resident_texture_bytes=max_resident_texture_bytes,
         )
+        self._log_main_thread_stall(
+            "texture manager setup",
+            time.perf_counter() - texture_setup_started_at,
+            materials=len(self.manifest.get("mtl_materials", {})),
+        )
+        texture_validation_started_at = time.perf_counter()
         self.texture_manager.validate_textures()
+        self._log_main_thread_stall(
+            "texture validation",
+            time.perf_counter() - texture_validation_started_at,
+            materials=len(self.manifest.get("mtl_materials", {})),
+        )
 
         def predecode_textures_for_chunk(chunk_data):
             # Called from a background worker thread (see StreamingWorld) --
@@ -1436,6 +1463,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             load_radius_cells=self.render_distance_stepper.value,
             unload_radius_margin=1,
         )
+        world_setup_started_at = time.perf_counter()
         self.world = StreamingWorld(
             self.cache_dir,
             config,
@@ -1449,32 +1477,20 @@ class CaveViewerWindow(mglw.WindowConfig):
             texture_gpu_budget_bytes=max_resident_texture_bytes,
             gpu_geometry_budget_bytes=gpu_geometry_budget_bytes,
         )
+        self._log_main_thread_stall(
+            "streaming world setup",
+            time.perf_counter() - world_setup_started_at,
+            chunks=len(self.manifest.get("chunks", {})),
+        )
 
         # Fallback starting position: center of the first available chunk, so
         # older caches without navigation metadata still open somewhere sane.
         first_cell_str = next(iter(self.manifest["chunks"]))
         first_info = self.manifest["chunks"][first_cell_str]
         start_pos = (np.array(first_info["bounds_min"]) + np.array(first_info["bounds_max"])) / 2.0
-        initial_pose = (
-            None
-            if benchmark_controller is not None
-            else self._auto_dive_initial_camera_pose()
-        )
-        if initial_pose is None:
-            self.camera = FlyCamera(position=tuple(start_pos))
-        else:
-            self.camera = FlyCamera(
-                position=initial_pose.position,
-                yaw_deg=initial_pose.yaw_deg,
-                pitch_deg=initial_pose.pitch_deg,
-            )
-            _LOG.info(
-                "Initial camera placed at Auto Dive endpoint: "
-                "position=(%.2f, %.2f, %.2f).",
-                float(initial_pose.position[0]),
-                float(initial_pose.position[1]),
-                float(initial_pose.position[2]),
-            )
+        self.camera = FlyCamera(position=tuple(start_pos))
+        if benchmark_controller is None:
+            self._start_initial_auto_dive_pose(start_pos)
         self._benchmark_route_prefetch_cells = frozenset()
         if benchmark_controller is not None:
             benchmark_controller.set_position_origin(start_pos)
@@ -1487,10 +1503,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         # footprint with a live red dot for current position. Built once
         # from the manifest's chunk bounding boxes -- no extra rendering
         # pass or GPU cost beyond this tiny 2D overlay.
+        minimap_started_at = time.perf_counter()
         self.minimap = Minimap(
             self.ctx,
             self.manifest,
             centerline_points_xz=self._minimap_centerline_points_xz(self.manifest),
+        )
+        self._log_main_thread_stall(
+            "minimap setup",
+            time.perf_counter() - minimap_started_at,
+            chunks=len(self.manifest.get("chunks", {})),
         )
 
         # One-time texture diagnostic: print material/texture summary to
@@ -1552,24 +1574,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.controls_overlay.show_fullscreen()
         # Reset on each map load; set True when the initial view has enough
         # uploaded chunks to be usable, not merely when the first chunk arrives.
-        self._initial_chunks_loaded = False
-        self._initial_visual_ready = False
-        self._initial_visual_ready_frames = 0
-        self._initial_visual_ready_visible_chunks = 0
-        self._initial_visual_ready_required_textures = 0
-        self._initial_visual_ready_resident_textures = 0
-        self._initial_visual_ready_visible_textures = 0
-        self._initial_visual_ready_missing_textures = 0
-        self._initial_visual_ready_expected_chunks = 0
-        self._initial_visual_ready_covered_chunks = 0
-        self._initial_visual_ready_missing_chunks = 0
-        self._initial_visual_ready_coverage_pct = 100.0
-        self._initial_visual_ready_logged = False
-        self._chunk_prep_progress = 0.0
-        self._chunk_prep_complete_until = None
-        self._chunk_prep_completion_armed = False
-        self.import_progress_panel.reset_progress()
+        self._reset_initial_chunk_loading_state()
         self._record_benchmark_streaming_environment()
+        self._log_main_thread_stall(
+            "map load",
+            time.perf_counter() - load_started_at,
+            chunks=len(self.manifest.get("chunks", {})),
+        )
 
     def _configure_benchmark_route_prefetch(self, origin: np.ndarray) -> None:
         """Ask streaming to keep the benchmark route tube wanted during startup."""
@@ -2451,9 +2462,216 @@ class CaveViewerWindow(mglw.WindowConfig):
             _LOG.debug("Auto Dive initial camera unavailable: %s", exc)
             return None
 
+    def _start_initial_auto_dive_pose(self, fallback_position: np.ndarray) -> bool:
+        """Queue the preferred map-load pose without blocking the render thread."""
+        if self.manifest is None:
+            return False
+        self._cancel_initial_auto_dive_pose()
+
+        executor: ThreadPoolExecutor | None = None
+        try:
+            settings = _auto_dive_settings_from_preferences()
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="CaveViewer-InitialAutoDivePose",
+            )
+            future = executor.submit(
+                build_auto_dive_initial_camera_pose,
+                self.manifest,
+                settings=settings,
+            )
+        except Exception as exc:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
+            _LOG.debug("Auto Dive initial camera unavailable: %s", exc)
+            return False
+
+        self._initial_auto_dive_pose_executor = executor
+        self._initial_auto_dive_pose_future = future
+        self._initial_auto_dive_pose_manifest = self.manifest
+        self._initial_auto_dive_pose_cache_dir = self.cache_dir
+        self._initial_auto_dive_pose_start_position = np.asarray(
+            fallback_position,
+            dtype=np.float64,
+        ).copy()
+        self._initial_auto_dive_pose_start_yaw = self._camera_angle("yaw")
+        self._initial_auto_dive_pose_start_pitch = self._camera_angle("pitch")
+        self._initial_auto_dive_pose_start_roll = self._camera_angle("roll")
+        _LOG.info("Auto Dive initial camera planning started.")
+        return True
+
+    def _update_initial_auto_dive_pose(self) -> None:
+        future = getattr(self, "_initial_auto_dive_pose_future", None)
+        if future is None or not future.done():
+            return
+
+        executor = getattr(self, "_initial_auto_dive_pose_executor", None)
+        requested_manifest = getattr(self, "_initial_auto_dive_pose_manifest", None)
+        requested_cache_dir = getattr(self, "_initial_auto_dive_pose_cache_dir", None)
+        start_position = getattr(
+            self,
+            "_initial_auto_dive_pose_start_position",
+            None,
+        )
+        start_yaw = getattr(self, "_initial_auto_dive_pose_start_yaw", None)
+        start_pitch = getattr(self, "_initial_auto_dive_pose_start_pitch", None)
+        start_roll = getattr(self, "_initial_auto_dive_pose_start_roll", None)
+        self._clear_initial_auto_dive_pose_state(shutdown_executor=False)
+
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        try:
+            initial_pose = future.result()
+        except NavigationConfigurationError as exc:
+            _LOG.debug("Auto Dive initial camera unavailable: %s", exc)
+            return
+        except Exception:
+            _LOG.exception("Auto Dive initial camera planning failed.")
+            return
+
+        if initial_pose is None:
+            return
+        if (
+            self.manifest is not requested_manifest
+            or self.cache_dir != requested_cache_dir
+            or self.camera is None
+            or self.world is None
+            or not self._has_map_loaded
+        ):
+            _LOG.debug("Discarded stale Auto Dive initial camera after map changed.")
+            return
+        if self._auto_dive_is_active() or self._auto_dive_start_is_pending():
+            _LOG.debug(
+                "Discarded Auto Dive initial camera because Auto Dive is active."
+            )
+            return
+        if not self._initial_auto_dive_camera_is_unchanged(
+            start_position,
+            start_yaw,
+            start_pitch,
+            start_roll,
+        ):
+            _LOG.info(
+                "Skipped Auto Dive initial camera because the camera changed "
+                "before planning finished."
+            )
+            return
+
+        previous_camera = self.camera
+        self.camera = FlyCamera(
+            position=initial_pose.position,
+            yaw_deg=initial_pose.yaw_deg,
+            pitch_deg=initial_pose.pitch_deg,
+            move_speed=float(getattr(previous_camera, "move_speed", 4.0)),
+            mouse_sensitivity=float(
+                getattr(previous_camera, "mouse_sensitivity", 0.12)
+            ),
+        )
+        self._reset_initial_chunk_loading_state()
+        _LOG.info(
+            "Initial camera placed at Auto Dive endpoint: "
+            "position=(%.2f, %.2f, %.2f).",
+            float(initial_pose.position[0]),
+            float(initial_pose.position[1]),
+            float(initial_pose.position[2]),
+        )
+
+    def _camera_angle(self, attribute_name: str) -> float | None:
+        camera = getattr(self, "camera", None)
+        if camera is None:
+            return None
+        try:
+            return float(getattr(camera, attribute_name))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _angle_delta_rad(current: float | None, expected: float | None) -> float:
+        if current is None or expected is None:
+            return 0.0
+        return abs((current - expected + math.pi) % (2.0 * math.pi) - math.pi)
+
+    def _initial_auto_dive_camera_is_unchanged(
+        self,
+        start_position: np.ndarray | None,
+        start_yaw: float | None,
+        start_pitch: float | None,
+        start_roll: float | None,
+    ) -> bool:
+        camera = getattr(self, "camera", None)
+        if camera is None or start_position is None:
+            return False
+        current_position = np.asarray(camera.position, dtype=np.float64)
+        if not np.allclose(
+            current_position,
+            start_position,
+            rtol=0.0,
+            atol=_INITIAL_AUTO_DIVE_POSE_POSITION_TOLERANCE_M,
+        ):
+            return False
+        return (
+            self._angle_delta_rad(self._camera_angle("yaw"), start_yaw)
+            <= _INITIAL_AUTO_DIVE_POSE_ANGLE_TOLERANCE_RAD
+            and self._angle_delta_rad(self._camera_angle("pitch"), start_pitch)
+            <= _INITIAL_AUTO_DIVE_POSE_ANGLE_TOLERANCE_RAD
+            and self._angle_delta_rad(self._camera_angle("roll"), start_roll)
+            <= _INITIAL_AUTO_DIVE_POSE_ANGLE_TOLERANCE_RAD
+        )
+
+    def _reset_initial_chunk_loading_state(self) -> None:
+        self._initial_chunks_loaded = False
+        self._initial_visual_ready = False
+        self._initial_visual_ready_frames = 0
+        self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_required_textures = 0
+        self._initial_visual_ready_resident_textures = 0
+        self._initial_visual_ready_visible_textures = 0
+        self._initial_visual_ready_missing_textures = 0
+        self._initial_visual_ready_expected_chunks = 0
+        self._initial_visual_ready_covered_chunks = 0
+        self._initial_visual_ready_missing_chunks = 0
+        self._initial_visual_ready_coverage_pct = 100.0
+        self._initial_visual_ready_logged = False
+        self._chunk_prep_progress = 0.0
+        self._chunk_prep_complete_until = None
+        self._chunk_prep_completion_armed = False
+        panel = getattr(self, "import_progress_panel", None)
+        if panel is not None:
+            panel.reset_progress()
+
+    def _clear_initial_auto_dive_pose_state(self, *, shutdown_executor: bool) -> None:
+        executor = getattr(self, "_initial_auto_dive_pose_executor", None)
+        if shutdown_executor and executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+        self._initial_auto_dive_pose_executor = None
+        self._initial_auto_dive_pose_future = None
+        self._initial_auto_dive_pose_manifest = None
+        self._initial_auto_dive_pose_cache_dir = None
+        self._initial_auto_dive_pose_start_position = None
+        self._initial_auto_dive_pose_start_yaw = None
+        self._initial_auto_dive_pose_start_pitch = None
+        self._initial_auto_dive_pose_start_roll = None
+
+    def _cancel_initial_auto_dive_pose(self) -> bool:
+        future = getattr(self, "_initial_auto_dive_pose_future", None)
+        if future is None:
+            return False
+        future.cancel()
+        self._clear_initial_auto_dive_pose_state(shutdown_executor=True)
+        _LOG.info("Auto Dive initial camera planning cancelled.")
+        return True
+
     def _auto_dive_is_active(self) -> bool:
         controller = getattr(self, "_auto_dive_controller", None)
         return controller is not None and controller.active
+
+    def _auto_dive_waiting_for_user_input(self) -> bool:
+        controller = getattr(self, "_auto_dive_controller", None)
+        return bool(
+            controller is not None
+            and getattr(controller, "state", None) is AutoDiveState.WAITING_FOR_USER
+        )
 
     def _auto_dive_start_is_pending(self) -> bool:
         return getattr(self, "_auto_dive_start_future", None) is not None
@@ -2461,6 +2679,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _toggle_auto_dive(self) -> bool:
         if not self._has_map_loaded or self.camera is None or self.world is None:
             return False
+        if self._auto_dive_waiting_for_user_input():
+            self._stop_auto_dive()
+            return self._start_auto_dive()
         if self._auto_dive_is_active() or self._auto_dive_start_is_pending():
             self._stop_auto_dive()
             return True
@@ -2523,6 +2744,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 build_centerline_auto_dive_plan,
                 self.manifest,
                 current_position=tuple(float(value) for value in start_position),
+                current_yaw=float(self.camera.yaw),
+                current_pitch=float(self.camera.pitch),
+                current_travel_yaw=float(self.camera.yaw),
+                current_travel_pitch=float(self.camera.pitch),
                 settings=auto_dive_settings,
                 cache_dir=self.cache_dir,
                 diagnostics=_auto_dive_diagnostic_sink(blackbox),
@@ -2799,25 +3024,181 @@ class CaveViewerWindow(mglw.WindowConfig):
                 now=now,
                 navigation_clamped=navigation_clamped,
             )
-        if state is AutoDiveState.COMPLETE:
+        current_state = getattr(controller, "state", state)
+        if current_state is AutoDiveState.WAITING_FOR_USER:
+            if self.minimap is not None:
+                self.minimap.set_active_route_points_xz(())
+            return
+        if current_state is AutoDiveState.COMPLETE:
             self._stop_auto_dive(completed=True)
 
     def _render_auto_dive_progress(self, window_size: tuple[int, int]) -> None:
+        if self._auto_dive_start_is_pending():
+            map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+            self.import_progress_panel.render(
+                window_size,
+                map_name,
+                "planning auto dive",
+                None,
+                title="",
+                note="Finding a forward route…",
+            )
+            return
+
         controller = getattr(self, "_auto_dive_controller", None)
+        if (
+            controller is not None
+            and getattr(controller, "state", None) is AutoDiveState.WAITING_FOR_USER
+        ):
+            self._render_auto_dive_user_assist_prompt(window_size)
+            return
         if controller is None or controller.state is not AutoDiveState.LOADING:
             return
         show_loading_indicator = getattr(controller, "show_loading_indicator", True)
         if not bool(show_loading_indicator):
             return
         map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+        loading_progress = getattr(
+            controller,
+            "loading_progress_fraction",
+            controller.progress,
+        )
+        loading_stage = (
+            "looking for a path"
+            if loading_progress is None
+            else ""
+        )
         self.import_progress_panel.render(
             window_size,
             map_name,
-            "",
-            controller.progress,
+            loading_stage,
+            loading_progress,
             title="",
             note="",
         )
+
+    def _auto_dive_resume_shortcut_label(self) -> str:
+        try:
+            modifier = self._active_platform_adapter().primary_shortcut_modifier_label()
+        except Exception:
+            modifier = "Ctrl"
+        return f"{modifier} + A"
+
+    def _render_auto_dive_user_assist_prompt(
+        self,
+        window_size: tuple[int, int],
+    ) -> None:
+        """Draw a small prompt while manual steering is needed to resume."""
+        w, h = window_size
+        panel_w = min(max(420.0, w * 0.44), w - 48.0)
+        panel_h = 104.0
+        x0 = (w - panel_w) / 2.0
+        y0 = 30.0
+        x1 = x0 + panel_w
+        y1 = y0 + panel_h
+        title = "Auto Dive needs input"
+        note = (
+            "Fly toward the passage ahead, then press "
+            f"{self._auto_dive_resume_shortcut_label()} to resume."
+        )
+        verts = []
+
+        def px_to_ndc(x: float, y: float) -> tuple[float, float]:
+            return (x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0
+
+        def add_quad_px(
+            qx0: float,
+            qy0: float,
+            qx1: float,
+            qy1: float,
+            rgba: tuple[float, float, float, float],
+        ) -> None:
+            nx0, ny0 = px_to_ndc(qx0, qy0)
+            nx1, ny1 = px_to_ndc(qx1, qy1)
+            top, bottom = max(ny0, ny1), min(ny0, ny1)
+            left, right = min(nx0, nx1), max(nx0, nx1)
+            quad = [
+                (left, bottom), (right, bottom), (right, top),
+                (left, bottom), (right, top), (left, top),
+            ]
+            for vx, vy in quad:
+                verts.append((vx, vy, *rgba))
+
+        def add_centered_text(
+            text: str,
+            y: float,
+            pixel_size: float,
+            rgba: tuple[float, float, float, float],
+            *,
+            max_width: float,
+        ) -> float:
+            text = " ".join(str(text or "").split())
+            if not text:
+                return 0.0
+            min_pixel_size = bitmap_font.pixel_size_at_text_scale(
+                1.20,
+                self.UI_TEXT_SCALE,
+            )
+            pixel_size = bitmap_font.pixel_size_at_text_scale(
+                pixel_size,
+                self.UI_TEXT_SCALE,
+            )
+            bounds = bitmap_font.text_bounds_px(text, pixel_size)
+            text_w = bounds[2] - bounds[0]
+            if text_w > max_width:
+                pixel_size = max(min_pixel_size, pixel_size * max_width / text_w)
+                bounds = bitmap_font.text_bounds_px(text, pixel_size)
+                text_w = bounds[2] - bounds[0]
+            text_h = bounds[3] - bounds[1]
+            origin_x = (w - text_w) / 2.0 - bounds[0]
+            origin_y = y - bounds[1]
+            r, g, b, a = rgba
+            for glyph in bitmap_font.iter_text_pixels(text, origin_x, origin_y, pixel_size):
+                px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
+                glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
+                add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
+            return text_h
+
+        add_quad_px(x0, y0, x1, y1, (0.025, 0.028, 0.040, 0.86))
+        border = 2.0
+        border_color = (0.8980, 0.6314, 0.1216, 0.95)
+        add_quad_px(x0, y0, x1, y0 + border, border_color)
+        add_quad_px(x0, y1 - border, x1, y1, border_color)
+        add_quad_px(x0, y0, x0 + border, y1, border_color)
+        add_quad_px(x1 - border, y0, x1, y1, border_color)
+
+        title_h = add_centered_text(
+            title,
+            y0 + 24.0,
+            2.25,
+            (0.9490, 0.8510, 0.5490, 1.0),
+            max_width=panel_w - 48.0,
+        )
+        add_centered_text(
+            note,
+            y0 + 24.0 + title_h + 18.0,
+            1.45,
+            (0.835, 0.855, 0.86, 0.92),
+            max_width=panel_w - 48.0,
+        )
+
+        data = np.array(verts, dtype=np.float32)
+        if len(verts) > self._status_panel_max_verts:
+            self._status_panel_vbo.release()
+            self._status_panel_max_verts = max(self._status_panel_max_verts * 2, len(verts))
+            self._status_panel_vbo = self.ctx.buffer(reserve=self._status_panel_max_verts * 6 * 4)
+            self._status_panel_vao = self.ctx.vertex_array(
+                self._hud_panel_program,
+                [(self._status_panel_vbo, "2f 4f", "in_pos", "in_color")],
+            )
+        self._status_panel_vbo.write(data.tobytes())
+        self.ctx.disable(moderngl.CULL_FACE)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.BLEND)
+        self._status_panel_vao.render(moderngl.TRIANGLES, vertices=len(verts))
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
 
     def _teardown_current_map(self, *, final_shutdown: bool = False) -> None:
         """
@@ -2845,6 +3226,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         logs the unjoined worker instead of letting the viewer close callback
         block forever.
         """
+        self._cancel_initial_auto_dive_pose()
         if not self._has_map_loaded:
             return
 
@@ -2901,6 +3283,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         self._window_resources_released = True
 
+        self._cancel_initial_auto_dive_pose()
         self._stop_recording()
         self._keys_down.clear()
         self._mouse_look_active = False
@@ -3090,6 +3473,34 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.import_progress_panel,
             self.wnd.size,
         )
+
+    def _render_startup_map_load_splash(self) -> None:
+        pending = getattr(self, "_startup_map_load_pending", None)
+        manifest = pending[2] if pending is not None else {}
+        map_name = os.path.basename(str(manifest.get("source_obj", "map")))
+        self.ctx.clear(0.02, 0.02, 0.03)
+        self.import_progress_panel.render(
+            self.wnd.size,
+            map_name,
+            "opening cave",
+            None,
+            title="",
+            note="Preparing map…",
+        )
+
+    def _load_startup_map_after_splash(self) -> None:
+        pending = getattr(self, "_startup_map_load_pending", None)
+        if pending is None:
+            return
+        if not getattr(self, "_startup_map_load_splash_rendered", False):
+            self._render_startup_map_load_splash()
+            self._startup_map_load_splash_rendered = True
+            return
+
+        self._startup_map_load_pending = None
+        cache_dir, textures_dir, manifest = pending
+        self._load_map(cache_dir, textures_dir, manifest)
+        self._has_map_loaded = True
 
     def _present_pending_import_splash_now(self) -> bool:
         """Best-effort immediate splash presentation during window setup."""
@@ -4386,6 +4797,39 @@ class CaveViewerWindow(mglw.WindowConfig):
             int(stats.get("wanted", 0)),
         )
 
+    def _log_main_thread_stall(
+        self,
+        label: str,
+        elapsed_s: float,
+        **details: object,
+    ) -> None:
+        if elapsed_s < _MAIN_THREAD_STALL_LOG_THRESHOLD_S:
+            return
+        last_logs = getattr(self, "_main_thread_stall_last_log_at", None)
+        if last_logs is None:
+            last_logs = {}
+            self._main_thread_stall_last_log_at = last_logs
+        now = time.perf_counter()
+        last_logged_at = last_logs.get(label)
+        if (
+            last_logged_at is not None
+            and now - last_logged_at < _MAIN_THREAD_STALL_LOG_MIN_INTERVAL_S
+        ):
+            return
+        last_logs[label] = now
+        detail_items = [
+            f"{name}={value}"
+            for name, value in details.items()
+            if value is not None
+        ]
+        detail_text = f" ({' '.join(detail_items)})" if detail_items else ""
+        _LOG.warning(
+            "Main-thread stall: %s took %.0fms%s.",
+            label,
+            elapsed_s * 1000.0,
+            detail_text,
+        )
+
     def _initial_chunk_load_progress(self, stats: dict) -> float:
         loaded = max(0, int(stats.get("loaded_wanted", stats.get("loaded", 0))))
         ready = max(0, int(stats.get("ready", 0)))
@@ -4934,6 +5378,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._reset_render_throttle("import_progress")
 
         if not self._has_map_loaded:
+            if getattr(self, "_startup_map_load_pending", None) is not None:
+                self._load_startup_map_after_splash()
+                return
             if self._render_throttle_due(
                 "import_pause_notice", _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S
             ):
@@ -4963,6 +5410,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             benchmark_controller is not None
             and not benchmark_controller.finished
         )
+        self._update_initial_auto_dive_pose()
         self._update_auto_dive_start()
 
         # Sleep/wake (or a debugger stop) can yield a very large frame_time
@@ -5006,7 +5454,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.camera.position.astype(np.float32),
                 cell_priority_key=self._streaming_cell_priority_key(),
             )
-            streaming_timing["update_ms"] = (time.perf_counter() - t_update) * 1000.0
+            update_elapsed_s = time.perf_counter() - t_update
+            streaming_timing["update_ms"] = update_elapsed_s * 1000.0
+            self._log_main_thread_stall("streaming update", update_elapsed_s)
 
             pre_drain_stats = self.world.stats()
             (
@@ -5023,9 +5473,16 @@ class CaveViewerWindow(mglw.WindowConfig):
                 max_per_frame=upload_chunks_per_frame,
                 time_budget_ms=upload_time_budget_ms,
             )
-            streaming_timing["ready_drain_ms"] = (
-                time.perf_counter() - t_ready_drain
-            ) * 1000.0
+            ready_drain_elapsed_s = time.perf_counter() - t_ready_drain
+            streaming_timing["ready_drain_ms"] = ready_drain_elapsed_s * 1000.0
+            self._log_main_thread_stall(
+                "ready chunk drain",
+                ready_drain_elapsed_s,
+                ready=int(pre_drain_stats.get("ready", 0)),
+                pending=int(pre_drain_stats.get("pending", 0)),
+                max_per_frame=upload_chunks_per_frame,
+                time_budget_ms=upload_time_budget_ms,
+            )
             t_failure_drain = time.perf_counter()
             self._drain_streaming_worker_failures()
             streaming_timing["failure_drain_ms"] = (

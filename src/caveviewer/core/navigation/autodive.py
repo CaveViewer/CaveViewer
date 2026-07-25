@@ -67,7 +67,11 @@ _AUTO_DIVE_MESH_RECOVERY_SCAN_PITCH_OFFSETS_DEG = (
     45.0,
 )
 _AUTO_DIVE_MESH_RECOVERY_SCAN_CONE_ALIGNMENT = math.cos(math.radians(22.5))
-_AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT = math.cos(math.radians(120.0))
+_AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES = 90.0
+_AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT = math.cos(
+    math.radians(_AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES)
+)
+_AUTO_DIVE_MESH_RECOVERY_FORWARD_ALIGNMENT = 0.0
 _AUTO_DIVE_MESH_RECOVERY_TURN_PENALTY_CELLS = 5.0
 _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS = 1.0
 _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_MAX_FRACTION = 0.35
@@ -457,10 +461,23 @@ def build_centerline_auto_dive_plan(
         current_x=float(current[0]),
         current_z=float(current[2]),
     )
+    direction_yaw = (
+        current_travel_yaw
+        if current_travel_yaw is not None
+        else current_yaw
+    )
+    direction_pitch = (
+        current_travel_pitch
+        if current_travel_pitch is not None
+        else current_pitch
+    )
     route_cells, circular_arc = _select_auto_dive_cells(
         centerline_path,
         nearest_index=nearest_index,
         closed_loop_gap_fraction=settings.closed_loop_gap_fraction,
+        current=current,
+        current_yaw=direction_yaw,
+        current_pitch=direction_pitch,
     )
     if len(route_cells) < 2:
         raise NavigationConfigurationError("Auto Dive route is too short")
@@ -841,19 +858,240 @@ def _select_auto_dive_cells(
     *,
     nearest_index: int,
     closed_loop_gap_fraction: float,
+    current: np.ndarray | None = None,
+    current_yaw: float | None = None,
+    current_pitch: float | None = None,
 ) -> tuple[tuple[FootprintCell, ...], bool]:
     cells = centerline_path.cells
     if _centerline_cells_form_closed_loop(cells):
-        return (
-            _open_arc_from_closed_loop(
-                cells,
-                start_index=nearest_index,
-                gap_fraction=closed_loop_gap_fraction,
-            ),
-            True,
+        forward = _open_arc_from_closed_loop(
+            cells,
+            start_index=nearest_index,
+            gap_fraction=closed_loop_gap_fraction,
         )
+        reverse = _open_arc_from_closed_loop(
+            _reversed_centerline_loop_cells(cells),
+            start_index=_reversed_loop_start_index(cells, nearest_index),
+            gap_fraction=closed_loop_gap_fraction,
+        )
+        return _select_auto_dive_cells_for_view(
+            centerline_path,
+            (forward, reverse),
+            current=current,
+            current_yaw=current_yaw,
+            current_pitch=current_pitch,
+        ), True
 
-    return tuple(cells[nearest_index:]), False
+    forward = tuple(cells[nearest_index:])
+    reverse = tuple(reversed(cells[: nearest_index + 1]))
+    return _select_auto_dive_cells_for_view(
+        centerline_path,
+        (forward, reverse),
+        current=current,
+        current_yaw=current_yaw,
+        current_pitch=current_pitch,
+    ), False
+
+
+def _select_auto_dive_cells_for_view(
+    centerline_path: CenterlinePath,
+    candidates: tuple[tuple[FootprintCell, ...], ...],
+    *,
+    current: np.ndarray | None,
+    current_yaw: float | None,
+    current_pitch: float | None,
+) -> tuple[FootprintCell, ...]:
+    viable = tuple(candidate for candidate in candidates if len(candidate) >= 2)
+    if not viable:
+        return candidates[0] if candidates else ()
+    if current is None:
+        return viable[0]
+
+    current_point: Point = (
+        float(current[0]),
+        float(current[1]),
+        float(current[2]),
+    )
+    position_direction = _auto_dive_current_position_offset_direction(
+        centerline_path,
+        current=np.asarray(current, dtype=np.float64),
+        current_point=current_point,
+    )
+    if current_yaw is None and position_direction is None:
+        return viable[0]
+    return max(
+        viable,
+        key=lambda candidate: _auto_dive_cell_direction_score(
+            centerline_path,
+            candidate,
+            current_point=current_point,
+            current=np.asarray(current, dtype=np.float64),
+            current_yaw=current_yaw,
+            current_pitch=current_pitch,
+            position_direction=position_direction,
+        ),
+    )
+
+
+def _auto_dive_cell_direction_score(
+    centerline_path: CenterlinePath,
+    cells: tuple[FootprintCell, ...],
+    *,
+    current_point: Point,
+    current: np.ndarray,
+    current_yaw: float | None,
+    current_pitch: float | None,
+    position_direction: np.ndarray | None,
+) -> tuple[object, ...]:
+    target = _auto_dive_direction_target_point(
+        centerline_path,
+        cells,
+        current=current,
+        current_point=current_point,
+    )
+    if target is None:
+        return (False, False, -1.0, -1.0, -1.0, 0.0, -len(cells))
+    view_alignment = (
+        None
+        if current_yaw is None
+        else _mesh_recovery_view_alignment(
+            current_point,
+            target,
+            current_yaw=current_yaw,
+            current_pitch=current_pitch,
+        )
+    )
+    position_alignment = _auto_dive_target_alignment_from_direction(
+        current_point,
+        target,
+        position_direction,
+    )
+    intent_alignments = tuple(
+        value
+        for value in (view_alignment, position_alignment)
+        if value is not None
+    )
+    if not intent_alignments:
+        return (True, False, -1.0, -1.0, -1.0, 0.0, -len(cells))
+    alignment = max(intent_alignments)
+    length_m = footprint_path_length(cells, centerline_path.centers)
+    return (
+        True,
+        alignment >= _AUTO_DIVE_MESH_RECOVERY_FORWARD_ALIGNMENT,
+        float(alignment),
+        -1.0 if position_alignment is None else float(position_alignment),
+        -1.0 if view_alignment is None else float(view_alignment),
+        float(length_m),
+        -len(cells),
+    )
+
+
+def _auto_dive_direction_target_point(
+    centerline_path: CenterlinePath,
+    cells: tuple[FootprintCell, ...],
+    *,
+    current: np.ndarray,
+    current_point: Point,
+) -> Point | None:
+    target_cells = _route_cells_after_current_camera_progress(
+        centerline_path,
+        route_cells=cells,
+        current=current,
+    )
+    threshold_m = max(
+        0.5,
+        float(centerline_path.footprint_cell_size) * 0.5,
+    )
+    for cell in target_cells:
+        target = _mesh_recovery_point_for_cell(
+            centerline_path,
+            cell,
+            fallback_y=float(current_point[1]),
+        )
+        if (
+            float(
+                np.linalg.norm(
+                    np.asarray(target, dtype=np.float64)
+                    - np.asarray(current_point, dtype=np.float64)
+                )
+            )
+            >= threshold_m
+        ):
+            return target
+    return None
+
+
+def _auto_dive_current_position_offset_direction(
+    centerline_path: CenterlinePath,
+    *,
+    current: np.ndarray,
+    current_point: Point,
+) -> np.ndarray | None:
+    component_cells = centerline_path.component_cells
+    if not component_cells:
+        return None
+    current_cell = _current_footprint_cell(centerline_path, current)
+    if current_cell not in component_cells:
+        current_cell = min(
+            component_cells,
+            key=lambda cell: (
+                _cell_center_distance_squared(centerline_path, cell, current),
+                cell,
+            ),
+        )
+    anchor = _mesh_recovery_point_for_cell(
+        centerline_path,
+        current_cell,
+        fallback_y=float(current_point[1]),
+    )
+    offset = (
+        np.asarray(current_point, dtype=np.float64)
+        - np.asarray(anchor, dtype=np.float64)
+    )
+    norm = float(np.linalg.norm(offset))
+    threshold_m = max(
+        0.25,
+        float(centerline_path.footprint_cell_size) * 0.25,
+    )
+    if norm < threshold_m:
+        return None
+    return offset / norm
+
+
+def _auto_dive_target_alignment_from_direction(
+    current_point: Point,
+    target_point: Point,
+    direction: np.ndarray | None,
+) -> float | None:
+    if direction is None:
+        return None
+    target_vector = (
+        np.asarray(target_point, dtype=np.float64)
+        - np.asarray(current_point, dtype=np.float64)
+    )
+    target_norm = float(np.linalg.norm(target_vector))
+    direction_norm = float(np.linalg.norm(direction))
+    if target_norm <= 1e-9 or direction_norm <= 1e-9:
+        return None
+    return float(np.dot(target_vector / target_norm, direction / direction_norm))
+
+
+def _reversed_centerline_loop_cells(
+    cells: tuple[FootprintCell, ...],
+) -> tuple[FootprintCell, ...]:
+    loop_cells = cells[:-1] if cells and cells[0] == cells[-1] else cells
+    return tuple(reversed(loop_cells))
+
+
+def _reversed_loop_start_index(
+    cells: tuple[FootprintCell, ...],
+    nearest_index: int,
+) -> int:
+    loop_cells = cells[:-1] if cells and cells[0] == cells[-1] else cells
+    if not loop_cells:
+        return 0
+    bounded_index = max(0, min(len(loop_cells) - 1, int(nearest_index)))
+    return len(loop_cells) - 1 - bounded_index
 
 
 def _centerline_cells_form_closed_loop(
@@ -1429,6 +1667,16 @@ def _select_best_auto_dive_route_candidate(
         if collision_validator.has_mesh_collision_guard
         else collision_validator
     )
+    current_point: Point = (
+        float(current[0]),
+        float(current[1]),
+        float(current[2]),
+    )
+    position_direction = _auto_dive_current_position_offset_direction(
+        centerline_path,
+        current=current,
+        current_point=current_point,
+    )
     if len(specs) <= 1:
         candidate = _build_auto_dive_route_candidate(
             specs[0],
@@ -1438,11 +1686,6 @@ def _select_best_auto_dive_route_candidate(
             current=current,
             settings=settings,
             collision_validator=construction_collision_validator,
-        )
-        current_point: Point = (
-            float(current[0]),
-            float(current[1]),
-            float(current[2]),
         )
         candidate_score = _score_auto_dive_route_candidate(
             candidate,
@@ -1454,6 +1697,7 @@ def _select_best_auto_dive_route_candidate(
             current_point=current_point,
             current_travel_yaw=current_travel_yaw,
             current_travel_pitch=current_travel_pitch,
+            position_direction=position_direction,
             cell_size=collision_validator.cell_size,
         )
         if (
@@ -1464,6 +1708,7 @@ def _select_best_auto_dive_route_candidate(
                 current_point=current_point,
                 current_travel_yaw=current_travel_yaw,
                 current_travel_pitch=current_travel_pitch,
+                position_direction=position_direction,
                 cell_size=collision_validator.cell_size,
             )
         ):
@@ -1483,7 +1728,7 @@ def _select_best_auto_dive_route_candidate(
                         )
                     ],
                     "reason": "no_forward_travel_candidates",
-                    "travel_cone_degrees": 120.0,
+                    "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
                     "travel_filter": travel_filter_payload,
                 },
             )
@@ -1567,11 +1812,6 @@ def _select_best_auto_dive_route_candidate(
             selection_reason="fallback_raw_points",
         )
 
-    current_point: Point = (
-        float(current[0]),
-        float(current[1]),
-        float(current[2]),
-    )
     scored = [
         (
             _score_auto_dive_route_candidate(
@@ -1619,6 +1859,7 @@ def _select_best_auto_dive_route_candidate(
         current_point=current_point,
         current_travel_yaw=current_travel_yaw,
         current_travel_pitch=current_travel_pitch,
+        position_direction=position_direction,
         cell_size=collision_validator.cell_size,
     )
     scored = _forward_travel_cone_route_candidates(
@@ -1626,6 +1867,7 @@ def _select_best_auto_dive_route_candidate(
         current_point=current_point,
         current_travel_yaw=current_travel_yaw,
         current_travel_pitch=current_travel_pitch,
+        position_direction=position_direction,
         cell_size=collision_validator.cell_size,
     )
     if not scored:
@@ -1640,7 +1882,7 @@ def _select_best_auto_dive_route_candidate(
                 ),
                 "failed_candidates": failed_candidates,
                 "reason": "no_forward_travel_candidates",
-                "travel_cone_degrees": 120.0,
+                "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
                 "travel_filter": travel_filter_payload,
             },
         )
@@ -1798,6 +2040,7 @@ def _forward_travel_cone_route_candidates(
     current_point: Point,
     current_travel_yaw: float | None,
     current_travel_pitch: float | None,
+    position_direction: np.ndarray | None,
     cell_size: float,
 ) -> list[tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteCandidate]]:
     if current_travel_yaw is None:
@@ -1811,6 +2054,7 @@ def _forward_travel_cone_route_candidates(
             current_point=current_point,
             current_travel_yaw=current_travel_yaw,
             current_travel_pitch=current_travel_pitch,
+            position_direction=position_direction,
             cell_size=cell_size,
         )
     ]
@@ -1822,6 +2066,7 @@ def _forward_travel_cone_filter_payload(
     current_point: Point,
     current_travel_yaw: float | None,
     current_travel_pitch: float | None,
+    position_direction: np.ndarray | None,
     cell_size: float,
 ) -> dict[str, Any]:
     if current_travel_yaw is None:
@@ -1839,6 +2084,7 @@ def _forward_travel_cone_filter_payload(
             current_point=current_point,
             current_travel_yaw=current_travel_yaw,
             current_travel_pitch=current_travel_pitch,
+            position_direction=position_direction,
             cell_size=cell_size,
         )
         accepted = (
@@ -1867,7 +2113,7 @@ def _forward_travel_cone_filter_payload(
         )
     return {
         "enabled": True,
-        "cone_degrees": 120.0,
+        "cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
         "before_count": len(scored),
         "after_count": accepted_count,
         "rejected": rejected,
@@ -1879,8 +2125,9 @@ def _candidate_route_is_within_travel_cone(
     score: _AutoDiveRouteCandidateScore,
     *,
     current_point: Point,
-    current_travel_yaw: float,
+    current_travel_yaw: float | None,
     current_travel_pitch: float | None,
+    position_direction: np.ndarray | None,
     cell_size: float,
 ) -> bool:
     alignment, _target = _candidate_route_travel_alignment(
@@ -1889,6 +2136,7 @@ def _candidate_route_is_within_travel_cone(
         current_point=current_point,
         current_travel_yaw=current_travel_yaw,
         current_travel_pitch=current_travel_pitch,
+        position_direction=position_direction,
         cell_size=cell_size,
     )
     return (
@@ -1902,8 +2150,9 @@ def _candidate_route_travel_alignment(
     score: _AutoDiveRouteCandidateScore,
     *,
     current_point: Point,
-    current_travel_yaw: float,
+    current_travel_yaw: float | None,
     current_travel_pitch: float | None,
+    position_direction: np.ndarray | None,
     cell_size: float,
 ) -> tuple[float | None, Point | None]:
     target_points = candidate.points
@@ -1927,13 +2176,26 @@ def _candidate_route_travel_alignment(
     )
     if final_target is None:
         return None, None
-    final_alignment = _mesh_recovery_view_alignment(
+    alignments: list[float] = []
+    if current_travel_yaw is not None:
+        alignments.append(
+            _mesh_recovery_view_alignment(
+                current_point,
+                final_target,
+                current_yaw=current_travel_yaw,
+                current_pitch=current_travel_pitch,
+            )
+        )
+    position_alignment = _auto_dive_target_alignment_from_direction(
         current_point,
         final_target,
-        current_yaw=current_travel_yaw,
-        current_pitch=current_travel_pitch,
+        position_direction,
     )
-    return float(final_alignment), final_target
+    if position_alignment is not None:
+        alignments.append(float(position_alignment))
+    if not alignments:
+        return None, final_target
+    return max(alignments), final_target
 
 
 def _route_target_point_far_enough(
@@ -2350,6 +2612,11 @@ def _mesh_clear_recovery_footprint_path(
         if current_travel_pitch is not None
         else current_pitch
     )
+    position_direction = _auto_dive_current_position_offset_direction(
+        centerline_path,
+        current=np.asarray(current_point, dtype=np.float64),
+        current_point=current_point,
+    )
 
     while frontier:
         current_cost, cell = heapq.heappop(frontier)
@@ -2369,7 +2636,11 @@ def _mesh_clear_recovery_footprint_path(
                 - np.asarray(current_point, dtype=np.float64)
             )
         )
-        target_allowed_by_pose = selection_yaw is not None or cell in target_indices
+        target_allowed_by_pose = (
+            selection_yaw is not None
+            or position_direction is not None
+            or cell in target_indices
+        )
         far_enough = net_distance_m >= max(
             0.5,
             centerline_path.footprint_cell_size * 0.5,
@@ -2393,9 +2664,23 @@ def _mesh_clear_recovery_footprint_path(
                 current_yaw=selection_yaw,
                 current_pitch=selection_pitch,
             )
+            position_alignment = _auto_dive_target_alignment_from_direction(
+                current_point,
+                target_point,
+                position_direction,
+            )
+            intent_alignments = tuple(
+                value
+                for value in (
+                    forward_alignment if selection_yaw is not None else None,
+                    position_alignment,
+                )
+                if value is not None
+            )
+            best_intent_alignment = max(intent_alignments) if intent_alignments else 0.0
             target_in_front = (
-                selection_yaw is None
-                or forward_alignment
+                (selection_yaw is None and position_alignment is None)
+                or best_intent_alignment
                 >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
             )
             if target_in_front:
@@ -2463,6 +2748,11 @@ def _mesh_clear_recovery_footprint_path(
                 )
                 key = (
                     bool(scan_in_cone),
+                    (
+                        (selection_yaw is None and position_alignment is None)
+                        or best_intent_alignment
+                        >= _AUTO_DIVE_MESH_RECOVERY_FORWARD_ALIGNMENT
+                    ),
                     -int(path_avoidance_count),
                     float(selection_score_m),
                     float(path_quality_m),
@@ -2471,6 +2761,12 @@ def _mesh_clear_recovery_footprint_path(
                     float(net_distance_m),
                     float(straightness),
                     int(target_indices.get(cell, -1)),
+                    float(best_intent_alignment),
+                    (
+                        -1.0
+                        if position_alignment is None
+                        else float(position_alignment)
+                    ),
                     float(forward_alignment),
                     float(scan_alignment),
                     float(direct_alignment),
@@ -2488,6 +2784,12 @@ def _mesh_clear_recovery_footprint_path(
                     "net_distance_m": float(net_distance_m),
                     "straightness": float(straightness),
                     "route_target_index": int(target_indices.get(cell, -1)),
+                    "intent_alignment": float(best_intent_alignment),
+                    "position_alignment": (
+                        None
+                        if position_alignment is None
+                        else float(position_alignment)
+                    ),
                     "forward_alignment": float(forward_alignment),
                     "scan_alignment": float(scan_alignment),
                     "direct_alignment": float(direct_alignment),
@@ -2601,7 +2903,7 @@ def _mesh_clear_recovery_footprint_path(
                 "edge_tests": int(edge_tests),
                 "edge_clear_count": int(edge_clear_count),
                 "edge_blocked_count": int(edge_blocked_count),
-                "travel_cone_degrees": 120.0,
+                "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
                 "scan_yaw_range_degrees": [-120.0, 120.0],
                 "selection_turn_penalty_cells": float(
                     _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS
@@ -2656,7 +2958,7 @@ def _mesh_clear_recovery_footprint_path(
             "edge_tests": int(edge_tests),
             "edge_clear_count": int(edge_clear_count),
             "edge_blocked_count": int(edge_blocked_count),
-            "travel_cone_degrees": 120.0,
+            "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
             "scan_yaw_range_degrees": [-120.0, 120.0],
             "selection_turn_penalty_cells": float(
                 _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS
