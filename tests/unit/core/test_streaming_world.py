@@ -163,6 +163,64 @@ def test_streaming_world_rejects_prepack_callback_policy():
         )
 
 
+def test_streaming_world_can_skip_render_thread_manifest_and_texture_scans(monkeypatch):
+    manifest = {
+        "chunks": {"0_0_0": {}},
+        "mtl_materials": {"wall": "wall.jpg"},
+    }
+
+    def fail_load_manifest(_cache_dir):
+        raise AssertionError("manifest should be supplied by the caller")
+
+    def fail_texture_estimate(_file_or_bytes, _textures_dir):
+        raise AssertionError("texture headers should not be scanned")
+
+    monkeypatch.setattr(streaming_world.chunker, "load_manifest", fail_load_manifest)
+    monkeypatch.setattr(
+        streaming_world.StreamingWorld,
+        "_estimate_texture_gpu_bytes",
+        staticmethod(fail_texture_estimate),
+    )
+    monkeypatch.setattr(
+        streaming_world.StreamingWorld,
+        "_estimate_chunk_ram_bytes",
+        lambda _self, _keys: 1,
+    )
+    monkeypatch.setattr(
+        streaming_world.StreamingWorld,
+        "_estimate_chunk_gpu_bytes",
+        lambda _self, _keys: 1,
+    )
+    monkeypatch.setattr(
+        streaming_world,
+        "_detect_ram_snapshot",
+        lambda: system_memory.RamSnapshot(100, 100),
+    )
+    monkeypatch.setattr(
+        streaming_world,
+        "resolve_worker_allocation",
+        lambda *_args, **_kwargs: WorkerAllocation(1, 3, 4, 1),
+    )
+    monkeypatch.setattr(
+        streaming_world.StreamingWorld,
+        "_start_worker_locked",
+        lambda _self: None,
+    )
+
+    world = streaming_world.StreamingWorld(
+        "unused",
+        streaming_world.StreamingConfig(chunk_size=1.0),
+        manifest=manifest,
+        total_gpu_memory_bytes=1_000,
+        texture_gpu_budget_bytes=100,
+        gpu_geometry_budget_bytes=200,
+        estimate_texture_gpu_bytes=False,
+    )
+
+    assert world.available_cells == {(0, 0, 0)}
+    assert world._texture_gpu_bytes == {}
+
+
 def test_prepack_policy_setter_publishes_bool_snapshot():
     world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
     _configure_worker_preprocess(world)

@@ -2169,33 +2169,33 @@ def _candidate_route_travel_alignment(
     )
     if len(route_points) < 2:
         return None, None
-    final_target = _route_target_point_far_enough(
+    first_move_target = _route_target_point_far_enough(
         route_points,
         current_point=current_point,
         cell_size=cell_size,
     )
-    if final_target is None:
+    if first_move_target is None:
         return None, None
     alignments: list[float] = []
     if current_travel_yaw is not None:
         alignments.append(
             _mesh_recovery_view_alignment(
                 current_point,
-                final_target,
+                first_move_target,
                 current_yaw=current_travel_yaw,
                 current_pitch=current_travel_pitch,
             )
         )
     position_alignment = _auto_dive_target_alignment_from_direction(
         current_point,
-        final_target,
+        first_move_target,
         position_direction,
     )
     if position_alignment is not None:
         alignments.append(float(position_alignment))
     if not alignments:
-        return None, final_target
-    return max(alignments), final_target
+        return None, first_move_target
+    return max(alignments), first_move_target
 
 
 def _route_target_point_far_enough(
@@ -2204,15 +2204,16 @@ def _route_target_point_far_enough(
     current_point: Point,
     cell_size: float,
 ) -> Point | None:
+    """Return the first meaningful movement target after the current camera."""
     current = np.asarray(current_point, dtype=np.float64)
     threshold_m = max(0.25, float(cell_size) * 0.25)
-    target = route_points[-1]
-    if (
-        float(np.linalg.norm(np.asarray(target, dtype=np.float64) - current))
-        < threshold_m
-    ):
-        return None
-    return target
+    for target in route_points[1:]:
+        if (
+            float(np.linalg.norm(np.asarray(target, dtype=np.float64) - current))
+            >= threshold_m
+        ):
+            return target
+    return None
 
 
 def _auto_dive_candidate_score_payload(

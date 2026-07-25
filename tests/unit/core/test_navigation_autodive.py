@@ -844,6 +844,32 @@ def test_auto_dive_uses_camera_position_offset_to_choose_upward_direction():
     assert plan.route.keyframes[0].pitch_deg > 0.0
 
 
+def test_auto_dive_resume_does_not_backtrack_to_rejoin_centerline():
+    component_cells = [(x, 0) for x in range(7)]
+    route_cells = tuple(component_cells)
+    route_points = tuple((float(x) + 0.5, 1.0, 0.5) for x in range(7))
+
+    plan = build_centerline_auto_dive_plan(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        ),
+        current_position=(2.75, 1.0, 0.5),
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+        ),
+    )
+
+    assert plan.route_points[0] == (2.75, 1.0, 0.5)
+    assert plan.route_points[1][0] > 2.75
+
+
 def test_auto_dive_mesh_recovery_prefers_upward_forward_over_long_backtrack():
     component_cells = (
         [(x, 0) for x in range(-8, 1)]

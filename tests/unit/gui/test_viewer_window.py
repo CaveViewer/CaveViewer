@@ -127,6 +127,15 @@ class FakeExecutor:
         self.shutdown_calls.append(kwargs)
 
 
+class FakeTextureValidationManager:
+    def __init__(self):
+        self.calls = 0
+
+    def validate_textures(self):
+        self.calls += 1
+        return {"found": ["texture.jpg"], "missing": []}
+
+
 def test_benchmark_route_prefetch_stats_reports_missing_route_cells():
     window = viewer_window.CaveViewerWindow.__new__(viewer_window.CaveViewerWindow)
     window._benchmark_route_prefetch_cells = frozenset(
@@ -3294,6 +3303,105 @@ def test_startup_render_presents_ready_cache_splash_before_loading_map():
     ]
     assert window._startup_map_load_pending is None
     assert window._has_map_loaded is True
+
+
+def test_texture_validation_queues_without_blocking(monkeypatch):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    manager = FakeTextureValidationManager()
+    future = FakeFuture(done=False)
+    executor = FakeExecutor(future)
+    window.texture_manager = manager
+    window.cache_dir = "/cache/devils-eye"
+    window._texture_validation_executor = None
+    window._texture_validation_future = None
+    window._texture_validation_manager = None
+    window._texture_validation_cache_dir = None
+    window._texture_validation_started_at = None
+
+    monkeypatch.setattr(
+        viewer_window,
+        "ThreadPoolExecutor",
+        lambda **_kwargs: executor,
+    )
+
+    assert window._start_texture_validation_async() is True
+
+    assert window._texture_validation_future is future
+    assert window._texture_validation_executor is executor
+    assert window._texture_validation_manager is manager
+    assert window._texture_validation_cache_dir == "/cache/devils-eye"
+    assert len(executor.submit_calls) == 1
+    fn, args, kwargs = executor.submit_calls[0]
+    assert fn.__self__ is manager
+    assert fn.__name__ == "validate_textures"
+    assert args == ()
+    assert kwargs == {}
+    assert manager.calls == 0
+
+
+def test_texture_validation_completion_shuts_down_executor():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    manager = FakeTextureValidationManager()
+    future = FakeFuture({"found": ["texture.jpg"], "missing": []})
+    executor = FakeExecutor(future)
+    window.texture_manager = manager
+    window.cache_dir = "/cache/devils-eye"
+    window._texture_validation_executor = executor
+    window._texture_validation_future = future
+    window._texture_validation_manager = manager
+    window._texture_validation_cache_dir = "/cache/devils-eye"
+    window._texture_validation_started_at = None
+
+    window._update_texture_validation()
+
+    assert future.result_called is True
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._texture_validation_future is None
+    assert window._texture_validation_executor is None
+
+
+def test_texture_validation_completion_discards_stale_map_result():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    old_manager = FakeTextureValidationManager()
+    new_manager = FakeTextureValidationManager()
+    future = FakeFuture({"found": ["old.jpg"], "missing": []})
+    executor = FakeExecutor(future)
+    window.texture_manager = new_manager
+    window.cache_dir = "/cache/new"
+    window._texture_validation_executor = executor
+    window._texture_validation_future = future
+    window._texture_validation_manager = old_manager
+    window._texture_validation_cache_dir = "/cache/old"
+    window._texture_validation_started_at = None
+
+    window._update_texture_validation()
+
+    assert future.result_called is False
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._texture_validation_future is None
+
+
+def test_texture_validation_cancel_shuts_down_executor():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    future = FakeFuture(done=False)
+    executor = FakeExecutor(future)
+    window._texture_validation_executor = executor
+    window._texture_validation_future = future
+    window._texture_validation_manager = FakeTextureValidationManager()
+    window._texture_validation_cache_dir = "/cache/devils-eye"
+    window._texture_validation_started_at = None
+
+    assert window._cancel_texture_validation() is True
+
+    assert future.cancelled is True
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._texture_validation_future is None
 
 
 def test_iconified_render_throttles_polling_without_sleep(monkeypatch):

@@ -202,7 +202,9 @@ class StreamingWorld:
                  textures_dir: str | None = None,
                  total_gpu_memory_bytes: int | None = None,
                  texture_gpu_budget_bytes: int | None = None,
-                 gpu_geometry_budget_bytes: int | None = None):
+                 gpu_geometry_budget_bytes: int | None = None,
+                 manifest: dict | None = None,
+                 estimate_texture_gpu_bytes: bool = True):
         """
         on_decode_textures, if given, is called from a background worker
         thread right after a chunk's geometry finishes loading, with the
@@ -232,6 +234,13 @@ class StreamingWorld:
         texture_gpu_budget_bytes and gpu_geometry_budget_bytes let the caller
         split one detected GPU target between texture and geometry residency.
         When omitted, geometry falls back to the legacy full-GPU-target cap.
+
+        manifest may be supplied by callers that already loaded it.  This avoids
+        re-reading manifest.json on the render thread during viewer startup.
+
+        estimate_texture_gpu_bytes controls an optional diagnostic pass that
+        opens every unique texture header to estimate full-resolution GPU cost.
+        Disable it when constructing the world on a UI/render thread.
         """
         self.cache_dir = cache_dir
         self.config = config
@@ -240,7 +249,10 @@ class StreamingWorld:
         self._prepack_smooth_shading = self._normalize_prepack_smooth_shading(
             prepack_smooth_shading
         )
-        manifest = chunker.load_manifest(cache_dir) or {"chunks": {}}
+        manifest = (
+            manifest if manifest is not None else chunker.load_manifest(cache_dir)
+        )
+        manifest = manifest or {"chunks": {}}
         manifest_max_upload_group_mb = chunker.manifest_max_upload_group_mb(manifest)
         self._chunk_file_max_group_bytes = (
             int(manifest_max_upload_group_mb * 1024 ** 2)
@@ -287,7 +299,16 @@ class StreamingWorld:
         self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes(sampled_chunk_keys)
         self._total_gpu_residency_budget_bytes: int | None = None
         self._texture_gpu_bytes: dict[object, int] = {}
-        self._configure_texture_gpu_estimates(manifest, textures_dir)
+        if estimate_texture_gpu_bytes:
+            self._configure_texture_gpu_estimates(manifest, textures_dir)
+        elif self._total_gpu_memory_bytes is not None:
+            self._total_gpu_residency_budget_bytes = int(
+                self._total_gpu_memory_bytes * self._gpu_target_fraction
+            )
+            if self._texture_gpu_budget_bytes is None:
+                self._texture_gpu_budget_bytes = (
+                    self._total_gpu_residency_budget_bytes
+                )
         self._configure_chunk_budget_from_memory_targets()
 
         self.loaded_cells: set[tuple[int, int, int]] = set()

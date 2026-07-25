@@ -1047,6 +1047,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_auto_dive_pose_start_yaw: float | None = None
         self._initial_auto_dive_pose_start_pitch: float | None = None
         self._initial_auto_dive_pose_start_roll: float | None = None
+        self._texture_validation_executor: ThreadPoolExecutor | None = None
+        self._texture_validation_future: Future | None = None
+        self._texture_validation_manager: TextureManager | None = None
+        self._texture_validation_cache_dir: str | None = None
+        self._texture_validation_started_at: float | None = None
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
@@ -1412,13 +1417,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             time.perf_counter() - texture_setup_started_at,
             materials=len(self.manifest.get("mtl_materials", {})),
         )
-        texture_validation_started_at = time.perf_counter()
-        self.texture_manager.validate_textures()
-        self._log_main_thread_stall(
-            "texture validation",
-            time.perf_counter() - texture_validation_started_at,
-            materials=len(self.manifest.get("mtl_materials", {})),
-        )
+        self._start_texture_validation_async()
 
         def predecode_textures_for_chunk(chunk_data):
             # Called from a background worker thread (see StreamingWorld) --
@@ -1476,6 +1475,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             total_gpu_memory_bytes=gpu_memory_bytes,
             texture_gpu_budget_bytes=max_resident_texture_bytes,
             gpu_geometry_budget_bytes=gpu_geometry_budget_bytes,
+            manifest=self.manifest,
+            estimate_texture_gpu_bytes=False,
         )
         self._log_main_thread_stall(
             "streaming world setup",
@@ -1581,6 +1582,110 @@ class CaveViewerWindow(mglw.WindowConfig):
             time.perf_counter() - load_started_at,
             chunks=len(self.manifest.get("chunks", {})),
         )
+
+    def _start_texture_validation_async(self) -> bool:
+        """
+        Start CPU/disk-only texture validation off the render thread.
+
+        Texture validation opens texture headers and checks paths for every
+        referenced material.  That is useful diagnostics, but doing it inside
+        _load_map() can keep the window event loop from responding long enough
+        for the desktop shell to report "application not responding."
+        """
+        texture_manager = getattr(self, "texture_manager", None)
+        if texture_manager is None:
+            return False
+
+        self._cancel_texture_validation()
+        executor: ThreadPoolExecutor | None = None
+        try:
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="caveviewer-texture-validate",
+            )
+            future = executor.submit(texture_manager.validate_textures)
+        except Exception as exc:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
+            _LOG.warning(
+                "Could not start background texture validation: %s", exc
+            )
+            return False
+
+        self._texture_validation_executor = executor
+        self._texture_validation_future = future
+        self._texture_validation_manager = texture_manager
+        self._texture_validation_cache_dir = self.cache_dir
+        self._texture_validation_started_at = time.perf_counter()
+        return True
+
+    def _update_texture_validation(self) -> None:
+        future = getattr(self, "_texture_validation_future", None)
+        if future is None or not future.done():
+            return
+
+        executor = getattr(self, "_texture_validation_executor", None)
+        texture_manager = getattr(self, "_texture_validation_manager", None)
+        cache_dir = getattr(self, "_texture_validation_cache_dir", None)
+        started_at = getattr(self, "_texture_validation_started_at", None)
+
+        self._clear_texture_validation_state(shutdown_executor=False)
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        if texture_manager is not getattr(self, "texture_manager", None):
+            return
+        if cache_dir != getattr(self, "cache_dir", None):
+            return
+
+        elapsed_s = (
+            max(0.0, time.perf_counter() - started_at)
+            if started_at is not None
+            else None
+        )
+        try:
+            result = future.result()
+        except Exception as exc:
+            _LOG.warning("Background texture validation failed: %s", exc)
+            return
+
+        found = len(result.get("found", ())) if isinstance(result, dict) else None
+        missing = len(result.get("missing", ())) if isinstance(result, dict) else None
+        if elapsed_s is None:
+            _LOG.info(
+                "Background texture validation completed "
+                "(found=%s missing=%s).",
+                found,
+                missing,
+            )
+        else:
+            _LOG.info(
+                "Background texture validation completed in %.2fs "
+                "(found=%s missing=%s).",
+                elapsed_s,
+                found,
+                missing,
+            )
+
+    def _clear_texture_validation_state(self, *, shutdown_executor: bool) -> None:
+        executor = getattr(self, "_texture_validation_executor", None)
+        if shutdown_executor and executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+        self._texture_validation_executor = None
+        self._texture_validation_future = None
+        self._texture_validation_manager = None
+        self._texture_validation_cache_dir = None
+        self._texture_validation_started_at = None
+
+    def _cancel_texture_validation(self) -> bool:
+        future = getattr(self, "_texture_validation_future", None)
+        if future is None:
+            return False
+        try:
+            future.cancel()
+        finally:
+            self._clear_texture_validation_state(shutdown_executor=True)
+        return True
 
     def _configure_benchmark_route_prefetch(self, origin: np.ndarray) -> None:
         """Ask streaming to keep the benchmark route tube wanted during startup."""
@@ -3227,6 +3332,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         block forever.
         """
         self._cancel_initial_auto_dive_pose()
+        self._cancel_texture_validation()
         if not self._has_map_loaded:
             return
 
@@ -3284,6 +3390,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._window_resources_released = True
 
         self._cancel_initial_auto_dive_pose()
+        self._cancel_texture_validation()
         self._stop_recording()
         self._keys_down.clear()
         self._mouse_look_active = False
@@ -5410,6 +5517,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             benchmark_controller is not None
             and not benchmark_controller.finished
         )
+        self._update_texture_validation()
         self._update_initial_auto_dive_pose()
         self._update_auto_dive_start()
 
