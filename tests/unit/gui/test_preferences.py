@@ -63,6 +63,19 @@ from caveviewer.gui import preferences as settings
         ("chunk_build_reserved_cpus", "0", "at least 2"),
         ("chunk_build_reserved_cpus", "1", "at least 2"),
         ("chunk_build_reserved_cpus", "33", "no more than 32"),
+        ("auto_dive_speed_feet_per_minute", "", "required"),
+        ("auto_dive_speed_feet_per_minute", "9.9", "at least 10"),
+        ("auto_dive_speed_feet_per_minute", "500.1", "no more than 500"),
+        ("auto_dive_speed_feet_per_minute", "fast", "must be a number"),
+        ("auto_dive_render_distance_cells", "0", "at least 1"),
+        ("auto_dive_render_distance_cells", "65", "no more than 64"),
+        ("auto_dive_render_distance_cells", "1.5", "whole number"),
+        ("auto_dive_smoothing_radius_cells", "-1", "cannot be negative"),
+        ("auto_dive_smoothing_radius_cells", "26", "no more than 25"),
+        ("auto_dive_smoothing_radius_cells", "1.5", "whole number"),
+        ("auto_dive_diagnostics", "-1", "cannot be negative"),
+        ("auto_dive_diagnostics", "2", "no more than 1"),
+        ("auto_dive_diagnostics", "0.5", "whole number"),
         ("recording_dir", "", "required"),
         ("map_library_dir", "", "required"),
     ],
@@ -120,6 +133,14 @@ def test_invalid_setting_reports_field(
         ("chunk_build_workers", "32", "32"),
         ("chunk_build_reserved_cpus", "2", "2"),
         ("chunk_build_reserved_cpus", "32", "32"),
+        ("auto_dive_speed_feet_per_minute", "10", "10"),
+        ("auto_dive_speed_feet_per_minute", "500", "500"),
+        ("auto_dive_render_distance_cells", "1", "1"),
+        ("auto_dive_render_distance_cells", "64", "64"),
+        ("auto_dive_smoothing_radius_cells", "0", "0"),
+        ("auto_dive_smoothing_radius_cells", "25", "25"),
+        ("auto_dive_diagnostics", "0", "0"),
+        ("auto_dive_diagnostics", "1", "1"),
     ],
 )
 def test_setting_boundaries_are_accepted(
@@ -169,6 +190,10 @@ def test_schema_is_typed_and_has_unique_runtime_mappings():
     assert settings.preference_defaults()["chunk_size_meters"] == "50"
     assert settings.preference_defaults()["max_upload_group_mb"] == "16"
     assert settings.preference_defaults()["obj_import_batch_thousands"] == "200"
+    assert settings.preference_defaults()["auto_dive_speed_feet_per_minute"] == "112.5"
+    assert settings.preference_defaults()["auto_dive_render_distance_cells"] == "4"
+    assert settings.preference_defaults()["auto_dive_smoothing_radius_cells"] == "5"
+    assert settings.preference_defaults()["auto_dive_diagnostics"] == "0"
     assert settings.preference_defaults()["map_library_dir"].endswith(
         os.path.join("Downloads")
     )
@@ -419,11 +444,13 @@ def test_environment_overrides_are_used_as_defaults(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "3")
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", "4")
     monkeypatch.setenv("CAVEVIEWER_OBJ_IMPORT_BATCH_FACES", "300000")
+    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS", "7")
     defaults = settings.preference_defaults()
     assert defaults["io_workers"] == "9"
     assert defaults["upload_chunks_per_frame"] == "3"
     assert defaults["upload_groups_per_frame"] == "4"
     assert defaults["obj_import_batch_thousands"] == "300"
+    assert defaults["auto_dive_smoothing_radius_cells"] == "7"
 
 
 def test_invalid_environment_override_falls_back_to_built_in(monkeypatch, caplog):
@@ -472,6 +499,10 @@ def test_every_numeric_setting_has_a_display_range():
         "obj_import_batch_thousands": "1-2000 thousand faces",
         "chunk_build_workers": "1-32 workers",
         "chunk_build_reserved_cpus": "2-32 logical CPUs",
+        "auto_dive_speed_feet_per_minute": "10-500 ft/min",
+        "auto_dive_render_distance_cells": "1-64 cells",
+        "auto_dive_smoothing_radius_cells": "0-25 cells",
+        "auto_dive_diagnostics": "0-1",
     }
 
     numeric_fields = {
@@ -511,6 +542,10 @@ def test_every_numeric_setting_has_an_in_field_placeholder():
         "obj_import_batch_thousands": "1-2000",
         "chunk_build_workers": "1-32",
         "chunk_build_reserved_cpus": "2-32",
+        "auto_dive_speed_feet_per_minute": "10-500",
+        "auto_dive_render_distance_cells": "1-64",
+        "auto_dive_smoothing_radius_cells": "0-25",
+        "auto_dive_diagnostics": "0-1",
     }
 
 
@@ -635,8 +670,8 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     }
     layout_policy = preferences_dialog._LAYOUT_POLICY
 
-    assert page_keys == ["streaming", "parsing", "storage"]
-    assert page_labels == ["Streaming", "Import", "Storage"]
+    assert page_keys == ["streaming", "parsing", "autodive", "storage"]
+    assert page_labels == ["Streaming", "Import", "Auto Dive", "Storage"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
     assert set(page_keys) == field_sections
     assert preferences_dialog._WINDOWS_LAYOUT == layout_policy.windows_layout
@@ -654,6 +689,15 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
         == "Faces per .obj batch"
     )
     assert fields_by_key["max_upload_group_mb"].label == "Max upload group size"
+    assert fields_by_key["auto_dive_speed_feet_per_minute"].label == "Speed"
+    assert (
+        fields_by_key["auto_dive_render_distance_cells"].label
+        == "Auto Dive render distance"
+    )
+    assert fields_by_key["auto_dive_smoothing_radius_cells"].label == (
+        "Smoothing radius"
+    )
+    assert fields_by_key["auto_dive_diagnostics"].label == "Diagnostics"
     assert (
         fields_by_key["io_workers"].hint
         == "Max chunk-loading worker threads."
@@ -678,6 +722,19 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
         fields_by_key["max_upload_group_mb"].hint
         == "Maximum VBO payload size for dense chunk groups, in MB."
     )
+    assert "225%" in fields_by_key["auto_dive_speed_feet_per_minute"].hint
+    assert "Auto Dive" not in fields_by_key["auto_dive_speed_feet_per_minute"].hint
+    assert (
+        fields_by_key["auto_dive_render_distance_cells"].hint
+        == "Temporary load radius used while Auto Dive prefetches route chunks."
+    )
+    assert "across all axes" in (
+        fields_by_key["auto_dive_smoothing_radius_cells"].hint
+    )
+    assert "outside the cave" in (
+        fields_by_key["auto_dive_smoothing_radius_cells"].hint
+    )
+    assert "auto_dive_debug.jsonl" in fields_by_key["auto_dive_diagnostics"].hint
     if preferences_dialog._LINUX_LAYOUT or preferences_dialog._WINDOWS_LAYOUT:
         assert preferences_dialog._MIN_WIDTH >= 860
     elif preferences_dialog._MACOS_LAYOUT:

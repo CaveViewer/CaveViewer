@@ -25,5 +25,23 @@ def test_tk_scale_is_a_known_runtime_setting():
     assert "CAVEVIEWER_OBJ_BUCKET_WORKERS" in app._KNOWN_CAVEVIEWER_ENV_VARS
     assert "CAVEVIEWER_WINDOW_SYSTEM" in app._KNOWN_CAVEVIEWER_ENV_VARS
     assert "CAVEVIEWER_VIEWER_UI_SCALE" in app._KNOWN_CAVEVIEWER_ENV_VARS
+    assert (
+        "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS"
+        in app._KNOWN_CAVEVIEWER_ENV_VARS
+    )
+    assert "CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS" in app._KNOWN_CAVEVIEWER_ENV_VARS
     assert app._effective_env_default("CAVEVIEWER_OBJ_BUCKET_WORKERS") == "2"
     assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"
+    assert (
+        app._effective_env_default(
+            "CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS"
+        )
+        == "10"
+    )
+    assert (
+        app._effective_env_default(
+            "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS"
+        )
+        == "5"
+    )
+    assert app._effective_env_default("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS") == "0"

@@ -78,6 +78,7 @@ _SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
 _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
+    ("autodive", "Auto Dive"),
     ("storage", "Storage"),
 )
 

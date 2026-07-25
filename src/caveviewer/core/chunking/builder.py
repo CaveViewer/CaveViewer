@@ -147,6 +147,7 @@ from caveviewer.core.chunking.upload import (
 )
 from caveviewer.core.hardware import system_memory
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.navigation.cache_metadata import build_navigation_metadata
 from caveviewer.core.workers.allocation import (
     MAX_WORKER_RAM_UTILIZATION,
     can_start_additional_worker,
@@ -629,6 +630,11 @@ def _build_incremental_obj_cache_in_directory(
         "triangle_count": int(bucketed_faces),
         "import_mode": "incremental_obj",
     }
+    _attach_navigation_metadata(
+        manifest,
+        surface_positions=vertex_data.positions,
+        navigation_start=_navigation_start_sidecar_for_obj(obj_path),
+    )
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
 
@@ -898,10 +904,69 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         "footprint_cell_size": footprint_cell_size,
         "footprint_cells": footprint_flat,
     }
+    _attach_navigation_metadata(
+        manifest,
+        surface_positions=mesh.positions,
+        navigation_start=_navigation_start_sidecar_for_obj(obj_path),
+    )
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
 
     return cache_dir
+
+
+def _attach_navigation_metadata(
+    manifest: dict,
+    *,
+    surface_positions: np.ndarray | None,
+    navigation_start: dict | None = None,
+) -> None:
+    """Attach optional navigation metadata without affecting cache validity."""
+    try:
+        navigation_metadata = build_navigation_metadata(
+            manifest,
+            surface_positions=surface_positions,
+            navigation_start=navigation_start,
+        )
+    except Exception as exc:
+        _LOG.warning(
+            "Could not build optional navigation metadata; "
+            "cache remains usable without it: %s",
+            exc,
+        )
+        return
+    if navigation_metadata is not None:
+        manifest["navigation"] = navigation_metadata
+
+
+def _navigation_start_sidecar_for_obj(obj_path: str) -> dict | None:
+    """Return optional navigation start metadata from a source-model sidecar."""
+    base_path, _extension = os.path.splitext(os.path.abspath(obj_path))
+    source_dir = os.path.dirname(os.path.abspath(obj_path))
+    candidate_paths = (
+        f"{base_path}.navigation.json",
+        os.path.join(source_dir, "navigation.json"),
+    )
+    seen: set[str] = set()
+    for path in candidate_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception as exc:
+            _LOG.warning("Could not read navigation sidecar %s: %s", path, exc)
+            return None
+        if not isinstance(payload, dict):
+            _LOG.warning("Ignoring navigation sidecar %s: expected a JSON object.", path)
+            return None
+        result = dict(payload)
+        result.setdefault("source", os.path.basename(path))
+        return result
+    return None
 
 
 def load_chunk_file(

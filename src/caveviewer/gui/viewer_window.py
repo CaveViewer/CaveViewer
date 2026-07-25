@@ -35,15 +35,28 @@ from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.navigation.autodive import (
     AutoDiveSettings,
+    DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS,
+    DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS,
+    DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
+    build_auto_dive_initial_camera_pose,
     build_centerline_auto_dive_plan,
 )
+from caveviewer.core.navigation.cache_metadata import cached_centerline_path
 from caveviewer.core.navigation.centerline import (
     CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
     generate_centerline_path,
 )
 from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
-from caveviewer.gui.autodive_controller import AutoDiveController, AutoDiveState
+from caveviewer.gui.autodive_blackbox import (
+    AutoDiveBlackbox,
+    auto_dive_blackbox_path,
+)
+from caveviewer.gui.autodive_controller import (
+    AutoDiveController,
+    AutoDiveReplanner,
+    AutoDiveState,
+)
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
 from caveviewer.gui.texture_manager import TextureManager
@@ -61,6 +74,7 @@ from caveviewer.gui.import_process import (
 )
 from caveviewer.gui.import_controller import MapImportController
 from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_folder
+from caveviewer.gui.preferences import load_preferences
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import render_upload
@@ -79,8 +93,10 @@ _LOG = get_logger("CaveViewer")
 _DEFAULT_WINDOW_SIZE = (1600, 1000)
 _DESKTOP_WINDOW_SCALE = 0.80
 _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
+_UI_TEXT_SCALE_ENV = "CAVEVIEWER_UI_TEXT_SCALE"
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
+_FEET_PER_MINUTE_TO_METERS_PER_SECOND = 0.3048 / 60.0
 _TEXTURE_RESIDENT_CACHE_MB_ENV = "CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB"
 _GPU_RESIDENCY_SAFETY_SHARE = 0.05
 _RENDER_UPLOAD_INITIAL_SLICE_BYTES = render_upload.RENDER_UPLOAD_INITIAL_SLICE_BYTES
@@ -221,6 +237,22 @@ def _window_pixel_ratio(window) -> float:
         return max(1.0, min(4.0, max(buffer_width / width, buffer_height / height)))
     except Exception:
         return 1.0
+
+
+def _viewer_overlay_text_scale(
+    platform_adapter,
+    base_scale: float,
+    environ: Mapping[str, str] | None = None,
+) -> float:
+    """Return the startup text scale for FreeType-rendered viewer overlays."""
+    environment = os.environ if environ is None else environ
+    raw_override = str(environment.get(_UI_TEXT_SCALE_ENV, "")).strip()
+    if raw_override:
+        try:
+            return float(raw_override)
+        except ValueError:
+            pass
+    return platform_adapter.viewer_overlay_text_scale(float(base_scale))
 
 
 def _viewer_ui_surface_size(
@@ -407,6 +439,108 @@ def _env_optional_mebibytes(name: str) -> int | None:
     return max(1, int(value * 1024 ** 2))
 
 
+def _auto_dive_settings_from_preferences() -> AutoDiveSettings:
+    """Resolve runtime Auto Dive settings from saved Preferences."""
+    return _auto_dive_settings_with_env_overrides(
+        _auto_dive_settings_from_mapping(load_preferences())
+    )
+
+
+def _auto_dive_diagnostics_enabled_from_preferences() -> bool:
+    preferences = load_preferences()
+    enabled = bool(
+        _preference_int(
+            preferences,
+            "auto_dive_diagnostics",
+            default=0,
+        )
+    )
+    return _env_bool("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS", enabled)
+
+
+def _auto_dive_settings_from_mapping(preferences: Mapping[str, str]) -> AutoDiveSettings:
+    """Convert validated preference values into route-planner settings."""
+    speed_feet_per_minute = _preference_float(
+        preferences,
+        "auto_dive_speed_feet_per_minute",
+        default=(
+            DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND
+            / _FEET_PER_MINUTE_TO_METERS_PER_SECOND
+        ),
+    )
+    return AutoDiveSettings(
+        render_distance_cells=_preference_int(
+            preferences,
+            "auto_dive_render_distance_cells",
+            default=DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS,
+        ),
+        speed_m_per_second=(
+            speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
+        ),
+        smoothing_radius_cells=_preference_int(
+            preferences,
+            "auto_dive_smoothing_radius_cells",
+            default=DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS,
+        ),
+    )
+
+
+def _preference_int(
+    preferences: Mapping[str, str],
+    key: str,
+    *,
+    default: int,
+) -> int:
+    try:
+        return int(preferences[key])
+    except Exception:
+        return int(default)
+
+
+def _preference_float(
+    preferences: Mapping[str, str],
+    key: str,
+    *,
+    default: float,
+) -> float:
+    try:
+        return float(preferences[key])
+    except Exception:
+        return float(default)
+
+
+def _auto_dive_settings_with_env_overrides(settings: AutoDiveSettings) -> AutoDiveSettings:
+    speed_feet_per_minute = _env_float(
+        "CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE",
+        settings.speed_m_per_second / _FEET_PER_MINUTE_TO_METERS_PER_SECOND,
+        10.0,
+        500.0,
+    )
+    return AutoDiveSettings(
+        render_distance_cells=_env_int(
+            "CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS",
+            int(settings.render_distance_cells),
+            1,
+            64,
+        ),
+        speed_m_per_second=(
+            speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
+        ),
+        smoothing_radius_cells=_env_int(
+            "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS",
+            int(settings.smoothing_radius_cells),
+            0,
+            25,
+        ),
+    )
+
+
+def _auto_dive_diagnostic_sink(blackbox: AutoDiveBlackbox | None):
+    if blackbox is None:
+        return None
+    return lambda event, payload: blackbox.record(event, **dict(payload))
+
+
 SHADER_DIR = str(resource_path("shaders"))
 
 
@@ -446,7 +580,6 @@ void main() {
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = APP_NAME
-    _NAVIGATION_VERTICAL_MIDDLE_FRACTION = 0.30
     # The launch helpers replace this fallback with an 80%-of-desktop size.
     # Keep aspect_ratio unlocked so manual resizing remains fully flexible.
     window_size = _DEFAULT_WINDOW_SIZE
@@ -558,14 +691,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._startup_focus_enabled = False
 
         # Optional env override for quick testing/tuning without code edits.
-        text_scale_env = os.getenv("CAVEVIEWER_UI_TEXT_SCALE")
-        if text_scale_env:
-            try:
-                bitmap_font.set_text_scale(float(text_scale_env))
-            except ValueError:
-                bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
-        else:
-            bitmap_font.set_text_scale(self.UI_TEXT_SCALE)
+        bitmap_font.set_text_scale(
+            _viewer_overlay_text_scale(self._platform_adapter, self.UI_TEXT_SCALE)
+        )
         bitmap_font.set_raster_scale(_window_pixel_ratio(getattr(self, "wnd", None)))
         self._viewer_ui_scale = _viewer_ui_scale_for_window_size(
             _viewer_ui_surface_size(getattr(self, "wnd", None), _DEFAULT_WINDOW_SIZE)
@@ -1283,12 +1411,31 @@ class CaveViewerWindow(mglw.WindowConfig):
             gpu_geometry_budget_bytes=gpu_geometry_budget_bytes,
         )
 
-        # pick a sane starting position: center of the first available chunk,
-        # so the user doesn't spawn outside the mesh and see nothing
+        # Fallback starting position: center of the first available chunk, so
+        # older caches without navigation metadata still open somewhere sane.
         first_cell_str = next(iter(self.manifest["chunks"]))
         first_info = self.manifest["chunks"][first_cell_str]
         start_pos = (np.array(first_info["bounds_min"]) + np.array(first_info["bounds_max"])) / 2.0
-        self.camera = FlyCamera(position=tuple(start_pos))
+        initial_pose = (
+            None
+            if benchmark_controller is not None
+            else self._auto_dive_initial_camera_pose()
+        )
+        if initial_pose is None:
+            self.camera = FlyCamera(position=tuple(start_pos))
+        else:
+            self.camera = FlyCamera(
+                position=initial_pose.position,
+                yaw_deg=initial_pose.yaw_deg,
+                pitch_deg=initial_pose.pitch_deg,
+            )
+            _LOG.info(
+                "Initial camera placed at Auto Dive endpoint: "
+                "position=(%.2f, %.2f, %.2f).",
+                float(initial_pose.position[0]),
+                float(initial_pose.position[1]),
+                float(initial_pose.position[2]),
+            )
         self._benchmark_route_prefetch_cells = frozenset()
         if benchmark_controller is not None:
             benchmark_controller.set_position_origin(start_pos)
@@ -1605,17 +1752,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         span = self._navigation_vertical_span_for_position(position)
         if span is None:
             return None
-        low_y, high_y = span
-        center_y = (low_y + high_y) * 0.5
-        # Keep free flight in the middle band of the local passage bounds.
-        # The chunk AABB includes cave walls/floor/ceiling, so allowing the
-        # full span still lets the camera skim the roof/surface; the middle
-        # band keeps the view inside the navigable void.
-        half_band = max(
-            0.0,
-            (high_y - low_y) * self._NAVIGATION_VERTICAL_MIDDLE_FRACTION * 0.5,
-        )
-        return center_y - half_band, center_y + half_band
+        return span
 
     def _navigation_vertical_span_for_position(
         self,
@@ -1637,6 +1774,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             return None
 
         y = float(pos[1])
+        for span in spans:
+            if span[0] <= y <= span[1]:
+                return span
         return min(
             spans,
             key=lambda span: (abs(((span[0] + span[1]) * 0.5) - y), span),
@@ -2244,6 +2384,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         manifest: Mapping[str, Any],
     ) -> tuple[tuple[float, float], ...]:
         """Return an optional centerline overlay for the minimap."""
+        cached_path = cached_centerline_path(manifest)
+        if cached_path is not None:
+            return cached_path.points_xz
+
         if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", False):
             return ()
         try:
@@ -2254,6 +2398,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         except NavigationConfigurationError as exc:
             _LOG.debug("Minimap centerline unavailable: %s", exc)
             return ()
+
+    def _auto_dive_initial_camera_pose(self):
+        """Return the preferred map-load pose for interactive Auto Dive startup."""
+        if self.manifest is None:
+            return None
+        try:
+            return build_auto_dive_initial_camera_pose(
+                self.manifest,
+                settings=_auto_dive_settings_from_preferences(),
+            )
+        except NavigationConfigurationError as exc:
+            _LOG.debug("Auto Dive initial camera unavailable: %s", exc)
+            return None
 
     def _auto_dive_is_active(self) -> bool:
         controller = getattr(self, "_auto_dive_controller", None)
@@ -2278,13 +2435,54 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.camera.position = self._clamp_navigation_position_to_bounds(
                 self.camera.position
             )
+        blackbox = self._auto_dive_blackbox()
         try:
+            auto_dive_settings = _auto_dive_settings_from_preferences()
+            if blackbox is not None:
+                blackbox.record(
+                    "session_started",
+                    cache_dir=self.cache_dir,
+                    source_obj=self.manifest.get("source_obj"),
+                    settings={
+                        "render_distance_cells": int(
+                            auto_dive_settings.render_distance_cells
+                        ),
+                        "speed_m_per_second": float(
+                            auto_dive_settings.speed_m_per_second
+                        ),
+                        "smoothing_radius_cells": int(
+                            auto_dive_settings.smoothing_radius_cells
+                        ),
+                        "lookahead_distance_m": float(
+                            auto_dive_settings.lookahead_distance_m
+                        ),
+                    },
+                    camera={
+                        "position": [
+                            float(value)
+                            for value in np.asarray(
+                                self.camera.position,
+                                dtype=np.float64,
+                            )
+                        ],
+                        "yaw_deg": math.degrees(float(self.camera.yaw)),
+                        "pitch_deg": math.degrees(float(self.camera.pitch)),
+                    },
+                )
             plan = build_centerline_auto_dive_plan(
                 self.manifest,
                 current_position=self.camera.position,
-                settings=AutoDiveSettings(render_distance_cells=10),
+                settings=auto_dive_settings,
+                diagnostics=_auto_dive_diagnostic_sink(blackbox),
             )
         except NavigationConfigurationError as exc:
+            if blackbox is not None:
+                blackbox.record(
+                    "auto_dive_unavailable",
+                    reason=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                blackbox.close()
             _LOG.info("Auto Dive unavailable: %s", exc)
             return True
 
@@ -2299,9 +2497,20 @@ class CaveViewerWindow(mglw.WindowConfig):
             ),
         )
         self.world.config.load_radius_cells = self.render_distance_stepper.value
+        replan_distance_m = max(
+            0.5,
+            float(plan.centerline_path.footprint_cell_size),
+        )
         controller = AutoDiveController(
             plan,
             perf_counter=lambda: time.perf_counter(),
+            replanner=AutoDiveReplanner(
+                self.manifest,
+                auto_dive_settings,
+                blackbox=blackbox,
+            ),
+            replan_distance_m=replan_distance_m,
+            blackbox=blackbox,
         )
         controller.start(self.camera, self.world, now=time.perf_counter())
         self._auto_dive_controller = controller
@@ -2318,6 +2527,18 @@ class CaveViewerWindow(mglw.WindowConfig):
             bool(plan.circular_arc),
         )
         return True
+
+    def _auto_dive_blackbox(self) -> AutoDiveBlackbox | None:
+        try:
+            enabled = _auto_dive_diagnostics_enabled_from_preferences()
+        except Exception:
+            enabled = _env_bool("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS", False)
+        if not enabled:
+            return None
+        path = auto_dive_blackbox_path(self.cache_dir)
+        blackbox = AutoDiveBlackbox(path)
+        _LOG.info("Auto Dive diagnostics enabled: %s", path)
+        return blackbox
 
     def _stop_auto_dive(self, *, completed: bool = False) -> None:
         controller = getattr(self, "_auto_dive_controller", None)
@@ -2347,9 +2568,45 @@ class CaveViewerWindow(mglw.WindowConfig):
         if controller is None or self.camera is None or self.world is None:
             return
         state = controller.update(self.camera, self.world, now=now)
+        navigation_clamped = False
         if self._navigation_guard_enabled:
+            before_clamp = self.camera.position.copy()
             self.camera.position = self._clamp_navigation_position_to_bounds(
                 self.camera.position,
+            )
+            navigation_clamped = not np.allclose(
+                before_clamp,
+                self.camera.position,
+                rtol=0.0,
+                atol=1e-6,
+            )
+            if navigation_clamped:
+                record_clamp = getattr(
+                    controller,
+                    "record_navigation_guard_clamp",
+                    None,
+                )
+                if callable(record_clamp):
+                    record_clamp(
+                        before=before_clamp,
+                        after=self.camera.position,
+                        vertical_band=self._navigation_vertical_band_for_position(
+                            self.camera.position,
+                        ),
+                    )
+        update_replan = getattr(controller, "update_replan", None)
+        if callable(update_replan) and update_replan(self.camera, self.world, now=now):
+            if self.minimap is not None:
+                self.minimap.set_active_route_points_xz(
+                    controller.plan.route_points_xz,
+                )
+        record_frame = getattr(controller, "record_frame", None)
+        if callable(record_frame):
+            record_frame(
+                self.camera,
+                self.world,
+                now=now,
+                navigation_clamped=navigation_clamped,
             )
         if state is AutoDiveState.COMPLETE:
             self._stop_auto_dive(completed=True)

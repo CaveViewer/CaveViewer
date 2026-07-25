@@ -145,6 +145,7 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
             destroy_root_on_close=True,
             windows_layout=False,
             linux_layout=False,
+            window_width=940,
             min_height=560,
             extra_bottom_slack=0,
             secondary_link_row_bottom_gap=36,
@@ -188,6 +189,17 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
     def default_text_antialiasing_mode(self) -> str:
         """Return the default FreeType anti-aliasing mode."""
         return "normal"
+
+    def viewer_overlay_text_scale(self, base_scale: float) -> float:
+        """Return the default OpenGL overlay text scale."""
+        return float(base_scale)
+
+    def tk_text_scale(self, default_font_points: float) -> float:
+        """Return the runtime Tk text scale for fixed-size splash tokens."""
+        try:
+            return max(1.0, float(default_font_points) / 12.0)
+        except (TypeError, ValueError):
+            return 1.0
 
     def supports_tk_display_scaling(self) -> bool:
         """Return whether Tk scaling should be adjusted on this platform."""

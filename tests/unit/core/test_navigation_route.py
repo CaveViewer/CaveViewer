@@ -53,3 +53,17 @@ def test_route_keyframes_for_points_can_hold_start_until_travel():
     assert keyframes[0]["position"] == [0.0, 0.0, 0.0]
     assert keyframes[1]["position"] == [0.0, 0.0, 0.0]
     assert keyframes[-1]["position"] == [10.0, 0.0, 0.0]
+
+
+def test_route_keyframes_can_steer_toward_lookahead_point():
+    keyframes = route_keyframes_for_points(
+        (
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 0.0, 1.0),
+        ),
+        duration_s=2.0,
+        lookahead_distance_m=2.0,
+    )
+
+    assert keyframes[0]["yaw_deg"] == pytest.approx(45.0)

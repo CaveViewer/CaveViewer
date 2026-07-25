@@ -346,9 +346,103 @@ def test_viewer_ui_scale_env_override_is_developer_only_escape_hatch():
     ) == 1.0
 
 
+def test_viewer_overlay_text_scale_uses_platform_default():
+    assert viewer_window._viewer_overlay_text_scale(
+        DefaultSplashPlatformAdapter(), 1.28, {}
+    ) == 1.28
+    assert viewer_window._viewer_overlay_text_scale(
+        MacOSSplashPlatformAdapter(), 1.28, {}
+    ) == pytest.approx(1.472)
+
+
+def test_viewer_overlay_text_scale_env_override_still_wins():
+    assert viewer_window._viewer_overlay_text_scale(
+        MacOSSplashPlatformAdapter(), 1.28, {"CAVEVIEWER_UI_TEXT_SCALE": "1.1"}
+    ) == 1.1
+    assert viewer_window._viewer_overlay_text_scale(
+        MacOSSplashPlatformAdapter(), 1.28, {"CAVEVIEWER_UI_TEXT_SCALE": "bad"}
+    ) == pytest.approx(1.472)
+
+
 def test_optional_ms_formatter_reports_disabled_timer():
     assert viewer_window.CaveViewerWindow._format_optional_ms(None) == "n/a"
     assert viewer_window.CaveViewerWindow._format_optional_ms(9.34) == "9.3ms"
+
+
+def test_auto_dive_settings_are_built_from_runtime_preferences():
+    settings = viewer_window._auto_dive_settings_from_mapping(
+        {
+            "auto_dive_speed_feet_per_minute": "120",
+            "auto_dive_render_distance_cells": "14",
+            "auto_dive_smoothing_radius_cells": "4",
+        }
+    )
+
+    assert settings.render_distance_cells == 14
+    assert settings.speed_m_per_second == pytest.approx(120.0 * 0.3048 / 60.0)
+    assert settings.smoothing_radius_cells == 4
+
+
+def test_auto_dive_settings_allow_explicit_environment_overrides(monkeypatch):
+    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE", "150")
+    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS", "18")
+    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS", "7")
+
+    settings = viewer_window._auto_dive_settings_with_env_overrides(
+        viewer_window.AutoDiveSettings(
+            render_distance_cells=10,
+            speed_m_per_second=120.0 * 0.3048 / 60.0,
+            smoothing_radius_cells=4,
+        )
+    )
+
+    assert settings.render_distance_cells == 18
+    assert settings.speed_m_per_second == pytest.approx(150.0 * 0.3048 / 60.0)
+    assert settings.smoothing_radius_cells == 7
+
+
+def test_auto_dive_diagnostics_can_be_enabled_from_preferences(monkeypatch):
+    monkeypatch.delenv("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS", raising=False)
+    monkeypatch.setattr(
+        viewer_window,
+        "load_preferences",
+        lambda: {"auto_dive_diagnostics": "1"},
+    )
+
+    assert viewer_window._auto_dive_diagnostics_enabled_from_preferences() is True
+
+
+def test_auto_dive_diagnostics_environment_override_wins(monkeypatch):
+    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS", "0")
+    monkeypatch.setattr(
+        viewer_window,
+        "load_preferences",
+        lambda: {"auto_dive_diagnostics": "1"},
+    )
+
+    assert viewer_window._auto_dive_diagnostics_enabled_from_preferences() is False
+
+
+def test_auto_dive_initial_camera_pose_uses_runtime_preferences(monkeypatch):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.manifest = {"chunks": {}}
+    settings = viewer_window.AutoDiveSettings(smoothing_radius_cells=3)
+    pose = SimpleNamespace(position=(1.0, 2.0, 3.0), yaw_deg=45.0, pitch_deg=5.0)
+    calls = []
+
+    monkeypatch.setattr(
+        viewer_window,
+        "_auto_dive_settings_from_preferences",
+        lambda: settings,
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "build_auto_dive_initial_camera_pose",
+        lambda manifest, *, settings: calls.append((manifest, settings)) or pose,
+    )
+
+    assert window._auto_dive_initial_camera_pose() is pose
+    assert calls == [(window.manifest, settings)]
 
 
 def test_recording_countdown_hides_picker_and_manual_help(monkeypatch):
@@ -1068,7 +1162,24 @@ def test_target_streaming_load_radius_uses_auto_dive_distance():
     assert window._target_streaming_load_radius() == 10
 
 
-def test_minimap_centerline_overlay_is_opt_in(monkeypatch):
+def test_minimap_centerline_overlay_uses_cached_navigation_by_default(monkeypatch):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    manifest = {"footprint_cells": [], "footprint_cell_size": 1.0}
+
+    monkeypatch.delenv("CAVEVIEWER_MINIMAP_CENTERLINE", raising=False)
+    monkeypatch.setattr(
+        viewer_window,
+        "cached_centerline_path",
+        lambda _manifest: SimpleNamespace(points_xz=((1.0, 2.0), (3.0, 4.0))),
+    )
+
+    assert window._minimap_centerline_points_xz(manifest) == (
+        (1.0, 2.0),
+        (3.0, 4.0),
+    )
+
+
+def test_minimap_generated_centerline_overlay_remains_opt_in(monkeypatch):
     window = object.__new__(viewer_window.CaveViewerWindow)
     manifest = {"footprint_cells": [], "footprint_cell_size": 1.0}
     calls = []
@@ -1078,6 +1189,11 @@ def test_minimap_centerline_overlay_is_opt_in(monkeypatch):
         return SimpleNamespace(points_xz=((1.0, 2.0), (3.0, 4.0)))
 
     monkeypatch.delenv("CAVEVIEWER_MINIMAP_CENTERLINE", raising=False)
+    monkeypatch.setattr(
+        viewer_window,
+        "cached_centerline_path",
+        lambda _manifest: None,
+    )
     monkeypatch.setattr(
         viewer_window,
         "generate_centerline_path",
@@ -1516,7 +1632,7 @@ class _FakeAutoDiveController:
         return self.state
 
 
-def test_navigation_guard_rejects_position_above_local_middle_band():
+def test_navigation_guard_rejects_position_above_local_vertical_span():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._navigation_guard_enabled = True
     window._navigation_guard_cells = {(0, 0, 0)}
@@ -1531,14 +1647,14 @@ def test_navigation_guard_rejects_position_above_local_middle_band():
     }
 
     assert window._navigation_position_is_allowed(
-        np.array([5.0, 8.0, 5.0], dtype=np.float64)
+        np.array([5.0, 12.0, 5.0], dtype=np.float64)
     ) is False
     assert window._navigation_position_is_allowed(
-        np.array([5.0, 5.0, 5.0], dtype=np.float64)
+        np.array([5.0, 8.0, 5.0], dtype=np.float64)
     ) is True
 
 
-def test_guarded_camera_move_clamps_to_local_middle_band():
+def test_guarded_camera_move_clamps_to_local_vertical_span():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._navigation_guard_enabled = True
     window._navigation_guard_cells = {(0, 0, 0)}
@@ -1558,10 +1674,32 @@ def test_guarded_camera_move_clamps_to_local_middle_band():
 
     window._move_camera_guarded(0.0, 0.0, 1.0, 1.0, 1.0)
 
-    assert window.camera.position.tolist() == [5.0, 6.5, 5.0]
+    assert window.camera.position.tolist() == [5.0, 10.0, 5.0]
 
 
-def test_auto_dive_update_clamps_route_pose_to_local_middle_band():
+def test_navigation_guard_preserves_position_inside_upper_vertical_span():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._navigation_guard_chunk_size = 40.0
+    window._navigation_guard_vertical_columns = {
+        (-3, 2): (
+            (-4.39140510559082, 0.33984100818634033),
+            (-0.418537, 26.631416),
+        ),
+    }
+    position = np.array([-91.522311, 5.510557, 101.700638], dtype=np.float64)
+
+    assert window._navigation_vertical_band_for_position(position) == (
+        -0.418537,
+        26.631416,
+    )
+    assert window._clamp_navigation_position_to_bounds(position).tolist() == [
+        -91.522311,
+        5.510557,
+        101.700638,
+    ]
+
+
+def test_auto_dive_update_clamps_route_pose_to_local_vertical_span():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._navigation_guard_enabled = True
     window._navigation_guard_bounds = (
@@ -1582,7 +1720,7 @@ def test_auto_dive_update_clamps_route_pose_to_local_middle_band():
     window._update_auto_dive(123.0)
 
     assert controller.update_calls == [(window.camera, window.world, 123.0)]
-    assert window.camera.position.tolist() == [5.0, 6.5, 5.0]
+    assert window.camera.position.tolist() == [5.0, 10.0, 5.0]
 
 
 def test_initial_visual_readiness_waits_for_settled_scene_frames():

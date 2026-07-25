@@ -127,6 +127,31 @@ def _mesh_with_cells(cell_count: int) -> obj_parser.RawMesh:
     )
 
 
+def _navigation_mesh() -> obj_parser.RawMesh:
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    faces = np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int32)
+    return obj_parser.RawMesh(
+        positions=positions,
+        uvs=np.zeros((len(positions), 2), dtype=np.float32),
+        normals=np.tile(
+            np.array([[0.0, 0.0, 1.0]], dtype=np.float32),
+            (len(positions), 1),
+        ),
+        face_pos_idx=faces,
+        face_uv_idx=faces.copy(),
+        face_nrm_idx=faces.copy(),
+        material_ranges=[obj_parser.MaterialRange("rock", 0, len(faces))],
+    )
+
+
 def _current_manifest() -> dict:
     return {
         "version": chunker._VERSION,
@@ -527,6 +552,96 @@ def test_build_cache_reports_progress_and_atomically_replaces_existing_cache(
         "writing manifest",
     } <= stages
     assert not list(old_cache.parent.glob(".map-key.tmp-*.previous"))
+
+
+def test_build_cache_attaches_optional_navigation_metadata(tmp_path):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small source map")
+    cache_dir = tmp_path / "managed" / "map-key"
+
+    result = chunker.build_cache(
+        str(source),
+        _navigation_mesh(),
+        {},
+        cache_dir=str(cache_dir),
+        chunk_size=8.0,
+    )
+
+    assert result == str(cache_dir)
+    assert chunker.cache_dir_is_valid(str(cache_dir), str(source)) is True
+    manifest = chunker.load_manifest(str(cache_dir))
+    navigation = manifest["navigation"]
+    assert navigation["method"] == "footprint_centerline_paths_v1"
+    assert navigation["route_count"] == 1
+    assert navigation["recommended_route_id"] == "centerline-0"
+    assert navigation["routes"][0]["closed_loop"] is False
+    assert navigation["routes"][0]["cells"] == [0, 0, 1, 0, 2, 0, 3, 0]
+
+
+def test_build_cache_orients_navigation_metadata_from_model_sidecar(tmp_path):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small source map")
+    (tmp_path / "map.navigation.json").write_text(
+        json.dumps(
+            {
+                "navigation_start": {
+                    "position": [7.0, 0.0, 0.0],
+                    "label": "entrance",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    cache_dir = tmp_path / "managed" / "map-key"
+
+    result = chunker.build_cache(
+        str(source),
+        _navigation_mesh(),
+        {},
+        cache_dir=str(cache_dir),
+        chunk_size=8.0,
+    )
+
+    assert result == str(cache_dir)
+    navigation = chunker.load_manifest(str(cache_dir))["navigation"]
+    assert navigation["navigation_start"] == {
+        "position": [7.0, 0.0, 0.0],
+        "label": "entrance",
+        "source": "map.navigation.json",
+    }
+    route = navigation["routes"][0]
+    assert route["starts_at_navigation_start"] is True
+    assert route["cells"] == [3, 0, 2, 0, 1, 0, 0, 0]
+
+
+def test_build_cache_omits_navigation_metadata_when_generation_fails(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small source map")
+    cache_dir = tmp_path / "managed" / "map-key"
+
+    def fail_navigation_metadata(_manifest):
+        raise RuntimeError("navigation failed")
+
+    monkeypatch.setattr(
+        chunker,
+        "build_navigation_metadata",
+        fail_navigation_metadata,
+    )
+
+    result = chunker.build_cache(
+        str(source),
+        _navigation_mesh(),
+        {},
+        cache_dir=str(cache_dir),
+        chunk_size=8.0,
+    )
+
+    assert result == str(cache_dir)
+    assert chunker.cache_dir_is_valid(str(cache_dir), str(source)) is True
+    assert "navigation" not in chunker.load_manifest(str(cache_dir))
 
 
 def test_incremental_obj_cache_build_writes_standard_chunks(tmp_path, monkeypatch):
