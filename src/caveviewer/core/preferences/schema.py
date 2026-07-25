@@ -361,8 +361,8 @@ PREFERENCE_FIELDS = (
         section="autodive",
         key="auto_dive_render_distance_cells",
         env_var="CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS",
-        label="Auto Dive render distance",
-        hint="Temporary load radius used while Auto Dive prefetches route chunks.",
+        label="Guided Dive render distance",
+        hint="Temporary load radius used while Guided Dive prefetches route chunks.",
         value_type=PreferenceValueType.INT,
         default="4",
         minimum=1,
@@ -391,7 +391,7 @@ PREFERENCE_FIELDS = (
         env_var="CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS",
         label="Diagnostics",
         hint=(
-            "Write Auto Dive blackbox events to auto_dive_debug.jsonl "
+            "Write Guided Dive blackbox events to auto_dive_debug.jsonl "
             "in the active map cache."
         ),
         value_type=PreferenceValueType.INT,

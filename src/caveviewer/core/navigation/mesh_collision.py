@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import math
 import os
 import threading
 from typing import Any
@@ -15,6 +16,23 @@ from caveviewer.core.navigation.centerline import (
     Cell,
     Point,
     parse_cell_key,
+)
+
+_DEFAULT_MAX_COLLISION_GUARD_TRIANGLES = 5_000_000
+_MAX_COLLISION_GUARD_TRIANGLES_ENV = (
+    "CAVEVIEWER_AUTO_DIVE_MESH_COLLISION_MAX_TRIANGLES"
+)
+_DEFAULT_MAX_COLLISION_GUARD_AVG_CHUNK_TRIANGLES = 50_000
+_MAX_COLLISION_GUARD_AVG_CHUNK_TRIANGLES_ENV = (
+    "CAVEVIEWER_AUTO_DIVE_MESH_COLLISION_MAX_AVG_CHUNK_TRIANGLES"
+)
+# Recovery performs lazy, local segment checks and is bounded by the
+# navigation search budget. A whole-map triangle cap is therefore a poor
+# proxy for recovery cost; keep the opt-out limit aligned with the collision
+# guard while retaining the environment override for unusually large maps.
+_DEFAULT_MAX_MESH_RECOVERY_TRIANGLES = 5_000_000
+_MAX_MESH_RECOVERY_TRIANGLES_ENV = (
+    "CAVEVIEWER_AUTO_DIVE_MESH_RECOVERY_MAX_TRIANGLES"
 )
 
 
@@ -33,6 +51,13 @@ class _ChunkBounds:
     bounds_max: np.ndarray
 
 
+@dataclass(frozen=True)
+class _ChunkTriangleMesh:
+    triangles: np.ndarray
+    triangle_min: np.ndarray
+    triangle_max: np.ndarray
+
+
 class CachedChunkMeshCollisionGuard:
     """Segment collision guard backed by cached chunk triangle payloads."""
 
@@ -40,10 +65,13 @@ class CachedChunkMeshCollisionGuard:
         self,
         cache_dir: str,
         chunk_bounds: tuple[_ChunkBounds, ...],
+        *,
+        mesh_recovery_enabled: bool = True,
     ) -> None:
         self._cache_dir = os.path.abspath(os.fspath(cache_dir))
         self._chunk_bounds = chunk_bounds
-        self._triangle_cache: dict[Cell, np.ndarray] = {}
+        self.mesh_recovery_enabled = bool(mesh_recovery_enabled)
+        self._triangle_cache: dict[Cell, _ChunkTriangleMesh] = {}
         self._cache_lock = threading.Lock()
 
     @classmethod
@@ -58,6 +86,22 @@ class CachedChunkMeshCollisionGuard:
         chunks = manifest.get("chunks")
         if not isinstance(chunks, Mapping) or not chunks:
             return None
+        chunk_count = len(chunks)
+        triangle_count = _manifest_triangle_count(manifest)
+        if _exceeds_triangle_limit(
+            triangle_count,
+            _collision_guard_triangle_limit(),
+        ):
+            return None
+        if _exceeds_triangle_limit(
+            _average_chunk_triangle_count(triangle_count, chunk_count),
+            _collision_guard_average_chunk_triangle_limit(),
+        ):
+            return None
+        mesh_recovery_enabled = not _exceeds_triangle_limit(
+            triangle_count,
+            _mesh_recovery_triangle_limit(),
+        )
         chunk_bounds: list[_ChunkBounds] = []
         for raw_cell, info in chunks.items():
             if not isinstance(info, Mapping):
@@ -80,6 +124,7 @@ class CachedChunkMeshCollisionGuard:
         return cls(
             os.fspath(cache_dir),
             tuple(sorted(chunk_bounds, key=lambda chunk: chunk.cell)),
+            mesh_recovery_enabled=mesh_recovery_enabled,
         )
 
     def segment_collision(
@@ -98,15 +143,17 @@ class CachedChunkMeshCollisionGuard:
         best_t: float | None = None
         best_hit: MeshCollisionHit | None = None
         for chunk in self._candidate_chunks(segment_min, segment_max):
-            triangles = self._triangles_for_chunk(chunk.cell)
-            if triangles.size == 0:
+            mesh = self._triangle_mesh_for_chunk(chunk.cell)
+            if mesh.triangles.size == 0:
                 continue
             result = _segment_triangles_intersection(
                 start,
                 end,
-                triangles,
+                mesh.triangles,
                 segment_min=segment_min,
                 segment_max=segment_max,
+                triangle_min=mesh.triangle_min,
+                triangle_max=mesh.triangle_max,
             )
             if result is None:
                 continue
@@ -135,14 +182,26 @@ class CachedChunkMeshCollisionGuard:
             )
         )
 
-    def _triangles_for_chunk(self, cell: Cell) -> np.ndarray:
+    def _triangle_mesh_for_chunk(self, cell: Cell) -> _ChunkTriangleMesh:
         with self._cache_lock:
             cached = self._triangle_cache.get(cell)
             if cached is not None:
                 return cached
             triangles = self._load_triangles_for_chunk(cell)
-            self._triangle_cache[cell] = triangles
-            return triangles
+            if triangles.size == 0:
+                mesh = _ChunkTriangleMesh(
+                    triangles=triangles,
+                    triangle_min=np.empty((0, 3), dtype=np.float64),
+                    triangle_max=np.empty((0, 3), dtype=np.float64),
+                )
+            else:
+                mesh = _ChunkTriangleMesh(
+                    triangles=triangles,
+                    triangle_min=triangles.min(axis=1),
+                    triangle_max=triangles.max(axis=1),
+                )
+            self._triangle_cache[cell] = mesh
+            return mesh
 
     def _load_triangles_for_chunk(self, cell: Cell) -> np.ndarray:
         try:
@@ -166,6 +225,67 @@ class CachedChunkMeshCollisionGuard:
         return np.concatenate(triangle_groups, axis=0)
 
 
+def _exceeds_triangle_limit(
+    triangle_count: int | None,
+    limit: int,
+) -> bool:
+    if triangle_count is None:
+        return False
+    return triangle_count > limit
+
+
+def _manifest_triangle_count(manifest: Mapping[str, Any]) -> int | None:
+    raw_value = manifest.get("triangle_count")
+    if raw_value is None:
+        return None
+    try:
+        triangle_count = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, triangle_count)
+
+
+def _average_chunk_triangle_count(
+    triangle_count: int | None,
+    chunk_count: int,
+) -> int | None:
+    if triangle_count is None or chunk_count <= 0:
+        return None
+    return int(math.ceil(float(triangle_count) / float(chunk_count)))
+
+
+def _collision_guard_triangle_limit() -> int:
+    return _triangle_limit_from_env(
+        _MAX_COLLISION_GUARD_TRIANGLES_ENV,
+        _DEFAULT_MAX_COLLISION_GUARD_TRIANGLES,
+    )
+
+
+def _collision_guard_average_chunk_triangle_limit() -> int:
+    return _triangle_limit_from_env(
+        _MAX_COLLISION_GUARD_AVG_CHUNK_TRIANGLES_ENV,
+        _DEFAULT_MAX_COLLISION_GUARD_AVG_CHUNK_TRIANGLES,
+    )
+
+
+def _mesh_recovery_triangle_limit() -> int:
+    return _triangle_limit_from_env(
+        _MAX_MESH_RECOVERY_TRIANGLES_ENV,
+        _DEFAULT_MAX_MESH_RECOVERY_TRIANGLES,
+    )
+
+
+def _triangle_limit_from_env(env_name: str, default: int) -> int:
+    raw_value = os.environ.get(env_name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        limit = int(raw_value)
+    except ValueError:
+        return default
+    return max(0, limit)
+
+
 def _aabb_intersects(
     first_min: np.ndarray,
     first_max: np.ndarray,
@@ -185,9 +305,13 @@ def _segment_triangles_intersection(
     *,
     segment_min: np.ndarray,
     segment_max: np.ndarray,
+    triangle_min: np.ndarray | None = None,
+    triangle_max: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray] | None:
-    triangle_min = triangles.min(axis=1)
-    triangle_max = triangles.max(axis=1)
+    if triangle_min is None:
+        triangle_min = triangles.min(axis=1)
+    if triangle_max is None:
+        triangle_max = triangles.max(axis=1)
     aabb_mask = np.all(triangle_max >= segment_min, axis=1) & np.all(
         segment_max >= triangle_min,
         axis=1,

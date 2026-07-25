@@ -127,6 +127,15 @@ class FakeExecutor:
         self.shutdown_calls.append(kwargs)
 
 
+class FakeTextureValidationManager:
+    def __init__(self):
+        self.calls = 0
+
+    def validate_textures(self):
+        self.calls += 1
+        return {"found": ["texture.jpg"], "missing": []}
+
+
 def test_benchmark_route_prefetch_stats_reports_missing_route_cells():
     window = viewer_window.CaveViewerWindow.__new__(viewer_window.CaveViewerWindow)
     window._benchmark_route_prefetch_cells = frozenset(
@@ -511,6 +520,147 @@ def test_auto_dive_initial_camera_pose_uses_runtime_preferences(monkeypatch):
     assert calls == [(window.manifest, settings)]
 
 
+def _initial_auto_dive_pose_window():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.manifest = {"source_obj": "/maps/devils_eye.obj"}
+    window.cache_dir = "/cache/devils-eye"
+    window.camera = viewer_window.FlyCamera(
+        position=(1.0, 2.0, 3.0),
+        yaw_deg=-90.0,
+        pitch_deg=0.0,
+    )
+    window.world = SimpleNamespace()
+    window._has_map_loaded = True
+    window._benchmark_controller = None
+    window._auto_dive_controller = None
+    window._auto_dive_start_future = None
+    window._initial_auto_dive_pose_executor = None
+    window._initial_auto_dive_pose_future = None
+    window._initial_auto_dive_pose_manifest = None
+    window._initial_auto_dive_pose_cache_dir = None
+    window._initial_auto_dive_pose_start_position = None
+    window._initial_auto_dive_pose_start_yaw = None
+    window._initial_auto_dive_pose_start_pitch = None
+    window._initial_auto_dive_pose_start_roll = None
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = True
+    window._initial_visual_ready_logged = True
+    window._chunk_prep_progress = 1.0
+    window._chunk_prep_complete_until = 10.0
+    window._chunk_prep_completion_armed = True
+    reset_calls = []
+    window.import_progress_panel = SimpleNamespace(
+        reset_progress=lambda: reset_calls.append("reset")
+    )
+    window._reset_calls = reset_calls
+    return window
+
+
+def test_initial_auto_dive_pose_queues_without_blocking(monkeypatch):
+    window = _initial_auto_dive_pose_window()
+    settings = viewer_window.AutoDiveSettings(smoothing_radius_cells=3)
+    future = FakeFuture(done=False)
+    executor = FakeExecutor(future)
+
+    monkeypatch.setattr(
+        viewer_window,
+        "_auto_dive_settings_from_preferences",
+        lambda: settings,
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "ThreadPoolExecutor",
+        lambda **_kwargs: executor,
+    )
+
+    assert window._start_initial_auto_dive_pose(window.camera.position) is True
+
+    assert window._initial_auto_dive_pose_future is future
+    assert len(executor.submit_calls) == 1
+    fn, args, kwargs = executor.submit_calls[0]
+    assert fn is viewer_window.build_auto_dive_initial_camera_pose
+    assert args == (window.manifest,)
+    assert kwargs["settings"] is settings
+    assert np.allclose(
+        window._initial_auto_dive_pose_start_position,
+        [1.0, 2.0, 3.0],
+    )
+    assert window._initial_auto_dive_pose_start_yaw == pytest.approx(
+        np.deg2rad(-90.0)
+    )
+
+
+def test_initial_auto_dive_pose_applies_if_camera_unchanged(monkeypatch):
+    window = _initial_auto_dive_pose_window()
+    pose = SimpleNamespace(position=(10.0, 20.0, 30.0), yaw_deg=45.0, pitch_deg=8.0)
+    future = FakeFuture(pose)
+    executor = FakeExecutor(future)
+
+    monkeypatch.setattr(
+        viewer_window,
+        "ThreadPoolExecutor",
+        lambda **_kwargs: executor,
+    )
+
+    assert window._start_initial_auto_dive_pose(window.camera.position) is True
+    window._update_initial_auto_dive_pose()
+
+    assert np.allclose(window.camera.position, [10.0, 20.0, 30.0])
+    assert np.degrees(window.camera.yaw) == pytest.approx(45.0)
+    assert np.degrees(window.camera.pitch) == pytest.approx(8.0)
+    assert window._initial_auto_dive_pose_future is None
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._initial_chunks_loaded is False
+    assert window._initial_visual_ready is False
+    assert window._chunk_prep_progress == 0.0
+    assert window._reset_calls == ["reset"]
+
+
+def test_initial_auto_dive_pose_does_not_snap_after_camera_input(monkeypatch):
+    window = _initial_auto_dive_pose_window()
+    original_camera = window.camera
+    pose = SimpleNamespace(position=(10.0, 20.0, 30.0), yaw_deg=45.0, pitch_deg=8.0)
+    future = FakeFuture(pose)
+    executor = FakeExecutor(future)
+
+    monkeypatch.setattr(
+        viewer_window,
+        "ThreadPoolExecutor",
+        lambda **_kwargs: executor,
+    )
+
+    assert window._start_initial_auto_dive_pose(window.camera.position) is True
+    window.camera.yaw = window.camera.yaw + np.deg2rad(1.0)
+    window._update_initial_auto_dive_pose()
+
+    assert window.camera is original_camera
+    assert np.allclose(window.camera.position, [1.0, 2.0, 3.0])
+    assert window._initial_auto_dive_pose_future is None
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._reset_calls == []
+
+
+def test_initial_auto_dive_pose_cancel_shuts_down_executor():
+    window = _initial_auto_dive_pose_window()
+    future = FakeFuture(done=False)
+    executor = FakeExecutor(future)
+    window._initial_auto_dive_pose_executor = executor
+    window._initial_auto_dive_pose_future = future
+    window._initial_auto_dive_pose_start_position = window.camera.position.copy()
+
+    assert window._cancel_initial_auto_dive_pose() is True
+
+    assert future.cancelled is True
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._initial_auto_dive_pose_future is None
+
+
 def _auto_dive_start_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.manifest = {"source_obj": "/maps/devils_eye.obj"}
@@ -580,12 +730,41 @@ def test_auto_dive_start_queues_initial_plan_without_blocking(monkeypatch):
     assert fn is viewer_window.build_centerline_auto_dive_plan
     assert args == (window.manifest,)
     assert kwargs["current_position"] == (1.0, 2.0, 3.0)
+    assert kwargs["current_yaw"] == pytest.approx(0.25)
+    assert kwargs["current_pitch"] == pytest.approx(-0.1)
+    assert "current_travel_yaw" not in kwargs
+    assert "current_travel_pitch" not in kwargs
     assert kwargs["settings"] is settings
     assert kwargs["cache_dir"] == "/cache/devils-eye"
     assert callable(kwargs["diagnostics"])
     assert [event for event, _payload in blackbox.events] == [
         "session_started",
         "auto_dive_plan_requested",
+    ]
+
+
+def test_auto_dive_pending_start_renders_planning_indicator():
+    window = _auto_dive_start_window()
+    rendered = []
+
+    class FakeImportProgressPanel:
+        def render(self, window_size, map_name, stage, fraction, *, title, note):
+            rendered.append((window_size, map_name, stage, fraction, title, note))
+
+    window.import_progress_panel = FakeImportProgressPanel()
+    window._auto_dive_start_future = FakeFuture(done=False)
+
+    window._render_auto_dive_progress((800, 600))
+
+    assert rendered == [
+        (
+            (800, 600),
+            "devils_eye.obj",
+            "planning guided dive",
+            None,
+            "",
+            "Finding a forward route…",
+        )
     ]
 
 
@@ -696,6 +875,46 @@ def test_auto_dive_stop_cancels_pending_initial_plan():
         "auto_dive_plan_cancelled"
     ]
     assert window._auto_dive_start_future is None
+
+
+def test_auto_dive_toggle_resumes_from_user_assist(monkeypatch):
+    window = _auto_dive_start_window()
+    calls = []
+    controller = SimpleNamespace(
+        state=viewer_window.AutoDiveState.WAITING_FOR_USER,
+        active=False,
+        resume_from_user_assist=lambda camera, world, now: calls.append(
+            ("resume", camera, world, now)
+        )
+        or True,
+    )
+    window._auto_dive_controller = controller
+    window._auto_dive_previous_render_distance = None
+    window._auto_dive_start_future = None
+    window._stop_auto_dive = lambda: calls.append("stop_auto_dive")
+    window._start_auto_dive = lambda: calls.append("start_auto_dive") or True
+
+    assert window._toggle_auto_dive() is True
+
+    assert len(calls) == 1
+    assert calls[0][:3] == ("resume", window.camera, window.world)
+    assert isinstance(calls[0][3], float)
+
+
+def test_auto_dive_waiting_for_user_renders_assist_prompt():
+    window = _auto_dive_start_window()
+    calls = []
+    window._auto_dive_controller = SimpleNamespace(
+        state=viewer_window.AutoDiveState.WAITING_FOR_USER,
+        active=False,
+    )
+    window._render_auto_dive_user_assist_prompt = (
+        lambda window_size: calls.append(window_size)
+    )
+
+    window._render_auto_dive_progress((800, 600))
+
+    assert calls == [(800, 600)]
 
 
 def test_recording_countdown_hides_picker_and_manual_help(monkeypatch):
@@ -2294,6 +2513,25 @@ def test_initial_compilation_completion_is_logged_once(monkeypatch):
     ]
 
 
+def test_main_thread_stall_log_reports_slow_phases_with_rate_limit(monkeypatch):
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    ticks = iter([10.0, 10.5, 13.0])
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._main_thread_stall_last_log_at = {}
+
+    window._log_main_thread_stall("streaming update", 0.1)
+    window._log_main_thread_stall("streaming update", 0.6, pending=4)
+    window._log_main_thread_stall("streaming update", 0.7, pending=5)
+    window._log_main_thread_stall("streaming update", 0.8, pending=6)
+
+    assert logger.warning_messages == [
+        "Main-thread stall: streaming update took 600ms (pending=4).",
+        "Main-thread stall: streaming update took 800ms (pending=6).",
+    ]
+
+
 def test_startup_streaming_radius_prefetches_beyond_revealed_render_distance():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.render_distance_stepper = SimpleNamespace(value=6, max_value=10)
@@ -3002,6 +3240,191 @@ def test_startup_render_starts_import_when_splash_was_already_presented():
 
     assert calls == ["splash", "start import"]
     assert window._pending_import_started is True
+
+
+def test_ready_cache_startup_is_deferred_until_render_loop():
+    source = inspect.getsource(viewer_window.CaveViewerWindow.__init__)
+
+    assert "self._startup_map_load_pending =" in source
+    assert "self._load_map(" not in source
+
+
+def test_ready_cache_startup_splash_is_indeterminate():
+    clear_calls = []
+    rendered = []
+
+    class FakeImportProgressPanel:
+        def render(self, window_size, map_name, stage, fraction, *, title, note):
+            rendered.append((window_size, map_name, stage, fraction, title, note))
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.ctx = SimpleNamespace(clear=lambda *color: clear_calls.append(color))
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window.import_progress_panel = FakeImportProgressPanel()
+    window._startup_map_load_pending = (
+        "/cache/devils-eye",
+        "/textures/devils-eye",
+        {"source_obj": "/maps/devils_eye.obj"},
+    )
+
+    window._render_startup_map_load_splash()
+
+    assert clear_calls == [(0.02, 0.02, 0.03)]
+    assert rendered == [
+        (
+            (800, 600),
+            "devils_eye.obj",
+            "opening cave",
+            None,
+            "",
+            "Preparing map…",
+        )
+    ]
+
+
+def test_startup_render_presents_ready_cache_splash_before_loading_map():
+    calls = []
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(800, 600))
+    window._closing_requested = False
+    window._startup_focus_enabled = False
+    window._is_iconified = False
+    window._has_map_loaded = False
+    window._import_active = False
+    window._startup_map_load_pending = (
+        "/cache/devils-eye",
+        "/textures/devils-eye",
+        {"source_obj": "/maps/devils_eye.obj"},
+    )
+    window._startup_map_load_splash_rendered = False
+    window._sync_render_mode_loading_policy = lambda: None
+    window._query_runtime_iconified_state = lambda: False
+    window._set_background_pause = lambda _should_pause, _reason: None
+    window._drain_recording_stop_results = lambda: None
+    window._render_startup_map_load_splash = lambda: calls.append("splash")
+    window._load_map = lambda *args: calls.append(("load", args))
+
+    window.on_render(0.0, 0.0)
+
+    assert calls == ["splash"]
+    assert window._startup_map_load_splash_rendered is True
+    assert window._has_map_loaded is False
+
+    window.on_render(0.0, 0.0)
+
+    assert calls == [
+        "splash",
+        (
+            "load",
+            (
+                "/cache/devils-eye",
+                "/textures/devils-eye",
+                {"source_obj": "/maps/devils_eye.obj"},
+            ),
+        ),
+    ]
+    assert window._startup_map_load_pending is None
+    assert window._has_map_loaded is True
+
+
+def test_texture_validation_queues_without_blocking(monkeypatch):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    manager = FakeTextureValidationManager()
+    future = FakeFuture(done=False)
+    executor = FakeExecutor(future)
+    window.texture_manager = manager
+    window.cache_dir = "/cache/devils-eye"
+    window._texture_validation_executor = None
+    window._texture_validation_future = None
+    window._texture_validation_manager = None
+    window._texture_validation_cache_dir = None
+    window._texture_validation_started_at = None
+
+    monkeypatch.setattr(
+        viewer_window,
+        "ThreadPoolExecutor",
+        lambda **_kwargs: executor,
+    )
+
+    assert window._start_texture_validation_async() is True
+
+    assert window._texture_validation_future is future
+    assert window._texture_validation_executor is executor
+    assert window._texture_validation_manager is manager
+    assert window._texture_validation_cache_dir == "/cache/devils-eye"
+    assert len(executor.submit_calls) == 1
+    fn, args, kwargs = executor.submit_calls[0]
+    assert fn.__self__ is manager
+    assert fn.__name__ == "validate_textures"
+    assert args == ()
+    assert kwargs == {}
+    assert manager.calls == 0
+
+
+def test_texture_validation_completion_shuts_down_executor():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    manager = FakeTextureValidationManager()
+    future = FakeFuture({"found": ["texture.jpg"], "missing": []})
+    executor = FakeExecutor(future)
+    window.texture_manager = manager
+    window.cache_dir = "/cache/devils-eye"
+    window._texture_validation_executor = executor
+    window._texture_validation_future = future
+    window._texture_validation_manager = manager
+    window._texture_validation_cache_dir = "/cache/devils-eye"
+    window._texture_validation_started_at = None
+
+    window._update_texture_validation()
+
+    assert future.result_called is True
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._texture_validation_future is None
+    assert window._texture_validation_executor is None
+
+
+def test_texture_validation_completion_discards_stale_map_result():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    old_manager = FakeTextureValidationManager()
+    new_manager = FakeTextureValidationManager()
+    future = FakeFuture({"found": ["old.jpg"], "missing": []})
+    executor = FakeExecutor(future)
+    window.texture_manager = new_manager
+    window.cache_dir = "/cache/new"
+    window._texture_validation_executor = executor
+    window._texture_validation_future = future
+    window._texture_validation_manager = old_manager
+    window._texture_validation_cache_dir = "/cache/old"
+    window._texture_validation_started_at = None
+
+    window._update_texture_validation()
+
+    assert future.result_called is False
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._texture_validation_future is None
+
+
+def test_texture_validation_cancel_shuts_down_executor():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    future = FakeFuture(done=False)
+    executor = FakeExecutor(future)
+    window._texture_validation_executor = executor
+    window._texture_validation_future = future
+    window._texture_validation_manager = FakeTextureValidationManager()
+    window._texture_validation_cache_dir = "/cache/devils-eye"
+    window._texture_validation_started_at = None
+
+    assert window._cancel_texture_validation() is True
+
+    assert future.cancelled is True
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._texture_validation_future is None
 
 
 def test_iconified_render_throttles_polling_without_sleep(monkeypatch):

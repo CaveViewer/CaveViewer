@@ -1,4 +1,4 @@
-"""Tests for Auto Dive blackbox JSONL diagnostics."""
+"""Tests for Guided Dive blackbox JSONL diagnostics."""
 
 from __future__ import annotations
 

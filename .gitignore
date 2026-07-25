@@ -33,3 +33,4 @@ run_caveviewer.sh
 .idea/
 .run
 .aiassistant/
+docs/development/.agents/

@@ -1,4 +1,4 @@
-"""Tests for user-facing centerline Auto Dive planning."""
+"""Tests for user-facing centerline Guided Dive planning."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from caveviewer.core.navigation.autodive import (
 from caveviewer.core.navigation.centerline import (
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
 )
+from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGuard
 from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.navigation.cache_metadata import (
     NAVIGATION_METADATA_METHOD,
@@ -564,6 +565,54 @@ def test_auto_dive_mesh_guard_rejects_cached_wall_shortcut(tmp_path):
     assert plan.route_points_xz == tuple((point[0], point[2]) for point in raw_route_points)
 
 
+def test_auto_dive_skips_mesh_guard_for_dense_chunk_cache(monkeypatch, tmp_path):
+    manifest, raw_route_points = _manifest_with_cached_mesh_wall_route()
+    manifest["triangle_count"] = 1_000_000
+    events = []
+
+    def fail_load_triangles(_self, _cell):
+        raise AssertionError("high-poly startup must not load chunk triangles")
+
+    monkeypatch.setattr(
+        CachedChunkMeshCollisionGuard,
+        "_load_triangles_for_chunk",
+        fail_load_triangles,
+    )
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=raw_route_points[0],
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=4,
+        ),
+        cache_dir=str(tmp_path / "cache"),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    candidate_payload = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ][-1]
+
+    assert candidate_payload["mesh_collision_enabled"] is False
+    assert plan.route_length_m > 0.0
+
+
+def test_auto_dive_enables_recovery_when_dense_triangles_are_chunked(tmp_path):
+    manifest = _split_manifest()
+    manifest["triangle_count"] = 1_000_000
+
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=str(tmp_path / "cache"),
+    )
+
+    assert guard is not None
+    assert guard.mesh_recovery_enabled is True
+
+
 def test_auto_dive_mesh_guard_trims_fully_blocked_route_to_safe_prefix(tmp_path):
     manifest, raw_route_points = _manifest_with_cached_mesh_blocked_route()
     cache_dir = tmp_path / "cache"
@@ -615,6 +664,7 @@ def test_auto_dive_mesh_guard_trims_fully_blocked_route_to_safe_prefix(tmp_path)
     )
     assert plan.route_length_m > 0.0
     assert max(point[0] for point in plan.route_points) < 5.5
+    assert max(point[0] for point in plan.route_points) <= 3.5
 
 
 def test_auto_dive_mesh_recovery_logs_search_alternatives(tmp_path):
@@ -679,6 +729,64 @@ def test_auto_dive_mesh_recovery_logs_search_alternatives(tmp_path):
     } <= set(payload["top_candidates"][0])
     assert payload["selection_turn_penalty_cells"] == pytest.approx(1.0)
     assert payload["path_avoidance_radius_cells"] == 1
+    assert payload["budget_exhausted"] is False
+    assert payload["max_visited_cells"] > payload["visited_cells"]
+    assert payload["max_edge_tests"] > payload["edge_tests"]
+
+
+def test_auto_dive_user_reposition_allows_mesh_recovery_to_change_direction(tmp_path):
+    manifest, raw_route_points = _manifest_with_cached_mesh_blocked_route()
+    cache_dir = tmp_path / "cache"
+    _write_test_chunk_mesh(
+        cache_dir,
+        cell=(0, 0, 0),
+        triangles=(
+            (
+                (5.5, 0.0, 0.0),
+                (5.5, 2.0, 0.0),
+                (5.5, 2.0, 6.0),
+            ),
+            (
+                (5.5, 0.0, 0.0),
+                (5.5, 2.0, 6.0),
+                (5.5, 0.0, 6.0),
+            ),
+        ),
+    )
+    events = []
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=raw_route_points[0],
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_travel_yaw=np.pi,
+        current_travel_pitch=0.0,
+        user_reposition=True,
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=4,
+        ),
+        cache_dir=str(cache_dir),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    recovery_events = [
+        payload
+        for event, payload in events
+        if event == "mesh_recovery_search"
+    ]
+    candidate_payload = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ][-1]
+
+    assert recovery_events
+    assert recovery_events[-1]["allow_reverse_travel"] is True
+    assert candidate_payload["user_reposition"] is True
+    assert candidate_payload["selection_reason"] == "mesh_recovery_route_clear"
+    assert plan.route_truncated_by_mesh is False
 
 
 def test_auto_dive_mesh_recovery_view_alignment_uses_pitch():
@@ -784,6 +892,216 @@ def test_auto_dive_replan_rejects_centerline_behind_travel_direction():
     assert candidate_payload["travel_filter"]["enabled"] is True
     assert candidate_payload["travel_filter"]["after_count"] == 0
     assert candidate_payload["travel_filter"]["rejected"]
+
+
+def test_auto_dive_user_reposition_treats_manual_direction_as_a_hint():
+    route_cells = tuple((-index, 0) for index in range(8))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    events = []
+
+    plan = build_centerline_auto_dive_plan(
+        _manifest_with_cached_route(
+            component_cells=route_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        ),
+        current_position=route_points[0],
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        user_reposition=True,
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+        ),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    candidate_payload = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ][-1]
+
+    assert plan.route_length_m > 0.0
+    assert candidate_payload["user_reposition"] is True
+    assert candidate_payload["travel_filter"]["enabled"] is False
+
+
+def test_auto_dive_initial_start_ignores_sideways_travel_cone():
+    route_cells = tuple((0, z) for z in range(6))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=route_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+
+    with pytest.raises(NavigationConfigurationError, match="forward travel cone"):
+        build_centerline_auto_dive_plan(
+            manifest,
+            current_position=route_points[0],
+            current_yaw=0.0,
+            current_pitch=0.0,
+            current_travel_yaw=0.0,
+            current_travel_pitch=0.0,
+            settings=AutoDiveSettings(
+                speed_m_per_second=1.0,
+                smoothing_radius_cells=0,
+            ),
+        )
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=route_points[0],
+        current_yaw=0.0,
+        current_pitch=0.0,
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+        ),
+    )
+
+    assert plan.route_points[0] == route_points[0]
+    assert plan.route_length_m > 0.0
+
+
+def test_auto_dive_uses_view_pitch_to_choose_upward_forward_direction():
+    component_cells = [(x, 0) for x in range(4)]
+    route_cells = tuple(component_cells)
+    route_points = (
+        (0.5, 2.0, 0.5),
+        (1.5, 1.0, 0.5),
+        (2.5, 1.0, 0.5),
+        (3.5, 1.0, 0.5),
+    )
+
+    plan = build_centerline_auto_dive_plan(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        ),
+        current_position=route_points[1],
+        current_yaw=np.pi,
+        current_pitch=np.radians(45.0),
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+        ),
+    )
+
+    assert plan.route_points[0] == route_points[1]
+    assert plan.route_points[1] == route_points[0]
+    assert plan.route.keyframes[0].pitch_deg > 0.0
+
+
+def test_auto_dive_uses_camera_position_offset_to_choose_upward_direction():
+    component_cells = [(x, 0) for x in range(4)]
+    route_cells = tuple(component_cells)
+    route_points = (
+        (0.5, 3.0, 0.5),
+        (1.5, 1.0, 0.5),
+        (2.5, 1.0, 0.5),
+        (3.5, 1.0, 0.5),
+    )
+
+    plan = build_centerline_auto_dive_plan(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        ),
+        current_position=(1.5, 2.0, 0.5),
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+        ),
+    )
+
+    assert plan.route_points[0] == (1.5, 2.0, 0.5)
+    assert plan.route_points[1] == route_points[0]
+    assert plan.route.keyframes[0].pitch_deg > 0.0
+
+
+def test_auto_dive_resume_does_not_backtrack_to_rejoin_centerline():
+    component_cells = [(x, 0) for x in range(7)]
+    route_cells = tuple(component_cells)
+    route_points = tuple((float(x) + 0.5, 1.0, 0.5) for x in range(7))
+
+    plan = build_centerline_auto_dive_plan(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        ),
+        current_position=(2.75, 1.0, 0.5),
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+        ),
+    )
+
+    assert plan.route_points[0] == (2.75, 1.0, 0.5)
+    assert plan.route_points[1][0] > 2.75
+
+
+def test_auto_dive_mesh_recovery_prefers_upward_forward_over_long_backtrack():
+    component_cells = (
+        [(x, 0) for x in range(-8, 1)]
+        + [(1, 0)]
+    )
+    route_cells = tuple(component_cells)
+    route_points = tuple(
+        (
+            float(x) + 0.5,
+            2.0 if x == 1 else 1.0,
+            float(z) + 0.5,
+        )
+        for x, z in route_cells
+    )
+    centerline_path = cached_centerline_path(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        )
+    )
+    events = []
+
+    assert centerline_path is not None
+    cells = _mesh_clear_recovery_footprint_path(
+        centerline_path,
+        start_cell=(0, 0),
+        target_indices={},
+        current_point=(0.5, 1.0, 0.5),
+        current_yaw=0.0,
+        current_pitch=np.radians(45.0),
+        current_travel_yaw=0.0,
+        current_travel_pitch=np.radians(45.0),
+        avoid_positions=None,
+        collision_validator=_AutoDiveCollisionValidator(centerline_path),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    assert cells[-1] == (1, 0)
+    payload = [
+        payload
+        for event, payload in events
+        if event == "mesh_recovery_search"
+    ][-1]
+    assert payload["selected_candidate"]["forward_alignment"] > 0.0
 
 
 def test_auto_dive_mesh_recovery_rejects_backtracking_from_travel_direction():

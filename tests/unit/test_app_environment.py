@@ -30,7 +30,9 @@ def test_tk_scale_is_a_known_runtime_setting():
         in app._KNOWN_CAVEVIEWER_ENV_VARS
     )
     assert "CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS" in app._KNOWN_CAVEVIEWER_ENV_VARS
+    assert "CAVEVIEWER_IO_NICE" in app._KNOWN_CAVEVIEWER_ENV_VARS
     assert app._effective_env_default("CAVEVIEWER_OBJ_BUCKET_WORKERS") == "2"
+    assert app._effective_env_default("CAVEVIEWER_IO_NICE") == "5"
     assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"
     assert (
         app._effective_env_default(
