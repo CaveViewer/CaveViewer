@@ -63,6 +63,7 @@ class CenterlinePath:
     cached_points: Mapping[FootprintCell, Point] | None = None
     cached_y_ranges: Mapping[FootprintCell, tuple[float, float]] | None = None
     cached_clearance_margins: Mapping[FootprintCell, float] | None = None
+    cached_recovery_hotspots: Mapping[FootprintCell, Mapping[str, float]] | None = None
 
     @property
     def points_xz(self) -> tuple[PointXZ, ...]:

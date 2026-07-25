@@ -79,6 +79,54 @@ class FakeLogger:
         self.debug_messages.append(self._format(message, args))
 
 
+class FakeAutoDiveBlackbox:
+    def __init__(self):
+        self.events = []
+        self.closed = False
+
+    def record(self, event, **payload):
+        self.events.append((event, payload))
+
+    def close(self):
+        self.closed = True
+
+
+class FakeFuture:
+    def __init__(self, result=None, *, done=True, exception=None):
+        self._result = result
+        self._done = done
+        self._exception = exception
+        self.cancelled = False
+        self.result_called = False
+
+    def done(self):
+        return self._done
+
+    def result(self):
+        self.result_called = True
+        if self._exception is not None:
+            raise self._exception
+        return self._result
+
+    def cancel(self):
+        self.cancelled = True
+        return True
+
+
+class FakeExecutor:
+    def __init__(self, future):
+        self.future = future
+        self.submit_calls = []
+        self.shutdown_calls = []
+
+    def submit(self, fn, *args, **kwargs):
+        self.submit_calls.append((fn, args, kwargs))
+        return self.future
+
+    def shutdown(self, **kwargs):
+        self.shutdown_calls.append(kwargs)
+
+
 def test_benchmark_route_prefetch_stats_reports_missing_route_cells():
     window = viewer_window.CaveViewerWindow.__new__(viewer_window.CaveViewerWindow)
     window._benchmark_route_prefetch_cells = frozenset(
@@ -372,19 +420,21 @@ def test_optional_ms_formatter_reports_disabled_timer():
 def test_auto_dive_settings_are_built_from_runtime_preferences():
     settings = viewer_window._auto_dive_settings_from_mapping(
         {
-            "auto_dive_speed_feet_per_minute": "120",
+            "auto_dive_acceleration": "1.4",
             "auto_dive_render_distance_cells": "14",
             "auto_dive_smoothing_radius_cells": "4",
         }
     )
 
     assert settings.render_distance_cells == 14
-    assert settings.speed_m_per_second == pytest.approx(120.0 * 0.3048 / 60.0)
+    assert settings.speed_m_per_second == pytest.approx(
+        viewer_window._auto_dive_speed_from_acceleration(1.4)
+    )
     assert settings.smoothing_radius_cells == 4
 
 
 def test_auto_dive_settings_allow_explicit_environment_overrides(monkeypatch):
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE", "150")
+    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_ACCELERATION", "2.0")
     monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS", "18")
     monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS", "7")
 
@@ -397,8 +447,24 @@ def test_auto_dive_settings_allow_explicit_environment_overrides(monkeypatch):
     )
 
     assert settings.render_distance_cells == 18
-    assert settings.speed_m_per_second == pytest.approx(150.0 * 0.3048 / 60.0)
+    assert settings.speed_m_per_second == pytest.approx(
+        viewer_window._auto_dive_speed_from_acceleration(2.0)
+    )
     assert settings.smoothing_radius_cells == 7
+
+
+def test_auto_dive_settings_preserve_legacy_speed_overrides(monkeypatch):
+    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE", "150")
+
+    settings = viewer_window._auto_dive_settings_with_env_overrides(
+        viewer_window.AutoDiveSettings(
+            render_distance_cells=10,
+            speed_m_per_second=120.0 * 0.3048 / 60.0,
+            smoothing_radius_cells=4,
+        )
+    )
+
+    assert settings.speed_m_per_second == pytest.approx(150.0 * 0.3048 / 60.0)
 
 
 def test_auto_dive_diagnostics_can_be_enabled_from_preferences(monkeypatch):
@@ -443,6 +509,193 @@ def test_auto_dive_initial_camera_pose_uses_runtime_preferences(monkeypatch):
 
     assert window._auto_dive_initial_camera_pose() is pose
     assert calls == [(window.manifest, settings)]
+
+
+def _auto_dive_start_window():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.manifest = {"source_obj": "/maps/devils_eye.obj"}
+    window.cache_dir = "/cache/devils-eye"
+    window.camera = SimpleNamespace(
+        position=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        yaw=0.25,
+        pitch=-0.1,
+    )
+    window.world = SimpleNamespace(config=SimpleNamespace(load_radius_cells=3))
+    window._has_map_loaded = True
+    window._benchmark_controller = None
+    window._navigation_guard_enabled = False
+    window._auto_dive_controller = None
+    window._auto_dive_previous_render_distance = None
+    window._auto_dive_start_executor = None
+    window._auto_dive_start_future = None
+    window._auto_dive_start_settings = None
+    window._auto_dive_start_blackbox = None
+    window._auto_dive_start_manifest = None
+    window._auto_dive_start_cache_dir = None
+    window._auto_dive_start_position = None
+    window.render_distance_stepper = SimpleNamespace(
+        value=3,
+        min_value=1,
+        max_value=10,
+    )
+    window.minimap = SimpleNamespace(route_points=(), set_active_route_points_xz=lambda points: setattr(window.minimap, "route_points", points))
+    window.controls_overlay = SimpleNamespace(
+        is_waiting_for_begin=True,
+        dismissed=False,
+        dismiss_begin_screen=lambda: setattr(window.controls_overlay, "dismissed", True),
+    )
+    return window
+
+
+def test_auto_dive_start_queues_initial_plan_without_blocking(monkeypatch):
+    window = _auto_dive_start_window()
+    settings = viewer_window.AutoDiveSettings(smoothing_radius_cells=3)
+    blackbox = FakeAutoDiveBlackbox()
+    future = FakeFuture(done=False)
+    executor = FakeExecutor(future)
+
+    monkeypatch.setattr(
+        viewer_window,
+        "_auto_dive_settings_from_preferences",
+        lambda: settings,
+    )
+    monkeypatch.setattr(
+        viewer_window.CaveViewerWindow,
+        "_auto_dive_blackbox",
+        lambda _self: blackbox,
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "ThreadPoolExecutor",
+        lambda **_kwargs: executor,
+    )
+
+    assert window._start_auto_dive() is True
+
+    assert window._auto_dive_start_future is future
+    assert window._auto_dive_start_settings is settings
+    assert window._auto_dive_start_blackbox is blackbox
+    assert len(executor.submit_calls) == 1
+    fn, args, kwargs = executor.submit_calls[0]
+    assert fn is viewer_window.build_centerline_auto_dive_plan
+    assert args == (window.manifest,)
+    assert kwargs["current_position"] == (1.0, 2.0, 3.0)
+    assert kwargs["settings"] is settings
+    assert kwargs["cache_dir"] == "/cache/devils-eye"
+    assert callable(kwargs["diagnostics"])
+    assert [event for event, _payload in blackbox.events] == [
+        "session_started",
+        "auto_dive_plan_requested",
+    ]
+
+
+def test_auto_dive_start_completion_activates_controller(monkeypatch):
+    window = _auto_dive_start_window()
+    settings = viewer_window.AutoDiveSettings(smoothing_radius_cells=3)
+    blackbox = FakeAutoDiveBlackbox()
+    plan = SimpleNamespace(
+        render_distance_cells=8,
+        centerline_path=SimpleNamespace(footprint_cell_size=2.5),
+        route_points_xz=((1.0, 3.0), (4.0, 6.0)),
+        route_length_m=30.0,
+        duration_s=12.0,
+        circular_arc=False,
+    )
+    future = FakeFuture(plan)
+    executor = FakeExecutor(future)
+    created = {}
+
+    class FakeReplanner:
+        def __init__(self, manifest, replanner_settings, *, cache_dir, blackbox):
+            created["replanner"] = (
+                manifest,
+                replanner_settings,
+                cache_dir,
+                blackbox,
+            )
+
+    class FakeController:
+        active = True
+
+        def __init__(
+            self,
+            controller_plan,
+            *,
+            perf_counter,
+            replanner,
+            replan_distance_m,
+            blackbox,
+        ):
+            created["controller"] = (
+                controller_plan,
+                perf_counter,
+                replanner,
+                replan_distance_m,
+                blackbox,
+            )
+            self.plan = controller_plan
+            self.started = []
+
+        def start(self, camera, world, *, now):
+            self.started.append((camera, world, now))
+
+    monkeypatch.setattr(viewer_window, "AutoDiveReplanner", FakeReplanner)
+    monkeypatch.setattr(viewer_window, "AutoDiveController", FakeController)
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 100.0)
+
+    window._auto_dive_start_executor = executor
+    window._auto_dive_start_future = future
+    window._auto_dive_start_settings = settings
+    window._auto_dive_start_blackbox = blackbox
+    window._auto_dive_start_manifest = window.manifest
+    window._auto_dive_start_cache_dir = window.cache_dir
+    window._auto_dive_start_position = window.camera.position.copy()
+
+    window._update_auto_dive_start()
+
+    controller = window._auto_dive_controller
+    assert isinstance(controller, FakeController)
+    assert controller.started == [(window.camera, window.world, 100.0)]
+    assert window._auto_dive_start_future is None
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert window._auto_dive_previous_render_distance == 3
+    assert window.render_distance_stepper.value == 8
+    assert window.world.config.load_radius_cells == 8
+    assert window.minimap.route_points == ((1.0, 3.0), (4.0, 6.0))
+    assert window.controls_overlay.dismissed is True
+    assert created["replanner"] == (
+        window.manifest,
+        settings,
+        window.cache_dir,
+        blackbox,
+    )
+    assert created["controller"][0] is plan
+    assert created["controller"][3] == 2.5
+
+
+def test_auto_dive_stop_cancels_pending_initial_plan():
+    window = _auto_dive_start_window()
+    blackbox = FakeAutoDiveBlackbox()
+    future = FakeFuture(done=False)
+    executor = FakeExecutor(future)
+    window._auto_dive_start_executor = executor
+    window._auto_dive_start_future = future
+    window._auto_dive_start_blackbox = blackbox
+    window._auto_dive_start_position = window.camera.position.copy()
+
+    window._stop_auto_dive()
+
+    assert future.cancelled is True
+    assert executor.shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+    assert blackbox.closed is True
+    assert [event for event, _payload in blackbox.events] == [
+        "auto_dive_plan_cancelled"
+    ]
+    assert window._auto_dive_start_future is None
 
 
 def test_recording_countdown_hides_picker_and_manual_help(monkeypatch):

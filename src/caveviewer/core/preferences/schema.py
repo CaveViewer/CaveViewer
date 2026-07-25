@@ -142,8 +142,22 @@ def _scan_throttle_default() -> str:
     return "1" if sys.platform.startswith("win") else "0"
 
 
-def _auto_dive_speed_default() -> str:
-    return "112.5"
+_AUTO_DIVE_BASE_SPEED_FEET_PER_MINUTE = 50.0
+_AUTO_DIVE_ACCELERATION_DEFAULT = 1.25
+_AUTO_DIVE_LEGACY_SPEED_KEY = "auto_dive_speed_feet_per_minute"
+_AUTO_DIVE_LEGACY_SPEED_ENV_VAR = "CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE"
+
+
+def _auto_dive_acceleration_default() -> str:
+    return f"{_AUTO_DIVE_ACCELERATION_DEFAULT:g}"
+
+
+def _auto_dive_acceleration_from_legacy_speed(raw_value: object) -> str:
+    speed_feet_per_minute = float(str(raw_value).strip())
+    acceleration = (
+        speed_feet_per_minute / _AUTO_DIVE_BASE_SPEED_FEET_PER_MINUTE
+    ) - 1.0
+    return f"{max(0.0, acceleration):g}"
 
 
 def _faces_env_to_thousands(raw_value: str) -> str:
@@ -330,17 +344,18 @@ PREFERENCE_FIELDS = (
     ),
     PreferenceSpec(
         section="autodive",
-        key="auto_dive_speed_feet_per_minute",
-        env_var="CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE",
-        label="Speed",
+        key="auto_dive_acceleration",
+        env_var="CAVEVIEWER_AUTO_DIVE_ACCELERATION",
+        label="Acceleration",
         hint=(
-            "Camera travel speed. The default is 225% of the baseline diver speed."
+            "Extra speed above the baseline diver speed. 0 uses the baseline; "
+            "1.25 preserves the previous default."
         ),
         value_type=PreferenceValueType.FLOAT,
-        default=_auto_dive_speed_default,
-        minimum=10.0,
-        maximum=500.0,
-        units="ft/min",
+        default=_auto_dive_acceleration_default,
+        minimum=0.0,
+        maximum=10.0,
+        units="x base",
     ),
     PreferenceSpec(
         section="autodive",
@@ -425,6 +440,13 @@ def normalize_preferences(values: Mapping | None) -> dict[str, str]:
         return normalized
     for field in PREFERENCE_FIELDS:
         raw = values.get(field.key, "")
+        if field.key == "auto_dive_acceleration" and not str(raw).strip():
+            legacy_raw = values.get(_AUTO_DIVE_LEGACY_SPEED_KEY, "")
+            if str(legacy_raw).strip():
+                try:
+                    raw = _auto_dive_acceleration_from_legacy_speed(legacy_raw)
+                except Exception:
+                    raw = ""
         normalized[field.key] = str(raw).strip() if raw is not None else ""
     return normalized
 
@@ -611,6 +633,31 @@ def _validated_default(field: PreferenceSpec) -> str:
                 configured,
                 configured_result.message,
             )
+
+    if field.key == "auto_dive_acceleration":
+        legacy_configured = os.getenv(_AUTO_DIVE_LEGACY_SPEED_ENV_VAR, "").strip()
+        if legacy_configured:
+            try:
+                legacy_value = _auto_dive_acceleration_from_legacy_speed(
+                    legacy_configured
+                )
+            except Exception as exc:
+                _LOG.warning(
+                    "Ignoring invalid %s value %r: %s",
+                    _AUTO_DIVE_LEGACY_SPEED_ENV_VAR,
+                    legacy_configured,
+                    exc,
+                )
+            else:
+                legacy_result = validate_preference(field, legacy_value)
+                if legacy_result.is_valid:
+                    return legacy_result.normalized_value
+                _LOG.warning(
+                    "Ignoring invalid %s value %r: %s",
+                    _AUTO_DIVE_LEGACY_SPEED_ENV_VAR,
+                    legacy_configured,
+                    legacy_result.message,
+                )
 
     built_in = field.built_in_default()
     result = validate_preference(field, built_in)

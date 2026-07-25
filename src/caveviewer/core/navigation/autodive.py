@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 import heapq
 import math
+import os
 from typing import Any
 
 import numpy as np
@@ -33,6 +34,7 @@ from caveviewer.core.navigation.centerline import (
     navigable_footprint_neighbors,
     route_points_for_xz_points,
 )
+from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGuard
 from caveviewer.core.navigation.route import (
     CameraRoute,
     NavigationConfigurationError,
@@ -53,6 +55,23 @@ DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS = (
     NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS
 )
 DEFAULT_AUTO_DIVE_LOOKAHEAD_DISTANCE_M = 8.0
+DEFAULT_AUTO_DIVE_TRUSTED_MAX_SEGMENT_CELLS = 6.0
+_AUTO_DIVE_MESH_RECOVERY_SCAN_YAW_OFFSETS_DEG = tuple(range(-120, 121, 15))
+_AUTO_DIVE_MESH_RECOVERY_SCAN_PITCH_OFFSETS_DEG = (
+    -45.0,
+    -30.0,
+    -15.0,
+    0.0,
+    15.0,
+    30.0,
+    45.0,
+)
+_AUTO_DIVE_MESH_RECOVERY_SCAN_CONE_ALIGNMENT = math.cos(math.radians(22.5))
+_AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT = math.cos(math.radians(120.0))
+_AUTO_DIVE_MESH_RECOVERY_TURN_PENALTY_CELLS = 5.0
+_AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS = 1.0
+_AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_MAX_FRACTION = 0.35
+_AUTO_DIVE_MESH_RECOVERY_PATH_AVOIDANCE_RADIUS_CELLS = 1
 
 AutoDiveDiagnosticSink = Callable[[str, Mapping[str, Any]], None]
 
@@ -98,6 +117,15 @@ class _AutoDiveRouteCandidate:
 
 
 @dataclass(frozen=True)
+class _AutoDiveSelectedRoute:
+    points: tuple[Point, ...]
+    selection_reason: str
+    route_truncated_by_mesh: bool = False
+    mesh_safe_prefix_length_m: float | None = None
+    replan_at_end: bool = False
+
+
+@dataclass(frozen=True)
 class _ConeChainCandidate:
     cells: tuple[FootprintCell, ...]
     anchor_index: int
@@ -111,6 +139,7 @@ class _AutoDiveClearanceFailure:
     index: int | None = None
     segment_index: int | None = None
     cell: FootprintCell | None = None
+    chunk_cell: tuple[int, int, int] | None = None
     point: Point | None = None
     first: Point | None = None
     second: Point | None = None
@@ -120,9 +149,13 @@ class _AutoDiveClearanceFailure:
 class _AutoDiveRouteCandidateScore:
     route_clear: bool
     entry_clear: bool
+    mesh_clear: bool
+    geometry_trusted: bool
     min_lateral_clearance_cells: int
     mean_lateral_clearance_cells: float
     min_clearance_margin_m: float
+    max_segment_length_m: float
+    max_segment_cells: float
     forward_progress_m: float
     pullback_penalty_m: float
     curvature_rad: float
@@ -139,9 +172,12 @@ class _AutoDiveRouteCandidateScore:
         return (
             bool(self.route_clear),
             bool(self.entry_clear),
+            bool(self.mesh_clear),
+            bool(self.geometry_trusted),
             int(self.min_lateral_clearance_cells),
             float(self.min_clearance_margin_m),
             float(self.mean_lateral_clearance_cells),
+            -float(self.max_segment_cells),
             -float(self.total_change_per_m),
             float(self.forward_progress_m),
             -float(self.pullback_penalty_m),
@@ -156,13 +192,13 @@ class _AutoDiveRouteCandidateScore:
 class _AutoDiveCollisionValidator:
     """Route collision seam for Auto Dive path candidates.
 
-    This is deliberately small and runtime-only. Today it validates against the
-    cached navigation footprint and cached vertical gap ranges when available.
-    A mesh BVH validator can be plugged in behind the same point/segment API
-    once mesh collision metadata is cached.
+    This is deliberately small and runtime-only. It validates against the
+    cached navigation footprint, cached vertical gap ranges when available,
+    and optional cached chunk mesh collision checks.
     """
 
     centerline_path: CenterlinePath
+    mesh_guard: CachedChunkMeshCollisionGuard | None = None
 
     @property
     def cell_size(self) -> float:
@@ -183,6 +219,10 @@ class _AutoDiveCollisionValidator:
     @property
     def has_route_clearance_metadata(self) -> bool:
         return bool(self.cached_clearance_margins)
+
+    @property
+    def has_mesh_collision_guard(self) -> bool:
+        return self.mesh_guard is not None
 
     def point_is_clear(self, point: Point) -> bool:
         return self.point_clearance_failure(point) is None
@@ -281,6 +321,25 @@ class _AutoDiveCollisionValidator:
                 return failure
         return None
 
+    def mesh_route_clearance_failure(
+        self,
+        route_points: tuple[Point, ...],
+    ) -> _AutoDiveClearanceFailure | None:
+        if self.mesh_guard is None or len(route_points) < 2:
+            return None
+        for segment_index, (first, second) in enumerate(
+            zip(route_points, route_points[1:], strict=False)
+        ):
+            failure = _route_segment_mesh_collision_failure(
+                first,
+                second,
+                collision_validator=self,
+                segment_index=segment_index,
+            )
+            if failure is not None:
+                return failure
+        return None
+
 
 @dataclass(frozen=True)
 class AutoDivePlan:
@@ -294,6 +353,10 @@ class AutoDivePlan:
     route_length_m: float
     duration_s: float
     render_distance_cells: int
+    selection_reason: str = ""
+    route_truncated_by_mesh: bool = False
+    mesh_safe_prefix_length_m: float | None = None
+    replan_at_end: bool = False
 
     @property
     def route_points_xz(self) -> tuple[PointXZ, ...]:
@@ -359,7 +422,13 @@ def build_centerline_auto_dive_plan(
     manifest: Mapping[str, Any],
     *,
     current_position: tuple[float, float, float] | np.ndarray,
+    current_yaw: float | None = None,
+    current_pitch: float | None = None,
+    current_travel_yaw: float | None = None,
+    current_travel_pitch: float | None = None,
+    avoid_positions: Sequence[Sequence[float]] | None = None,
     settings: AutoDiveSettings | None = None,
+    cache_dir: str | os.PathLike[str] | None = None,
     diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> AutoDivePlan:
     """Build a finite centerline Auto Dive route near the current camera.
@@ -422,16 +491,28 @@ def build_centerline_auto_dive_plan(
         manifest=manifest,
         settings=settings,
     )
-    collision_validator = _AutoDiveCollisionValidator(centerline_path)
-    route_points = _select_best_auto_dive_route_candidate(
+    collision_validator = _AutoDiveCollisionValidator(
+        centerline_path,
+        mesh_guard=CachedChunkMeshCollisionGuard.from_manifest(
+            manifest,
+            cache_dir=cache_dir,
+        ),
+    )
+    selected_route = _select_best_auto_dive_route_candidate(
         centerline_path,
         waypoint_cells=waypoint_cells,
         route_points=route_points,
         current=current,
         settings=settings,
         collision_validator=collision_validator,
+        current_yaw=current_yaw,
+        current_pitch=current_pitch,
+        current_travel_yaw=current_travel_yaw,
+        current_travel_pitch=current_travel_pitch,
+        avoid_positions=avoid_positions,
         diagnostics=diagnostics,
     )
+    route_points = selected_route.points
     route_points = _route_points_starting_at_current_camera(route_points, current)
     route_points = _dedupe_consecutive_points(route_points)
     length_m = path_length(route_points)
@@ -467,6 +548,10 @@ def build_centerline_auto_dive_plan(
             1,
             int(settings.render_distance_cells),
         ),
+        selection_reason=selected_route.selection_reason,
+        route_truncated_by_mesh=bool(selected_route.route_truncated_by_mesh),
+        mesh_safe_prefix_length_m=selected_route.mesh_safe_prefix_length_m,
+        replan_at_end=bool(selected_route.replan_at_end),
     )
 
 
@@ -899,7 +984,10 @@ def _waypoint_cells_for_cached_route(
     settings: AutoDiveSettings,
 ) -> tuple[FootprintCell, ...]:
     """Prefer dense cached navigation points to avoid chords through walls."""
-    cells = _dedupe_consecutive_cells(route_cells)
+    cells = _expand_route_cell_gaps_through_component(
+        centerline_path,
+        _dedupe_consecutive_cells(route_cells),
+    )
     waypoint_limit = max(2, int(settings.max_keyframes))
     if len(cells) <= waypoint_limit:
         return cells
@@ -909,6 +997,30 @@ def _waypoint_cells_for_cached_route(
         cell_size=centerline_path.footprint_cell_size,
         settings=settings,
     )
+
+
+def _expand_route_cell_gaps_through_component(
+    centerline_path: CenterlinePath,
+    cells: tuple[FootprintCell, ...],
+) -> tuple[FootprintCell, ...]:
+    if len(cells) < 2:
+        return cells
+    expanded: list[FootprintCell] = [cells[0]]
+    for first, second in zip(cells, cells[1:], strict=False):
+        if max(abs(second[0] - first[0]), abs(second[1] - first[1])) <= 1:
+            expanded.append(second)
+            continue
+        connector = lowest_cost_footprint_path(
+            centerline_path.component_cells,
+            first,
+            second,
+            centerline_path.clearance_scores,
+        )
+        if len(connector) >= 2:
+            expanded.extend(connector[1:])
+        else:
+            expanded.append(second)
+    return _dedupe_consecutive_cells(tuple(expanded))
 
 
 def _auto_dive_points_for_waypoint_cells(
@@ -932,7 +1044,13 @@ def _auto_dive_points_for_waypoint_cells(
     for cell, xz in zip(waypoint_cells, route_xz, strict=True):
         cached_point = cached_points.get(cell)
         if cached_point is not None:
-            route_points.append(cached_point)
+            route_points.append(
+                _cached_auto_dive_point_for_waypoint_cell(
+                    centerline_path,
+                    cell=cell,
+                    cached_point=cached_point,
+                )
+            )
             continue
         route_points.append(
             route_points_for_xz_points(
@@ -943,6 +1061,27 @@ def _auto_dive_points_for_waypoint_cells(
             )[0]
         )
     return tuple(route_points)
+
+
+def _cached_auto_dive_point_for_waypoint_cell(
+    centerline_path: CenterlinePath,
+    *,
+    cell: FootprintCell,
+    cached_point: Point,
+) -> Point:
+    point_cell = _footprint_cell_for_xz(
+        (cached_point[0], cached_point[2]),
+        centerline_path.footprint_cell_size,
+    )
+    if max(abs(point_cell[0] - cell[0]), abs(point_cell[1] - cell[1])) <= 1:
+        return cached_point
+    x, z = footprint_world_center(cell, centerline_path.footprint_cell_size)
+    y = _medial_y_for_route_cell(
+        centerline_path,
+        cell,
+        fallback_y=float(cached_point[1]),
+    )
+    return float(x), float(y), float(z)
 
 
 def _auto_dive_initial_camera_position_groups(
@@ -1264,8 +1403,13 @@ def _select_best_auto_dive_route_candidate(
     current: np.ndarray,
     settings: AutoDiveSettings,
     collision_validator: _AutoDiveCollisionValidator,
+    current_yaw: float | None = None,
+    current_pitch: float | None = None,
+    current_travel_yaw: float | None = None,
+    current_travel_pitch: float | None = None,
+    avoid_positions: Sequence[Sequence[float]] | None = None,
     diagnostics: AutoDiveDiagnosticSink | None = None,
-) -> tuple[Point, ...]:
+) -> _AutoDiveSelectedRoute:
     """Generate and score local route candidates, returning the safest route.
 
     This turns smoothing into candidate selection. Raw, Theta-relaxed,
@@ -1275,6 +1419,16 @@ def _select_best_auto_dive_route_candidate(
     """
     specs = _auto_dive_candidate_specs(settings)
     route_samples = _AutoDiveRouteSamples(cells=waypoint_cells, points=route_points)
+    # Candidate construction can call segment checks many times while probing
+    # Theta/cone shortcuts. Keep those speculative probes footprint-only, then
+    # apply the cached mesh guard once during final candidate scoring. This
+    # keeps Auto Dive startup responsive while still applying cached mesh
+    # during final candidate scoring and guarded fallback trimming.
+    construction_collision_validator = (
+        _AutoDiveCollisionValidator(centerline_path)
+        if collision_validator.has_mesh_collision_guard
+        else collision_validator
+    )
     if len(specs) <= 1:
         candidate = _build_auto_dive_route_candidate(
             specs[0],
@@ -1283,14 +1437,69 @@ def _select_best_auto_dive_route_candidate(
             route_samples=route_samples,
             current=current,
             settings=settings,
+            collision_validator=construction_collision_validator,
+        )
+        current_point: Point = (
+            float(current[0]),
+            float(current[1]),
+            float(current[2]),
+        )
+        candidate_score = _score_auto_dive_route_candidate(
+            candidate,
+            current_point=current_point,
             collision_validator=collision_validator,
         )
+        travel_filter_payload = _forward_travel_cone_filter_payload(
+            [(candidate_score, candidate)],
+            current_point=current_point,
+            current_travel_yaw=current_travel_yaw,
+            current_travel_pitch=current_travel_pitch,
+            cell_size=collision_validator.cell_size,
+        )
+        if (
+            current_travel_yaw is not None
+            and not _candidate_route_is_within_travel_cone(
+                candidate,
+                candidate_score,
+                current_point=current_point,
+                current_travel_yaw=current_travel_yaw,
+                current_travel_pitch=current_travel_pitch,
+                cell_size=collision_validator.cell_size,
+            )
+        ):
+            _record_auto_dive_diagnostic(
+                diagnostics,
+                "candidate_scores",
+                {
+                    "selected": "none",
+                    "candidate_count": 1,
+                    "mesh_collision_enabled": bool(
+                        collision_validator.has_mesh_collision_guard
+                    ),
+                    "candidates": [
+                        _auto_dive_candidate_score_payload(
+                            candidate_score,
+                            candidate,
+                        )
+                    ],
+                    "reason": "no_forward_travel_candidates",
+                    "travel_cone_degrees": 120.0,
+                    "travel_filter": travel_filter_payload,
+                },
+            )
+            raise NavigationConfigurationError(
+                "Auto Dive found no route candidate in the forward travel cone"
+            )
         _record_auto_dive_diagnostic(
             diagnostics,
             "candidate_scores",
             {
                 "selected": candidate.name,
                 "candidate_count": 1,
+                "mesh_collision_enabled": bool(
+                    collision_validator.has_mesh_collision_guard
+                ),
+                "travel_filter": travel_filter_payload,
                 "candidates": [
                     {
                         "name": candidate.name,
@@ -1300,7 +1509,10 @@ def _select_best_auto_dive_route_candidate(
                 ],
             },
         )
-        return candidate.points
+        return _AutoDiveSelectedRoute(
+            points=candidate.points,
+            selection_reason="single_candidate",
+        )
 
     candidates: list[_AutoDiveRouteCandidate] = []
     failed_candidates: list[dict[str, Any]] = []
@@ -1318,7 +1530,7 @@ def _select_best_auto_dive_route_candidate(
                 route_samples=route_samples,
                 current=current,
                 settings=settings,
-                collision_validator=collision_validator,
+                collision_validator=construction_collision_validator,
             ): (ordinal, spec)
             for ordinal, spec in enumerate(specs)
         }
@@ -1344,10 +1556,16 @@ def _select_best_auto_dive_route_candidate(
             {
                 "selected": "fallback_raw_points",
                 "candidate_count": 0,
+                "mesh_collision_enabled": bool(
+                    collision_validator.has_mesh_collision_guard
+                ),
                 "failed_candidates": failed_candidates,
             },
         )
-        return route_points
+        return _AutoDiveSelectedRoute(
+            points=route_points,
+            selection_reason="fallback_raw_points",
+        )
 
     current_point: Point = (
         float(current[0]),
@@ -1366,48 +1584,183 @@ def _select_best_auto_dive_route_candidate(
         for candidate in candidates
         if len(candidate.points) >= 1
     ]
+    if (
+        collision_validator.has_mesh_collision_guard
+        and scored
+        and not any(score.mesh_clear for score, _candidate in scored)
+    ):
+        recovery_candidate = _build_mesh_recovery_auto_dive_route_candidate(
+            ordinal=max(candidate.ordinal for candidate in candidates) + 1,
+            centerline_path=centerline_path,
+            route_samples=route_samples,
+            current=current,
+            current_yaw=current_yaw,
+            current_pitch=current_pitch,
+            current_travel_yaw=current_travel_yaw,
+            current_travel_pitch=current_travel_pitch,
+            avoid_positions=avoid_positions,
+            collision_validator=collision_validator,
+            diagnostics=diagnostics,
+        )
+        if recovery_candidate is not None:
+            candidates.append(recovery_candidate)
+            scored.append(
+                (
+                    _score_auto_dive_route_candidate(
+                        recovery_candidate,
+                        current_point=current_point,
+                        collision_validator=collision_validator,
+                    ),
+                    recovery_candidate,
+                )
+            )
+    travel_filter_payload = _forward_travel_cone_filter_payload(
+        scored,
+        current_point=current_point,
+        current_travel_yaw=current_travel_yaw,
+        current_travel_pitch=current_travel_pitch,
+        cell_size=collision_validator.cell_size,
+    )
+    scored = _forward_travel_cone_route_candidates(
+        scored,
+        current_point=current_point,
+        current_travel_yaw=current_travel_yaw,
+        current_travel_pitch=current_travel_pitch,
+        cell_size=collision_validator.cell_size,
+    )
     if not scored:
         _record_auto_dive_diagnostic(
             diagnostics,
             "candidate_scores",
             {
-                "selected": "fallback_raw_points",
+                "selected": "none",
                 "candidate_count": len(candidates),
+                "mesh_collision_enabled": bool(
+                    collision_validator.has_mesh_collision_guard
+                ),
                 "failed_candidates": failed_candidates,
-                "reason": "no_scoreable_candidates",
+                "reason": "no_forward_travel_candidates",
+                "travel_cone_degrees": 120.0,
+                "travel_filter": travel_filter_payload,
             },
         )
-        return route_points
+        raise NavigationConfigurationError(
+            "Auto Dive found no route candidate in the forward travel cone"
+        )
 
     selectable = [
         item
         for item in scored
-        if item[0].route_clear
+        if item[0].route_clear and item[0].geometry_trusted
     ]
+    selection_reason = "trusted_route_clear"
     if not selectable:
         selectable = [
             item
             for item in scored
-            if item[0].entry_clear and not item[1].name.startswith("cone-")
+            if (
+                item[0].geometry_trusted
+                and _dense_candidate_clearance_failure_is_tolerable(item[0])
+                and not item[1].name.startswith("cone-")
+            )
         ]
+        selection_reason = "trusted_dense_low_clearance_fallback"
+    if not selectable:
+        selectable = [
+            item
+            for item in scored
+            if item[0].route_clear
+        ]
+        selection_reason = "untrusted_route_clear_fallback"
+    if not selectable:
+        selectable = [
+            item
+            for item in scored
+            if (
+                item[0].entry_clear
+                and item[0].mesh_clear
+                and not item[1].name.startswith("cone-")
+            )
+        ]
+        selection_reason = "entry_clear_fallback"
+    if not selectable:
+        selectable = [
+            item
+            for item in scored
+            if item[1].name == "raw" and item[0].mesh_clear
+        ]
+        selection_reason = "raw_fallback"
+    if not selectable and collision_validator.has_mesh_collision_guard:
+        selectable = [
+            item
+            for item in scored
+            if (
+                _score_reports_mesh_intersection(item[0])
+                and not item[1].name.startswith("cone-")
+            )
+        ]
+        selection_reason = "mesh_compromised_prefix_fallback"
     if not selectable:
         selectable = [
             item
             for item in scored
             if item[1].name == "raw"
         ] or scored
+        selection_reason = "raw_fallback"
 
-    _best_score, best_candidate = max(
+    best_score, best_candidate = max(
         selectable,
-        key=lambda item: (*item[0].sort_key, -item[1].ordinal),
+        key=lambda item: (
+            *_auto_dive_selection_sort_key(
+                item,
+                selection_reason=selection_reason,
+                current_point=current_point,
+                cell_size=collision_validator.cell_size,
+            ),
+            -item[1].ordinal,
+        ),
     )
+    if (
+        best_candidate.name == "mesh-recovery"
+        and selection_reason == "trusted_route_clear"
+    ):
+        selection_reason = "mesh_recovery_route_clear"
+    selected_points = best_candidate.points
+    selected_route_truncated = False
+    selected_safe_prefix_length_m: float | None = None
+    if selection_reason == "mesh_compromised_prefix_fallback":
+        selected_points = _trim_auto_dive_candidate_before_clearance_failure(
+            best_candidate,
+            best_score.first_clearance_failure,
+            current_point=current_point,
+            cell_size=collision_validator.cell_size,
+        )
+        selected_route_truncated = selected_points != best_candidate.points
+        selected_safe_prefix_length_m = path_length(
+            _route_points_starting_at_current_camera(
+                selected_points,
+                np.asarray(current_point, dtype=np.float64),
+            )
+        )
     _record_auto_dive_diagnostic(
         diagnostics,
         "candidate_scores",
         {
             "selected": best_candidate.name,
+            "selection_reason": selection_reason,
+            "selected_geometry_trusted": bool(best_score.geometry_trusted),
+            "selected_route_truncated": bool(selected_route_truncated),
+            "selected_safe_prefix_length_m": selected_safe_prefix_length_m,
+            "selected_replan_at_end": bool(best_candidate.name == "mesh-recovery"),
+            "trusted_max_segment_cells": float(
+                DEFAULT_AUTO_DIVE_TRUSTED_MAX_SEGMENT_CELLS
+            ),
+            "mesh_collision_enabled": bool(
+                collision_validator.has_mesh_collision_guard
+            ),
             "candidate_count": len(candidates),
             "failed_candidates": failed_candidates,
+            "travel_filter": travel_filter_payload,
             "candidates": [
                 _auto_dive_candidate_score_payload(score, candidate)
                 for score, candidate in sorted(
@@ -1417,7 +1770,13 @@ def _select_best_auto_dive_route_candidate(
             ],
         },
     )
-    return best_candidate.points
+    return _AutoDiveSelectedRoute(
+        points=selected_points,
+        selection_reason=selection_reason,
+        route_truncated_by_mesh=bool(selected_route_truncated),
+        mesh_safe_prefix_length_m=selected_safe_prefix_length_m,
+        replan_at_end=bool(best_candidate.name == "mesh-recovery"),
+    )
 
 
 def _record_auto_dive_diagnostic(
@@ -1433,6 +1792,167 @@ def _record_auto_dive_diagnostic(
         return
 
 
+def _forward_travel_cone_route_candidates(
+    scored: list[tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteCandidate]],
+    *,
+    current_point: Point,
+    current_travel_yaw: float | None,
+    current_travel_pitch: float | None,
+    cell_size: float,
+) -> list[tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteCandidate]]:
+    if current_travel_yaw is None:
+        return scored
+    return [
+        item
+        for item in scored
+        if _candidate_route_is_within_travel_cone(
+            item[1],
+            item[0],
+            current_point=current_point,
+            current_travel_yaw=current_travel_yaw,
+            current_travel_pitch=current_travel_pitch,
+            cell_size=cell_size,
+        )
+    ]
+
+
+def _forward_travel_cone_filter_payload(
+    scored: list[tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteCandidate]],
+    *,
+    current_point: Point,
+    current_travel_yaw: float | None,
+    current_travel_pitch: float | None,
+    cell_size: float,
+) -> dict[str, Any]:
+    if current_travel_yaw is None:
+        return {
+            "enabled": False,
+            "before_count": len(scored),
+            "after_count": len(scored),
+        }
+    rejected: list[dict[str, Any]] = []
+    accepted_count = 0
+    for score, candidate in scored:
+        alignment, target = _candidate_route_travel_alignment(
+            candidate,
+            score,
+            current_point=current_point,
+            current_travel_yaw=current_travel_yaw,
+            current_travel_pitch=current_travel_pitch,
+            cell_size=cell_size,
+        )
+        accepted = (
+            alignment is not None
+            and alignment >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
+        )
+        if accepted:
+            accepted_count += 1
+            continue
+        if len(rejected) >= 8:
+            continue
+        rejected.append(
+            {
+                "name": candidate.name,
+                "ordinal": int(candidate.ordinal),
+                "alignment": None if alignment is None else float(alignment),
+                "target": None if target is None else [float(value) for value in target],
+                "route_clear": bool(score.route_clear),
+                "mesh_clear": bool(score.mesh_clear),
+                "entry_clear": bool(score.entry_clear),
+                "length_m": float(score.length_m),
+                "first_failure": _auto_dive_clearance_failure_payload(
+                    score.first_clearance_failure
+                ),
+            }
+        )
+    return {
+        "enabled": True,
+        "cone_degrees": 120.0,
+        "before_count": len(scored),
+        "after_count": accepted_count,
+        "rejected": rejected,
+    }
+
+
+def _candidate_route_is_within_travel_cone(
+    candidate: _AutoDiveRouteCandidate,
+    score: _AutoDiveRouteCandidateScore,
+    *,
+    current_point: Point,
+    current_travel_yaw: float,
+    current_travel_pitch: float | None,
+    cell_size: float,
+) -> bool:
+    alignment, _target = _candidate_route_travel_alignment(
+        candidate,
+        score,
+        current_point=current_point,
+        current_travel_yaw=current_travel_yaw,
+        current_travel_pitch=current_travel_pitch,
+        cell_size=cell_size,
+    )
+    return (
+        alignment is not None
+        and alignment >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
+    )
+
+
+def _candidate_route_travel_alignment(
+    candidate: _AutoDiveRouteCandidate,
+    score: _AutoDiveRouteCandidateScore,
+    *,
+    current_point: Point,
+    current_travel_yaw: float,
+    current_travel_pitch: float | None,
+    cell_size: float,
+) -> tuple[float | None, Point | None]:
+    target_points = candidate.points
+    if _score_reports_mesh_intersection(score):
+        target_points = _trim_auto_dive_candidate_before_clearance_failure(
+            candidate,
+            score.first_clearance_failure,
+            current_point=current_point,
+            cell_size=cell_size,
+        )
+    route_points = _route_points_starting_at_current_camera(
+        target_points,
+        np.asarray(current_point, dtype=np.float64),
+    )
+    if len(route_points) < 2:
+        return None, None
+    final_target = _route_target_point_far_enough(
+        route_points,
+        current_point=current_point,
+        cell_size=cell_size,
+    )
+    if final_target is None:
+        return None, None
+    final_alignment = _mesh_recovery_view_alignment(
+        current_point,
+        final_target,
+        current_yaw=current_travel_yaw,
+        current_pitch=current_travel_pitch,
+    )
+    return float(final_alignment), final_target
+
+
+def _route_target_point_far_enough(
+    route_points: tuple[Point, ...],
+    *,
+    current_point: Point,
+    cell_size: float,
+) -> Point | None:
+    current = np.asarray(current_point, dtype=np.float64)
+    threshold_m = max(0.25, float(cell_size) * 0.25)
+    target = route_points[-1]
+    if (
+        float(np.linalg.norm(np.asarray(target, dtype=np.float64) - current))
+        < threshold_m
+    ):
+        return None
+    return target
+
+
 def _auto_dive_candidate_score_payload(
     score: _AutoDiveRouteCandidateScore,
     candidate: _AutoDiveRouteCandidate,
@@ -1442,9 +1962,13 @@ def _auto_dive_candidate_score_payload(
         "ordinal": candidate.ordinal,
         "route_clear": bool(score.route_clear),
         "entry_clear": bool(score.entry_clear),
+        "mesh_clear": bool(score.mesh_clear),
+        "geometry_trusted": bool(score.geometry_trusted),
         "min_lateral_clearance_cells": int(score.min_lateral_clearance_cells),
         "mean_lateral_clearance_cells": float(score.mean_lateral_clearance_cells),
         "min_clearance_margin_m": float(score.min_clearance_margin_m),
+        "max_segment_length_m": float(score.max_segment_length_m),
+        "max_segment_cells": float(score.max_segment_cells),
         "forward_progress_m": float(score.forward_progress_m),
         "pullback_penalty_m": float(score.pullback_penalty_m),
         "curvature_rad": float(score.curvature_rad),
@@ -1475,6 +1999,12 @@ def _auto_dive_clearance_failure_payload(
         payload["segment_index"] = int(failure.segment_index)
     if failure.cell is not None:
         payload["cell"] = [int(failure.cell[0]), int(failure.cell[1])]
+    if failure.chunk_cell is not None:
+        payload["chunk_cell"] = [
+            int(failure.chunk_cell[0]),
+            int(failure.chunk_cell[1]),
+            int(failure.chunk_cell[2]),
+        ]
     if failure.point is not None:
         payload["point"] = [float(value) for value in failure.point]
     if failure.first is not None:
@@ -1482,6 +2012,960 @@ def _auto_dive_clearance_failure_payload(
     if failure.second is not None:
         payload["second"] = [float(value) for value in failure.second]
     return payload
+
+
+def _dense_candidate_clearance_failure_is_tolerable(
+    score: _AutoDiveRouteCandidateScore,
+) -> bool:
+    """Return whether a dense fallback failed only by hugging a wall.
+
+    When footprint-only collision says a long shortcut is clear, that can be
+    worse than a dense centerline route that briefly enters a tight cell:
+    the long shortcut may be crossing span-filled or textureless wall space.
+    Only low-lateral-clearance failures are allowed here; structural failures
+    such as leaving the footprint or cutting a diagonal wall still disqualify
+    the candidate.
+    """
+    if not score.entry_clear:
+        return False
+    if not score.mesh_clear:
+        return False
+    if score.first_clearance_failure is None:
+        return True
+    return score.first_clearance_failure.reason == "low_lateral_clearance"
+
+
+def _dense_fallback_auto_dive_sort_key(
+    score: _AutoDiveRouteCandidateScore,
+) -> tuple[object, ...]:
+    """Rank dense fallback routes by local validity, then smoothness.
+
+    In this mode every candidate is geometry-trusted, but none is fully
+    clearance-clear. Prefer the route that keeps the most margin and changes
+    direction/elevation least, rather than the one that won only because it
+    deleted more cave bends.
+    """
+    return (
+        bool(score.entry_clear),
+        int(score.min_lateral_clearance_cells),
+        float(score.min_clearance_margin_m),
+        -float(score.total_change_per_m),
+        float(score.mean_lateral_clearance_cells),
+        -float(score.max_segment_cells),
+        float(score.forward_progress_m),
+        -float(score.pullback_penalty_m),
+        -float(score.length_m),
+        -int(score.point_count),
+    )
+
+
+def _auto_dive_selection_sort_key(
+    item: tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteCandidate],
+    *,
+    selection_reason: str,
+    current_point: Point,
+    cell_size: float,
+) -> tuple[object, ...]:
+    score, candidate = item
+    if selection_reason == "trusted_dense_low_clearance_fallback":
+        return _dense_fallback_auto_dive_sort_key(score)
+    if selection_reason == "mesh_compromised_prefix_fallback":
+        return _mesh_compromised_auto_dive_sort_key(
+            score,
+            candidate,
+            current_point=current_point,
+            cell_size=cell_size,
+        )
+    return score.sort_key
+
+
+def _score_reports_mesh_intersection(score: _AutoDiveRouteCandidateScore) -> bool:
+    failure = score.first_clearance_failure
+    return failure is not None and failure.reason == "mesh_intersection"
+
+
+def _mesh_compromised_auto_dive_sort_key(
+    score: _AutoDiveRouteCandidateScore,
+    candidate: _AutoDiveRouteCandidate,
+    *,
+    current_point: Point,
+    cell_size: float,
+) -> tuple[object, ...]:
+    """Rank mesh-compromised routes by usable safe prefix.
+
+    Until Auto Dive has a true mesh-aware rerouter, the best fallback is the
+    route that moves farthest before the first cached-mesh intersection, then
+    trims the planned route before that wall. This avoids the hard no-motion
+    regression while still not knowingly planning through cached mesh.
+    """
+    trimmed_points = _trim_auto_dive_candidate_before_clearance_failure(
+        candidate,
+        score.first_clearance_failure,
+        current_point=current_point,
+        cell_size=cell_size,
+    )
+    safe_length_m = path_length(
+        _route_points_starting_at_current_camera(
+            trimmed_points,
+            np.asarray(current_point, dtype=np.float64),
+        )
+    )
+    net_progress_m = _trimmed_prefix_net_progress_m(
+        trimmed_points,
+        current_point=current_point,
+    )
+    return (
+        net_progress_m > max(0.25, float(cell_size) * 0.25),
+        float(net_progress_m),
+        safe_length_m > 1e-6,
+        float(safe_length_m),
+        bool(score.entry_clear),
+        bool(score.geometry_trusted),
+        int(score.min_lateral_clearance_cells),
+        float(score.min_clearance_margin_m),
+        -float(score.total_change_per_m),
+        float(score.mean_lateral_clearance_cells),
+        -float(score.pullback_penalty_m),
+    )
+
+
+def _trimmed_prefix_net_progress_m(
+    points: tuple[Point, ...],
+    *,
+    current_point: Point,
+) -> float:
+    if not points:
+        return 0.0
+    last = np.asarray(points[-1], dtype=np.float64)
+    current = np.asarray(current_point, dtype=np.float64)
+    return float(np.linalg.norm(last - current))
+
+
+def _trim_auto_dive_candidate_before_clearance_failure(
+    candidate: _AutoDiveRouteCandidate,
+    failure: _AutoDiveClearanceFailure | None,
+    *,
+    current_point: Point,
+    cell_size: float,
+) -> tuple[Point, ...]:
+    if (
+        failure is None
+        or failure.reason != "mesh_intersection"
+        or failure.segment_index is None
+    ):
+        return candidate.points
+
+    route_with_current = _route_points_starting_at_current_camera(
+        candidate.points,
+        np.asarray(current_point, dtype=np.float64),
+    )
+    segment_index = max(
+        0,
+        min(int(failure.segment_index), len(route_with_current) - 1),
+    )
+    trimmed: list[Point] = list(route_with_current[1 : segment_index + 1])
+    safe_stop = _safe_stop_before_mesh_failure(
+        failure,
+        cell_size=cell_size,
+    )
+    if safe_stop is not None and (
+        not trimmed or not _points_almost_equal(trimmed[-1], safe_stop)
+    ):
+        trimmed.append(safe_stop)
+    return _dedupe_consecutive_points(tuple(trimmed))
+
+
+def _safe_stop_before_mesh_failure(
+    failure: _AutoDiveClearanceFailure,
+    *,
+    cell_size: float,
+) -> Point | None:
+    if failure.first is None or failure.point is None:
+        return None
+    first = np.asarray(failure.first, dtype=np.float64)
+    hit = np.asarray(failure.point, dtype=np.float64)
+    delta = hit - first
+    distance = float(np.linalg.norm(delta))
+    if not math.isfinite(distance) or distance <= 1e-6:
+        return None
+    pullback_m = min(1.0, max(0.1, float(cell_size) * 0.1))
+    stop_distance = distance - pullback_m
+    if stop_distance <= 1e-4:
+        return None
+    stop = first + (delta / distance) * stop_distance
+    return (float(stop[0]), float(stop[1]), float(stop[2]))
+
+
+def _points_almost_equal(first: Point, second: Point) -> bool:
+    return (
+        abs(float(first[0]) - float(second[0])) <= 1e-6
+        and abs(float(first[1]) - float(second[1])) <= 1e-6
+        and abs(float(first[2]) - float(second[2])) <= 1e-6
+    )
+
+
+def _build_mesh_recovery_auto_dive_route_candidate(
+    *,
+    ordinal: int,
+    centerline_path: CenterlinePath,
+    route_samples: _AutoDiveRouteSamples,
+    current: np.ndarray,
+    current_yaw: float | None,
+    current_pitch: float | None,
+    current_travel_yaw: float | None,
+    current_travel_pitch: float | None,
+    avoid_positions: Sequence[Sequence[float]] | None,
+    collision_validator: _AutoDiveCollisionValidator,
+    diagnostics: AutoDiveDiagnosticSink | None,
+) -> _AutoDiveRouteCandidate | None:
+    """Build a mesh-clear footprint route when all smooth candidates hit a wall."""
+    if not collision_validator.has_mesh_collision_guard:
+        return None
+    current_point: Point = (
+        float(current[0]),
+        float(current[1]),
+        float(current[2]),
+    )
+    start_cell = _current_footprint_cell(centerline_path, current)
+    if start_cell not in centerline_path.component_cells:
+        start_cell = min(
+            centerline_path.component_cells,
+            key=lambda cell: (
+                _cell_center_distance_squared(centerline_path, cell, current),
+                cell,
+            ),
+        )
+    target_indices = _mesh_recovery_target_indices(
+        route_samples.cells,
+        start_cell=start_cell,
+        component_cells=centerline_path.component_cells,
+    )
+    if not target_indices:
+        return None
+
+    cells = _mesh_clear_recovery_footprint_path(
+        centerline_path,
+        start_cell=start_cell,
+        target_indices=target_indices,
+        current_point=current_point,
+        current_yaw=current_yaw,
+        current_pitch=current_pitch,
+        current_travel_yaw=current_travel_yaw,
+        current_travel_pitch=current_travel_pitch,
+        avoid_positions=avoid_positions,
+        collision_validator=collision_validator,
+        diagnostics=diagnostics,
+    )
+    if len(cells) < 2:
+        return None
+
+    points = tuple(
+        _mesh_recovery_point_for_cell(
+            centerline_path,
+            cell,
+            fallback_y=current_point[1],
+        )
+        for cell in cells[1:]
+    )
+    points = _dedupe_consecutive_points(points, min_distance_m=1e-6)
+    if not points:
+        return None
+    return _AutoDiveRouteCandidate(
+        ordinal=ordinal,
+        name="mesh-recovery",
+        cells=tuple(cells),
+        points=points,
+    )
+
+
+def _mesh_recovery_target_indices(
+    route_cells: tuple[FootprintCell, ...],
+    *,
+    start_cell: FootprintCell,
+    component_cells: frozenset[FootprintCell],
+) -> dict[FootprintCell, int]:
+    target_indices: dict[FootprintCell, int] = {}
+    for index, cell in enumerate(_dedupe_consecutive_cells(route_cells)):
+        if cell == start_cell or cell not in component_cells:
+            continue
+        target_indices[cell] = max(index, target_indices.get(cell, -1))
+    return target_indices
+
+
+def _mesh_clear_recovery_footprint_path(
+    centerline_path: CenterlinePath,
+    *,
+    start_cell: FootprintCell,
+    target_indices: Mapping[FootprintCell, int],
+    current_point: Point,
+    current_yaw: float | None,
+    current_pitch: float | None,
+    current_travel_yaw: float | None,
+    current_travel_pitch: float | None,
+    avoid_positions: Sequence[Sequence[float]] | None,
+    collision_validator: _AutoDiveCollisionValidator,
+    diagnostics: AutoDiveDiagnosticSink | None = None,
+) -> tuple[FootprintCell, ...]:
+    component = centerline_path.component_cells
+    if start_cell not in component:
+        return ()
+    max_clearance = max(
+        centerline_path.clearance_scores.get(cell, 1)
+        for cell in component
+    )
+    frontier: list[tuple[float, FootprintCell]] = [(0.0, start_cell)]
+    previous: dict[FootprintCell, FootprintCell | None] = {start_cell: None}
+    previous_steps: dict[FootprintCell, tuple[int, int] | None] = {
+        start_cell: None,
+    }
+    costs: dict[FootprintCell, float] = {start_cell: 0.0}
+    path_distances: dict[FootprintCell, float] = {start_cell: 0.0}
+    turn_penalties: dict[FootprintCell, float] = {start_cell: 0.0}
+    edge_cache: dict[tuple[FootprintCell, FootprintCell], bool] = {}
+    point_cache: dict[FootprintCell, Point] = {
+        start_cell: current_point,
+    }
+    avoid_cells = _mesh_recovery_avoid_cells(
+        centerline_path,
+        avoid_positions=avoid_positions,
+    )
+    best_cell: FootprintCell | None = None
+    best_key: tuple[object, ...] | None = None
+    best_candidate_payload: dict[str, Any] | None = None
+    candidate_payloads: list[tuple[tuple[object, ...], dict[str, Any]]] = []
+    visited_cells = 0
+    edge_tests = 0
+    edge_clear_count = 0
+    edge_blocked_count = 0
+    rejected_behind_count = 0
+    rejected_avoided_count = 0
+    rejected_too_close_count = 0
+    selection_yaw = (
+        current_travel_yaw
+        if current_travel_yaw is not None
+        else current_yaw
+    )
+    selection_pitch = (
+        current_travel_pitch
+        if current_travel_pitch is not None
+        else current_pitch
+    )
+
+    while frontier:
+        current_cost, cell = heapq.heappop(frontier)
+        if current_cost > costs[cell]:
+            continue
+        visited_cells += 1
+        target_point = _mesh_recovery_graph_point(
+            centerline_path,
+            cell,
+            current_point=current_point,
+            start_cell=start_cell,
+            point_cache=point_cache,
+        )
+        net_distance_m = float(
+            np.linalg.norm(
+                np.asarray(target_point, dtype=np.float64)
+                - np.asarray(current_point, dtype=np.float64)
+            )
+        )
+        target_allowed_by_pose = selection_yaw is not None or cell in target_indices
+        far_enough = net_distance_m >= max(
+            0.5,
+            centerline_path.footprint_cell_size * 0.5,
+        )
+        target_avoided = (
+            far_enough
+            and _mesh_recovery_target_is_avoided(
+                target_point,
+                avoid_positions=avoid_positions,
+                cell_size=centerline_path.footprint_cell_size,
+            )
+        )
+        if not far_enough:
+            rejected_too_close_count += 1
+        elif target_avoided:
+            rejected_avoided_count += 1
+        if target_allowed_by_pose and far_enough and not target_avoided:
+            forward_alignment = _mesh_recovery_view_alignment(
+                current_point,
+                target_point,
+                current_yaw=selection_yaw,
+                current_pitch=selection_pitch,
+            )
+            target_in_front = (
+                selection_yaw is None
+                or forward_alignment
+                >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
+            )
+            if target_in_front:
+                scan_in_cone, scan_alignment, scan_angle_penalty = (
+                    _mesh_recovery_scan_alignment(
+                        current_point,
+                        target_point,
+                        current_yaw=selection_yaw,
+                        current_pitch=selection_pitch,
+                    )
+                )
+                direct_alignment = _mesh_recovery_view_alignment(
+                    current_point,
+                    target_point,
+                    current_yaw=current_yaw,
+                    current_pitch=current_pitch,
+                )
+                path_distance_cells = float(path_distances.get(cell, current_cost))
+                path_distance_m = (
+                    path_distance_cells
+                    * float(centerline_path.footprint_cell_size)
+                )
+                turn_penalty_rad = float(turn_penalties.get(cell, 0.0))
+                selection_turn_penalty_uncapped_m = (
+                    turn_penalty_rad
+                    * _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS
+                    * float(centerline_path.footprint_cell_size)
+                )
+                selection_turn_penalty_cap_m = (
+                    path_distance_m
+                    * _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_MAX_FRACTION
+                )
+                selection_turn_penalty_m = min(
+                    selection_turn_penalty_uncapped_m,
+                    selection_turn_penalty_cap_m,
+                )
+                straightness = net_distance_m / max(1e-9, path_distance_m)
+                path_quality_m = (
+                    path_distance_m - selection_turn_penalty_m
+                )
+                candidate_path = _mesh_recovery_cell_path(previous, cell)
+                (
+                    path_avoidance_count,
+                    path_avoidance_min_distance_cells,
+                    path_avoidance_cells,
+                ) = _mesh_recovery_path_avoidance(
+                    candidate_path,
+                    avoid_cells=avoid_cells,
+                    start_cell=start_cell,
+                )
+                path_avoidance_penalty_m = (
+                    float(path_avoidance_count)
+                    * float(centerline_path.footprint_cell_size)
+                    * 8.0
+                )
+                selection_score_m = path_quality_m - path_avoidance_penalty_m
+                cached_hotspot = _mesh_recovery_cached_hotspot_payload(
+                    centerline_path,
+                    cell,
+                )
+                cached_hotspot_score = (
+                    0.0
+                    if cached_hotspot is None
+                    else float(cached_hotspot.get("score", 0.0))
+                )
+                key = (
+                    bool(scan_in_cone),
+                    -int(path_avoidance_count),
+                    float(selection_score_m),
+                    float(path_quality_m),
+                    float(cached_hotspot_score),
+                    float(path_distance_m),
+                    float(net_distance_m),
+                    float(straightness),
+                    int(target_indices.get(cell, -1)),
+                    float(forward_alignment),
+                    float(scan_alignment),
+                    float(direct_alignment),
+                    int(centerline_path.clearance_scores.get(cell, 1)),
+                    -float(turn_penalty_rad),
+                    -float(scan_angle_penalty),
+                    cell,
+                )
+                candidate_payload = {
+                    "cell": [int(cell[0]), int(cell[1])],
+                    "target": [float(value) for value in target_point],
+                    "selection_score_m": float(selection_score_m),
+                    "path_quality_m": float(path_quality_m),
+                    "path_distance_m": float(path_distance_m),
+                    "net_distance_m": float(net_distance_m),
+                    "straightness": float(straightness),
+                    "route_target_index": int(target_indices.get(cell, -1)),
+                    "forward_alignment": float(forward_alignment),
+                    "scan_alignment": float(scan_alignment),
+                    "direct_alignment": float(direct_alignment),
+                    "clearance_score": int(
+                        centerline_path.clearance_scores.get(cell, 1)
+                    ),
+                    "turn_penalty_rad": float(turn_penalty_rad),
+                    "selection_turn_penalty_m": float(selection_turn_penalty_m),
+                    "selection_turn_penalty_uncapped_m": float(
+                        selection_turn_penalty_uncapped_m
+                    ),
+                    "selection_turn_penalty_cap_m": float(
+                        selection_turn_penalty_cap_m
+                    ),
+                    "path_avoidance_count": int(path_avoidance_count),
+                    "path_avoidance_penalty_m": float(path_avoidance_penalty_m),
+                    "path_avoidance_min_distance_cells": (
+                        None
+                        if path_avoidance_min_distance_cells is None
+                        else float(path_avoidance_min_distance_cells)
+                    ),
+                    "path_avoidance_cells": [
+                        [int(cell[0]), int(cell[1])]
+                        for cell in path_avoidance_cells[:8]
+                    ],
+                    "path_avoidance_cells_truncated": (
+                        len(path_avoidance_cells) > 8
+                    ),
+                    "path_cell_count": len(candidate_path),
+                    "path_cells": [
+                        [int(path_cell[0]), int(path_cell[1])]
+                        for path_cell in candidate_path[:24]
+                    ],
+                    "path_cells_truncated": len(candidate_path) > 24,
+                    "scan_angle_penalty_deg": float(scan_angle_penalty),
+                }
+                candidate_payload["cached_hotspot_score"] = float(
+                    cached_hotspot_score
+                )
+                if cached_hotspot is not None:
+                    candidate_payload["cached_hotspot"] = cached_hotspot
+                candidate_payloads.append((key, candidate_payload))
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_cell = cell
+                    best_candidate_payload = candidate_payload
+            else:
+                rejected_behind_count += 1
+
+        for neighbor in navigable_footprint_neighbors(cell, component):
+            edge_cache_count = len(edge_cache)
+            edge_clear = _mesh_recovery_edge_is_clear(
+                centerline_path,
+                cell,
+                neighbor,
+                current_point=current_point,
+                start_cell=start_cell,
+                collision_validator=collision_validator,
+                point_cache=point_cache,
+                edge_cache=edge_cache,
+            )
+            if len(edge_cache) > edge_cache_count:
+                edge_tests += 1
+                if edge_clear:
+                    edge_clear_count += 1
+                else:
+                    edge_blocked_count += 1
+            if not edge_clear:
+                continue
+            step_distance = footprint_cell_distance(cell, neighbor)
+            step = (neighbor[0] - cell[0], neighbor[1] - cell[1])
+            turn_penalty = _mesh_recovery_turn_angle(
+                previous_steps.get(cell),
+                step,
+            )
+            clearance_penalty = (
+                (max_clearance - centerline_path.clearance_scores.get(neighbor, 1))
+                / max(1, max_clearance)
+            )
+            next_cost = (
+                current_cost
+                + step_distance * (1.0 + clearance_penalty)
+                + turn_penalty * _AUTO_DIVE_MESH_RECOVERY_TURN_PENALTY_CELLS
+            )
+            if next_cost >= costs.get(neighbor, math.inf):
+                continue
+            costs[neighbor] = next_cost
+            previous[neighbor] = cell
+            previous_steps[neighbor] = step
+            path_distances[neighbor] = (
+                path_distances.get(cell, 0.0) + step_distance
+            )
+            turn_penalties[neighbor] = (
+                turn_penalties.get(cell, 0.0) + turn_penalty
+            )
+            heapq.heappush(frontier, (next_cost, neighbor))
+
+    if best_cell is None:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "mesh_recovery_search",
+            {
+                "selected": None,
+                "start_cell": [int(start_cell[0]), int(start_cell[1])],
+                "visited_cells": int(visited_cells),
+                "target_count": int(len(target_indices)),
+                "candidate_count": int(len(candidate_payloads)),
+                "rejected_behind_count": int(rejected_behind_count),
+                "rejected_avoided_count": int(rejected_avoided_count),
+                "rejected_too_close_count": int(rejected_too_close_count),
+                "edge_tests": int(edge_tests),
+                "edge_clear_count": int(edge_clear_count),
+                "edge_blocked_count": int(edge_blocked_count),
+                "travel_cone_degrees": 120.0,
+                "scan_yaw_range_degrees": [-120.0, 120.0],
+                "selection_turn_penalty_cells": float(
+                    _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS
+                ),
+                "selection_turn_penalty_max_fraction": float(
+                    _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_MAX_FRACTION
+                ),
+                "path_avoidance_radius_cells": int(
+                    _AUTO_DIVE_MESH_RECOVERY_PATH_AVOIDANCE_RADIUS_CELLS
+                ),
+                "avoid_cells": [
+                    [int(cell[0]), int(cell[1])]
+                    for cell in sorted(avoid_cells)[:16]
+                ],
+                "avoid_cells_truncated": len(avoid_cells) > 16,
+            },
+        )
+        return ()
+    path: list[FootprintCell] = []
+    cell: FootprintCell | None = best_cell
+    while cell is not None:
+        path.append(cell)
+        cell = previous[cell]
+    selected_path = tuple(reversed(path))
+    top_candidates = [
+        payload
+        for _key, payload in sorted(
+            candidate_payloads,
+            key=lambda item: item[0],
+            reverse=True,
+        )[:12]
+    ]
+    _record_auto_dive_diagnostic(
+        diagnostics,
+        "mesh_recovery_search",
+        {
+            "selected": [int(best_cell[0]), int(best_cell[1])],
+            "selected_candidate": best_candidate_payload,
+            "selected_path_cell_count": len(selected_path),
+            "selected_path_cells": [
+                [int(cell[0]), int(cell[1])]
+                for cell in selected_path[:24]
+            ],
+            "selected_path_truncated": len(selected_path) > 24,
+            "start_cell": [int(start_cell[0]), int(start_cell[1])],
+            "visited_cells": int(visited_cells),
+            "target_count": int(len(target_indices)),
+            "candidate_count": int(len(candidate_payloads)),
+            "rejected_behind_count": int(rejected_behind_count),
+            "rejected_avoided_count": int(rejected_avoided_count),
+            "rejected_too_close_count": int(rejected_too_close_count),
+            "edge_tests": int(edge_tests),
+            "edge_clear_count": int(edge_clear_count),
+            "edge_blocked_count": int(edge_blocked_count),
+            "travel_cone_degrees": 120.0,
+            "scan_yaw_range_degrees": [-120.0, 120.0],
+            "selection_turn_penalty_cells": float(
+                _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS
+            ),
+            "selection_turn_penalty_max_fraction": float(
+                _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_MAX_FRACTION
+            ),
+            "path_avoidance_radius_cells": int(
+                _AUTO_DIVE_MESH_RECOVERY_PATH_AVOIDANCE_RADIUS_CELLS
+            ),
+            "avoid_cells": [
+                [int(cell[0]), int(cell[1])]
+                for cell in sorted(avoid_cells)[:16]
+            ],
+            "avoid_cells_truncated": len(avoid_cells) > 16,
+            "top_candidates": top_candidates,
+        },
+    )
+    return selected_path
+
+
+def _mesh_recovery_cell_path(
+    previous: Mapping[FootprintCell, FootprintCell | None],
+    cell: FootprintCell,
+) -> tuple[FootprintCell, ...]:
+    path: list[FootprintCell] = []
+    current: FootprintCell | None = cell
+    while current is not None:
+        path.append(current)
+        current = previous[current]
+    return tuple(reversed(path))
+
+
+def _mesh_recovery_avoid_cells(
+    centerline_path: CenterlinePath,
+    *,
+    avoid_positions: Sequence[Sequence[float]] | None,
+) -> frozenset[FootprintCell]:
+    if not avoid_positions:
+        return frozenset()
+    cell_size = float(centerline_path.footprint_cell_size)
+    cells: set[FootprintCell] = set()
+    for position in avoid_positions:
+        try:
+            point = np.asarray(position, dtype=np.float64).reshape(3)
+        except Exception:
+            continue
+        cell = (
+            int(math.floor(float(point[0]) / cell_size)),
+            int(math.floor(float(point[2]) / cell_size)),
+        )
+        if cell in centerline_path.component_cells:
+            cells.add(cell)
+    return frozenset(cells)
+
+
+def _mesh_recovery_path_avoidance(
+    path: tuple[FootprintCell, ...],
+    *,
+    avoid_cells: frozenset[FootprintCell],
+    start_cell: FootprintCell,
+) -> tuple[int, float | None, tuple[FootprintCell, ...]]:
+    if not path or not avoid_cells:
+        return 0, None, ()
+
+    radius = int(_AUTO_DIVE_MESH_RECOVERY_PATH_AVOIDANCE_RADIUS_CELLS)
+    hit_count = 0
+    min_distance_cells: float | None = None
+    hit_cells: list[FootprintCell] = []
+    seen_hit_cells: set[FootprintCell] = set()
+    for cell in path[1:]:
+        if cell == start_cell:
+            continue
+        nearest = min(
+            max(
+                abs(int(cell[0]) - int(avoid_cell[0])),
+                abs(int(cell[1]) - int(avoid_cell[1])),
+            )
+            for avoid_cell in avoid_cells
+        )
+        nearest_f = float(nearest)
+        if min_distance_cells is None or nearest_f < min_distance_cells:
+            min_distance_cells = nearest_f
+        if nearest <= radius:
+            hit_count += 1
+            if cell not in seen_hit_cells:
+                hit_cells.append(cell)
+                seen_hit_cells.add(cell)
+    return hit_count, min_distance_cells, tuple(hit_cells)
+
+
+def _mesh_recovery_turn_angle(
+    previous_step: tuple[int, int] | None,
+    next_step: tuple[int, int],
+) -> float:
+    if previous_step is None:
+        return 0.0
+    previous_x, previous_z = previous_step
+    next_x, next_z = next_step
+    previous_norm = math.hypot(previous_x, previous_z)
+    next_norm = math.hypot(next_x, next_z)
+    if previous_norm <= 1e-9 or next_norm <= 1e-9:
+        return 0.0
+    dot = (previous_x * next_x) + (previous_z * next_z)
+    alignment = max(-1.0, min(1.0, dot / (previous_norm * next_norm)))
+    return float(math.acos(alignment))
+
+
+def _mesh_recovery_cached_hotspot_payload(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+) -> dict[str, float] | None:
+    hotspots = getattr(centerline_path, "cached_recovery_hotspots", None) or {}
+    hotspot = hotspots.get(cell)
+    if not hotspot:
+        return None
+    payload: dict[str, float] = {}
+    for key in (
+        "score",
+        "clearance_score",
+        "straight_run_cells",
+        "corridor_run_cells",
+        "degree_score",
+    ):
+        value = hotspot.get(key)
+        if value is None:
+            continue
+        payload[key] = float(value)
+    return payload or None
+
+
+def _mesh_recovery_edge_is_clear(
+    centerline_path: CenterlinePath,
+    first_cell: FootprintCell,
+    second_cell: FootprintCell,
+    *,
+    current_point: Point,
+    start_cell: FootprintCell,
+    collision_validator: _AutoDiveCollisionValidator,
+    point_cache: dict[FootprintCell, Point],
+    edge_cache: dict[tuple[FootprintCell, FootprintCell], bool],
+) -> bool:
+    edge_key = (
+        first_cell,
+        second_cell,
+    )
+    reverse_key = (
+        second_cell,
+        first_cell,
+    )
+    if edge_key in edge_cache:
+        return edge_cache[edge_key]
+    if reverse_key in edge_cache:
+        return edge_cache[reverse_key]
+
+    first_point = _mesh_recovery_graph_point(
+        centerline_path,
+        first_cell,
+        current_point=current_point,
+        start_cell=start_cell,
+        point_cache=point_cache,
+    )
+    second_point = _mesh_recovery_graph_point(
+        centerline_path,
+        second_cell,
+        current_point=current_point,
+        start_cell=start_cell,
+        point_cache=point_cache,
+    )
+    clear = (
+        collision_validator.segment_clearance_failure(
+            first_point,
+            second_point,
+        )
+        is None
+    )
+    edge_cache[edge_key] = clear
+    return clear
+
+
+def _mesh_recovery_graph_point(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+    *,
+    current_point: Point,
+    start_cell: FootprintCell,
+    point_cache: dict[FootprintCell, Point],
+) -> Point:
+    cached = point_cache.get(cell)
+    if cached is not None:
+        return cached
+    if cell == start_cell:
+        point_cache[cell] = current_point
+        return current_point
+    point = _mesh_recovery_point_for_cell(
+        centerline_path,
+        cell,
+        fallback_y=current_point[1],
+    )
+    point_cache[cell] = point
+    return point
+
+
+def _mesh_recovery_point_for_cell(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+    *,
+    fallback_y: float,
+) -> Point:
+    x, z = _center_for_route_cell(centerline_path, cell)
+    y = _medial_y_for_route_cell(
+        centerline_path,
+        cell,
+        fallback_y=fallback_y,
+    )
+    return (float(x), float(y), float(z))
+
+
+def _mesh_recovery_view_alignment(
+    current_point: Point,
+    target_point: Point,
+    *,
+    current_yaw: float | None,
+    current_pitch: float | None,
+) -> float:
+    if current_yaw is None:
+        return 0.0
+    dx = float(target_point[0]) - float(current_point[0])
+    dy = float(target_point[1]) - float(current_point[1])
+    dz = float(target_point[2]) - float(current_point[2])
+    norm = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if norm <= 1e-9:
+        return -1.0
+    yaw = float(current_yaw)
+    pitch = 0.0 if current_pitch is None else float(current_pitch)
+    horizontal = math.cos(pitch)
+    view_x = math.cos(yaw) * horizontal
+    view_y = math.sin(pitch)
+    view_z = math.sin(yaw) * horizontal
+    return float((view_x * dx + view_y * dy + view_z * dz) / norm)
+
+
+def _mesh_recovery_scan_alignment(
+    current_point: Point,
+    target_point: Point,
+    *,
+    current_yaw: float | None,
+    current_pitch: float | None,
+) -> tuple[bool, float, float]:
+    if current_yaw is None:
+        return True, 0.0, 0.0
+
+    best_alignment = -1.0
+    best_angle_penalty = math.inf
+    base_pitch = 0.0 if current_pitch is None else float(current_pitch)
+    min_pitch = math.radians(-55.0)
+    max_pitch = math.radians(55.0)
+
+    for yaw_offset_deg in _AUTO_DIVE_MESH_RECOVERY_SCAN_YAW_OFFSETS_DEG:
+        yaw = float(current_yaw) + math.radians(float(yaw_offset_deg))
+        for pitch_offset_deg in _AUTO_DIVE_MESH_RECOVERY_SCAN_PITCH_OFFSETS_DEG:
+            pitch = max(
+                min_pitch,
+                min(
+                    max_pitch,
+                    base_pitch + math.radians(float(pitch_offset_deg)),
+                ),
+            )
+            alignment = _mesh_recovery_view_alignment(
+                current_point,
+                target_point,
+                current_yaw=yaw,
+                current_pitch=pitch,
+            )
+            angle_penalty = abs(float(yaw_offset_deg)) + (
+                abs(float(pitch_offset_deg)) * 0.5
+            )
+            if (alignment, -angle_penalty) > (
+                best_alignment,
+                -best_angle_penalty,
+            ):
+                best_alignment = alignment
+                best_angle_penalty = angle_penalty
+
+    return (
+        best_alignment >= _AUTO_DIVE_MESH_RECOVERY_SCAN_CONE_ALIGNMENT,
+        float(best_alignment),
+        float(best_angle_penalty),
+    )
+
+
+def _mesh_recovery_target_is_avoided(
+    target_point: Point,
+    *,
+    avoid_positions: Sequence[Sequence[float]] | None,
+    cell_size: float,
+) -> bool:
+    if not avoid_positions:
+        return False
+    target = np.asarray(target_point, dtype=np.float64)
+    threshold_m = max(1.0, float(cell_size) * 0.75)
+    for position in avoid_positions:
+        try:
+            avoided = np.asarray(position, dtype=np.float64).reshape(3)
+        except Exception:
+            continue
+        if float(np.linalg.norm(target - avoided)) <= threshold_m:
+            return True
+    return False
 
 
 def _auto_dive_candidate_specs(
@@ -1659,7 +3143,12 @@ def _score_auto_dive_route_candidate(
     first_clearance_failure = collision_validator.route_clearance_failure(
         route_with_current
     )
-    route_clear = first_clearance_failure is None
+    first_mesh_failure = collision_validator.mesh_route_clearance_failure(
+        route_with_current
+    )
+    mesh_clear = first_mesh_failure is None
+    route_clear = first_clearance_failure is None and mesh_clear
+    reported_clearance_failure = first_mesh_failure or first_clearance_failure
     lateral_scores = _sampled_lateral_clearance_scores(
         route_with_current,
         collision_validator=collision_validator,
@@ -1669,6 +3158,11 @@ def _score_auto_dive_route_candidate(
         collision_validator=collision_validator,
     )
     length_m = path_length(route_with_current)
+    max_segment_length_m = _route_max_segment_length_m(route_with_current)
+    max_segment_cells = _route_max_segment_xz_cells(
+        route_with_current,
+        cell_size=collision_validator.cell_size,
+    )
     curvature_rad = _route_curvature_rad(route_with_current)
     vertical_jerk_m = _route_vertical_jerk_m(route_with_current)
     curvature_rad_per_m = curvature_rad / max(1e-9, length_m)
@@ -1676,6 +3170,8 @@ def _score_auto_dive_route_candidate(
     return _AutoDiveRouteCandidateScore(
         route_clear=route_clear,
         entry_clear=entry_clear,
+        mesh_clear=mesh_clear,
+        geometry_trusted=_route_geometry_is_trusted(max_segment_cells),
         min_lateral_clearance_cells=min(lateral_scores) if lateral_scores else 0,
         mean_lateral_clearance_cells=(
             sum(lateral_scores) / len(lateral_scores)
@@ -1687,6 +3183,8 @@ def _score_auto_dive_route_candidate(
             if clearance_margins
             else 0.0
         ),
+        max_segment_length_m=max_segment_length_m,
+        max_segment_cells=max_segment_cells,
         forward_progress_m=_candidate_forward_progress_m(route_with_current),
         pullback_penalty_m=_candidate_pullback_penalty_m(route_with_current),
         curvature_rad=curvature_rad,
@@ -1696,7 +3194,7 @@ def _score_auto_dive_route_candidate(
         total_change_per_m=curvature_rad_per_m + vertical_jerk_m_per_m,
         length_m=length_m,
         point_count=len(route_with_current),
-        first_clearance_failure=first_clearance_failure,
+        first_clearance_failure=reported_clearance_failure,
     )
 
 
@@ -2486,6 +3984,40 @@ def _sampled_route_points(
     return tuple(sampled)
 
 
+def _route_geometry_is_trusted(max_segment_cells: float) -> bool:
+    return (
+        float(max_segment_cells)
+        <= float(DEFAULT_AUTO_DIVE_TRUSTED_MAX_SEGMENT_CELLS) + 1e-9
+    )
+
+
+def _route_max_segment_length_m(route_points: tuple[Point, ...]) -> float:
+    if len(route_points) < 2:
+        return 0.0
+    return max(
+        math.sqrt(
+            (second[0] - first[0]) ** 2
+            + (second[1] - first[1]) ** 2
+            + (second[2] - first[2]) ** 2
+        )
+        for first, second in zip(route_points, route_points[1:], strict=False)
+    )
+
+
+def _route_max_segment_xz_cells(
+    route_points: tuple[Point, ...],
+    *,
+    cell_size: float,
+) -> float:
+    if len(route_points) < 2:
+        return 0.0
+    max_segment_m = max(
+        math.hypot(second[0] - first[0], second[2] - first[2])
+        for first, second in zip(route_points, route_points[1:], strict=False)
+    )
+    return max_segment_m / max(1e-9, float(cell_size))
+
+
 def _candidate_forward_progress_m(route_points: tuple[Point, ...]) -> float:
     if len(route_points) < 2:
         return 0.0
@@ -2831,7 +4363,43 @@ def _route_segment_clearance_failure(
                     second=second,
                 )
         previous_cell = cell
+    mesh_failure = _route_segment_mesh_collision_failure(
+        first,
+        second,
+        collision_validator=collision_validator,
+        segment_index=segment_index,
+    )
+    if mesh_failure is not None:
+        return mesh_failure
     return None
+
+
+def _route_segment_mesh_collision_failure(
+    first: Point,
+    second: Point,
+    *,
+    collision_validator: _AutoDiveCollisionValidator,
+    segment_index: int | None = None,
+) -> _AutoDiveClearanceFailure | None:
+    if collision_validator.mesh_guard is None:
+        return None
+    hit = collision_validator.mesh_guard.segment_collision(first, second)
+    if hit is None:
+        return None
+    hit_cell = _footprint_cell_for_xz(
+        (hit.point[0], hit.point[2]),
+        collision_validator.cell_size,
+    )
+    return _AutoDiveClearanceFailure(
+        kind="segment",
+        reason="mesh_intersection",
+        segment_index=segment_index,
+        cell=hit_cell,
+        chunk_cell=hit.chunk_cell,
+        point=hit.point,
+        first=first,
+        second=second,
+    )
 
 
 def _route_segment_stays_in_footprint(

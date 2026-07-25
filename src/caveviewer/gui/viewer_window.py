@@ -13,6 +13,7 @@ simple lookup-and-release.
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Mapping
 import hashlib
 import json
@@ -97,6 +98,10 @@ _UI_TEXT_SCALE_ENV = "CAVEVIEWER_UI_TEXT_SCALE"
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
 _FEET_PER_MINUTE_TO_METERS_PER_SECOND = 0.3048 / 60.0
+_DEFAULT_AUTO_DIVE_ACCELERATION = 1.25
+_AUTO_DIVE_BASE_SPEED_M_PER_SECOND = (
+    DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND / (1.0 + _DEFAULT_AUTO_DIVE_ACCELERATION)
+)
 _TEXTURE_RESIDENT_CACHE_MB_ENV = "CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB"
 _GPU_RESIDENCY_SAFETY_SHARE = 0.05
 _RENDER_UPLOAD_INITIAL_SLICE_BYTES = render_upload.RENDER_UPLOAD_INITIAL_SLICE_BYTES
@@ -460,23 +465,14 @@ def _auto_dive_diagnostics_enabled_from_preferences() -> bool:
 
 def _auto_dive_settings_from_mapping(preferences: Mapping[str, str]) -> AutoDiveSettings:
     """Convert validated preference values into route-planner settings."""
-    speed_feet_per_minute = _preference_float(
-        preferences,
-        "auto_dive_speed_feet_per_minute",
-        default=(
-            DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND
-            / _FEET_PER_MINUTE_TO_METERS_PER_SECOND
-        ),
-    )
+    acceleration = _auto_dive_acceleration_from_preferences(preferences)
     return AutoDiveSettings(
         render_distance_cells=_preference_int(
             preferences,
             "auto_dive_render_distance_cells",
             default=DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS,
         ),
-        speed_m_per_second=(
-            speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
-        ),
+        speed_m_per_second=_auto_dive_speed_from_acceleration(acceleration),
         smoothing_radius_cells=_preference_int(
             preferences,
             "auto_dive_smoothing_radius_cells",
@@ -509,13 +505,63 @@ def _preference_float(
         return float(default)
 
 
+def _auto_dive_acceleration_from_preferences(
+    preferences: Mapping[str, str],
+) -> float:
+    if str(preferences.get("auto_dive_acceleration", "")).strip():
+        return _preference_float(
+            preferences,
+            "auto_dive_acceleration",
+            default=_DEFAULT_AUTO_DIVE_ACCELERATION,
+        )
+    if str(preferences.get("auto_dive_speed_feet_per_minute", "")).strip():
+        legacy_speed_feet_per_minute = _preference_float(
+            preferences,
+            "auto_dive_speed_feet_per_minute",
+            default=(
+                DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND
+                / _FEET_PER_MINUTE_TO_METERS_PER_SECOND
+            ),
+        )
+        return _auto_dive_acceleration_from_speed_m_per_second(
+            legacy_speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
+        )
+    return _DEFAULT_AUTO_DIVE_ACCELERATION
+
+
+def _auto_dive_speed_from_acceleration(acceleration: float) -> float:
+    clamped = max(0.0, min(10.0, float(acceleration)))
+    return _AUTO_DIVE_BASE_SPEED_M_PER_SECOND * (1.0 + clamped)
+
+
+def _auto_dive_acceleration_from_speed_m_per_second(speed_m_per_second: float) -> float:
+    acceleration = (
+        float(speed_m_per_second) / max(1e-9, _AUTO_DIVE_BASE_SPEED_M_PER_SECOND)
+    ) - 1.0
+    return max(0.0, min(10.0, acceleration))
+
+
 def _auto_dive_settings_with_env_overrides(settings: AutoDiveSettings) -> AutoDiveSettings:
-    speed_feet_per_minute = _env_float(
-        "CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE",
-        settings.speed_m_per_second / _FEET_PER_MINUTE_TO_METERS_PER_SECOND,
-        10.0,
-        500.0,
+    acceleration = _auto_dive_acceleration_from_speed_m_per_second(
+        settings.speed_m_per_second
     )
+    if os.getenv("CAVEVIEWER_AUTO_DIVE_ACCELERATION", "").strip():
+        acceleration = _env_float(
+            "CAVEVIEWER_AUTO_DIVE_ACCELERATION",
+            acceleration,
+            0.0,
+            10.0,
+        )
+    elif os.getenv("CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE", "").strip():
+        legacy_speed_feet_per_minute = _env_float(
+            "CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE",
+            settings.speed_m_per_second / _FEET_PER_MINUTE_TO_METERS_PER_SECOND,
+            10.0,
+            500.0,
+        )
+        acceleration = _auto_dive_acceleration_from_speed_m_per_second(
+            legacy_speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
+        )
     return AutoDiveSettings(
         render_distance_cells=_env_int(
             "CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS",
@@ -523,9 +569,7 @@ def _auto_dive_settings_with_env_overrides(settings: AutoDiveSettings) -> AutoDi
             1,
             64,
         ),
-        speed_m_per_second=(
-            speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
-        ),
+        speed_m_per_second=_auto_dive_speed_from_acceleration(acceleration),
         smoothing_radius_cells=_env_int(
             "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS",
             int(settings.smoothing_radius_cells),
@@ -996,6 +1040,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         ] = {}
         self._auto_dive_controller: AutoDiveController | None = None
         self._auto_dive_previous_render_distance: int | None = None
+        self._auto_dive_start_executor: ThreadPoolExecutor | None = None
+        self._auto_dive_start_future: Future | None = None
+        self._auto_dive_start_settings: AutoDiveSettings | None = None
+        self._auto_dive_start_blackbox: AutoDiveBlackbox | None = None
+        self._auto_dive_start_manifest: dict | None = None
+        self._auto_dive_start_cache_dir: str | None = None
+        self._auto_dive_start_position: np.ndarray | None = None
         self._has_map_loaded = False
         self._pending_import_started = False
         self._initial_chunks_loaded = False
@@ -2416,18 +2467,23 @@ class CaveViewerWindow(mglw.WindowConfig):
         controller = getattr(self, "_auto_dive_controller", None)
         return controller is not None and controller.active
 
+    def _auto_dive_start_is_pending(self) -> bool:
+        return getattr(self, "_auto_dive_start_future", None) is not None
+
     def _toggle_auto_dive(self) -> bool:
         if not self._has_map_loaded or self.camera is None or self.world is None:
             return False
-        if self._auto_dive_is_active():
+        if self._auto_dive_is_active() or self._auto_dive_start_is_pending():
             self._stop_auto_dive()
             return True
         return self._start_auto_dive()
 
     def _start_auto_dive(self) -> bool:
-        """Plan and start user-facing centerline Auto Dive."""
+        """Queue user-facing centerline Auto Dive planning without blocking rendering."""
         if self.manifest is None or self.camera is None or self.world is None:
             return False
+        if self._auto_dive_start_is_pending():
+            return True
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         if benchmark_controller is not None and not benchmark_controller.finished:
             return False
@@ -2436,6 +2492,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.camera.position
             )
         blackbox = self._auto_dive_blackbox()
+        executor: ThreadPoolExecutor | None = None
         try:
             auto_dive_settings = _auto_dive_settings_from_preferences()
             if blackbox is not None:
@@ -2469,13 +2526,22 @@ class CaveViewerWindow(mglw.WindowConfig):
                         "pitch_deg": math.degrees(float(self.camera.pitch)),
                     },
                 )
-            plan = build_centerline_auto_dive_plan(
+            start_position = np.asarray(self.camera.position, dtype=np.float64).copy()
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="CaveViewer-AutoDiveStart",
+            )
+            future = executor.submit(
+                build_centerline_auto_dive_plan,
                 self.manifest,
-                current_position=self.camera.position,
+                current_position=tuple(float(value) for value in start_position),
                 settings=auto_dive_settings,
+                cache_dir=self.cache_dir,
                 diagnostics=_auto_dive_diagnostic_sink(blackbox),
             )
-        except NavigationConfigurationError as exc:
+        except Exception as exc:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
             if blackbox is not None:
                 blackbox.record(
                     "auto_dive_unavailable",
@@ -2485,6 +2551,138 @@ class CaveViewerWindow(mglw.WindowConfig):
                 blackbox.close()
             _LOG.info("Auto Dive unavailable: %s", exc)
             return True
+
+        self._auto_dive_start_executor = executor
+        self._auto_dive_start_future = future
+        self._auto_dive_start_settings = auto_dive_settings
+        self._auto_dive_start_blackbox = blackbox
+        self._auto_dive_start_manifest = self.manifest
+        self._auto_dive_start_cache_dir = self.cache_dir
+        self._auto_dive_start_position = start_position
+        if blackbox is not None:
+            blackbox.record(
+                "auto_dive_plan_requested",
+                position=[float(value) for value in start_position],
+            )
+        _LOG.info("Auto Dive planning started.")
+        return True
+
+    def _update_auto_dive_start(self) -> None:
+        future = getattr(self, "_auto_dive_start_future", None)
+        if future is None or not future.done():
+            return
+
+        executor = getattr(self, "_auto_dive_start_executor", None)
+        auto_dive_settings = getattr(self, "_auto_dive_start_settings", None)
+        blackbox = getattr(self, "_auto_dive_start_blackbox", None)
+        requested_manifest = getattr(self, "_auto_dive_start_manifest", None)
+        requested_cache_dir = getattr(self, "_auto_dive_start_cache_dir", None)
+        start_position = getattr(self, "_auto_dive_start_position", None)
+        self._clear_auto_dive_start_state(shutdown_executor=False)
+
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        try:
+            plan = future.result()
+        except NavigationConfigurationError as exc:
+            if blackbox is not None:
+                blackbox.record(
+                    "auto_dive_unavailable",
+                    reason=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                blackbox.close()
+            _LOG.info("Auto Dive unavailable: %s", exc)
+            return
+        except Exception as exc:
+            if blackbox is not None:
+                blackbox.record(
+                    "auto_dive_unavailable",
+                    reason=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                blackbox.close()
+            _LOG.exception("Auto Dive planning failed.")
+            return
+
+        if (
+            self.manifest is not requested_manifest
+            or self.cache_dir != requested_cache_dir
+            or self.camera is None
+            or self.world is None
+            or not self._has_map_loaded
+        ):
+            if blackbox is not None:
+                blackbox.record(
+                    "auto_dive_plan_discarded",
+                    reason="map_changed",
+                    position=(
+                        None
+                        if start_position is None
+                        else [float(value) for value in start_position]
+                    ),
+                )
+                blackbox.close()
+            _LOG.info("Discarded stale Auto Dive plan after map changed.")
+            return
+
+        if auto_dive_settings is None:
+            if blackbox is not None:
+                blackbox.record(
+                    "auto_dive_plan_discarded",
+                    reason="missing_settings",
+                )
+                blackbox.close()
+            return
+
+        self._activate_auto_dive_plan(plan, auto_dive_settings, blackbox)
+
+    def _clear_auto_dive_start_state(self, *, shutdown_executor: bool) -> None:
+        executor = getattr(self, "_auto_dive_start_executor", None)
+        if shutdown_executor and executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+        self._auto_dive_start_executor = None
+        self._auto_dive_start_future = None
+        self._auto_dive_start_settings = None
+        self._auto_dive_start_blackbox = None
+        self._auto_dive_start_manifest = None
+        self._auto_dive_start_cache_dir = None
+        self._auto_dive_start_position = None
+
+    def _cancel_auto_dive_start(self) -> bool:
+        future = getattr(self, "_auto_dive_start_future", None)
+        blackbox = getattr(self, "_auto_dive_start_blackbox", None)
+        position = getattr(self, "_auto_dive_start_position", None)
+        if future is None:
+            return False
+        future.cancel()
+        if blackbox is not None:
+            blackbox.record(
+                "auto_dive_plan_cancelled",
+                position=(
+                    None if position is None else [float(value) for value in position]
+                ),
+            )
+            blackbox.close()
+        self._clear_auto_dive_start_state(shutdown_executor=True)
+        _LOG.info("Auto Dive planning cancelled.")
+        return True
+
+    def _activate_auto_dive_plan(
+        self,
+        plan,
+        auto_dive_settings: AutoDiveSettings,
+        blackbox: AutoDiveBlackbox | None,
+    ) -> None:
+        if self.manifest is None or self.camera is None or self.world is None:
+            if blackbox is not None:
+                blackbox.record(
+                    "auto_dive_plan_discarded",
+                    reason="missing_viewer_state",
+                )
+                blackbox.close()
+            return
 
         self._auto_dive_previous_render_distance = int(
             getattr(self.render_distance_stepper, "value", 10)
@@ -2507,6 +2705,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             replanner=AutoDiveReplanner(
                 self.manifest,
                 auto_dive_settings,
+                cache_dir=self.cache_dir,
                 blackbox=blackbox,
             ),
             replan_distance_m=replan_distance_m,
@@ -2526,7 +2725,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             plan.render_distance_cells,
             bool(plan.circular_arc),
         )
-        return True
 
     def _auto_dive_blackbox(self) -> AutoDiveBlackbox | None:
         try:
@@ -2544,7 +2742,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         controller = getattr(self, "_auto_dive_controller", None)
         had_auto_dive_state = controller is not None or (
             getattr(self, "_auto_dive_previous_render_distance", None) is not None
+        ) or (
+            getattr(self, "_auto_dive_start_future", None) is not None
         )
+        start_cancelled = self._cancel_auto_dive_start()
         if controller is not None:
             controller.stop(self.world, completed=completed)
         self._auto_dive_controller = None
@@ -2561,6 +2762,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self.minimap is not None:
             self.minimap.set_active_route_points_xz(())
         if had_auto_dive_state:
+            if start_cancelled:
+                return
             _LOG.info("Auto Dive %s.", "completed" if completed else "stopped")
 
     def _update_auto_dive(self, now: float) -> None:
@@ -2614,6 +2817,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _render_auto_dive_progress(self, window_size: tuple[int, int]) -> None:
         controller = getattr(self, "_auto_dive_controller", None)
         if controller is None or controller.state is not AutoDiveState.LOADING:
+            return
+        show_loading_indicator = getattr(controller, "show_loading_indicator", True)
+        if not bool(show_loading_indicator):
             return
         map_name = os.path.basename(self.manifest.get("source_obj", "map"))
         self.import_progress_panel.render(
@@ -4769,6 +4975,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             benchmark_controller is not None
             and not benchmark_controller.finished
         )
+        self._update_auto_dive_start()
 
         # Sleep/wake (or a debugger stop) can yield a very large frame_time
         # and leave input/capture state stale (e.g. key-release never seen).

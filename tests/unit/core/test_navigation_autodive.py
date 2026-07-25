@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from caveviewer.core.chunking import io as chunk_io
 from caveviewer.core.navigation.autodive import (
     DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
     DEFAULT_AUTO_DIVE_VERTICAL_POSITION_FRACTION,
@@ -13,8 +14,12 @@ from caveviewer.core.navigation.autodive import (
     _AutoDiveRouteSamples,
     _centerline_cells_form_closed_loop,
     _cone_chain_anchor_indices,
+    _mesh_clear_recovery_footprint_path,
     _open_arc_from_closed_loop,
     _repelled_auto_dive_points,
+    _mesh_recovery_scan_alignment,
+    _mesh_recovery_turn_angle,
+    _mesh_recovery_view_alignment,
     _route_segment_stays_in_footprint,
     build_auto_dive_initial_camera_pose,
     build_centerline_auto_dive_plan,
@@ -22,6 +27,7 @@ from caveviewer.core.navigation.autodive import (
 from caveviewer.core.navigation.centerline import (
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
 )
+from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.navigation.cache_metadata import (
     NAVIGATION_METADATA_METHOD,
     NAVIGATION_METADATA_VERSION,
@@ -374,7 +380,7 @@ def test_auto_dive_multicandidate_smoothing_prefers_central_line_of_sight_path()
         if 3.0 <= point[0] <= 7.0
     )
 
-    assert len(plan.route_points) == len(raw_route_points)
+    assert len(plan.route_points) >= len(raw_route_points)
     assert any(
         _point_distance_xz(point, raw_point) > 1e-6
         for point, raw_point in zip(plan.route_points, raw_route_points, strict=True)
@@ -409,6 +415,7 @@ def test_auto_dive_candidate_scores_are_available_for_diagnostics():
     assert candidate_events
     assert candidate_events[-1]["selected"]
     assert candidate_events[-1]["candidate_count"] >= 2
+    assert candidate_events[-1]["travel_filter"]["enabled"] is False
     assert {
         "name",
         "route_clear",
@@ -460,6 +467,495 @@ def test_auto_dive_candidate_diagnostics_report_first_clearance_failure():
     assert any(
         failure["reason"] == "invalid_footprint_transition"
         for failure in failures
+    )
+
+
+def test_auto_dive_prefers_dense_route_over_untrusted_clear_shortcut():
+    manifest, raw_route_points = _manifest_with_cached_wall_hugging_route()
+    events = []
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=raw_route_points[0],
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=8,
+        ),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    candidate_payload = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ][-1]
+    clear_shortcuts = [
+        candidate
+        for candidate in candidate_payload["candidates"]
+        if candidate["route_clear"] and not candidate["geometry_trusted"]
+    ]
+
+    assert clear_shortcuts
+    assert candidate_payload["selection_reason"] == (
+        "trusted_dense_low_clearance_fallback"
+    )
+    selected_candidate = next(
+        candidate
+        for candidate in candidate_payload["candidates"]
+        if candidate["name"] == candidate_payload["selected"]
+    )
+    assert not str(candidate_payload["selected"]).startswith(("theta", "cone"))
+    assert candidate_payload["selected_geometry_trusted"] is True
+    assert len(plan.route_points) >= len(raw_route_points)
+    assert (
+        selected_candidate["max_segment_cells"]
+        <= candidate_payload["trusted_max_segment_cells"]
+    )
+
+
+def test_auto_dive_mesh_guard_rejects_cached_wall_shortcut(tmp_path):
+    manifest, raw_route_points = _manifest_with_cached_mesh_wall_route()
+    cache_dir = tmp_path / "cache"
+    _write_test_chunk_mesh(
+        cache_dir,
+        cell=(0, 0, 0),
+        triangles=(
+            (
+                (5.5, 0.0, 0.9),
+                (5.5, 2.0, 0.9),
+                (5.5, 2.0, 5.5),
+            ),
+            (
+                (5.5, 0.0, 0.9),
+                (5.5, 2.0, 5.5),
+                (5.5, 0.0, 5.5),
+            ),
+        ),
+    )
+    events = []
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=raw_route_points[0],
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=8,
+        ),
+        cache_dir=str(cache_dir),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    candidate_payload = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ][-1]
+    mesh_failures = [
+        candidate["first_clearance_failure"]
+        for candidate in candidate_payload["candidates"]
+        if candidate["first_clearance_failure"] is not None
+        and candidate["first_clearance_failure"]["reason"] == "mesh_intersection"
+    ]
+
+    assert candidate_payload["mesh_collision_enabled"] is True
+    assert mesh_failures
+    assert all("chunk_cell" in failure for failure in mesh_failures)
+    assert not str(candidate_payload["selected"]).startswith(("theta", "cone"))
+    assert plan.route_points_xz == tuple((point[0], point[2]) for point in raw_route_points)
+
+
+def test_auto_dive_mesh_guard_trims_fully_blocked_route_to_safe_prefix(tmp_path):
+    manifest, raw_route_points = _manifest_with_cached_mesh_blocked_route()
+    cache_dir = tmp_path / "cache"
+    _write_test_chunk_mesh(
+        cache_dir,
+        cell=(0, 0, 0),
+        triangles=(
+            (
+                (5.5, 0.0, 0.0),
+                (5.5, 2.0, 0.0),
+                (5.5, 2.0, 6.0),
+            ),
+            (
+                (5.5, 0.0, 0.0),
+                (5.5, 2.0, 6.0),
+                (5.5, 0.0, 6.0),
+            ),
+        ),
+    )
+    events = []
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=raw_route_points[0],
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=4,
+        ),
+        cache_dir=str(cache_dir),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    candidate_payload = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ][-1]
+
+    assert candidate_payload["selected"] == "raw"
+    assert candidate_payload["selection_reason"] == (
+        "mesh_compromised_prefix_fallback"
+    )
+    assert candidate_payload["mesh_collision_enabled"] is True
+    assert candidate_payload["selected_route_truncated"] is True
+    assert candidate_payload["selected_safe_prefix_length_m"] > 0.0
+    assert all(
+        not candidate["mesh_clear"]
+        for candidate in candidate_payload["candidates"]
+    )
+    assert plan.route_length_m > 0.0
+    assert max(point[0] for point in plan.route_points) < 5.5
+
+
+def test_auto_dive_mesh_recovery_logs_search_alternatives(tmp_path):
+    manifest, raw_route_points = _manifest_with_cached_mesh_blocked_route()
+    cache_dir = tmp_path / "cache"
+    _write_test_chunk_mesh(
+        cache_dir,
+        cell=(0, 0, 0),
+        triangles=(
+            (
+                (5.5, 0.0, 0.0),
+                (5.5, 2.0, 0.0),
+                (5.5, 2.0, 6.0),
+            ),
+            (
+                (5.5, 0.0, 0.0),
+                (5.5, 2.0, 6.0),
+                (5.5, 0.0, 6.0),
+            ),
+        ),
+    )
+    events = []
+
+    build_centerline_auto_dive_plan(
+        manifest,
+        current_position=raw_route_points[0],
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=4,
+        ),
+        cache_dir=str(cache_dir),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    recovery_events = [
+        payload
+        for event, payload in events
+        if event == "mesh_recovery_search"
+    ]
+
+    assert recovery_events
+    payload = recovery_events[-1]
+    assert payload["visited_cells"] > 0
+    assert payload["edge_tests"] > 0
+    assert 0 < len(payload["top_candidates"]) <= payload["candidate_count"]
+    assert payload["selected"] is not None
+    assert payload["selected_candidate"]["cell"] == payload["selected"]
+    assert {
+        "selection_score_m",
+        "path_quality_m",
+        "path_distance_m",
+        "forward_alignment",
+        "turn_penalty_rad",
+        "selection_turn_penalty_m",
+        "path_avoidance_count",
+        "path_cells",
+        "scan_angle_penalty_deg",
+    } <= set(payload["top_candidates"][0])
+    assert payload["selection_turn_penalty_cells"] == pytest.approx(1.0)
+    assert payload["path_avoidance_radius_cells"] == 1
+
+
+def test_auto_dive_mesh_recovery_view_alignment_uses_pitch():
+    current = (0.0, 0.0, 0.0)
+    uphill = (10.0, 10.0, 0.0)
+    flat = (10.0, 0.0, 0.0)
+
+    uphill_with_positive_pitch = _mesh_recovery_view_alignment(
+        current,
+        uphill,
+        current_yaw=0.0,
+        current_pitch=np.pi / 4.0,
+    )
+    uphill_with_flat_pitch = _mesh_recovery_view_alignment(
+        current,
+        uphill,
+        current_yaw=0.0,
+        current_pitch=0.0,
+    )
+    uphill_with_negative_pitch = _mesh_recovery_view_alignment(
+        current,
+        uphill,
+        current_yaw=0.0,
+        current_pitch=-np.pi / 4.0,
+    )
+    flat_with_positive_pitch = _mesh_recovery_view_alignment(
+        current,
+        flat,
+        current_yaw=0.0,
+        current_pitch=np.pi / 4.0,
+    )
+
+    assert uphill_with_positive_pitch == pytest.approx(1.0)
+    assert uphill_with_positive_pitch > uphill_with_flat_pitch
+    assert uphill_with_negative_pitch == pytest.approx(0.0)
+    assert uphill_with_positive_pitch > flat_with_positive_pitch
+
+
+def test_auto_dive_mesh_recovery_scan_alignment_finds_offset_pitch_yaw():
+    current = (0.0, 0.0, 0.0)
+    left_uphill = (10.0, 10.0, 10.0)
+
+    in_cone, alignment, penalty = _mesh_recovery_scan_alignment(
+        current,
+        left_uphill,
+        current_yaw=0.0,
+        current_pitch=0.0,
+    )
+
+    assert in_cone is True
+    assert alignment > 0.95
+    assert penalty > 0.0
+
+
+def test_auto_dive_mesh_recovery_scan_alignment_covers_wide_travel_cone():
+    current = (0.0, 0.0, 0.0)
+    yaw = np.radians(115.0)
+    wide_left = (float(np.cos(yaw) * 10.0), 0.0, float(np.sin(yaw) * 10.0))
+
+    in_cone, alignment, penalty = _mesh_recovery_scan_alignment(
+        current,
+        wide_left,
+        current_yaw=0.0,
+        current_pitch=0.0,
+    )
+
+    assert in_cone is True
+    assert alignment > 0.95
+    assert penalty >= 90.0
+
+
+def test_auto_dive_replan_rejects_centerline_behind_travel_direction():
+    route_cells = tuple((-index, 0) for index in range(8))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    events = []
+
+    with pytest.raises(NavigationConfigurationError, match="forward travel cone"):
+        build_centerline_auto_dive_plan(
+            _manifest_with_cached_route(
+                component_cells=route_cells,
+                route_cells=route_cells,
+                route_points=route_points,
+            ),
+            current_position=route_points[0],
+            current_travel_yaw=0.0,
+            current_travel_pitch=0.0,
+            settings=AutoDiveSettings(
+                speed_m_per_second=1.0,
+                smoothing_radius_cells=0,
+            ),
+            diagnostics=lambda event, payload: events.append((event, payload)),
+        )
+
+    candidate_payload = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ][-1]
+    assert candidate_payload["reason"] == "no_forward_travel_candidates"
+    assert candidate_payload["travel_filter"]["enabled"] is True
+    assert candidate_payload["travel_filter"]["after_count"] == 0
+    assert candidate_payload["travel_filter"]["rejected"]
+
+
+def test_auto_dive_mesh_recovery_rejects_backtracking_from_travel_direction():
+    component_cells = [(0, z) for z in range(11)]
+    route_cells = tuple(component_cells)
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    centerline_path = cached_centerline_path(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        )
+    )
+
+    assert centerline_path is not None
+    cells = _mesh_clear_recovery_footprint_path(
+        centerline_path,
+        start_cell=(0, 5),
+        target_indices={},
+        current_point=(0.5, 1.0, 5.5),
+        current_yaw=np.pi / 2.0,
+        current_pitch=0.0,
+        current_travel_yaw=-np.pi / 2.0,
+        current_travel_pitch=0.0,
+        avoid_positions=None,
+        collision_validator=_AutoDiveCollisionValidator(centerline_path),
+    )
+
+    assert cells[-1] == (0, 0)
+    assert all(cell[1] <= 5 for cell in cells)
+
+
+def test_auto_dive_mesh_recovery_prefers_long_low_turn_corridor():
+    component_cells = (
+        [(x, 0) for x in range(9)]
+        + [(0, 1), (0, 2)]
+    )
+    route_cells = tuple(component_cells)
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    centerline_path = cached_centerline_path(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        )
+    )
+
+    assert centerline_path is not None
+    cells = _mesh_clear_recovery_footprint_path(
+        centerline_path,
+        start_cell=(0, 0),
+        target_indices={},
+        current_point=(0.5, 1.0, 0.5),
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        avoid_positions=None,
+        collision_validator=_AutoDiveCollisionValidator(centerline_path),
+    )
+
+    assert cells[-1] == (8, 0)
+
+
+def test_auto_dive_mesh_recovery_prefers_longer_passage_over_short_turn():
+    component_cells = (
+        [(x, 0) for x in range(5)]
+        + [(1, z) for z in range(1, 8)]
+    )
+    route_cells = tuple(component_cells)
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    centerline_path = cached_centerline_path(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        )
+    )
+    events = []
+
+    assert centerline_path is not None
+    cells = _mesh_clear_recovery_footprint_path(
+        centerline_path,
+        start_cell=(0, 0),
+        target_indices={},
+        current_point=(0.5, 1.0, 0.5),
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        avoid_positions=None,
+        collision_validator=_AutoDiveCollisionValidator(centerline_path),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    assert cells[-1] == (1, 7)
+    payload = [
+        payload
+        for event, payload in events
+        if event == "mesh_recovery_search"
+    ][-1]
+    selected = payload["selected_candidate"]
+    assert selected["path_distance_m"] > 7.0
+    assert selected["selection_turn_penalty_m"] < selected["path_distance_m"]
+    assert selected["path_avoidance_count"] == 0
+
+
+def test_auto_dive_mesh_recovery_penalizes_paths_through_prior_boundaries():
+    component_cells = (
+        [(x, 0) for x in range(5)]
+        + [(1, z) for z in range(1, 8)]
+    )
+    route_cells = tuple(component_cells)
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    centerline_path = cached_centerline_path(
+        _manifest_with_cached_route(
+            component_cells=component_cells,
+            route_cells=route_cells,
+            route_points=route_points,
+        )
+    )
+    events = []
+
+    assert centerline_path is not None
+    cells = _mesh_clear_recovery_footprint_path(
+        centerline_path,
+        start_cell=(0, 0),
+        target_indices={},
+        current_point=(0.5, 1.0, 0.5),
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        avoid_positions=((1.5, 1.0, 4.5),),
+        collision_validator=_AutoDiveCollisionValidator(centerline_path),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    assert cells[-1] == (4, 0)
+    payload = [
+        payload
+        for event, payload in events
+        if event == "mesh_recovery_search"
+    ][-1]
+    assert payload["avoid_cells"] == [[1, 4]]
+    assert payload["selected_candidate"]["path_avoidance_count"] == 0
+    avoided_candidates = [
+        candidate
+        for candidate in payload["top_candidates"]
+        if candidate["cell"] == [1, 7]
+    ]
+    assert avoided_candidates
+    assert avoided_candidates[0]["path_avoidance_count"] > 0
+
+
+def test_auto_dive_mesh_recovery_turn_angle_penalizes_direction_changes():
+    assert _mesh_recovery_turn_angle(None, (1, 0)) == pytest.approx(0.0)
+    assert _mesh_recovery_turn_angle((1, 0), (1, 0)) == pytest.approx(0.0)
+    assert _mesh_recovery_turn_angle((1, 0), (0, 1)) == pytest.approx(
+        np.pi / 2.0
     )
 
 
@@ -880,6 +1376,103 @@ def _manifest_with_cached_wide_zigzag_route():
     )
 
 
+def _manifest_with_cached_wall_hugging_route():
+    component_cells = [
+        (x, z)
+        for x in range(28)
+        for z in range(5)
+    ]
+    route_cells = (
+        *[(x, 2) for x in range(3, 8)],
+        *[(x, 0) for x in range(8, 16)],
+        *[(x, 2) for x in range(16, 25)],
+    )
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+    manifest["navigation"]["routes"][0]["clearance_margins"] = [
+        1.0 for _cell in route_cells
+    ]
+    return manifest, route_points
+
+
+def _manifest_with_cached_mesh_wall_route():
+    component_cells = [
+        (x, z)
+        for x in range(12)
+        for z in range(6)
+    ]
+    route_cells = (
+        (2, 2),
+        (2, 1),
+        (2, 0),
+        (3, 0),
+        (4, 0),
+        (5, 0),
+        (6, 0),
+        (7, 0),
+        (8, 0),
+        (8, 1),
+        (8, 2),
+        (8, 3),
+    )
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+    manifest["chunk_size"] = 16.0
+    manifest["chunks"] = {
+        "0_0_0": {
+            "bounds_min": [0.0, 0.0, 0.0],
+            "bounds_max": [12.0, 2.0, 6.0],
+        }
+    }
+    manifest["navigation"]["routes"][0]["clearance_margins"] = [
+        1.0 for _cell in route_cells
+    ]
+    return manifest, route_points
+
+
+def _manifest_with_cached_mesh_blocked_route():
+    component_cells = [
+        (x, z)
+        for x in range(12)
+        for z in range(6)
+    ]
+    route_cells = (
+        (2, 2),
+        (8, 2),
+    )
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+    manifest["chunk_size"] = 16.0
+    manifest["chunks"] = {
+        "0_0_0": {
+            "bounds_min": [0.0, 0.0, 0.0],
+            "bounds_max": [12.0, 2.0, 6.0],
+        }
+    }
+    return manifest, route_points
+
+
 def _manifest_with_cached_l_bend_route():
     route_cells = (
         *[(x, 0) for x in range(7)],
@@ -1003,3 +1596,23 @@ def _flat_pairs(flat: list[int]) -> tuple[tuple[int, int], ...]:
         (int(flat[index]), int(flat[index + 1]))
         for index in range(0, len(flat), 2)
     )
+
+
+def _write_test_chunk_mesh(cache_dir, *, cell, triangles) -> None:
+    chunks_dir = cache_dir / chunk_io.CHUNKS_DIRNAME
+    chunks_dir.mkdir(parents=True)
+    path = chunks_dir / f"{cell[0]}_{cell[1]}_{cell[2]}.bin"
+    positions = np.asarray(triangles, dtype=np.float32).reshape(-1, 3)
+    uvs = np.zeros((len(positions), 2), dtype=np.float32)
+    normals = np.tile(np.array([[1.0, 0.0, 0.0]], dtype=np.float32), (len(positions), 1))
+    name = b"wall"
+    with path.open("wb") as output:
+        output.write(chunk_io._MAGIC)
+        output.write(chunk_io._VERSION.to_bytes(4, "little"))
+        output.write((1).to_bytes(4, "little"))
+        output.write(len(name).to_bytes(4, "little"))
+        output.write(name)
+        output.write(len(positions).to_bytes(4, "little"))
+        output.write(positions.tobytes())
+        output.write(uvs.tobytes())
+        output.write(normals.tobytes())
