@@ -17,6 +17,11 @@ from caveviewer.core.navigation.centerline import (
     parse_cell_key,
 )
 
+_DEFAULT_MAX_COLLISION_GUARD_TRIANGLES = 250_000
+_MAX_COLLISION_GUARD_TRIANGLES_ENV = (
+    "CAVEVIEWER_AUTO_DIVE_MESH_COLLISION_MAX_TRIANGLES"
+)
+
 
 @dataclass(frozen=True)
 class MeshCollisionHit:
@@ -57,6 +62,8 @@ class CachedChunkMeshCollisionGuard:
             return None
         chunks = manifest.get("chunks")
         if not isinstance(chunks, Mapping) or not chunks:
+            return None
+        if _manifest_exceeds_collision_guard_triangle_limit(manifest):
             return None
         chunk_bounds: list[_ChunkBounds] = []
         for raw_cell, info in chunks.items():
@@ -164,6 +171,37 @@ class CachedChunkMeshCollisionGuard:
         if not triangle_groups:
             return np.empty((0, 3, 3), dtype=np.float64)
         return np.concatenate(triangle_groups, axis=0)
+
+
+def _manifest_exceeds_collision_guard_triangle_limit(
+    manifest: Mapping[str, Any],
+) -> bool:
+    triangle_count = _manifest_triangle_count(manifest)
+    if triangle_count is None:
+        return False
+    return triangle_count > _collision_guard_triangle_limit()
+
+
+def _manifest_triangle_count(manifest: Mapping[str, Any]) -> int | None:
+    raw_value = manifest.get("triangle_count")
+    if raw_value is None:
+        return None
+    try:
+        triangle_count = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, triangle_count)
+
+
+def _collision_guard_triangle_limit() -> int:
+    raw_value = os.environ.get(_MAX_COLLISION_GUARD_TRIANGLES_ENV)
+    if raw_value is None or not raw_value.strip():
+        return _DEFAULT_MAX_COLLISION_GUARD_TRIANGLES
+    try:
+        limit = int(raw_value)
+    except ValueError:
+        return _DEFAULT_MAX_COLLISION_GUARD_TRIANGLES
+    return max(0, limit)
 
 
 def _aabb_intersects(

@@ -27,6 +27,7 @@ from caveviewer.core.navigation.autodive import (
 from caveviewer.core.navigation.centerline import (
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
 )
+from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGuard
 from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.navigation.cache_metadata import (
     NAVIGATION_METADATA_METHOD,
@@ -562,6 +563,41 @@ def test_auto_dive_mesh_guard_rejects_cached_wall_shortcut(tmp_path):
     assert all("chunk_cell" in failure for failure in mesh_failures)
     assert not str(candidate_payload["selected"]).startswith(("theta", "cone"))
     assert plan.route_points_xz == tuple((point[0], point[2]) for point in raw_route_points)
+
+
+def test_auto_dive_skips_mesh_guard_for_high_triangle_cache(monkeypatch, tmp_path):
+    manifest, raw_route_points = _manifest_with_cached_mesh_wall_route()
+    manifest["triangle_count"] = 1_000_000
+    events = []
+
+    def fail_load_triangles(_self, _cell):
+        raise AssertionError("high-poly startup must not load chunk triangles")
+
+    monkeypatch.setattr(
+        CachedChunkMeshCollisionGuard,
+        "_load_triangles_for_chunk",
+        fail_load_triangles,
+    )
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=raw_route_points[0],
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=4,
+        ),
+        cache_dir=str(tmp_path / "cache"),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    candidate_payload = [
+        payload
+        for event, payload in events
+        if event == "candidate_scores"
+    ][-1]
+
+    assert candidate_payload["mesh_collision_enabled"] is False
+    assert plan.route_length_m > 0.0
 
 
 def test_auto_dive_mesh_guard_trims_fully_blocked_route_to_safe_prefix(tmp_path):
