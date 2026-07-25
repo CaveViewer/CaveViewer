@@ -10,11 +10,17 @@ def test_lower_current_thread_priority_targets_native_thread(monkeypatch):
 
     monkeypatch.setattr(priority.sys, "platform", "linux")
     monkeypatch.setattr(priority.os, "PRIO_PROCESS", 0, raising=False)
-    monkeypatch.setattr(priority.os, "getpriority", lambda _kind, native_id: 2)
+    monkeypatch.setattr(
+        priority.os,
+        "getpriority",
+        lambda _kind, native_id: 2,
+        raising=False,
+    )
     monkeypatch.setattr(
         priority.os,
         "setpriority",
         lambda kind, native_id, value: calls.append((kind, native_id, value)),
+        raising=False,
     )
     monkeypatch.setattr(priority.threading, "get_native_id", lambda: 1234)
     monkeypatch.setenv(priority.STREAMING_WORKER_NICE_ENV_VAR, "4")
@@ -28,11 +34,17 @@ def test_lower_current_thread_priority_does_not_exceed_linux_limit(monkeypatch):
 
     monkeypatch.setattr(priority.sys, "platform", "linux")
     monkeypatch.setattr(priority.os, "PRIO_PROCESS", 0, raising=False)
-    monkeypatch.setattr(priority.os, "getpriority", lambda _kind, _native_id: 19)
+    monkeypatch.setattr(
+        priority.os,
+        "getpriority",
+        lambda _kind, _native_id: 19,
+        raising=False,
+    )
     monkeypatch.setattr(
         priority.os,
         "setpriority",
         lambda *args: calls.append(args),
+        raising=False,
     )
 
     assert priority.lower_current_thread_priority(environ={}) is False
