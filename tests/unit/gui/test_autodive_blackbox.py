@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import numpy as np
 
@@ -40,6 +41,7 @@ def test_auto_dive_blackbox_writes_jsonl_events(tmp_path):
 
 
 def test_auto_dive_blackbox_path_uses_cache_dir():
-    assert auto_dive_blackbox_path("/tmp/cache").endswith(
-        f"/cache/{AUTO_DIVE_BLACKBOX_FILENAME}"
-    )
+    path = auto_dive_blackbox_path("/tmp/cache")
+
+    assert os.path.basename(path) == AUTO_DIVE_BLACKBOX_FILENAME
+    assert os.path.basename(os.path.dirname(path)) == "cache"
