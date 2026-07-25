@@ -9,6 +9,7 @@ from caveviewer.core.navigation.cache_metadata import (
     NAVIGATION_METADATA_METHOD,
     NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS,
     NAVIGATION_METADATA_VERSION,
+    NAVIGATION_RECOVERY_HOTSPOT_METHOD,
     build_navigation_metadata,
     cached_centerline_path,
 )
@@ -30,6 +31,13 @@ def test_navigation_metadata_stores_component_centerline_routes():
     assert metadata["routes"][0]["closed_loop"] is False
     assert metadata["routes"][0]["cells"]
     assert metadata["routes"][0]["component_cells"]
+    hotspots = metadata["routes"][0]["recovery_hotspots"]
+    assert hotspots["method"] == NAVIGATION_RECOVERY_HOTSPOT_METHOD
+    assert hotspots["score_source"] == "geometry_only_v1"
+    assert hotspots["light_path_scores_available"] is False
+    assert hotspots["texture_feature_scores_available"] is False
+    assert hotspots["cells"]
+    assert len(hotspots["scores"]) == len(_flat_pairs(hotspots["cells"]))
 
     cached_path = cached_centerline_path({**manifest, "navigation": metadata})
 
@@ -38,6 +46,7 @@ def test_navigation_metadata_stores_component_centerline_routes():
     assert cached_path.component_size == 48
     assert cached_path.length_m == pytest.approx(metadata["routes"][0]["length_m"])
     assert cached_path.cells == _flat_pairs(metadata["routes"][0]["cells"])
+    assert cached_path.cached_recovery_hotspots
 
 
 def test_navigation_metadata_uses_surface_cells_and_stores_3d_gap_points():

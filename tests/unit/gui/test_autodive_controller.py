@@ -8,6 +8,7 @@ import math
 import threading
 
 import numpy as np
+import pytest
 
 from caveviewer.core.navigation.autodive import AutoDivePlan, AutoDiveSettings
 from caveviewer.core.navigation.route import CameraRoute, RouteKeyframe
@@ -76,9 +77,12 @@ class _FakeReplanner:
         self.requests = []
         self.shutdown_called = False
 
-    def request(self, current_position):
+    def request(self, current_position, **kwargs):
         self.requests.append(
-            tuple(float(value) for value in np.asarray(current_position))
+            (
+                tuple(float(value) for value in np.asarray(current_position)),
+                _safe_request_kwargs(kwargs),
+            )
         )
         return True
 
@@ -101,6 +105,22 @@ class _FakeBlackbox:
 
     def close(self):
         self.closed = True
+
+
+def _safe_request_kwargs(kwargs):
+    safe = {}
+    for key, value in kwargs.items():
+        if value is None:
+            safe[key] = None
+            continue
+        if key == "avoid_positions":
+            safe[key] = tuple(
+                tuple(float(item) for item in np.asarray(position))
+                for position in value
+            )
+            continue
+        safe[key] = float(value)
+    return safe
 
 
 def test_auto_dive_pauses_until_lookahead_cells_are_loaded():
@@ -164,7 +184,7 @@ def test_auto_dive_requests_replan_after_fractional_cell_travel():
     camera.position = np.array([0.25, 0.0, 0.0], dtype=np.float64)
     assert controller.update_replan(camera, world, now=0.0) is False
 
-    assert replanner.requests == [(0.25, 0.0, 0.0)]
+    assert replanner.requests == [((0.25, 0.0, 0.0), {})]
 
 
 def test_auto_dive_route_prefetch_radius_is_narrower_than_render_radius():
@@ -187,6 +207,40 @@ def test_auto_dive_route_prefetch_radius_is_narrower_than_render_radius():
     )
 
 
+def test_auto_dive_default_survey_does_not_pause_or_scan_view():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        lookahead_seconds=1.0,
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 6.0
+    controller.update(camera, world)
+
+    position_after_six_seconds = camera.position.copy()
+    yaw_after_six_seconds = camera.yaw
+
+    assert controller.status_note == "Diving centerline"
+    assert position_after_six_seconds[0] == 5.0
+
+    clock.now = 6.5
+    controller.update(camera, world)
+
+    assert camera.position[0] > position_after_six_seconds[0]
+    assert camera.yaw == yaw_after_six_seconds
+    assert not any(event == "survey_started" for event, _payload in blackbox.events)
+
+
 def test_auto_dive_periodic_survey_pause_holds_position_and_scans_view():
     clock = _FakeClock()
     world = _FakeWorld()
@@ -201,7 +255,7 @@ def test_auto_dive_periodic_survey_pause_holds_position_and_scans_view():
         blackbox=blackbox,
     )
     controller.start(camera, world)
-    world.loaded_cells = set(controller.prefetch_cells)
+    world.loaded_cells = set(world.available_cells)
     world._pending = set()
 
     clock.now = 1.0
@@ -231,6 +285,34 @@ def test_auto_dive_periodic_survey_pause_holds_position_and_scans_view():
     assert camera.position[0] > survey_position[0]
     assert any(event == "survey_started" for event, _payload in blackbox.events)
     assert any(event == "survey_completed" for event, _payload in blackbox.events)
+
+
+def test_auto_dive_survey_pause_does_not_emit_stuck_diagnostic():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        lookahead_seconds=1.0,
+        survey_interval_s=5.0,
+        survey_duration_s=2.0,
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 6.0
+    controller.update(camera, world)
+
+    controller.record_frame(camera, world, now=6.0)
+    controller.record_frame(camera, world, now=7.9)
+
+    assert controller.status_note == "Surveying next passage"
+    assert not any(event == "stuck_detected" for event, _payload in blackbox.events)
 
 
 def test_auto_dive_survey_pause_temporarily_widens_route_prefetch():
@@ -293,10 +375,10 @@ def test_auto_dive_replan_defaults_to_bounded_runtime_cadence():
         world,
         now=DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS,
     ) is False
-    assert replanner.requests == [(0.25, 0.0, 0.0)]
+    assert replanner.requests == [((0.25, 0.0, 0.0), {})]
 
 
-def test_auto_dive_default_replanning_waits_for_survey_pause():
+def test_auto_dive_survey_scoped_replanning_waits_for_survey_pause():
     clock = _FakeClock()
     world = _FakeWorld()
     camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
@@ -324,7 +406,181 @@ def test_auto_dive_default_replanning_waits_for_survey_pause():
     camera.position = np.array([5.0, 0.0, 0.0], dtype=np.float64)
 
     assert controller.update_replan(camera, world, now=6.0) is False
-    assert replanner.requests == [(5.0, 0.0, 0.0)]
+    assert replanner.requests == [((5.0, 0.0, 0.0), {})]
+
+
+def test_auto_dive_mesh_trimmed_route_replans_instead_of_completing():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(route_truncated_by_mesh=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+
+    clock.now = 12.0
+    state = controller.update(camera, world)
+
+    assert state is AutoDiveState.LOADING
+    assert controller.active
+    assert replanner.requests == []
+    assert controller.status_note == "Thinking"
+    assert controller.show_loading_indicator is False
+    assert any(
+        event == "mesh_recovery_scan_started"
+        for event, _payload in blackbox.events
+    )
+
+    clock.now = 12.6
+    controller.update(camera, world)
+
+    assert len(replanner.requests) == 1
+    request_position, request_pose = replanner.requests[0]
+    assert request_position == (10.0, 0.0, 0.0)
+    assert request_pose["current_yaw"] == 0.0
+    assert abs(request_pose["current_pitch"]) < 1e-9
+    assert request_pose["current_travel_yaw"] == 0.0
+    assert abs(request_pose["current_travel_pitch"]) < 1e-9
+    assert request_pose["avoid_positions"] == ()
+    assert any(
+        event == "mesh_recovery_replan_requested"
+        for event, _payload in blackbox.events
+    )
+
+    recovery_plan = _plan(start=(10.0, 0.0, 0.0), end=(0.0, 0.0, 0.0))
+    replanner.latest_plan = recovery_plan
+
+    assert controller.update_replan(camera, world, now=12.7) is True
+    assert controller.plan is recovery_plan
+    assert controller.active
+
+
+def test_auto_dive_mesh_trimmed_route_stops_before_wall_for_recovery():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(route_truncated_by_mesh=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=2.0,
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    assert controller.update(camera, world) is AutoDiveState.DIVING
+
+    clock.now = 5.0
+    assert controller.update(camera, world) is AutoDiveState.DIVING
+    assert np.linalg.norm(camera.position - np.array([4.0, 0.0, 0.0])) < 1e-9
+    assert not any(
+        event == "mesh_recovery_scan_started"
+        for event, _payload in blackbox.events
+    )
+
+    clock.now = 6.1
+    assert controller.update(camera, world) is AutoDiveState.LOADING
+    assert np.linalg.norm(camera.position - np.array([5.1, 0.0, 0.0])) < 1e-9
+    assert np.linalg.norm(camera.position - np.array([10.0, 0.0, 0.0])) > 1.0
+    assert controller.show_loading_indicator is False
+    scans = [
+        payload
+        for event, payload in blackbox.events
+        if event == "mesh_recovery_scan_started"
+    ]
+    assert scans
+    assert scans[-1]["reason"] == "mesh_truncated_standoff"
+    assert scans[-1]["remaining_distance_m"] == pytest.approx(4.9)
+    assert scans[-1]["standoff_distance_m"] == pytest.approx(5.0)
+    assert replanner.requests == []
+
+    clock.now = 6.7
+    controller.update(camera, world)
+
+    assert len(replanner.requests) == 1
+    assert replanner.requests[0][0] == pytest.approx((5.1, 0.0, 0.0))
+
+
+def test_auto_dive_mesh_recovery_uses_route_vector_at_boundary():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(
+            start=(-94.989978, 4.595492, 82.243261),
+            end=(-79.158315, 4.595492, 15.831663),
+            replan_at_end=True,
+        ),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 12.0
+    assert controller.update(camera, world) is AutoDiveState.LOADING
+    clock.now = 12.6
+    controller.update(camera, world)
+
+    assert len(replanner.requests) == 1
+    _request_position, request_pose = replanner.requests[0]
+    expected_yaw = math.atan2(
+        15.831663 - 82.243261,
+        -79.158315 - -94.989978,
+    )
+    assert request_pose["current_travel_yaw"] == pytest.approx(expected_yaw)
+    assert abs(request_pose["current_travel_pitch"]) < 1e-9
+
+
+def test_auto_dive_local_recovery_leg_replans_at_end():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 12.0
+    state = controller.update(camera, world)
+
+    assert state is AutoDiveState.LOADING
+    assert controller.active
+    assert replanner.requests == []
+
+    clock.now = 12.6
+    controller.update(camera, world)
+
+    assert len(replanner.requests) == 1
 
 
 def test_auto_dive_swaps_latest_nearby_replan_on_owner_thread():
@@ -501,7 +757,7 @@ def test_auto_dive_rejects_stalled_replan_and_does_not_retry_same_pose():
     camera.position = np.array([0.5, 0.0, 0.0], dtype=np.float64)
     assert controller.update_replan(camera, world, now=2.2) is False
 
-    assert replanner.requests == [(0.5, 0.0, 0.0)]
+    assert replanner.requests == [((0.5, 0.0, 0.0), {})]
 
 
 def test_auto_dive_shutdown_stops_replanner():
@@ -527,11 +783,34 @@ def test_auto_dive_replanner_can_be_constructed_and_shutdown():
     replanner.shutdown()
 
 
+def test_auto_dive_replanner_forwards_cache_dir_to_plan_builder():
+    calls = []
+
+    def build_plan(manifest, **kwargs):
+        calls.append((manifest, kwargs))
+        return _plan()
+
+    replanner = AutoDiveReplanner(
+        {"chunks": {}},
+        AutoDiveSettings(),
+        plan_builder=build_plan,
+        cache_dir="/cache/cave",
+    )
+
+    _generation, plan = replanner._build_plan(1, (1.0, 2.0, 3.0))
+    replanner.shutdown()
+
+    assert plan is not None
+    assert calls[0][1]["cache_dir"] == "/cache/cave"
+
+
 def _plan(
     *,
     start: tuple[float, float, float] = (0.0, 0.0, 0.0),
     end: tuple[float, float, float] = (10.0, 0.0, 0.0),
     render_distance_cells: int = 2,
+    route_truncated_by_mesh: bool = False,
+    replan_at_end: bool = False,
 ) -> AutoDivePlan:
     route = CameraRoute.from_keyframes(
         (
@@ -548,4 +827,13 @@ def _plan(
         route_length_m=10.0,
         duration_s=10.0,
         render_distance_cells=render_distance_cells,
+        route_truncated_by_mesh=route_truncated_by_mesh,
+        replan_at_end=replan_at_end,
+        selection_reason=(
+            "mesh_compromised_prefix_fallback"
+            if route_truncated_by_mesh
+            else "trusted_route_clear"
+            if replan_at_end
+            else ""
+        ),
     )

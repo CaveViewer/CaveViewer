@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
@@ -24,12 +24,21 @@ from caveviewer.core.navigation.route import apply_pose_to_camera
 DEFAULT_AUTO_DIVE_ROUTE_LOOKAHEAD_SECONDS = 6.0
 DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS = 1.0
 DEFAULT_AUTO_DIVE_ROUTE_PREFETCH_RADIUS_CELLS = 2
-DEFAULT_AUTO_DIVE_SURVEY_INTERVAL_SECONDS = 5.0
-DEFAULT_AUTO_DIVE_SURVEY_DURATION_SECONDS = 2.0
+# Survey pauses intentionally remain opt-in: visible route-time pauses and
+# yaw/pitch sweeps read as jitter during normal interactive Auto Dive playback.
+DEFAULT_AUTO_DIVE_SURVEY_INTERVAL_SECONDS = 0.0
+DEFAULT_AUTO_DIVE_SURVEY_DURATION_SECONDS = 0.0
 DEFAULT_AUTO_DIVE_SURVEY_PREFETCH_LOOKAHEAD_MULTIPLIER = 2.0
 DEFAULT_AUTO_DIVE_SURVEY_PREFETCH_RADIUS_BONUS_CELLS = 1
 DEFAULT_AUTO_DIVE_SURVEY_YAW_SWEEP_DEGREES = 28.0
 DEFAULT_AUTO_DIVE_SURVEY_PITCH_SWEEP_DEGREES = 5.0
+DEFAULT_AUTO_DIVE_MESH_RECOVERY_TURN_SECONDS = 0.5
+DEFAULT_AUTO_DIVE_MESH_RECOVERY_YAW_DEGREES = 180.0
+DEFAULT_AUTO_DIVE_MESH_RECOVERY_PITCH_DEGREES = 8.0
+DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_ATTEMPTS = 8
+DEFAULT_AUTO_DIVE_MESH_RECOVERY_STANDOFF_CELLS = 2.0
+DEFAULT_AUTO_DIVE_MESH_RECOVERY_MIN_STANDOFF_M = 15.0
+DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_STANDOFF_FRACTION = 0.5
 
 
 class AutoDiveState(str, Enum):
@@ -72,11 +81,13 @@ class AutoDiveReplanner:
         settings: AutoDiveSettings,
         *,
         plan_builder: Callable[..., AutoDivePlan] = build_centerline_auto_dive_plan,
+        cache_dir: str | None = None,
         blackbox: Any | None = None,
     ) -> None:
         self._manifest = manifest
         self._settings = settings
         self._plan_builder = plan_builder
+        self._cache_dir = cache_dir
         self._blackbox = blackbox
         self._executor = ThreadPoolExecutor(
             max_workers=1,
@@ -89,18 +100,41 @@ class AutoDiveReplanner:
         self._pending_future: Future | None = None
         self._shutdown = False
 
-    def request(self, current_position: np.ndarray | tuple[float, float, float]) -> bool:
+    def request(
+        self,
+        current_position: np.ndarray | tuple[float, float, float],
+        *,
+        current_yaw: float | None = None,
+        current_pitch: float | None = None,
+        current_travel_yaw: float | None = None,
+        current_travel_pitch: float | None = None,
+        avoid_positions: Sequence[Sequence[float]] | None = None,
+    ) -> bool:
         """Queue one replan from the current camera position if none is pending."""
         position = tuple(
             float(value)
             for value in np.asarray(current_position, dtype=np.float64).reshape(3)
         )
+        yaw = None if current_yaw is None else float(current_yaw)
+        pitch = None if current_pitch is None else float(current_pitch)
+        travel_yaw = (
+            None if current_travel_yaw is None else float(current_travel_yaw)
+        )
+        travel_pitch = (
+            None if current_travel_pitch is None else float(current_travel_pitch)
+        )
+        avoided = _normalized_avoid_positions(avoid_positions)
         with self._lock:
             if self._shutdown:
                 self._record_blackbox(
                     "replan_request_skipped",
                     reason="shutdown",
                     position=position,
+                    yaw=yaw,
+                    pitch=pitch,
+                    travel_yaw=travel_yaw,
+                    travel_pitch=travel_pitch,
+                    avoid_positions=avoided,
                 )
                 return False
             if self._pending_future is not None and not self._pending_future.done():
@@ -108,6 +142,11 @@ class AutoDiveReplanner:
                     "replan_request_skipped",
                     reason="already_pending",
                     position=position,
+                    yaw=yaw,
+                    pitch=pitch,
+                    travel_yaw=travel_yaw,
+                    travel_pitch=travel_pitch,
+                    avoid_positions=avoided,
                 )
                 return False
             self._generation += 1
@@ -116,8 +155,22 @@ class AutoDiveReplanner:
                 "replan_requested",
                 generation=generation,
                 position=position,
+                yaw=yaw,
+                pitch=pitch,
+                travel_yaw=travel_yaw,
+                travel_pitch=travel_pitch,
+                avoid_positions=avoided,
             )
-            future = self._executor.submit(self._build_plan, generation, position)
+            future = self._executor.submit(
+                self._build_plan,
+                generation,
+                position,
+                yaw,
+                pitch,
+                travel_yaw,
+                travel_pitch,
+                avoided,
+            )
             self._pending_future = future
             future.add_done_callback(self._store_completed_plan)
             return True
@@ -128,6 +181,13 @@ class AutoDiveReplanner:
             plan = self._latest_plan
             self._latest_plan = None
             return plan
+
+    def has_pending(self) -> bool:
+        with self._lock:
+            return bool(
+                self._pending_future is not None
+                and not self._pending_future.done()
+            )
 
     def shutdown(self) -> None:
         with self._lock:
@@ -140,17 +200,39 @@ class AutoDiveReplanner:
         self,
         generation: int,
         current_position: tuple[float, float, float],
+        current_yaw: float | None = None,
+        current_pitch: float | None = None,
+        current_travel_yaw: float | None = None,
+        current_travel_pitch: float | None = None,
+        avoid_positions: tuple[tuple[float, float, float], ...] = (),
     ) -> tuple[int, AutoDivePlan]:
         self._record_blackbox(
             "replan_build_started",
             generation=generation,
             position=current_position,
+            yaw=current_yaw,
+            pitch=current_pitch,
+            travel_yaw=current_travel_yaw,
+            travel_pitch=current_travel_pitch,
+            avoid_positions=avoid_positions,
         )
         try:
             kwargs: dict[str, Any] = {
                 "current_position": current_position,
                 "settings": self._settings,
             }
+            if current_yaw is not None:
+                kwargs["current_yaw"] = current_yaw
+            if current_pitch is not None:
+                kwargs["current_pitch"] = current_pitch
+            if current_travel_yaw is not None:
+                kwargs["current_travel_yaw"] = current_travel_yaw
+            if current_travel_pitch is not None:
+                kwargs["current_travel_pitch"] = current_travel_pitch
+            if avoid_positions:
+                kwargs["avoid_positions"] = avoid_positions
+            if self._cache_dir is not None:
+                kwargs["cache_dir"] = self._cache_dir
             if self._blackbox is not None:
                 kwargs["diagnostics"] = (
                     lambda event, payload: self._record_blackbox(
@@ -260,6 +342,10 @@ class AutoDiveController:
         self._last_replan_request_at: float | None = None
         self._last_rejected_replan_position: np.ndarray | None = None
         self._last_blackbox_frame_at: float | None = None
+        self._mesh_recovery_started_at: float | None = None
+        self._mesh_recovery_replan_pending = False
+        self._mesh_recovery_attempts = 0
+        self._mesh_recovery_boundary_positions: list[np.ndarray] = []
         self._stuck_reference_time: float | None = None
         self._stuck_reference_position: np.ndarray | None = None
         self._last_stuck_event_at: float | None = None
@@ -273,12 +359,21 @@ class AutoDiveController:
     @property
     def progress(self) -> float:
         route_progress = route_progress_fraction(self.plan.route, self._elapsed_s)
-        if self.state == AutoDiveState.LOADING:
+        if self.state == AutoDiveState.LOADING and not self._mesh_recovery_active():
             return self._readiness.progress
         return route_progress
 
     @property
+    def show_loading_indicator(self) -> bool:
+        return bool(
+            self.state is AutoDiveState.LOADING
+            and not self._mesh_recovery_active()
+        )
+
+    @property
     def status_note(self) -> str:
+        if self._mesh_recovery_active():
+            return "Thinking"
         if self.state == AutoDiveState.LOADING:
             return (
                 "Loading next passage "
@@ -331,6 +426,10 @@ class AutoDiveController:
             dtype=np.float64,
         ).copy()
         self._last_replan_request_at = now
+        self._mesh_recovery_started_at = None
+        self._mesh_recovery_replan_pending = False
+        self._mesh_recovery_attempts = 0
+        self._mesh_recovery_boundary_positions = []
         self.state = AutoDiveState.LOADING
         apply_pose_to_camera(camera, self.plan.route.pose_at(0.0))
         self.refresh_prefetch(world)
@@ -384,6 +483,11 @@ class AutoDiveController:
         self.refresh_prefetch(world)
         self._readiness = self.readiness_for_world(world)
         if not self._readiness.ready:
+            if self._mesh_recovery_active():
+                self._apply_mesh_recovery_pose_to_camera(camera, now=now)
+                self._request_mesh_recovery_replan_if_ready(camera, now=now)
+                self.state = AutoDiveState.LOADING
+                return self.state
             if self._survey_active(now=now):
                 self._apply_survey_pose_to_camera(camera, now=now)
                 self.state = AutoDiveState.LOADING
@@ -405,6 +509,12 @@ class AutoDiveController:
             self.state = AutoDiveState.DIVING
             return self.state
 
+        if self._mesh_recovery_active():
+            self._apply_mesh_recovery_pose_to_camera(camera, now=now)
+            self._request_mesh_recovery_replan_if_ready(camera, now=now)
+            self.state = AutoDiveState.LOADING
+            return self.state
+
         if self._survey_pause_started_at is not None:
             survey_duration_s = max(0.0, now - self._survey_pause_started_at)
             self._paused_seconds += survey_duration_s
@@ -423,6 +533,14 @@ class AutoDiveController:
             self.plan.route.duration_s,
             max(0.0, now - self._started_at - self._paused_seconds),
         )
+        if self._should_start_mesh_recovery_standoff():
+            apply_pose_to_camera(camera, self.plan.route.pose_at(self._elapsed_s))
+            if self._maybe_start_mesh_recovery_scan(
+                now=now,
+                reason="mesh_truncated_standoff",
+            ):
+                self.state = AutoDiveState.LOADING
+                return self.state
         if self._should_start_survey():
             self._survey_pause_started_at = now
             self._survey_replan_requested = False
@@ -444,6 +562,12 @@ class AutoDiveController:
 
         apply_pose_to_camera(camera, self.plan.route.pose_at(self._elapsed_s))
         if self._elapsed_s >= self.plan.route.duration_s:
+            if self._maybe_start_mesh_recovery_scan(
+                now=now,
+                reason="route_boundary",
+            ):
+                self.state = AutoDiveState.LOADING
+                return self.state
             self.stop(world, completed=True)
             return self.state
         self.state = AutoDiveState.DIVING
@@ -464,7 +588,12 @@ class AutoDiveController:
         latest_plan = replanner.take_latest_plan()
         rejected_replan = False
         if latest_plan is not None:
-            if self.replan_only_during_survey and not self._survey_active(now=now):
+            mesh_recovery = self._mesh_recovery_active()
+            if (
+                self.replan_only_during_survey
+                and not self._survey_active(now=now)
+                and not mesh_recovery
+            ):
                 rejection = {"reason": "outside_survey_pause"}
             else:
                 rejection = self._replan_rejection_payload(
@@ -482,6 +611,11 @@ class AutoDiveController:
                 self._paused_seconds = 0.0
                 self._elapsed_s = resume_elapsed_s
                 self._last_rejected_replan_position = None
+                self._mesh_recovery_started_at = None
+                self._mesh_recovery_replan_pending = False
+                if not _plan_needs_boundary_replan(latest_plan):
+                    self._mesh_recovery_attempts = 0
+                    self._mesh_recovery_boundary_positions = []
                 self.refresh_prefetch(world)
                 self._readiness = self.readiness_for_world(world)
                 self._record_blackbox(
@@ -494,6 +628,7 @@ class AutoDiveController:
                 )
                 swapped = True
             else:
+                self._mesh_recovery_replan_pending = False
                 self._last_rejected_replan_position = current_position.copy()
                 rejected_replan = True
                 self._record_blackbox(
@@ -501,6 +636,17 @@ class AutoDiveController:
                     camera_position=_vector_payload(current_position),
                     plan=_plan_summary(latest_plan),
                     **rejection,
+                )
+        elif self._mesh_recovery_replan_pending:
+            has_pending = getattr(replanner, "has_pending", None)
+            if callable(has_pending) and not has_pending():
+                self._mesh_recovery_replan_pending = False
+                self._record_blackbox(
+                    "mesh_recovery_replan_finished_without_plan",
+                    attempts=int(self._mesh_recovery_attempts),
+                    position=_vector_payload(current_position),
+                    elapsed_s=float(self._elapsed_s),
+                    progress=float(self.progress),
                 )
 
         if not rejected_replan and self._should_request_replan(
@@ -556,7 +702,11 @@ class AutoDiveController:
                 "next_point": _vector_payload(next_point),
             }
         alignment = self._plan_forward_alignment(next_point, current_position)
-        if alignment is not None and alignment < -0.05:
+        if (
+            alignment is not None
+            and alignment < -0.05
+            and not self._allow_backward_mesh_recovery_replan()
+        ):
             return {
                 "reason": "moves_backward_from_current_route",
                 "forward_alignment": float(alignment),
@@ -658,7 +808,12 @@ class AutoDiveController:
         now: float,
         navigation_clamped: bool,
     ) -> None:
-        if self.state is not AutoDiveState.DIVING or not self._readiness.ready:
+        if (
+            self.state is not AutoDiveState.DIVING
+            or not self._readiness.ready
+            or self._survey_active(now=now)
+            or self._mesh_recovery_active()
+        ):
             self._stuck_reference_time = None
             self._stuck_reference_position = None
             return
@@ -879,6 +1034,168 @@ class AutoDiveController:
         now = self.perf_counter() if now is None else float(now)
         return now - self._survey_pause_started_at < self.survey_duration_s
 
+    def _mesh_recovery_active(self, *, now: float | None = None) -> bool:
+        if self._mesh_recovery_started_at is None:
+            return False
+        return True
+
+    def _should_start_mesh_recovery_standoff(self) -> bool:
+        if self._mesh_recovery_active():
+            return False
+        if not getattr(self.plan, "route_truncated_by_mesh", False):
+            return False
+        if self._elapsed_s >= self.plan.route.duration_s:
+            return False
+        remaining_distance_m = self._route_remaining_distance_m()
+        if remaining_distance_m is None:
+            return False
+        return remaining_distance_m <= self._mesh_recovery_standoff_distance_m()
+
+    def _route_remaining_distance_m(self) -> float | None:
+        duration_s = float(getattr(self.plan.route, "duration_s", 0.0))
+        if duration_s <= 1e-9:
+            return None
+        remaining_s = max(0.0, duration_s - float(self._elapsed_s))
+        return float(remaining_s * self._route_speed_m_per_second())
+
+    def _mesh_recovery_standoff_distance_m(self) -> float:
+        route_length_m = max(0.0, float(getattr(self.plan, "route_length_m", 0.0)))
+        if route_length_m <= 1e-9:
+            return 0.0
+        distance_m = max(
+            float(DEFAULT_AUTO_DIVE_MESH_RECOVERY_MIN_STANDOFF_M),
+            float(self.replan_distance_m)
+            * float(DEFAULT_AUTO_DIVE_MESH_RECOVERY_STANDOFF_CELLS),
+        )
+        return min(
+            distance_m,
+            route_length_m
+            * float(DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_STANDOFF_FRACTION),
+        )
+
+    def _maybe_start_mesh_recovery_scan(
+        self,
+        *,
+        now: float,
+        reason: str = "route_boundary",
+    ) -> bool:
+        if not _plan_needs_boundary_replan(self.plan):
+            return False
+        if self.replanner is None:
+            return False
+        if self._mesh_recovery_replan_pending:
+            return True
+        if self._mesh_recovery_attempts >= DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_ATTEMPTS:
+            self._record_blackbox(
+                "mesh_recovery_exhausted",
+                attempts=int(self._mesh_recovery_attempts),
+                elapsed_s=float(self._elapsed_s),
+                progress=float(self.progress),
+            )
+            return False
+
+        if self._mesh_recovery_started_at is None:
+            self._mesh_recovery_started_at = now
+            route_end = np.asarray(
+                self.plan.route.pose_at(self._elapsed_s).position,
+                dtype=np.float64,
+            )
+            self._remember_mesh_recovery_boundary(route_end)
+            self._record_blackbox(
+                "mesh_recovery_scan_started",
+                reason=str(reason),
+                attempts=int(self._mesh_recovery_attempts),
+                boundary_positions=[
+                    _vector_payload(position)
+                    for position in self._mesh_recovery_boundary_positions
+                ],
+                elapsed_s=float(self._elapsed_s),
+                progress=float(self.progress),
+                remaining_distance_m=self._route_remaining_distance_m(),
+                standoff_distance_m=float(self._mesh_recovery_standoff_distance_m()),
+                plan=_plan_summary(self.plan),
+            )
+        return True
+
+    def _request_mesh_recovery_replan_if_ready(self, camera, *, now: float) -> bool:
+        if self.replanner is None:
+            return False
+        if self._mesh_recovery_replan_pending:
+            return True
+        if self._mesh_recovery_started_at is None:
+            return False
+        scan_elapsed_s = max(0.0, float(now) - self._mesh_recovery_started_at)
+        if scan_elapsed_s < DEFAULT_AUTO_DIVE_MESH_RECOVERY_TURN_SECONDS:
+            return False
+
+        current_position = np.asarray(camera.position, dtype=np.float64)
+        travel_yaw, travel_pitch = self._current_route_travel_angles(current_position)
+        requested = self.replanner.request(
+            current_position,
+            current_yaw=float(getattr(camera, "yaw", 0.0)),
+            current_pitch=float(getattr(camera, "pitch", 0.0)),
+            current_travel_yaw=travel_yaw,
+            current_travel_pitch=travel_pitch,
+            avoid_positions=tuple(
+                tuple(float(value) for value in position)
+                for position in self._mesh_recovery_prior_boundary_positions()
+            ),
+        )
+        self._mesh_recovery_replan_pending = True
+        if requested:
+            self._mesh_recovery_attempts += 1
+            self._last_replan_request_position = current_position.copy()
+            self._last_replan_request_at = now
+        self._record_blackbox(
+            "mesh_recovery_replan_requested",
+            requested=bool(requested),
+            attempts=int(self._mesh_recovery_attempts),
+            scan_elapsed_s=float(scan_elapsed_s),
+            position=_vector_payload(current_position),
+            yaw=float(getattr(camera, "yaw", 0.0)),
+            pitch=float(getattr(camera, "pitch", 0.0)),
+            travel_yaw=travel_yaw,
+            travel_pitch=travel_pitch,
+            avoid_positions=[
+                _vector_payload(position)
+                for position in self._mesh_recovery_prior_boundary_positions()
+            ],
+            elapsed_s=float(self._elapsed_s),
+            progress=float(self.progress),
+            plan=_plan_summary(self.plan),
+        )
+        return True
+
+    def _current_route_travel_angles(
+        self,
+        current_position: np.ndarray,
+    ) -> tuple[float | None, float | None]:
+        forward = self._current_route_forward_vector(current_position)
+        if forward is None:
+            return None, None
+        return _vector_yaw_pitch(forward)
+
+    def _remember_mesh_recovery_boundary(self, position: np.ndarray) -> None:
+        point = np.asarray(position, dtype=np.float64).reshape(3).copy()
+        threshold_m = max(0.5, float(self.replan_distance_m) * 0.5)
+        for existing in self._mesh_recovery_boundary_positions:
+            if float(np.linalg.norm(existing - point)) <= threshold_m:
+                return
+        self._mesh_recovery_boundary_positions.append(point)
+        if len(self._mesh_recovery_boundary_positions) > 8:
+            del self._mesh_recovery_boundary_positions[:-8]
+
+    def _mesh_recovery_prior_boundary_positions(self) -> tuple[np.ndarray, ...]:
+        if len(self._mesh_recovery_boundary_positions) <= 1:
+            return ()
+        return tuple(self._mesh_recovery_boundary_positions[:-1])
+
+    def _allow_backward_mesh_recovery_replan(self) -> bool:
+        return bool(
+            self._mesh_recovery_replan_pending
+            and _plan_needs_boundary_replan(self.plan)
+        )
+
     def _should_start_survey(self) -> bool:
         if self.survey_interval_s <= 0.0 or self.survey_duration_s <= 0.0:
             return False
@@ -931,6 +1248,10 @@ class AutoDiveController:
         ) * math.sin(math.tau * phase * 2.0)
         camera.pitch = max(math.radians(-55.0), min(math.radians(55.0), camera.pitch))
 
+    def _apply_mesh_recovery_pose_to_camera(self, camera, *, now: float) -> None:
+        pose = self.plan.route.pose_at(self._elapsed_s)
+        apply_pose_to_camera(camera, pose)
+
     def _route_speed_m_per_second(self) -> float:
         return float(self.plan.route_length_m) / max(1e-9, float(self.plan.duration_s))
 
@@ -981,6 +1302,38 @@ def _route_elapsed_nearest_position(
     return duration * progress
 
 
+def _vector_yaw_pitch(vector: np.ndarray) -> tuple[float | None, float | None]:
+    values = np.asarray(vector, dtype=np.float64).reshape(3)
+    norm = float(np.linalg.norm(values))
+    if norm <= 1e-9:
+        return None, None
+    unit = values / norm
+    yaw = math.atan2(float(unit[2]), float(unit[0]))
+    pitch = math.asin(max(-1.0, min(1.0, float(unit[1]))))
+    return float(yaw), float(pitch)
+
+
+def _normalized_avoid_positions(
+    avoid_positions: Sequence[Sequence[float]] | None,
+) -> tuple[tuple[float, float, float], ...]:
+    if not avoid_positions:
+        return ()
+    normalized: list[tuple[float, float, float]] = []
+    for position in avoid_positions:
+        try:
+            values = np.asarray(position, dtype=np.float64).reshape(3)
+        except Exception:
+            continue
+        normalized.append(
+            (
+                float(values[0]),
+                float(values[1]),
+                float(values[2]),
+            )
+        )
+    return tuple(normalized)
+
+
 def _plan_summary(plan: AutoDivePlan) -> dict[str, Any]:
     return {
         "route_length_m": float(plan.route_length_m),
@@ -989,6 +1342,16 @@ def _plan_summary(plan: AutoDivePlan) -> dict[str, Any]:
         "route_cell_count": len(plan.route_cells),
         "render_distance_cells": int(plan.render_distance_cells),
         "circular_arc": bool(plan.circular_arc),
+        "selection_reason": str(getattr(plan, "selection_reason", "")),
+        "route_truncated_by_mesh": bool(
+            getattr(plan, "route_truncated_by_mesh", False)
+        ),
+        "replan_at_end": bool(getattr(plan, "replan_at_end", False)),
+        "mesh_safe_prefix_length_m": (
+            None
+            if getattr(plan, "mesh_safe_prefix_length_m", None) is None
+            else float(getattr(plan, "mesh_safe_prefix_length_m"))
+        ),
         "centerline_source": getattr(plan.centerline_path, "source", None),
         "centerline_length_m": (
             None
@@ -1006,6 +1369,13 @@ def _plan_summary(plan: AutoDivePlan) -> dict[str, Any]:
             else _vector_payload(plan.route_points[-1])
         ),
     }
+
+
+def _plan_needs_boundary_replan(plan: AutoDivePlan) -> bool:
+    return bool(
+        getattr(plan, "route_truncated_by_mesh", False)
+        or getattr(plan, "replan_at_end", False)
+    )
 
 
 def _readiness_payload(readiness: AutoDiveReadiness) -> dict[str, Any]:

@@ -154,8 +154,8 @@ def test_environment_diagnostics_report_set_discovered_and_effective_values(
     assert "CAVEVIEWER_UI_TEXT_SCALE=2.0" in output
     assert "CAVEVIEWER_CUSTOM_SETTING=enabled" in output
     assert (
-        "CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE=<unset> "
-        "(effective: 112.5)"
+        "CAVEVIEWER_AUTO_DIVE_ACCELERATION=<unset> "
+        "(effective: 1.25)"
     ) in output
     assert (
         "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS=<unset> "

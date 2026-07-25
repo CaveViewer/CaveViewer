@@ -43,6 +43,9 @@ NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS = 5
 NAVIGATION_ENDPOINT_CENTERING_RADIUS_CELLS = 5
 NAVIGATION_START_CENTERING_RADIUS_CELLS = 2
 _NAVIGATION_SURFACE_BLOCK_VERTICES = 250_000
+NAVIGATION_RECOVERY_HOTSPOT_METHOD = "component_recovery_hotspots_v1"
+NAVIGATION_RECOVERY_HOTSPOT_LIMIT = 256
+NAVIGATION_RECOVERY_HOTSPOT_MAX_RUN_CELLS = 64
 
 
 @dataclass
@@ -564,6 +567,10 @@ def _path_with_cells(
         endpoint_percentile=path.endpoint_percentile,
         endpoint_threshold_clearance_cells=path.endpoint_threshold_clearance_cells,
         length_m=footprint_path_length(tuple(cells), path.centers),
+        cached_points=path.cached_points,
+        cached_y_ranges=path.cached_y_ranges,
+        cached_clearance_margins=path.cached_clearance_margins,
+        cached_recovery_hotspots=path.cached_recovery_hotspots,
     )
 
 
@@ -679,7 +686,158 @@ def _metadata_route_for_centerline_path(
     )
     if component_y_ranges:
         route["component_y_ranges"] = _flat_y_ranges(component_y_ranges)
+    recovery_hotspots = _recovery_hotspots_for_path(
+        path,
+        component_cells=component_cells,
+    )
+    if recovery_hotspots:
+        route["recovery_hotspots"] = recovery_hotspots
     return route
+
+
+def _recovery_hotspots_for_path(
+    path: CenterlinePath,
+    *,
+    component_cells: tuple[FootprintCell, ...],
+) -> dict[str, Any] | None:
+    if not component_cells:
+        return None
+    scored = [
+        _recovery_hotspot_score(path, cell)
+        for cell in component_cells
+    ]
+    scored = sorted(
+        scored,
+        key=lambda item: (
+            item["score"],
+            item["corridor_run_cells"],
+            item["straight_run_cells"],
+            item["clearance_score"],
+            item["degree_score"],
+            item["cell"],
+        ),
+        reverse=True,
+    )
+    hotspots = scored[:NAVIGATION_RECOVERY_HOTSPOT_LIMIT]
+    if not hotspots:
+        return None
+    return {
+        "version": 1,
+        "method": NAVIGATION_RECOVERY_HOTSPOT_METHOD,
+        "score_source": "geometry_only_v1",
+        "cell_count": len(hotspots),
+        "component_cell_count": len(component_cells),
+        "limit": NAVIGATION_RECOVERY_HOTSPOT_LIMIT,
+        "light_path_scores_available": False,
+        "texture_feature_scores_available": False,
+        "future_signal_slots": [
+            "light_path_score",
+            "texture_feature_score",
+        ],
+        "cells": _flat_cells(tuple(item["cell"] for item in hotspots)),
+        "scores": [float(item["score"]) for item in hotspots],
+        "clearance_scores": [
+            float(item["clearance_score"]) for item in hotspots
+        ],
+        "straight_run_cells": [
+            float(item["straight_run_cells"]) for item in hotspots
+        ],
+        "corridor_run_cells": [
+            float(item["corridor_run_cells"]) for item in hotspots
+        ],
+        "degree_scores": [
+            float(item["degree_score"]) for item in hotspots
+        ],
+    }
+
+
+def _recovery_hotspot_score(
+    path: CenterlinePath,
+    cell: FootprintCell,
+) -> dict[str, Any]:
+    neighbors = navigable_footprint_neighbors(cell, path.component_cells)
+    straight_run = _longest_straight_recovery_run_cells(path, cell)
+    corridor_run = _longest_bidirectional_recovery_run_cells(path, cell)
+    clearance = float(path.clearance_scores.get(cell, 1))
+    degree = float(len(neighbors))
+    score = (
+        corridor_run
+        + (0.75 * straight_run)
+        + (0.50 * clearance)
+        + (0.25 * degree)
+    )
+    return {
+        "cell": cell,
+        "score": float(score),
+        "clearance_score": float(clearance),
+        "straight_run_cells": float(straight_run),
+        "corridor_run_cells": float(corridor_run),
+        "degree_score": float(degree),
+    }
+
+
+def _longest_straight_recovery_run_cells(
+    path: CenterlinePath,
+    cell: FootprintCell,
+) -> float:
+    return max(
+        (
+            _straight_recovery_run_cells(path, cell, direction)
+            for direction in _NAVIGATION_RECOVERY_DIRECTIONS
+        ),
+        default=0.0,
+    )
+
+
+def _longest_bidirectional_recovery_run_cells(
+    path: CenterlinePath,
+    cell: FootprintCell,
+) -> float:
+    best = 0.0
+    for direction in _NAVIGATION_RECOVERY_DIRECTIONS[:4]:
+        reverse = (-direction[0], -direction[1])
+        best = max(
+            best,
+            _straight_recovery_run_cells(path, cell, direction)
+            + _straight_recovery_run_cells(path, cell, reverse),
+        )
+    return float(best)
+
+
+_NAVIGATION_RECOVERY_DIRECTIONS: tuple[tuple[int, int], ...] = (
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+)
+
+
+def _straight_recovery_run_cells(
+    path: CenterlinePath,
+    cell: FootprintCell,
+    direction: tuple[int, int],
+) -> float:
+    dx, dz = direction
+    current = cell
+    distance = 0.0
+    while True:
+        if distance >= NAVIGATION_RECOVERY_HOTSPOT_MAX_RUN_CELLS:
+            break
+        next_cell = (current[0] + dx, current[1] + dz)
+        if next_cell not in path.component_cells:
+            break
+        if next_cell not in navigable_footprint_neighbors(
+            current,
+            path.component_cells,
+        ):
+            break
+        distance += footprint_cell_distance(current, next_cell)
+        current = next_cell
+    return float(min(distance, float(NAVIGATION_RECOVERY_HOTSPOT_MAX_RUN_CELLS)))
 
 
 def _recommended_route_id(routes: Sequence[Mapping[str, Any]]) -> str:
@@ -757,6 +915,9 @@ def _centerline_path_from_metadata_route(
                     strict=False,
                 )
             }
+        cached_recovery_hotspots = _parse_recovery_hotspots(
+            route.get("recovery_hotspots")
+        )
         clearance_scores = clearance_scores_for_footprint(component)
         length_m = _float_or_default(
             route.get("length_m"),
@@ -792,6 +953,7 @@ def _centerline_path_from_metadata_route(
         cached_points=cached_points,
         cached_y_ranges=cached_y_ranges,
         cached_clearance_margins=cached_clearance_margins,
+        cached_recovery_hotspots=cached_recovery_hotspots,
     )
 
 
@@ -876,6 +1038,38 @@ def _parse_float_sequence(value: object) -> tuple[float, ...]:
         except (TypeError, ValueError):
             return ()
     return tuple(floats)
+
+
+def _parse_recovery_hotspots(
+    value: object,
+) -> dict[FootprintCell, dict[str, float]] | None:
+    if not isinstance(value, Mapping):
+        return None
+    if value.get("version") != 1:
+        return None
+    if value.get("method") != NAVIGATION_RECOVERY_HOTSPOT_METHOD:
+        return None
+    cells = _parse_flat_cells(value.get("cells"))
+    scores = _parse_float_sequence(value.get("scores"))
+    if not cells or len(scores) != len(cells):
+        return None
+    clearance_scores = _parse_float_sequence(value.get("clearance_scores"))
+    straight_runs = _parse_float_sequence(value.get("straight_run_cells"))
+    corridor_runs = _parse_float_sequence(value.get("corridor_run_cells"))
+    degree_scores = _parse_float_sequence(value.get("degree_scores"))
+    parsed: dict[FootprintCell, dict[str, float]] = {}
+    for index, cell in enumerate(cells):
+        hotspot = {"score": float(scores[index])}
+        if index < len(clearance_scores):
+            hotspot["clearance_score"] = float(clearance_scores[index])
+        if index < len(straight_runs):
+            hotspot["straight_run_cells"] = float(straight_runs[index])
+        if index < len(corridor_runs):
+            hotspot["corridor_run_cells"] = float(corridor_runs[index])
+        if index < len(degree_scores):
+            hotspot["degree_score"] = float(degree_scores[index])
+        parsed[cell] = hotspot
+    return parsed
 
 
 def _navigation_manifest_from_surface_positions(
