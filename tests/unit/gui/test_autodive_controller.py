@@ -1,4 +1,4 @@
-"""Tests for Auto Dive controller pause/resume behavior."""
+"""Tests for Guided Dive controller pause/resume behavior."""
 
 from __future__ import annotations
 
@@ -413,7 +413,7 @@ def test_auto_dive_survey_scoped_replanning_waits_for_survey_pause():
     assert replanner.requests == [((5.0, 0.0, 0.0), {})]
 
 
-def test_auto_dive_mesh_trimmed_route_replans_instead_of_completing():
+def test_auto_dive_mesh_trimmed_route_requests_assist_at_boundary():
     clock = _FakeClock()
     world = _FakeWorld()
     camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
@@ -436,69 +436,38 @@ def test_auto_dive_mesh_trimmed_route_replans_instead_of_completing():
     clock.now = 12.0
     state = controller.update(camera, world)
 
-    assert state is AutoDiveState.LOADING
-    assert controller.active
+    assert state is AutoDiveState.WAITING_FOR_USER
+    assert controller.waiting_for_user_input
+    assert not controller.active
+    assert np.allclose(camera.position, np.array([10.0, 0.0, 0.0]))
     assert replanner.requests == []
-    assert controller.status_note == "Thinking"
-    assert controller.show_loading_indicator is True
-    assert controller.loading_progress_fraction is None
-    assert any(
-        event == "mesh_recovery_scan_started"
-        for event, _payload in blackbox.events
-    )
-
-    clock.now = 12.6
-    controller.update(camera, world)
-
-    assert len(replanner.requests) == 1
-    request_position, request_pose = replanner.requests[0]
-    assert request_position == (10.0, 0.0, 0.0)
-    assert request_pose["current_yaw"] == pytest.approx(0.0)
-    assert abs(request_pose["current_pitch"]) < 1e-9
-    assert request_pose["current_travel_yaw"] == 0.0
-    assert abs(request_pose["current_travel_pitch"]) < 1e-9
-    assert request_pose["avoid_positions"] == ()
-    assert any(
-        event == "mesh_recovery_replan_requested"
-        for event, _payload in blackbox.events
-    )
-
-    recovery_plan = _plan(start=(10.0, 0.0, 0.0), end=(0.0, 0.0, 0.0))
-    replanner.latest_plan = recovery_plan
-
-    assert controller.update_replan(camera, world, now=12.7) is False
-    assert controller.plan is not recovery_plan
-    assert controller.state is AutoDiveState.WAITING_FOR_USER
-    assert controller.waiting_for_user_input is True
-    assert controller.active is False
-    assert controller.status_note == "Auto Dive needs input"
+    assert controller.status_note == "Guided Dive needs input"
     assert controller.show_loading_indicator is False
     assert controller.loading_progress_fraction is None
-    assert replanner.shutdown_called is True
+    assert replanner.shutdown_called is False
     assert world.prefetch == set()
-    rejected = [
+    assist = [
         payload
         for event, payload in blackbox.events
-        if event == "replan_rejected"
+        if event == "user_assist_requested"
     ]
-    assert rejected
-    assert rejected[-1]["reason"] == "moves_backward_from_current_route"
-    assert any(
-        event == "user_assist_requested"
-        for event, _payload in blackbox.events
-    )
+    assert assist
+    assert assist[-1]["reason"] == "mesh_truncated_boundary_reached"
+    assert assist[-1]["details"]["route_truncated_by_mesh"] is True
 
 
-def test_auto_dive_mesh_recovery_holds_camera_steady_while_thinking():
+def test_auto_dive_mesh_trimmed_route_does_not_start_recovery_scan():
     clock = _FakeClock()
     world = _FakeWorld()
     camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
     replanner = _FakeReplanner()
     controller = AutoDiveController(
         _plan(route_truncated_by_mesh=True),
         perf_counter=clock,
         replanner=replanner,  # type: ignore[arg-type]
         replan_distance_m=0.25,
+        blackbox=blackbox,
     )
     controller.start(camera, world)
     world.loaded_cells = set(world.available_cells)
@@ -506,22 +475,22 @@ def test_auto_dive_mesh_recovery_holds_camera_steady_while_thinking():
 
     clock.now = 1.0
     controller.update(camera, world)
-    clock.now = 12.0
-    assert controller.update(camera, world) is AutoDiveState.LOADING
-    steady_position = camera.position.copy()
-    steady_yaw = camera.yaw
-    steady_pitch = camera.pitch
+    clock.now = 5.0
+    assert controller.update(camera, world) is AutoDiveState.DIVING
+    moving_position = camera.position.copy()
 
-    clock.now = 12.125
-    assert controller.update(camera, world) is AutoDiveState.LOADING
+    clock.now = 5.125
+    assert controller.update(camera, world) is AutoDiveState.DIVING
 
-    assert np.allclose(camera.position, steady_position)
-    assert camera.yaw == pytest.approx(steady_yaw)
-    assert camera.pitch == pytest.approx(steady_pitch)
+    assert not np.allclose(camera.position, moving_position)
     assert replanner.requests == []
+    assert not any(
+        event == "mesh_recovery_scan_started"
+        for event, _payload in blackbox.events
+    )
 
 
-def test_auto_dive_mesh_trimmed_route_stops_before_wall_for_recovery():
+def test_auto_dive_mesh_trimmed_route_waits_at_boundary_instead_of_replanning():
     clock = _FakeClock()
     world = _FakeWorld()
     camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
@@ -550,27 +519,72 @@ def test_auto_dive_mesh_trimmed_route_stops_before_wall_for_recovery():
     )
 
     clock.now = 6.1
-    assert controller.update(camera, world) is AutoDiveState.LOADING
+    assert controller.update(camera, world) is AutoDiveState.DIVING
     assert np.linalg.norm(camera.position - np.array([5.1, 0.0, 0.0])) < 1e-9
     assert np.linalg.norm(camera.position - np.array([10.0, 0.0, 0.0])) > 1.0
-    assert controller.show_loading_indicator is True
-    assert controller.loading_progress_fraction is None
-    scans = [
-        payload
-        for event, payload in blackbox.events
-        if event == "mesh_recovery_scan_started"
-    ]
-    assert scans
-    assert scans[-1]["reason"] == "mesh_truncated_standoff"
-    assert scans[-1]["remaining_distance_m"] == pytest.approx(4.9)
-    assert scans[-1]["standoff_distance_m"] == pytest.approx(5.0)
+    assert not controller.show_loading_indicator
+    assert not any(
+        event == "mesh_recovery_scan_started"
+        for event, _payload in blackbox.events
+    )
     assert replanner.requests == []
 
-    clock.now = 6.7
-    controller.update(camera, world)
+    clock.now = 11.1
+    assert controller.update(camera, world) is AutoDiveState.WAITING_FOR_USER
 
-    assert len(replanner.requests) == 1
-    assert replanner.requests[0][0] == pytest.approx((5.1, 0.0, 0.0))
+    assert np.linalg.norm(camera.position - np.array([10.0, 0.0, 0.0])) < 1e-9
+    assert replanner.requests == []
+
+
+def test_auto_dive_user_resume_allows_a_route_turn_after_repositioning():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(route_truncated_by_mesh=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 12.0
+    assert controller.update(camera, world) is AutoDiveState.WAITING_FOR_USER
+    assert np.allclose(camera.position, np.array([10.0, 0.0, 0.0]))
+
+    camera.position = np.array([10.0, 0.0, 2.0], dtype=np.float64)
+    camera.yaw = math.pi / 2.0
+    camera.pitch = 0.2
+    controller.observe_user_assist_position(camera.position)
+
+    assert controller.resume_from_user_assist(camera, world, now=20.0) is True
+    assert controller.state is AutoDiveState.LOADING
+    assert controller.active
+    request_position, request_pose = replanner.requests[-1]
+    assert request_position == pytest.approx((10.0, 0.0, 2.0))
+    assert request_pose["current_yaw"] == pytest.approx(math.pi / 2.0)
+    assert request_pose["current_pitch"] == pytest.approx(0.2)
+    assert request_pose["current_travel_yaw"] == pytest.approx(math.pi / 2.0)
+    assert request_pose["current_travel_pitch"] == pytest.approx(0.0)
+    assert request_pose["user_reposition"] == pytest.approx(1.0)
+    assert request_pose["avoid_positions"] == ((10.0, 0.0, 0.0),)
+
+    # The old route must not regain control while the user-resume plan is
+    # still being built.
+    held_position = camera.position.copy()
+    assert controller.update(camera, world, now=20.1) is AutoDiveState.LOADING
+    assert np.allclose(camera.position, held_position)
+
+    replanner.latest_plan = _plan(start=(10.0, 0.0, 2.0), end=(10.0, 0.0, -8.0))
+    assert controller.update_replan(camera, world, now=20.2) is True
+    assert controller.plan.route_points[0] == (10.0, 0.0, 2.0)
+    assert controller._user_resume_replan_pending is False
+    assert replanner.shutdown_called is False
 
 
 def test_auto_dive_mesh_recovery_uses_route_vector_at_boundary():
@@ -616,7 +630,7 @@ def test_auto_dive_mesh_recovery_requests_user_assist_when_replan_has_no_plan():
     blackbox = _FakeBlackbox()
     replanner = _FakeReplanner()
     controller = AutoDiveController(
-        _plan(route_truncated_by_mesh=True),
+        _plan(replan_at_end=True),
         perf_counter=clock,
         replanner=replanner,  # type: ignore[arg-type]
         replan_distance_m=0.25,
@@ -639,7 +653,7 @@ def test_auto_dive_mesh_recovery_requests_user_assist_when_replan_has_no_plan():
     assert controller.state is AutoDiveState.WAITING_FOR_USER
     assert controller.waiting_for_user_input is True
     assert controller.active is False
-    assert replanner.shutdown_called is True
+    assert replanner.shutdown_called is False
     assert world.prefetch == set()
     assist = [
         payload
@@ -925,6 +939,7 @@ def _plan(
         duration_s=10.0,
         render_distance_cells=render_distance_cells,
         route_truncated_by_mesh=route_truncated_by_mesh,
+        mesh_safe_prefix_length_m=10.0 if route_truncated_by_mesh else None,
         replan_at_end=replan_at_end,
         selection_reason=(
             "mesh_compromised_prefix_fallback"

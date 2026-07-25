@@ -134,7 +134,7 @@ def _get_platform_control_sections(
     navigation.extend([
         ("1..9", "Recall camera bookmark slot"),
         ("Del + 1..9", "Delete bookmark slot"),
-        (f"{primary_shortcut_label} + A", "Start / stop Auto Dive"),
+        (f"{primary_shortcut_label} + A", "Start/stop guided dive"),
         ("Minimap click", "Jump to that spot"),
         (f"{primary_shortcut_label} + O", "Switch to a different map"),
         ("Open button", "Switch to a different map"),

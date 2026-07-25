@@ -36,7 +36,7 @@ NAVIGATION_METADATA_KEY = "navigation"
 NAVIGATION_SURFACE_Y_SEARCH_RADIUS_CELLS = 4
 NAVIGATION_SURFACE_Y_HISTOGRAM_BINS = 96
 NAVIGATION_SURFACE_SPAN_FILL_MAX_CELLS = 32
-# Suggested runtime Auto Dive Y smoothing radius for viewers that expose a
+# Suggested runtime Guided Dive Y smoothing radius for viewers that expose a
 # preference. Metadata stores raw route samples; smoothing is applied by the
 # route planner so the radius can be tuned without rebuilding cache.
 NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS = 5

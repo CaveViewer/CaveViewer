@@ -1,4 +1,4 @@
-"""Opt-in JSONL diagnostics for Auto Dive troubleshooting."""
+"""Opt-in JSONL diagnostics for Guided Dive troubleshooting."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ AUTO_DIVE_BLACKBOX_FILENAME = "auto_dive_debug.jsonl"
 
 
 class AutoDiveBlackbox:
-    """Append-only structured Auto Dive diagnostic log.
+    """Append-only structured Guided Dive diagnostic log.
 
     The writer is intentionally tiny and best-effort. Diagnostic failures must
     never interrupt viewer navigation, replanning, or shutdown.

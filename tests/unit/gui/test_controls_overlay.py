@@ -171,6 +171,7 @@ def test_control_help_copy_uses_adapter_for_control_shortcuts():
     assert "Right click + mouse" not in rows
     assert rows["Ctrl + 0"] == "Reset view (level horizon)"
     assert rows["Ctrl + 1..9"] == "Save camera bookmark slot"
+    assert rows["Ctrl + A"] == "Start/stop guided dive"
     assert rows["Ctrl + O"] == "Switch to a different map"
     assert rows["Ctrl + W"] == "Close window"
 

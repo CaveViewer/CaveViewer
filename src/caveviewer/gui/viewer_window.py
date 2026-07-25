@@ -432,7 +432,7 @@ def _env_optional_mebibytes(name: str) -> int | None:
 
 
 def _auto_dive_settings_from_preferences() -> AutoDiveSettings:
-    """Resolve runtime Auto Dive settings from saved Preferences."""
+    """Resolve runtime Guided Dive settings from saved Preferences."""
     return _auto_dive_settings_with_env_overrides(
         _auto_dive_settings_from_mapping(load_preferences())
     )
@@ -2555,7 +2555,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             return ()
 
     def _auto_dive_initial_camera_pose(self):
-        """Return the preferred map-load pose for interactive Auto Dive startup."""
+        """Return the preferred map-load pose for interactive Guided Dive startup."""
         if self.manifest is None:
             return None
         try:
@@ -2564,7 +2564,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 settings=_auto_dive_settings_from_preferences(),
             )
         except NavigationConfigurationError as exc:
-            _LOG.debug("Auto Dive initial camera unavailable: %s", exc)
+            _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
             return None
 
     def _start_initial_auto_dive_pose(self, fallback_position: np.ndarray) -> bool:
@@ -2588,7 +2588,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         except Exception as exc:
             if executor is not None:
                 executor.shutdown(wait=False, cancel_futures=True)
-            _LOG.debug("Auto Dive initial camera unavailable: %s", exc)
+            _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
             return False
 
         self._initial_auto_dive_pose_executor = executor
@@ -2602,7 +2602,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_auto_dive_pose_start_yaw = self._camera_angle("yaw")
         self._initial_auto_dive_pose_start_pitch = self._camera_angle("pitch")
         self._initial_auto_dive_pose_start_roll = self._camera_angle("roll")
-        _LOG.info("Auto Dive initial camera planning started.")
+        _LOG.info("Guided Dive initial camera planning started.")
         return True
 
     def _update_initial_auto_dive_pose(self) -> None:
@@ -2629,10 +2629,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         try:
             initial_pose = future.result()
         except NavigationConfigurationError as exc:
-            _LOG.debug("Auto Dive initial camera unavailable: %s", exc)
+            _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
             return
         except Exception:
-            _LOG.exception("Auto Dive initial camera planning failed.")
+            _LOG.exception("Guided Dive initial camera planning failed.")
             return
 
         if initial_pose is None:
@@ -2644,11 +2644,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             or self.world is None
             or not self._has_map_loaded
         ):
-            _LOG.debug("Discarded stale Auto Dive initial camera after map changed.")
+            _LOG.debug("Discarded stale Guided Dive initial camera after map changed.")
             return
         if self._auto_dive_is_active() or self._auto_dive_start_is_pending():
             _LOG.debug(
-                "Discarded Auto Dive initial camera because Auto Dive is active."
+                "Discarded Guided Dive initial camera because Guided Dive is active."
             )
             return
         if not self._initial_auto_dive_camera_is_unchanged(
@@ -2658,7 +2658,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             start_roll,
         ):
             _LOG.info(
-                "Skipped Auto Dive initial camera because the camera changed "
+                "Skipped Guided Dive initial camera because the camera changed "
                 "before planning finished."
             )
             return
@@ -2675,7 +2675,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._reset_initial_chunk_loading_state()
         _LOG.info(
-            "Initial camera placed at Auto Dive endpoint: "
+            "Initial camera placed at Guided Dive endpoint: "
             "position=(%.2f, %.2f, %.2f).",
             float(initial_pose.position[0]),
             float(initial_pose.position[1]),
@@ -2764,7 +2764,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         future.cancel()
         self._clear_initial_auto_dive_pose_state(shutdown_executor=True)
-        _LOG.info("Auto Dive initial camera planning cancelled.")
+        _LOG.info("Guided Dive initial camera planning cancelled.")
         return True
 
     def _auto_dive_is_active(self) -> bool:
@@ -2785,6 +2785,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not self._has_map_loaded or self.camera is None or self.world is None:
             return False
         if self._auto_dive_waiting_for_user_input():
+            controller = getattr(self, "_auto_dive_controller", None)
+            resume = getattr(controller, "resume_from_user_assist", None)
+            if callable(resume):
+                return bool(
+                    resume(
+                        self.camera,
+                        self.world,
+                        now=time.perf_counter(),
+                    )
+                )
             self._stop_auto_dive()
             return self._start_auto_dive()
         if self._auto_dive_is_active() or self._auto_dive_start_is_pending():
@@ -2793,7 +2803,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         return self._start_auto_dive()
 
     def _start_auto_dive(self) -> bool:
-        """Queue user-facing centerline Auto Dive planning without blocking rendering."""
+        """Queue user-facing centerline Guided Dive planning without blocking rendering."""
         if self.manifest is None or self.camera is None or self.world is None:
             return False
         if self._auto_dive_start_is_pending():
@@ -2865,7 +2875,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     error_type=type(exc).__name__,
                 )
                 blackbox.close()
-            _LOG.info("Auto Dive unavailable: %s", exc)
+            _LOG.info("Guided Dive unavailable: %s", exc)
             return True
 
         self._auto_dive_start_executor = executor
@@ -2880,7 +2890,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "auto_dive_plan_requested",
                 position=[float(value) for value in start_position],
             )
-        _LOG.info("Auto Dive planning started.")
+        _LOG.info("Guided Dive planning started.")
         return True
 
     def _update_auto_dive_start(self) -> None:
@@ -2909,7 +2919,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     error_type=type(exc).__name__,
                 )
                 blackbox.close()
-            _LOG.info("Auto Dive unavailable: %s", exc)
+            _LOG.info("Guided Dive unavailable: %s", exc)
             return
         except Exception as exc:
             if blackbox is not None:
@@ -2919,7 +2929,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     error_type=type(exc).__name__,
                 )
                 blackbox.close()
-            _LOG.exception("Auto Dive planning failed.")
+            _LOG.exception("Guided Dive planning failed.")
             return
 
         if (
@@ -2940,7 +2950,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     ),
                 )
                 blackbox.close()
-            _LOG.info("Discarded stale Auto Dive plan after map changed.")
+            _LOG.info("Discarded stale Guided Dive plan after map changed.")
             return
 
         if auto_dive_settings is None:
@@ -2982,7 +2992,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             blackbox.close()
         self._clear_auto_dive_start_state(shutdown_executor=True)
-        _LOG.info("Auto Dive planning cancelled.")
+        _LOG.info("Guided Dive planning cancelled.")
         return True
 
     def _activate_auto_dive_plan(
@@ -3034,7 +3044,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self.controls_overlay.is_waiting_for_begin:
             self.controls_overlay.dismiss_begin_screen()
         _LOG.info(
-            "Auto Dive started: length=%.1fm duration=%.1fs "
+            "Guided Dive started: length=%.1fm duration=%.1fs "
             "render_distance=%d circular_arc=%s.",
             plan.route_length_m,
             plan.duration_s,
@@ -3051,7 +3061,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             return None
         path = auto_dive_blackbox_path(self.cache_dir)
         blackbox = AutoDiveBlackbox(path)
-        _LOG.info("Auto Dive diagnostics enabled: %s", path)
+        _LOG.info("Guided Dive diagnostics enabled: %s", path)
         return blackbox
 
     def _stop_auto_dive(self, *, completed: bool = False) -> None:
@@ -3080,12 +3090,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         if had_auto_dive_state:
             if start_cancelled:
                 return
-            _LOG.info("Auto Dive %s.", "completed" if completed else "stopped")
+            _LOG.info("Guided Dive %s.", "completed" if completed else "stopped")
 
     def _update_auto_dive(self, now: float) -> None:
         controller = getattr(self, "_auto_dive_controller", None)
         if controller is None or self.camera is None or self.world is None:
             return
+        observe_assist_position = getattr(
+            controller,
+            "observe_user_assist_position",
+            None,
+        )
+        if callable(observe_assist_position):
+            observe_assist_position(self.camera.position)
         state = controller.update(self.camera, self.world, now=now)
         navigation_clamped = False
         if self._navigation_guard_enabled:
@@ -3141,7 +3158,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.import_progress_panel.render(
                 window_size,
                 map_name,
-                "planning auto dive",
+                "planning guided dive",
                 None,
                 title="",
                 note="Finding a forward route…",
@@ -3199,7 +3216,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         y0 = 30.0
         x1 = x0 + panel_w
         y1 = y0 + panel_h
-        title = "Auto Dive needs input"
+        title = "Guided Dive needs input"
         note = (
             "Fly toward the passage ahead, then press "
             f"{self._auto_dive_resume_shortcut_label()} to resume."

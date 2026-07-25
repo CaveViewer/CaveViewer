@@ -34,6 +34,7 @@ from caveviewer.core.workers.allocation import (
     describe_worker_target,
     resolve_worker_allocation,
 )
+from caveviewer.core.workers.priority import lower_current_thread_priority
 from caveviewer.core.chunking.io import ChunkData
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.streaming.budget import (
@@ -878,6 +879,11 @@ class StreamingWorld:
             return dict(getattr(self, "_failed_cells", {}))
 
     def _worker_loop(self):
+        # os.nice() does not provide portable per-thread control. Use the
+        # worker-entry helper so Linux adjusts only this native loader thread
+        # and leaves the render thread responsive while chunks are read and
+        # prepared.
+        lower_current_thread_priority()
         while not self._stop_event.is_set():
             if self._paused_event.is_set():
                 self._wait_while_paused()

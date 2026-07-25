@@ -111,6 +111,9 @@ modules:
 Workers load and prepare CPU payloads. The viewer performs OpenGL uploads and
 unloads on the render thread. Internal residency state and external GPU state
 must remain transactionally consistent when callbacks fail.
+On Linux, each streaming worker raises its own nice value by the configured
+increment so chunk preparation yields CPU time to the GUI/render thread; a
+process-wide `os.nice()` call is intentionally not used for this runtime pool.
 Streaming starts one worker and considers one additional worker only after a
 prepared chunk is resident in the bounded ready queue, so each memory sample
 includes real decode cost. Pool growth stops when system RAM utilization

@@ -26,7 +26,9 @@ from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
     DIALOG_PANEL_BORDER,
     create_dialog_action_button,
+    create_dialog_notice,
     set_dialog_action_button,
+    set_dialog_notice,
 )
 from caveviewer.gui.platform import (
     DesktopServices,
@@ -78,8 +80,12 @@ _SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
 _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
-    ("autodive", "Auto Dive"),
+    ("autodive", "Guided Dive"),
     ("storage", "Storage"),
+)
+_GUIDED_DIVE_DISCLAIMER = (
+    "Experimental feature: Guided Dive is still under development and may "
+    "occasionally pause, stop, or choose an unexpected route."
 )
 
 
@@ -305,6 +311,21 @@ class PreferencesDialog:
         ]
         for index, field in enumerate(fields):
             self._render_field(group, field, last=index == len(fields) - 1)
+
+    def _render_guided_dive_disclaimer(self, parent) -> None:
+        frame, label = create_dialog_notice(
+            parent,
+            font=self.small_font,
+            wraplength=_NOTICE_WRAP_LENGTH,
+            kind="warning",
+        )
+        set_dialog_notice(
+            frame,
+            label,
+            _GUIDED_DIVE_DISCLAIMER,
+            kind="warning",
+        )
+        frame.pack(fill="x", pady=(0, _ROW_PAD_Y))
 
     def _render_field(self, section, field: PreferenceSpec, *, last: bool) -> None:
         key = field.key
@@ -818,6 +839,8 @@ class PreferencesDialog:
             page = tk.Frame(self.page_stack, bg=_BG_COLOR)
             page.grid(row=0, column=0, sticky="nsew")
             self.pages[page_key] = page
+            if page_key == "autodive":
+                self._render_guided_dive_disclaimer(page)
             self._render_section(page, page_key)
         self.dialog.update_idletasks()
         max_page_width = max(

@@ -163,6 +163,25 @@ def test_streaming_world_rejects_prepack_callback_policy():
         )
 
 
+def test_streaming_worker_lowers_priority_at_thread_entry(monkeypatch):
+    world = streaming_world.StreamingWorld.__new__(streaming_world.StreamingWorld)
+    world._stop_event = threading.Event()
+    world._paused_event = threading.Event()
+    world._work_queue = queue.Queue()
+    world._work_queue.put(None)
+    calls = []
+
+    monkeypatch.setattr(
+        streaming_world,
+        "lower_current_thread_priority",
+        lambda: calls.append(True),
+    )
+
+    world._worker_loop()
+
+    assert calls == [True]
+
+
 def test_streaming_world_can_skip_render_thread_manifest_and_texture_scans(monkeypatch):
     manifest = {
         "chunks": {"0_0_0": {}},

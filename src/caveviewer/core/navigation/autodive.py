@@ -1,4 +1,4 @@
-"""User-facing centerline Auto Dive route planning."""
+"""User-facing centerline Guided Dive route planning."""
 
 from __future__ import annotations
 
@@ -56,6 +56,9 @@ DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS = (
 )
 DEFAULT_AUTO_DIVE_LOOKAHEAD_DISTANCE_M = 8.0
 DEFAULT_AUTO_DIVE_TRUSTED_MAX_SEGMENT_CELLS = 6.0
+# Keep the camera well back from a cached-mesh boundary. A one-metre pullback
+# still leaves the camera visibly inside tight passages on larger maps.
+DEFAULT_AUTO_DIVE_MESH_BOUNDARY_PULLBACK_M = 2.0
 _AUTO_DIVE_MESH_RECOVERY_SCAN_YAW_OFFSETS_DEG = tuple(range(-120, 121, 15))
 _AUTO_DIVE_MESH_RECOVERY_SCAN_PITCH_OFFSETS_DEG = (
     -45.0,
@@ -76,13 +79,18 @@ _AUTO_DIVE_MESH_RECOVERY_TURN_PENALTY_CELLS = 5.0
 _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS = 1.0
 _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_MAX_FRACTION = 0.35
 _AUTO_DIVE_MESH_RECOVERY_PATH_AVOIDANCE_RADIUS_CELLS = 1
+# Mesh recovery is deliberately bounded. The collision guard loads only
+# chunks intersecting tested edges, so the search budget is a better safety
+# valve than disabling recovery from the map's total triangle count.
+_AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS = 4096
+_AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS = 16384
 
 AutoDiveDiagnosticSink = Callable[[str, Mapping[str, Any]], None]
 
 
 @dataclass(frozen=True)
 class AutoDiveSettings:
-    """Configuration for user-facing centerline Auto Dive planning."""
+    """Configuration for user-facing centerline Guided Dive planning."""
 
     render_distance_cells: int = DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS
     speed_m_per_second: float = DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND
@@ -194,7 +202,7 @@ class _AutoDiveRouteCandidateScore:
 
 @dataclass(frozen=True)
 class _AutoDiveCollisionValidator:
-    """Route collision seam for Auto Dive path candidates.
+    """Route collision seam for Guided Dive path candidates.
 
     This is deliberately small and runtime-only. It validates against the
     cached navigation footprint, cached vertical gap ranges when available,
@@ -347,7 +355,7 @@ class _AutoDiveCollisionValidator:
 
 @dataclass(frozen=True)
 class AutoDivePlan:
-    """Finite Auto Dive route derived from a manifest centerline."""
+    """Finite Guided Dive route derived from a manifest centerline."""
 
     route: CameraRoute
     centerline_path: CenterlinePath
@@ -377,7 +385,7 @@ def build_auto_dive_initial_camera_pose(
 
     Viewer startup historically used the first manifest chunk center. On maps
     imported in phases, that can place the camera in the middle of a passage
-    or close to a cave face, which makes the first Auto Dive replan fight its
+    or close to a cave face, which makes the first Guided Dive replan fight its
     way out of a bad local pose. This helper chooses one endpoint of the
     selected centerline route, then returns the first route keyframe looking
     down the clearest available initial segment.
@@ -397,7 +405,7 @@ def build_auto_dive_initial_camera_pose(
     )
     if not position_groups:
         raise NavigationConfigurationError(
-            "Auto Dive initial camera requires a centerline endpoint"
+            "Guided Dive initial camera requires a centerline endpoint"
         )
 
     for positions in position_groups:
@@ -418,7 +426,7 @@ def build_auto_dive_initial_camera_pose(
             return best_plan.route.keyframes[0]
 
     raise NavigationConfigurationError(
-        "Auto Dive initial camera could not build an endpoint route"
+        "Guided Dive initial camera could not build an endpoint route"
     )
 
 
@@ -431,11 +439,12 @@ def build_centerline_auto_dive_plan(
     current_travel_yaw: float | None = None,
     current_travel_pitch: float | None = None,
     avoid_positions: Sequence[Sequence[float]] | None = None,
+    user_reposition: bool = False,
     settings: AutoDiveSettings | None = None,
     cache_dir: str | os.PathLike[str] | None = None,
     diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> AutoDivePlan:
-    """Build a finite centerline Auto Dive route near the current camera.
+    """Build a finite centerline Guided Dive route near the current camera.
 
     The route uses the longest manifest-derived centerline and deliberately
     ignores texture or chunk complexity. If the selected path is circular, the
@@ -454,22 +463,34 @@ def build_centerline_auto_dive_plan(
             component_selection=CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
         )
     if len(centerline_path.cells) < 2:
-        raise NavigationConfigurationError("Auto Dive requires a multi-point centerline")
+        raise NavigationConfigurationError("Guided Dive requires a multi-point centerline")
 
     nearest_index = _nearest_centerline_index(
         centerline_path,
         current_x=float(current[0]),
         current_z=float(current[2]),
     )
+    # A user's displacement while escaping a collision describes how they
+    # repositioned the camera, not necessarily the direction Guided Dive should
+    # travel next. Keep the camera view as the soft route-selection hint and
+    # reserve the travel vector for ordinary receding-horizon replans.
     direction_yaw = (
-        current_travel_yaw
-        if current_travel_yaw is not None
-        else current_yaw
+        current_yaw
+        if user_reposition
+        else (
+            current_travel_yaw
+            if current_travel_yaw is not None
+            else current_yaw
+        )
     )
     direction_pitch = (
-        current_travel_pitch
-        if current_travel_pitch is not None
-        else current_pitch
+        current_pitch
+        if user_reposition
+        else (
+            current_travel_pitch
+            if current_travel_pitch is not None
+            else current_pitch
+        )
     )
     route_cells, circular_arc = _select_auto_dive_cells(
         centerline_path,
@@ -480,7 +501,7 @@ def build_centerline_auto_dive_plan(
         current_pitch=direction_pitch,
     )
     if len(route_cells) < 2:
-        raise NavigationConfigurationError("Auto Dive route is too short")
+        raise NavigationConfigurationError("Guided Dive route is too short")
 
     route_cells = _route_cells_connected_to_current_camera(
         centerline_path,
@@ -524,9 +545,10 @@ def build_centerline_auto_dive_plan(
         collision_validator=collision_validator,
         current_yaw=current_yaw,
         current_pitch=current_pitch,
-        current_travel_yaw=current_travel_yaw,
-        current_travel_pitch=current_travel_pitch,
+        current_travel_yaw=(None if user_reposition else current_travel_yaw),
+        current_travel_pitch=(None if user_reposition else current_travel_pitch),
         avoid_positions=avoid_positions,
+        user_reposition=user_reposition,
         diagnostics=diagnostics,
     )
     route_points = selected_route.points
@@ -534,7 +556,7 @@ def build_centerline_auto_dive_plan(
     route_points = _dedupe_consecutive_points(route_points)
     length_m = path_length(route_points)
     if length_m <= 1e-6:
-        raise NavigationConfigurationError("Auto Dive route has no travel distance")
+        raise NavigationConfigurationError("Guided Dive route has no travel distance")
     duration_s = length_m / float(settings.speed_m_per_second)
     keyframe_payloads = route_keyframes_for_points(
         route_points,
@@ -574,33 +596,33 @@ def build_centerline_auto_dive_plan(
 
 def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
     if int(settings.render_distance_cells) <= 0:
-        raise NavigationConfigurationError("Auto Dive render distance must be positive")
+        raise NavigationConfigurationError("Guided Dive render distance must be positive")
     speed = float(settings.speed_m_per_second)
     if not math.isfinite(speed) or speed <= 0.0:
-        raise NavigationConfigurationError("Auto Dive speed must be positive")
+        raise NavigationConfigurationError("Guided Dive speed must be positive")
     vertical_fraction = float(settings.vertical_position_fraction)
     if (
         not math.isfinite(vertical_fraction)
         or not 0.0 <= vertical_fraction <= 1.0
     ):
         raise NavigationConfigurationError(
-            "Auto Dive vertical position fraction must be between 0 and 1"
+            "Guided Dive vertical position fraction must be between 0 and 1"
         )
     gap = float(settings.closed_loop_gap_fraction)
     if not math.isfinite(gap) or not 0.0 < gap < 1.0:
         raise NavigationConfigurationError(
-            "Auto Dive closed-loop gap fraction must be between 0 and 1"
+            "Guided Dive closed-loop gap fraction must be between 0 and 1"
         )
     if int(settings.max_keyframes) < 2:
-        raise NavigationConfigurationError("Auto Dive requires at least 2 keyframes")
+        raise NavigationConfigurationError("Guided Dive requires at least 2 keyframes")
     if int(settings.smoothing_radius_cells) < 0:
         raise NavigationConfigurationError(
-            "Auto Dive smoothing radius cannot be negative"
+            "Guided Dive smoothing radius cannot be negative"
         )
     lookahead = float(settings.lookahead_distance_m)
     if not math.isfinite(lookahead) or lookahead < 0.0:
         raise NavigationConfigurationError(
-            "Auto Dive look-ahead distance cannot be negative"
+            "Guided Dive look-ahead distance cannot be negative"
         )
 
 
@@ -1163,7 +1185,7 @@ def _route_cells_after_current_camera_progress(
 ) -> tuple[FootprintCell, ...]:
     """Skip the current route cell so replans do not steer backward.
 
-    Auto Dive routes always prepend the exact current camera point later. If a
+    Guided Dive routes always prepend the exact current camera point later. If a
     frequent replan also keeps the current cell center as the next waypoint,
     the camera can repeatedly steer back into the same local surface/center
     before making progress. Once the camera is inside the first route cell,
@@ -1646,6 +1668,7 @@ def _select_best_auto_dive_route_candidate(
     current_travel_yaw: float | None = None,
     current_travel_pitch: float | None = None,
     avoid_positions: Sequence[Sequence[float]] | None = None,
+    user_reposition: bool = False,
     diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> _AutoDiveSelectedRoute:
     """Generate and score local route candidates, returning the safest route.
@@ -1660,7 +1683,7 @@ def _select_best_auto_dive_route_candidate(
     # Candidate construction can call segment checks many times while probing
     # Theta/cone shortcuts. Keep those speculative probes footprint-only, then
     # apply the cached mesh guard once during final candidate scoring. This
-    # keeps Auto Dive startup responsive while still applying cached mesh
+    # keeps Guided Dive startup responsive while still applying cached mesh
     # during final candidate scoring and guarded fallback trimming.
     construction_collision_validator = (
         _AutoDiveCollisionValidator(centerline_path)
@@ -1721,6 +1744,7 @@ def _select_best_auto_dive_route_candidate(
                     "mesh_collision_enabled": bool(
                         collision_validator.has_mesh_collision_guard
                     ),
+                    "user_reposition": bool(user_reposition),
                     "candidates": [
                         _auto_dive_candidate_score_payload(
                             candidate_score,
@@ -1733,7 +1757,7 @@ def _select_best_auto_dive_route_candidate(
                 },
             )
             raise NavigationConfigurationError(
-                "Auto Dive found no route candidate in the forward travel cone"
+                "Guided Dive found no route candidate in the forward travel cone"
             )
         _record_auto_dive_diagnostic(
             diagnostics,
@@ -1744,6 +1768,7 @@ def _select_best_auto_dive_route_candidate(
                 "mesh_collision_enabled": bool(
                     collision_validator.has_mesh_collision_guard
                 ),
+                "user_reposition": bool(user_reposition),
                 "travel_filter": travel_filter_payload,
                 "candidates": [
                     {
@@ -1804,6 +1829,7 @@ def _select_best_auto_dive_route_candidate(
                 "mesh_collision_enabled": bool(
                     collision_validator.has_mesh_collision_guard
                 ),
+                "user_reposition": bool(user_reposition),
                 "failed_candidates": failed_candidates,
             },
         )
@@ -1826,6 +1852,7 @@ def _select_best_auto_dive_route_candidate(
     ]
     if (
         collision_validator.has_mesh_collision_guard
+        and _mesh_recovery_is_enabled(collision_validator.mesh_guard)
         and scored
         and not any(score.mesh_clear for score, _candidate in scored)
     ):
@@ -1839,6 +1866,7 @@ def _select_best_auto_dive_route_candidate(
             current_travel_yaw=current_travel_yaw,
             current_travel_pitch=current_travel_pitch,
             avoid_positions=avoid_positions,
+            allow_reverse_travel=bool(user_reposition),
             collision_validator=collision_validator,
             diagnostics=diagnostics,
         )
@@ -1880,6 +1908,7 @@ def _select_best_auto_dive_route_candidate(
                 "mesh_collision_enabled": bool(
                     collision_validator.has_mesh_collision_guard
                 ),
+                "user_reposition": bool(user_reposition),
                 "failed_candidates": failed_candidates,
                 "reason": "no_forward_travel_candidates",
                 "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
@@ -1887,7 +1916,7 @@ def _select_best_auto_dive_route_candidate(
             },
         )
         raise NavigationConfigurationError(
-            "Auto Dive found no route candidate in the forward travel cone"
+            "Guided Dive found no route candidate in the forward travel cone"
         )
 
     selectable = [
@@ -1990,6 +2019,7 @@ def _select_best_auto_dive_route_candidate(
         {
             "selected": best_candidate.name,
             "selection_reason": selection_reason,
+            "user_reposition": bool(user_reposition),
             "selected_geometry_trusted": bool(best_score.geometry_trusted),
             "selected_route_truncated": bool(selected_route_truncated),
             "selected_safe_prefix_length_m": selected_safe_prefix_length_m,
@@ -2032,6 +2062,14 @@ def _record_auto_dive_diagnostic(
         diagnostics(event, payload)
     except Exception:
         return
+
+
+def _mesh_recovery_is_enabled(
+    mesh_guard: CachedChunkMeshCollisionGuard | None,
+) -> bool:
+    if mesh_guard is None:
+        return False
+    return bool(getattr(mesh_guard, "mesh_recovery_enabled", True))
 
 
 def _forward_travel_cone_route_candidates(
@@ -2356,7 +2394,7 @@ def _mesh_compromised_auto_dive_sort_key(
 ) -> tuple[object, ...]:
     """Rank mesh-compromised routes by usable safe prefix.
 
-    Until Auto Dive has a true mesh-aware rerouter, the best fallback is the
+    Until Guided Dive has a true mesh-aware rerouter, the best fallback is the
     route that moves farthest before the first cached-mesh intersection, then
     trims the planned route before that wall. This avoids the hard no-motion
     regression while still not knowingly planning through cached mesh.
@@ -2451,7 +2489,10 @@ def _safe_stop_before_mesh_failure(
     distance = float(np.linalg.norm(delta))
     if not math.isfinite(distance) or distance <= 1e-6:
         return None
-    pullback_m = min(1.0, max(0.1, float(cell_size) * 0.1))
+    pullback_m = max(
+        DEFAULT_AUTO_DIVE_MESH_BOUNDARY_PULLBACK_M,
+        float(cell_size) * 0.25,
+    )
     stop_distance = distance - pullback_m
     if stop_distance <= 1e-4:
         return None
@@ -2478,6 +2519,7 @@ def _build_mesh_recovery_auto_dive_route_candidate(
     current_travel_yaw: float | None,
     current_travel_pitch: float | None,
     avoid_positions: Sequence[Sequence[float]] | None,
+    allow_reverse_travel: bool = False,
     collision_validator: _AutoDiveCollisionValidator,
     diagnostics: AutoDiveDiagnosticSink | None,
 ) -> _AutoDiveRouteCandidate | None:
@@ -2516,6 +2558,7 @@ def _build_mesh_recovery_auto_dive_route_candidate(
         current_travel_yaw=current_travel_yaw,
         current_travel_pitch=current_travel_pitch,
         avoid_positions=avoid_positions,
+        allow_reverse_travel=allow_reverse_travel,
         collision_validator=collision_validator,
         diagnostics=diagnostics,
     )
@@ -2566,6 +2609,7 @@ def _mesh_clear_recovery_footprint_path(
     current_travel_yaw: float | None,
     current_travel_pitch: float | None,
     avoid_positions: Sequence[Sequence[float]] | None,
+    allow_reverse_travel: bool = False,
     collision_validator: _AutoDiveCollisionValidator,
     diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> tuple[FootprintCell, ...]:
@@ -2603,6 +2647,7 @@ def _mesh_clear_recovery_footprint_path(
     rejected_behind_count = 0
     rejected_avoided_count = 0
     rejected_too_close_count = 0
+    budget_exhausted = False
     selection_yaw = (
         current_travel_yaw
         if current_travel_yaw is not None
@@ -2620,6 +2665,9 @@ def _mesh_clear_recovery_footprint_path(
     )
 
     while frontier:
+        if visited_cells >= _AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS:
+            budget_exhausted = True
+            break
         current_cost, cell = heapq.heappop(frontier)
         if current_cost > costs[cell]:
             continue
@@ -2680,7 +2728,8 @@ def _mesh_clear_recovery_footprint_path(
             )
             best_intent_alignment = max(intent_alignments) if intent_alignments else 0.0
             target_in_front = (
-                (selection_yaw is None and position_alignment is None)
+                allow_reverse_travel
+                or (selection_yaw is None and position_alignment is None)
                 or best_intent_alignment
                 >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
             )
@@ -2841,6 +2890,16 @@ def _mesh_clear_recovery_footprint_path(
                 rejected_behind_count += 1
 
         for neighbor in navigable_footprint_neighbors(cell, component):
+            edge_is_cached = (
+                (cell, neighbor) in edge_cache
+                or (neighbor, cell) in edge_cache
+            )
+            if (
+                not edge_is_cached
+                and edge_tests >= _AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS
+            ):
+                budget_exhausted = True
+                break
             edge_cache_count = len(edge_cache)
             edge_clear = _mesh_recovery_edge_is_clear(
                 centerline_path,
@@ -2887,6 +2946,8 @@ def _mesh_clear_recovery_footprint_path(
                 turn_penalties.get(cell, 0.0) + turn_penalty
             )
             heapq.heappush(frontier, (next_cost, neighbor))
+        if budget_exhausted:
+            break
 
     if best_cell is None:
         _record_auto_dive_diagnostic(
@@ -2904,6 +2965,12 @@ def _mesh_clear_recovery_footprint_path(
                 "edge_tests": int(edge_tests),
                 "edge_clear_count": int(edge_clear_count),
                 "edge_blocked_count": int(edge_blocked_count),
+                "allow_reverse_travel": bool(allow_reverse_travel),
+                "budget_exhausted": bool(budget_exhausted),
+                "max_visited_cells": int(
+                    _AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS
+                ),
+                "max_edge_tests": int(_AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS),
                 "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
                 "scan_yaw_range_degrees": [-120.0, 120.0],
                 "selection_turn_penalty_cells": float(
@@ -2959,6 +3026,12 @@ def _mesh_clear_recovery_footprint_path(
             "edge_tests": int(edge_tests),
             "edge_clear_count": int(edge_clear_count),
             "edge_blocked_count": int(edge_blocked_count),
+            "allow_reverse_travel": bool(allow_reverse_travel),
+            "budget_exhausted": bool(budget_exhausted),
+            "max_visited_cells": int(
+                _AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS
+            ),
+            "max_edge_tests": int(_AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS),
             "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
             "scan_yaw_range_degrees": [-120.0, 120.0],
             "selection_turn_penalty_cells": float(

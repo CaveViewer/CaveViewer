@@ -742,7 +742,7 @@ def test_auto_dive_pending_start_renders_planning_indicator():
         (
             (800, 600),
             "devils_eye.obj",
-            "planning auto dive",
+            "planning guided dive",
             None,
             "",
             "Finding a forward route…",
@@ -865,7 +865,10 @@ def test_auto_dive_toggle_resumes_from_user_assist(monkeypatch):
     controller = SimpleNamespace(
         state=viewer_window.AutoDiveState.WAITING_FOR_USER,
         active=False,
-        stop=lambda _world, completed=False: calls.append(("stop", completed)),
+        resume_from_user_assist=lambda camera, world, now: calls.append(
+            ("resume", camera, world, now)
+        )
+        or True,
     )
     window._auto_dive_controller = controller
     window._auto_dive_previous_render_distance = None
@@ -875,7 +878,9 @@ def test_auto_dive_toggle_resumes_from_user_assist(monkeypatch):
 
     assert window._toggle_auto_dive() is True
 
-    assert calls == ["stop_auto_dive", "start_auto_dive"]
+    assert len(calls) == 1
+    assert calls[0][:3] == ("resume", window.camera, window.world)
+    assert isinstance(calls[0][3], float)
 
 
 def test_auto_dive_waiting_for_user_renders_assist_prompt():

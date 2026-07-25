@@ -674,6 +674,9 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     source = inspect.getsource(preferences_dialog.PreferencesDialog._build)
     module_source = inspect.getsource(preferences_dialog)
     settings_source = inspect.getsource(settings)
+    disclaimer_source = inspect.getsource(
+        preferences_dialog.PreferencesDialog._render_guided_dive_disclaimer
+    )
     show_page_source = inspect.getsource(
         preferences_dialog.PreferencesDialog._show_page
     )
@@ -691,7 +694,13 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     layout_policy = preferences_dialog._LAYOUT_POLICY
 
     assert page_keys == ["streaming", "parsing", "autodive", "storage"]
-    assert page_labels == ["Streaming", "Import", "Auto Dive", "Storage"]
+    assert page_labels == ["Streaming", "Import", "Guided Dive", "Storage"]
+    assert "Experimental feature" in preferences_dialog._GUIDED_DIVE_DISCLAIMER
+    assert "Guided Dive" in preferences_dialog._GUIDED_DIVE_DISCLAIMER
+    assert "occasionally pause" in preferences_dialog._GUIDED_DIVE_DISCLAIMER
+    assert "if page_key == \"autodive\":" in source
+    assert "self._render_guided_dive_disclaimer(page)" in source
+    assert "kind=\"warning\"" in disclaimer_source
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
     assert set(page_keys) == field_sections
     assert preferences_dialog._WINDOWS_LAYOUT == layout_policy.windows_layout
@@ -712,7 +721,7 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     assert fields_by_key["auto_dive_acceleration"].label == "Acceleration"
     assert (
         fields_by_key["auto_dive_render_distance_cells"].label
-        == "Auto Dive render distance"
+        == "Guided Dive render distance"
     )
     assert fields_by_key["auto_dive_smoothing_radius_cells"].label == (
         "Smoothing radius"
@@ -744,10 +753,10 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     )
     assert "baseline" in fields_by_key["auto_dive_acceleration"].hint
     assert "1.25" in fields_by_key["auto_dive_acceleration"].hint
-    assert "Auto Dive" not in fields_by_key["auto_dive_acceleration"].hint
+    assert "Guided Dive" not in fields_by_key["auto_dive_acceleration"].hint
     assert (
         fields_by_key["auto_dive_render_distance_cells"].hint
-        == "Temporary load radius used while Auto Dive prefetches route chunks."
+        == "Temporary load radius used while Guided Dive prefetches route chunks."
     )
     assert "across all axes" in (
         fields_by_key["auto_dive_smoothing_radius_cells"].hint
@@ -839,8 +848,9 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     assert "active_page.winfo_reqheight()" in module_source
     assert "_apply_geometry" not in show_page_source
     assert "grid_propagate(False)" in source
-    assert "create_dialog_notice(" not in module_source
+    assert "create_dialog_notice(" in module_source
     assert "create_dialog_action_button(" in module_source
+    assert "set_dialog_notice(" in module_source
     assert "set_dialog_action_button(" in module_source
     assert "class _LabelButton" not in module_source
 
