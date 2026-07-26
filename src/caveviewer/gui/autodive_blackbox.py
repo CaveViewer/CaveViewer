@@ -15,6 +15,7 @@ import numpy as np
 
 
 AUTO_DIVE_BLACKBOX_FILENAME = "auto_dive_debug.jsonl"
+AUTO_DIVE_BLACKBOX_SCHEMA_VERSION = 2
 
 
 class AutoDiveBlackbox:
@@ -47,6 +48,7 @@ class AutoDiveBlackbox:
             "session_id": self.session_id,
             "event": str(event),
             **payload,
+            "schema_version": AUTO_DIVE_BLACKBOX_SCHEMA_VERSION,
         }
         line = json.dumps(_json_safe(record), sort_keys=True, separators=(",", ":"))
         try:

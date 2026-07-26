@@ -166,6 +166,27 @@ class CachedChunkMeshCollisionGuard:
                 )
         return best_hit
 
+    def triangle_meshes_for_bounds(
+        self,
+        bounds_min: Point,
+        bounds_max: Point,
+    ) -> tuple[np.ndarray, ...]:
+        """Return cached chunk triangle arrays intersecting local bounds.
+
+        Navigation refinements use this bounded provider to build optional
+        local analyses without loading the whole map into one mesh array.
+        """
+        first = np.asarray(bounds_min, dtype=np.float64).reshape(3)
+        second = np.asarray(bounds_max, dtype=np.float64).reshape(3)
+        lower = np.minimum(first, second)
+        upper = np.maximum(first, second)
+        meshes: list[np.ndarray] = []
+        for chunk in self._candidate_chunks(lower, upper):
+            mesh = self._triangle_mesh_for_chunk(chunk.cell)
+            if mesh.triangles.size:
+                meshes.append(mesh.triangles)
+        return tuple(meshes)
+
     def _candidate_chunks(
         self,
         segment_min: np.ndarray,

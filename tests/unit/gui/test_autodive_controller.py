@@ -536,7 +536,7 @@ def test_auto_dive_mesh_trimmed_route_waits_at_boundary_instead_of_replanning():
     assert replanner.requests == []
 
 
-def test_auto_dive_user_resume_allows_a_route_turn_after_repositioning():
+def test_auto_dive_user_resume_rejects_a_route_against_repositioning_direction():
     clock = _FakeClock()
     world = _FakeWorld()
     camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
@@ -581,8 +581,8 @@ def test_auto_dive_user_resume_allows_a_route_turn_after_repositioning():
     assert np.allclose(camera.position, held_position)
 
     replanner.latest_plan = _plan(start=(10.0, 0.0, 2.0), end=(10.0, 0.0, -8.0))
-    assert controller.update_replan(camera, world, now=20.2) is True
-    assert controller.plan.route_points[0] == (10.0, 0.0, 2.0)
+    assert controller.update_replan(camera, world, now=20.2) is False
+    assert controller.state is AutoDiveState.WAITING_FOR_USER
     assert controller._user_resume_replan_pending is False
     assert replanner.shutdown_called is False
 
@@ -913,6 +913,105 @@ def test_auto_dive_replanner_forwards_cache_dir_to_plan_builder():
 
     assert plan is not None
     assert calls[0][1]["cache_dir"] == "/cache/cave"
+
+
+def test_auto_dive_replanner_logs_correlated_build_timing():
+    clock = _FakeClock()
+    blackbox = _FakeBlackbox()
+
+    def build_plan(manifest, **kwargs):
+        diagnostics = kwargs.get("diagnostics")
+        if diagnostics is not None:
+            diagnostics(
+                "candidate_scores",
+                {"selected": "raw", "decision_duration_ms": 1.5},
+            )
+        return _plan()
+
+    replanner = AutoDiveReplanner(
+        {"chunks": {}},
+        AutoDiveSettings(),
+        plan_builder=build_plan,
+        blackbox=blackbox,
+        perf_counter=clock,
+    )
+
+    _generation, plan = replanner._build_plan(
+        3,
+        (1.0, 2.0, 3.0),
+        request_started_at=-1.0,
+    )
+    replanner.shutdown()
+
+    assert plan is not None
+    started = [
+        payload
+        for event, payload in blackbox.events
+        if event == "replan_build_started"
+    ][-1]
+    completed = [
+        payload
+        for event, payload in blackbox.events
+        if event == "replan_completed"
+    ][-1]
+    diagnostic = [
+        payload
+        for event, payload in blackbox.events
+        if event == "candidate_scores"
+    ][-1]
+
+    assert started["replan_id"] == "replan-3"
+    assert started["generation"] == 3
+    assert started["queue_duration_ms"] == pytest.approx(1000.0)
+    assert completed["replan_id"] == "replan-3"
+    assert completed["build_duration_ms"] == pytest.approx(0.0)
+    assert completed["total_duration_ms"] == pytest.approx(1000.0)
+    assert diagnostic["replan_id"] == "replan-3"
+    assert diagnostic["replan_generation"] == 3
+
+
+def test_auto_dive_frame_and_stop_log_motion_and_prefetch_summary():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    blackbox = _FakeBlackbox()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        blackbox=blackbox,
+    )
+
+    controller.start(camera, world)
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+    clock.now = 2.0
+    controller.update(camera, world)
+    clock.now = 3.0
+    controller.update(camera, world)
+    camera.position = np.array([1.25, 0.0, 0.0], dtype=np.float64)
+    controller.record_frame(camera, world, now=3.0)
+
+    frame = [
+        payload
+        for event, payload in blackbox.events
+        if event == "frame"
+    ][-1]
+    assert frame["command_error_m"] == pytest.approx(0.25)
+    assert frame["observed_displacement_m"] == pytest.approx(1.25)
+    assert frame["observed_distance_m"] == pytest.approx(1.25)
+    assert frame["plan_sequence"] == 0
+    assert frame["prefetch"]["cell_count"] == len(controller.prefetch_cells)
+    assert frame["prefetch"]["cell_sample"]
+
+    controller.stop(world)
+    stopped = [
+        payload
+        for event, payload in blackbox.events
+        if event == "auto_dive_stopped"
+    ][-1]
+    assert stopped["outcome"] == "stopped"
+    assert stopped["observed_distance_m"] == pytest.approx(1.25)
+    assert stopped["final_command_error_m"] == pytest.approx(0.25)
 
 
 def _plan(

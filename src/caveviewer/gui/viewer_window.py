@@ -14,7 +14,8 @@ simple lookup-and-release.
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import asdict, replace
 import hashlib
 import json
 import logging
@@ -35,6 +36,7 @@ from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.navigation.autodive import (
+    AUTO_DIVE_RUNTIME_METHOD,
     AutoDiveSettings,
     DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS,
     DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS,
@@ -47,8 +49,10 @@ from caveviewer.core.navigation.centerline import (
     CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
     generate_centerline_path,
 )
+from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
 from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
+from caveviewer.core.navigation.voxel_volume import VOXEL_VOLUME_METHOD
 from caveviewer.gui.autodive_blackbox import (
     AutoDiveBlackbox,
     auto_dive_blackbox_path,
@@ -57,6 +61,7 @@ from caveviewer.gui.autodive_controller import (
     AutoDiveController,
     AutoDiveReplanner,
     AutoDiveState,
+    auto_dive_plan_summary,
 )
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
@@ -566,7 +571,8 @@ def _auto_dive_settings_with_env_overrides(settings: AutoDiveSettings) -> AutoDi
         acceleration = _auto_dive_acceleration_from_speed_m_per_second(
             legacy_speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
         )
-    return AutoDiveSettings(
+    return replace(
+        settings,
         render_distance_cells=_env_int(
             "CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS",
             int(settings.render_distance_cells),
@@ -583,10 +589,148 @@ def _auto_dive_settings_with_env_overrides(settings: AutoDiveSettings) -> AutoDi
     )
 
 
-def _auto_dive_diagnostic_sink(blackbox: AutoDiveBlackbox | None):
+def _auto_dive_settings_payload(settings: AutoDiveSettings) -> dict[str, Any]:
+    """Return every effective planner setting for a session record."""
+    try:
+        return dict(asdict(settings))
+    except Exception:
+        return {
+            "render_distance_cells": int(settings.render_distance_cells),
+            "speed_m_per_second": float(settings.speed_m_per_second),
+            "smoothing_radius_cells": int(settings.smoothing_radius_cells),
+            "lookahead_distance_m": float(settings.lookahead_distance_m),
+        }
+
+
+def _auto_dive_navigation_context(
+    manifest: Mapping[str, Any],
+    cache_dir: str | None,
+    settings: AutoDiveSettings,
+) -> dict[str, Any]:
+    """Build bounded cache, algorithm, and coordinate context for diagnostics."""
+    chunks = manifest.get("chunks", {})
+    chunks = chunks if isinstance(chunks, Mapping) else {}
+    map_bounds_min_array: np.ndarray | None = None
+    map_bounds_max_array: np.ndarray | None = None
+    chunk_triangle_count = 0
+    has_chunk_triangle_count = False
+    for info in chunks.values():
+        if not isinstance(info, Mapping):
+            continue
+        try:
+            minimum = np.asarray(info["bounds_min"], dtype=np.float64).reshape(3)
+            maximum = np.asarray(info["bounds_max"], dtype=np.float64).reshape(3)
+            if np.all(np.isfinite(minimum)) and np.all(np.isfinite(maximum)):
+                map_bounds_min_array = (
+                    minimum.copy()
+                    if map_bounds_min_array is None
+                    else np.minimum(map_bounds_min_array, minimum)
+                )
+                map_bounds_max_array = (
+                    maximum.copy()
+                    if map_bounds_max_array is None
+                    else np.maximum(map_bounds_max_array, maximum)
+                )
+        except Exception:
+            pass
+        try:
+            if "triangle_count" in info:
+                chunk_triangle_count += max(0, int(info["triangle_count"]))
+                has_chunk_triangle_count = True
+        except Exception:
+            pass
+
+    navigation = manifest.get("navigation", {})
+    navigation = navigation if isinstance(navigation, Mapping) else {}
+    triangle_count = manifest.get("triangle_count")
+    try:
+        triangle_count = int(triangle_count)
+    except Exception:
+        triangle_count = chunk_triangle_count if has_chunk_triangle_count else None
+
+    cache_manifest_sha256 = None
+    if cache_dir:
+        try:
+            cache_manifest_sha256 = _cache_manifest_sha256(cache_dir)
+        except Exception:
+            cache_manifest_sha256 = None
+
+    def _finite_float(value: Any) -> float | None:
+        try:
+            value = float(value)
+        except Exception:
+            return None
+        return value if math.isfinite(value) else None
+
+    map_bounds_min = (
+        None
+        if map_bounds_min_array is None
+        else [float(value) for value in map_bounds_min_array]
+    )
+    map_bounds_max = (
+        None
+        if map_bounds_max_array is None
+        else [float(value) for value in map_bounds_max_array]
+    )
+    return {
+        "app_version": APP_VERSION,
+        "cache_dir": None if cache_dir is None else os.path.abspath(cache_dir),
+        "cache_manifest_sha256": cache_manifest_sha256,
+        "source_obj": manifest.get("source_obj"),
+        "cache_manifest_version": manifest.get("version"),
+        "chunk_count": len(chunks),
+        "triangle_count": triangle_count,
+        "chunk_size_m": _finite_float(manifest.get("chunk_size")),
+        "footprint_cell_size_m": _finite_float(
+            manifest.get("footprint_cell_size")
+            or navigation.get("footprint_cell_size")
+        ),
+        "map_bounds_min": map_bounds_min,
+        "map_bounds_max": map_bounds_max,
+        "coordinate_frame": {
+            "units": "m",
+            "vertical_axis": "y",
+            "horizontal_axes": ["x", "z"],
+        },
+        "navigation_metadata": {
+            "version": navigation.get("version"),
+            "method": navigation.get("method"),
+            "route_count": navigation.get("route_count"),
+            "recommended_route_id": navigation.get("recommended_route_id"),
+            "surface_driven": navigation.get("surface_driven"),
+            "footprint_source": navigation.get("navigation_footprint_source"),
+        },
+        "algorithm_versions": {
+            "runtime": AUTO_DIVE_RUNTIME_METHOD,
+            "centerline": navigation.get("method"),
+            "curvature": CURVATURE_PROFILE_METHOD,
+            "voxel": VOXEL_VOLUME_METHOD,
+        },
+        "settings": _auto_dive_settings_payload(settings),
+    }
+
+
+def _auto_dive_diagnostic_sink(
+    blackbox: AutoDiveBlackbox | None,
+    *,
+    phase: str | None = None,
+    position: Sequence[float] | None = None,
+):
     if blackbox is None:
         return None
-    return lambda event, payload: blackbox.record(event, **dict(payload))
+
+    def record(event: str, payload: Mapping[str, Any]) -> None:
+        enriched = dict(payload)
+        if phase is not None:
+            enriched.setdefault("phase", phase)
+        if position is not None:
+            enriched.setdefault(
+                "position",
+                [float(value) for value in position],
+            )
+        blackbox.record(event, **enriched)
+
+    return record
 
 
 SHADER_DIR = str(resource_path("shaders"))
@@ -1051,6 +1195,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._auto_dive_start_manifest: dict | None = None
         self._auto_dive_start_cache_dir: str | None = None
         self._auto_dive_start_position: np.ndarray | None = None
+        self._auto_dive_start_requested_at: float | None = None
         self._initial_auto_dive_pose_executor: ThreadPoolExecutor | None = None
         self._initial_auto_dive_pose_future: Future | None = None
         self._initial_auto_dive_pose_manifest: dict | None = None
@@ -2831,25 +2976,20 @@ class CaveViewerWindow(mglw.WindowConfig):
         executor: ThreadPoolExecutor | None = None
         try:
             auto_dive_settings = _auto_dive_settings_from_preferences()
+            start_position = np.asarray(self.camera.position, dtype=np.float64).copy()
+            requested_at = time.perf_counter()
+            self._auto_dive_start_requested_at = requested_at
             if blackbox is not None:
                 blackbox.record(
                     "session_started",
                     cache_dir=self.cache_dir,
                     source_obj=self.manifest.get("source_obj"),
-                    settings={
-                        "render_distance_cells": int(
-                            auto_dive_settings.render_distance_cells
-                        ),
-                        "speed_m_per_second": float(
-                            auto_dive_settings.speed_m_per_second
-                        ),
-                        "smoothing_radius_cells": int(
-                            auto_dive_settings.smoothing_radius_cells
-                        ),
-                        "lookahead_distance_m": float(
-                            auto_dive_settings.lookahead_distance_m
-                        ),
-                    },
+                    settings=_auto_dive_settings_payload(auto_dive_settings),
+                    navigation_context=_auto_dive_navigation_context(
+                        self.manifest,
+                        self.cache_dir,
+                        auto_dive_settings,
+                    ),
                     camera={
                         "position": [
                             float(value)
@@ -2860,9 +3000,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                         ],
                         "yaw_deg": math.degrees(float(self.camera.yaw)),
                         "pitch_deg": math.degrees(float(self.camera.pitch)),
+                        "roll_deg": math.degrees(float(getattr(self.camera, "roll", 0.0))),
                     },
                 )
-            start_position = np.asarray(self.camera.position, dtype=np.float64).copy()
             executor = ThreadPoolExecutor(
                 max_workers=1,
                 thread_name_prefix="CaveViewer-AutoDiveStart",
@@ -2875,7 +3015,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                 current_pitch=float(self.camera.pitch),
                 settings=auto_dive_settings,
                 cache_dir=self.cache_dir,
-                diagnostics=_auto_dive_diagnostic_sink(blackbox),
+                diagnostics=_auto_dive_diagnostic_sink(
+                    blackbox,
+                    phase="initial_plan",
+                    position=start_position,
+                ),
             )
         except Exception as exc:
             if executor is not None:
@@ -2885,6 +3029,13 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "auto_dive_unavailable",
                     reason=str(exc),
                     error_type=type(exc).__name__,
+                    plan_phase="initial_plan",
+                    planning_duration_ms=max(
+                        0.0,
+                        (time.perf_counter() - requested_at) * 1000.0,
+                    )
+                    if "requested_at" in locals()
+                    else None,
                 )
                 blackbox.close()
             _LOG.info("Guided Dive unavailable: %s", exc)
@@ -2901,6 +3052,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             blackbox.record(
                 "auto_dive_plan_requested",
                 position=[float(value) for value in start_position],
+                plan_id="initial",
+                plan_phase="initial_plan",
             )
         _LOG.info("Guided Dive planning started.")
         return True
@@ -2916,6 +3069,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         requested_manifest = getattr(self, "_auto_dive_start_manifest", None)
         requested_cache_dir = getattr(self, "_auto_dive_start_cache_dir", None)
         start_position = getattr(self, "_auto_dive_start_position", None)
+        requested_at = getattr(self, "_auto_dive_start_requested_at", None)
+        planning_duration_ms = (
+            None
+            if requested_at is None
+            else max(0.0, (time.perf_counter() - requested_at) * 1000.0)
+        )
         self._clear_auto_dive_start_state(shutdown_executor=False)
 
         if executor is not None:
@@ -2929,6 +3088,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "auto_dive_unavailable",
                     reason=str(exc),
                     error_type=type(exc).__name__,
+                    plan_id="initial",
+                    plan_phase="initial_plan",
+                    planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             _LOG.info("Guided Dive unavailable: %s", exc)
@@ -2939,6 +3101,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "auto_dive_unavailable",
                     reason=str(exc),
                     error_type=type(exc).__name__,
+                    plan_id="initial",
+                    plan_phase="initial_plan",
+                    planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             _LOG.exception("Guided Dive planning failed.")
@@ -2960,6 +3125,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                         if start_position is None
                         else [float(value) for value in start_position]
                     ),
+                    plan_id="initial",
+                    plan_phase="initial_plan",
+                    planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             _LOG.info("Discarded stale Guided Dive plan after map changed.")
@@ -2970,10 +3138,21 @@ class CaveViewerWindow(mglw.WindowConfig):
                 blackbox.record(
                     "auto_dive_plan_discarded",
                     reason="missing_settings",
+                    plan_id="initial",
+                    plan_phase="initial_plan",
+                    planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             return
 
+        if blackbox is not None:
+            blackbox.record(
+                "auto_dive_plan_completed",
+                plan_id="initial",
+                plan_phase="initial_plan",
+                planning_duration_ms=planning_duration_ms,
+                plan=auto_dive_plan_summary(plan),
+            )
         self._activate_auto_dive_plan(plan, auto_dive_settings, blackbox)
 
     def _clear_auto_dive_start_state(self, *, shutdown_executor: bool) -> None:
@@ -2987,11 +3166,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._auto_dive_start_manifest = None
         self._auto_dive_start_cache_dir = None
         self._auto_dive_start_position = None
+        self._auto_dive_start_requested_at = None
 
     def _cancel_auto_dive_start(self) -> bool:
         future = getattr(self, "_auto_dive_start_future", None)
         blackbox = getattr(self, "_auto_dive_start_blackbox", None)
         position = getattr(self, "_auto_dive_start_position", None)
+        requested_at = getattr(self, "_auto_dive_start_requested_at", None)
         if future is None:
             return False
         future.cancel()
@@ -3000,6 +3181,16 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "auto_dive_plan_cancelled",
                 position=(
                     None if position is None else [float(value) for value in position]
+                ),
+                plan_id="initial",
+                plan_phase="initial_plan",
+                planning_duration_ms=(
+                    None
+                    if requested_at is None
+                    else max(
+                        0.0,
+                        (time.perf_counter() - requested_at) * 1000.0,
+                    )
                 ),
             )
             blackbox.close()

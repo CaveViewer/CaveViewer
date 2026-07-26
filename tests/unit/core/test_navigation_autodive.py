@@ -734,7 +734,62 @@ def test_auto_dive_mesh_recovery_logs_search_alternatives(tmp_path):
     assert payload["max_edge_tests"] > payload["edge_tests"]
 
 
-def test_auto_dive_user_reposition_allows_mesh_recovery_to_change_direction(tmp_path):
+def test_auto_dive_mesh_recovery_builds_local_voxel_volume_for_a_bend(tmp_path):
+    manifest, raw_route_points = _manifest_with_cached_l_bend_route()
+    manifest["chunk_size"] = 16.0
+    manifest["chunks"] = {
+        "0_0_0": {
+            "bounds_min": [0.0, 0.0, 0.0],
+            "bounds_max": [8.0, 2.0, 8.0],
+        }
+    }
+    cache_dir = tmp_path / "cache"
+    _write_test_chunk_mesh(
+        cache_dir,
+        cell=(0, 0, 0),
+        triangles=(
+            (
+                (6.0, 0.0, -1.0),
+                (6.0, 2.0, -1.0),
+                (6.0, 2.0, 8.0),
+            ),
+            (
+                (6.0, 0.0, -1.0),
+                (6.0, 2.0, 8.0),
+                (6.0, 0.0, 8.0),
+            ),
+        ),
+    )
+    events = []
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=raw_route_points[0],
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=4,
+        ),
+        cache_dir=str(cache_dir),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    voxel_events = [
+        payload
+        for event, payload in events
+        if event == "voxel_volume"
+    ]
+    assert voxel_events
+    assert voxel_events[-1]["built"] is True
+    assert voxel_events[-1]["outcome"] == "built"
+    assert voxel_events[-1]["selected_region_count"] > 0
+    assert voxel_events[-1]["curvature_region_count"] > 0
+    assert voxel_events[-1]["volume"]["voxel_count"] <= (
+        AutoDiveSettings().voxel_max_cells
+    )
+    assert plan.selection_reason == "mesh_recovery_route_clear"
+
+
+def test_auto_dive_user_reposition_keeps_mesh_recovery_in_manual_direction(tmp_path):
     manifest, raw_route_points = _manifest_with_cached_mesh_blocked_route()
     cache_dir = tmp_path / "cache"
     _write_test_chunk_mesh(
@@ -783,10 +838,11 @@ def test_auto_dive_user_reposition_allows_mesh_recovery_to_change_direction(tmp_
     ][-1]
 
     assert recovery_events
-    assert recovery_events[-1]["allow_reverse_travel"] is True
+    assert recovery_events[-1]["allow_reverse_travel"] is False
     assert candidate_payload["user_reposition"] is True
     assert candidate_payload["selection_reason"] == "mesh_recovery_route_clear"
     assert plan.route_truncated_by_mesh is False
+    assert candidate_payload["travel_filter"]["enabled"] is True
 
 
 def test_auto_dive_mesh_recovery_view_alignment_uses_pitch():
@@ -894,7 +950,7 @@ def test_auto_dive_replan_rejects_centerline_behind_travel_direction():
     assert candidate_payload["travel_filter"]["rejected"]
 
 
-def test_auto_dive_user_reposition_treats_manual_direction_as_a_hint():
+def test_auto_dive_user_reposition_enforces_manual_direction():
     route_cells = tuple((-index, 0) for index in range(8))
     route_points = tuple(
         (float(x) + 0.5, 1.0, float(z) + 0.5)
@@ -902,24 +958,25 @@ def test_auto_dive_user_reposition_treats_manual_direction_as_a_hint():
     )
     events = []
 
-    plan = build_centerline_auto_dive_plan(
-        _manifest_with_cached_route(
-            component_cells=route_cells,
-            route_cells=route_cells,
-            route_points=route_points,
-        ),
-        current_position=route_points[0],
-        current_yaw=0.0,
-        current_pitch=0.0,
-        current_travel_yaw=0.0,
-        current_travel_pitch=0.0,
-        user_reposition=True,
-        settings=AutoDiveSettings(
-            speed_m_per_second=1.0,
-            smoothing_radius_cells=0,
-        ),
-        diagnostics=lambda event, payload: events.append((event, payload)),
-    )
+    with pytest.raises(NavigationConfigurationError, match="forward travel cone"):
+        build_centerline_auto_dive_plan(
+            _manifest_with_cached_route(
+                component_cells=route_cells,
+                route_cells=route_cells,
+                route_points=route_points,
+            ),
+            current_position=route_points[0],
+            current_yaw=0.0,
+            current_pitch=0.0,
+            current_travel_yaw=0.0,
+            current_travel_pitch=0.0,
+            user_reposition=True,
+            settings=AutoDiveSettings(
+                speed_m_per_second=1.0,
+                smoothing_radius_cells=0,
+            ),
+            diagnostics=lambda event, payload: events.append((event, payload)),
+        )
 
     candidate_payload = [
         payload
@@ -927,9 +984,10 @@ def test_auto_dive_user_reposition_treats_manual_direction_as_a_hint():
         if event == "candidate_scores"
     ][-1]
 
-    assert plan.route_length_m > 0.0
     assert candidate_payload["user_reposition"] is True
-    assert candidate_payload["travel_filter"]["enabled"] is False
+    assert candidate_payload["reason"] == "no_forward_travel_candidates"
+    assert candidate_payload["travel_filter"]["enabled"] is True
+    assert candidate_payload["travel_filter"]["after_count"] == 0
 
 
 def test_auto_dive_initial_start_ignores_sideways_travel_cone():

@@ -36,6 +36,37 @@ presentation or render-thread OpenGL resources. `viewer_window.py` adapts a
 `BenchmarkController` into the real render loop when the benchmark CLI launches
 the viewer.
 
+## Guided Dive centerline refinement
+
+Guided Dive keeps the centerline generator and local geometric refinements
+replaceable. `core.navigation.curvature` profiles any 3D route polyline and
+labels contiguous high-curvature regions with map-relative ranks from 0 to 100.
+`core.navigation.voxel_volume` can then rasterize cached triangle surfaces into
+a bounded local voxel field around selected regions. It is deliberately a
+surface-distance guide rather than a second collision authority: the existing
+exact triangle intersection guard still accepts or rejects recovery edges.
+
+The voxel field is built lazily only when normal Guided Dive candidates have
+failed cached-mesh validation. It queries only chunks intersecting the selected
+curvy-region bounds, caps the voxel capacity and surface samples, and refines
+recovery waypoints inside the existing footprint cell and cached Y range. This
+keeps the cache format unchanged and allows the voxel builder—or the entire
+centerline source—to be removed or replaced behind the navigation seam without
+changing GUI or streaming code.
+
+Guided Dive's opt-in JSONL blackbox records use schema version 2. Every event
+retains its existing name and session identifier, while `session_started`
+captures the cache fingerprint, map bounds, navigation metadata, effective
+settings, coordinate frame, and algorithm-method identifiers. Background
+replans use a stable `replan_id` and generation with queue, build, and total
+durations; candidate decisions report bounded timing and voxel summaries.
+Voxel events also record an explicit outcome such as no qualifying curvature in
+the analysis horizon, no triangles, no surface samples, disabled analysis, or
+an exception, together with selected-region bounds and sample counts.
+Runtime frame, clamp, assist, and stop events record plan sequence, readiness,
+bounded prefetch-cell samples, and actual-versus-commanded motion. Full meshes,
+triangle arrays, and voxel grids are never written to the log.
+
 ## Startup and map import
 
 Core import services discover supported models and dispatch them to the OBJ or

@@ -9,6 +9,7 @@ import numpy as np
 
 from caveviewer.gui.autodive_blackbox import (
     AUTO_DIVE_BLACKBOX_FILENAME,
+    AUTO_DIVE_BLACKBOX_SCHEMA_VERSION,
     AutoDiveBlackbox,
     auto_dive_blackbox_path,
 )
@@ -36,6 +37,7 @@ def test_auto_dive_blackbox_writes_jsonl_events(tmp_path):
     payload = json.loads(lines[0])
     assert payload["event"] == "frame"
     assert payload["session_id"] == "session-1"
+    assert payload["schema_version"] == AUTO_DIVE_BLACKBOX_SCHEMA_VERSION
     assert payload["position"] == [1.0, 2.0, 3.0]
     assert payload["bad_number"] == "inf"
 

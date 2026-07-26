@@ -498,6 +498,49 @@ def test_auto_dive_diagnostics_environment_override_wins(monkeypatch):
     assert viewer_window._auto_dive_diagnostics_enabled_from_preferences() is False
 
 
+def test_auto_dive_navigation_context_contains_bounded_cache_and_algorithm_metadata():
+    settings = viewer_window.AutoDiveSettings(voxel_max_cells=321)
+    manifest = {
+        "version": 7,
+        "source_obj": "devils_eye.obj",
+        "chunk_size": 8.0,
+        "footprint_cell_size": 1.5,
+        "triangle_count": 12,
+        "chunks": {
+            "0,0,0": {
+                "bounds_min": [-1.0, -2.0, -3.0],
+                "bounds_max": [4.0, 5.0, 6.0],
+            },
+            "1,0,0": {
+                "bounds_min": [4.0, 0.0, -2.0],
+                "bounds_max": [10.0, 6.0, 8.0],
+            },
+        },
+        "navigation": {
+            "version": 1,
+            "method": "footprint_centerline_paths_v1",
+            "route_count": 2,
+            "recommended_route_id": "route-0",
+            "surface_driven": True,
+            "navigation_footprint_source": "manifest_footprint",
+        },
+    }
+
+    context = viewer_window._auto_dive_navigation_context(
+        manifest,
+        "/cache/devils-eye",
+        settings,
+    )
+
+    assert context["chunk_count"] == 2
+    assert context["triangle_count"] == 12
+    assert context["map_bounds_min"] == [-1.0, -2.0, -3.0]
+    assert context["map_bounds_max"] == [10.0, 6.0, 8.0]
+    assert context["navigation_metadata"]["recommended_route_id"] == "route-0"
+    assert context["algorithm_versions"]["curvature"] == "rolling_turn_density_v1"
+    assert context["settings"]["voxel_max_cells"] == 321
+
+
 def test_auto_dive_initial_camera_pose_uses_runtime_preferences(monkeypatch):
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.manifest = {"chunks": {}}

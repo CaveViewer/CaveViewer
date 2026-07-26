@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 import heapq
 import math
 import os
+import time
 from typing import Any
 
 import numpy as np
@@ -35,12 +36,26 @@ from caveviewer.core.navigation.centerline import (
     route_points_for_xz_points,
 )
 from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGuard
+from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
 from caveviewer.core.navigation.route import (
     CameraRoute,
     NavigationConfigurationError,
     RouteKeyframe,
     path_length,
     route_keyframes_for_points,
+)
+from caveviewer.core.navigation.voxel_volume import (
+    DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD,
+    DEFAULT_VOXEL_MAX_CELLS,
+    DEFAULT_VOXEL_MAX_DISTANCE_M,
+    DEFAULT_VOXEL_MAX_REGIONS,
+    DEFAULT_VOXEL_SIZE_M,
+    LocalVoxelVolume,
+    VOXEL_ANALYSIS_OUTCOME_DISABLED,
+    VOXEL_ANALYSIS_OUTCOME_ERROR,
+    VOXEL_ANALYSIS_OUTCOME_MESH_GUARD_UNAVAILABLE,
+    VOXEL_VOLUME_METHOD,
+    analyze_curvature_guided_voxel_volume,
 )
 
 
@@ -55,6 +70,7 @@ DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS = (
     NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS
 )
 DEFAULT_AUTO_DIVE_LOOKAHEAD_DISTANCE_M = 8.0
+AUTO_DIVE_RUNTIME_METHOD = "candidate_mesh_recovery_v1"
 DEFAULT_AUTO_DIVE_TRUSTED_MAX_SEGMENT_CELLS = 6.0
 # Keep the camera well back from a cached-mesh boundary. A one-metre pullback
 # still leaves the camera visibly inside tight passages on larger maps.
@@ -101,6 +117,14 @@ class AutoDiveSettings:
     keyframe_spacing_m: float | None = None
     smoothing_radius_cells: int = DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS
     lookahead_distance_m: float = DEFAULT_AUTO_DIVE_LOOKAHEAD_DISTANCE_M
+    voxel_analysis_enabled: bool = True
+    voxel_size_m: float = DEFAULT_VOXEL_SIZE_M
+    voxel_curvature_rank_threshold: int = (
+        DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD
+    )
+    voxel_max_regions: int = DEFAULT_VOXEL_MAX_REGIONS
+    voxel_max_distance_m: float = DEFAULT_VOXEL_MAX_DISTANCE_M
+    voxel_max_cells: int = DEFAULT_VOXEL_MAX_CELLS
 
 
 @dataclass(frozen=True)
@@ -211,6 +235,8 @@ class _AutoDiveCollisionValidator:
 
     centerline_path: CenterlinePath
     mesh_guard: CachedChunkMeshCollisionGuard | None = None
+    voxel_volume: LocalVoxelVolume | None = None
+    voxel_builder: Callable[[], LocalVoxelVolume | None] | None = None
 
     @property
     def cell_size(self) -> float:
@@ -470,27 +496,18 @@ def build_centerline_auto_dive_plan(
         current_x=float(current[0]),
         current_z=float(current[2]),
     )
-    # A user's displacement while escaping a collision describes how they
-    # repositioned the camera, not necessarily the direction Guided Dive should
-    # travel next. Keep the camera view as the soft route-selection hint and
-    # reserve the travel vector for ordinary receding-horizon replans.
+    # An explicit user displacement is the authoritative direction for a
+    # user-resume replan. Camera view is only the fallback when the user did
+    # not move far enough to establish a reliable displacement vector.
     direction_yaw = (
-        current_yaw
-        if user_reposition
-        else (
-            current_travel_yaw
-            if current_travel_yaw is not None
-            else current_yaw
-        )
+        current_travel_yaw
+        if current_travel_yaw is not None
+        else current_yaw
     )
     direction_pitch = (
-        current_pitch
-        if user_reposition
-        else (
-            current_travel_pitch
-            if current_travel_pitch is not None
-            else current_pitch
-        )
+        current_travel_pitch
+        if current_travel_pitch is not None
+        else current_pitch
     )
     route_cells, circular_arc = _select_auto_dive_cells(
         centerline_path,
@@ -529,11 +546,19 @@ def build_centerline_auto_dive_plan(
         manifest=manifest,
         settings=settings,
     )
+    mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=cache_dir,
+    )
     collision_validator = _AutoDiveCollisionValidator(
         centerline_path,
-        mesh_guard=CachedChunkMeshCollisionGuard.from_manifest(
-            manifest,
-            cache_dir=cache_dir,
+        mesh_guard=mesh_guard,
+        voxel_builder=_make_auto_dive_voxel_builder(
+            route_points=route_points,
+            centerline_path=centerline_path,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            diagnostics=diagnostics,
         ),
     )
     selected_route = _select_best_auto_dive_route_candidate(
@@ -545,8 +570,8 @@ def build_centerline_auto_dive_plan(
         collision_validator=collision_validator,
         current_yaw=current_yaw,
         current_pitch=current_pitch,
-        current_travel_yaw=(None if user_reposition else current_travel_yaw),
-        current_travel_pitch=(None if user_reposition else current_travel_pitch),
+        current_travel_yaw=current_travel_yaw,
+        current_travel_pitch=current_travel_pitch,
         avoid_positions=avoid_positions,
         user_reposition=user_reposition,
         diagnostics=diagnostics,
@@ -623,6 +648,29 @@ def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
     if not math.isfinite(lookahead) or lookahead < 0.0:
         raise NavigationConfigurationError(
             "Guided Dive look-ahead distance cannot be negative"
+        )
+    voxel_size = float(settings.voxel_size_m)
+    if not math.isfinite(voxel_size) or voxel_size <= 0.0:
+        raise NavigationConfigurationError(
+            "Guided Dive voxel size must be positive"
+        )
+    voxel_rank = int(settings.voxel_curvature_rank_threshold)
+    if not 0 <= voxel_rank <= 100:
+        raise NavigationConfigurationError(
+            "Guided Dive voxel curvature rank must be between 0 and 100"
+        )
+    if int(settings.voxel_max_regions) < 0:
+        raise NavigationConfigurationError(
+            "Guided Dive voxel region count cannot be negative"
+        )
+    voxel_distance = float(settings.voxel_max_distance_m)
+    if not math.isfinite(voxel_distance) or voxel_distance <= 0.0:
+        raise NavigationConfigurationError(
+            "Guided Dive voxel analysis distance must be positive"
+        )
+    if int(settings.voxel_max_cells) <= 0:
+        raise NavigationConfigurationError(
+            "Guided Dive voxel cell budget must be positive"
         )
 
 
@@ -988,14 +1036,13 @@ def _auto_dive_cell_direction_score(
         target,
         position_direction,
     )
-    intent_alignments = tuple(
-        value
-        for value in (view_alignment, position_alignment)
-        if value is not None
+    alignment = (
+        view_alignment
+        if view_alignment is not None
+        else position_alignment
     )
-    if not intent_alignments:
+    if alignment is None:
         return (True, False, -1.0, -1.0, -1.0, 0.0, -len(cells))
-    alignment = max(intent_alignments)
     length_m = footprint_path_length(cells, centerline_path.centers)
     return (
         True,
@@ -1678,6 +1725,7 @@ def _select_best_auto_dive_route_candidate(
     lateral clearance, margin, forward progress, curvature, and vertical jerk.
     The caller still prepends the exact camera position after this selection.
     """
+    decision_started_at = time.perf_counter()
     specs = _auto_dive_candidate_specs(settings)
     route_samples = _AutoDiveRouteSamples(cells=waypoint_cells, points=route_points)
     # Candidate construction can call segment checks many times while probing
@@ -1754,6 +1802,9 @@ def _select_best_auto_dive_route_candidate(
                     "reason": "no_forward_travel_candidates",
                     "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
                     "travel_filter": travel_filter_payload,
+                    "decision_duration_ms": _auto_dive_duration_ms(
+                        decision_started_at
+                    ),
                 },
             )
             raise NavigationConfigurationError(
@@ -1770,6 +1821,9 @@ def _select_best_auto_dive_route_candidate(
                 ),
                 "user_reposition": bool(user_reposition),
                 "travel_filter": travel_filter_payload,
+                "decision_duration_ms": _auto_dive_duration_ms(
+                    decision_started_at
+                ),
                 "candidates": [
                     {
                         "name": candidate.name,
@@ -1831,6 +1885,9 @@ def _select_best_auto_dive_route_candidate(
                 ),
                 "user_reposition": bool(user_reposition),
                 "failed_candidates": failed_candidates,
+                "decision_duration_ms": _auto_dive_duration_ms(
+                    decision_started_at
+                ),
             },
         )
         return _AutoDiveSelectedRoute(
@@ -1856,6 +1913,9 @@ def _select_best_auto_dive_route_candidate(
         and scored
         and not any(score.mesh_clear for score, _candidate in scored)
     ):
+        collision_validator = _materialize_auto_dive_voxel_volume(
+            collision_validator
+        )
         recovery_candidate = _build_mesh_recovery_auto_dive_route_candidate(
             ordinal=max(candidate.ordinal for candidate in candidates) + 1,
             centerline_path=centerline_path,
@@ -1866,7 +1926,10 @@ def _select_best_auto_dive_route_candidate(
             current_travel_yaw=current_travel_yaw,
             current_travel_pitch=current_travel_pitch,
             avoid_positions=avoid_positions,
-            allow_reverse_travel=bool(user_reposition),
+            # Never reverse a route when a directional pose or user travel
+            # vector is available. If neither is available, the search still
+            # has its scan/target ordering as a safe fallback.
+            allow_reverse_travel=False,
             collision_validator=collision_validator,
             diagnostics=diagnostics,
         )
@@ -1913,6 +1976,9 @@ def _select_best_auto_dive_route_candidate(
                 "reason": "no_forward_travel_candidates",
                 "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
                 "travel_filter": travel_filter_payload,
+                "decision_duration_ms": _auto_dive_duration_ms(
+                    decision_started_at
+                ),
             },
         )
         raise NavigationConfigurationError(
@@ -2030,9 +2096,13 @@ def _select_best_auto_dive_route_candidate(
             "mesh_collision_enabled": bool(
                 collision_validator.has_mesh_collision_guard
             ),
+            "voxel_volume": _auto_dive_voxel_volume_payload(
+                collision_validator
+            ),
             "candidate_count": len(candidates),
             "failed_candidates": failed_candidates,
             "travel_filter": travel_filter_payload,
+            "decision_duration_ms": _auto_dive_duration_ms(decision_started_at),
             "candidates": [
                 _auto_dive_candidate_score_payload(score, candidate)
                 for score, candidate in sorted(
@@ -2062,6 +2132,150 @@ def _record_auto_dive_diagnostic(
         diagnostics(event, payload)
     except Exception:
         return
+
+
+def _auto_dive_duration_ms(started_at: float) -> float:
+    return max(0.0, (time.perf_counter() - float(started_at)) * 1000.0)
+
+
+def _make_auto_dive_voxel_builder(
+    *,
+    route_points: tuple[Point, ...],
+    centerline_path: CenterlinePath,
+    mesh_guard: CachedChunkMeshCollisionGuard | None,
+    settings: AutoDiveSettings,
+    diagnostics: AutoDiveDiagnosticSink | None,
+) -> Callable[[], LocalVoxelVolume | None] | None:
+    """Return a lazy local voxel builder for mesh-recovery replanning."""
+    common_payload = {
+        "method": VOXEL_VOLUME_METHOD,
+        "curvature_method": CURVATURE_PROFILE_METHOD,
+        "voxel_size_m": float(settings.voxel_size_m),
+        "curvature_rank_threshold": int(
+            settings.voxel_curvature_rank_threshold
+        ),
+        "max_regions": int(settings.voxel_max_regions),
+        "max_distance_m": float(settings.voxel_max_distance_m),
+        "max_cells": int(settings.voxel_max_cells),
+    }
+    if mesh_guard is None:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_volume",
+            {
+                **common_payload,
+                "built": False,
+                "outcome": VOXEL_ANALYSIS_OUTCOME_MESH_GUARD_UNAVAILABLE,
+            },
+        )
+        return None
+    if not bool(settings.voxel_analysis_enabled):
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_volume",
+            {
+                **common_payload,
+                "built": False,
+                "outcome": VOXEL_ANALYSIS_OUTCOME_DISABLED,
+            },
+        )
+        return None
+
+    def build() -> LocalVoxelVolume | None:
+        try:
+            analysis = analyze_curvature_guided_voxel_volume(
+                route_points,
+                triangle_provider=mesh_guard.triangle_meshes_for_bounds,
+                voxel_size_m=float(settings.voxel_size_m),
+                curvature_rank_threshold=int(
+                    settings.voxel_curvature_rank_threshold
+                ),
+                max_regions=int(settings.voxel_max_regions),
+                max_distance_m=float(settings.voxel_max_distance_m),
+                padding_m=max(
+                    float(centerline_path.footprint_cell_size) * 0.5,
+                    float(settings.voxel_size_m) * 2.0,
+                ),
+                max_voxels=int(settings.voxel_max_cells),
+                window_points=max(
+                    2,
+                    min(5, int(settings.smoothing_radius_cells) or 2),
+                ),
+            )
+        except Exception as exc:
+            _record_auto_dive_diagnostic(
+                diagnostics,
+                "voxel_volume",
+                {
+                    **common_payload,
+                    "built": False,
+                    "outcome": VOXEL_ANALYSIS_OUTCOME_ERROR,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            return None
+
+        analysis_payload = analysis.diagnostic_payload()
+        analysis_payload.update(
+            {
+                "point_count": int(analysis.profile.point_count),
+                "curvature_sample_count": len(analysis.profile.samples),
+                "curvature_region_count": len(analysis.profile.regions),
+                "curvature_regions": [
+                    {
+                        "start_index": int(region.start_index),
+                        "end_index": int(region.end_index),
+                        "start_distance_m": float(region.start_distance_m),
+                        "end_distance_m": float(region.end_distance_m),
+                        "max_rank_0_100": int(region.max_rank_0_100),
+                        "max_curvature_density_rad_per_m": float(
+                            region.max_curvature_density_rad_per_m
+                        ),
+                    }
+                    for region in analysis.profile.regions[:8]
+                ],
+                "curvature_regions_truncated": len(analysis.profile.regions) > 8,
+            }
+        )
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_volume",
+            {
+                **common_payload,
+                **analysis_payload,
+            },
+        )
+        return analysis.volume
+
+    return build
+
+
+def _materialize_auto_dive_voxel_volume(
+    collision_validator: _AutoDiveCollisionValidator,
+) -> _AutoDiveCollisionValidator:
+    """Build the optional volume once, preserving the validator seam."""
+    builder = collision_validator.voxel_builder
+    if builder is None:
+        return collision_validator
+    try:
+        volume = builder()
+    except Exception:
+        volume = None
+    return replace(
+        collision_validator,
+        voxel_volume=volume,
+        voxel_builder=None,
+    )
+
+
+def _auto_dive_voxel_volume_payload(
+    collision_validator: _AutoDiveCollisionValidator,
+) -> dict[str, object] | None:
+    volume = collision_validator.voxel_volume
+    if volume is None:
+        return None
+    return volume.diagnostic_payload()
 
 
 def _mesh_recovery_is_enabled(
@@ -2214,26 +2428,22 @@ def _candidate_route_travel_alignment(
     )
     if first_move_target is None:
         return None, None
-    alignments: list[float] = []
     if current_travel_yaw is not None:
-        alignments.append(
+        return (
             _mesh_recovery_view_alignment(
                 current_point,
                 first_move_target,
                 current_yaw=current_travel_yaw,
                 current_pitch=current_travel_pitch,
-            )
+            ),
+            first_move_target,
         )
     position_alignment = _auto_dive_target_alignment_from_direction(
         current_point,
         first_move_target,
         position_direction,
     )
-    if position_alignment is not None:
-        alignments.append(float(position_alignment))
-    if not alignments:
-        return None, first_move_target
-    return max(alignments), first_move_target
+    return position_alignment, first_move_target
 
 
 def _route_target_point_far_enough(
@@ -2570,6 +2780,7 @@ def _build_mesh_recovery_auto_dive_route_candidate(
             centerline_path,
             cell,
             fallback_y=current_point[1],
+            voxel_volume=collision_validator.voxel_volume,
         )
         for cell in cells[1:]
     )
@@ -2678,6 +2889,7 @@ def _mesh_clear_recovery_footprint_path(
             current_point=current_point,
             start_cell=start_cell,
             point_cache=point_cache,
+            voxel_volume=collision_validator.voxel_volume,
         )
         net_distance_m = float(
             np.linalg.norm(
@@ -2718,20 +2930,23 @@ def _mesh_clear_recovery_footprint_path(
                 target_point,
                 position_direction,
             )
-            intent_alignments = tuple(
-                value
-                for value in (
-                    forward_alignment if selection_yaw is not None else None,
-                    position_alignment,
-                )
-                if value is not None
+            direction_alignment = (
+                forward_alignment
+                if selection_yaw is not None
+                else position_alignment
             )
-            best_intent_alignment = max(intent_alignments) if intent_alignments else 0.0
+            best_intent_alignment = (
+                0.0
+                if direction_alignment is None
+                else float(direction_alignment)
+            )
             target_in_front = (
                 allow_reverse_travel
-                or (selection_yaw is None and position_alignment is None)
-                or best_intent_alignment
-                >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
+                or direction_alignment is None
+                or (
+                    direction_alignment
+                    >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
+                )
             )
             if target_in_front:
                 scan_in_cone, scan_alignment, scan_angle_penalty = (
@@ -2955,6 +3170,9 @@ def _mesh_clear_recovery_footprint_path(
             "mesh_recovery_search",
             {
                 "selected": None,
+                "voxel_volume": _auto_dive_voxel_volume_payload(
+                    collision_validator
+                ),
                 "start_cell": [int(start_cell[0]), int(start_cell[1])],
                 "visited_cells": int(visited_cells),
                 "target_count": int(len(target_indices)),
@@ -3009,6 +3227,9 @@ def _mesh_clear_recovery_footprint_path(
         "mesh_recovery_search",
         {
             "selected": [int(best_cell[0]), int(best_cell[1])],
+            "voxel_volume": _auto_dive_voxel_volume_payload(
+                collision_validator
+            ),
             "selected_candidate": best_candidate_payload,
             "selected_path_cell_count": len(selected_path),
             "selected_path_cells": [
@@ -3194,6 +3415,7 @@ def _mesh_recovery_edge_is_clear(
         current_point=current_point,
         start_cell=start_cell,
         point_cache=point_cache,
+        voxel_volume=collision_validator.voxel_volume,
     )
     second_point = _mesh_recovery_graph_point(
         centerline_path,
@@ -3201,6 +3423,7 @@ def _mesh_recovery_edge_is_clear(
         current_point=current_point,
         start_cell=start_cell,
         point_cache=point_cache,
+        voxel_volume=collision_validator.voxel_volume,
     )
     clear = (
         collision_validator.segment_clearance_failure(
@@ -3220,6 +3443,7 @@ def _mesh_recovery_graph_point(
     current_point: Point,
     start_cell: FootprintCell,
     point_cache: dict[FootprintCell, Point],
+    voxel_volume: LocalVoxelVolume | None = None,
 ) -> Point:
     cached = point_cache.get(cell)
     if cached is not None:
@@ -3231,6 +3455,7 @@ def _mesh_recovery_graph_point(
         centerline_path,
         cell,
         fallback_y=current_point[1],
+        voxel_volume=voxel_volume,
     )
     point_cache[cell] = point
     return point
@@ -3241,6 +3466,7 @@ def _mesh_recovery_point_for_cell(
     cell: FootprintCell,
     *,
     fallback_y: float,
+    voxel_volume: LocalVoxelVolume | None = None,
 ) -> Point:
     x, z = _center_for_route_cell(centerline_path, cell)
     y = _medial_y_for_route_cell(
@@ -3248,7 +3474,18 @@ def _mesh_recovery_point_for_cell(
         cell,
         fallback_y=fallback_y,
     )
-    return (float(x), float(y), float(z))
+    point = (float(x), float(y), float(z))
+    if voxel_volume is None:
+        return point
+    refined = voxel_volume.refine_point(
+        point,
+        footprint_cell=cell,
+        footprint_cell_size=centerline_path.footprint_cell_size,
+        y_range=(getattr(centerline_path, "cached_y_ranges", None) or {}).get(
+            cell
+        ),
+    )
+    return point if refined is None else refined
 
 
 def _mesh_recovery_view_alignment(
