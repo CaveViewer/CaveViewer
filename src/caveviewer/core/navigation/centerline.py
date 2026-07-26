@@ -64,6 +64,11 @@ class CenterlinePath:
     cached_y_ranges: Mapping[FootprintCell, tuple[float, float]] | None = None
     cached_clearance_margins: Mapping[FootprintCell, float] | None = None
     cached_recovery_hotspots: Mapping[FootprintCell, Mapping[str, float]] | None = None
+    # Kept as ``Any`` so the replaceable centerline primitive does not import
+    # the optional voxel implementation. Runtime navigation treats this as an
+    # optional LocalVoxelVolume when the cache sidecar is available.
+    cached_voxel_volume: Any | None = None
+    cached_voxel_metrics: Mapping[str, Any] | None = None
 
     @property
     def points_xz(self) -> tuple[PointXZ, ...]:

@@ -152,6 +152,38 @@ def _navigation_mesh() -> obj_parser.RawMesh:
     )
 
 
+def _curved_navigation_mesh() -> obj_parser.RawMesh:
+    cells = [(x, 0) for x in range(6)] + [(5, z) for z in range(1, 6)]
+    positions: list[list[float]] = []
+    faces: list[list[int]] = []
+    for x, z in cells:
+        base = len(positions)
+        positions.extend(
+            [
+                [x + 0.2, 0.0, z + 0.2],
+                [x + 0.8, 4.0, z + 0.2],
+                [x + 0.2, 0.0, z + 0.8],
+            ]
+        )
+        faces.append([base, base + 1, base + 2])
+    positions_array = np.asarray(positions, dtype=np.float32)
+    faces_array = np.asarray(faces, dtype=np.int32)
+    return obj_parser.RawMesh(
+        positions=positions_array,
+        uvs=np.zeros((len(positions_array), 2), dtype=np.float32),
+        normals=np.tile(
+            np.array([[0.0, 0.0, 1.0]], dtype=np.float32),
+            (len(positions_array), 1),
+        ),
+        face_pos_idx=faces_array,
+        face_uv_idx=faces_array.copy(),
+        face_nrm_idx=faces_array.copy(),
+        material_ranges=[
+            obj_parser.MaterialRange("rock", 0, len(faces_array))
+        ],
+    )
+
+
 def _current_manifest() -> dict:
     return {
         "version": chunker._VERSION,
@@ -576,6 +608,35 @@ def test_build_cache_attaches_optional_navigation_metadata(tmp_path):
     assert navigation["recommended_route_id"] == "centerline-0"
     assert navigation["routes"][0]["closed_loop"] is False
     assert navigation["routes"][0]["cells"] == [0, 0, 1, 0, 2, 0, 3, 0]
+
+
+def test_build_cache_writes_bounded_curvature_voxel_sidecar(tmp_path):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small source map")
+    cache_dir = tmp_path / "managed" / "map-key"
+
+    chunker.build_cache(
+        str(source),
+        _curved_navigation_mesh(),
+        {},
+        cache_dir=str(cache_dir),
+        chunk_size=1.0,
+    )
+
+    manifest = chunker.load_manifest(str(cache_dir))
+    navigation = manifest["navigation"]
+    assert navigation["voxel_cache"]["method"] == (
+        "curvature_corridor_voxels_v1"
+    )
+    assert navigation["route_selection_method"] == (
+        "largest_cached_curvature_volume_v1"
+    )
+    summary = navigation["routes"][0]["voxel_corridor"]
+    assert summary["built"] is True
+    assert summary["available_volume_m3"] > 0.0
+    sidecar = cache_dir / "navigation_voxels.json"
+    assert sidecar.is_file()
+    assert sidecar.stat().st_size < 64 * 1024 * 1024
 
 
 def test_build_cache_orients_navigation_metadata_from_model_sidecar(tmp_path):

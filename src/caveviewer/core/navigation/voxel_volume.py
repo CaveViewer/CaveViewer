@@ -10,6 +10,7 @@ that can be removed or replaced without changing centerline policy.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
+from collections import deque
 from dataclasses import dataclass
 import math
 
@@ -46,6 +47,8 @@ VOXEL_ANALYSIS_OUTCOME_NO_SURFACE_SAMPLES = "no_surface_samples"
 VOXEL_ANALYSIS_OUTCOME_ERROR = "error"
 VOXEL_ANALYSIS_OUTCOME_DISABLED = "disabled"
 VOXEL_ANALYSIS_OUTCOME_MESH_GUARD_UNAVAILABLE = "mesh_guard_unavailable"
+VOXEL_ANALYSIS_OUTCOME_CACHE_HIT = "cache_hit"
+VOXEL_ANALYSIS_OUTCOME_CACHE_MISS = "cache_miss"
 
 
 @dataclass(frozen=True)
@@ -243,6 +246,59 @@ class LocalVoxelVolume:
                 best_point = point
         return best_point
 
+    def corridor_volume_metrics(
+        self,
+        points: Sequence[Sequence[float]],
+        *,
+        max_clearance_samples: int = 8192,
+    ) -> dict[str, float | int | bool]:
+        """Measure bounded free space reachable from route samples.
+
+        This is a corridor-volume signal, not a watertight solid-volume
+        reconstruction. Surface voxels are treated as hard barriers and a
+        six-connected flood fill starts at the supplied route samples. The
+        bounded local box and the route seeds keep an open cave mouth from
+        turning the entire world into a candidate volume.
+        """
+        seed_indices = self._free_seed_indices(points)
+        free_cells = self._reachable_free_cells(seed_indices)
+        if not free_cells:
+            return {
+                "seed_count": int(len(seed_indices)),
+                "free_cell_count": 0,
+                "available_volume_m3": 0.0,
+                "surface_fraction": self._surface_fraction(),
+                "min_clearance_m": 0.0,
+                "mean_clearance_m": 0.0,
+                "clearance_sample_count": 0,
+                "flood_fill_truncated": False,
+            }
+
+        ordered_cells = sorted(free_cells)
+        sample_limit = max(1, int(max_clearance_samples))
+        stride = max(1, int(math.ceil(len(ordered_cells) / sample_limit)))
+        clearance_map = self._surface_clearance_distance_map()
+        fallback_distance = self.max_clearance_search_cells + 1
+        clearance_values = [
+            float(clearance_map.get(index, fallback_distance))
+            * self.voxel_size_m
+            for index in ordered_cells[::stride]
+        ]
+        return {
+            "seed_count": int(len(seed_indices)),
+            "free_cell_count": int(len(free_cells)),
+            "available_volume_m3": float(
+                len(free_cells) * self.voxel_size_m ** 3
+            ),
+            "surface_fraction": self._surface_fraction(),
+            "min_clearance_m": float(min(clearance_values)),
+            "mean_clearance_m": float(
+                sum(clearance_values) / max(1, len(clearance_values))
+            ),
+            "clearance_sample_count": int(len(clearance_values)),
+            "flood_fill_truncated": False,
+        }
+
     def diagnostic_payload(self) -> dict[str, object]:
         """Return bounded diagnostics suitable for the Guided Dive blackbox."""
         return {
@@ -253,6 +309,9 @@ class LocalVoxelVolume:
             "voxel_shape": [int(value) for value in self.shape],
             "voxel_count": int(self.voxel_count),
             "surface_cells": len(self.surface_cells),
+            "surface_occupied_volume_m3": float(
+                len(self.surface_cells) * self.voxel_size_m ** 3
+            ),
             "triangle_count": int(self.triangle_count),
             "surface_sample_count": int(self.surface_sample_count),
             "sampling_truncated": bool(self.sampling_truncated),
@@ -276,6 +335,80 @@ class LocalVoxelVolume:
         if last < first:
             return ()
         return tuple(range(first, last + 1))
+
+    def _free_seed_indices(
+        self,
+        points: Sequence[Sequence[float]],
+    ) -> tuple[VoxelIndex, ...]:
+        seeds: set[VoxelIndex] = set()
+        for point in points:
+            try:
+                index = self.voxel_index(point)
+            except (TypeError, ValueError):
+                continue
+            if not self.contains_index(index):
+                continue
+            if index not in self.surface_cells:
+                seeds.add(index)
+                continue
+            # A centerline sample can land in an inflated surface voxel after
+            # coarse rasterization. Find the nearest unblocked voxel without
+            # allowing a seed to jump across the whole local model.
+            for radius in range(1, self.max_clearance_search_cells + 2):
+                candidate = next(
+                    (
+                        item
+                        for item in _shell_indices(index, radius)
+                        if self.contains_index(item)
+                        and item not in self.surface_cells
+                    ),
+                    None,
+                )
+                if candidate is not None:
+                    seeds.add(candidate)
+                    break
+        return tuple(sorted(seeds))
+
+    def _reachable_free_cells(
+        self,
+        seeds: Sequence[VoxelIndex],
+    ) -> frozenset[VoxelIndex]:
+        visited = set(seeds)
+        queue = deque(seeds)
+        while queue:
+            current = queue.popleft()
+            for neighbor in _six_neighbor_indices(current):
+                if not self.contains_index(neighbor):
+                    continue
+                if neighbor in self.surface_cells or neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                queue.append(neighbor)
+        return frozenset(visited)
+
+    def _surface_fraction(self) -> float:
+        return float(len(self.surface_cells) / max(1, self.voxel_count))
+
+    def _surface_clearance_distance_map(self) -> dict[VoxelIndex, int]:
+        """Return a bounded six-connected distance map from surface cells."""
+        if not self.surface_cells:
+            return {}
+        distances = {index: 0 for index in self.surface_cells}
+        queue = deque(self.surface_cells)
+        while queue:
+            current = queue.popleft()
+            current_distance = distances[current]
+            if current_distance >= self.max_clearance_search_cells:
+                continue
+            next_distance = current_distance + 1
+            for neighbor in _six_neighbor_indices(current):
+                if not self.contains_index(neighbor):
+                    continue
+                if neighbor in distances:
+                    continue
+                distances[neighbor] = next_distance
+                queue.append(neighbor)
+        return distances
 
 
 @dataclass(frozen=True)
@@ -341,9 +474,10 @@ def analyze_curvature_guided_voxel_volume(
     voxel_size_m: float = DEFAULT_VOXEL_SIZE_M,
     curvature_rank_threshold: int = DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD,
     max_regions: int = DEFAULT_VOXEL_MAX_REGIONS,
-    max_distance_m: float = DEFAULT_VOXEL_MAX_DISTANCE_M,
+    max_distance_m: float | None = DEFAULT_VOXEL_MAX_DISTANCE_M,
     padding_m: float | None = None,
     max_voxels: int = DEFAULT_VOXEL_MAX_CELLS,
+    max_surface_samples: int = DEFAULT_VOXEL_MAX_SURFACE_SAMPLES,
     window_points: int = 3,
 ) -> CurvatureGuidedVoxelAnalysis:
     """Analyze curvature and return an explicit bounded voxel outcome."""
@@ -389,6 +523,7 @@ def analyze_curvature_guided_voxel_volume(
         config=VoxelVolumeConfig(
             voxel_size_m=size,
             max_voxels=max_voxels,
+            max_surface_samples=max_surface_samples,
         ),
     )
     if volume.triangle_count == 0:
@@ -421,9 +556,10 @@ def build_curvature_guided_voxel_volume(
     voxel_size_m: float = DEFAULT_VOXEL_SIZE_M,
     curvature_rank_threshold: int = DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD,
     max_regions: int = DEFAULT_VOXEL_MAX_REGIONS,
-    max_distance_m: float = DEFAULT_VOXEL_MAX_DISTANCE_M,
+    max_distance_m: float | None = DEFAULT_VOXEL_MAX_DISTANCE_M,
     padding_m: float | None = None,
     max_voxels: int = DEFAULT_VOXEL_MAX_CELLS,
+    max_surface_samples: int = DEFAULT_VOXEL_MAX_SURFACE_SAMPLES,
     window_points: int = 3,
 ) -> tuple[CurvatureProfile, LocalVoxelVolume | None]:
     """Analyze curvature and build a bounded volume around selected regions."""
@@ -436,6 +572,7 @@ def build_curvature_guided_voxel_volume(
         max_distance_m=max_distance_m,
         padding_m=padding_m,
         max_voxels=max_voxels,
+        max_surface_samples=max_surface_samples,
         window_points=window_points,
     )
     return analysis.profile, analysis.volume
@@ -508,7 +645,7 @@ def build_surface_voxel_volume(
 def _points_for_regions(
     points: Sequence[Sequence[float]],
     regions: Sequence[CurvatureRegion],
-    max_distance_m: float,
+    max_distance_m: float | None,
     profile: CurvatureProfile,
 ) -> tuple[Point, ...]:
     normalized = tuple(_point(point) for point in points)
@@ -517,7 +654,10 @@ def _points_for_regions(
         start = max(0, int(region.start_index))
         end = min(len(normalized) - 1, int(region.end_index))
         for index in range(start, end + 1):
-            if profile.cumulative_distances_m[index] <= float(max_distance_m):
+            if (
+                max_distance_m is None
+                or profile.cumulative_distances_m[index] <= float(max_distance_m)
+            ):
                 selected.add(index)
     return tuple(normalized[index] for index in sorted(selected))
 
@@ -626,6 +766,16 @@ def _shell_indices(center: VoxelIndex, radius: int) -> Iterable[VoxelIndex]:
                 if max(abs(dx), abs(dy), abs(dz)) != radius:
                     continue
                 yield (center[0] + dx, center[1] + dy, center[2] + dz)
+
+
+def _six_neighbor_indices(center: VoxelIndex) -> Iterable[VoxelIndex]:
+    x, y, z = center
+    yield (x - 1, y, z)
+    yield (x + 1, y, z)
+    yield (x, y - 1, z)
+    yield (x, y + 1, z)
+    yield (x, y, z - 1)
+    yield (x, y, z + 1)
 
 
 def _sample_axis_product(

@@ -642,6 +642,24 @@ def _auto_dive_navigation_context(
 
     navigation = manifest.get("navigation", {})
     navigation = navigation if isinstance(navigation, Mapping) else {}
+    selected_route_id = navigation.get("recommended_route_id")
+    selected_route = next(
+        (
+            route
+            for route in navigation.get("routes", ())
+            if isinstance(route, Mapping)
+            and (
+                selected_route_id is None
+                or route.get("id") == selected_route_id
+            )
+        ),
+        None,
+    ) if isinstance(navigation.get("routes"), Sequence) else None
+    selected_voxel_summary = (
+        selected_route.get("voxel_corridor")
+        if isinstance(selected_route, Mapping)
+        else None
+    )
     triangle_count = manifest.get("triangle_count")
     try:
         triangle_count = int(triangle_count)
@@ -699,12 +717,20 @@ def _auto_dive_navigation_context(
             "recommended_route_id": navigation.get("recommended_route_id"),
             "surface_driven": navigation.get("surface_driven"),
             "footprint_source": navigation.get("navigation_footprint_source"),
+            "route_selection_method": navigation.get("route_selection_method"),
+            "voxel_cache": navigation.get("voxel_cache"),
+            "recommended_route_voxel": selected_voxel_summary,
         },
         "algorithm_versions": {
             "runtime": AUTO_DIVE_RUNTIME_METHOD,
             "centerline": navigation.get("method"),
             "curvature": CURVATURE_PROFILE_METHOD,
             "voxel": VOXEL_VOLUME_METHOD,
+            "voxel_cache": (
+                navigation.get("voxel_cache", {}).get("method")
+                if isinstance(navigation.get("voxel_cache"), Mapping)
+                else None
+            ),
         },
         "settings": _auto_dive_settings_payload(settings),
     }
@@ -2716,9 +2742,17 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self.manifest is None:
             return None
         try:
+            settings = _auto_dive_settings_from_preferences()
+            cache_dir = getattr(self, "cache_dir", None)
+            if cache_dir is None:
+                return build_auto_dive_initial_camera_pose(
+                    self.manifest,
+                    settings=settings,
+                )
             return build_auto_dive_initial_camera_pose(
                 self.manifest,
-                settings=_auto_dive_settings_from_preferences(),
+                settings=settings,
+                cache_dir=cache_dir,
             )
         except NavigationConfigurationError as exc:
             _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
@@ -2741,6 +2775,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 build_auto_dive_initial_camera_pose,
                 self.manifest,
                 settings=settings,
+                cache_dir=self.cache_dir,
             )
         except Exception as exc:
             if executor is not None:

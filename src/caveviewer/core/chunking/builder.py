@@ -148,6 +148,11 @@ from caveviewer.core.chunking.upload import (
 from caveviewer.core.hardware import system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.navigation.cache_metadata import build_navigation_metadata
+from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGuard
+from caveviewer.core.navigation.voxel_cache import (
+    NAVIGATION_VOXEL_CACHE_NAME,
+    build_navigation_voxel_cache,
+)
 from caveviewer.core.workers.allocation import (
     MAX_WORKER_RAM_UTILIZATION,
     can_start_additional_worker,
@@ -634,6 +639,7 @@ def _build_incremental_obj_cache_in_directory(
         manifest,
         surface_positions=vertex_data.positions,
         navigation_start=_navigation_start_sidecar_for_obj(obj_path),
+        cache_dir=cache_dir,
     )
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
@@ -903,11 +909,13 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         "chunks": manifest_chunks,
         "footprint_cell_size": footprint_cell_size,
         "footprint_cells": footprint_flat,
+        "triangle_count": int(n_faces),
     }
     _attach_navigation_metadata(
         manifest,
         surface_positions=mesh.positions,
         navigation_start=_navigation_start_sidecar_for_obj(obj_path),
+        cache_dir=cache_dir,
     )
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
@@ -920,6 +928,7 @@ def _attach_navigation_metadata(
     *,
     surface_positions: np.ndarray | None,
     navigation_start: dict | None = None,
+    cache_dir: str | None = None,
 ) -> None:
     """Attach optional navigation metadata without affecting cache validity."""
     try:
@@ -937,6 +946,41 @@ def _attach_navigation_metadata(
         return
     if navigation_metadata is not None:
         manifest["navigation"] = navigation_metadata
+        if cache_dir:
+            try:
+                mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
+                    manifest,
+                    cache_dir=cache_dir,
+                )
+                if mesh_guard is None:
+                    _LOG.info(
+                        "Skipping cache-time navigation voxel analysis: "
+                        "cached mesh provider unavailable."
+                    )
+                    return
+                voxel_result = build_navigation_voxel_cache(
+                    manifest,
+                    navigation_metadata,
+                    triangle_provider=mesh_guard.triangle_meshes_for_bounds,
+                )
+                if voxel_result.built_route_count:
+                    _atomic_write_json(
+                        os.path.join(cache_dir, NAVIGATION_VOXEL_CACHE_NAME),
+                        voxel_result.payload,
+                    )
+                    _LOG.info(
+                        "Built cache-time navigation voxel models for %d route(s); "
+                        "recommended route=%s.",
+                        voxel_result.built_route_count,
+                        voxel_result.recommended_route_id,
+                    )
+            except Exception as exc:
+                navigation_metadata.pop("voxel_cache", None)
+                _LOG.warning(
+                    "Could not build optional cache-time navigation voxel data; "
+                    "cache remains usable without it: %s",
+                    exc,
+                )
 
 
 def _navigation_start_sidecar_for_obj(obj_path: str) -> dict | None:

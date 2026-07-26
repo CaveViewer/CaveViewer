@@ -27,6 +27,11 @@ from caveviewer.core.navigation.centerline import (
     navigable_footprint_neighbors,
     positive_manifest_float,
 )
+from caveviewer.core.navigation.voxel_cache import (
+    NAVIGATION_VOXEL_CACHE_METHOD,
+    NAVIGATION_VOXEL_CACHE_VERSION,
+    load_cached_navigation_voxel_volume,
+)
 from caveviewer.core.navigation.route import NavigationConfigurationError
 
 
@@ -175,6 +180,7 @@ def cached_centerline_path(
     manifest: Mapping[str, Any],
     *,
     route_id: str | None = None,
+    cache_dir: str | None = None,
 ) -> CenterlinePath | None:
     """Return the selected cached centerline path, if the manifest has one."""
     navigation = manifest.get(NAVIGATION_METADATA_KEY)
@@ -202,7 +208,11 @@ def cached_centerline_path(
             break
     if selected_route is None:
         return None
-    return _centerline_path_from_metadata_route(manifest, selected_route)
+    return _centerline_path_from_metadata_route(
+        manifest,
+        selected_route,
+        cache_dir=cache_dir,
+    )
 
 
 def _select_navigation_route_candidate(
@@ -571,6 +581,8 @@ def _path_with_cells(
         cached_y_ranges=path.cached_y_ranges,
         cached_clearance_margins=path.cached_clearance_margins,
         cached_recovery_hotspots=path.cached_recovery_hotspots,
+        cached_voxel_volume=path.cached_voxel_volume,
+        cached_voxel_metrics=path.cached_voxel_metrics,
     )
 
 
@@ -853,6 +865,8 @@ def _recommended_route_id(routes: Sequence[Mapping[str, Any]]) -> str:
 def _centerline_path_from_metadata_route(
     manifest: Mapping[str, Any],
     route: Mapping[str, Any],
+    *,
+    cache_dir: str | None = None,
 ) -> CenterlinePath | None:
     try:
         cell_size = positive_manifest_float(
@@ -918,6 +932,19 @@ def _centerline_path_from_metadata_route(
         cached_recovery_hotspots = _parse_recovery_hotspots(
             route.get("recovery_hotspots")
         )
+        cached_voxel_metrics = _parse_voxel_metrics(
+            route.get("voxel_corridor")
+        )
+        route_id = _string_or_none(route.get("id"))
+        cached_voxel_volume = (
+            None
+            if cache_dir is None or route_id is None
+            else load_cached_navigation_voxel_volume(
+                cache_dir,
+                manifest,
+                route_id,
+            )
+        )
         clearance_scores = clearance_scores_for_footprint(component)
         length_m = _float_or_default(
             route.get("length_m"),
@@ -954,6 +981,8 @@ def _centerline_path_from_metadata_route(
         cached_y_ranges=cached_y_ranges,
         cached_clearance_margins=cached_clearance_margins,
         cached_recovery_hotspots=cached_recovery_hotspots,
+        cached_voxel_volume=cached_voxel_volume,
+        cached_voxel_metrics=cached_voxel_metrics,
     )
 
 
@@ -1057,6 +1086,15 @@ def _parse_recovery_hotspots(
     straight_runs = _parse_float_sequence(value.get("straight_run_cells"))
     corridor_runs = _parse_float_sequence(value.get("corridor_run_cells"))
     degree_scores = _parse_float_sequence(value.get("degree_scores"))
+    available_volumes = _parse_float_sequence(
+        value.get("available_volume_m3")
+    )
+    volume_per_route = _parse_float_sequence(
+        value.get("volume_per_route_m")
+    )
+    voxel_clearance = _parse_float_sequence(
+        value.get("voxel_mean_clearance_m")
+    )
     parsed: dict[FootprintCell, dict[str, float]] = {}
     for index, cell in enumerate(cells):
         hotspot = {"score": float(scores[index])}
@@ -1068,7 +1106,66 @@ def _parse_recovery_hotspots(
             hotspot["corridor_run_cells"] = float(corridor_runs[index])
         if index < len(degree_scores):
             hotspot["degree_score"] = float(degree_scores[index])
+        if index < len(available_volumes):
+            hotspot["available_volume_m3"] = float(
+                available_volumes[index]
+            )
+        if index < len(volume_per_route):
+            hotspot["volume_per_route_m"] = float(volume_per_route[index])
+        if index < len(voxel_clearance):
+            hotspot["voxel_mean_clearance_m"] = float(voxel_clearance[index])
         parsed[cell] = hotspot
+    return parsed
+
+
+def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
+    """Parse compact cache-time voxel metrics without loading the sidecar."""
+    if not isinstance(value, Mapping):
+        return None
+    if value.get("version") != NAVIGATION_VOXEL_CACHE_VERSION:
+        return None
+    if value.get("method") != NAVIGATION_VOXEL_CACHE_METHOD:
+        return None
+    parsed: dict[str, Any] = {
+        "version": NAVIGATION_VOXEL_CACHE_VERSION,
+        "method": NAVIGATION_VOXEL_CACHE_METHOD,
+    }
+    numeric_keys = (
+        "voxel_size_m",
+        "available_volume_m3",
+        "volume_per_route_m",
+        "free_cell_count",
+        "seed_count",
+        "surface_fraction",
+        "min_clearance_m",
+        "mean_clearance_m",
+        "clearance_sample_count",
+        "route_length_m",
+        "triangle_count",
+        "surface_sample_count",
+        "curvature_region_count",
+        "selected_region_count",
+    )
+    float_keys = {
+        "voxel_size_m",
+        "available_volume_m3",
+        "volume_per_route_m",
+        "surface_fraction",
+        "min_clearance_m",
+        "mean_clearance_m",
+        "route_length_m",
+    }
+    for key in numeric_keys:
+        raw = value.get(key)
+        if raw is None:
+            continue
+        try:
+            parsed[key] = float(raw) if key in float_keys else int(raw)
+        except (TypeError, ValueError):
+            continue
+    for key in ("built", "sampling_truncated", "flood_fill_truncated"):
+        if key in value:
+            parsed[key] = bool(value.get(key))
     return parsed
 
 

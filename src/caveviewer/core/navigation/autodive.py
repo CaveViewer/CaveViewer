@@ -53,9 +53,14 @@ from caveviewer.core.navigation.voxel_volume import (
     LocalVoxelVolume,
     VOXEL_ANALYSIS_OUTCOME_DISABLED,
     VOXEL_ANALYSIS_OUTCOME_ERROR,
+    VOXEL_ANALYSIS_OUTCOME_CACHE_HIT,
+    VOXEL_ANALYSIS_OUTCOME_CACHE_MISS,
     VOXEL_ANALYSIS_OUTCOME_MESH_GUARD_UNAVAILABLE,
     VOXEL_VOLUME_METHOD,
     analyze_curvature_guided_voxel_volume,
+)
+from caveviewer.core.navigation.voxel_cache import (
+    NAVIGATION_VOXEL_CACHE_METHOD,
 )
 
 
@@ -406,6 +411,7 @@ def build_auto_dive_initial_camera_pose(
     manifest: Mapping[str, Any],
     *,
     settings: AutoDiveSettings | None = None,
+    cache_dir: str | os.PathLike[str] | None = None,
 ) -> RouteKeyframe:
     """Return a safe endpoint camera pose for a newly loaded map.
 
@@ -418,7 +424,7 @@ def build_auto_dive_initial_camera_pose(
     """
     settings = settings or AutoDiveSettings()
     _validate_auto_dive_settings(settings)
-    centerline_path = cached_centerline_path(manifest)
+    centerline_path = cached_centerline_path(manifest, cache_dir=cache_dir)
     if centerline_path is None:
         centerline_path = generate_centerline_path(
             manifest,
@@ -482,7 +488,7 @@ def build_centerline_auto_dive_plan(
     if current.shape != (3,):
         raise NavigationConfigurationError("current_position must be a 3D point")
 
-    centerline_path = cached_centerline_path(manifest)
+    centerline_path = cached_centerline_path(manifest, cache_dir=cache_dir)
     if centerline_path is None:
         centerline_path = generate_centerline_path(
             manifest,
@@ -550,15 +556,66 @@ def build_centerline_auto_dive_plan(
         manifest,
         cache_dir=cache_dir,
     )
+    cached_voxel_volume = (
+        getattr(centerline_path, "cached_voxel_volume", None)
+        if bool(settings.voxel_analysis_enabled)
+        else None
+    )
+    navigation_metadata = manifest.get(NAVIGATION_METADATA_KEY)
+    cache_voxel_cache_declared = bool(
+        isinstance(navigation_metadata, Mapping)
+        and isinstance(navigation_metadata.get("voxel_cache"), Mapping)
+    )
+    if cached_voxel_volume is not None:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_volume",
+            {
+                "method": NAVIGATION_VOXEL_CACHE_METHOD,
+                "built": True,
+                "outcome": VOXEL_ANALYSIS_OUTCOME_CACHE_HIT,
+                "source": "cache",
+                "metrics": getattr(centerline_path, "cached_voxel_metrics", None),
+                "volume": cached_voxel_volume.diagnostic_payload(),
+            },
+        )
+    elif cache_voxel_cache_declared and not bool(settings.voxel_analysis_enabled):
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_volume",
+            {
+                "method": NAVIGATION_VOXEL_CACHE_METHOD,
+                "built": False,
+                "outcome": VOXEL_ANALYSIS_OUTCOME_DISABLED,
+                "source": "cache",
+            },
+        )
+    elif cache_voxel_cache_declared and bool(settings.voxel_analysis_enabled):
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_volume",
+            {
+                "method": NAVIGATION_VOXEL_CACHE_METHOD,
+                "built": False,
+                "outcome": VOXEL_ANALYSIS_OUTCOME_CACHE_MISS,
+                "source": "cache",
+                "metrics": getattr(centerline_path, "cached_voxel_metrics", None),
+            },
+        )
     collision_validator = _AutoDiveCollisionValidator(
         centerline_path,
         mesh_guard=mesh_guard,
-        voxel_builder=_make_auto_dive_voxel_builder(
-            route_points=route_points,
-            centerline_path=centerline_path,
-            mesh_guard=mesh_guard,
-            settings=settings,
-            diagnostics=diagnostics,
+        voxel_volume=cached_voxel_volume,
+        voxel_builder=(
+            None
+            if cached_voxel_volume is not None or cache_voxel_cache_declared
+            else _make_auto_dive_voxel_builder(
+                route_points=route_points,
+                centerline_path=centerline_path,
+                mesh_guard=mesh_guard,
+                settings=settings,
+                diagnostics=diagnostics,
+            )
         ),
     )
     selected_route = _select_best_auto_dive_route_candidate(
@@ -2275,7 +2332,17 @@ def _auto_dive_voxel_volume_payload(
     volume = collision_validator.voxel_volume
     if volume is None:
         return None
-    return volume.diagnostic_payload()
+    payload = volume.diagnostic_payload()
+    if volume is collision_validator.centerline_path.cached_voxel_volume:
+        payload["source"] = "cache"
+        payload["cache_metrics"] = getattr(
+            collision_validator.centerline_path,
+            "cached_voxel_metrics",
+            None,
+        )
+    else:
+        payload["source"] = "runtime"
+    return payload
 
 
 def _mesh_recovery_is_enabled(
@@ -3011,6 +3078,16 @@ def _mesh_clear_recovery_footprint_path(
                     if cached_hotspot is None
                     else float(cached_hotspot.get("score", 0.0))
                 )
+                cached_volume_per_route = (
+                    0.0
+                    if cached_hotspot is None
+                    else float(cached_hotspot.get("volume_per_route_m", 0.0))
+                )
+                cached_volume_m3 = (
+                    0.0
+                    if cached_hotspot is None
+                    else float(cached_hotspot.get("available_volume_m3", 0.0))
+                )
                 key = (
                     bool(scan_in_cone),
                     (
@@ -3021,6 +3098,8 @@ def _mesh_clear_recovery_footprint_path(
                     -int(path_avoidance_count),
                     float(selection_score_m),
                     float(path_quality_m),
+                    float(cached_volume_per_route),
+                    float(cached_volume_m3),
                     float(cached_hotspot_score),
                     float(path_distance_m),
                     float(net_distance_m),
@@ -3093,6 +3172,12 @@ def _mesh_clear_recovery_footprint_path(
                 }
                 candidate_payload["cached_hotspot_score"] = float(
                     cached_hotspot_score
+                )
+                candidate_payload["cached_volume_per_route_m"] = float(
+                    cached_volume_per_route
+                )
+                candidate_payload["cached_available_volume_m3"] = float(
+                    cached_volume_m3
                 )
                 if cached_hotspot is not None:
                     candidate_payload["cached_hotspot"] = cached_hotspot
@@ -3377,6 +3462,9 @@ def _mesh_recovery_cached_hotspot_payload(
         "straight_run_cells",
         "corridor_run_cells",
         "degree_score",
+        "available_volume_m3",
+        "volume_per_route_m",
+        "voxel_mean_clearance_m",
     ):
         value = hotspot.get(key)
         if value is None:

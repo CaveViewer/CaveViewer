@@ -42,16 +42,23 @@ Guided Dive keeps the centerline generator and local geometric refinements
 replaceable. `core.navigation.curvature` profiles any 3D route polyline and
 labels contiguous high-curvature regions with map-relative ranks from 0 to 100.
 `core.navigation.voxel_volume` can then rasterize cached triangle surfaces into
-a bounded local voxel field around selected regions. It is deliberately a
-surface-distance guide rather than a second collision authority: the existing
-exact triangle intersection guard still accepts or rejects recovery edges.
+a bounded local voxel field around selected regions. During cache construction,
+`core.navigation.voxel_cache` reuses the already-written chunk files to build
+small models for qualifying curved route sections. It stores compact route
+volume summaries in the manifest and compressed surface occupancy in the
+optional `navigation_voxels.json` sidecar. The cache-time selector can prefer
+the largest reachable corridor volume while preserving an explicit
+navigation-start route.
 
-The voxel field is built lazily only when normal Guided Dive candidates have
-failed cached-mesh validation. It queries only chunks intersecting the selected
-curvy-region bounds, caps the voxel capacity and surface samples, and refines
-recovery waypoints inside the existing footprint cell and cached Y range. This
-keeps the cache format unchanged and allows the voxel builder—or the entire
-centerline source—to be removed or replaced behind the navigation seam without
+At runtime Guided Dive loads the cached model when available, so replanning
+does not rasterize triangles on the render machine. It uses the model to rank
+available corridor candidates and refine recovery waypoints inside the existing
+footprint cell and cached Y range. Older caches, missing sidecars, disabled
+voxel analysis, and cache-build failures retain the bounded lazy fallback. The
+voxel field is deliberately a surface-distance/corridor-volume guide rather
+than a second collision authority: the existing exact triangle intersection
+guard still accepts or rejects recovery edges. Both the voxel builder and the
+entire centerline source remain replaceable behind the navigation seam without
 changing GUI or streaming code.
 
 Guided Dive's opt-in JSONL blackbox records use schema version 2. Every event
@@ -115,8 +122,12 @@ below 80%. Unknown availability or memory pressure keeps the build at its
 already-admitted concurrency, with one worker always able to make progress.
 
 The cache manifest records chunk metadata, spatial bounds, material references,
-and the minimap occupancy footprint. A cache-format change must either remain
-backward compatible or increment its version and force a deliberate rebuild.
+the minimap occupancy footprint, and optional versioned navigation summaries.
+Cache-time voxel occupancy is kept in the atomically published
+`navigation_voxels.json` sidecar rather than in the render manifest. A
+cache-format change must either remain backward compatible or increment its
+version and force a deliberate rebuild; unsupported or missing optional voxel
+artifacts must never make a render cache unusable.
 The render-chunk binary format remains at version 1: unknown manifest fields
 and extra subdirectories inside a selected generated cache are ignored, while
 imports write only the active cache artifacts.
