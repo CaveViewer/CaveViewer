@@ -261,8 +261,10 @@ class LocalVoxelVolume:
         turning the entire world into a candidate volume.
         """
         seed_indices = self._free_seed_indices(points)
-        free_cells = self._reachable_free_cells(seed_indices)
-        if not free_cells:
+        clearance_by_cell = self._filled_free_cell_clearance_from_seeds(
+            seed_indices
+        )
+        if not clearance_by_cell:
             return {
                 "seed_count": int(len(seed_indices)),
                 "free_cell_count": 0,
@@ -274,21 +276,18 @@ class LocalVoxelVolume:
                 "flood_fill_truncated": False,
             }
 
-        ordered_cells = sorted(free_cells)
+        ordered_cells = sorted(clearance_by_cell)
         sample_limit = max(1, int(max_clearance_samples))
         stride = max(1, int(math.ceil(len(ordered_cells) / sample_limit)))
-        clearance_map = self._surface_clearance_distance_map()
-        fallback_distance = self.max_clearance_search_cells + 1
         clearance_values = [
-            float(clearance_map.get(index, fallback_distance))
-            * self.voxel_size_m
+            float(clearance_by_cell[index])
             for index in ordered_cells[::stride]
         ]
         return {
             "seed_count": int(len(seed_indices)),
-            "free_cell_count": int(len(free_cells)),
+            "free_cell_count": int(len(clearance_by_cell)),
             "available_volume_m3": float(
-                len(free_cells) * self.voxel_size_m ** 3
+                len(clearance_by_cell) * self.voxel_size_m ** 3
             ),
             "surface_fraction": self._surface_fraction(),
             "min_clearance_m": float(min(clearance_values)),
@@ -297,6 +296,35 @@ class LocalVoxelVolume:
             ),
             "clearance_sample_count": int(len(clearance_values)),
             "flood_fill_truncated": False,
+        }
+
+    def filled_free_cell_clearance_m(
+        self,
+        points: Sequence[Sequence[float]],
+    ) -> dict[VoxelIndex, float]:
+        """Return the bounded filled free-space cells reached from ``points``.
+
+        Surface voxels are barriers and the flood fill is limited to this
+        local volume. The result is intentionally a plain mapping so callers
+        can aggregate it into a coarser navigation graph without coupling the
+        graph to this voxel implementation.
+        """
+        seed_indices = self._free_seed_indices(points)
+        return self._filled_free_cell_clearance_from_seeds(seed_indices)
+
+    def _filled_free_cell_clearance_from_seeds(
+        self,
+        seed_indices: Sequence[VoxelIndex],
+    ) -> dict[VoxelIndex, float]:
+        free_cells = self._reachable_free_cells(seed_indices)
+        if not free_cells:
+            return {}
+        clearance_map = self._surface_clearance_distance_map()
+        fallback_distance = self.max_clearance_search_cells + 1
+        return {
+            index: float(clearance_map.get(index, fallback_distance))
+            * self.voxel_size_m
+            for index in free_cells
         }
 
     def diagnostic_payload(self) -> dict[str, object]:

@@ -726,6 +726,11 @@ def _auto_dive_navigation_context(
             "centerline": navigation.get("method"),
             "curvature": CURVATURE_PROFILE_METHOD,
             "voxel": VOXEL_VOLUME_METHOD,
+            "voxel_branch_lookahead": (
+                selected_voxel_summary.get("branch_lookahead_method")
+                if isinstance(selected_voxel_summary, Mapping)
+                else None
+            ),
             "voxel_cache": (
                 navigation.get("voxel_cache", {}).get("method")
                 if isinstance(navigation.get("voxel_cache"), Mapping)
@@ -3340,7 +3345,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             None,
         )
         if callable(observe_assist_position):
-            observe_assist_position(self.camera.position)
+            observe_assist_position(
+                self.camera.position,
+                now=now,
+                yaw=float(getattr(self.camera, "yaw", 0.0)),
+                pitch=float(getattr(self.camera, "pitch", 0.0)),
+                roll=float(getattr(self.camera, "roll", 0.0)),
+                world=self.world,
+            )
         state = controller.update(self.camera, self.world, now=now)
         navigation_clamped = False
         if self._navigation_guard_enabled:

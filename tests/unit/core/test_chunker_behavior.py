@@ -610,7 +610,7 @@ def test_build_cache_attaches_optional_navigation_metadata(tmp_path):
     assert navigation["routes"][0]["cells"] == [0, 0, 1, 0, 2, 0, 3, 0]
 
 
-def test_build_cache_writes_bounded_curvature_voxel_sidecar(tmp_path):
+def test_build_cache_writes_bounded_whole_cave_voxel_sidecar(tmp_path):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small source map")
     cache_dir = tmp_path / "managed" / "map-key"
@@ -626,10 +626,10 @@ def test_build_cache_writes_bounded_curvature_voxel_sidecar(tmp_path):
     manifest = chunker.load_manifest(str(cache_dir))
     navigation = manifest["navigation"]
     assert navigation["voxel_cache"]["method"] == (
-        "curvature_corridor_voxels_v1"
+        "whole_cave_voxel_atlas_v2"
     )
     assert navigation["route_selection_method"] == (
-        "largest_cached_curvature_volume_v1"
+        "largest_cached_cave_volume_v2"
     )
     summary = navigation["routes"][0]["voxel_corridor"]
     assert summary["built"] is True

@@ -1130,8 +1130,22 @@ def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
         "version": NAVIGATION_VOXEL_CACHE_VERSION,
         "method": NAVIGATION_VOXEL_CACHE_METHOD,
     }
+    for key in (
+        "curvature_method",
+        "coverage_scope",
+        "model_kind",
+        "navigation_graph_method",
+        "branch_lookahead_method",
+    ):
+        raw = value.get(key)
+        if isinstance(raw, str):
+            parsed[key] = raw
     numeric_keys = (
         "voxel_size_m",
+        "tile_size_m",
+        "max_tiles",
+        "max_cells",
+        "max_surface_samples",
         "available_volume_m3",
         "volume_per_route_m",
         "free_cell_count",
@@ -1145,15 +1159,23 @@ def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
         "surface_sample_count",
         "curvature_region_count",
         "selected_region_count",
+        "tile_count",
+        "coverage_cell_count",
+        "tiles_skipped",
+        "navigation_cell_count",
+        "filled_free_cell_count",
+        "progress_max_m",
     )
     float_keys = {
         "voxel_size_m",
+        "tile_size_m",
         "available_volume_m3",
         "volume_per_route_m",
         "surface_fraction",
         "min_clearance_m",
         "mean_clearance_m",
         "route_length_m",
+        "progress_max_m",
     }
     for key in numeric_keys:
         raw = value.get(key)
@@ -1163,9 +1185,57 @@ def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
             parsed[key] = float(raw) if key in float_keys else int(raw)
         except (TypeError, ValueError):
             continue
-    for key in ("built", "sampling_truncated", "flood_fill_truncated"):
+    for key in (
+        "built",
+        "sampling_truncated",
+        "flood_fill_truncated",
+        "coverage_includes_preceding_curvature",
+    ):
         if key in value:
             parsed[key] = bool(value.get(key))
+    for key in ("bounds_min", "bounds_max"):
+        raw = value.get(key)
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            continue
+        if len(raw) != 3:
+            continue
+        try:
+            bounds = [float(item) for item in raw]
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(item) for item in bounds):
+            parsed[key] = bounds
+    raw_regions = value.get("selected_regions")
+    if isinstance(raw_regions, Sequence) and not isinstance(
+        raw_regions,
+        (str, bytes),
+    ):
+        regions: list[dict[str, Any]] = []
+        for raw_region in raw_regions[:8]:
+            if not isinstance(raw_region, Mapping):
+                continue
+            region: dict[str, Any] = {}
+            for key in ("start_index", "end_index", "max_rank_0_100"):
+                raw = raw_region.get(key)
+                try:
+                    region[key] = int(raw)
+                except (TypeError, ValueError):
+                    continue
+            for key in (
+                "start_distance_m",
+                "end_distance_m",
+                "max_curvature_density_rad_per_m",
+            ):
+                raw = raw_region.get(key)
+                try:
+                    number = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(number):
+                    region[key] = number
+            if region:
+                regions.append(region)
+        parsed["selected_regions"] = regions
     return parsed
 
 

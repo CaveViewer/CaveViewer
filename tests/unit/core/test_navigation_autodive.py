@@ -7,14 +7,18 @@ import pytest
 
 from caveviewer.core.chunking import io as chunk_io
 from caveviewer.core.navigation.autodive import (
+    AutoDivePlanningBudgetExceeded,
     DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
     DEFAULT_AUTO_DIVE_VERTICAL_POSITION_FRACTION,
+    _AutoDivePlanningBudget,
     _AutoDiveCollisionValidator,
     AutoDiveSettings,
     _AutoDiveRouteSamples,
+    _auto_dive_points_for_waypoint_cells,
     _centerline_cells_form_closed_loop,
     _cone_chain_anchor_indices,
     _mesh_clear_recovery_footprint_path,
+    _mesh_recovery_edge_is_clear,
     _open_arc_from_closed_loop,
     _repelled_auto_dive_points,
     _mesh_recovery_scan_alignment,
@@ -55,6 +59,29 @@ def test_auto_dive_uses_longest_centerline_component():
     assert min(point[0] for point in plan.route_points[1:]) > 35.0
     assert plan.route.duration_s == pytest.approx(plan.route_length_m)
     assert plan.render_distance_cells == 4
+
+
+def test_auto_dive_runtime_planning_budget_reports_expired_phase():
+    events = []
+
+    with pytest.raises(AutoDivePlanningBudgetExceeded):
+        build_centerline_auto_dive_plan(
+            _l_bend_manifest(),
+            current_position=(0.5, 1.0, 0.5),
+            settings=AutoDiveSettings(
+                planning_budget_s=1e-9,
+                keyframe_spacing_m=1000.0,
+            ),
+            diagnostics=lambda event, payload: events.append((event, payload)),
+        )
+
+    budget_events = [
+        payload
+        for event, payload in events
+        if event == "planning_budget_exceeded"
+    ]
+    assert budget_events
+    assert budget_events[-1]["phase"] == "initialization"
 
 
 def test_auto_dive_route_keeps_bend_waypoint_instead_of_cutting_wall():
@@ -292,6 +319,35 @@ def test_auto_dive_dedupes_duplicate_cached_navigation_points():
         (20.5, 1.0, 0.5),
         (20.5, 1.5, 0.5),
         (21.5, 1.5, 1.5),
+    )
+
+
+def test_auto_dive_voxel_route_uses_cell_centers_not_cached_centerline_points():
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0), (1, 1)),
+        route_cells=((0, 0), (1, 0), (1, 1)),
+        route_points=(
+            (0.5, 1.0, 0.5),
+            (0.5, 1.0, 0.5),
+            (1.5, 1.0, 1.5),
+        ),
+    )
+    centerline_path = cached_centerline_path(manifest)
+
+    assert centerline_path is not None
+    points = _auto_dive_points_for_waypoint_cells(
+        centerline_path,
+        waypoint_cells=((1, 0), (1, 1)),
+        route_xz=((1.5, 0.5), (1.5, 1.5)),
+        manifest=manifest,
+        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        prefer_route_cell_centers=True,
+        fallback_y=1.0,
+    )
+
+    assert tuple((point[0], point[2]) for point in points) == (
+        (1.5, 0.5),
+        (1.5, 1.5),
     )
 
 
@@ -732,6 +788,121 @@ def test_auto_dive_mesh_recovery_logs_search_alternatives(tmp_path):
     assert payload["budget_exhausted"] is False
     assert payload["max_visited_cells"] > payload["visited_cells"]
     assert payload["max_edge_tests"] > payload["edge_tests"]
+
+
+def test_auto_dive_voxel_recovery_does_not_reject_filled_space_for_lateral_score(
+    tmp_path,
+):
+    component_cells = [
+        (x, z)
+        for x in range(5)
+        for z in range(5)
+    ]
+    route_cells = ((0, 2), (1, 2))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+    manifest["navigation"]["routes"][0]["clearance_margins"] = [
+        1.0 for _cell in route_cells
+    ]
+    centerline_path = cached_centerline_path(manifest)
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=str(tmp_path),
+    )
+
+    assert centerline_path is not None
+    assert guard is not None
+    current = route_points[0]
+    strict_cache = {(0, 2): current}
+    assert not _mesh_recovery_edge_is_clear(
+        centerline_path,
+        (0, 2),
+        (1, 2),
+        current_point=current,
+        start_cell=(0, 2),
+        collision_validator=_AutoDiveCollisionValidator(
+            centerline_path,
+            mesh_guard=guard,
+        ),
+        point_cache=strict_cache,
+        edge_cache={},
+    )
+
+    voxel_cache = {(0, 2): current}
+    assert _mesh_recovery_edge_is_clear(
+        centerline_path,
+        (0, 2),
+        (1, 2),
+        current_point=current,
+        start_cell=(0, 2),
+        collision_validator=_AutoDiveCollisionValidator(
+            centerline_path,
+            mesh_guard=guard,
+        ),
+        point_cache=voxel_cache,
+        edge_cache={},
+        use_footprint_centers=True,
+    )
+
+
+def test_auto_dive_mesh_recovery_logs_budget_abort_details(tmp_path):
+    component_cells = ((0, 0), (1, 0), (2, 0))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, 0.5)
+        for x, _z in component_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=component_cells,
+        route_points=route_points,
+    )
+    centerline_path = cached_centerline_path(manifest)
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=str(tmp_path),
+    )
+    events = []
+
+    assert centerline_path is not None
+    assert guard is not None
+    with pytest.raises(AutoDivePlanningBudgetExceeded):
+        _mesh_clear_recovery_footprint_path(
+            centerline_path,
+            start_cell=(0, 0),
+            target_indices={(1, 0): 1},
+            current_point=route_points[0],
+            current_yaw=0.0,
+            current_pitch=0.0,
+            current_travel_yaw=0.0,
+            current_travel_pitch=0.0,
+            avoid_positions=None,
+            collision_validator=_AutoDiveCollisionValidator(
+                centerline_path,
+                mesh_guard=guard,
+            ),
+            diagnostics=lambda event, payload: events.append((event, payload)),
+            planning_budget=_AutoDivePlanningBudget(
+                started_at=0.0,
+                budget_s=1e-9,
+            ),
+        )
+
+    payload = [
+        payload
+        for event, payload in events
+        if event == "mesh_recovery_search"
+    ][-1]
+    assert payload["aborted"] is True
+    assert payload["abort_phase"] == "mesh_recovery_search"
+    assert payload["budget_exhausted"] is True
+    assert payload["visited_cells"] == 0
 
 
 def test_auto_dive_mesh_recovery_builds_local_voxel_volume_for_a_bend(tmp_path):

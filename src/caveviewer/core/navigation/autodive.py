@@ -61,6 +61,9 @@ from caveviewer.core.navigation.voxel_volume import (
 )
 from caveviewer.core.navigation.voxel_cache import (
     NAVIGATION_VOXEL_CACHE_METHOD,
+    NAVIGATION_VOXEL_GRAPH_METHOD,
+    NavigationVoxelAtlas,
+    NavigationVoxelRoutePlan,
 )
 
 
@@ -75,6 +78,9 @@ DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS = (
     NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS
 )
 DEFAULT_AUTO_DIVE_LOOKAHEAD_DISTANCE_M = 8.0
+# Runtime replans must not monopolize a consumer machine. Initial route
+# planning remains uncapped; the replanner supplies this budget explicitly.
+DEFAULT_AUTO_DIVE_REPLAN_PLANNING_BUDGET_S = 8.0
 AUTO_DIVE_RUNTIME_METHOD = "candidate_mesh_recovery_v1"
 DEFAULT_AUTO_DIVE_TRUSTED_MAX_SEGMENT_CELLS = 6.0
 # Keep the camera well back from a cached-mesh boundary. A one-metre pullback
@@ -91,9 +97,20 @@ _AUTO_DIVE_MESH_RECOVERY_SCAN_PITCH_OFFSETS_DEG = (
     45.0,
 )
 _AUTO_DIVE_MESH_RECOVERY_SCAN_CONE_ALIGNMENT = math.cos(math.radians(22.5))
-_AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES = 90.0
+# A 90-degree cone admitted exactly sideways recovery targets. Those targets
+# can then turn toward the entrance even though their first dot product was
+# not negative. Keep a modest turn allowance, but require meaningful forward
+# intent; ambiguous geometry should ask for assistance rather than backtrack.
+_AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES = 75.0
 _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT = math.cos(
     math.radians(_AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES)
+)
+# The mesh-recovery search may explore a ninety-degree turn so it can find a
+# valid passage around an obstacle. Final route acceptance remains stricter;
+# otherwise an exactly sideways recovery target can be mistaken for progress.
+_AUTO_DIVE_MESH_RECOVERY_TARGET_CONE_DEGREES = 90.0
+_AUTO_DIVE_MESH_RECOVERY_TARGET_ALIGNMENT = math.cos(
+    math.radians(_AUTO_DIVE_MESH_RECOVERY_TARGET_CONE_DEGREES)
 )
 _AUTO_DIVE_MESH_RECOVERY_FORWARD_ALIGNMENT = 0.0
 _AUTO_DIVE_MESH_RECOVERY_TURN_PENALTY_CELLS = 5.0
@@ -130,6 +147,64 @@ class AutoDiveSettings:
     voxel_max_regions: int = DEFAULT_VOXEL_MAX_REGIONS
     voxel_max_distance_m: float = DEFAULT_VOXEL_MAX_DISTANCE_M
     voxel_max_cells: int = DEFAULT_VOXEL_MAX_CELLS
+    # None is intentional for the initial route. AutoDiveReplanner replaces
+    # this value on each runtime replan with its bounded planning budget.
+    planning_budget_s: float | None = None
+
+
+class AutoDivePlanningBudgetExceeded(NavigationConfigurationError):
+    """Raised when a runtime route plan exceeds its cooperative time budget."""
+
+    def __init__(self, *, budget_s: float, elapsed_s: float, phase: str) -> None:
+        self.budget_s = float(budget_s)
+        self.elapsed_s = float(elapsed_s)
+        self.phase = str(phase)
+        super().__init__(
+            "Guided Dive planning budget exceeded during "
+            f"{self.phase} ({self.elapsed_s:.3f}s >= {self.budget_s:.3f}s)"
+        )
+
+
+@dataclass(frozen=True)
+class _AutoDivePlanningBudget:
+    """Cooperative deadline shared by one runtime planning operation."""
+
+    started_at: float
+    budget_s: float | None
+
+    @classmethod
+    def from_settings(cls, settings: AutoDiveSettings) -> "_AutoDivePlanningBudget":
+        budget = settings.planning_budget_s
+        return cls(
+            started_at=time.perf_counter(),
+            budget_s=None if budget is None else float(budget),
+        )
+
+    def check(
+        self,
+        phase: str,
+        *,
+        diagnostics: AutoDiveDiagnosticSink | None = None,
+    ) -> None:
+        if self.budget_s is None:
+            return
+        elapsed_s = max(0.0, time.perf_counter() - self.started_at)
+        if elapsed_s < self.budget_s:
+            return
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "planning_budget_exceeded",
+            {
+                "budget_s": float(self.budget_s),
+                "elapsed_s": float(elapsed_s),
+                "phase": str(phase),
+            },
+        )
+        raise AutoDivePlanningBudgetExceeded(
+            budget_s=float(self.budget_s),
+            elapsed_s=float(elapsed_s),
+            phase=str(phase),
+        )
 
 
 @dataclass(frozen=True)
@@ -240,7 +315,7 @@ class _AutoDiveCollisionValidator:
 
     centerline_path: CenterlinePath
     mesh_guard: CachedChunkMeshCollisionGuard | None = None
-    voxel_volume: LocalVoxelVolume | None = None
+    voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None = None
     voxel_builder: Callable[[], LocalVoxelVolume | None] | None = None
 
     @property
@@ -277,6 +352,7 @@ class _AutoDiveCollisionValidator:
         index: int | None = None,
         segment_index: int | None = None,
         kind: str = "point",
+        enforce_lateral_clearance: bool = True,
     ) -> _AutoDiveClearanceFailure | None:
         cell = _footprint_cell_for_xz((point[0], point[2]), self.cell_size)
         if cell not in self.component_cells:
@@ -300,7 +376,7 @@ class _AutoDiveCollisionValidator:
                     cell=cell,
                     point=point,
                 )
-        if not self.has_route_clearance_metadata:
+        if not self.has_route_clearance_metadata or not enforce_lateral_clearance:
             return None
         lateral_clearance = _lateral_clearance_score_at_point(
             point,
@@ -328,12 +404,14 @@ class _AutoDiveCollisionValidator:
         second: Point,
         *,
         segment_index: int | None = None,
+        allow_low_lateral_clearance: bool = False,
     ) -> _AutoDiveClearanceFailure | None:
         return _route_segment_clearance_failure(
             first,
             second,
             collision_validator=self,
             segment_index=segment_index,
+            allow_low_lateral_clearance=allow_low_lateral_clearance,
         )
 
     def route_is_clear(self, route_points: tuple[Point, ...]) -> bool:
@@ -342,6 +420,8 @@ class _AutoDiveCollisionValidator:
     def route_clearance_failure(
         self,
         route_points: tuple[Point, ...],
+        *,
+        allow_low_lateral_clearance: bool = False,
     ) -> _AutoDiveClearanceFailure | None:
         if not route_points:
             return _AutoDiveClearanceFailure(
@@ -349,7 +429,11 @@ class _AutoDiveCollisionValidator:
                 reason="empty_route",
             )
         for index, point in enumerate(route_points):
-            failure = self.point_clearance_failure(point, index=index)
+            failure = self.point_clearance_failure(
+                point,
+                index=index,
+                enforce_lateral_clearance=not allow_low_lateral_clearance,
+            )
             if failure is not None:
                 return failure
         for segment_index, (first, second) in enumerate(
@@ -359,6 +443,7 @@ class _AutoDiveCollisionValidator:
                 first,
                 second,
                 segment_index=segment_index,
+                allow_low_lateral_clearance=allow_low_lateral_clearance,
             )
             if failure is not None:
                 return failure
@@ -367,12 +452,20 @@ class _AutoDiveCollisionValidator:
     def mesh_route_clearance_failure(
         self,
         route_points: tuple[Point, ...],
+        *,
+        planning_budget: _AutoDivePlanningBudget | None = None,
+        diagnostics: AutoDiveDiagnosticSink | None = None,
     ) -> _AutoDiveClearanceFailure | None:
         if self.mesh_guard is None or len(route_points) < 2:
             return None
         for segment_index, (first, second) in enumerate(
             zip(route_points, route_points[1:], strict=False)
         ):
+            if planning_budget is not None:
+                planning_budget.check(
+                    "candidate_mesh_segment",
+                    diagnostics=diagnostics,
+                )
             failure = _route_segment_mesh_collision_failure(
                 first,
                 second,
@@ -400,6 +493,7 @@ class AutoDivePlan:
     route_truncated_by_mesh: bool = False
     mesh_safe_prefix_length_m: float | None = None
     replan_at_end: bool = False
+    voxel_route_selection: Mapping[str, Any] | None = None
 
     @property
     def route_points_xz(self) -> tuple[PointXZ, ...]:
@@ -476,14 +570,17 @@ def build_centerline_auto_dive_plan(
     cache_dir: str | os.PathLike[str] | None = None,
     diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> AutoDivePlan:
-    """Build a finite centerline Guided Dive route near the current camera.
+    """Build a finite voxel-guided Guided Dive route near the current camera.
 
-    The route uses the longest manifest-derived centerline and deliberately
-    ignores texture or chunk complexity. If the selected path is circular, the
-    returned route uses an open arc with a gap instead of a complete loop.
+    A cache-time filled voxel graph chooses the forward branch when available;
+    the manifest centerline remains the entrance seed and a bounded fallback.
+    If the selected path is circular, the fallback route uses an open arc with
+    a gap instead of a complete loop.
     """
     settings = settings or AutoDiveSettings()
     _validate_auto_dive_settings(settings)
+    planning_budget = _AutoDivePlanningBudget.from_settings(settings)
+    planning_budget.check("initialization", diagnostics=diagnostics)
     current = np.asarray(current_position, dtype=np.float64)
     if current.shape != (3,):
         raise NavigationConfigurationError("current_position must be a 3D point")
@@ -494,6 +591,7 @@ def build_centerline_auto_dive_plan(
             manifest,
             component_selection=CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
         )
+    planning_budget.check("centerline_loaded", diagnostics=diagnostics)
     if len(centerline_path.cells) < 2:
         raise NavigationConfigurationError("Guided Dive requires a multi-point centerline")
 
@@ -523,6 +621,78 @@ def build_centerline_auto_dive_plan(
         current_yaw=direction_yaw,
         current_pitch=direction_pitch,
     )
+    planning_budget.check("route_seed_selected", diagnostics=diagnostics)
+
+    navigation_metadata = manifest.get(NAVIGATION_METADATA_KEY)
+    cache_voxel_cache_declared = bool(
+        isinstance(navigation_metadata, Mapping)
+        and isinstance(navigation_metadata.get("voxel_cache"), Mapping)
+    )
+    cached_voxel_volume = (
+        getattr(centerline_path, "cached_voxel_volume", None)
+        if bool(settings.voxel_analysis_enabled)
+        else None
+    )
+    voxel_route_active = False
+    voxel_route_plan: NavigationVoxelRoutePlan | None = None
+    voxel_route_payload: dict[str, Any] = {
+        "method": NAVIGATION_VOXEL_GRAPH_METHOD,
+        "enabled": bool(settings.voxel_analysis_enabled),
+        "cache_declared": cache_voxel_cache_declared,
+        "selected": False,
+    }
+    if isinstance(cached_voxel_volume, NavigationVoxelAtlas):
+        voxel_route_payload["cache_graph_cell_count"] = int(
+            cached_voxel_volume.navigation_cell_count
+        )
+        preferred_direction = _direction_from_radians(
+            direction_yaw,
+            direction_pitch,
+        )
+        voxel_route_plan = cached_voxel_volume.plan_footprint_route(
+            centerline_path.component_cells,
+            current_position=current,
+            footprint_cell_size=centerline_path.footprint_cell_size,
+            preferred_direction=preferred_direction,
+            diagnostics=diagnostics,
+        )
+        planning_budget.check("voxel_route_selected", diagnostics=diagnostics)
+        if voxel_route_plan is not None and len(voxel_route_plan.cells) >= 2:
+            route_cells = voxel_route_plan.cells
+            circular_arc = False
+            voxel_route_active = True
+            voxel_route_payload.update(
+                {
+                    "selected": True,
+                    "fallback_reason": None,
+                    "route_geometry_source": "voxel_cell_centers",
+                    "plan": voxel_route_plan.diagnostic_payload(),
+                }
+            )
+        else:
+            voxel_route_payload["fallback_reason"] = (
+                "missing_filled_voxel_graph"
+                if cached_voxel_volume.navigation_cell_count <= 0
+                else "no_viable_filled_voxel_branch"
+            )
+            voxel_route_payload["branch_policy"] = {
+                "reject_dead_end": True,
+                "reject_backward_first_step": preferred_direction is not None,
+                "min_forward_alignment": 0.0,
+            }
+    elif cached_voxel_volume is not None:
+        voxel_route_payload["fallback_reason"] = "legacy_local_voxel_model"
+    elif cache_voxel_cache_declared:
+        voxel_route_payload["fallback_reason"] = (
+            "cache_disabled" if not settings.voxel_analysis_enabled else "cache_miss"
+        )
+    else:
+        voxel_route_payload["fallback_reason"] = "filled_voxel_graph_unavailable"
+    _record_auto_dive_diagnostic(
+        diagnostics,
+        "voxel_route_selection",
+        voxel_route_payload,
+    )
     if len(route_cells) < 2:
         raise NavigationConfigurationError("Guided Dive route is too short")
 
@@ -542,7 +712,11 @@ def build_centerline_auto_dive_plan(
         settings=settings,
     )
     route_xz = tuple(
-        _center_for_route_cell(centerline_path, cell)
+        (
+            footprint_world_center(cell, centerline_path.footprint_cell_size)
+            if voxel_route_active
+            else _center_for_route_cell(centerline_path, cell)
+        )
         for cell in waypoint_cells
     )
     route_points = _auto_dive_points_for_waypoint_cells(
@@ -551,20 +725,13 @@ def build_centerline_auto_dive_plan(
         route_xz=route_xz,
         manifest=manifest,
         settings=settings,
+        prefer_route_cell_centers=voxel_route_active,
+        fallback_y=float(current[1]),
     )
+    planning_budget.check("route_points_built", diagnostics=diagnostics)
     mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
         manifest,
         cache_dir=cache_dir,
-    )
-    cached_voxel_volume = (
-        getattr(centerline_path, "cached_voxel_volume", None)
-        if bool(settings.voxel_analysis_enabled)
-        else None
-    )
-    navigation_metadata = manifest.get(NAVIGATION_METADATA_KEY)
-    cache_voxel_cache_declared = bool(
-        isinstance(navigation_metadata, Mapping)
-        and isinstance(navigation_metadata.get("voxel_cache"), Mapping)
     )
     if cached_voxel_volume is not None:
         _record_auto_dive_diagnostic(
@@ -631,8 +798,12 @@ def build_centerline_auto_dive_plan(
         current_travel_pitch=current_travel_pitch,
         avoid_positions=avoid_positions,
         user_reposition=user_reposition,
+        voxel_route_active=voxel_route_active,
+        voxel_route_plan=voxel_route_plan,
+        planning_budget=planning_budget,
         diagnostics=diagnostics,
     )
+    planning_budget.check("route_candidate_selected", diagnostics=diagnostics)
     route_points = selected_route.points
     route_points = _route_points_starting_at_current_camera(route_points, current)
     route_points = _dedupe_consecutive_points(route_points)
@@ -651,7 +822,10 @@ def build_centerline_auto_dive_plan(
         centerline_path=centerline_path,
         settings=settings,
         collision_validator=collision_validator,
+        planning_budget=planning_budget,
+        diagnostics=diagnostics,
     )
+    planning_budget.check("keyframes_built", diagnostics=diagnostics)
     keyframes = [
         RouteKeyframe.from_mapping(payload, index=index)
         for index, payload in enumerate(keyframe_payloads)
@@ -673,6 +847,11 @@ def build_centerline_auto_dive_plan(
         route_truncated_by_mesh=bool(selected_route.route_truncated_by_mesh),
         mesh_safe_prefix_length_m=selected_route.mesh_safe_prefix_length_m,
         replan_at_end=bool(selected_route.replan_at_end),
+        voxel_route_selection=(
+            None
+            if voxel_route_plan is None
+            else voxel_route_plan.diagnostic_payload()
+        ),
     )
 
 
@@ -729,6 +908,12 @@ def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
         raise NavigationConfigurationError(
             "Guided Dive voxel cell budget must be positive"
         )
+    if settings.planning_budget_s is not None:
+        planning_budget = float(settings.planning_budget_s)
+        if not math.isfinite(planning_budget) or planning_budget <= 0.0:
+            raise NavigationConfigurationError(
+                "Guided Dive planning budget must be positive"
+            )
 
 
 def _wall_aware_auto_dive_keyframe_payloads(
@@ -738,6 +923,8 @@ def _wall_aware_auto_dive_keyframe_payloads(
     centerline_path: CenterlinePath,
     settings: AutoDiveSettings,
     collision_validator: _AutoDiveCollisionValidator,
+    planning_budget: _AutoDivePlanningBudget | None = None,
+    diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> list[dict[str, Any]]:
     if len(keyframe_payloads) != len(route_points):
         return keyframe_payloads
@@ -751,6 +938,8 @@ def _wall_aware_auto_dive_keyframe_payloads(
     )
     steered: list[dict[str, Any]] = []
     for index, payload in enumerate(keyframe_payloads):
+        if planning_budget is not None:
+            planning_budget.check("keyframe_steering", diagnostics=diagnostics)
         try:
             base_yaw = float(payload["yaw_deg"])
             base_pitch = float(payload["pitch_deg"])
@@ -763,6 +952,8 @@ def _wall_aware_auto_dive_keyframe_payloads(
             base_pitch_deg=base_pitch,
             distance_m=steering_distance_m,
             collision_validator=collision_validator,
+            planning_budget=planning_budget,
+            diagnostics=diagnostics,
         )
         updated = dict(payload)
         updated["yaw_deg"] = round(yaw_deg, 6)
@@ -778,6 +969,8 @@ def _wall_aware_look_angles(
     base_pitch_deg: float,
     distance_m: float,
     collision_validator: _AutoDiveCollisionValidator,
+    planning_budget: _AutoDivePlanningBudget | None = None,
+    diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> tuple[float, float]:
     yaw_offsets = (0.0, -6.0, 6.0, -12.0, 12.0, -20.0, 20.0)
     pitch_offsets = (0.0, -4.0, 4.0, -8.0, 8.0)
@@ -786,6 +979,11 @@ def _wall_aware_look_angles(
     default_score: tuple[object, ...] | None = None
     for yaw_offset in yaw_offsets:
         for pitch_offset in pitch_offsets:
+            if planning_budget is not None:
+                planning_budget.check(
+                    "keyframe_look_search",
+                    diagnostics=diagnostics,
+                )
             yaw = float(base_yaw_deg) + yaw_offset
             pitch = max(-55.0, min(55.0, float(base_pitch_deg) + pitch_offset))
             direction = _direction_from_yaw_pitch(yaw, pitch)
@@ -849,6 +1047,31 @@ def _direction_from_yaw_pitch(
             math.cos(yaw) * horizontal,
             math.sin(pitch),
             math.sin(yaw) * horizontal,
+        ),
+        dtype=np.float64,
+    )
+
+
+def _direction_from_radians(
+    yaw: float | None,
+    pitch: float | None,
+) -> np.ndarray | None:
+    """Convert the planner's radian camera pose into a unit look vector."""
+    if yaw is None or pitch is None:
+        return None
+    try:
+        yaw_value = float(yaw)
+        pitch_value = float(pitch)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(yaw_value) or not math.isfinite(pitch_value):
+        return None
+    horizontal = math.cos(pitch_value)
+    return np.asarray(
+        (
+            math.cos(yaw_value) * horizontal,
+            math.sin(pitch_value),
+            math.sin(yaw_value) * horizontal,
         ),
         dtype=np.float64,
     )
@@ -1394,6 +1617,8 @@ def _auto_dive_points_for_waypoint_cells(
     route_xz: tuple[PointXZ, ...],
     manifest: Mapping[str, Any],
     settings: AutoDiveSettings,
+    prefer_route_cell_centers: bool = False,
+    fallback_y: float = 0.0,
 ) -> tuple[Point, ...]:
     cached_points = getattr(centerline_path, "cached_points", None) or {}
     if not cached_points:
@@ -1406,6 +1631,14 @@ def _auto_dive_points_for_waypoint_cells(
 
     route_points: list[Point] = []
     for cell, xz in zip(waypoint_cells, route_xz, strict=True):
+        if prefer_route_cell_centers:
+            y = _medial_y_for_route_cell(
+                centerline_path,
+                cell,
+                fallback_y=float(fallback_y),
+            )
+            route_points.append((float(xz[0]), float(y), float(xz[1])))
+            continue
         cached_point = cached_points.get(cell)
         if cached_point is not None:
             route_points.append(
@@ -1773,6 +2006,9 @@ def _select_best_auto_dive_route_candidate(
     current_travel_pitch: float | None = None,
     avoid_positions: Sequence[Sequence[float]] | None = None,
     user_reposition: bool = False,
+    voxel_route_active: bool = False,
+    voxel_route_plan: NavigationVoxelRoutePlan | None = None,
+    planning_budget: _AutoDivePlanningBudget | None = None,
     diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> _AutoDiveSelectedRoute:
     """Generate and score local route candidates, returning the safest route.
@@ -1783,6 +2019,8 @@ def _select_best_auto_dive_route_candidate(
     The caller still prepends the exact camera position after this selection.
     """
     decision_started_at = time.perf_counter()
+    if planning_budget is not None:
+        planning_budget.check("candidate_selection", diagnostics=diagnostics)
     specs = _auto_dive_candidate_specs(settings)
     route_samples = _AutoDiveRouteSamples(cells=waypoint_cells, points=route_points)
     # Candidate construction can call segment checks many times while probing
@@ -1805,6 +2043,24 @@ def _select_best_auto_dive_route_candidate(
         current=current,
         current_point=current_point,
     )
+    if voxel_route_active:
+        return _select_voxel_graph_auto_dive_route(
+            centerline_path,
+            route_samples=route_samples,
+            current=current,
+            current_point=current_point,
+            current_yaw=current_yaw,
+            current_pitch=current_pitch,
+            current_travel_yaw=current_travel_yaw,
+            current_travel_pitch=current_travel_pitch,
+            avoid_positions=avoid_positions,
+            user_reposition=user_reposition,
+            voxel_route_plan=voxel_route_plan,
+            collision_validator=collision_validator,
+            diagnostics=diagnostics,
+            decision_started_at=decision_started_at,
+            planning_budget=planning_budget,
+        )
     if len(specs) <= 1:
         candidate = _build_auto_dive_route_candidate(
             specs[0],
@@ -1819,6 +2075,8 @@ def _select_best_auto_dive_route_candidate(
             candidate,
             current_point=current_point,
             collision_validator=collision_validator,
+            planning_budget=planning_budget,
+            diagnostics=diagnostics,
         )
         travel_filter_payload = _forward_travel_cone_filter_payload(
             [(candidate_score, candidate)],
@@ -1897,38 +2155,74 @@ def _select_best_auto_dive_route_candidate(
 
     candidates: list[_AutoDiveRouteCandidate] = []
     failed_candidates: list[dict[str, Any]] = []
-    worker_count = min(2, len(specs))
-    with ThreadPoolExecutor(
-        max_workers=worker_count,
-        thread_name_prefix="AutoDiveCandidate",
-    ) as executor:
-        futures = {
-            executor.submit(
-                _build_auto_dive_route_candidate,
-                spec,
-                ordinal=ordinal,
-                centerline_path=centerline_path,
-                route_samples=route_samples,
-                current=current,
-                settings=settings,
-                collision_validator=construction_collision_validator,
-            ): (ordinal, spec)
-            for ordinal, spec in enumerate(specs)
-        }
-        for future in as_completed(futures):
-            ordinal, spec = futures[future]
-            try:
-                candidates.append(future.result())
-            except Exception as exc:
-                failed_candidates.append(
-                    {
-                        "name": spec.name,
-                        "ordinal": ordinal,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    }
+    def append_candidate(ordinal: int, spec: _AutoDiveCandidateSpec) -> None:
+        try:
+            candidates.append(
+                _build_auto_dive_route_candidate(
+                    spec,
+                    ordinal=ordinal,
+                    centerline_path=centerline_path,
+                    route_samples=route_samples,
+                    current=current,
+                    settings=settings,
+                    collision_validator=construction_collision_validator,
                 )
-                continue
+            )
+        except AutoDivePlanningBudgetExceeded:
+            raise
+        except Exception as exc:
+            failed_candidates.append(
+                {
+                    "name": spec.name,
+                    "ordinal": ordinal,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+
+    if planning_budget is not None:
+        # Do not submit speculative work to a context manager during a
+        # bounded replan: once the deadline is reached, executor shutdown
+        # would otherwise wait for every worker before the exception escapes.
+        for ordinal, spec in enumerate(specs):
+            planning_budget.check(
+                "candidate_construction",
+                diagnostics=diagnostics,
+            )
+            append_candidate(ordinal, spec)
+    else:
+        worker_count = min(2, len(specs))
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="AutoDiveCandidate",
+        ) as executor:
+            futures = {
+                executor.submit(
+                    _build_auto_dive_route_candidate,
+                    spec,
+                    ordinal=ordinal,
+                    centerline_path=centerline_path,
+                    route_samples=route_samples,
+                    current=current,
+                    settings=settings,
+                    collision_validator=construction_collision_validator,
+                ): (ordinal, spec)
+                for ordinal, spec in enumerate(specs)
+            }
+            for future in as_completed(futures):
+                ordinal, spec = futures[future]
+                try:
+                    candidates.append(future.result())
+                except Exception as exc:
+                    failed_candidates.append(
+                        {
+                            "name": spec.name,
+                            "ordinal": ordinal,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        }
+                    )
+                    continue
 
     if not candidates:
         _record_auto_dive_diagnostic(
@@ -1958,6 +2252,8 @@ def _select_best_auto_dive_route_candidate(
                 candidate,
                 current_point=current_point,
                 collision_validator=collision_validator,
+                planning_budget=planning_budget,
+                diagnostics=diagnostics,
             ),
             candidate,
         )
@@ -1989,6 +2285,7 @@ def _select_best_auto_dive_route_candidate(
             allow_reverse_travel=False,
             collision_validator=collision_validator,
             diagnostics=diagnostics,
+            planning_budget=planning_budget,
         )
         if recovery_candidate is not None:
             candidates.append(recovery_candidate)
@@ -1998,6 +2295,8 @@ def _select_best_auto_dive_route_candidate(
                         recovery_candidate,
                         current_point=current_point,
                         collision_validator=collision_validator,
+                        planning_budget=planning_budget,
+                        diagnostics=diagnostics,
                     ),
                     recovery_candidate,
                 )
@@ -2175,6 +2474,189 @@ def _select_best_auto_dive_route_candidate(
         route_truncated_by_mesh=bool(selected_route_truncated),
         mesh_safe_prefix_length_m=selected_safe_prefix_length_m,
         replan_at_end=bool(best_candidate.name == "mesh-recovery"),
+    )
+
+
+def _select_voxel_graph_auto_dive_route(
+    centerline_path: CenterlinePath,
+    *,
+    route_samples: _AutoDiveRouteSamples,
+    current: np.ndarray,
+    current_point: Point,
+    current_yaw: float | None,
+    current_pitch: float | None,
+    current_travel_yaw: float | None,
+    current_travel_pitch: float | None,
+    avoid_positions: Sequence[Sequence[float]] | None,
+    user_reposition: bool,
+    voxel_route_plan: NavigationVoxelRoutePlan | None,
+    collision_validator: _AutoDiveCollisionValidator,
+    diagnostics: AutoDiveDiagnosticSink | None,
+    decision_started_at: float,
+    planning_budget: _AutoDivePlanningBudget | None = None,
+) -> _AutoDiveSelectedRoute:
+    """Validate a cached voxel route with one exact mesh pass.
+
+    A filled-space route does not need the seven speculative smoothing
+    candidates. If its exact mesh check fails, the existing bounded recovery
+    search remains the safety fallback; otherwise a safe prefix is returned.
+    """
+    graph_candidate = _AutoDiveRouteCandidate(
+        ordinal=0,
+        name="voxel-graph",
+        cells=route_samples.cells,
+        points=route_samples.points,
+    )
+    if planning_budget is not None:
+        planning_budget.check("voxel_route_scoring", diagnostics=diagnostics)
+    active_validator = collision_validator
+    graph_score = _score_auto_dive_route_candidate(
+        graph_candidate,
+        current_point=current_point,
+        collision_validator=active_validator,
+        allow_low_lateral_clearance=True,
+        planning_budget=planning_budget,
+        diagnostics=diagnostics,
+    )
+    scored: list[tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteCandidate]] = [
+        (graph_score, graph_candidate)
+    ]
+    recovery_candidate: _AutoDiveRouteCandidate | None = None
+    if (
+        not graph_score.route_clear
+        and active_validator.has_mesh_collision_guard
+        and _mesh_recovery_is_enabled(active_validator.mesh_guard)
+    ):
+        if planning_budget is not None:
+            planning_budget.check("mesh_recovery_setup", diagnostics=diagnostics)
+        active_validator = _materialize_auto_dive_voxel_volume(active_validator)
+        recovery_candidate = _build_mesh_recovery_auto_dive_route_candidate(
+            ordinal=1,
+            centerline_path=centerline_path,
+            route_samples=route_samples,
+            current=current,
+            current_yaw=current_yaw,
+            current_pitch=current_pitch,
+            current_travel_yaw=current_travel_yaw,
+            current_travel_pitch=current_travel_pitch,
+            avoid_positions=avoid_positions,
+            allow_reverse_travel=False,
+            collision_validator=active_validator,
+            use_footprint_centers=True,
+            diagnostics=diagnostics,
+            planning_budget=planning_budget,
+        )
+        if recovery_candidate is not None:
+            scored.append(
+                (
+                    _score_auto_dive_route_candidate(
+                        recovery_candidate,
+                        current_point=current_point,
+                        collision_validator=active_validator,
+                        allow_low_lateral_clearance=True,
+                        planning_budget=planning_budget,
+                        diagnostics=diagnostics,
+                    ),
+                    recovery_candidate,
+                )
+            )
+
+    clear_candidates = [item for item in scored if item[0].route_clear]
+    selected_route_truncated = False
+    selected_safe_prefix_length_m: float | None = None
+    if clear_candidates:
+        best_score, best_candidate = max(
+            clear_candidates,
+            key=lambda item: _auto_dive_selection_sort_key(
+                item,
+                selection_reason="voxel_branch_lookahead",
+                current_point=current_point,
+                cell_size=active_validator.cell_size,
+            ),
+        )
+        selection_reason = (
+            "voxel_branch_lookahead_mesh_recovery"
+            if best_candidate.name == "mesh-recovery"
+            else "voxel_branch_lookahead"
+        )
+        selected_points = best_candidate.points
+    else:
+        best_score, best_candidate = max(
+            scored,
+            key=lambda item: _auto_dive_selection_sort_key(
+                item,
+                selection_reason="mesh_compromised_prefix_fallback",
+                current_point=current_point,
+                cell_size=active_validator.cell_size,
+            ),
+        )
+        selection_reason = "voxel_branch_lookahead_mesh_prefix_fallback"
+        selected_points = _trim_auto_dive_candidate_before_clearance_failure(
+            best_candidate,
+            best_score.first_clearance_failure,
+            current_point=current_point,
+            cell_size=active_validator.cell_size,
+        )
+        selected_route_truncated = selected_points != best_candidate.points
+        selected_safe_prefix_length_m = path_length(
+            _route_points_starting_at_current_camera(
+                selected_points,
+                np.asarray(current_point, dtype=np.float64),
+            )
+        )
+    selected_replan_at_end = bool(
+        not selected_route_truncated
+        and voxel_route_plan is not None
+        and voxel_route_plan.replan_at_lookahead
+    )
+
+    _record_auto_dive_diagnostic(
+        diagnostics,
+        "candidate_scores",
+        {
+            "selected": best_candidate.name,
+            "selection_reason": selection_reason,
+            "user_reposition": bool(user_reposition),
+            "selected_geometry_trusted": bool(best_score.geometry_trusted),
+            "selected_route_truncated": bool(selected_route_truncated),
+            "selected_safe_prefix_length_m": selected_safe_prefix_length_m,
+            "selected_replan_at_end": selected_replan_at_end,
+            "route_geometry_source": (
+                "voxel_cell_centers"
+                if voxel_route_plan is not None
+                else "cached_navigation_points"
+            ),
+            "voxel_branch_lookahead": (
+                None
+                if voxel_route_plan is None
+                else voxel_route_plan.diagnostic_payload()
+            ),
+            "mesh_collision_enabled": bool(
+                active_validator.has_mesh_collision_guard
+            ),
+            "low_lateral_clearance_allowed": True,
+            "voxel_route_progress_guard": True,
+            "voxel_volume": _auto_dive_voxel_volume_payload(active_validator),
+            "candidate_count": len(scored),
+            "travel_filter": {
+                "enabled": False,
+                "reason": "voxel_progress_guard_and_soft_direction_cost",
+                "before_count": len(scored),
+                "after_count": len(scored),
+            },
+            "decision_duration_ms": _auto_dive_duration_ms(decision_started_at),
+            "candidates": [
+                _auto_dive_candidate_score_payload(score, candidate)
+                for score, candidate in scored
+            ],
+        },
+    )
+    return _AutoDiveSelectedRoute(
+        points=selected_points,
+        selection_reason=selection_reason,
+        route_truncated_by_mesh=bool(selected_route_truncated),
+        mesh_safe_prefix_length_m=selected_safe_prefix_length_m,
+        replan_at_end=selected_replan_at_end,
     )
 
 
@@ -2495,22 +2977,41 @@ def _candidate_route_travel_alignment(
     )
     if first_move_target is None:
         return None, None
-    if current_travel_yaw is not None:
-        return (
-            _mesh_recovery_view_alignment(
+
+    def alignment_for(target: Point) -> float | None:
+        if current_travel_yaw is not None:
+            return _mesh_recovery_view_alignment(
                 current_point,
-                first_move_target,
+                target,
                 current_yaw=current_travel_yaw,
                 current_pitch=current_travel_pitch,
-            ),
-            first_move_target,
+            )
+        return _auto_dive_target_alignment_from_direction(
+            current_point,
+            target,
+            position_direction,
         )
-    position_alignment = _auto_dive_target_alignment_from_direction(
-        current_point,
-        first_move_target,
-        position_direction,
-    )
-    return position_alignment, first_move_target
+
+    first_alignment = alignment_for(first_move_target)
+    # A recovery path may need to step sideways around a blocking mesh before
+    # it can resume the user's direction. Do not accept a path whose initial
+    # step points backward, but let a later forward waypoint establish intent
+    # for the final travel-cone decision. This keeps legitimate obstacle
+    # avoidance possible while rejecting the old exactly-sideways fallback.
+    if (
+        candidate.name == "mesh-recovery"
+        and first_alignment is not None
+        and first_alignment >= 0.0
+        and first_alignment < _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
+    ):
+        for target in route_points[2:]:
+            alignment = alignment_for(target)
+            if (
+                alignment is not None
+                and alignment >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
+            ):
+                return alignment, target
+    return first_alignment, first_move_target
 
 
 def _route_target_point_far_enough(
@@ -2798,11 +3299,15 @@ def _build_mesh_recovery_auto_dive_route_candidate(
     avoid_positions: Sequence[Sequence[float]] | None,
     allow_reverse_travel: bool = False,
     collision_validator: _AutoDiveCollisionValidator,
+    use_footprint_centers: bool = False,
     diagnostics: AutoDiveDiagnosticSink | None,
+    planning_budget: _AutoDivePlanningBudget | None = None,
 ) -> _AutoDiveRouteCandidate | None:
     """Build a mesh-clear footprint route when all smooth candidates hit a wall."""
     if not collision_validator.has_mesh_collision_guard:
         return None
+    if planning_budget is not None:
+        planning_budget.check("mesh_recovery_route_build", diagnostics=diagnostics)
     current_point: Point = (
         float(current[0]),
         float(current[1]),
@@ -2837,7 +3342,9 @@ def _build_mesh_recovery_auto_dive_route_candidate(
         avoid_positions=avoid_positions,
         allow_reverse_travel=allow_reverse_travel,
         collision_validator=collision_validator,
+        use_footprint_centers=use_footprint_centers,
         diagnostics=diagnostics,
+        planning_budget=planning_budget,
     )
     if len(cells) < 2:
         return None
@@ -2848,6 +3355,7 @@ def _build_mesh_recovery_auto_dive_route_candidate(
             cell,
             fallback_y=current_point[1],
             voxel_volume=collision_validator.voxel_volume,
+            use_footprint_center=use_footprint_centers,
         )
         for cell in cells[1:]
     )
@@ -2889,7 +3397,9 @@ def _mesh_clear_recovery_footprint_path(
     avoid_positions: Sequence[Sequence[float]] | None,
     allow_reverse_travel: bool = False,
     collision_validator: _AutoDiveCollisionValidator,
+    use_footprint_centers: bool = False,
     diagnostics: AutoDiveDiagnosticSink | None = None,
+    planning_budget: _AutoDivePlanningBudget | None = None,
 ) -> tuple[FootprintCell, ...]:
     component = centerline_path.component_cells
     if start_cell not in component:
@@ -2926,6 +3436,21 @@ def _mesh_clear_recovery_footprint_path(
     rejected_avoided_count = 0
     rejected_too_close_count = 0
     budget_exhausted = False
+    max_visited_cells = _AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS
+    max_edge_tests = _AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS
+    if planning_budget is not None and planning_budget.budget_s is not None:
+        # A runtime replan must remain local even when a mesh query is slower
+        # than expected. The cooperative deadline is still authoritative;
+        # these smaller search caps keep the worker from spending the whole
+        # deadline exploring a large component one edge at a time.
+        max_visited_cells = min(
+            max_visited_cells,
+            max(32, int(float(planning_budget.budget_s) * 32.0)),
+        )
+        max_edge_tests = min(
+            max_edge_tests,
+            max(16, int(float(planning_budget.budget_s) * 8.0)),
+        )
     selection_yaw = (
         current_travel_yaw
         if current_travel_yaw is not None
@@ -2941,14 +3466,86 @@ def _mesh_clear_recovery_footprint_path(
         current=np.asarray(current_point, dtype=np.float64),
         current_point=current_point,
     )
+    last_cell: FootprintCell | None = None
+    last_neighbor: FootprintCell | None = None
+
+    def record_budget_abort(exc: AutoDivePlanningBudgetExceeded) -> None:
+        top_candidates = [
+            payload
+            for _key, payload in sorted(
+                candidate_payloads,
+                key=lambda item: item[0],
+                reverse=True,
+            )[:12]
+        ]
+        payload: dict[str, Any] = {
+            "selected": None,
+            "voxel_volume": _auto_dive_voxel_volume_payload(
+                collision_validator
+            ),
+            "start_cell": [int(start_cell[0]), int(start_cell[1])],
+            "visited_cells": int(visited_cells),
+            "target_count": int(len(target_indices)),
+            "candidate_count": int(len(candidate_payloads)),
+            "rejected_behind_count": int(rejected_behind_count),
+            "rejected_avoided_count": int(rejected_avoided_count),
+            "rejected_too_close_count": int(rejected_too_close_count),
+            "edge_tests": int(edge_tests),
+            "edge_clear_count": int(edge_clear_count),
+            "edge_blocked_count": int(edge_blocked_count),
+            "allow_reverse_travel": bool(allow_reverse_travel),
+            "budget_exhausted": True,
+            "aborted": True,
+            "abort_phase": str(exc.phase),
+            "budget_s": float(exc.budget_s),
+            "budget_elapsed_s": float(exc.elapsed_s),
+            "max_visited_cells": int(max_visited_cells),
+            "max_edge_tests": int(max_edge_tests),
+            "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
+            "scan_yaw_range_degrees": [-120.0, 120.0],
+            "selection_turn_penalty_cells": float(
+                _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_CELLS
+            ),
+            "selection_turn_penalty_max_fraction": float(
+                _AUTO_DIVE_MESH_RECOVERY_SELECTION_TURN_PENALTY_MAX_FRACTION
+            ),
+            "path_avoidance_radius_cells": int(
+                _AUTO_DIVE_MESH_RECOVERY_PATH_AVOIDANCE_RADIUS_CELLS
+            ),
+            "top_candidates": top_candidates,
+        }
+        if best_candidate_payload is not None:
+            payload["best_candidate"] = best_candidate_payload
+        if last_cell is not None:
+            payload["last_cell"] = [int(last_cell[0]), int(last_cell[1])]
+        if last_neighbor is not None:
+            payload["last_neighbor"] = [
+                int(last_neighbor[0]),
+                int(last_neighbor[1]),
+            ]
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "mesh_recovery_search",
+            payload,
+        )
 
     while frontier:
-        if visited_cells >= _AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS:
+        if planning_budget is not None:
+            try:
+                planning_budget.check(
+                    "mesh_recovery_search",
+                    diagnostics=diagnostics,
+                )
+            except AutoDivePlanningBudgetExceeded as exc:
+                record_budget_abort(exc)
+                raise
+        if visited_cells >= max_visited_cells:
             budget_exhausted = True
             break
         current_cost, cell = heapq.heappop(frontier)
         if current_cost > costs[cell]:
             continue
+        last_cell = cell
         visited_cells += 1
         target_point = _mesh_recovery_graph_point(
             centerline_path,
@@ -2957,6 +3554,7 @@ def _mesh_clear_recovery_footprint_path(
             start_cell=start_cell,
             point_cache=point_cache,
             voxel_volume=collision_validator.voxel_volume,
+            use_footprint_center=use_footprint_centers,
         )
         net_distance_m = float(
             np.linalg.norm(
@@ -3012,7 +3610,7 @@ def _mesh_clear_recovery_footprint_path(
                 or direction_alignment is None
                 or (
                     direction_alignment
-                    >= _AUTO_DIVE_FORWARD_TRAVEL_CONE_ALIGNMENT
+                    >= _AUTO_DIVE_MESH_RECOVERY_TARGET_ALIGNMENT
                 )
             )
             if target_in_front:
@@ -3190,13 +3788,23 @@ def _mesh_clear_recovery_footprint_path(
                 rejected_behind_count += 1
 
         for neighbor in navigable_footprint_neighbors(cell, component):
+            last_neighbor = neighbor
+            if planning_budget is not None:
+                try:
+                    planning_budget.check(
+                        "mesh_recovery_edge_search",
+                        diagnostics=diagnostics,
+                    )
+                except AutoDivePlanningBudgetExceeded as exc:
+                    record_budget_abort(exc)
+                    raise
             edge_is_cached = (
                 (cell, neighbor) in edge_cache
                 or (neighbor, cell) in edge_cache
             )
             if (
                 not edge_is_cached
-                and edge_tests >= _AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS
+                and edge_tests >= max_edge_tests
             ):
                 budget_exhausted = True
                 break
@@ -3210,6 +3818,7 @@ def _mesh_clear_recovery_footprint_path(
                 collision_validator=collision_validator,
                 point_cache=point_cache,
                 edge_cache=edge_cache,
+                use_footprint_centers=use_footprint_centers,
             )
             if len(edge_cache) > edge_cache_count:
                 edge_tests += 1
@@ -3217,6 +3826,15 @@ def _mesh_clear_recovery_footprint_path(
                     edge_clear_count += 1
                 else:
                     edge_blocked_count += 1
+            if planning_budget is not None:
+                try:
+                    planning_budget.check(
+                        "mesh_recovery_edge_result",
+                        diagnostics=diagnostics,
+                    )
+                except AutoDivePlanningBudgetExceeded as exc:
+                    record_budget_abort(exc)
+                    raise
             if not edge_clear:
                 continue
             step_distance = footprint_cell_distance(cell, neighbor)
@@ -3270,10 +3888,8 @@ def _mesh_clear_recovery_footprint_path(
                 "edge_blocked_count": int(edge_blocked_count),
                 "allow_reverse_travel": bool(allow_reverse_travel),
                 "budget_exhausted": bool(budget_exhausted),
-                "max_visited_cells": int(
-                    _AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS
-                ),
-                "max_edge_tests": int(_AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS),
+                "max_visited_cells": int(max_visited_cells),
+                "max_edge_tests": int(max_edge_tests),
                 "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
                 "scan_yaw_range_degrees": [-120.0, 120.0],
                 "selection_turn_penalty_cells": float(
@@ -3334,10 +3950,8 @@ def _mesh_clear_recovery_footprint_path(
             "edge_blocked_count": int(edge_blocked_count),
             "allow_reverse_travel": bool(allow_reverse_travel),
             "budget_exhausted": bool(budget_exhausted),
-            "max_visited_cells": int(
-                _AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS
-            ),
-            "max_edge_tests": int(_AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS),
+            "max_visited_cells": int(max_visited_cells),
+            "max_edge_tests": int(max_edge_tests),
             "travel_cone_degrees": _AUTO_DIVE_FORWARD_TRAVEL_CONE_DEGREES,
             "scan_yaw_range_degrees": [-120.0, 120.0],
             "selection_turn_penalty_cells": float(
@@ -3483,6 +4097,7 @@ def _mesh_recovery_edge_is_clear(
     collision_validator: _AutoDiveCollisionValidator,
     point_cache: dict[FootprintCell, Point],
     edge_cache: dict[tuple[FootprintCell, FootprintCell], bool],
+    use_footprint_centers: bool = False,
 ) -> bool:
     edge_key = (
         first_cell,
@@ -3504,6 +4119,7 @@ def _mesh_recovery_edge_is_clear(
         start_cell=start_cell,
         point_cache=point_cache,
         voxel_volume=collision_validator.voxel_volume,
+        use_footprint_center=use_footprint_centers,
     )
     second_point = _mesh_recovery_graph_point(
         centerline_path,
@@ -3512,11 +4128,13 @@ def _mesh_recovery_edge_is_clear(
         start_cell=start_cell,
         point_cache=point_cache,
         voxel_volume=collision_validator.voxel_volume,
+        use_footprint_center=use_footprint_centers,
     )
     clear = (
         collision_validator.segment_clearance_failure(
             first_point,
             second_point,
+            allow_low_lateral_clearance=use_footprint_centers,
         )
         is None
     )
@@ -3531,7 +4149,8 @@ def _mesh_recovery_graph_point(
     current_point: Point,
     start_cell: FootprintCell,
     point_cache: dict[FootprintCell, Point],
-    voxel_volume: LocalVoxelVolume | None = None,
+    voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None = None,
+    use_footprint_center: bool = False,
 ) -> Point:
     cached = point_cache.get(cell)
     if cached is not None:
@@ -3544,6 +4163,7 @@ def _mesh_recovery_graph_point(
         cell,
         fallback_y=current_point[1],
         voxel_volume=voxel_volume,
+        use_footprint_center=use_footprint_center,
     )
     point_cache[cell] = point
     return point
@@ -3554,24 +4174,41 @@ def _mesh_recovery_point_for_cell(
     cell: FootprintCell,
     *,
     fallback_y: float,
-    voxel_volume: LocalVoxelVolume | None = None,
+    voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None = None,
+    use_footprint_center: bool = False,
 ) -> Point:
-    x, z = _center_for_route_cell(centerline_path, cell)
-    y = _medial_y_for_route_cell(
-        centerline_path,
-        cell,
-        fallback_y=fallback_y,
-    )
+    if use_footprint_center:
+        x, z = footprint_world_center(
+            cell,
+            centerline_path.footprint_cell_size,
+        )
+    else:
+        x, z = _center_for_route_cell(centerline_path, cell)
+    cached_y_ranges = getattr(centerline_path, "cached_y_ranges", None) or {}
+    y_range = cached_y_ranges.get(cell)
+    if use_footprint_center and y_range is None:
+        # Voxel recovery is local to the current camera when the selected
+        # atlas cell has no cached vertical envelope. Reusing a centerline
+        # sample's Y here can jump the recovery point to an unrelated branch.
+        y = float(fallback_y)
+    else:
+        y = _medial_y_for_route_cell(
+            centerline_path,
+            cell,
+            fallback_y=fallback_y,
+        )
     point = (float(x), float(y), float(z))
-    if voxel_volume is None:
+    # A whole-cave atlas has no reliable vertical envelope for cells that
+    # were not part of the original centerline samples. Do not let refinement
+    # move those recovery points to an arbitrary high-clearance voxel outside
+    # the passage's known Y band; that creates a voxel/mesh disagreement.
+    if voxel_volume is None or y_range is None:
         return point
     refined = voxel_volume.refine_point(
         point,
         footprint_cell=cell,
         footprint_cell_size=centerline_path.footprint_cell_size,
-        y_range=(getattr(centerline_path, "cached_y_ranges", None) or {}).get(
-            cell
-        ),
+        y_range=y_range,
     )
     return point if refined is None else refined
 
@@ -3831,7 +4468,12 @@ def _score_auto_dive_route_candidate(
     *,
     current_point: Point,
     collision_validator: _AutoDiveCollisionValidator,
+    allow_low_lateral_clearance: bool = False,
+    planning_budget: _AutoDivePlanningBudget | None = None,
+    diagnostics: AutoDiveDiagnosticSink | None = None,
 ) -> _AutoDiveRouteCandidateScore:
+    if planning_budget is not None:
+        planning_budget.check("candidate_score_entry", diagnostics=diagnostics)
     entry_clear = _entry_segment_is_clear(
         current_point,
         candidate.points[0],
@@ -3842,11 +4484,18 @@ def _score_auto_dive_route_candidate(
         np.asarray(current_point, dtype=np.float64),
     )
     first_clearance_failure = collision_validator.route_clearance_failure(
-        route_with_current
+        route_with_current,
+        allow_low_lateral_clearance=allow_low_lateral_clearance,
     )
+    if planning_budget is not None:
+        planning_budget.check("candidate_score_mesh", diagnostics=diagnostics)
     first_mesh_failure = collision_validator.mesh_route_clearance_failure(
-        route_with_current
+        route_with_current,
+        planning_budget=planning_budget,
+        diagnostics=diagnostics,
     )
+    if planning_budget is not None:
+        planning_budget.check("candidate_score_metrics", diagnostics=diagnostics)
     mesh_clear = first_mesh_failure is None
     route_clear = first_clearance_failure is None and mesh_clear
     reported_clearance_failure = first_mesh_failure or first_clearance_failure
@@ -5000,6 +5649,7 @@ def _route_segment_clearance_failure(
     *,
     collision_validator: _AutoDiveCollisionValidator,
     segment_index: int | None = None,
+    allow_low_lateral_clearance: bool = False,
 ) -> _AutoDiveClearanceFailure | None:
     distance = math.sqrt(
         (second[0] - first[0]) ** 2
@@ -5031,6 +5681,7 @@ def _route_segment_clearance_failure(
             index=step,
             segment_index=segment_index,
             kind="segment_point",
+            enforce_lateral_clearance=not allow_low_lateral_clearance,
         )
         if point_failure is not None:
             return _AutoDiveClearanceFailure(

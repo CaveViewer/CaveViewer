@@ -41,25 +41,39 @@ the viewer.
 Guided Dive keeps the centerline generator and local geometric refinements
 replaceable. `core.navigation.curvature` profiles any 3D route polyline and
 labels contiguous high-curvature regions with map-relative ranks from 0 to 100.
-`core.navigation.voxel_volume` can then rasterize cached triangle surfaces into
-a bounded local voxel field around selected regions. During cache construction,
-`core.navigation.voxel_cache` reuses the already-written chunk files to build
-small models for qualifying curved route sections. It stores compact route
-volume summaries in the manifest and compressed surface occupancy in the
-optional `navigation_voxels.json` sidecar. The cache-time selector can prefer
-the largest reachable corridor volume while preserving an explicit
-navigation-start route.
+`core.navigation.voxel_volume` rasterizes cached triangle surfaces into bounded
+local voxel fields. During cache construction, `core.navigation.voxel_cache`
+reuses the already-written chunk files to build a tiled atlas for every cell in
+each navigable cave component. Curvature-ranked regions remain diagnostic
+metadata, while the atlas also covers the approach before a bend and the
+straight sections after it. Per-tile limits keep memory and sampling work
+bounded on consumer hardware. Compact route volume summaries are stored in the
+manifest and compressed tile occupancy in the optional
+`navigation_voxels.json` sidecar. The cache-time selector can prefer the
+largest reachable cave volume while preserving an explicit navigation-start
+route. The sidecar is versioned; legacy single-window models remain readable.
 
 At runtime Guided Dive loads the cached model when available, so replanning
-does not rasterize triangles on the render machine. It uses the model to rank
-available corridor candidates and refine recovery waypoints inside the existing
-footprint cell and cached Y range. Older caches, missing sidecars, disabled
-voxel analysis, and cache-build failures retain the bounded lazy fallback. The
-voxel field is deliberately a surface-distance/corridor-volume guide rather
-than a second collision authority: the existing exact triangle intersection
-guard still accepts or rejects recovery edges. Both the voxel builder and the
-entire centerline source remain replaceable behind the navigation seam without
-changing GUI or streaming code.
+does not rasterize triangles on the render machine. The filled free voxels are
+aggregated into a bounded footprint graph with per-cell volume, clearance, and
+entrance-relative progress. Replanning evaluates each immediate forward branch
+to a bounded lookahead, probes beyond that frontier for onward exits, and
+penalizes branches that terminate in a cul-de-sac. Dead-end branches are now
+rejected rather than selected as a last resort; an explicit user travel
+direction also rejects a backward first step. The centerline remains the
+entrance seed and a bounded fallback when the filled graph has no viable
+branch. Volume and clearance are retained as per-cell evidence but deliberately
+deferred as route-ranking inputs until the cross-section policy is added. Each
+selected prefix is marked for a forward boundary replan so a large room cannot
+end the dive just because it is locally deep. The exact triangle intersection
+guard still accepts or rejects the selected route. Runtime replans receive a
+cooperative wall-clock budget; when it expires, the worker reports the phase
+and the owner thread hands control back to user assist instead of holding the
+camera in a long search. Older caches without graph metrics, missing sidecars,
+disabled voxel analysis, and cache-build failures retain the bounded
+centerline/lazy fallback. Both the voxel builder and the entire route source
+remain replaceable behind the navigation seam without changing GUI or
+streaming code.
 
 Guided Dive's opt-in JSONL blackbox records use schema version 2. Every event
 retains its existing name and session identifier, while `session_started`
@@ -67,12 +81,24 @@ captures the cache fingerprint, map bounds, navigation metadata, effective
 settings, coordinate frame, and algorithm-method identifiers. Background
 replans use a stable `replan_id` and generation with queue, build, and total
 durations; candidate decisions report bounded timing and voxel summaries.
-Voxel events also record an explicit outcome such as no qualifying curvature in
-the analysis horizon, no triangles, no surface samples, disabled analysis, or
-an exception, together with selected-region bounds and sample counts.
+Voxel events also record an explicit outcome such as cache hit, no triangles, no
+surface samples, disabled analysis, or an exception, together with coverage
+scope, tile counts, selected curvature regions, bounds, sample counts, and
+filled-graph coverage. Route-selection events record the bounded lookahead
+frontier, continuation distance, onward exits, dead-end classification, user
+direction alignment, progress guard, volume/clearance goal metrics, and an
+explicit fallback reason.
 Runtime frame, clamp, assist, and stop events record plan sequence, readiness,
-bounded prefetch-cell samples, and actual-versus-commanded motion. Full meshes,
-triangle arrays, and voxel grids are never written to the log.
+bounded prefetch-cell samples, and actual-versus-commanded motion. While
+Guided Dive is explicitly waiting for user assistance, the controller also
+writes a bounded trace at up to four samples per second or one metre of
+movement. Each sample contains camera pose, world and footprint cells,
+displacement, speed, and readiness. The completion record summarizes distance,
+net displacement, turns, pauses, guard clamps, final resume position, and the
+cached voxel branch candidates annotated with the branch the diver moved toward.
+Manual navigation outside an active assistance handoff is not recorded by this
+trace. Full meshes, triangle arrays, and voxel grids are never written to the
+log.
 
 ## Startup and map import
 

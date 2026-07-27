@@ -969,7 +969,7 @@ def _attach_navigation_metadata(
                         voxel_result.payload,
                     )
                     _LOG.info(
-                        "Built cache-time navigation voxel models for %d route(s); "
+                        "Built whole-cave navigation voxel atlases for %d route(s); "
                         "recommended route=%s.",
                         voxel_result.built_route_count,
                         voxel_result.recommended_route_id,
