@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import heapq
 import math
 import os
 import time
-from typing import Any
+from typing import Any, NoReturn
 
 import numpy as np
 
@@ -44,13 +44,22 @@ from caveviewer.core.navigation.route import (
     path_length,
     route_keyframes_for_points,
 )
+from caveviewer.core.navigation.recovery_scan import (
+    HemisphereProbe,
+    iter_hemisphere_probes,
+)
 from caveviewer.core.navigation.voxel_volume import (
     DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD,
     DEFAULT_VOXEL_MAX_CELLS,
     DEFAULT_VOXEL_MAX_DISTANCE_M,
     DEFAULT_VOXEL_MAX_REGIONS,
+    DEFAULT_VOXEL_LOCAL_REFINEMENT_FORWARD_M,
+    DEFAULT_VOXEL_LOCAL_REFINEMENT_MAX_CELLS,
+    DEFAULT_VOXEL_LOCAL_REFINEMENT_RADIUS_M,
     DEFAULT_VOXEL_SIZE_M,
     LocalVoxelVolume,
+    VoxelVolumeConfig,
+    VOXEL_ANALYSIS_OUTCOME_BUILT,
     VOXEL_ANALYSIS_OUTCOME_DISABLED,
     VOXEL_ANALYSIS_OUTCOME_ERROR,
     VOXEL_ANALYSIS_OUTCOME_CACHE_HIT,
@@ -58,12 +67,16 @@ from caveviewer.core.navigation.voxel_volume import (
     VOXEL_ANALYSIS_OUTCOME_MESH_GUARD_UNAVAILABLE,
     VOXEL_VOLUME_METHOD,
     analyze_curvature_guided_voxel_volume,
+    build_surface_voxel_volume,
 )
 from caveviewer.core.navigation.voxel_cache import (
     NAVIGATION_VOXEL_CACHE_METHOD,
+    NAVIGATION_VOXEL_CACHE_NAME,
+    NAVIGATION_VOXEL_CACHE_VERSION,
     NAVIGATION_VOXEL_GRAPH_METHOD,
     NavigationVoxelAtlas,
     NavigationVoxelRoutePlan,
+    NavigationVoxelScoringPolicy,
 )
 
 
@@ -78,6 +91,7 @@ DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS = (
     NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS
 )
 DEFAULT_AUTO_DIVE_LOOKAHEAD_DISTANCE_M = 8.0
+DEFAULT_AUTO_DIVE_LOCAL_REFINEMENT_ENABLED = True
 # Runtime replans must not monopolize a consumer machine. Initial route
 # planning remains uncapped; the replanner supplies this budget explicitly.
 DEFAULT_AUTO_DIVE_REPLAN_PLANNING_BUDGET_S = 8.0
@@ -122,6 +136,18 @@ _AUTO_DIVE_MESH_RECOVERY_PATH_AVOIDANCE_RADIUS_CELLS = 1
 # valve than disabling recovery from the map's total triangle count.
 _AUTO_DIVE_MESH_RECOVERY_MAX_VISITED_CELLS = 4096
 _AUTO_DIVE_MESH_RECOVERY_MAX_EDGE_TESTS = 16384
+# The runtime hemisphere scan is deliberately coarse and staged. The first
+# pass is cheap voxel/footprint filtering; only the best probes reach exact
+# mesh collision checks. This covers all forward directions without turning a
+# consumer machine into a 3D ray-tracing worker.
+_AUTO_DIVE_HEMISPHERE_DIRECTION_COUNT = 32
+_AUTO_DIVE_HEMISPHERE_ROLL_COUNT = 4
+_AUTO_DIVE_HEMISPHERE_MAX_EXACT_CANDIDATES = 8
+_AUTO_DIVE_HEMISPHERE_MAX_DIAGNOSTIC_CANDIDATES = 16
+_AUTO_DIVE_HEMISPHERE_PROBE_DISTANCE_CELLS = 8.0
+_AUTO_DIVE_HEMISPHERE_MIN_COVERAGE = 0.70
+_AUTO_DIVE_HEMISPHERE_MIN_TARGET_ALIGNMENT = 0.0
+_AUTO_DIVE_HEMISPHERE_PROGRESS_TOLERANCE_CELLS = 1.0
 
 AutoDiveDiagnosticSink = Callable[[str, Mapping[str, Any]], None]
 
@@ -147,9 +173,24 @@ class AutoDiveSettings:
     voxel_max_regions: int = DEFAULT_VOXEL_MAX_REGIONS
     voxel_max_distance_m: float = DEFAULT_VOXEL_MAX_DISTANCE_M
     voxel_max_cells: int = DEFAULT_VOXEL_MAX_CELLS
+    voxel_local_refinement_enabled: bool = DEFAULT_AUTO_DIVE_LOCAL_REFINEMENT_ENABLED
+    voxel_local_refinement_radius_m: float = (
+        DEFAULT_VOXEL_LOCAL_REFINEMENT_RADIUS_M
+    )
+    voxel_local_refinement_forward_m: float = (
+        DEFAULT_VOXEL_LOCAL_REFINEMENT_FORWARD_M
+    )
+    voxel_local_refinement_max_cells: int = (
+        DEFAULT_VOXEL_LOCAL_REFINEMENT_MAX_CELLS
+    )
     # None is intentional for the initial route. AutoDiveReplanner replaces
     # this value on each runtime replan with its bounded planning budget.
     planning_budget_s: float | None = None
+    # The policy is request-scoped so experiments can change route priorities
+    # without changing the prepared graph or the navigation-thread contract.
+    voxel_scoring_policy: NavigationVoxelScoringPolicy = field(
+        default_factory=NavigationVoxelScoringPolicy
+    )
 
 
 class AutoDivePlanningBudgetExceeded(NavigationConfigurationError):
@@ -206,6 +247,21 @@ class _AutoDivePlanningBudget:
             phase=str(phase),
         )
 
+    @property
+    def deadline_monotonic_s(self) -> float | None:
+        """Return the absolute deadline used by cooperative inner searches."""
+        if self.budget_s is None:
+            return None
+        return float(self.started_at + self.budget_s)
+
+    @property
+    def remaining_s(self) -> float | None:
+        """Return the remaining planning budget without raising."""
+        deadline = self.deadline_monotonic_s
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.perf_counter())
+
 
 @dataclass(frozen=True)
 class _AutoDiveRouteSamples:
@@ -230,6 +286,7 @@ class _AutoDiveRouteCandidate:
     name: str
     cells: tuple[FootprintCell, ...]
     points: tuple[Point, ...]
+    roll_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -239,6 +296,8 @@ class _AutoDiveSelectedRoute:
     route_truncated_by_mesh: bool = False
     mesh_safe_prefix_length_m: float | None = None
     replan_at_end: bool = False
+    roll_deg: float = 0.0
+    terminal_reached: bool = False
 
 
 @dataclass(frozen=True)
@@ -246,6 +305,23 @@ class _ConeChainCandidate:
     cells: tuple[FootprintCell, ...]
     anchor_index: int
     cost: float
+
+
+@dataclass(frozen=True)
+class _HemisphereProbeEvaluation:
+    """Cheap evidence retained before exact mesh checks."""
+
+    probe: HemisphereProbe
+    points: tuple[Point, ...]
+    target_cell: FootprintCell
+    target_alignment: float
+    progress_gain_m: float
+    target_volume_m3: float
+    target_clearance_m: float
+    continuation_count: int
+    voxel_coverage_fraction: float
+    voxel_free_fraction: float
+    voxel_mean_clearance_m: float
 
 
 @dataclass(frozen=True)
@@ -317,6 +393,9 @@ class _AutoDiveCollisionValidator:
     mesh_guard: CachedChunkMeshCollisionGuard | None = None
     voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None = None
     voxel_builder: Callable[[], LocalVoxelVolume | None] | None = None
+    voxel_refinement: LocalVoxelVolume | None = None
+    voxel_refinement_builder: Callable[[], LocalVoxelVolume | None] | None = None
+    allow_native_graph_transitions: bool = False
 
     @property
     def cell_size(self) -> float:
@@ -342,6 +421,50 @@ class _AutoDiveCollisionValidator:
     def has_mesh_collision_guard(self) -> bool:
         return self.mesh_guard is not None
 
+    @property
+    def active_voxel_volume(self) -> LocalVoxelVolume | NavigationVoxelAtlas | None:
+        """Return the finest available field for local collision queries."""
+        return self.voxel_refinement or self.voxel_volume
+
+    def probe_voxel_point(
+        self,
+        point: Point,
+        *,
+        include_clearance: bool = True,
+    ) -> tuple[bool, float] | None:
+        """Query fine refinement first, then the cached whole-cave atlas."""
+        for volume in (self.voxel_refinement, self.voxel_volume):
+            if volume is None:
+                continue
+            probe = getattr(volume, "probe_point", None)
+            if not callable(probe):
+                continue
+            result = probe(point, include_clearance=include_clearance)
+            if result is not None:
+                return result
+        return None
+
+    def probe_fine_point(
+        self,
+        point: Point,
+        *,
+        include_clearance: bool = True,
+    ) -> tuple[bool, float] | None:
+        """Query only the fine refinement layer, if one is available."""
+        if self.voxel_refinement is not None:
+            return self.voxel_refinement.probe_point(
+                point,
+                include_clearance=include_clearance,
+            )
+        volume = self.voxel_volume
+        probe_fine = getattr(volume, "probe_fine_point", None)
+        if callable(probe_fine):
+            return probe_fine(
+                point,
+                include_clearance=include_clearance,
+            )
+        return None
+
     def point_is_clear(self, point: Point) -> bool:
         return self.point_clearance_failure(point) is None
 
@@ -354,6 +477,39 @@ class _AutoDiveCollisionValidator:
         kind: str = "point",
         enforce_lateral_clearance: bool = True,
     ) -> _AutoDiveClearanceFailure | None:
+        fine_result = self.probe_fine_point(
+            point,
+            include_clearance=False,
+        )
+        if fine_result is not None and not fine_result[0]:
+            return _AutoDiveClearanceFailure(
+                kind=kind,
+                reason="voxel_blocked",
+                index=index,
+                segment_index=segment_index,
+                point=point,
+            )
+        # A covered fine voxel is the authoritative local filter. It may
+        # legitimately sit outside the coarse centerline footprint, which is
+        # exactly the case this refinement exists to recover.
+        if fine_result is not None and fine_result[0]:
+            if not self.has_route_clearance_metadata or not enforce_lateral_clearance:
+                return None
+            lateral_clearance = _lateral_clearance_score_at_point(
+                point,
+                centerline_path=self.centerline_path,
+            )
+            if lateral_clearance < _minimum_required_lateral_clearance_score(
+                self.centerline_path
+            ):
+                return _AutoDiveClearanceFailure(
+                    kind=kind,
+                    reason="low_lateral_clearance",
+                    index=index,
+                    segment_index=segment_index,
+                    point=point,
+                )
+            return None
         cell = _footprint_cell_for_xz((point[0], point[2]), self.cell_size)
         if cell not in self.component_cells:
             return _AutoDiveClearanceFailure(
@@ -494,6 +650,7 @@ class AutoDivePlan:
     mesh_safe_prefix_length_m: float | None = None
     replan_at_end: bool = False
     voxel_route_selection: Mapping[str, Any] | None = None
+    terminal_reached: bool = False
 
     @property
     def route_points_xz(self) -> tuple[PointXZ, ...]:
@@ -501,11 +658,226 @@ class AutoDivePlan:
         return tuple((point[0], point[2]) for point in self.route_points)
 
 
+class NavigationVoxelGraphAuthorityError(NavigationConfigurationError):
+    """Raised when runtime Guided Dive lacks an authoritative voxel graph."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        status: Mapping[str, Any],
+    ) -> None:
+        self.reason = str(reason)
+        self.status = dict(status)
+        super().__init__(message)
+
+
+def _authoritative_navigation_voxel_context(
+    manifest: Mapping[str, Any],
+    *,
+    cache_dir: str | os.PathLike[str] | None,
+    settings: AutoDiveSettings,
+    diagnostics: AutoDiveDiagnosticSink | None,
+) -> tuple[CenterlinePath, NavigationVoxelAtlas, dict[str, Any]]:
+    """Load the graph-only runtime navigation context.
+
+    The centerline metadata is retained here only as a geometry/component
+    descriptor for collision checks. It is never used as a route source when
+    this context is requested.
+    """
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    descriptor = (
+        navigation.get("voxel_cache")
+        if isinstance(navigation, Mapping)
+        else None
+    )
+    routes = (
+        navigation.get("routes")
+        if isinstance(navigation, Mapping)
+        else None
+    )
+    route_id: str | None = None
+    if isinstance(navigation, Mapping):
+        candidate = navigation.get("recommended_route_id")
+        if isinstance(candidate, str) and candidate:
+            route_id = candidate
+    if route_id is None and isinstance(routes, Sequence) and not isinstance(
+        routes,
+        (str, bytes),
+    ):
+        for route in routes:
+            if not isinstance(route, Mapping):
+                continue
+            candidate = route.get("id")
+            if isinstance(candidate, str) and candidate:
+                route_id = candidate
+                break
+
+    status: dict[str, Any] = {
+        "authority": "prepared_true_3d_voxel_graph",
+        "required": True,
+        "available": False,
+        "reason": None,
+        "cache_directory_present": bool(cache_dir),
+        "cache_declared": isinstance(descriptor, Mapping),
+        "cache_version": (
+            None
+            if not isinstance(descriptor, Mapping)
+            else descriptor.get("version")
+        ),
+        "cache_method": (
+            None
+            if not isinstance(descriptor, Mapping)
+            else descriptor.get("method")
+        ),
+        "cache_path": (
+            None
+            if not isinstance(descriptor, Mapping)
+            else descriptor.get("path")
+        ),
+        "route_id": route_id,
+    }
+
+    def reject(reason: str, message: str) -> NoReturn:
+        status["reason"] = str(reason)
+        status["message"] = str(message)
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "navigation_authority",
+            status,
+        )
+        raise NavigationVoxelGraphAuthorityError(
+            message,
+            reason=reason,
+            status=status,
+        )
+
+    if not bool(settings.voxel_analysis_enabled):
+        reject(
+            "voxel_analysis_disabled",
+            "Guided Dive requires voxel graph navigation, but voxel analysis "
+            "is disabled",
+        )
+    if not cache_dir:
+        reject(
+            "cache_directory_missing",
+            "Guided Dive requires a navigation voxel cache directory",
+        )
+    if not isinstance(navigation, Mapping):
+        reject(
+            "navigation_metadata_missing",
+            "Guided Dive requires cached navigation metadata",
+        )
+    if not isinstance(descriptor, Mapping):
+        reject(
+            "voxel_cache_not_declared",
+            "Guided Dive requires a declared navigation voxel graph cache",
+        )
+    if (
+        descriptor.get("version") != NAVIGATION_VOXEL_CACHE_VERSION
+        or descriptor.get("method") != NAVIGATION_VOXEL_CACHE_METHOD
+    ):
+        reject(
+            "stale_or_unsupported_cache",
+            "Guided Dive requires the current prepared voxel graph cache; "
+            "rebuild the navigation cache",
+        )
+    if descriptor.get("path") != NAVIGATION_VOXEL_CACHE_NAME:
+        reject(
+            "voxel_cache_path_invalid",
+            "Guided Dive navigation voxel cache path is invalid; rebuild the cache",
+        )
+    if route_id is None:
+        reject(
+            "navigation_route_missing",
+            "Guided Dive requires a selected cached navigation route",
+        )
+
+    centerline_path = cached_centerline_path(
+        manifest,
+        cache_dir=os.fspath(cache_dir),
+    )
+    if centerline_path is None:
+        reject(
+            "navigation_route_metadata_invalid",
+            "Guided Dive cached navigation route metadata is invalid",
+        )
+    cached_volume = getattr(centerline_path, "cached_voxel_volume", None)
+    if not isinstance(cached_volume, NavigationVoxelAtlas):
+        reject(
+            "voxel_graph_model_missing",
+            "Guided Dive could not load the prepared voxel graph; rebuild the cache",
+        )
+    graph = cached_volume.prepared_3d_graph
+    if not cached_volume.has_prepared_3d_graph or graph is None:
+        reject(
+            "true_3d_graph_missing",
+            "Guided Dive cache does not contain a prepared true-3D voxel graph",
+        )
+    status.update(
+        {
+            "graph_method": str(graph.method),
+            "graph_node_count": len(graph.nodes),
+            "graph_edge_count": int(graph.edge_count),
+            "graph_routable_node_count": int(graph.routable_node_count),
+            "graph_component_count": int(graph.component_count),
+            "graph_edge_integrity_safe": bool(graph.edge_integrity_safe),
+            "motion_geometry_safe": bool(
+                cached_volume.prepared_3d_motion_geometry_safe
+            ),
+        }
+    )
+    if str(graph.method) != NAVIGATION_VOXEL_GRAPH_METHOD:
+        reject(
+            "true_3d_graph_method_unsupported",
+            "Guided Dive cache contains an unsupported true-3D voxel graph",
+        )
+    if not cached_volume.prepared_3d_motion_geometry_safe:
+        reject(
+            "true_3d_graph_geometry_unsafe",
+            "Guided Dive true-3D voxel graph geometry is too coarse for motion; "
+            "rebuild the navigation cache",
+        )
+    if len(graph.nodes) <= 0:
+        reject(
+            "true_3d_graph_empty",
+            "Guided Dive cache contains an empty true-3D voxel graph",
+        )
+    if not graph.edge_integrity_safe:
+        reject(
+            "true_3d_graph_edge_integrity_invalid",
+            "Guided Dive cache contains an invalid true-3D voxel graph edge set; "
+            "rebuild the navigation cache",
+        )
+    if graph.edge_count <= 0 or graph.routable_node_count <= 0:
+        reject(
+            "true_3d_graph_has_no_routes",
+            "Guided Dive cache contains voxel density but no prepared graph routes; "
+            "rebuild the navigation cache",
+        )
+
+    status.update(
+        {
+            "available": True,
+            "reason": "ready",
+            "source": "cached_navigation_voxel_graph",
+        }
+    )
+    _record_auto_dive_diagnostic(
+        diagnostics,
+        "navigation_authority",
+        status,
+    )
+    return centerline_path, cached_volume, status
+
+
 def build_auto_dive_initial_camera_pose(
     manifest: Mapping[str, Any],
     *,
     settings: AutoDiveSettings | None = None,
     cache_dir: str | os.PathLike[str] | None = None,
+    require_voxel_graph: bool = False,
 ) -> RouteKeyframe:
     """Return a safe endpoint camera pose for a newly loaded map.
 
@@ -519,6 +891,10 @@ def build_auto_dive_initial_camera_pose(
     settings = settings or AutoDiveSettings()
     _validate_auto_dive_settings(settings)
     centerline_path = cached_centerline_path(manifest, cache_dir=cache_dir)
+    if centerline_path is None and require_voxel_graph:
+        raise NavigationConfigurationError(
+            "Guided Dive initial camera requires a prepared voxel graph cache"
+        )
     if centerline_path is None:
         centerline_path = generate_centerline_path(
             manifest,
@@ -543,6 +919,8 @@ def build_auto_dive_initial_camera_pose(
                         manifest,
                         current_position=position,
                         settings=settings,
+                        cache_dir=cache_dir,
+                        require_voxel_graph=require_voxel_graph,
                     )
                 )
             except NavigationConfigurationError:
@@ -562,20 +940,23 @@ def build_centerline_auto_dive_plan(
     current_position: tuple[float, float, float] | np.ndarray,
     current_yaw: float | None = None,
     current_pitch: float | None = None,
+    current_roll: float | None = None,
     current_travel_yaw: float | None = None,
     current_travel_pitch: float | None = None,
     avoid_positions: Sequence[Sequence[float]] | None = None,
     user_reposition: bool = False,
+    force_hemisphere_scan: bool = False,
     settings: AutoDiveSettings | None = None,
     cache_dir: str | os.PathLike[str] | None = None,
     diagnostics: AutoDiveDiagnosticSink | None = None,
+    require_voxel_graph: bool = False,
 ) -> AutoDivePlan:
     """Build a finite voxel-guided Guided Dive route near the current camera.
 
-    A cache-time filled voxel graph chooses the forward branch when available;
-    the manifest centerline remains the entrance seed and a bounded fallback.
-    If the selected path is circular, the fallback route uses an open arc with
-    a gap instead of a complete loop.
+    Compatibility callers may still use the centerline-seeded mode. Production
+    Guided Dive passes ``require_voxel_graph=True``; in that mode the prepared
+    true-3D voxel graph is the only runtime route authority and missing or
+    invalid graph data raises an explicit configuration error.
     """
     settings = settings or AutoDiveSettings()
     _validate_auto_dive_settings(settings)
@@ -585,21 +966,34 @@ def build_centerline_auto_dive_plan(
     if current.shape != (3,):
         raise NavigationConfigurationError("current_position must be a 3D point")
 
-    centerline_path = cached_centerline_path(manifest, cache_dir=cache_dir)
-    if centerline_path is None:
-        centerline_path = generate_centerline_path(
+    authority_status: dict[str, Any] | None = None
+    if require_voxel_graph:
+        (
+            centerline_path,
+            cached_voxel_volume,
+            authority_status,
+        ) = _authoritative_navigation_voxel_context(
             manifest,
-            component_selection=CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
+            cache_dir=cache_dir,
+            settings=settings,
+            diagnostics=diagnostics,
+        )
+    else:
+        centerline_path = cached_centerline_path(manifest, cache_dir=cache_dir)
+        if centerline_path is None:
+            centerline_path = generate_centerline_path(
+                manifest,
+                component_selection=CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
+            )
+        cached_voxel_volume = (
+            getattr(centerline_path, "cached_voxel_volume", None)
+            if bool(settings.voxel_analysis_enabled)
+            else None
         )
     planning_budget.check("centerline_loaded", diagnostics=diagnostics)
     if len(centerline_path.cells) < 2:
         raise NavigationConfigurationError("Guided Dive requires a multi-point centerline")
 
-    nearest_index = _nearest_centerline_index(
-        centerline_path,
-        current_x=float(current[0]),
-        current_z=float(current[2]),
-    )
     # An explicit user displacement is the authoritative direction for a
     # user-resume replan. Camera view is only the fallback when the user did
     # not move far enough to establish a reliable displacement vector.
@@ -613,14 +1007,23 @@ def build_centerline_auto_dive_plan(
         if current_travel_pitch is not None
         else current_pitch
     )
-    route_cells, circular_arc = _select_auto_dive_cells(
-        centerline_path,
-        nearest_index=nearest_index,
-        closed_loop_gap_fraction=settings.closed_loop_gap_fraction,
-        current=current,
-        current_yaw=direction_yaw,
-        current_pitch=direction_pitch,
-    )
+    if require_voxel_graph:
+        route_cells = ()
+        circular_arc = False
+    else:
+        nearest_index = _nearest_centerline_index(
+            centerline_path,
+            current_x=float(current[0]),
+            current_z=float(current[2]),
+        )
+        route_cells, circular_arc = _select_auto_dive_cells(
+            centerline_path,
+            nearest_index=nearest_index,
+            closed_loop_gap_fraction=settings.closed_loop_gap_fraction,
+            current=current,
+            current_yaw=direction_yaw,
+            current_pitch=direction_pitch,
+        )
     planning_budget.check("route_seed_selected", diagnostics=diagnostics)
 
     navigation_metadata = manifest.get(NAVIGATION_METADATA_KEY)
@@ -628,22 +1031,23 @@ def build_centerline_auto_dive_plan(
         isinstance(navigation_metadata, Mapping)
         and isinstance(navigation_metadata.get("voxel_cache"), Mapping)
     )
-    cached_voxel_volume = (
-        getattr(centerline_path, "cached_voxel_volume", None)
-        if bool(settings.voxel_analysis_enabled)
-        else None
-    )
     voxel_route_active = False
     voxel_route_plan: NavigationVoxelRoutePlan | None = None
+    voxel_route_world_points: tuple[Point, ...] = ()
     voxel_route_payload: dict[str, Any] = {
         "method": NAVIGATION_VOXEL_GRAPH_METHOD,
         "enabled": bool(settings.voxel_analysis_enabled),
         "cache_declared": cache_voxel_cache_declared,
         "selected": False,
+        "authority_required": bool(require_voxel_graph),
+        "authority": authority_status,
     }
     if isinstance(cached_voxel_volume, NavigationVoxelAtlas):
         voxel_route_payload["cache_graph_cell_count"] = int(
             cached_voxel_volume.navigation_cell_count
+        )
+        voxel_route_payload["prepared_3d_motion_geometry_safe"] = bool(
+            cached_voxel_volume.prepared_3d_motion_geometry_safe
         )
         preferred_direction = _direction_from_radians(
             direction_yaw,
@@ -654,27 +1058,52 @@ def build_centerline_auto_dive_plan(
             current_position=current,
             footprint_cell_size=centerline_path.footprint_cell_size,
             preferred_direction=preferred_direction,
+            lookahead_distance_m=float(settings.lookahead_distance_m),
+            scoring_policy=settings.voxel_scoring_policy,
             diagnostics=diagnostics,
         )
         planning_budget.check("voxel_route_selected", diagnostics=diagnostics)
-        if voxel_route_plan is not None and len(voxel_route_plan.cells) >= 2:
+        if (
+            voxel_route_plan is not None
+            and (
+                len(voxel_route_plan.cells) >= 2
+                or len(voxel_route_plan.world_points) >= 2
+            )
+            and (
+                not voxel_route_plan.three_d_graph
+                or cached_voxel_volume.prepared_3d_motion_geometry_safe
+            )
+        ):
             route_cells = voxel_route_plan.cells
+            voxel_route_world_points = voxel_route_plan.world_points
             circular_arc = False
             voxel_route_active = True
             voxel_route_payload.update(
                 {
                     "selected": True,
                     "fallback_reason": None,
-                    "route_geometry_source": "voxel_cell_centers",
+                    "route_geometry_source": (
+                        "voxel_3d_cell_centers"
+                        if voxel_route_plan.three_d_graph
+                        else "voxel_cell_centers"
+                    ),
                     "plan": voxel_route_plan.diagnostic_payload(),
                 }
             )
         else:
-            voxel_route_payload["fallback_reason"] = (
-                "missing_filled_voxel_graph"
-                if cached_voxel_volume.navigation_cell_count <= 0
-                else "no_viable_filled_voxel_branch"
-            )
+            if (
+                cached_voxel_volume.has_prepared_3d_graph
+                and not cached_voxel_volume.prepared_3d_motion_geometry_safe
+            ):
+                voxel_route_payload["fallback_reason"] = (
+                    "prepared_3d_graph_geometry_too_coarse"
+                )
+            else:
+                voxel_route_payload["fallback_reason"] = (
+                    "missing_filled_true_3d_voxel_graph"
+                    if cached_voxel_volume.navigation_cell_count <= 0
+                    else "no_viable_true_3d_voxel_branch"
+                )
             voxel_route_payload["branch_policy"] = {
                 "reject_dead_end": True,
                 "reject_backward_first_step": preferred_direction is not None,
@@ -693,41 +1122,106 @@ def build_centerline_auto_dive_plan(
         "voxel_route_selection",
         voxel_route_payload,
     )
-    if len(route_cells) < 2:
+    scan_only_recovery = bool(
+        force_hemisphere_scan
+        and require_voxel_graph
+        and voxel_route_plan is None
+        and isinstance(cached_voxel_volume, NavigationVoxelAtlas)
+    )
+    if scan_only_recovery:
+        voxel_route_payload["fallback_reason"] = "continuous_scan_only_recovery"
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_route_selection",
+            voxel_route_payload,
+        )
+    if require_voxel_graph and voxel_route_plan is None and not scan_only_recovery:
+        failure_status = dict(authority_status or {})
+        failure_status.update(
+            {
+                "available": False,
+                "reason": "no_valid_forward_route",
+                "message": (
+                    "the prepared true-3D voxel graph has no valid forward route"
+                ),
+            }
+        )
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "navigation_authority",
+            failure_status,
+        )
+        raise NavigationVoxelGraphAuthorityError(
+            "Guided Dive found no valid forward route in the prepared true-3D "
+            "voxel graph",
+            reason="no_valid_forward_route",
+            status=failure_status,
+        )
+    if (
+        isinstance(cached_voxel_volume, NavigationVoxelAtlas)
+        and cached_voxel_volume.has_prepared_3d_graph
+        and cached_voxel_volume.prepared_3d_motion_geometry_safe
+        and voxel_route_plan is None
+        and not scan_only_recovery
+    ):
+        raise NavigationConfigurationError(
+            "Guided Dive found no valid forward route in the true 3D voxel graph"
+        )
+    route_uses_3d_points = len(voxel_route_world_points) >= 2
+    if scan_only_recovery:
+        current_cell = _current_footprint_cell(
+            centerline_path,
+            current,
+        )
+        route_cells = (current_cell,)
+        waypoint_cells = (current_cell,)
+        route_xz = ((float(current[0]), float(current[2])),)
+        route_points = (
+            (float(current[0]), float(current[1]), float(current[2])),
+        )
+    elif len(route_cells) < 2 and not route_uses_3d_points:
         raise NavigationConfigurationError("Guided Dive route is too short")
 
-    route_cells = _route_cells_connected_to_current_camera(
-        centerline_path,
-        route_cells=route_cells,
-        current=current,
-    )
-    waypoint_route_cells = _route_cells_after_current_camera_progress(
-        centerline_path,
-        route_cells=route_cells,
-        current=current,
-    )
-    waypoint_cells = _waypoint_cells_for_auto_dive_route(
-        centerline_path,
-        route_cells=waypoint_route_cells,
-        settings=settings,
-    )
-    route_xz = tuple(
-        (
-            footprint_world_center(cell, centerline_path.footprint_cell_size)
-            if voxel_route_active
-            else _center_for_route_cell(centerline_path, cell)
+    if route_uses_3d_points:
+        waypoint_cells = route_cells
+        route_xz = tuple(
+            (float(point[0]), float(point[2]))
+            for point in voxel_route_world_points
         )
-        for cell in waypoint_cells
-    )
-    route_points = _auto_dive_points_for_waypoint_cells(
-        centerline_path,
-        waypoint_cells=waypoint_cells,
-        route_xz=route_xz,
-        manifest=manifest,
-        settings=settings,
-        prefer_route_cell_centers=voxel_route_active,
-        fallback_y=float(current[1]),
-    )
+        route_points = voxel_route_world_points
+    elif not scan_only_recovery:
+        route_cells = _route_cells_connected_to_current_camera(
+            centerline_path,
+            route_cells=route_cells,
+            current=current,
+        )
+        waypoint_route_cells = _route_cells_after_current_camera_progress(
+            centerline_path,
+            route_cells=route_cells,
+            current=current,
+        )
+        waypoint_cells = _waypoint_cells_for_auto_dive_route(
+            centerline_path,
+            route_cells=waypoint_route_cells,
+            settings=settings,
+        )
+        route_xz = tuple(
+            (
+                footprint_world_center(cell, centerline_path.footprint_cell_size)
+                if voxel_route_active
+                else _center_for_route_cell(centerline_path, cell)
+            )
+            for cell in waypoint_cells
+        )
+        route_points = _auto_dive_points_for_waypoint_cells(
+            centerline_path,
+            waypoint_cells=waypoint_cells,
+            route_xz=route_xz,
+            manifest=manifest,
+            settings=settings,
+            prefer_route_cell_centers=voxel_route_active,
+            fallback_y=float(current[1]),
+        )
     planning_budget.check("route_points_built", diagnostics=diagnostics)
     mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
         manifest,
@@ -769,10 +1263,65 @@ def build_centerline_auto_dive_plan(
                 "metrics": getattr(centerline_path, "cached_voxel_metrics", None),
             },
         )
+    local_refinement_forward = _direction_from_radians(
+        direction_yaw,
+        direction_pitch,
+    )
+    fine_frontier_tile = (
+        cached_voxel_volume.fine_tile_for_point(current)
+        if isinstance(cached_voxel_volume, NavigationVoxelAtlas)
+        else None
+    )
+    if isinstance(cached_voxel_volume, NavigationVoxelAtlas):
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_fine_frontier_coverage",
+            {
+                "covered": fine_frontier_tile is not None,
+                "fine_tile_count": int(cached_voxel_volume.fine_tile_count),
+                "fine_voxel_size_m": float(
+                    cached_voxel_volume.fine_voxel_size_m
+                ),
+                "position": [float(value) for value in current],
+                "source": "cache",
+            },
+        )
+    runtime_refinement_allowed = planning_budget.budget_s is None
+    local_refinement_builder = (
+        _make_auto_dive_local_frontier_voxel_builder(
+            current=current,
+            forward=local_refinement_forward,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            diagnostics=diagnostics,
+        )
+        if (
+            (cached_voxel_volume is not None or cache_voxel_cache_declared)
+            and fine_frontier_tile is None
+            and runtime_refinement_allowed
+        )
+        else None
+    )
+    if (
+        fine_frontier_tile is None
+        and (cached_voxel_volume is not None or cache_voxel_cache_declared)
+        and not runtime_refinement_allowed
+    ):
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_refinement",
+            {
+                "built": False,
+                "outcome": "deferred_to_cache_or_background",
+                "reason": "runtime_planning_budget",
+                "planning_budget_s": planning_budget.budget_s,
+            },
+        )
     collision_validator = _AutoDiveCollisionValidator(
         centerline_path,
         mesh_guard=mesh_guard,
         voxel_volume=cached_voxel_volume,
+        voxel_refinement_builder=local_refinement_builder,
         voxel_builder=(
             None
             if cached_voxel_volume is not None or cache_voxel_cache_declared
@@ -784,6 +1333,10 @@ def build_centerline_auto_dive_plan(
                 diagnostics=diagnostics,
             )
         ),
+        allow_native_graph_transitions=bool(
+            isinstance(cached_voxel_volume, NavigationVoxelAtlas)
+            and cached_voxel_volume.has_prepared_3d_graph
+        ),
     )
     selected_route = _select_best_auto_dive_route_candidate(
         centerline_path,
@@ -794,11 +1347,13 @@ def build_centerline_auto_dive_plan(
         collision_validator=collision_validator,
         current_yaw=current_yaw,
         current_pitch=current_pitch,
+        current_roll=current_roll,
         current_travel_yaw=current_travel_yaw,
         current_travel_pitch=current_travel_pitch,
         avoid_positions=avoid_positions,
         user_reposition=user_reposition,
-        voxel_route_active=voxel_route_active,
+        force_hemisphere_scan=force_hemisphere_scan,
+        voxel_route_active=bool(voxel_route_active or scan_only_recovery),
         voxel_route_plan=voxel_route_plan,
         planning_budget=planning_budget,
         diagnostics=diagnostics,
@@ -816,6 +1371,8 @@ def build_centerline_auto_dive_plan(
         duration_s=duration_s,
         lookahead_distance_m=max(0.0, float(settings.lookahead_distance_m)),
     )
+    for payload in keyframe_payloads:
+        payload["roll_deg"] = round(float(selected_route.roll_deg), 6)
     keyframe_payloads = _wall_aware_auto_dive_keyframe_payloads(
         keyframe_payloads,
         route_points=route_points,
@@ -852,6 +1409,19 @@ def build_centerline_auto_dive_plan(
             if voxel_route_plan is None
             else voxel_route_plan.diagnostic_payload()
         ),
+        terminal_reached=bool(selected_route.terminal_reached),
+    )
+
+
+def build_voxel_graph_auto_dive_plan(
+    manifest: Mapping[str, Any],
+    **kwargs: Any,
+) -> AutoDivePlan:
+    """Build a production Guided Dive plan using only the prepared voxel graph."""
+    return build_centerline_auto_dive_plan(
+        manifest,
+        require_voxel_graph=True,
+        **kwargs,
     )
 
 
@@ -908,12 +1478,33 @@ def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
         raise NavigationConfigurationError(
             "Guided Dive voxel cell budget must be positive"
         )
+    local_radius = float(settings.voxel_local_refinement_radius_m)
+    if not math.isfinite(local_radius) or local_radius <= 0.0:
+        raise NavigationConfigurationError(
+            "Guided Dive local voxel refinement radius must be positive"
+        )
+    local_forward = float(settings.voxel_local_refinement_forward_m)
+    if not math.isfinite(local_forward) or local_forward <= 0.0:
+        raise NavigationConfigurationError(
+            "Guided Dive local voxel refinement distance must be positive"
+        )
+    if int(settings.voxel_local_refinement_max_cells) <= 0:
+        raise NavigationConfigurationError(
+            "Guided Dive local voxel refinement cell budget must be positive"
+        )
     if settings.planning_budget_s is not None:
         planning_budget = float(settings.planning_budget_s)
         if not math.isfinite(planning_budget) or planning_budget <= 0.0:
             raise NavigationConfigurationError(
                 "Guided Dive planning budget must be positive"
             )
+    if not isinstance(
+        settings.voxel_scoring_policy,
+        NavigationVoxelScoringPolicy,
+    ):
+        raise NavigationConfigurationError(
+            "Guided Dive voxel scoring policy is invalid"
+        )
 
 
 def _wall_aware_auto_dive_keyframe_payloads(
@@ -2002,10 +2593,12 @@ def _select_best_auto_dive_route_candidate(
     collision_validator: _AutoDiveCollisionValidator,
     current_yaw: float | None = None,
     current_pitch: float | None = None,
+    current_roll: float | None = None,
     current_travel_yaw: float | None = None,
     current_travel_pitch: float | None = None,
     avoid_positions: Sequence[Sequence[float]] | None = None,
     user_reposition: bool = False,
+    force_hemisphere_scan: bool = False,
     voxel_route_active: bool = False,
     voxel_route_plan: NavigationVoxelRoutePlan | None = None,
     planning_budget: _AutoDivePlanningBudget | None = None,
@@ -2049,12 +2642,15 @@ def _select_best_auto_dive_route_candidate(
             route_samples=route_samples,
             current=current,
             current_point=current_point,
+            settings=settings,
             current_yaw=current_yaw,
             current_pitch=current_pitch,
+            current_roll=current_roll,
             current_travel_yaw=current_travel_yaw,
             current_travel_pitch=current_travel_pitch,
             avoid_positions=avoid_positions,
             user_reposition=user_reposition,
+            force_hemisphere_scan=force_hemisphere_scan,
             voxel_route_plan=voxel_route_plan,
             collision_validator=collision_validator,
             diagnostics=diagnostics,
@@ -2151,6 +2747,7 @@ def _select_best_auto_dive_route_candidate(
         return _AutoDiveSelectedRoute(
             points=candidate.points,
             selection_reason="single_candidate",
+            roll_deg=float(candidate.roll_deg),
         )
 
     candidates: list[_AutoDiveRouteCandidate] = []
@@ -2244,6 +2841,7 @@ def _select_best_auto_dive_route_candidate(
         return _AutoDiveSelectedRoute(
             points=route_points,
             selection_reason="fallback_raw_points",
+            roll_deg=0.0,
         )
 
     scored = [
@@ -2269,23 +2867,100 @@ def _select_best_auto_dive_route_candidate(
         collision_validator = _materialize_auto_dive_voxel_volume(
             collision_validator
         )
-        recovery_candidate = _build_mesh_recovery_auto_dive_route_candidate(
+        hemisphere_candidate = _build_hemisphere_probe_route_candidate(
             ordinal=max(candidate.ordinal for candidate in candidates) + 1,
             centerline_path=centerline_path,
-            route_samples=route_samples,
             current=current,
+            route_points=route_samples.points,
             current_yaw=current_yaw,
             current_pitch=current_pitch,
+            current_roll=current_roll,
             current_travel_yaw=current_travel_yaw,
             current_travel_pitch=current_travel_pitch,
-            avoid_positions=avoid_positions,
-            # Never reverse a route when a directional pose or user travel
-            # vector is available. If neither is available, the search still
-            # has its scan/target ordering as a safe fallback.
-            allow_reverse_travel=False,
             collision_validator=collision_validator,
-            diagnostics=diagnostics,
+            avoid_positions=avoid_positions,
+            settings=settings,
             planning_budget=planning_budget,
+            diagnostics=diagnostics,
+        )
+        if hemisphere_candidate is not None:
+            candidates.append(hemisphere_candidate)
+            scored.append(
+                (
+                    _score_auto_dive_route_candidate(
+                        hemisphere_candidate,
+                        current_point=current_point,
+                        collision_validator=collision_validator,
+                        allow_low_lateral_clearance=True,
+                        planning_budget=planning_budget,
+                        diagnostics=diagnostics,
+                    ),
+                    hemisphere_candidate,
+                )
+            )
+        # A local voxel route is only a candidate. If the exact mesh guard
+        # rejects it, do not return to the same candidate and then trim the
+        # centerline into a dead end. Run the complete 3D hemisphere scan so
+        # lateral and vertical alternatives can compete from this position.
+        if (
+            hemisphere_candidate is not None
+            and hemisphere_candidate.name == "voxel-local-frontier"
+            and not any(score.route_clear for score, _candidate in scored)
+        ):
+            full_scan_candidate = _build_hemisphere_probe_route_candidate(
+                ordinal=max(candidate.ordinal for candidate in candidates) + 1,
+                centerline_path=centerline_path,
+                current=current,
+                route_points=route_samples.points,
+                current_yaw=current_yaw,
+                current_pitch=current_pitch,
+                current_roll=current_roll,
+                current_travel_yaw=current_travel_yaw,
+                current_travel_pitch=current_travel_pitch,
+                collision_validator=collision_validator,
+                avoid_positions=avoid_positions,
+                settings=settings,
+                planning_budget=planning_budget,
+                force_hemisphere_scan=True,
+                diagnostics=diagnostics,
+            )
+            if full_scan_candidate is not None:
+                candidates.append(full_scan_candidate)
+                scored.append(
+                    (
+                        _score_auto_dive_route_candidate(
+                            full_scan_candidate,
+                            current_point=current_point,
+                            collision_validator=collision_validator,
+                            allow_low_lateral_clearance=True,
+                            planning_budget=planning_budget,
+                            diagnostics=diagnostics,
+                        ),
+                        full_scan_candidate,
+                    )
+                )
+        recovery_candidate = (
+            None
+            if any(score.route_clear for score, _candidate in scored)
+            else _build_mesh_recovery_auto_dive_route_candidate(
+                ordinal=max(candidate.ordinal for candidate in candidates) + 1,
+                centerline_path=centerline_path,
+                route_samples=route_samples,
+                current=current,
+                current_yaw=current_yaw,
+                current_pitch=current_pitch,
+                current_travel_yaw=current_travel_yaw,
+                current_travel_pitch=current_travel_pitch,
+                avoid_positions=avoid_positions,
+                # Never reverse a route when a directional pose or user
+                # travel vector is available. If neither is available, the
+                # search still has its scan/target ordering as a safe
+                # fallback.
+                allow_reverse_travel=False,
+                collision_validator=collision_validator,
+                diagnostics=diagnostics,
+                planning_budget=planning_budget,
+            )
         )
         if recovery_candidate is not None:
             candidates.append(recovery_candidate)
@@ -2418,6 +3093,16 @@ def _select_best_auto_dive_route_candidate(
         and selection_reason == "trusted_route_clear"
     ):
         selection_reason = "mesh_recovery_route_clear"
+    elif (
+        best_candidate.name == "hemisphere-probe"
+        and selection_reason == "trusted_route_clear"
+    ):
+        selection_reason = "hemisphere_probe_route_clear"
+    elif (
+        best_candidate.name == "voxel-local-frontier"
+        and selection_reason == "trusted_route_clear"
+    ):
+        selection_reason = "voxel_local_frontier_route_clear"
     selected_points = best_candidate.points
     selected_route_truncated = False
     selected_safe_prefix_length_m: float | None = None
@@ -2442,10 +3127,14 @@ def _select_best_auto_dive_route_candidate(
             "selected": best_candidate.name,
             "selection_reason": selection_reason,
             "user_reposition": bool(user_reposition),
+            "force_hemisphere_scan": bool(force_hemisphere_scan),
             "selected_geometry_trusted": bool(best_score.geometry_trusted),
             "selected_route_truncated": bool(selected_route_truncated),
             "selected_safe_prefix_length_m": selected_safe_prefix_length_m,
-            "selected_replan_at_end": bool(best_candidate.name == "mesh-recovery"),
+            "selected_replan_at_end": bool(
+                best_candidate.name
+                in {"mesh-recovery", "hemisphere-probe", "voxel-local-frontier"}
+            ),
             "trusted_max_segment_cells": float(
                 DEFAULT_AUTO_DIVE_TRUSTED_MAX_SEGMENT_CELLS
             ),
@@ -2473,7 +3162,11 @@ def _select_best_auto_dive_route_candidate(
         selection_reason=selection_reason,
         route_truncated_by_mesh=bool(selected_route_truncated),
         mesh_safe_prefix_length_m=selected_safe_prefix_length_m,
-        replan_at_end=bool(best_candidate.name == "mesh-recovery"),
+        replan_at_end=bool(
+            best_candidate.name
+            in {"mesh-recovery", "hemisphere-probe", "voxel-local-frontier"}
+        ),
+        roll_deg=float(best_candidate.roll_deg),
     )
 
 
@@ -2483,12 +3176,15 @@ def _select_voxel_graph_auto_dive_route(
     route_samples: _AutoDiveRouteSamples,
     current: np.ndarray,
     current_point: Point,
+    settings: AutoDiveSettings,
     current_yaw: float | None,
     current_pitch: float | None,
+    current_roll: float | None,
     current_travel_yaw: float | None,
     current_travel_pitch: float | None,
     avoid_positions: Sequence[Sequence[float]] | None,
     user_reposition: bool,
+    force_hemisphere_scan: bool,
     voxel_route_plan: NavigationVoxelRoutePlan | None,
     collision_validator: _AutoDiveCollisionValidator,
     diagnostics: AutoDiveDiagnosticSink | None,
@@ -2521,17 +3217,107 @@ def _select_voxel_graph_auto_dive_route(
     scored: list[tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteCandidate]] = [
         (graph_score, graph_candidate)
     ]
+    hemisphere_candidate: _AutoDiveRouteCandidate | None = None
     recovery_candidate: _AutoDiveRouteCandidate | None = None
-    if (
-        not graph_score.route_clear
-        and active_validator.has_mesh_collision_guard
-        and _mesh_recovery_is_enabled(active_validator.mesh_guard)
+    should_scan_hemisphere = bool(
+        force_hemisphere_scan or not graph_score.route_clear
+    )
+    if should_scan_hemisphere and (
+        active_validator.voxel_volume is not None
+        or active_validator.has_mesh_collision_guard
     ):
         if planning_budget is not None:
             planning_budget.check("mesh_recovery_setup", diagnostics=diagnostics)
         active_validator = _materialize_auto_dive_voxel_volume(active_validator)
-        recovery_candidate = _build_mesh_recovery_auto_dive_route_candidate(
+        hemisphere_candidate = _build_hemisphere_probe_route_candidate(
             ordinal=1,
+            centerline_path=centerline_path,
+            current=current,
+            route_points=route_samples.points,
+            current_yaw=current_yaw,
+            current_pitch=current_pitch,
+            current_roll=current_roll,
+            current_travel_yaw=current_travel_yaw,
+            current_travel_pitch=current_travel_pitch,
+            collision_validator=active_validator,
+            avoid_positions=avoid_positions,
+            settings=settings,
+            scan_distance_m=(
+                None
+                if voxel_route_plan is None
+                else voxel_route_plan.lookahead_distance_m
+            ),
+            planning_budget=planning_budget,
+            force_hemisphere_scan=bool(force_hemisphere_scan),
+            diagnostics=diagnostics,
+        )
+        if hemisphere_candidate is not None:
+            scored.append(
+                (
+                    _score_auto_dive_route_candidate(
+                        hemisphere_candidate,
+                        current_point=current_point,
+                        collision_validator=active_validator,
+                        allow_low_lateral_clearance=True,
+                        planning_budget=planning_budget,
+                        diagnostics=diagnostics,
+                    ),
+                    hemisphere_candidate,
+                )
+            )
+        # A local voxel route can be geometrically plausible yet fail the
+        # exact mesh guard. In that case it must not suppress the complete
+        # hemisphere scan; the missing passage may be lateral or vertical.
+        if (
+            not force_hemisphere_scan
+            and hemisphere_candidate is not None
+            and hemisphere_candidate.name == "voxel-local-frontier"
+            and not any(score.route_clear for score, _candidate in scored)
+        ):
+            full_scan_candidate = _build_hemisphere_probe_route_candidate(
+                ordinal=max(candidate.ordinal for _score, candidate in scored) + 1,
+                centerline_path=centerline_path,
+                current=current,
+                route_points=route_samples.points,
+                current_yaw=current_yaw,
+                current_pitch=current_pitch,
+                current_roll=current_roll,
+                current_travel_yaw=current_travel_yaw,
+                current_travel_pitch=current_travel_pitch,
+                collision_validator=active_validator,
+                avoid_positions=avoid_positions,
+                settings=settings,
+                scan_distance_m=(
+                    None
+                    if voxel_route_plan is None
+                    else voxel_route_plan.lookahead_distance_m
+                ),
+                planning_budget=planning_budget,
+                force_hemisphere_scan=True,
+                diagnostics=diagnostics,
+            )
+            if full_scan_candidate is not None:
+                scored.append(
+                    (
+                        _score_auto_dive_route_candidate(
+                            full_scan_candidate,
+                            current_point=current_point,
+                            collision_validator=active_validator,
+                            allow_low_lateral_clearance=True,
+                            planning_budget=planning_budget,
+                            diagnostics=diagnostics,
+                        ),
+                        full_scan_candidate,
+                    )
+                )
+    if (
+        not graph_score.route_clear
+        and active_validator.has_mesh_collision_guard
+        and _mesh_recovery_is_enabled(active_validator.mesh_guard)
+        and not any(score.route_clear for score, _candidate in scored)
+    ):
+        recovery_candidate = _build_mesh_recovery_auto_dive_route_candidate(
+            ordinal=2,
             centerline_path=centerline_path,
             route_samples=route_samples,
             current=current,
@@ -2574,11 +3360,22 @@ def _select_voxel_graph_auto_dive_route(
                 cell_size=active_validator.cell_size,
             ),
         )
-        selection_reason = (
-            "voxel_branch_lookahead_mesh_recovery"
-            if best_candidate.name == "mesh-recovery"
-            else "voxel_branch_lookahead"
-        )
+        if best_candidate.name == "mesh-recovery":
+            selection_reason = "voxel_branch_lookahead_mesh_recovery"
+        elif best_candidate.name == "hemisphere-probe":
+            selection_reason = "voxel_hemisphere_probe"
+        elif best_candidate.name == "voxel-local-frontier":
+            selection_reason = "voxel_local_frontier"
+        elif (
+            voxel_route_plan is not None
+            and voxel_route_plan.prepared_graph
+        ):
+            selection_reason = str(
+                voxel_route_plan.selection_reason
+                or "prepared_forward_graph"
+            )
+        else:
+            selection_reason = "voxel_branch_lookahead"
         selected_points = best_candidate.points
     else:
         best_score, best_candidate = max(
@@ -2606,8 +3403,16 @@ def _select_voxel_graph_auto_dive_route(
         )
     selected_replan_at_end = bool(
         not selected_route_truncated
-        and voxel_route_plan is not None
-        and voxel_route_plan.replan_at_lookahead
+        and (
+            (
+                voxel_route_plan is not None
+                and voxel_route_plan.replan_at_lookahead
+            )
+            or best_candidate.name in {
+                "hemisphere-probe",
+                "voxel-local-frontier",
+            }
+        )
     )
 
     _record_auto_dive_diagnostic(
@@ -2622,7 +3427,10 @@ def _select_voxel_graph_auto_dive_route(
             "selected_safe_prefix_length_m": selected_safe_prefix_length_m,
             "selected_replan_at_end": selected_replan_at_end,
             "route_geometry_source": (
-                "voxel_cell_centers"
+                "voxel_3d_cell_centers"
+                if voxel_route_plan is not None
+                and voxel_route_plan.three_d_graph
+                else "voxel_cell_centers"
                 if voxel_route_plan is not None
                 else "cached_navigation_points"
             ),
@@ -2635,12 +3443,13 @@ def _select_voxel_graph_auto_dive_route(
                 active_validator.has_mesh_collision_guard
             ),
             "low_lateral_clearance_allowed": True,
-            "voxel_route_progress_guard": True,
+            "voxel_route_entrance_guard": True,
+            "voxel_route_progress_monotonic": False,
             "voxel_volume": _auto_dive_voxel_volume_payload(active_validator),
             "candidate_count": len(scored),
             "travel_filter": {
                 "enabled": False,
-                "reason": "voxel_progress_guard_and_soft_direction_cost",
+                "reason": "voxel_entrance_band_and_heading",
                 "before_count": len(scored),
                 "after_count": len(scored),
             },
@@ -2657,6 +3466,13 @@ def _select_voxel_graph_auto_dive_route(
         route_truncated_by_mesh=bool(selected_route_truncated),
         mesh_safe_prefix_length_m=selected_safe_prefix_length_m,
         replan_at_end=selected_replan_at_end,
+        roll_deg=float(best_candidate.roll_deg),
+        terminal_reached=bool(
+            voxel_route_plan is not None
+            and voxel_route_plan.terminal_reached
+            and best_candidate.name == "voxel-graph"
+            and not selected_route_truncated
+        ),
     )
 
 
@@ -2790,10 +3606,180 @@ def _make_auto_dive_voxel_builder(
     return build
 
 
+def _make_auto_dive_local_frontier_voxel_builder(
+    *,
+    current: np.ndarray,
+    forward: Sequence[float] | None,
+    mesh_guard: CachedChunkMeshCollisionGuard | None,
+    settings: AutoDiveSettings,
+    diagnostics: AutoDiveDiagnosticSink | None,
+) -> Callable[[], LocalVoxelVolume | None] | None:
+    """Return a bounded 1 m field for local 3D frontier recovery."""
+    common_payload = {
+        "method": "local_frontier_surface_voxels_v1",
+        "voxel_size_m": 1.0,
+        "surface_inflation_m": 2.0,
+        "radius_m": float(settings.voxel_local_refinement_radius_m),
+        "forward_distance_m": float(
+            settings.voxel_local_refinement_forward_m
+        ),
+        "max_cells": int(settings.voxel_local_refinement_max_cells),
+    }
+    if not bool(settings.voxel_analysis_enabled) or not bool(
+        settings.voxel_local_refinement_enabled
+    ):
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_refinement",
+            {
+                **common_payload,
+                "built": False,
+                "outcome": VOXEL_ANALYSIS_OUTCOME_DISABLED,
+            },
+        )
+        return None
+    if mesh_guard is None:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_refinement",
+            {
+                **common_payload,
+                "built": False,
+                "outcome": VOXEL_ANALYSIS_OUTCOME_MESH_GUARD_UNAVAILABLE,
+            },
+        )
+        return None
+
+    try:
+        current_point = tuple(float(value) for value in current)
+    except (TypeError, ValueError):
+        return None
+    if len(current_point) != 3 or not all(
+        math.isfinite(value) for value in current_point
+    ):
+        return None
+    direction_values = tuple(
+        float(value)
+        for value in (
+            (0.0, 0.0, 0.0) if forward is None else forward
+        )
+    )
+    direction_norm = math.sqrt(
+        sum(value * value for value in direction_values)
+    )
+    if direction_norm <= 1e-9:
+        direction_values = (0.0, 0.0, 1.0)
+        direction_norm = 1.0
+    direction = tuple(value / direction_norm for value in direction_values)
+    radius = max(4.0, float(settings.voxel_local_refinement_radius_m))
+    forward_distance = max(
+        radius,
+        float(settings.voxel_local_refinement_forward_m),
+    )
+    bounds_min = tuple(
+        current_point[axis]
+        - radius
+        + min(0.0, direction[axis] * forward_distance)
+        for axis in range(3)
+    )
+    bounds_max = tuple(
+        current_point[axis]
+        + radius
+        + max(0.0, direction[axis] * forward_distance)
+        for axis in range(3)
+    )
+
+    def build() -> LocalVoxelVolume | None:
+        try:
+            meshes = mesh_guard.triangle_meshes_for_bounds(
+                bounds_min,
+                bounds_max,
+            )
+            if not meshes:
+                _record_auto_dive_diagnostic(
+                    diagnostics,
+                    "voxel_local_refinement",
+                    {
+                        **common_payload,
+                        "built": False,
+                        "outcome": VOXEL_ANALYSIS_OUTCOME_NO_TRIANGLES,
+                        "bounds_min": [float(value) for value in bounds_min],
+                        "bounds_max": [float(value) for value in bounds_max],
+                    },
+                )
+                return None
+            max_cells = max(
+                4_096,
+                min(
+                    int(settings.voxel_local_refinement_max_cells),
+                    131_072,
+                ),
+            )
+            volume = build_surface_voxel_volume(
+                meshes,
+                bounds_min=bounds_min,
+                bounds_max=bounds_max,
+                config=VoxelVolumeConfig(
+                    voxel_size_m=1.0,
+                    surface_inflation_cells=2,
+                    max_voxels=max_cells,
+                    max_surface_samples=max(
+                        16_384,
+                        min(200_000, max_cells),
+                    ),
+                    max_clearance_search_cells=16,
+                ),
+            )
+        except Exception as exc:
+            _record_auto_dive_diagnostic(
+                diagnostics,
+                "voxel_local_refinement",
+                {
+                    **common_payload,
+                    "built": False,
+                    "outcome": VOXEL_ANALYSIS_OUTCOME_ERROR,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            return None
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_refinement",
+            {
+                **common_payload,
+                "built": True,
+                "outcome": VOXEL_ANALYSIS_OUTCOME_BUILT,
+                "actual_voxel_size_m": float(volume.voxel_size_m),
+                "voxel_count": int(volume.voxel_count),
+                "surface_cell_count": int(len(volume.surface_cells)),
+                "triangle_count": int(volume.triangle_count),
+                "surface_sample_count": int(volume.surface_sample_count),
+                "sampling_truncated": bool(volume.sampling_truncated),
+                "bounds_min": [float(value) for value in bounds_min],
+                "bounds_max": [float(value) for value in bounds_max],
+            },
+        )
+        return volume
+
+    return build
+
+
 def _materialize_auto_dive_voxel_volume(
     collision_validator: _AutoDiveCollisionValidator,
 ) -> _AutoDiveCollisionValidator:
-    """Build the optional volume once, preserving the validator seam."""
+    """Build the optional fine field or legacy volume once."""
+    refinement_builder = collision_validator.voxel_refinement_builder
+    if refinement_builder is not None:
+        try:
+            refinement = refinement_builder()
+        except Exception:
+            refinement = None
+        return replace(
+            collision_validator,
+            voxel_refinement=refinement,
+            voxel_refinement_builder=None,
+        )
     builder = collision_validator.voxel_builder
     if builder is None:
         return collision_validator
@@ -2812,9 +3798,14 @@ def _auto_dive_voxel_volume_payload(
     collision_validator: _AutoDiveCollisionValidator,
 ) -> dict[str, object] | None:
     volume = collision_validator.voxel_volume
-    if volume is None:
+    refinement = collision_validator.voxel_refinement
+    if volume is None and refinement is None:
         return None
-    payload = volume.diagnostic_payload()
+    payload = (
+        {}
+        if volume is None
+        else volume.diagnostic_payload()
+    )
     if volume is collision_validator.centerline_path.cached_voxel_volume:
         payload["source"] = "cache"
         payload["cache_metrics"] = getattr(
@@ -2822,8 +3813,11 @@ def _auto_dive_voxel_volume_payload(
             "cached_voxel_metrics",
             None,
         )
-    else:
+    elif volume is not None:
         payload["source"] = "runtime"
+    if refinement is not None:
+        payload["local_refinement"] = refinement.diagnostic_payload()
+        payload["local_refinement_source"] = "runtime"
     return payload
 
 
@@ -3039,6 +4033,7 @@ def _auto_dive_candidate_score_payload(
     return {
         "name": candidate.name,
         "ordinal": candidate.ordinal,
+        "roll_deg": float(candidate.roll_deg),
         "route_clear": bool(score.route_clear),
         "entry_clear": bool(score.entry_clear),
         "mesh_clear": bool(score.mesh_clear),
@@ -3652,6 +4647,10 @@ def _mesh_clear_recovery_footprint_path(
                     path_distance_m - selection_turn_penalty_m
                 )
                 candidate_path = _mesh_recovery_cell_path(previous, cell)
+                path_volume_m3 = sum(
+                    _mesh_recovery_cell_available_volume(centerline_path, path_cell)
+                    for path_cell in candidate_path
+                )
                 (
                     path_avoidance_count,
                     path_avoidance_min_distance_cells,
@@ -3696,6 +4695,7 @@ def _mesh_clear_recovery_footprint_path(
                     -int(path_avoidance_count),
                     float(selection_score_m),
                     float(path_quality_m),
+                    float(path_volume_m3),
                     float(cached_volume_per_route),
                     float(cached_volume_m3),
                     float(cached_hotspot_score),
@@ -3722,6 +4722,7 @@ def _mesh_clear_recovery_footprint_path(
                     "target": [float(value) for value in target_point],
                     "selection_score_m": float(selection_score_m),
                     "path_quality_m": float(path_quality_m),
+                    "path_volume_m3": float(path_volume_m3),
                     "path_distance_m": float(path_distance_m),
                     "net_distance_m": float(net_distance_m),
                     "straightness": float(straightness),
@@ -4068,6 +5069,23 @@ def _mesh_recovery_cached_hotspot_payload(
     hotspots = getattr(centerline_path, "cached_recovery_hotspots", None) or {}
     hotspot = hotspots.get(cell)
     if not hotspot:
+        volume = getattr(centerline_path, "cached_voxel_volume", None)
+        if isinstance(volume, NavigationVoxelAtlas):
+            metric = volume.cell_metrics.get(cell)
+            if metric is not None:
+                available_volume = max(
+                    0.0,
+                    float(getattr(metric, "available_volume_m3", 0.0)),
+                )
+                return {
+                    "available_volume_m3": available_volume,
+                    "volume_per_route_m": available_volume
+                    / max(1e-6, float(centerline_path.footprint_cell_size)),
+                    "voxel_mean_clearance_m": max(
+                        0.0,
+                        float(getattr(metric, "mean_clearance_m", 0.0)),
+                    ),
+                }
         return None
     payload: dict[str, float] = {}
     for key in (
@@ -4085,6 +5103,17 @@ def _mesh_recovery_cached_hotspot_payload(
             continue
         payload[key] = float(value)
     return payload or None
+
+
+def _mesh_recovery_cell_available_volume(
+    centerline_path: CenterlinePath,
+    cell: FootprintCell,
+) -> float:
+    """Return cache-time filled volume for a recovery corridor cell."""
+    hotspot = _mesh_recovery_cached_hotspot_payload(centerline_path, cell)
+    if hotspot is None:
+        return 0.0
+    return max(0.0, float(hotspot.get("available_volume_m3", 0.0)))
 
 
 def _mesh_recovery_edge_is_clear(
@@ -4284,6 +5313,733 @@ def _mesh_recovery_scan_alignment(
         float(best_alignment),
         float(best_angle_penalty),
     )
+
+
+def _build_hemisphere_probe_route_candidate(
+    *,
+    ordinal: int,
+    centerline_path: CenterlinePath,
+    current: np.ndarray,
+    route_points: tuple[Point, ...],
+    current_yaw: float | None,
+    current_pitch: float | None,
+    current_roll: float | None,
+    current_travel_yaw: float | None,
+    current_travel_pitch: float | None,
+    collision_validator: _AutoDiveCollisionValidator,
+    avoid_positions: Sequence[Sequence[float]] | None,
+    settings: AutoDiveSettings,
+    scan_distance_m: float | None = None,
+    planning_budget: _AutoDivePlanningBudget | None = None,
+    force_hemisphere_scan: bool = False,
+    diagnostics: AutoDiveDiagnosticSink | None = None,
+) -> _AutoDiveRouteCandidate | None:
+    """Select one exact-mesh-checked route from a 3D hemisphere scan.
+
+    The scan is intentionally local. The cache-time voxel graph remains the
+    long-range branch selector; this routine finds a safe next leg when the
+    graph/centerline route cannot be entered or when a turn requires a
+    lateral/vertical camera reposition first.
+    """
+    current_point: Point = (
+        float(current[0]),
+        float(current[1]),
+        float(current[2]),
+    )
+    forward = _hemisphere_scan_forward_vector(
+        centerline_path,
+        current=current,
+        current_point=current_point,
+        current_yaw=current_yaw,
+        current_pitch=current_pitch,
+        current_travel_yaw=current_travel_yaw,
+        current_travel_pitch=current_travel_pitch,
+        route_points=route_points,
+    )
+    if forward is None:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "hemisphere_scan",
+            {
+                "selected": None,
+                "reason": "no_forward_direction",
+                "direction_count": int(_AUTO_DIVE_HEMISPHERE_DIRECTION_COUNT),
+                "roll_count": int(_AUTO_DIVE_HEMISPHERE_ROLL_COUNT),
+            },
+        )
+        return None
+
+    local_voxel_volume = collision_validator.voxel_refinement
+    if local_voxel_volume is None:
+        candidate_volume = collision_validator.voxel_volume
+        if callable(getattr(candidate_volume, "find_forward_route", None)):
+            local_voxel_volume = candidate_volume
+    if local_voxel_volume is not None and not force_hemisphere_scan:
+        if planning_budget is not None:
+            planning_budget.check(
+                "voxel_local_route_search",
+                diagnostics=diagnostics,
+            )
+        local_deadline = (
+            None
+            if planning_budget is None
+            else planning_budget.deadline_monotonic_s
+        )
+        if local_deadline is not None:
+            # Leave time for exact mesh validation and route handoff after the
+            # bounded voxel search returns a safe partial prefix.
+            local_deadline -= min(
+                0.75,
+                max(0.10, float(planning_budget.budget_s or 0.0) * 0.15),
+            )
+        local_route = local_voxel_volume.find_forward_route(
+            current_point,
+            forward,
+            max_distance_m=max(
+                float(settings.voxel_local_refinement_forward_m),
+                float(settings.lookahead_distance_m),
+            ),
+            max_nodes=int(settings.voxel_local_refinement_max_cells),
+            min_target_distance_m=max(
+                4.0,
+                float(local_voxel_volume.voxel_size_m) * 4.0,
+            ),
+            deadline_monotonic_s=local_deadline,
+        )
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_route_search",
+            {
+                "selected": local_route is not None,
+                "voxel_size_m": float(local_voxel_volume.voxel_size_m),
+                "max_distance_m": float(
+                    max(
+                        float(settings.voxel_local_refinement_forward_m),
+                        float(settings.lookahead_distance_m),
+                    )
+                ),
+                "route": (
+                    None
+                    if local_route is None
+                    else local_route.diagnostic_payload()
+                ),
+                "search_truncated": bool(
+                    local_route is not None and local_route.search_truncated
+                ),
+            },
+        )
+        if local_route is not None and not force_hemisphere_scan:
+            local_cells = tuple(
+                _footprint_cell_for_xz(
+                    (point[0], point[2]),
+                    float(centerline_path.footprint_cell_size),
+                )
+                for point in local_route.points
+            )
+            if (
+                planning_budget is not None
+                and not local_route.search_truncated
+            ):
+                planning_budget.check(
+                    "voxel_local_route_search_complete",
+                    diagnostics=diagnostics,
+                )
+            return _AutoDiveRouteCandidate(
+                ordinal=ordinal,
+                name="voxel-local-frontier",
+                cells=tuple(_dedupe_consecutive_cells(local_cells)),
+                points=local_route.points,
+            )
+
+    cell_size = float(centerline_path.footprint_cell_size)
+    probe_distance_m = max(
+        cell_size * 3.0,
+        min(
+            max(
+                cell_size * 3.0,
+                float(
+                    settings.lookahead_distance_m
+                    if scan_distance_m is None
+                    else scan_distance_m
+                ),
+            ),
+            cell_size * _AUTO_DIVE_HEMISPHERE_PROBE_DISTANCE_CELLS,
+        ),
+    )
+    voxel_volume = collision_validator.active_voxel_volume
+    voxel_size_m = float(
+        getattr(voxel_volume, "voxel_size_m", settings.voxel_size_m)
+    )
+    current_cell = _current_footprint_cell(centerline_path, current)
+    start_progress = _hemisphere_progress_for_cell(
+        voxel_volume,
+        current_cell,
+    )
+    progress_tolerance_m = (
+        cell_size * _AUTO_DIVE_HEMISPHERE_PROGRESS_TOLERANCE_CELLS
+    )
+    evaluations: list[_HemisphereProbeEvaluation] = []
+    rejection_counts: dict[str, int] = {}
+    generated_count = 0
+    fine_supported_count = 0
+    fine_blocked_count = 0
+    fine_uncovered_count = 0
+
+    probes = iter_hemisphere_probes(
+        current_point,
+        forward=forward,
+        distance_m=probe_distance_m,
+        cell_size_m=cell_size,
+        voxel_size_m=voxel_size_m,
+        current_roll_deg=(
+            0.0
+            if current_roll is None
+            else math.degrees(float(current_roll))
+        ),
+        direction_count=_AUTO_DIVE_HEMISPHERE_DIRECTION_COUNT,
+        roll_count=_AUTO_DIVE_HEMISPHERE_ROLL_COUNT,
+    )
+    for probe in probes:
+        generated_count += 1
+        if planning_budget is not None:
+            planning_budget.check(
+                "hemisphere_probe_coarse",
+                diagnostics=diagnostics,
+            )
+        probe_points = _dedupe_consecutive_points(
+            (probe.origin, probe.target),
+            min_distance_m=1e-6,
+        )
+        if not probe_points:
+            _increment_hemisphere_rejection(rejection_counts, "empty_probe")
+            continue
+        target_cell = _footprint_cell_for_xz(
+            (probe.target[0], probe.target[2]),
+            cell_size,
+        )
+        fine_target_result = collision_validator.probe_fine_point(
+            probe.target,
+            include_clearance=False,
+        )
+        if fine_target_result is None:
+            fine_uncovered_count += 1
+        elif fine_target_result[0]:
+            fine_supported_count += 1
+        else:
+            fine_blocked_count += 1
+        target_supported_by_fine_field = (
+            fine_target_result is not None and fine_target_result[0]
+        )
+        if (
+            target_cell not in collision_validator.component_cells
+            and not target_supported_by_fine_field
+        ):
+            _increment_hemisphere_rejection(
+                rejection_counts,
+                "outside_footprint",
+            )
+            continue
+        if not _hemisphere_vertical_probe_is_supported(
+            current_point,
+            probe,
+            collision_validator=collision_validator,
+            voxel_volume=voxel_volume,
+            voxel_size_m=voxel_size_m,
+        ):
+            _increment_hemisphere_rejection(
+                rejection_counts,
+                "no_vertical_model",
+            )
+            continue
+        target_vector = np.asarray(probe.target, dtype=np.float64) - current
+        target_distance_m = float(np.linalg.norm(target_vector))
+        if target_distance_m < max(0.5, cell_size * 0.5):
+            _increment_hemisphere_rejection(rejection_counts, "too_close")
+            continue
+        target_alignment = float(
+            np.dot(target_vector, np.asarray(forward, dtype=np.float64))
+            / max(1e-9, target_distance_m)
+        )
+        origin_vector = np.asarray(probe.origin, dtype=np.float64) - current
+        origin_forward_m = float(
+            np.dot(origin_vector, np.asarray(forward, dtype=np.float64))
+        )
+        if origin_forward_m < -max(0.25, cell_size * 0.1):
+            _increment_hemisphere_rejection(
+                rejection_counts,
+                "backward_origin_offset",
+            )
+            continue
+        if target_alignment < _AUTO_DIVE_HEMISPHERE_MIN_TARGET_ALIGNMENT:
+            _increment_hemisphere_rejection(
+                rejection_counts,
+                "backward_target",
+            )
+            continue
+        if _mesh_recovery_target_is_avoided(
+            probe.target,
+            avoid_positions=avoid_positions,
+            cell_size=cell_size,
+        ):
+            _increment_hemisphere_rejection(rejection_counts, "avoided_target")
+            continue
+        coarse_failure = _hemisphere_probe_coarse_failure(
+            current_point,
+            probe_points,
+            collision_validator=collision_validator,
+        )
+        if coarse_failure is not None:
+            _increment_hemisphere_rejection(rejection_counts, coarse_failure)
+            continue
+
+        voxel_metrics = _voxel_probe_path_metrics(
+            (current_point, *probe_points),
+            voxel_volume=voxel_volume,
+            voxel_size_m=voxel_size_m,
+        )
+        if voxel_metrics is not None and (
+            float(voxel_metrics["coverage_fraction"])
+            < _AUTO_DIVE_HEMISPHERE_MIN_COVERAGE
+            or float(voxel_metrics["free_fraction"]) < 0.55
+        ):
+            _increment_hemisphere_rejection(rejection_counts, "voxel_blocked")
+            continue
+
+        target_progress = _hemisphere_progress_for_cell(
+            voxel_volume,
+            target_cell,
+        )
+        progress_gain_m = (
+            0.0
+            if start_progress is None or target_progress is None
+            else float(target_progress - start_progress)
+        )
+        if (
+            start_progress is not None
+            and target_progress is not None
+            and progress_gain_m < -progress_tolerance_m
+        ):
+            _increment_hemisphere_rejection(rejection_counts, "entrance_progress")
+            continue
+
+        metric = _hemisphere_voxel_cell_metric(voxel_volume, target_cell)
+        if voxel_volume is not None and isinstance(voxel_volume, NavigationVoxelAtlas):
+            if (
+                not target_supported_by_fine_field
+                and (metric is None or int(metric.free_cell_count) <= 0)
+            ):
+                _increment_hemisphere_rejection(
+                    rejection_counts,
+                    "missing_filled_cell",
+                )
+                continue
+        target_volume_m3 = (
+            0.0 if metric is None else float(metric.available_volume_m3)
+        )
+        target_clearance_m = (
+            0.0 if metric is None else float(metric.mean_clearance_m)
+        )
+        continuation_count = _hemisphere_continuation_count(
+            voxel_volume,
+            target_cell,
+            progress_tolerance_m=progress_tolerance_m,
+        )
+        evaluations.append(
+            _HemisphereProbeEvaluation(
+                probe=probe,
+                points=probe_points,
+                target_cell=target_cell,
+                target_alignment=target_alignment,
+                progress_gain_m=progress_gain_m,
+                target_volume_m3=target_volume_m3,
+                target_clearance_m=target_clearance_m,
+                continuation_count=continuation_count,
+                voxel_coverage_fraction=(
+                    1.0
+                    if voxel_metrics is None
+                    else float(voxel_metrics["coverage_fraction"])
+                ),
+                voxel_free_fraction=(
+                    1.0
+                    if voxel_metrics is None
+                    else float(voxel_metrics["free_fraction"])
+                ),
+                voxel_mean_clearance_m=(
+                    0.0
+                    if voxel_metrics is None
+                    else float(voxel_metrics["mean_clearance_m"])
+                ),
+            )
+        )
+
+    ordered_evaluations = sorted(
+        evaluations,
+        key=_hemisphere_probe_evaluation_sort_key,
+        reverse=True,
+    )
+    exact_results: list[
+        tuple[_AutoDiveRouteCandidateScore, _AutoDiveRouteCandidate, _HemisphereProbeEvaluation]
+    ] = []
+    for evaluation in ordered_evaluations[:_AUTO_DIVE_HEMISPHERE_MAX_EXACT_CANDIDATES]:
+        if planning_budget is not None:
+            planning_budget.check(
+                "hemisphere_probe_exact",
+                diagnostics=diagnostics,
+            )
+        candidate = _AutoDiveRouteCandidate(
+            ordinal=ordinal,
+            name="hemisphere-probe",
+            cells=(current_cell, evaluation.target_cell),
+            points=evaluation.points,
+            roll_deg=float(evaluation.probe.roll_deg),
+        )
+        score = _score_auto_dive_route_candidate(
+            candidate,
+            current_point=current_point,
+            collision_validator=collision_validator,
+            allow_low_lateral_clearance=True,
+            planning_budget=planning_budget,
+            diagnostics=diagnostics,
+        )
+        exact_results.append((score, candidate, evaluation))
+
+    selected_result = None
+    if exact_results:
+        selected_result = max(
+            exact_results,
+            key=lambda item: _hemisphere_exact_selection_key(
+                item,
+                current_roll=current_roll,
+            ),
+        )
+    _record_auto_dive_diagnostic(
+        diagnostics,
+        "hemisphere_scan",
+        {
+            "selected": (
+                None
+                if selected_result is None
+                else [
+                    int(selected_result[2].target_cell[0]),
+                    int(selected_result[2].target_cell[1]),
+                ]
+            ),
+            "forward": [float(value) for value in forward],
+            "probe_distance_m": float(probe_distance_m),
+            "direction_count": int(_AUTO_DIVE_HEMISPHERE_DIRECTION_COUNT),
+            "roll_count": int(_AUTO_DIVE_HEMISPHERE_ROLL_COUNT),
+            "generated_count": int(generated_count),
+            "coarse_candidate_count": len(evaluations),
+            "exact_candidate_count": len(exact_results),
+            "rejection_counts": rejection_counts,
+            "fine_supported_count": int(fine_supported_count),
+            "fine_blocked_count": int(fine_blocked_count),
+            "fine_uncovered_count": int(fine_uncovered_count),
+            "forced_full_scan": bool(force_hemisphere_scan),
+            "start_progress_m": (
+                None if start_progress is None else float(start_progress)
+            ),
+            "top_candidates": [
+                _hemisphere_probe_evaluation_payload(evaluation)
+                for evaluation in ordered_evaluations[
+                    :_AUTO_DIVE_HEMISPHERE_MAX_DIAGNOSTIC_CANDIDATES
+                ]
+            ],
+            "selected_score": (
+                None
+                if selected_result is None
+                else _auto_dive_candidate_score_payload(
+                    selected_result[0],
+                    selected_result[1],
+                )
+            ),
+        },
+    )
+    return None if selected_result is None else selected_result[1]
+
+
+def _hemisphere_scan_forward_vector(
+    centerline_path: CenterlinePath,
+    *,
+    current: np.ndarray,
+    current_point: Point,
+    current_yaw: float | None,
+    current_pitch: float | None,
+    current_travel_yaw: float | None,
+    current_travel_pitch: float | None,
+    route_points: tuple[Point, ...],
+) -> tuple[float, float, float] | None:
+    for yaw, pitch in (
+        (current_travel_yaw, current_travel_pitch),
+        (current_yaw, current_pitch),
+    ):
+        if yaw is None:
+            continue
+        direction = _direction_from_radians(
+            float(yaw),
+            0.0 if pitch is None else float(pitch),
+        )
+        if direction is not None and float(np.linalg.norm(direction)) > 1e-9:
+            return tuple(float(value) for value in direction)  # type: ignore[return-value]
+
+    position_direction = _auto_dive_current_position_offset_direction(
+        centerline_path,
+        current=current,
+        current_point=current_point,
+    )
+    if position_direction is not None and float(np.linalg.norm(position_direction)) > 1e-9:
+        return tuple(float(value) for value in position_direction)  # type: ignore[return-value]
+
+    current_array = np.asarray(current_point, dtype=np.float64)
+    for point in route_points:
+        delta = np.asarray(point, dtype=np.float64) - current_array
+        norm = float(np.linalg.norm(delta))
+        if norm >= max(0.5, centerline_path.footprint_cell_size * 0.5):
+            return tuple(float(value) for value in delta / norm)  # type: ignore[return-value]
+    return None
+
+
+def _hemisphere_probe_coarse_failure(
+    current_point: Point,
+    probe_points: tuple[Point, ...],
+    *,
+    collision_validator: _AutoDiveCollisionValidator,
+) -> str | None:
+    points = (current_point, *probe_points)
+    for index, (first, second) in enumerate(zip(points, points[1:], strict=False)):
+        if index == 0 and not collision_validator.point_is_clear(first):
+            if not _route_segment_is_clear_after_start(
+                first,
+                second,
+                collision_validator=collision_validator,
+                allow_low_lateral_clearance=True,
+            ):
+                return "coarse_start_segment"
+            continue
+        failure = collision_validator.segment_clearance_failure(
+            first,
+            second,
+            allow_low_lateral_clearance=True,
+        )
+        if failure is not None:
+            return str(failure.reason)
+    return None
+
+
+def _hemisphere_vertical_probe_is_supported(
+    current_point: Point,
+    probe: HemisphereProbe,
+    *,
+    collision_validator: _AutoDiveCollisionValidator,
+    voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None,
+    voxel_size_m: float,
+) -> bool:
+    """Keep legacy mesh-only recovery from probing outside known height."""
+    if voxel_volume is not None or collision_validator.cached_y_ranges:
+        return True
+    tolerance = max(
+        0.25,
+        min(float(collision_validator.cell_size) * 0.25, float(voxel_size_m)),
+    )
+    return all(
+        abs(float(point[1]) - float(current_point[1])) <= tolerance
+        for point in (probe.origin, probe.target)
+    )
+
+
+def _voxel_probe_path_metrics(
+    points: tuple[Point, ...],
+    *,
+    voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None,
+    voxel_size_m: float,
+) -> dict[str, float | int] | None:
+    if voxel_volume is None:
+        return None
+    probe_point = getattr(voxel_volume, "probe_point", None)
+    if not callable(probe_point):
+        return None
+    sample_step = max(0.5, float(voxel_size_m) * 0.5)
+    samples: list[Point] = [points[0]] if points else []
+    for first, second in zip(points, points[1:], strict=False):
+        distance = float(
+            np.linalg.norm(
+                np.asarray(second, dtype=np.float64)
+                - np.asarray(first, dtype=np.float64)
+            )
+        )
+        steps = max(1, int(math.ceil(distance / sample_step)))
+        for step in range(1, steps + 1):
+            fraction = step / steps
+            samples.append(
+                tuple(
+                    float(first[axis] + (second[axis] - first[axis]) * fraction)
+                    for axis in range(3)
+                )
+            )
+    covered_count = 0
+    free_count = 0
+    blocked_count = 0
+    clearances: list[float] = []
+    for point in samples:
+        result = probe_point(point, include_clearance=False)
+        if result is None:
+            continue
+        covered_count += 1
+        is_free, _clearance_m = result
+        if is_free:
+            free_count += 1
+        else:
+            blocked_count += 1
+    if samples:
+        # The hemisphere pass is a cheap occupancy filter. Clearance is
+        # recomputed only for the small exact-candidate set; asking the local
+        # distance field for every probe endpoint made a 1 m cache behave like
+        # an unbounded runtime analysis.
+        endpoint_result = probe_point(samples[-1], include_clearance=False)
+        if endpoint_result is not None and endpoint_result[0]:
+            clearances.append(float(endpoint_result[1]))
+    if covered_count <= 0 or not samples:
+        return None
+    return {
+        "sample_count": int(len(samples)),
+        "covered_count": int(covered_count),
+        "free_count": int(free_count),
+        "blocked_count": int(blocked_count),
+        "coverage_fraction": float(covered_count / len(samples)),
+        "free_fraction": float(free_count / covered_count),
+        "blocked_fraction": float(blocked_count / covered_count),
+        "mean_clearance_m": float(
+            sum(clearances) / max(1, len(clearances))
+        ),
+    }
+
+
+def _hemisphere_progress_for_cell(
+    voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None,
+    cell: FootprintCell,
+) -> float | None:
+    metric = _hemisphere_voxel_cell_metric(voxel_volume, cell)
+    return None if metric is None else float(metric.progress_m)
+
+
+def _hemisphere_voxel_cell_metric(
+    voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None,
+    cell: FootprintCell,
+) -> Any | None:
+    if not isinstance(voxel_volume, NavigationVoxelAtlas):
+        return None
+    return voxel_volume.cell_metrics.get(cell)
+
+
+def _hemisphere_continuation_count(
+    voxel_volume: LocalVoxelVolume | NavigationVoxelAtlas | None,
+    cell: FootprintCell,
+    *,
+    progress_tolerance_m: float,
+) -> int:
+    if not isinstance(voxel_volume, NavigationVoxelAtlas):
+        return 0
+    metric = voxel_volume.cell_metrics.get(cell)
+    if metric is None:
+        return 0
+    return sum(
+        1
+        for neighbor in navigable_footprint_neighbors(
+            cell,
+            frozenset(voxel_volume.cell_metrics),
+        )
+        if neighbor in voxel_volume.cell_metrics
+        and float(voxel_volume.cell_metrics[neighbor].progress_m)
+        >= float(metric.progress_m) - float(progress_tolerance_m)
+    )
+
+
+def _hemisphere_probe_evaluation_sort_key(
+    evaluation: _HemisphereProbeEvaluation,
+) -> tuple[object, ...]:
+    return (
+        float(evaluation.progress_gain_m) >= 0.0,
+        int(evaluation.continuation_count) > 0,
+        float(evaluation.voxel_free_fraction),
+        float(evaluation.voxel_coverage_fraction),
+        float(evaluation.target_clearance_m),
+        float(evaluation.voxel_mean_clearance_m),
+        float(evaluation.target_volume_m3),
+        float(evaluation.progress_gain_m),
+        float(evaluation.target_alignment),
+        -float(np.linalg.norm(evaluation.probe.origin_offset)),
+        -int(evaluation.probe.direction_index),
+        -int(evaluation.probe.roll_index),
+        -int(evaluation.probe.offset_index),
+    )
+
+
+def _hemisphere_exact_selection_key(
+    item: tuple[
+        _AutoDiveRouteCandidateScore,
+        _AutoDiveRouteCandidate,
+        _HemisphereProbeEvaluation,
+    ],
+    *,
+    current_roll: float | None,
+) -> tuple[object, ...]:
+    score, candidate, evaluation = item
+    roll_delta = abs(
+        (float(candidate.roll_deg) - math.degrees(float(current_roll or 0.0)) + 180.0)
+        % 360.0
+        - 180.0
+    )
+    return (
+        bool(score.route_clear),
+        bool(score.mesh_clear),
+        bool(score.entry_clear),
+        bool(evaluation.continuation_count > 0),
+        float(evaluation.voxel_free_fraction),
+        float(evaluation.target_clearance_m),
+        float(evaluation.target_volume_m3),
+        float(evaluation.progress_gain_m),
+        float(score.forward_progress_m),
+        -float(score.total_change_per_m),
+        -float(roll_delta),
+    )
+
+
+def _hemisphere_probe_evaluation_payload(
+    evaluation: _HemisphereProbeEvaluation,
+) -> dict[str, Any]:
+    probe = evaluation.probe
+    return {
+        "probe_index": int(probe.index),
+        "direction_index": int(probe.direction_index),
+        "roll_index": int(probe.roll_index),
+        "offset_index": int(probe.offset_index),
+        "origin": [float(value) for value in probe.origin],
+        "target": [float(value) for value in probe.target],
+        "origin_offset": [float(value) for value in probe.origin_offset],
+        "offset_label": str(probe.offset_label),
+        "direction": [float(value) for value in probe.direction],
+        "forward_alignment": float(probe.forward_alignment),
+        "roll_deg": float(probe.roll_deg),
+        "target_cell": [
+            int(evaluation.target_cell[0]),
+            int(evaluation.target_cell[1]),
+        ],
+        "target_alignment": float(evaluation.target_alignment),
+        "progress_gain_m": float(evaluation.progress_gain_m),
+        "target_volume_m3": float(evaluation.target_volume_m3),
+        "target_clearance_m": float(evaluation.target_clearance_m),
+        "continuation_count": int(evaluation.continuation_count),
+        "voxel_coverage_fraction": float(evaluation.voxel_coverage_fraction),
+        "voxel_free_fraction": float(evaluation.voxel_free_fraction),
+        "voxel_mean_clearance_m": float(evaluation.voxel_mean_clearance_m),
+    }
+
+
+def _increment_hemisphere_rejection(
+    counts: dict[str, int],
+    reason: str,
+) -> None:
+    counts[str(reason)] = int(counts.get(str(reason), 0)) + 1
 
 
 def _mesh_recovery_target_is_avoided(
@@ -5222,6 +6978,7 @@ def _route_segment_is_clear_after_start(
     second: Point,
     *,
     collision_validator: _AutoDiveCollisionValidator,
+    allow_low_lateral_clearance: bool = False,
 ) -> bool:
     distance = math.sqrt(
         (second[0] - first[0]) ** 2
@@ -5243,13 +7000,23 @@ def _route_segment_is_clear_after_start(
             first[1] + (second[1] - first[1]) * t,
             first[2] + (second[2] - first[2]) * t,
         )
-        if not collision_validator.point_is_clear(point):
+        if (
+            collision_validator.point_clearance_failure(
+                point,
+                enforce_lateral_clearance=not allow_low_lateral_clearance,
+            )
+            is not None
+        ):
             return False
         cell = _footprint_cell_for_xz(
             (point[0], point[2]),
             collision_validator.cell_size,
         )
-        if previous_cell is not None and cell != previous_cell:
+        if (
+            previous_cell is not None
+            and cell != previous_cell
+            and not collision_validator.allow_native_graph_transitions
+        ):
             if not _footprint_transition_stays_in_footprint(
                 previous_cell,
                 cell,
@@ -5698,7 +7465,11 @@ def _route_segment_clearance_failure(
             (point[0], point[2]),
             collision_validator.cell_size,
         )
-        if previous_cell is not None and cell != previous_cell:
+        if (
+            previous_cell is not None
+            and cell != previous_cell
+            and not collision_validator.allow_native_graph_transitions
+        ):
             if not _footprint_transition_stays_in_footprint(
                 previous_cell,
                 cell,

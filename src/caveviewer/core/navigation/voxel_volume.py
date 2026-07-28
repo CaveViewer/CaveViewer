@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
+import time
 
 import numpy as np
 
@@ -29,13 +30,26 @@ VoxelIndex = tuple[int, int, int]
 TriangleProvider = Callable[[Point, Point], Iterable[np.ndarray]]
 VOXEL_VOLUME_METHOD = "local_surface_distance_v1"
 
-DEFAULT_VOXEL_SIZE_M = 2.0
+_LOCAL_26_NEIGHBOR_OFFSETS = tuple(
+    (dx, dy, dz)
+    for dx in (-1, 0, 1)
+    for dy in (-1, 0, 1)
+    for dz in (-1, 0, 1)
+    if (dx, dy, dz) != (0, 0, 0)
+)
+
+DEFAULT_VOXEL_SIZE_M = 1.0
 DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD = 65
 DEFAULT_VOXEL_MAX_REGIONS = 2
 DEFAULT_VOXEL_MAX_DISTANCE_M = 256.0
 DEFAULT_VOXEL_MAX_CELLS = 120_000
 DEFAULT_VOXEL_MAX_SURFACE_SAMPLES = 200_000
 DEFAULT_VOXEL_SURFACE_INFLATION_CELLS = 1
+DEFAULT_VOXEL_MAX_CLEARANCE_SEARCH_CELLS = 16
+DEFAULT_VOXEL_LOCAL_REFINEMENT_RADIUS_M = 16.0
+DEFAULT_VOXEL_LOCAL_REFINEMENT_FORWARD_M = 32.0
+DEFAULT_VOXEL_LOCAL_REFINEMENT_MAX_CELLS = 65_536
+_RUNTIME_CLEARANCE_CACHE_MAX_ENTRIES = 4096
 
 VOXEL_ANALYSIS_OUTCOME_BUILT = "built"
 VOXEL_ANALYSIS_OUTCOME_NO_CURVATURE_REGION = (
@@ -59,7 +73,9 @@ class VoxelVolumeConfig:
     surface_inflation_cells: int = DEFAULT_VOXEL_SURFACE_INFLATION_CELLS
     max_voxels: int = DEFAULT_VOXEL_MAX_CELLS
     max_surface_samples: int = DEFAULT_VOXEL_MAX_SURFACE_SAMPLES
-    max_clearance_search_cells: int = 8
+    max_clearance_search_cells: int = (
+        DEFAULT_VOXEL_MAX_CLEARANCE_SEARCH_CELLS
+    )
 
     def validated(self) -> "VoxelVolumeConfig":
         size = float(self.voxel_size_m)
@@ -83,6 +99,50 @@ class VoxelVolumeConfig:
 
 
 @dataclass(frozen=True)
+class LocalVoxelRoute:
+    """A bounded route found in a fine local voxel field."""
+
+    points: tuple[Point, ...]
+    indices: tuple[VoxelIndex, ...]
+    explored_voxel_count: int
+    free_voxel_count: int
+    branch_free_voxel_count: int
+    target_connectivity: int
+    target_clearance_m: float
+    forward_progress_m: float
+    distance_m: float
+    vertical_change_m: float
+    unknown_boundary_count: int
+    boundary_reached: bool
+    search_truncated: bool = False
+
+    def diagnostic_payload(self) -> dict[str, object]:
+        return {
+            "point_count": len(self.points),
+            "voxel_count": len(self.indices),
+            "explored_voxel_count": int(self.explored_voxel_count),
+            "free_voxel_count": int(self.free_voxel_count),
+            "branch_free_voxel_count": int(self.branch_free_voxel_count),
+            "target_connectivity": int(self.target_connectivity),
+            "target_clearance_m": float(self.target_clearance_m),
+            "forward_progress_m": float(self.forward_progress_m),
+            "distance_m": float(self.distance_m),
+            "vertical_change_m": float(self.vertical_change_m),
+            "unknown_boundary_count": int(self.unknown_boundary_count),
+            "boundary_reached": bool(self.boundary_reached),
+            "search_truncated": bool(self.search_truncated),
+            "first_points": [
+                [float(value) for value in point]
+                for point in self.points[:8]
+            ],
+            "last_points": [
+                [float(value) for value in point]
+                for point in self.points[-8:]
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class LocalVoxelVolume:
     """Bounded sparse surface occupancy and clearance field."""
 
@@ -94,6 +154,15 @@ class LocalVoxelVolume:
     surface_sample_count: int
     sampling_truncated: bool
     max_clearance_search_cells: int
+    _runtime_clearance_cache: dict[VoxelIndex, float] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Create a bounded runtime cache for repeated probe samples."""
+        object.__setattr__(self, "_runtime_clearance_cache", {})
 
     @property
     def voxel_count(self) -> int:
@@ -155,12 +224,294 @@ class LocalVoxelVolume:
             return False
         return self.voxel_index(point) in self.surface_cells
 
+    def probe_point(
+        self,
+        point: Sequence[float],
+        *,
+        include_clearance: bool = True,
+    ) -> tuple[bool, float] | None:
+        """Return ``(free, clearance_m)`` for a cached point, if covered.
+
+        This is intentionally a surface-field query rather than a second
+        flood fill. Runtime recovery samples short connected probe segments;
+        the exact mesh guard remains authoritative for the selected route.
+        Coarse callers can disable clearance to avoid a repeated distance-field
+        search while retaining the free/occupied result.
+        ``None`` means that this local volume does not cover the point.
+        """
+        if not self.contains_point(point):
+            return None
+        index = self.voxel_index(point)
+        if index in self.surface_cells:
+            return False, 0.0
+        return True, (
+            float(self.surface_clearance_m(index))
+            if include_clearance
+            else 0.0
+        )
+
+    def find_forward_route(
+        self,
+        current: Sequence[float],
+        forward: Sequence[float],
+        *,
+        max_distance_m: float = DEFAULT_VOXEL_LOCAL_REFINEMENT_FORWARD_M,
+        max_nodes: int = DEFAULT_VOXEL_LOCAL_REFINEMENT_MAX_CELLS,
+        min_target_distance_m: float = 4.0,
+        deadline_monotonic_s: float | None = None,
+    ) -> "LocalVoxelRoute | None":
+        """Find a bounded, heading-aware route through fine free voxels.
+
+        This search deliberately operates on the local surface field rather
+        than the coarse whole-cave graph. It explores every 26-connected
+        neighbor in the current forward hemisphere, preserves vertical
+        movement, and ranks branches by forward reach, continuation volume,
+        and local connectivity. Unknown cells remain boundaries; they are
+        never treated as free route nodes.
+        """
+        try:
+            current_point = tuple(float(value) for value in current)
+            forward_values = tuple(float(value) for value in forward)
+        except (TypeError, ValueError):
+            return None
+        if (
+            len(current_point) != 3
+            or len(forward_values) != 3
+            or not all(math.isfinite(value) for value in current_point)
+            or not all(math.isfinite(value) for value in forward_values)
+        ):
+            return None
+        forward_norm = math.sqrt(sum(value * value for value in forward_values))
+        if forward_norm <= 1e-9:
+            return None
+        forward_unit = tuple(value / forward_norm for value in forward_values)
+        size = max(1e-6, float(self.voxel_size_m))
+        max_distance = max(size * 3.0, float(max_distance_m))
+        node_limit = max(64, int(max_nodes))
+        target_distance = max(size * 3.0, float(min_target_distance_m))
+        deadline = (
+            None
+            if deadline_monotonic_s is None
+            else float(deadline_monotonic_s)
+        )
+        if deadline is not None and not math.isfinite(deadline):
+            deadline = None
+        try:
+            start = self.voxel_index(current_point)
+        except (TypeError, ValueError):
+            return None
+        if not self.contains_index(start):
+            return None
+
+        queue: deque[tuple[VoxelIndex, VoxelIndex | None]] = deque(
+            [(start, None)]
+        )
+        previous: dict[VoxelIndex, VoxelIndex | None] = {start: None}
+        branch_stats: dict[VoxelIndex, dict[str, float | int | bool]] = {}
+        branch_targets: dict[VoxelIndex, tuple[tuple[float, ...], VoxelIndex]] = {}
+        best_branch_targets: dict[
+            VoxelIndex,
+            tuple[tuple[float, ...], VoxelIndex],
+        ] = {}
+        free_nodes = 0
+        unknown_boundary_count = 0
+        boundary_reached = False
+        search_truncated = False
+        expanded_nodes = 0
+        surface_cells = self.surface_cells
+
+        def dot_from_current(index: VoxelIndex) -> tuple[float, float, float]:
+            point = self.voxel_center(index)
+            return tuple(
+                float(point[axis] - current_point[axis])
+                for axis in range(3)
+            )
+
+        def forward_projection(delta: Sequence[float]) -> float:
+            return sum(float(delta[axis]) * forward_unit[axis] for axis in range(3))
+
+        def distance_of(delta: Sequence[float]) -> float:
+            return math.sqrt(sum(float(value) * float(value) for value in delta))
+
+        def candidate_key(
+            delta: Sequence[float],
+            degree: int,
+        ) -> tuple[float, ...]:
+            distance = distance_of(delta)
+            projection = forward_projection(delta)
+            return (
+                projection,
+                distance,
+                float(degree),
+            )
+
+        while queue and len(previous) < node_limit:
+            if (
+                deadline is not None
+                and expanded_nodes % 128 == 0
+                and time.perf_counter() >= deadline
+            ):
+                search_truncated = True
+                break
+            index, branch = queue.popleft()
+            expanded_nodes += 1
+            delta = dot_from_current(index)
+            distance = distance_of(delta)
+            projection = forward_projection(delta)
+            if index != start and projection < -size * 0.5:
+                continue
+            if not self.contains_index(index):
+                unknown_boundary_count += 1
+                boundary_reached = True
+                continue
+            if index in surface_cells and index != start:
+                continue
+            free_nodes += 1
+            if branch is not None:
+                stats = branch_stats.setdefault(
+                    branch,
+                    {
+                        "free_count": 0,
+                        "max_projection_m": 0.0,
+                        "max_distance_m": 0.0,
+                        "max_degree": 0,
+                        "boundary_reached": False,
+                    },
+                )
+                stats["free_count"] = int(stats["free_count"]) + 1
+                stats["max_projection_m"] = max(
+                    float(stats["max_projection_m"]),
+                    projection,
+                )
+                stats["max_distance_m"] = max(
+                    float(stats["max_distance_m"]),
+                    distance,
+                )
+
+            free_neighbors = 0
+            for offset in _LOCAL_26_NEIGHBOR_OFFSETS:
+                neighbor = (
+                    index[0] + offset[0],
+                    index[1] + offset[1],
+                    index[2] + offset[2],
+                )
+                if not self.contains_index(neighbor):
+                    unknown_boundary_count += 1
+                    boundary_reached = True
+                    if branch is not None:
+                        branch_stats[branch]["boundary_reached"] = True
+                    continue
+                neighbor_delta = dot_from_current(neighbor)
+                neighbor_distance = distance_of(neighbor_delta)
+                if neighbor_distance > max_distance + size * 0.75:
+                    continue
+                if forward_projection(neighbor_delta) < -size * 0.5:
+                    continue
+                if neighbor in surface_cells:
+                    continue
+                free_neighbors += 1
+                if neighbor in previous:
+                    continue
+                next_branch = (
+                    offset
+                    if index == start
+                    else branch
+                )
+                previous[neighbor] = index
+                queue.append((neighbor, next_branch))
+
+            if branch is not None:
+                branch_stats[branch]["max_degree"] = max(
+                    int(branch_stats[branch]["max_degree"]),
+                    free_neighbors,
+                )
+                key = candidate_key(delta, free_neighbors)
+                prior = best_branch_targets.get(branch)
+                if prior is None or key > prior[0]:
+                    best_branch_targets[branch] = (key, index)
+                if distance >= target_distance:
+                    prior = branch_targets.get(branch)
+                    if prior is None or key > prior[0]:
+                        branch_targets[branch] = (key, index)
+
+        if queue and len(previous) >= node_limit:
+            search_truncated = True
+
+        target_branches = branch_targets or best_branch_targets
+        if not target_branches:
+            return None
+
+        def branch_key(
+            branch: VoxelIndex,
+        ) -> tuple[float, ...]:
+            stats = branch_stats[branch]
+            free_count = int(stats["free_count"])
+            volume_bonus = math.log1p(max(0, free_count)) * size * 1.5
+            return (
+                2.0 * float(stats["max_projection_m"])
+                + 0.8 * float(stats["max_distance_m"])
+                + volume_bonus
+                + 0.25 * size * float(stats["max_degree"]),
+                float(stats["max_projection_m"]),
+                float(stats["max_distance_m"]),
+                float(free_count),
+            )
+
+        selected_branch = max(target_branches, key=branch_key)
+        target_index = target_branches[selected_branch][1]
+        path_indices: list[VoxelIndex] = []
+        index: VoxelIndex | None = target_index
+        while index is not None:
+            path_indices.append(index)
+            index = previous.get(index)
+        path_indices.reverse()
+        if not path_indices or path_indices[0] != start:
+            return None
+        points = (current_point,) + tuple(
+            self.voxel_center(index) for index in path_indices
+        )
+        points = _dedupe_points(points)
+        if len(points) < 2:
+            return None
+        target_point = points[-1]
+        target_result = self.probe_point(target_point, include_clearance=True)
+        target_clearance = (
+            0.0
+            if target_result is None
+            else float(target_result[1])
+        )
+        stats = branch_stats[selected_branch]
+        return LocalVoxelRoute(
+            points=points,
+            indices=tuple(path_indices),
+            explored_voxel_count=len(previous),
+            free_voxel_count=free_nodes,
+            branch_free_voxel_count=int(stats["free_count"]),
+            target_connectivity=int(stats["max_degree"]),
+            target_clearance_m=target_clearance,
+            forward_progress_m=float(stats["max_projection_m"]),
+            distance_m=float(stats["max_distance_m"]),
+            vertical_change_m=float(target_point[1] - current_point[1]),
+            unknown_boundary_count=unknown_boundary_count,
+            boundary_reached=bool(
+                boundary_reached or stats["boundary_reached"]
+            ),
+            search_truncated=bool(search_truncated),
+        )
+
     def surface_clearance_m(self, index: VoxelIndex) -> float:
         """Estimate distance to the nearest sampled surface voxel."""
         if not self.contains_index(index):
             return 0.0
+        cached = self._runtime_clearance_cache.get(index)
+        if cached is not None:
+            return float(cached)
         if not self.surface_cells:
-            return float(self.max_clearance_search_cells + 1) * self.voxel_size_m
+            clearance = float(
+                self.max_clearance_search_cells + 1
+            ) * self.voxel_size_m
+            self._cache_clearance(index, clearance)
+            return clearance
         for radius in range(self.max_clearance_search_cells + 1):
             for candidate in _shell_indices(index, radius):
                 if self.contains_index(candidate) and candidate in self.surface_cells:
@@ -170,8 +521,18 @@ class LocalVoxelVolume:
                             for axis in range(3)
                         )
                     )
-                    return distance_cells * self.voxel_size_m
-        return float(self.max_clearance_search_cells + 1) * self.voxel_size_m
+                    clearance = distance_cells * self.voxel_size_m
+                    self._cache_clearance(index, clearance)
+                    return clearance
+        clearance = float(
+            self.max_clearance_search_cells + 1
+        ) * self.voxel_size_m
+        self._cache_clearance(index, clearance)
+        return clearance
+
+    def _cache_clearance(self, index: VoxelIndex, clearance: float) -> None:
+        if len(self._runtime_clearance_cache) < _RUNTIME_CLEARANCE_CACHE_MAX_ENTRIES:
+            self._runtime_clearance_cache[index] = float(clearance)
 
     def refine_point(
         self,
@@ -697,6 +1058,20 @@ def _point(value: Sequence[float]) -> Point:
     if not all(math.isfinite(coordinate) for coordinate in point):
         raise ValueError("voxel points must be finite")
     return point
+
+
+def _dedupe_points(points: Sequence[Point]) -> tuple[Point, ...]:
+    """Remove repeated adjacent local voxel route points."""
+    result: list[Point] = []
+    for point in points:
+        normalized = _point(point)
+        if result and all(
+            abs(normalized[axis] - result[-1][axis]) <= 1e-9
+            for axis in range(3)
+        ):
+            continue
+        result.append(normalized)
+    return tuple(result)
 
 
 def _fit_volume_geometry(

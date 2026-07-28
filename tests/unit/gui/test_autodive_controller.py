@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 import math
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -19,7 +20,11 @@ from caveviewer.core.navigation.route import CameraRoute, RouteKeyframe
 from caveviewer.gui.autodive_controller import (
     AutoDiveController,
     AutoDiveReplanner,
+    AutoDiveRollingClearanceReport,
+    AutoDiveRollingClearanceWorker,
     AutoDiveState,
+    AutoDiveVoxelPrefetchReport,
+    AutoDiveVoxelPrefetchWorker,
     DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS,
     DEFAULT_AUTO_DIVE_ROUTE_PREFETCH_RADIUS_CELLS,
     DEFAULT_AUTO_DIVE_ROUTE_LOOKAHEAD_SECONDS,
@@ -81,6 +86,8 @@ class _FakeReplanner:
         self.latest_plan = latest_plan
         self._has_pending = has_pending
         self.requests = []
+        self.voxel_prefetch_requests = []
+        self.voxel_reports = []
         self.shutdown_called = False
 
     def request(self, current_position, **kwargs):
@@ -100,8 +107,108 @@ class _FakeReplanner:
     def has_pending(self):
         return self._has_pending
 
+    def request_voxel_prefetch(self, plan, **kwargs):
+        self.voxel_prefetch_requests.append((plan, dict(kwargs)))
+        return True
+
+    def take_voxel_prefetch_report(self):
+        if not self.voxel_reports:
+            return None
+        return self.voxel_reports.pop(0)
+
+    def has_voxel_prefetch_pending(self):
+        return False
+
     def shutdown(self):
         self.shutdown_called = True
+
+
+class _SpeculativeFakeReplanner(_FakeReplanner):
+    def __init__(self, latest_plan=None, *, has_pending=False):
+        super().__init__(latest_plan, has_pending=has_pending)
+        self.speculative_requests = []
+        self._latest_source_sequence = None
+        self._last_taken_source_sequence = None
+
+    def request_speculative(self, current_position, **kwargs):
+        self.speculative_requests.append(
+            (
+                tuple(float(value) for value in np.asarray(current_position)),
+                _safe_request_kwargs(kwargs),
+            )
+        )
+        self._has_pending = True
+        return True
+
+    def publish_speculative_plan(self, plan, *, source_plan_sequence):
+        self.latest_plan = plan
+        self._latest_source_sequence = int(source_plan_sequence)
+        self._has_pending = False
+
+    def take_latest_plan(self):
+        plan = super().take_latest_plan()
+        self._last_taken_source_sequence = self._latest_source_sequence
+        self._latest_source_sequence = None
+        return plan
+
+    @property
+    def last_taken_plan_source_sequence(self):
+        return self._last_taken_source_sequence
+
+
+class _ContinuousFakeReplanner(_FakeReplanner):
+    def __init__(self, latest_plan=None, *, has_pending=False):
+        super().__init__(latest_plan, has_pending=has_pending)
+        self.continuous_requests = []
+        self._continuous_pending = False
+        self._continuous_result = None
+        self._continuous_source_sequence = None
+        self._last_continuous_source_sequence = None
+        self._last_continuous_generation = None
+        self.continuous_scan_failure_count = 0
+        self.continuous_scan_last_failure_generation = None
+
+    def request_continuous_scan(self, current_position, **kwargs):
+        self.continuous_requests.append(
+            (
+                tuple(float(value) for value in np.asarray(current_position)),
+                _safe_request_kwargs(kwargs),
+            )
+        )
+        self._continuous_pending = True
+        return True
+
+    def take_latest_continuous_scan(self):
+        plan = self._continuous_result
+        self._continuous_result = None
+        self._last_continuous_source_sequence = self._continuous_source_sequence
+        self._continuous_source_sequence = None
+        return plan
+
+    @property
+    def last_taken_continuous_scan_source_sequence(self):
+        return self._last_continuous_source_sequence
+
+    @property
+    def last_taken_continuous_scan_generation(self):
+        return self._last_continuous_generation
+
+    def has_continuous_scan_pending(self):
+        return self._continuous_pending
+
+    def has_continuous_scan_result(self):
+        return self._continuous_result is not None
+
+    def publish_continuous_plan(self, plan, *, source_plan_sequence):
+        self._continuous_result = plan
+        self._continuous_source_sequence = int(source_plan_sequence)
+        self._last_continuous_generation = len(self.continuous_requests)
+        self._continuous_pending = False
+
+    def cancel_continuous_scan(self):
+        self._continuous_pending = False
+        self._continuous_result = None
+        self._continuous_source_sequence = None
 
 
 class _FakeBlackbox:
@@ -114,6 +221,22 @@ class _FakeBlackbox:
 
     def close(self):
         self.closed = True
+
+
+class _FakeRollingClearanceWorker:
+    def __init__(self, report=None):
+        self.report = report
+
+    def request(self, *_args, **_kwargs):
+        return False
+
+    def poll(self):
+        report = self.report
+        self.report = None
+        return report
+
+    def shutdown(self):
+        return None
 
 
 def _safe_request_kwargs(kwargs):
@@ -171,6 +294,185 @@ def test_auto_dive_pauses_until_lookahead_cells_are_loaded():
     assert camera.position[0] > 0.0
 
 
+def test_auto_dive_rolling_clearance_worker_reports_frontier_off_render_thread():
+    worker = AutoDiveRollingClearanceWorker()
+    try:
+        assert worker.request(
+            _plan(replan_at_end=True, selection_reason="voxel_branch_lookahead"),
+            plan_sequence=3,
+            elapsed_s=6.0,
+            trigger_distance_m=5.0,
+            standoff_distance_m=2.0,
+        ) is True
+        report = None
+        for _ in range(100):
+            report = worker.poll()
+            if report is not None:
+                break
+            time.sleep(0.005)
+
+        assert report is not None
+        assert report.plan_sequence == 3
+        assert report.needs_replan is True
+        assert report.safe_to_continue is True
+        assert report.reason == "approaching_forward_clearance_boundary"
+        assert report.sample_count >= 2
+    finally:
+        worker.shutdown()
+
+
+def test_auto_dive_rolling_clearance_worker_reports_explicit_voxel_block():
+    class _VoxelField:
+        def probe_point(self, point, *, include_clearance=True):
+            if float(point[0]) >= 4.0:
+                return False, 0.0
+            return True, 2.0
+
+    worker = AutoDiveRollingClearanceWorker()
+    try:
+        assert worker.request(
+            _plan(
+                centerline_path=SimpleNamespace(
+                    cached_voxel_volume=_VoxelField(),
+                ),
+            ),
+            plan_sequence=4,
+            elapsed_s=2.0,
+            trigger_distance_m=5.0,
+            standoff_distance_m=2.0,
+        ) is True
+        report = None
+        for _ in range(100):
+            report = worker.poll()
+            if report is not None:
+                break
+            time.sleep(0.005)
+
+        assert report is not None
+        assert report.reason == "voxel_forward_clearance_blocked"
+        assert report.voxel_occupied_count > 0
+        assert report.safe_to_continue is False
+    finally:
+        worker.shutdown()
+
+
+def test_auto_dive_voxel_prefetch_worker_materializes_predicted_horizon():
+    class _Store:
+        def __init__(self):
+            self.resident = set()
+            self.released = None
+
+        def chunk_ids_for_point(self, point):
+            return ("coarse-000000",) if point[0] < 5.0 else ("coarse-000001",)
+
+        def resident_chunk_ids(self):
+            return tuple(sorted(self.resident))
+
+        def release_unused(self, keep_chunk_ids=()):
+            self.released = tuple(keep_chunk_ids)
+            self.resident.intersection_update(self.released)
+
+        def stats(self):
+            return {
+                "backend": "fake_lru",
+                "resident_chunk_count": len(self.resident),
+            }
+
+    class _Volume:
+        def __init__(self):
+            self.chunk_store = _Store()
+            self.points = ()
+
+        def prefetch_for_points(self, points):
+            self.points = tuple(points)
+            for point in points:
+                self.chunk_store.resident.update(
+                    self.chunk_store.chunk_ids_for_point(point)
+                )
+            return self.chunk_store.resident_chunk_ids()
+
+    volume = _Volume()
+    plan = _plan(
+        centerline_path=SimpleNamespace(cached_voxel_volume=volume),
+    )
+    worker = AutoDiveVoxelPrefetchWorker()
+    try:
+        assert worker.request(
+            plan,
+            plan_sequence=4,
+            elapsed_s=0.0,
+            horizon_s=6.0,
+            reason="test_horizon",
+        ) is True
+        report = None
+        for _ in range(100):
+            report = worker.take_latest_report()
+            if report is not None:
+                break
+            time.sleep(0.005)
+
+        assert report is not None
+        assert report.plan_sequence == 4
+        assert report.reason == "test_horizon"
+        assert report.outcome == "prefetched"
+        assert report.requested_chunk_count == 2
+        assert report.resident_chunk_count == 2
+        assert report.storage_backend == "fake_lru"
+        assert len(volume.points) >= 2
+        assert volume.chunk_store.released == (
+            "coarse-000000",
+            "coarse-000001",
+        )
+    finally:
+        worker.shutdown()
+
+
+def test_auto_dive_voxel_prefetch_report_is_bounded_and_json_safe():
+    report = AutoDiveVoxelPrefetchReport(
+        plan_sequence=2,
+        elapsed_s=1.0,
+        horizon_s=12.0,
+        reason="test",
+        outcome="prefetched",
+        point_count=4,
+        requested_chunk_count=20,
+        resident_chunk_count=20,
+        resident_chunk_ids=tuple(f"chunk-{index}" for index in range(20)),
+        storage_backend="disk_lru",
+        storage_stats={"backend": "disk_lru"},
+        duration_ms=1.5,
+    )
+
+    payload = report.diagnostic_payload()
+
+    assert len(payload["resident_chunk_ids"]) == 16
+    assert payload["resident_chunk_ids_truncated"] is True
+    assert payload["storage_stats"] == {"backend": "disk_lru"}
+
+
+def test_auto_dive_schedules_navigation_prefetch_for_current_plan_horizon():
+    volume = SimpleNamespace(prefetch_for_points=lambda _points: ())
+    plan = _plan(centerline_path=SimpleNamespace(cached_voxel_volume=volume))
+    replanner = _FakeReplanner()
+    clock = _FakeClock()
+    controller = AutoDiveController(
+        plan,
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+    )
+
+    controller.start(
+        _FakeCamera(position=np.zeros(3, dtype=np.float64)),
+        _FakeWorld(),
+    )
+
+    assert len(replanner.voxel_prefetch_requests) == 1
+    _requested_plan, kwargs = replanner.voxel_prefetch_requests[0]
+    assert kwargs["plan_sequence"] == 0
+    assert kwargs["reason"] == "initial_plan"
+    assert kwargs["horizon_s"] > 0.0
+
+
 def test_auto_dive_requests_replan_after_fractional_cell_travel():
     clock = _FakeClock()
     world = _FakeWorld()
@@ -199,6 +501,7 @@ def test_auto_dive_requests_replan_after_fractional_cell_travel():
             {
                 "current_yaw": 0.0,
                 "current_pitch": 0.0,
+                "current_roll": 0.0,
                 "current_travel_yaw": 0.0,
                 "current_travel_pitch": 0.0,
             },
@@ -347,7 +650,7 @@ def test_auto_dive_survey_pause_temporarily_widens_route_prefetch():
     )
     controller.start(camera, world)
     normal_prefetch_count = len(controller.prefetch_cells)
-    world.loaded_cells = set(controller.prefetch_cells)
+    world.loaded_cells = set(world.available_cells)
     world._pending = set()
 
     clock.now = 1.0
@@ -400,6 +703,7 @@ def test_auto_dive_replan_defaults_to_bounded_runtime_cadence():
             {
                 "current_yaw": 0.0,
                 "current_pitch": 0.0,
+                "current_roll": 0.0,
                 "current_travel_yaw": 0.0,
                 "current_travel_pitch": 0.0,
             },
@@ -441,6 +745,7 @@ def test_auto_dive_survey_scoped_replanning_waits_for_survey_pause():
             {
                 "current_yaw": 0.0,
                 "current_pitch": 0.0,
+                "current_roll": 0.0,
                 "current_travel_yaw": 0.0,
                 "current_travel_pitch": 0.0,
             },
@@ -787,6 +1092,50 @@ def test_auto_dive_mesh_recovery_uses_route_vector_at_boundary():
     )
     assert request_pose["current_travel_yaw"] == pytest.approx(expected_yaw)
     assert abs(request_pose["current_travel_pitch"]) < 1e-9
+    assert request_pose["force_hemisphere_scan"] == pytest.approx(1.0)
+
+
+def test_auto_dive_mesh_recovery_resets_attempt_budget_after_forward_handoff():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 12.0
+    assert controller.update(camera, world) is AutoDiveState.LOADING
+    clock.now = 12.6
+    controller.update(camera, world)
+    assert controller._mesh_recovery_attempts == 1
+
+    replanner.latest_plan = _plan(
+        start=(11.0, 0.0, 0.0),
+        end=(20.0, 0.0, 0.0),
+        replan_at_end=True,
+    )
+    camera.position = np.array((11.0, 0.0, 0.0), dtype=np.float64)
+    assert controller.update_replan(camera, world, now=13.0) is True
+    assert controller._mesh_recovery_attempts == 0
+
+    accepted = [
+        payload
+        for event, payload in blackbox.events
+        if event == "replan_accepted"
+    ][-1]
+    assert accepted["mesh_recovery_progressed"] is True
+    assert accepted["mesh_recovery_attempts"] == 0
 
 
 def test_auto_dive_mesh_recovery_requests_user_assist_when_replan_has_no_plan():
@@ -860,6 +1209,53 @@ def test_auto_dive_local_recovery_leg_replans_at_end():
     assert len(replanner.requests) == 1
 
 
+def test_auto_dive_rolling_recovery_scans_without_holding_before_safe_frontier():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _FakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+    )
+    controller.start(camera, world)
+    controller._rolling_clearance_worker.shutdown()
+    controller._rolling_clearance_worker = _FakeRollingClearanceWorker(
+        AutoDiveRollingClearanceReport(
+            plan_sequence=0,
+            checked_elapsed_s=2.0,
+            remaining_distance_m=8.0,
+            trigger_distance_m=2.0,
+            safe_elapsed_s=5.0,
+            safe_to_continue=True,
+            needs_replan=True,
+            reason="approaching_forward_clearance_boundary",
+            sample_count=2,
+            maximum_turn_degrees=0.0,
+            prepared_branch_count=1,
+            prepared_goal_clearance_m=2.0,
+        )
+    )
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    assert controller.update(camera, world) is AutoDiveState.DIVING
+    clock.now = 2.0
+    assert controller.update_replan(camera, world, now=2.0) is False
+    assert controller._mesh_recovery_active()
+
+    clock.now = 3.0
+    assert controller.update(camera, world) is AutoDiveState.DIVING
+    assert camera.position[0] == pytest.approx(2.0)
+    assert len(replanner.requests) == 1
+
+    clock.now = 6.0
+    assert controller.update(camera, world) is AutoDiveState.LOADING
+    assert camera.position[0] == pytest.approx(5.0)
+
+
 def test_auto_dive_voxel_lookahead_requests_forward_replan_at_boundary():
     clock = _FakeClock()
     world = _FakeWorld()
@@ -877,11 +1273,27 @@ def test_auto_dive_voxel_lookahead_requests_forward_replan_at_boundary():
         blackbox=blackbox,
     )
     controller.start(camera, world)
+    controller._rolling_clearance_worker.shutdown()
+    controller._rolling_clearance_worker = _FakeRollingClearanceWorker()
     world.loaded_cells = set(controller.prefetch_cells)
     world._pending = set()
 
     clock.now = 1.0
     assert controller.update(camera, world) is AutoDiveState.DIVING
+    controller._rolling_clearance_worker.report = AutoDiveRollingClearanceReport(
+        plan_sequence=0,
+        checked_elapsed_s=10.0,
+        remaining_distance_m=1.0,
+        trigger_distance_m=1.0,
+        safe_elapsed_s=10.0,
+        safe_to_continue=True,
+        needs_replan=True,
+        reason="approaching_forward_clearance_boundary",
+        sample_count=2,
+        maximum_turn_degrees=0.0,
+        prepared_branch_count=1,
+        prepared_goal_clearance_m=5.0,
+    )
     clock.now = 11.0
     assert controller.update(camera, world) is AutoDiveState.LOADING
     assert controller._lookahead_replan_pending is True
@@ -899,6 +1311,94 @@ def test_auto_dive_voxel_lookahead_requests_forward_replan_at_boundary():
     assert controller.update_replan(camera, world, now=10.1) is True
     assert controller._lookahead_replan_pending is False
     assert controller.plan.route_points[-1] == (20.0, 0.0, 0.0)
+
+
+def test_auto_dive_speculative_replan_keeps_current_route_active():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _SpeculativeFakeReplanner()
+    controller = AutoDiveController(
+        _long_plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_only_during_survey=True,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    assert controller.update(camera, world) is AutoDiveState.DIVING
+    clock.now = 11.0
+    assert controller.update(camera, world) is AutoDiveState.DIVING
+    assert controller.update_replan(camera, world, now=11.0) is False
+
+    assert len(replanner.speculative_requests) == 1
+    assert controller._speculative_replan_pending is True
+    assert controller.state is AutoDiveState.DIVING
+    assert controller.plan.route_points == ((0.0, 0.0, 0.0), (20.0, 0.0, 0.0))
+
+    camera.position = np.array([10.5, 0.0, 0.0], dtype=np.float64)
+    replanner.publish_speculative_plan(
+        _long_plan(start=(10.5, 0.0, 0.0), end=(30.5, 0.0, 0.0)),
+        source_plan_sequence=0,
+    )
+
+    assert controller.update_replan(camera, world, now=10.5) is True
+    assert controller.state is AutoDiveState.DIVING
+    assert controller._speculative_replan_pending is False
+    assert controller.plan.route_points == (
+        (10.5, 0.0, 0.0),
+        (30.5, 0.0, 0.0),
+    )
+
+
+def test_auto_dive_discards_speculative_plan_from_an_older_route_sequence():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    blackbox = _FakeBlackbox()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _SpeculativeFakeReplanner()
+    controller = AutoDiveController(
+        _long_plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    world.loaded_cells = set(controller.prefetch_cells)
+    world._pending = set()
+
+    clock.now = 1.0
+    controller.update(camera, world)
+    clock.now = 11.0
+    controller.update(camera, world)
+    controller.update_replan(camera, world, now=11.0)
+
+    controller._plan_sequence = 1
+    replanner.publish_speculative_plan(
+        _long_plan(start=(10.0, 0.0, 0.0), end=(30.0, 0.0, 0.0)),
+        source_plan_sequence=0,
+    )
+
+    assert controller.update_replan(camera, world, now=11.1) is False
+    assert controller.plan.route_points == (
+        (0.0, 0.0, 0.0),
+        (20.0, 0.0, 0.0),
+    )
+    # The stale result is discarded, then the new current sequence may use
+    # the single planner slot again while the accepted route continues.
+    assert controller._speculative_replan_pending is True
+    assert len(replanner.speculative_requests) == 2
+    assert controller.waiting_for_user_input is False
+    discarded = [
+        payload
+        for event, payload in blackbox.events
+        if event == "replan_rejected"
+    ]
+    assert discarded[-1]["reason"] == "stale_source_plan_sequence"
+    assert discarded[-1]["speculative_replan"] is True
 
 
 def test_auto_dive_swaps_latest_nearby_replan_on_owner_thread():
@@ -1081,6 +1581,7 @@ def test_auto_dive_rejects_stalled_replan_and_does_not_retry_same_pose():
             {
                 "current_yaw": 0.0,
                 "current_pitch": 0.0,
+                "current_roll": 0.0,
                 "current_travel_yaw": 0.0,
                 "current_travel_pitch": 0.0,
             },
@@ -1130,6 +1631,160 @@ def test_auto_dive_replanner_forwards_cache_dir_to_plan_builder():
 
     assert plan is not None
     assert calls[0][1]["cache_dir"] == "/cache/cave"
+
+
+def test_auto_dive_replanner_preserves_speculative_source_sequence():
+    blackbox = _FakeBlackbox()
+    replanner = AutoDiveReplanner(
+        {"chunks": {}},
+        AutoDiveSettings(),
+        plan_builder=lambda _manifest, **_kwargs: _plan(),
+        blackbox=blackbox,
+    )
+    try:
+        assert replanner.request_speculative(
+            (0.0, 0.0, 0.0),
+            source_plan_sequence=7,
+        ) is True
+        latest_plan = None
+        for _ in range(100):
+            latest_plan = replanner.take_latest_plan()
+            if latest_plan is not None:
+                break
+            time.sleep(0.005)
+
+        assert latest_plan is not None
+        assert replanner.last_taken_plan_source_sequence == 7
+        requested = [
+            payload
+            for event, payload in blackbox.events
+            if event == "replan_requested"
+        ][-1]
+        completed = [
+            payload
+            for event, payload in blackbox.events
+            if event == "replan_completed"
+        ][-1]
+        assert requested["speculative_replan"] is True
+        assert requested["source_plan_sequence"] == 7
+        assert completed["speculative_replan"] is True
+        assert completed["source_plan_sequence"] == 7
+    finally:
+        replanner.shutdown()
+
+
+def test_auto_dive_replanner_continuous_scan_is_unbounded_and_sequence_safe():
+    calls = []
+    blackbox = _FakeBlackbox()
+
+    def build_plan(manifest, **kwargs):
+        calls.append((manifest, kwargs))
+        return _plan()
+
+    replanner = AutoDiveReplanner(
+        {"chunks": {}},
+        AutoDiveSettings(),
+        plan_builder=build_plan,
+        blackbox=blackbox,
+    )
+    try:
+        assert replanner.request_continuous_scan(
+            (1.0, 2.0, 3.0),
+            current_yaw=0.25,
+            current_pitch=-0.1,
+            source_plan_sequence=7,
+        ) is True
+        for _ in range(100):
+            if replanner.has_continuous_scan_result():
+                break
+            time.sleep(0.005)
+
+        assert replanner.has_continuous_scan_result() is True
+        assert replanner.take_latest_continuous_scan() is not None
+        assert replanner.last_taken_continuous_scan_source_sequence == 7
+        assert calls[0][1]["settings"].planning_budget_s is None
+        assert calls[0][1]["force_hemisphere_scan"] is True
+        assert any(
+            event == "continuous_scan_completed"
+            for event, _payload in blackbox.events
+        )
+    finally:
+        replanner.shutdown()
+
+
+def test_auto_dive_accepts_continuous_scan_and_starts_next_cycle():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    replanner = _ContinuousFakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        blackbox=blackbox,
+    )
+
+    controller.start(camera, world)
+    assert len(replanner.continuous_requests) == 1
+    replanner.publish_continuous_plan(
+        _plan(start=(0.0, 0.0, 0.0), end=(12.0, 0.0, 0.0)),
+        source_plan_sequence=0,
+    )
+
+    assert controller.update_replan(camera, world, now=1.0) is True
+    accepted = [
+        payload
+        for event, payload in blackbox.events
+        if event == "replan_accepted"
+    ][-1]
+    assert accepted["continuous_scan"] is True
+    assert accepted["source_plan_sequence"] == 0
+    assert len(replanner.continuous_requests) == 2
+
+    controller.stop(world)
+
+
+def test_auto_dive_continuous_mesh_recovery_does_not_start_bounded_wait():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    replanner = _ContinuousFakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        blackbox=blackbox,
+    )
+    controller.start(camera, world)
+    clock.now = 1.0
+    controller.update(camera, world)
+    world.loaded_cells = set(world.available_cells)
+    world._pending = set()
+
+    clock.now = 12.0
+    controller.update(camera, world)
+    clock.now = 22.0
+    controller.update(camera, world)
+    clock.now = 22.6
+    controller.update(camera, world)
+    clock.now = 29.0
+    controller.update_replan(camera, world)
+
+    assert controller.state is not AutoDiveState.WAITING_FOR_USER
+    assert controller._replan_wait_started_at is None
+    assert not any(
+        event == "replan_planning_budget_exceeded"
+        for event, _payload in blackbox.events
+    )
+    assert any(
+        payload.get("continuous_scan") is True
+        for event, payload in blackbox.events
+        if event == "mesh_recovery_replan_requested"
+    )
+
+    controller.stop(world)
 
 
 def test_auto_dive_replanner_logs_correlated_build_timing():
@@ -1344,4 +1999,28 @@ def _plan(
             )
         ),
         voxel_route_selection=voxel_route_selection,
+    )
+
+
+def _long_plan(
+    *,
+    start: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    end: tuple[float, float, float] = (20.0, 0.0, 0.0),
+) -> AutoDivePlan:
+    route = CameraRoute.from_keyframes(
+        (
+            RouteKeyframe(0.0, start, 0.0, 0.0),
+            RouteKeyframe(20.0, end, 0.0, 0.0),
+        )
+    )
+    return AutoDivePlan(
+        route=route,
+        centerline_path=None,  # type: ignore[arg-type]
+        route_points=(start, end),
+        route_cells=((0, 0), (20, 0)),
+        circular_arc=False,
+        route_length_m=20.0,
+        duration_s=20.0,
+        render_distance_cells=2,
+        selection_reason="trusted_route_clear",
     )

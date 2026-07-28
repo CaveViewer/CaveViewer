@@ -24,6 +24,11 @@ import os
 import sys
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.map import source_model
+from caveviewer.core.diagnostics.application import (
+    ApplicationDiagnostics,
+    get_active_application_diagnostics,
+    set_active_application_diagnostics,
+)
 from caveviewer.core.diagnostics.logging import (
     configure_logging,
     finish_console_progress_line,
@@ -46,6 +51,27 @@ except Exception:
     pass  # non-fatal: falls back to Python's bundled CA bundle
 
 _LOG = get_logger("CaveViewer")
+
+
+def _record_application_event(event: str, **payload) -> None:
+    """Forward an application event when process diagnostics are active."""
+    diagnostics = get_active_application_diagnostics()
+    if diagnostics is not None:
+        diagnostics.record(event, **payload)
+
+
+def _record_application_exception(event: str, exc: BaseException, **context) -> None:
+    """Record a viewer-boundary exception with its traceback when enabled."""
+    diagnostics = get_active_application_diagnostics()
+    if diagnostics is not None:
+        diagnostics.record_exception(
+            event,
+            type(exc),
+            exc,
+            exc.__traceback__,
+            fatal=True,
+            **context,
+        )
 
 
 def _route_moderngl_window_logging() -> None:
@@ -453,10 +479,21 @@ def _run_map_session(folder: str) -> None:
             from caveviewer.gui.viewer_window import run_viewer
             try:
                 run_viewer(_prebuilt_cache, textures_dir=_textures_dir)
+                _record_application_event(
+                    "viewer_session_returned",
+                    outcome="window_closed",
+                    cache_dir=_prebuilt_cache,
+                )
                 from caveviewer.gui.map_history import remember_recent_map_path
 
                 remember_recent_map_path(folder)
             except Exception as launch_err:
+                _record_application_exception(
+                    "viewer_session_exception",
+                    outcome="exception",
+                    cache_dir=_prebuilt_cache,
+                    exc=launch_err,
+                )
                 _LOG.error(f"Error starting viewer: {launch_err}")
                 import traceback
                 traceback.print_exc()
@@ -491,10 +528,21 @@ def _run_map_session(folder: str) -> None:
         from caveviewer.gui.viewer_window import run_viewer
         try:
             run_viewer(cache_dir, textures_dir=cache_textures_dir)
+            _record_application_event(
+                "viewer_session_returned",
+                outcome="window_closed",
+                cache_dir=cache_dir,
+            )
             from caveviewer.gui.map_history import remember_recent_map_path
 
             remember_recent_map_path(folder)
         except Exception as e:
+            _record_application_exception(
+                "viewer_session_exception",
+                outcome="exception",
+                cache_dir=cache_dir,
+                exc=e,
+            )
             _LOG.error(f"Error starting viewer: {e}")
             import traceback
             traceback.print_exc()
@@ -510,7 +558,18 @@ def _run_map_session(folder: str) -> None:
         from caveviewer.gui.viewer_window import run_viewer_with_pending_import
         try:
             run_viewer_with_pending_import(model_descriptor, textures_dir=folder)
+            _record_application_event(
+                "viewer_session_returned",
+                outcome="window_closed",
+                cache_dir=None,
+            )
         except Exception as e:
+            _record_application_exception(
+                "viewer_session_exception",
+                outcome="exception",
+                cache_dir=None,
+                exc=e,
+            )
             _LOG.error(f"Error starting viewer: {e}")
             import traceback
             traceback.print_exc()
@@ -591,6 +650,16 @@ def main():
 
 def run() -> None:
     """Run the application and present a best-effort fatal-error dialog."""
+    application_diagnostics = ApplicationDiagnostics(
+        metadata={
+            "app_name": APP_NAME,
+            "app_version": APP_VERSION,
+            "python_version": sys.version.split()[0],
+            "platform": sys.platform,
+        }
+    )
+    set_active_application_diagnostics(application_diagnostics)
+    application_diagnostics.install_hooks(install_signals=True)
     try:
         import multiprocessing
 
@@ -599,13 +668,38 @@ def run() -> None:
     except KeyboardInterrupt:
         configure_logging()
         _LOG.info("%s interrupted by user.", APP_NAME)
+        application_diagnostics.record(
+            "application_interrupted",
+            reason="keyboard_interrupt",
+            sync=True,
+        )
+        application_diagnostics.finalize(
+            outcome="interrupted",
+            exit_code=130,
+            reason="keyboard_interrupt",
+        )
         sys.exit(130)
+    except SystemExit as exc:
+        exit_code = _system_exit_code(exc.code)
+        application_diagnostics.finalize(
+            outcome="system_exit",
+            exit_code=exit_code,
+            reason="sys_exit",
+        )
+        raise
     except Exception as e:
         import traceback
         user_error = f"{APP_NAME} encountered a fatal error:\n\n{e}"
         error_msg = f"{user_error}\n\nTraceback:\n{traceback.format_exc()}"
         configure_logging()
         _LOG.error(error_msg)
+        application_diagnostics.record_exception(
+            "application_uncaught_exception",
+            type(e),
+            e,
+            e.__traceback__,
+            fatal=True,
+        )
         
         # Try to show error dialog if GUI is available
         try:
@@ -618,8 +712,30 @@ def run() -> None:
             show_error(user_error, parent=root)
         except Exception:
             pass
-        
+        application_diagnostics.finalize(
+            outcome="fatal_error",
+            exit_code=1,
+            reason="uncaught_exception",
+        )
         sys.exit(1)
+    else:
+        application_diagnostics.finalize(
+            outcome="normal",
+            exit_code=0,
+            reason="main_returned",
+        )
+    finally:
+        if get_active_application_diagnostics() is application_diagnostics:
+            set_active_application_diagnostics(None)
+
+
+def _system_exit_code(value: object) -> int | None:
+    """Normalize ``SystemExit.code`` for structured process diagnostics."""
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return int(value)
+    return 1
 
 
 if __name__ == "__main__":

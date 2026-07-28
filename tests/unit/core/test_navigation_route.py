@@ -20,7 +20,7 @@ def test_route_follower_applies_offset_route_to_camera():
     route = CameraRoute.from_keyframes(
         (
             RouteKeyframe(0.0, (0.0, 0.0, 0.0), 0.0, 0.0),
-            RouteKeyframe(10.0, (10.0, 0.0, 0.0), 90.0, -10.0),
+            RouteKeyframe(10.0, (10.0, 0.0, 0.0), 90.0, -10.0, 30.0),
         ),
         position_mode="first_chunk_center_offset",
     )
@@ -39,6 +39,7 @@ def test_route_follower_applies_offset_route_to_camera():
     assert camera.position.tolist() == pytest.approx([105.0, 20.0, -50.0])
     assert camera.yaw == pytest.approx(math.radians(45.0))
     assert camera.pitch == pytest.approx(math.radians(-5.0))
+    assert camera.roll == pytest.approx(math.radians(15.0))
 
 
 def test_route_keyframes_for_points_can_hold_start_until_travel():

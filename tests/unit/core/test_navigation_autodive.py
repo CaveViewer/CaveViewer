@@ -15,6 +15,7 @@ from caveviewer.core.navigation.autodive import (
     AutoDiveSettings,
     _AutoDiveRouteSamples,
     _auto_dive_points_for_waypoint_cells,
+    _build_hemisphere_probe_route_candidate,
     _centerline_cells_form_closed_loop,
     _cone_chain_anchor_indices,
     _mesh_clear_recovery_footprint_path,
@@ -39,6 +40,7 @@ from caveviewer.core.navigation.cache_metadata import (
     build_navigation_metadata,
     cached_centerline_path,
 )
+from caveviewer.core.navigation.voxel_volume import LocalVoxelVolume
 
 
 def test_auto_dive_uses_longest_centerline_component():
@@ -349,6 +351,119 @@ def test_auto_dive_voxel_route_uses_cell_centers_not_cached_centerline_points():
         (1.5, 0.5),
         (1.5, 1.5),
     )
+
+
+def test_auto_dive_hemisphere_recovery_scans_roll_and_vertical_offsets():
+    component_cells = [(x, z) for x in range(8) for z in range(8)]
+    route_cells = tuple((x, 3) for x in range(8))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, 3.5)
+        for x, _z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+    manifest["navigation"]["routes"][0]["y_ranges"] = [
+        value
+        for _cell in route_cells
+        for value in (0.0, 4.0)
+    ]
+    centerline_path = cached_centerline_path(manifest)
+    events = []
+
+    assert centerline_path is not None
+    candidate = _build_hemisphere_probe_route_candidate(
+        ordinal=1,
+        centerline_path=centerline_path,
+        current=np.asarray(route_points[0], dtype=np.float64),
+        route_points=route_points,
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_roll=np.pi / 2.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        collision_validator=_AutoDiveCollisionValidator(centerline_path),
+        avoid_positions=None,
+        settings=AutoDiveSettings(
+            smoothing_radius_cells=0,
+            lookahead_distance_m=8.0,
+        ),
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    assert candidate is not None
+    assert candidate.name == "hemisphere-probe"
+    assert candidate.roll_deg == pytest.approx(90.0)
+    scan_payload = [
+        payload
+        for event, payload in events
+        if event == "hemisphere_scan"
+    ][-1]
+    assert scan_payload["generated_count"] == 32 * 4 * 9
+    assert scan_payload["coarse_candidate_count"] > 0
+    assert scan_payload["top_candidates"]
+
+
+def test_auto_dive_forced_hemisphere_scan_bypasses_local_voxel_route():
+    component_cells = [(x, z) for x in range(8) for z in range(8)]
+    route_cells = tuple((x, 3) for x in range(8))
+    route_points = tuple(
+        (float(x) + 0.5, 1.0, 3.5)
+        for x, _z in route_cells
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=route_cells,
+        route_points=route_points,
+    )
+    centerline_path = cached_centerline_path(manifest)
+    events = []
+
+    assert centerline_path is not None
+    local_volume = LocalVoxelVolume(
+        voxel_size_m=1.0,
+        origin=(-8.0, -8.0, -8.0),
+        shape=(32, 24, 32),
+        surface_cells=frozenset(),
+        triangle_count=1,
+        surface_sample_count=1,
+        sampling_truncated=False,
+        max_clearance_search_cells=16,
+    )
+    candidate = _build_hemisphere_probe_route_candidate(
+        ordinal=1,
+        centerline_path=centerline_path,
+        current=np.asarray(route_points[0], dtype=np.float64),
+        route_points=route_points,
+        current_yaw=0.0,
+        current_pitch=0.0,
+        current_roll=0.0,
+        current_travel_yaw=0.0,
+        current_travel_pitch=0.0,
+        collision_validator=_AutoDiveCollisionValidator(
+            centerline_path,
+            voxel_refinement=local_volume,
+        ),
+        avoid_positions=None,
+        settings=AutoDiveSettings(
+            smoothing_radius_cells=0,
+            lookahead_distance_m=8.0,
+        ),
+        force_hemisphere_scan=True,
+        diagnostics=lambda event, payload: events.append((event, payload)),
+    )
+
+    assert candidate is not None
+    assert candidate.name == "hemisphere-probe"
+    scan_payload = [
+        payload
+        for event, payload in events
+        if event == "hemisphere_scan"
+    ][-1]
+    assert scan_payload["forced_full_scan"] is True
+    assert scan_payload["generated_count"] == 32 * 4 * 9
 
 
 def test_auto_dive_applies_runtime_cached_y_smoothing_radius():

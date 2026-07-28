@@ -13,9 +13,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import base64
 import binascii
+from collections import OrderedDict
+import hashlib
 import heapq
 import math
 import os
+import threading
 import zlib
 
 import numpy as np
@@ -39,37 +42,108 @@ from caveviewer.core.navigation.voxel_volume import (
     DEFAULT_VOXEL_MAX_CELLS,
     DEFAULT_VOXEL_MAX_REGIONS,
     DEFAULT_VOXEL_MAX_SURFACE_SAMPLES,
+    DEFAULT_VOXEL_LOCAL_REFINEMENT_FORWARD_M,
+    DEFAULT_VOXEL_LOCAL_REFINEMENT_MAX_CELLS,
     DEFAULT_VOXEL_SIZE_M,
     LocalVoxelVolume,
+    LocalVoxelRoute,
     TriangleProvider,
     VoxelVolumeConfig,
     build_surface_voxel_volume,
 )
+from caveviewer.core.navigation.voxel_graph import (
+    DEFAULT_GRAPH_MAX_EDGE_DISTANCE_CELLS,
+    DEFAULT_GRAPH_MAX_EDGES_PER_NODE,
+    NAVIGATION_VOXEL_GRAPH_METHOD as PREPARED_NAVIGATION_VOXEL_GRAPH_METHOD,
+    NavigationVoxelGraph,
+    NavigationVoxelGraphEdge,
+    NavigationVoxelGraphNode,
+    build_navigation_voxel_graph,
+    deserialize_navigation_voxel_graph,
+    serialize_navigation_voxel_graph,
+)
+from caveviewer.core.navigation.voxel_graph_3d import (
+    DEFAULT_3D_GRAPH_MAX_EDGE_DISTANCE_CELLS,
+    DEFAULT_3D_GRAPH_MAX_EDGES_PER_NODE,
+    DEFAULT_3D_GRAPH_MAX_NODES,
+    DEFAULT_3D_GRAPH_MAX_EDGES,
+    NAVIGATION_VOXEL_3D_GRAPH_METHOD,
+    NavigationVoxel3DEdge,
+    NavigationVoxel3DGraph,
+    NavigationVoxel3DMetric,
+    VoxelGraphKey,
+    accumulate_navigation_voxel_3d_sample,
+    build_navigation_voxel_3d_graph,
+    deserialize_navigation_voxel_3d_graph,
+    finalize_navigation_voxel_3d_metrics,
+    serialize_navigation_voxel_3d_graph,
+)
+from caveviewer.core.navigation.voxel_store import (
+    DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_BYTES,
+    DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_RESIDENT,
+    DiskNavigationVoxelChunkStore,
+    InMemoryNavigationVoxelChunkStore,
+    NavigationVoxelChunkDescriptor,
+    NavigationVoxelChunkStore,
+    NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD,
+)
 
 
-NAVIGATION_VOXEL_CACHE_VERSION = 2
-NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v2"
+NAVIGATION_VOXEL_CACHE_VERSION = 7
+NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v7"
+_PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION = 6
+_PREVIOUS_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v6"
+_OLDER_NAVIGATION_VOXEL_CACHE_VERSION = 3
+_OLDER_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v3"
 _LEGACY_NAVIGATION_VOXEL_CACHE_VERSION = 1
 _LEGACY_NAVIGATION_VOXEL_CACHE_METHOD = "curvature_corridor_voxels_v1"
 NAVIGATION_VOXEL_CACHE_NAME = "navigation_voxels.json"
-NAVIGATION_VOXEL_CACHE_MAX_BYTES = 64 * 1024 * 1024
-NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v2"
+NAVIGATION_VOXEL_CACHE_MAX_BYTES = 256 * 1024 * 1024
+NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v7"
+_PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v6"
+_OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v3"
 
-# These are deliberately smaller than the interactive settings. Cache
-# construction can touch more than one route, so it must remain a bounded
-# import-time cost on consumer hardware.
+# Replans run on a worker, but repeatedly decoding the whole-cave sidecar still
+# consumed most of the worker budget on consumer hardware. Keep a small,
+# signature-keyed process cache of the parsed payload and restored route model.
+# The file signature invalidates both entries when the cache is rebuilt.
+_RUNTIME_VOXEL_PAYLOAD_CACHE_LIMIT = 4
+_RUNTIME_VOXEL_MODEL_CACHE_LIMIT = 8
+_runtime_voxel_cache_lock = threading.RLock()
+_runtime_voxel_payload_cache: OrderedDict[
+    tuple[str, int, int], Mapping[str, object]
+] = OrderedDict()
+_runtime_voxel_model_cache: OrderedDict[
+    tuple[str, int, int, str], LocalVoxelVolume | NavigationVoxelAtlas
+] = OrderedDict()
+
+# Guided Dive cache construction is now the accuracy tier. Runtime planning
+# still stays bounded, but the offline cache is allowed to preserve much more
+# of the sparse 1 m navigation field.
 DEFAULT_CACHE_VOXEL_SIZE_M = DEFAULT_VOXEL_SIZE_M
 DEFAULT_CACHE_VOXEL_RANK_THRESHOLD = DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD
 DEFAULT_CACHE_VOXEL_MAX_REGIONS = DEFAULT_VOXEL_MAX_REGIONS
-DEFAULT_CACHE_VOXEL_MAX_CELLS = 32_768
-DEFAULT_CACHE_VOXEL_MAX_SURFACE_SAMPLES = 50_000
+DEFAULT_CACHE_VOXEL_MAX_CELLS = 65_536
+DEFAULT_CACHE_VOXEL_MAX_SURFACE_SAMPLES = 250_000
 DEFAULT_CACHE_VOXEL_MAX_ROUTES = 4
 DEFAULT_CACHE_VOXEL_WINDOW_POINTS = 3
 DEFAULT_CACHE_VOXEL_TILE_SIZE_M = 64.0
 DEFAULT_CACHE_VOXEL_MAX_TILES = 256
-DEFAULT_CACHE_VOXEL_MAX_TILE_CELLS = 8_192
-DEFAULT_CACHE_VOXEL_MAX_CELL_METRICS = 16_384
-NAVIGATION_VOXEL_GRAPH_METHOD = "voxel_filled_component_graph_v1"
+DEFAULT_CACHE_VOXEL_MAX_TILE_CELLS = 65_536
+DEFAULT_CACHE_VOXEL_MAX_CELL_METRICS = 65_536
+DEFAULT_CACHE_FINE_VOXEL_SIZE_M = 1.0
+DEFAULT_CACHE_FINE_TILE_RADIUS_M = 16.0
+DEFAULT_CACHE_FINE_MAX_TILES = 24
+DEFAULT_CACHE_FINE_MAX_TILE_CELLS = 131_072
+DEFAULT_CACHE_GRAPH_MAX_NODES = DEFAULT_3D_GRAPH_MAX_NODES
+DEFAULT_CACHE_GRAPH_MAX_EDGES = DEFAULT_3D_GRAPH_MAX_EDGES
+DEFAULT_CACHE_GRAPH_MAX_EDGE_DISTANCE_CELLS = (
+    DEFAULT_3D_GRAPH_MAX_EDGE_DISTANCE_CELLS
+)
+DEFAULT_CACHE_GRAPH_MAX_EDGES_PER_NODE = DEFAULT_3D_GRAPH_MAX_EDGES_PER_NODE
+NAVIGATION_VOXEL_GRAPH_METHOD = NAVIGATION_VOXEL_3D_GRAPH_METHOD
+NAVIGATION_VOXEL_FOOTPRINT_GRAPH_METHOD = PREPARED_NAVIGATION_VOXEL_GRAPH_METHOD
+_PREVIOUS_NAVIGATION_VOXEL_GRAPH_METHOD = "voxel_filled_component_graph_v1"
 NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD = "voxel_branch_lookahead_v1"
 DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_DISTANCE_M = 256.0
 DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_CELLS = 32
@@ -78,11 +152,32 @@ DEFAULT_NAVIGATION_VOXEL_BRANCH_MAX_EXPANSIONS = 2_048
 # A route may turn sideways, but an explicit travel direction must never select
 # the first step of a branch that points back toward the entrance.
 DEFAULT_NAVIGATION_VOXEL_MIN_FORWARD_ALIGNMENT = 0.0
+NAVIGATION_VOXEL_SCORING_POLICY_METHOD = "connectivity_forward_volume_v1"
+NAVIGATION_VOXEL_LOOP_POLICY_AVOID = "avoid"
+NAVIGATION_VOXEL_LOOP_POLICY_ALLOW_FORWARD = "allow_forward"
+NAVIGATION_VOXEL_LOOP_POLICIES = frozenset(
+    {
+        NAVIGATION_VOXEL_LOOP_POLICY_AVOID,
+        NAVIGATION_VOXEL_LOOP_POLICY_ALLOW_FORWARD,
+    }
+)
+DEFAULT_NAVIGATION_VOXEL_CONNECTIVITY_WEIGHT = 1.0
+DEFAULT_NAVIGATION_VOXEL_SMOOTH_FORWARD_WEIGHT = 1.0
+DEFAULT_NAVIGATION_VOXEL_VOLUME_WEIGHT = 0.15
+DEFAULT_NAVIGATION_VOXEL_CLEARANCE_WEIGHT = 0.10
+DEFAULT_NAVIGATION_VOXEL_TURN_WEIGHT = 0.55
+DEFAULT_NAVIGATION_VOXEL_BACKTRACK_WEIGHT = 1.0
+DEFAULT_NAVIGATION_VOXEL_GRAPH_MAX_EDGE_DISTANCE_CELLS = (
+    DEFAULT_GRAPH_MAX_EDGE_DISTANCE_CELLS
+)
+DEFAULT_NAVIGATION_VOXEL_GRAPH_MAX_EDGES_PER_NODE = (
+    DEFAULT_GRAPH_MAX_EDGES_PER_NODE
+)
 
 
 @dataclass(frozen=True)
 class NavigationVoxelCacheConfig:
-    """Bounded cache-time voxel construction settings."""
+    """Accuracy-tier cache-time voxel and graph construction settings."""
 
     voxel_size_m: float = DEFAULT_CACHE_VOXEL_SIZE_M
     curvature_rank_threshold: int = DEFAULT_CACHE_VOXEL_RANK_THRESHOLD
@@ -93,6 +188,14 @@ class NavigationVoxelCacheConfig:
     window_points: int = DEFAULT_CACHE_VOXEL_WINDOW_POINTS
     tile_size_m: float = DEFAULT_CACHE_VOXEL_TILE_SIZE_M
     max_tiles: int = DEFAULT_CACHE_VOXEL_MAX_TILES
+    fine_voxel_size_m: float = DEFAULT_CACHE_FINE_VOXEL_SIZE_M
+    fine_tile_radius_m: float = DEFAULT_CACHE_FINE_TILE_RADIUS_M
+    max_fine_tiles: int = DEFAULT_CACHE_FINE_MAX_TILES
+    max_fine_tile_cells: int = DEFAULT_CACHE_FINE_MAX_TILE_CELLS
+    graph_max_nodes: int = DEFAULT_CACHE_GRAPH_MAX_NODES
+    graph_max_edges: int = DEFAULT_CACHE_GRAPH_MAX_EDGES
+    graph_max_edge_distance_cells: int = DEFAULT_CACHE_GRAPH_MAX_EDGE_DISTANCE_CELLS
+    graph_max_edges_per_node: int = DEFAULT_CACHE_GRAPH_MAX_EDGES_PER_NODE
 
     def validated(self) -> "NavigationVoxelCacheConfig":
         size = float(self.voxel_size_m)
@@ -108,6 +211,21 @@ class NavigationVoxelCacheConfig:
         if not math.isfinite(tile_size) or tile_size <= 0.0:
             raise ValueError("cache voxel tile size must be positive and finite")
         max_tiles = max(1, int(self.max_tiles))
+        fine_size = float(self.fine_voxel_size_m)
+        if not math.isfinite(fine_size) or fine_size <= 0.0:
+            raise ValueError("fine voxel size must be positive and finite")
+        fine_radius = float(self.fine_tile_radius_m)
+        if not math.isfinite(fine_radius) or fine_radius <= 0.0:
+            raise ValueError("fine voxel tile radius must be positive and finite")
+        max_fine_tiles = max(0, int(self.max_fine_tiles))
+        max_fine_cells = max(1, int(self.max_fine_tile_cells))
+        graph_max_nodes = max(2, int(self.graph_max_nodes))
+        graph_max_edges = max(1, int(self.graph_max_edges))
+        graph_max_edge_distance_cells = max(
+            1,
+            int(self.graph_max_edge_distance_cells),
+        )
+        graph_max_edges_per_node = max(6, int(self.graph_max_edges_per_node))
         return NavigationVoxelCacheConfig(
             voxel_size_m=size,
             curvature_rank_threshold=rank,
@@ -118,6 +236,14 @@ class NavigationVoxelCacheConfig:
             window_points=window_points,
             tile_size_m=tile_size,
             max_tiles=max_tiles,
+            fine_voxel_size_m=fine_size,
+            fine_tile_radius_m=fine_radius,
+            max_fine_tiles=max_fine_tiles,
+            max_fine_tile_cells=max_fine_cells,
+            graph_max_nodes=graph_max_nodes,
+            graph_max_edges=graph_max_edges,
+            graph_max_edge_distance_cells=graph_max_edge_distance_cells,
+            graph_max_edges_per_node=graph_max_edges_per_node,
         )
 
 
@@ -128,6 +254,10 @@ class NavigationVoxelCacheBuildResult:
     payload: dict[str, object]
     built_route_count: int
     recommended_route_id: str | None
+    chunked_payload: dict[str, object] | None = None
+    chunk_payloads: Mapping[str, Mapping[str, object]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -139,6 +269,79 @@ class NavigationVoxelCellMetric:
     min_clearance_m: float
     mean_clearance_m: float
     progress_m: float
+    center_y_m: float = 0.0
+
+
+@dataclass(frozen=True)
+class NavigationVoxelScoringPolicy:
+    """Per-request priorities for bounded voxel branch selection.
+
+    Reverse edges remain illegal in every policy. ``allow_forward`` only lets
+    a bounded search revisit a previously seen voxel when the new edge still
+    lies in the incoming forward hemisphere; the revisit receives an explicit
+    backtracking penalty and is still bounded by the heading-state search.
+    """
+
+    connectivity_weight: float = DEFAULT_NAVIGATION_VOXEL_CONNECTIVITY_WEIGHT
+    smooth_forward_weight: float = DEFAULT_NAVIGATION_VOXEL_SMOOTH_FORWARD_WEIGHT
+    volume_weight: float = DEFAULT_NAVIGATION_VOXEL_VOLUME_WEIGHT
+    clearance_weight: float = DEFAULT_NAVIGATION_VOXEL_CLEARANCE_WEIGHT
+    turn_weight: float = DEFAULT_NAVIGATION_VOXEL_TURN_WEIGHT
+    backtrack_weight: float = DEFAULT_NAVIGATION_VOXEL_BACKTRACK_WEIGHT
+    loop_policy: str = NAVIGATION_VOXEL_LOOP_POLICY_AVOID
+
+    def __post_init__(self) -> None:
+        for name in (
+            "connectivity_weight",
+            "smooth_forward_weight",
+            "volume_weight",
+            "clearance_weight",
+            "turn_weight",
+            "backtrack_weight",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"voxel {name} must be finite and non-negative")
+        if self.loop_policy not in NAVIGATION_VOXEL_LOOP_POLICIES:
+            raise ValueError(
+                "voxel loop policy must be 'avoid' or 'allow_forward'"
+            )
+
+    def diagnostic_payload(self) -> dict[str, object]:
+        return {
+            "method": NAVIGATION_VOXEL_SCORING_POLICY_METHOD,
+            "connectivity_weight": float(self.connectivity_weight),
+            "smooth_forward_weight": float(self.smooth_forward_weight),
+            "volume_weight": float(self.volume_weight),
+            "clearance_weight": float(self.clearance_weight),
+            "turn_weight": float(self.turn_weight),
+            "backtrack_weight": float(self.backtrack_weight),
+            "loop_policy": str(self.loop_policy),
+            "reverse_edges": "rejected",
+        }
+
+    def branch_sort_key(
+        self,
+        score: "NavigationVoxelBranchScore",
+    ) -> tuple[object, ...]:
+        """Return the architecture's lexicographic branch priority.
+
+        Safety/topology validity comes first. Among viable candidates the
+        order is connectivity, smooth forward progress, backtracking penalty,
+        and finally volume as a comfort tie-breaker.
+        """
+        return (
+            not score.dead_end,
+            bool(score.unknown_boundary),
+            float(self.connectivity_weight) * float(score.connectivity_score),
+            float(self.smooth_forward_weight)
+            * float(score.smooth_forward_score),
+            -float(self.backtrack_weight) * float(score.backtrack_penalty),
+            float(self.volume_weight) * float(score.volume_score),
+            int(score.onward_exit_count),
+            float(score.reached_distance_m),
+            -float(score.path_cost_m),
+        )
 
 
 @dataclass(frozen=True)
@@ -156,6 +359,20 @@ class NavigationVoxelBranchScore:
     expanded_count: int
     dead_end: bool
     target_is_terminal: bool
+    connectivity_score: float = 0.0
+    heading_state_count: int = 0
+    unknown_boundary: bool = False
+    branch_start_key: tuple[int, ...] | None = None
+    target_key: tuple[int, ...] | None = None
+    graph_method: str = NAVIGATION_VOXEL_FOOTPRINT_GRAPH_METHOD
+    revisited_footprint_count: int = 0
+    entrance_floor_rejections: int = 0
+    route_volume_m3: float = 0.0
+    smooth_forward_score: float = 0.0
+    volume_score: float = 0.0
+    backtrack_penalty: float = 0.0
+    weighted_score: float = 0.0
+    scoring_policy_method: str = NAVIGATION_VOXEL_SCORING_POLICY_METHOD
 
     def diagnostic_payload(self) -> dict[str, object]:
         """Return bounded branch evidence for the navigation blackbox."""
@@ -168,6 +385,17 @@ class NavigationVoxelBranchScore:
                 int(self.target_cell[0]),
                 int(self.target_cell[1]),
             ],
+            "branch_start_key": (
+                None
+                if self.branch_start_key is None
+                else [int(value) for value in self.branch_start_key]
+            ),
+            "target_key": (
+                None
+                if self.target_key is None
+                else [int(value) for value in self.target_key]
+            ),
+            "graph_method": str(self.graph_method),
             "reached_distance_m": float(self.reached_distance_m),
             "continuation_distance_m": float(self.continuation_distance_m),
             "onward_exit_count": int(self.onward_exit_count),
@@ -177,7 +405,57 @@ class NavigationVoxelBranchScore:
             "expanded_count": int(self.expanded_count),
             "dead_end": bool(self.dead_end),
             "target_is_terminal": bool(self.target_is_terminal),
+            "connectivity_score": float(self.connectivity_score),
+            "heading_state_count": int(self.heading_state_count),
+            "unknown_boundary": bool(self.unknown_boundary),
+            "revisited_footprint_count": int(self.revisited_footprint_count),
+            "entrance_floor_rejections": int(
+                self.entrance_floor_rejections
+            ),
+            "route_volume_m3": float(self.route_volume_m3),
+            "smooth_forward_score": float(self.smooth_forward_score),
+            "volume_score": float(self.volume_score),
+            "backtrack_penalty": float(self.backtrack_penalty),
+            "weighted_score": float(self.weighted_score),
+            "scoring_policy_method": str(self.scoring_policy_method),
         }
+
+
+def _navigation_smooth_forward_score(
+    *,
+    first_step_alignment: float,
+    continuation_distance_m: float,
+    lookahead_distance_m: float,
+) -> float:
+    """Normalize heading smoothness and useful forward reach to [0, 1]."""
+    alignment = max(0.0, min(1.0, float(first_step_alignment)))
+    horizon = max(1e-6, float(lookahead_distance_m))
+    continuation = max(
+        0.0,
+        min(1.0, float(continuation_distance_m) / horizon),
+    )
+    return 0.65 * alignment + 0.35 * continuation
+
+
+def _navigation_volume_score(route_volume_m3: float) -> float:
+    """Compress route volume so it remains a comfort tie-breaker."""
+    return math.log1p(max(0.0, float(route_volume_m3)))
+
+
+def _navigation_weighted_branch_score(
+    *,
+    policy: NavigationVoxelScoringPolicy,
+    connectivity_score: float,
+    smooth_forward_score: float,
+    volume_score: float,
+    backtrack_penalty: float,
+) -> float:
+    return (
+        float(policy.connectivity_weight) * float(connectivity_score)
+        + float(policy.smooth_forward_weight) * float(smooth_forward_score)
+        + float(policy.volume_weight) * float(volume_score)
+        - float(policy.backtrack_weight) * float(backtrack_penalty)
+    )
 
 
 @dataclass(frozen=True)
@@ -186,6 +464,15 @@ class _NavigationVoxelBranchEvaluation:
 
     score: NavigationVoxelBranchScore
     path: tuple[FootprintCell, ...]
+    sort_key: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class _NavigationVoxel3DBranchEvaluation:
+    """Internal true-3D branch score paired with voxel centers."""
+
+    score: NavigationVoxelBranchScore
+    path: tuple[VoxelGraphKey, ...]
     sort_key: tuple[object, ...]
 
 
@@ -207,11 +494,31 @@ class NavigationVoxelRoutePlan:
     replan_at_lookahead: bool = True
     branch_score: NavigationVoxelBranchScore | None = None
     branch_candidates: tuple[NavigationVoxelBranchScore, ...] = ()
+    prepared_graph: bool = False
+    heading_state_count: int = 0
+    connectivity_score: float = 0.0
+    terminal_reached: bool = False
+    unknown_boundary_reached: bool = False
+    dead_end_rejections: int = 0
+    world_points: tuple[Point, ...] = ()
+    three_d_graph: bool = False
+    entrance_progress_floor_m: float | None = None
+    entrance_guard_tolerance_m: float | None = None
+    entrance_guard_source: str | None = None
+    scoring_policy: Mapping[str, object] | None = None
 
     def diagnostic_payload(self) -> dict[str, object]:
         """Return route-selection details suitable for the debug log."""
         return {
-            "method": NAVIGATION_VOXEL_GRAPH_METHOD,
+            "method": (
+                NAVIGATION_VOXEL_GRAPH_METHOD
+                if self.three_d_graph
+                else (
+                    self.branch_score.graph_method
+                    if self.branch_score is not None
+                    else NAVIGATION_VOXEL_FOOTPRINT_GRAPH_METHOD
+                )
+            ),
             "selection_reason": self.selection_reason,
             "cell_count": len(self.cells),
             "start_cell": [int(value) for value in self.start_cell],
@@ -228,6 +535,35 @@ class NavigationVoxelRoutePlan:
             "lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
             "lookahead_distance_m": float(self.lookahead_distance_m),
             "replan_at_lookahead": bool(self.replan_at_lookahead),
+            "prepared_graph": bool(self.prepared_graph),
+            "three_d_graph": bool(self.three_d_graph),
+            "world_point_count": len(self.world_points),
+            "heading_state_count": int(self.heading_state_count),
+            "connectivity_score": float(self.connectivity_score),
+            "terminal_reached": bool(self.terminal_reached),
+            "unknown_boundary_reached": bool(self.unknown_boundary_reached),
+            "dead_end_rejections": int(self.dead_end_rejections),
+            "entrance_progress_floor_m": (
+                None
+                if self.entrance_progress_floor_m is None
+                else float(self.entrance_progress_floor_m)
+            ),
+            "entrance_guard_tolerance_m": (
+                None
+                if self.entrance_guard_tolerance_m is None
+                else float(self.entrance_guard_tolerance_m)
+            ),
+            "entrance_guard_source": self.entrance_guard_source,
+            "scoring_policy": (
+                None
+                if self.scoring_policy is None
+                else dict(self.scoring_policy)
+            ),
+            "progress_guard_mode": (
+                "entrance_band_only"
+                if self.entrance_progress_floor_m is not None
+                else "legacy_graph_policy"
+            ),
             "cross_section_scoring": "deferred",
             "branch": (
                 None
@@ -245,6 +581,14 @@ class NavigationVoxelRoutePlan:
             "last_cells": [
                 [int(cell[0]), int(cell[1])]
                 for cell in self.cells[-8:]
+            ],
+            "first_world_points": [
+                [float(value) for value in point]
+                for point in self.world_points[:8]
+            ],
+            "last_world_points": [
+                [float(value) for value in point]
+                for point in self.world_points[-8:]
             ],
         }
 
@@ -264,29 +608,165 @@ class NavigationVoxelAtlas:
     cell_metrics: Mapping[FootprintCell, NavigationVoxelCellMetric] = field(
         default_factory=dict
     )
+    prepared_graph: NavigationVoxelGraph | None = None
+    prepared_3d_graph: NavigationVoxel3DGraph | None = None
+    fine_tiles: tuple[LocalVoxelVolume, ...] = ()
+    chunk_store: NavigationVoxelChunkStore | None = None
+    _probe_tile_bucket_size_m: float = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _probe_tiles: tuple[LocalVoxelVolume, ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _probe_tile_index: Mapping[tuple[int, int], tuple[int, ...]] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Build a small immutable spatial dispatch table for point probes."""
+        probe_tiles = tuple(self.fine_tiles) + tuple(self.tiles)
+        object.__setattr__(self, "_probe_tiles", probe_tiles)
+        if not probe_tiles:
+            object.__setattr__(self, "_probe_tile_bucket_size_m", 1.0)
+            object.__setattr__(self, "_probe_tile_index", {})
+            return
+
+        horizontal_sizes = sorted(
+            max(
+                float(tile.bounds_max[0] - tile.bounds_min[0]),
+                float(tile.bounds_max[2] - tile.bounds_min[2]),
+                1.0,
+            )
+            for tile in probe_tiles
+        )
+        bucket_size = horizontal_sizes[len(horizontal_sizes) // 2]
+        index: dict[tuple[int, int], list[int]] = {}
+        for tile_index, tile in enumerate(probe_tiles):
+            min_x = math.floor(tile.bounds_min[0] / bucket_size)
+            max_x = math.floor(tile.bounds_max[0] / bucket_size)
+            min_z = math.floor(tile.bounds_min[2] / bucket_size)
+            max_z = math.floor(tile.bounds_max[2] / bucket_size)
+            for bucket_x in range(min_x, max_x + 1):
+                for bucket_z in range(min_z, max_z + 1):
+                    index.setdefault((bucket_x, bucket_z), []).append(tile_index)
+        object.__setattr__(self, "_probe_tile_bucket_size_m", bucket_size)
+        object.__setattr__(
+            self,
+            "_probe_tile_index",
+            {
+                key: tuple(value)
+                for key, value in index.items()
+            },
+        )
 
     @property
     def voxel_count(self) -> int:
+        """Return coarse atlas capacity without double-counting refinements."""
+        if self.chunk_store is not None and not self.tiles:
+            return int(
+                sum(
+                    descriptor.voxel_count
+                    for descriptor in self.chunk_store.descriptors(
+                        fine_only=False,
+                    )
+                )
+            )
         return int(sum(tile.voxel_count for tile in self.tiles))
+
+    @property
+    def fine_voxel_count(self) -> int:
+        """Return capacity added by persisted fine frontier tiles."""
+        if self.chunk_store is not None and not self.fine_tiles:
+            return int(
+                sum(
+                    descriptor.voxel_count
+                    for descriptor in self.chunk_store.descriptors(
+                        fine_only=True,
+                    )
+                )
+            )
+        return int(sum(tile.voxel_count for tile in self.fine_tiles))
+
+    @property
+    def tile_count(self) -> int:
+        """Return the number of coarse chunks represented by this atlas."""
+        if self.chunk_store is not None and not self.tiles:
+            return len(self.chunk_store.descriptors(fine_only=False))
+        return len(self.tiles)
+
+    @property
+    def fine_tile_count(self) -> int:
+        """Return the number of fine chunks represented by this atlas."""
+        if self.chunk_store is not None and not self.fine_tiles:
+            return len(self.chunk_store.descriptors(fine_only=True))
+        return len(self.fine_tiles)
 
     @property
     def surface_cells(self) -> frozenset[tuple[int, int, int]]:
         """Expose sparse occupancy for compatibility with local fields."""
         cells: set[tuple[int, int, int]] = set()
-        for tile in self.tiles:
+        for tile in tuple(self.tiles) + tuple(self.fine_tiles):
             cells.update(tile.surface_cells)
+        if self.chunk_store is not None and not cells:
+            for chunk_id in self.chunk_store.resident_chunk_ids():
+                tile = self.chunk_store.get_chunk(chunk_id)
+                if tile is not None:
+                    cells.update(tile.surface_cells)
         return frozenset(cells)
 
     @property
     def voxel_size_m(self) -> float:
-        if not self.tiles:
-            return 0.0
-        return float(min(tile.voxel_size_m for tile in self.tiles))
+        all_tiles = tuple(self.tiles) + tuple(self.fine_tiles)
+        if not all_tiles:
+            if self.chunk_store is None:
+                return 0.0
+            return min(
+                (
+                    float(descriptor.voxel_size_m)
+                    for descriptor in self.chunk_store.descriptors()
+                ),
+                default=0.0,
+            )
+        return float(min(tile.voxel_size_m for tile in all_tiles))
+
+    @property
+    def fine_voxel_size_m(self) -> float:
+        """Return the finest persisted local refinement resolution."""
+        if not self.fine_tiles:
+            if self.chunk_store is None:
+                return 0.0
+            return min(
+                (
+                    float(descriptor.voxel_size_m)
+                    for descriptor in self.chunk_store.descriptors(
+                        fine_only=True,
+                    )
+                ),
+                default=0.0,
+            )
+        return float(min(tile.voxel_size_m for tile in self.fine_tiles))
 
     @property
     def navigation_cell_count(self) -> int:
-        """Return the number of footprint cells with filled-space metrics."""
+        """Return the number of prepared 3D nodes or footprint cells."""
+        if self.has_prepared_3d_graph:
+            return len(self.prepared_3d_graph.nodes)
         return len(self.cell_metrics)
+
+    @property
+    def navigation_3d_cell_count(self) -> int:
+        """Return the number of independent X/Y/Z navigation nodes."""
+        return (
+            0
+            if self.prepared_3d_graph is None
+            else len(self.prepared_3d_graph.nodes)
+        )
 
     @property
     def filled_free_cell_count(self) -> int:
@@ -299,26 +779,78 @@ class NavigationVoxelAtlas:
     @property
     def max_progress_m(self) -> float:
         """Return the deepest cached graph progress from its entrance seed."""
+        if self.has_prepared_3d_graph:
+            return max(
+                (
+                    float(node.progress_m)
+                    for node in self.prepared_3d_graph.nodes.values()
+                ),
+                default=0.0,
+            )
         return max(
             (float(metric.progress_m) for metric in self.cell_metrics.values()),
             default=0.0,
         )
 
     @property
+    def has_prepared_graph(self) -> bool:
+        """Return whether cache-time heading/visibility data is available."""
+        return self.prepared_graph is not None and bool(
+            self.prepared_graph.nodes
+        )
+
+    @property
+    def has_prepared_3d_graph(self) -> bool:
+        """Return whether the true 3D cache graph is available."""
+        return self.prepared_3d_graph is not None and bool(
+            self.prepared_3d_graph.nodes
+        )
+
+    @property
+    def prepared_3d_motion_geometry_safe(self) -> bool:
+        """Return whether prepared graph centers may drive the camera."""
+        return bool(
+            self.prepared_3d_graph is not None
+            and self.prepared_3d_graph.motion_geometry_safe
+        )
+
+    @property
     def bounds_min(self) -> Point:
-        if not self.tiles:
-            return (0.0, 0.0, 0.0)
+        all_tiles = tuple(self.tiles) + tuple(self.fine_tiles)
+        if not all_tiles:
+            descriptors = (
+                ()
+                if self.chunk_store is None
+                else self.chunk_store.descriptors()
+            )
+            if not descriptors:
+                return (0.0, 0.0, 0.0)
+            return tuple(
+                min(descriptor.bounds_min[axis] for descriptor in descriptors)
+                for axis in range(3)
+            )  # type: ignore[return-value]
         return tuple(
-            min(tile.bounds_min[axis] for tile in self.tiles)
+            min(tile.bounds_min[axis] for tile in all_tiles)
             for axis in range(3)
         )  # type: ignore[return-value]
 
     @property
     def bounds_max(self) -> Point:
-        if not self.tiles:
-            return (0.0, 0.0, 0.0)
+        all_tiles = tuple(self.tiles) + tuple(self.fine_tiles)
+        if not all_tiles:
+            descriptors = (
+                ()
+                if self.chunk_store is None
+                else self.chunk_store.descriptors()
+            )
+            if not descriptors:
+                return (0.0, 0.0, 0.0)
+            return tuple(
+                max(descriptor.bounds_max[axis] for descriptor in descriptors)
+                for axis in range(3)
+            )  # type: ignore[return-value]
         return tuple(
-            max(tile.bounds_max[axis] for tile in self.tiles)
+            max(tile.bounds_max[axis] for tile in all_tiles)
             for axis in range(3)
         )  # type: ignore[return-value]
 
@@ -334,7 +866,16 @@ class NavigationVoxelAtlas:
         """Refine a point using the best local tile that covers its cell."""
         candidates: list[tuple[float, float, Point]] = []
         desired_point = tuple(float(value) for value in desired)
-        for tile in self.tiles:
+        tiles: list[LocalVoxelVolume] = list(self.tiles)
+        tiles.extend(self.fine_tiles)
+        if not tiles and self.chunk_store is not None:
+            chunk_ids = self.chunk_store.chunk_ids_for_point(desired_point)
+            tiles = [
+                tile
+                for chunk_id in chunk_ids
+                if (tile := self.chunk_store.get_chunk(chunk_id)) is not None
+            ]
+        for tile in tiles:
             candidate = tile.refine_point(
                 desired_point,
                 footprint_cell=footprint_cell,
@@ -358,11 +899,233 @@ class NavigationVoxelAtlas:
             return None
         return max(candidates, key=lambda item: item[:2])[2]
 
+    def probe_point(
+        self,
+        point: Sequence[float],
+        *,
+        include_clearance: bool = True,
+    ) -> tuple[bool, float] | None:
+        """Return the best cached surface-field result for one point."""
+        if self.chunk_store is not None and not self._probe_tiles:
+            fine_result = self.probe_fine_point(
+                point,
+                include_clearance=include_clearance,
+            )
+            if fine_result is not None:
+                return fine_result
+            free_clearances: list[float] = []
+            occupied = False
+            for chunk_id in self.chunk_store.chunk_ids_for_point(
+                point,
+                fine_only=False,
+            ):
+                tile = self.chunk_store.get_chunk(chunk_id)
+                if tile is None:
+                    continue
+                result = tile.probe_point(
+                    point,
+                    include_clearance=include_clearance,
+                )
+                if result is None:
+                    continue
+                is_free, clearance_m = result
+                if is_free:
+                    free_clearances.append(float(clearance_m))
+                else:
+                    occupied = True
+            if free_clearances:
+                return True, max(free_clearances)
+            if occupied:
+                return False, 0.0
+            return None
+        try:
+            bucket = (
+                math.floor(float(point[0]) / self._probe_tile_bucket_size_m),
+                math.floor(float(point[2]) / self._probe_tile_bucket_size_m),
+            )
+        except (IndexError, TypeError, ValueError, ZeroDivisionError):
+            return None
+        free_clearances: list[float] = []
+        occupied = False
+        fine_result = self.probe_fine_point(
+            point,
+            include_clearance=include_clearance,
+        )
+        if fine_result is not None:
+            return fine_result
+        for tile_index in self._probe_tile_index.get(bucket, ()):
+            if tile_index < len(self.fine_tiles):
+                continue
+            tile = self._probe_tiles[tile_index]
+            result = tile.probe_point(
+                point,
+                include_clearance=include_clearance,
+            )
+            if result is None:
+                continue
+            is_free, clearance_m = result
+            if is_free:
+                free_clearances.append(float(clearance_m))
+            else:
+                occupied = True
+        if free_clearances:
+            return True, max(free_clearances)
+        if occupied:
+            return False, 0.0
+        return None
+
+    def fine_tile_for_point(
+        self,
+        point: Sequence[float],
+    ) -> LocalVoxelVolume | None:
+        """Return the persisted fine tile covering a world point, if any."""
+        if self.chunk_store is not None and not self.fine_tiles:
+            for chunk_id in self.chunk_store.chunk_ids_for_point(
+                point,
+                fine_only=True,
+            ):
+                tile = self.chunk_store.get_chunk(chunk_id)
+                if tile is not None and tile.contains_point(point):
+                    return tile
+            return None
+        try:
+            bucket = (
+                math.floor(
+                    float(point[0]) / self._probe_tile_bucket_size_m
+                ),
+                math.floor(
+                    float(point[2]) / self._probe_tile_bucket_size_m
+                ),
+            )
+        except (IndexError, TypeError, ValueError, ZeroDivisionError):
+            return None
+        for tile_index in self._probe_tile_index.get(bucket, ()):
+            if tile_index >= len(self.fine_tiles):
+                continue
+            tile = self.fine_tiles[tile_index]
+            if tile.contains_point(point):
+                return tile
+        return None
+
+    def probe_fine_point(
+        self,
+        point: Sequence[float],
+        *,
+        include_clearance: bool = True,
+    ) -> tuple[bool, float] | None:
+        """Query only persisted fine frontier tiles."""
+        if self.chunk_store is not None and not self.fine_tiles:
+            free_clearances: list[float] = []
+            occupied = False
+            for chunk_id in self.chunk_store.chunk_ids_for_point(
+                point,
+                fine_only=True,
+            ):
+                tile = self.chunk_store.get_chunk(chunk_id)
+                if tile is None:
+                    continue
+                result = tile.probe_point(
+                    point,
+                    include_clearance=include_clearance,
+                )
+                if result is None:
+                    continue
+                if result[0]:
+                    free_clearances.append(float(result[1]))
+                else:
+                    occupied = True
+            if free_clearances:
+                return True, max(free_clearances)
+            if occupied:
+                return False, 0.0
+            return None
+        free_clearances: list[float] = []
+        occupied = False
+        for tile in self.fine_tiles:
+            result = tile.probe_point(
+                point,
+                include_clearance=include_clearance,
+            )
+            if result is None:
+                continue
+            if result[0]:
+                free_clearances.append(float(result[1]))
+            else:
+                occupied = True
+        if free_clearances:
+            return True, max(free_clearances)
+        if occupied:
+            return False, 0.0
+        return None
+
+    def prefetch_for_points(
+        self,
+        points: Sequence[Sequence[float]],
+    ) -> tuple[str, ...]:
+        """Prefetch chunks intersecting a bounded navigation horizon."""
+        if self.chunk_store is None:
+            return ()
+        chunk_ids: list[str] = []
+        for point in points:
+            chunk_ids.extend(self.chunk_store.chunk_ids_for_point(point))
+        return self.chunk_store.prefetch(tuple(dict.fromkeys(chunk_ids)))
+
+    def find_forward_route(
+        self,
+        current: Sequence[float],
+        forward: Sequence[float],
+        *,
+        max_distance_m: float = DEFAULT_VOXEL_LOCAL_REFINEMENT_FORWARD_M,
+        max_nodes: int = DEFAULT_VOXEL_LOCAL_REFINEMENT_MAX_CELLS,
+        min_target_distance_m: float = 4.0,
+        deadline_monotonic_s: float | None = None,
+    ) -> LocalVoxelRoute | None:
+        """Search the fine tile containing the current frontier."""
+        tile = self.fine_tile_for_point(current)
+        if tile is None:
+            return None
+        candidates: list[LocalVoxelRoute] = []
+        for tile in (tile,):
+            route = tile.find_forward_route(
+                current,
+                forward,
+                max_distance_m=max_distance_m,
+                max_nodes=max_nodes,
+                min_target_distance_m=min_target_distance_m,
+                deadline_monotonic_s=deadline_monotonic_s,
+            )
+            if route is not None:
+                candidates.append(route)
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda route: (
+                float(route.forward_progress_m),
+                int(route.branch_free_voxel_count),
+                float(route.distance_m),
+                int(route.target_connectivity),
+            ),
+        )
+
     def corridor_volume_metrics(
         self,
         points: Sequence[Sequence[float]],
     ) -> dict[str, float | int | bool]:
         """Aggregate corridor metrics across all atlas tiles."""
+        if self.chunk_store is not None and not self.tiles:
+            chunk_ids: list[str] = []
+            for point in points:
+                chunk_ids.extend(
+                    self.chunk_store.chunk_ids_for_point(point)
+                )
+            tiles = [
+                tile
+                for chunk_id in dict.fromkeys(chunk_ids)
+                if (tile := self.chunk_store.get_chunk(chunk_id)) is not None
+            ]
+        else:
+            tiles = list(self.tiles)
         metrics = [
             tile.corridor_volume_metrics(
                 tuple(
@@ -371,7 +1134,7 @@ class NavigationVoxelAtlas:
                     if tile.contains_point(point)
                 )
             )
-            for tile in self.tiles
+            for tile in tiles
         ]
         if not metrics:
             return {
@@ -395,8 +1158,8 @@ class NavigationVoxelAtlas:
             for item in metrics
             if int(item["clearance_sample_count"]) > 0
         ]
-        voxel_capacity = sum(tile.voxel_count for tile in self.tiles)
-        surface_cells = sum(len(tile.surface_cells) for tile in self.tiles)
+        voxel_capacity = sum(tile.voxel_count for tile in tiles)
+        surface_cells = sum(len(tile.surface_cells) for tile in tiles)
         return {
             "seed_count": sum(int(item["seed_count"]) for item in metrics),
             "free_cell_count": sum(
@@ -430,18 +1193,17 @@ class NavigationVoxelAtlas:
         lookahead_distance_m: float | None = None,
         lookahead_cells: int = DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_CELLS,
         max_branch_candidates: int = DEFAULT_NAVIGATION_VOXEL_BRANCH_MAX_CANDIDATES,
+        scoring_policy: NavigationVoxelScoringPolicy | None = None,
         diagnostics: Callable[[str, Mapping[str, object]], None] | None = None,
     ) -> NavigationVoxelRoutePlan | None:
         """Select a forward branch with bounded continuation lookahead.
 
-        The graph is intentionally a coarse footprint graph over the filled
-        3D voxel measurements. Progress from the cache entrance is a hard
-        guard against returning to the entrance, but it is not the branch
-        objective. Each immediate branch is explored only to a bounded
-        lookahead and then scored by whether it continues beyond that horizon
-        or terminates in a cul-de-sac. Cross-section metrics remain available
-        on the selected cells but are deliberately not part of this first
-        topology policy.
+        A current cache uses the prepared true-3D graph as the route source.
+        The footprint graph remains available only for readable older caches.
+        The cache entrance is a small no-return boundary, but progress is not
+        otherwise monotonic: a forward heading-aware branch may move to a
+        shallower or deeper region. Each immediate branch is explored only to
+        a bounded lookahead and scored by its future connectivity.
         """
         try:
             cell_size = float(footprint_cell_size)
@@ -455,6 +1217,39 @@ class NavigationVoxelAtlas:
             or not all(math.isfinite(value) for value in position)
         ):
             return None
+        policy = scoring_policy or NavigationVoxelScoringPolicy()
+        if self.has_prepared_3d_graph:
+            return self._plan_prepared_3d_graph_route(
+                component_cells=component_cells,
+                position=position,
+                footprint_cell_size=cell_size,
+                preferred_direction=preferred_direction,
+                max_expansions=max_expansions,
+                max_route_cells=max_route_cells,
+                backtrack_tolerance_m=backtrack_tolerance_m,
+                min_progress_gain_m=min_progress_gain_m,
+                lookahead_distance_m=lookahead_distance_m,
+                lookahead_cells=lookahead_cells,
+                max_branch_candidates=max_branch_candidates,
+                scoring_policy=policy,
+                diagnostics=diagnostics,
+            )
+        if self.has_prepared_graph:
+            return self._plan_prepared_graph_route(
+                component_cells=component_cells,
+                position=position,
+                footprint_cell_size=cell_size,
+                preferred_direction=preferred_direction,
+                max_expansions=max_expansions,
+                max_route_cells=max_route_cells,
+                backtrack_tolerance_m=backtrack_tolerance_m,
+                min_progress_gain_m=min_progress_gain_m,
+                lookahead_distance_m=lookahead_distance_m,
+                lookahead_cells=lookahead_cells,
+                max_branch_candidates=max_branch_candidates,
+                scoring_policy=policy,
+                diagnostics=diagnostics,
+            )
         component = {
             (int(cell[0]), int(cell[1]))
             for cell in component_cells
@@ -574,6 +1369,7 @@ class NavigationVoxelAtlas:
                 lookahead_distance_m=lookahead_distance,
                 lookahead_cells=lookahead_cell_limit,
                 expansion_budget=branch_budget,
+                scoring_policy=policy,
             )
             if evaluation is not None:
                 evaluations.append(evaluation)
@@ -700,27 +1496,781 @@ class NavigationVoxelAtlas:
             replan_at_lookahead=True,
             branch_score=selected.score,
             branch_candidates=ordered_scores,
+            scoring_policy=policy.diagnostic_payload(),
+        )
+
+    def _plan_prepared_3d_graph_route(
+        self,
+        *,
+        component_cells: Sequence[FootprintCell]
+        | set[FootprintCell]
+        | frozenset[FootprintCell],
+        position: tuple[float, float, float],
+        footprint_cell_size: float,
+        preferred_direction: Sequence[float] | None,
+        max_expansions: int,
+        max_route_cells: int,
+        backtrack_tolerance_m: float | None,
+        min_progress_gain_m: float | None,
+        lookahead_distance_m: float | None,
+        lookahead_cells: int,
+        max_branch_candidates: int,
+        scoring_policy: NavigationVoxelScoringPolicy,
+        diagnostics: Callable[[str, Mapping[str, object]], None] | None,
+    ) -> NavigationVoxelRoutePlan | None:
+        """Search independent X/Y/Z nodes with bounded heading-aware states."""
+        graph = self.prepared_3d_graph
+        if graph is None:
+            return None
+        # True-3D graph nodes use the graph's native sparse voxel coordinates.
+        # The caller's component_cells belong to the coarse centerline grid and
+        # must never be compared directly with node.footprint_cell.
+        del component_cells
+        graph_keys = set(graph.nodes)
+        if len(graph_keys) < 2:
+            _record_voxel_route_diagnostic(
+                diagnostics,
+                "voxel_route_rejected",
+                {
+                    "reason": "true_3d_graph_too_small",
+                    "prepared_graph": True,
+                    "true_3d": True,
+                    "graph_node_count": len(graph_keys),
+                },
+            )
+            return None
+
+        # Select the nearest node from the routable subset first.  A sparse
+        # cache can contain an isolated sample closer to the camera than the
+        # actual prepared route; anchoring the component to that sample would
+        # make a valid route appear unavailable at startup.
+        routable_graph_keys = {
+            key
+            for key in graph_keys
+            if any(
+                edge.line_of_sight and edge.target in graph_keys
+                for edge in graph.outgoing(key)
+            )
+        }
+        nearest_key = _nearest_prepared_3d_graph_key(
+            routable_graph_keys or graph_keys,
+            graph.nodes,
+            position=position,
+        )
+        if nearest_key is None:
+            return None
+        graph_component_id = int(graph.nodes[nearest_key].component_id)
+        graph_keys = {
+            key
+            for key, node in graph.nodes.items()
+            if int(node.component_id) == graph_component_id
+        }
+        # Keep the search in the graph-native topological component.  The
+        # nearest routable node above normally is already in this set, but
+        # recomputing it here makes the invariant explicit after filtering.
+        route_start_keys = {
+            key
+            for key in graph_keys
+            if any(
+                edge.line_of_sight and edge.target in graph_keys
+                for edge in graph.outgoing(key)
+            )
+        }
+        current_key = _nearest_prepared_3d_graph_key(
+            route_start_keys or graph_keys,
+            graph.nodes,
+            position=position,
+        )
+        if current_key is None:
+            return None
+        current_node = graph.nodes[current_key]
+        start_progress = float(current_node.progress_m)
+        graph_scale = max(
+            float(footprint_cell_size),
+            float(self.voxel_size_m),
+            *(float(value) for value in graph.grid_size_m),
+        )
+        tolerance, entrance_guard_source = (
+            _true_3d_entrance_guard_tolerance(
+                footprint_cell_size=footprint_cell_size,
+                voxel_size_m=self.voxel_size_m,
+                graph_grid_size_m=graph.grid_size_m,
+                backtrack_tolerance_m=backtrack_tolerance_m,
+            )
+        )
+        # ``min_progress_gain_m`` remains part of the shared planner API for
+        # older footprint graphs. True-3D routing uses heading and topology;
+        # it must not turn centerline depth into a monotonic altitude/depth
+        # constraint.
+        minimum_progress = min(
+            float(graph.nodes[key].progress_m) for key in graph_keys
+        )
+        entrance_band = minimum_progress + tolerance
+        # Keep the whole initial entrance band out of later route prefixes,
+        # including when planning starts inside that band. Otherwise a route
+        # can leave the entrance, turn through a vertical cross-section, and
+        # legally re-enter a different voxel at the same entrance depth.
+        entrance_progress_floor = entrance_band
+        heading = _normalised_graph_direction(preferred_direction)
+        requested_lookahead = (
+            DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_DISTANCE_M
+            if lookahead_distance_m is None
+            else float(lookahead_distance_m)
+        )
+        if not math.isfinite(requested_lookahead) or requested_lookahead <= 0.0:
+            requested_lookahead = DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_DISTANCE_M
+        lookahead_distance = max(graph_scale * 2.0, requested_lookahead)
+        expansion_limit = max(1, int(max_expansions))
+        branch_edges: list[
+            tuple[NavigationVoxel3DEdge, float]
+        ] = []
+        outgoing_edges = graph.outgoing(current_key)
+        rejected_nontraversable = 0
+        rejected_component = 0
+        rejected_entrance_floor = 0
+        rejected_backward = 0
+        for edge in outgoing_edges:
+            if not edge.line_of_sight or edge.target not in graph_keys:
+                rejected_nontraversable += 1
+                continue
+            if not _true_3d_edge_stays_in_component(
+                graph,
+                edge,
+                component_id=graph_component_id,
+            ):
+                rejected_component += 1
+                continue
+            target_node = graph.nodes[edge.target]
+            if target_node.progress_m < entrance_progress_floor - 1e-6:
+                rejected_entrance_floor += 1
+                continue
+            alignment = (
+                1.0
+                if heading is None
+                else _graph_dot(heading, edge.direction)
+            )
+            # In 3-D, forward/reverse is the signed dot product. A cross
+            # product is perpendicular to the travel vector and cannot encode
+            # whether a candidate points back toward the entrance.
+            if heading is not None and alignment < 0.0:
+                rejected_backward += 1
+                continue
+            branch_edges.append((edge, alignment))
+
+        edge_filter = {
+            "outgoing_edge_count": len(outgoing_edges),
+            "rejected_nontraversable_edges": int(rejected_nontraversable),
+            "rejected_component_edges": int(rejected_component),
+            "rejected_entrance_floor_edges": int(rejected_entrance_floor),
+            "rejected_backward_edges": int(rejected_backward),
+            "accepted_forward_edges": len(branch_edges),
+        }
+        _record_voxel_route_diagnostic(
+            diagnostics,
+            "voxel_route_edge_filter",
+            {
+                "prepared_graph": True,
+                "true_3d": True,
+                "start_key": [int(value) for value in current_key],
+                "start_cell": [
+                    int(current_node.footprint_cell[0]),
+                    int(current_node.footprint_cell[1]),
+                ],
+                "start_progress_m": start_progress,
+                "graph_component_id": graph_component_id,
+                "graph_native_component_filter": True,
+                "minimum_cached_progress_m": float(minimum_progress),
+                "entrance_progress_floor_m": float(
+                    entrance_progress_floor
+                ),
+                "entrance_guard_tolerance_m": float(tolerance),
+                "entrance_guard_source": entrance_guard_source,
+                "heading": _graph_direction_payload(heading),
+                "scoring_policy": scoring_policy.diagnostic_payload(),
+                **edge_filter,
+            },
+        )
+
+        branch_edges.sort(
+            key=lambda item: (
+                float(scoring_policy.connectivity_weight)
+                * float(graph.nodes[item[0].target].connectivity_score),
+                float(scoring_policy.smooth_forward_weight)
+                * float(item[1]),
+                float(scoring_policy.volume_weight)
+                * _navigation_volume_score(
+                    float(graph.nodes[item[0].target].available_volume_m3)
+                ),
+                float(graph.nodes[item[0].target].progress_m),
+                -float(item[0].distance_m),
+            ),
+            reverse=True,
+        )
+        if not branch_edges:
+            _record_voxel_route_diagnostic(
+                diagnostics,
+                "voxel_route_rejected",
+                {
+                    "reason": "no_forward_continuation",
+                    "prepared_graph": True,
+                    "true_3d": True,
+                    "start_key": [int(value) for value in current_key],
+                    "start_cell": [
+                        int(current_node.footprint_cell[0]),
+                        int(current_node.footprint_cell[1]),
+                    ],
+                    "start_progress_m": start_progress,
+                    "graph_component_id": graph_component_id,
+                    "entrance_progress_floor_m": float(
+                        entrance_progress_floor
+                    ),
+                    "entrance_guard_tolerance_m": float(tolerance),
+                    "entrance_guard_source": entrance_guard_source,
+                    "heading": _graph_direction_payload(heading),
+                    **edge_filter,
+                },
+            )
+            return None
+
+        branch_budget = max(
+            8,
+            expansion_limit // max(1, len(branch_edges)),
+        )
+        evaluations: list[_NavigationVoxel3DBranchEvaluation] = []
+        for edge, alignment in branch_edges:
+            evaluation = _evaluate_prepared_3d_graph_branch(
+                graph=graph,
+                graph_keys=graph_keys,
+                graph_component_id=graph_component_id,
+                current_key=current_key,
+                first_edge=edge,
+                first_alignment=alignment,
+                entrance_progress_floor_m=entrance_progress_floor,
+                lookahead_distance_m=lookahead_distance,
+                lookahead_cells=max(4, int(lookahead_cells)),
+                expansion_budget=branch_budget,
+                graph_scale_m=graph_scale,
+                scoring_policy=scoring_policy,
+            )
+            if evaluation is not None:
+                evaluations.append(evaluation)
+
+        if not evaluations:
+            _record_voxel_route_diagnostic(
+                diagnostics,
+                "voxel_route_rejected",
+                {
+                    "reason": "true_3d_graph_search_empty",
+                    "prepared_graph": True,
+                    "true_3d": True,
+                    "start_key": [int(value) for value in current_key],
+                    "entrance_progress_floor_m": float(
+                        entrance_progress_floor
+                    ),
+                    "entrance_guard_tolerance_m": float(tolerance),
+                    "entrance_guard_source": entrance_guard_source,
+                    "heading": _graph_direction_payload(heading),
+                    "branch_count": len(branch_edges),
+                    **edge_filter,
+                },
+            )
+            return None
+
+        continuing = [
+            item
+            for item in evaluations
+            if not item.score.dead_end
+            and (
+                item.score.continuation_distance_m > 0.0
+                or item.score.unknown_boundary
+            )
+        ]
+        terminal_candidates = [
+            item
+            for item in evaluations
+            if item.score.target_is_terminal
+            and not item.score.unknown_boundary
+        ]
+        if continuing:
+            selected = max(continuing, key=lambda item: item.sort_key)
+            terminal_reached = False
+            selection_reason = "prepared_true_3d_graph"
+        elif terminal_candidates:
+            selected = max(
+                terminal_candidates,
+                key=lambda item: scoring_policy.branch_sort_key(item.score),
+            )
+            terminal_reached = True
+            selection_reason = "cave_terminal"
+        else:
+            _record_voxel_route_diagnostic(
+                diagnostics,
+                "voxel_route_rejected",
+                {
+                    "reason": "no_non_dead_end_forward_branch",
+                    "prepared_graph": True,
+                    "true_3d": True,
+                    "start_key": [int(value) for value in current_key],
+                    "entrance_progress_floor_m": float(
+                        entrance_progress_floor
+                    ),
+                    "entrance_guard_tolerance_m": float(tolerance),
+                    "entrance_guard_source": entrance_guard_source,
+                    "heading": _graph_direction_payload(heading),
+                    "scoring_policy": scoring_policy.diagnostic_payload(),
+                    "branch_count": len(branch_edges),
+                    **edge_filter,
+                    "dead_end_rejections": sum(
+                        1 for item in evaluations if item.score.dead_end
+                    ),
+                    "branch_candidates": [
+                        item.score.diagnostic_payload()
+                        for item in sorted(
+                            evaluations,
+                            key=lambda item: item.sort_key,
+                            reverse=True,
+                        )[: max(1, int(max_branch_candidates))]
+                    ],
+                },
+            )
+            return None
+
+        path_keys = _bound_voxel_route_keys(
+            _expand_true_3d_path(selected.path, graph.nodes),
+            max_route_cells=max_route_cells,
+        )
+        graph_world_points = tuple(graph.nodes[key].center for key in path_keys)
+        # The nearest graph node is a routing anchor, not necessarily the
+        # camera's current position.  Replans can begin after the camera has
+        # moved past that anchor; retaining it as the first waypoint would
+        # make the new route point backward.  Keep the actual position as the
+        # route origin and omit only an anchor that lies behind the requested
+        # travel direction.  Forward anchors remain in the route so their
+        # collision-safe centerline is preserved.
+        world_points_list = [position]
+        first_graph_point = graph_world_points[0]
+        first_offset = tuple(
+            float(first_graph_point[index]) - float(position[index])
+            for index in range(3)
+        )
+        first_is_current = sum(value * value for value in first_offset) <= 1e-12
+        first_is_backward = bool(
+            heading is not None
+            and not first_is_current
+            and _graph_dot(first_offset, heading) < -1e-6
+        )
+        if not first_is_current and not first_is_backward:
+            world_points_list.append(first_graph_point)
+        world_points_list.extend(graph_world_points[1:])
+        world_points = tuple(world_points_list)
+        if len(world_points) < 2:
+            return None
+        route_cells = _project_3d_route_cells(path_keys, graph.nodes)
+        if not route_cells:
+            route_cells = (current_node.footprint_cell,)
+        goal_key = selected.score.target_key or selected.path[-1]
+        goal_node = graph.nodes[goal_key]
+        route_volume = sum(
+            float(graph.nodes[key].available_volume_m3)
+            for key in path_keys
+            if key in graph.nodes
+        )
+        ordered_scores = tuple(
+            item.score
+            for item in sorted(
+                evaluations,
+                key=lambda item: item.sort_key,
+                reverse=True,
+            )[: max(1, int(max_branch_candidates))]
+        )
+        _record_voxel_route_diagnostic(
+            diagnostics,
+            "voxel_prepared_3d_graph_selection",
+            {
+                "prepared_graph": graph.diagnostic_payload(),
+                "selection_reason": selection_reason,
+                "true_3d": True,
+                "start_key": [int(value) for value in current_key],
+                "goal_key": [int(value) for value in goal_key],
+                "start_cell": [
+                    int(current_node.footprint_cell[0]),
+                    int(current_node.footprint_cell[1]),
+                ],
+                "goal_cell": [
+                    int(goal_node.footprint_cell[0]),
+                    int(goal_node.footprint_cell[1]),
+                ],
+                "heading": _graph_direction_payload(heading),
+                "scoring_policy": scoring_policy.diagnostic_payload(),
+                "entrance_progress_floor_m": float(entrance_progress_floor),
+                "entrance_guard_tolerance_m": float(tolerance),
+                "entrance_guard_source": entrance_guard_source,
+                "progress_guard_mode": "entrance_band_only",
+                "branch_count": len(branch_edges),
+                **edge_filter,
+                "branch_candidates": [
+                    item.diagnostic_payload() for item in ordered_scores
+                ],
+                "dead_end_rejections": sum(
+                    1 for item in evaluations if item.score.dead_end
+                ),
+            },
+        )
+        return NavigationVoxelRoutePlan(
+            cells=route_cells,
+            start_cell=current_node.footprint_cell,
+            goal_cell=goal_node.footprint_cell,
+            start_progress_m=start_progress,
+            goal_progress_m=float(goal_node.progress_m),
+            goal_volume_m3=float(goal_node.available_volume_m3),
+            route_volume_m3=float(route_volume),
+            goal_clearance_m=float(goal_node.mean_clearance_m),
+            expanded_count=sum(
+                int(item.score.expanded_count) for item in evaluations
+            ),
+            selection_reason=selection_reason,
+            lookahead_distance_m=float(lookahead_distance),
+            replan_at_lookahead=not terminal_reached,
+            branch_score=selected.score,
+            branch_candidates=ordered_scores,
+            scoring_policy=scoring_policy.diagnostic_payload(),
+            prepared_graph=True,
+            heading_state_count=sum(
+                int(item.score.heading_state_count) for item in evaluations
+            ),
+            connectivity_score=float(selected.score.connectivity_score),
+            terminal_reached=terminal_reached,
+            unknown_boundary_reached=bool(selected.score.unknown_boundary),
+            dead_end_rejections=sum(
+                1 for item in evaluations if item.score.dead_end
+            ),
+            world_points=world_points,
+            three_d_graph=True,
+            entrance_progress_floor_m=float(entrance_progress_floor),
+            entrance_guard_tolerance_m=float(tolerance),
+            entrance_guard_source=entrance_guard_source,
+        )
+
+    def _plan_prepared_graph_route(
+        self,
+        *,
+        component_cells: Sequence[FootprintCell]
+        | set[FootprintCell]
+        | frozenset[FootprintCell],
+        position: tuple[float, float, float],
+        footprint_cell_size: float,
+        preferred_direction: Sequence[float] | None,
+        max_expansions: int,
+        max_route_cells: int,
+        backtrack_tolerance_m: float | None,
+        min_progress_gain_m: float | None,
+        lookahead_distance_m: float | None,
+        lookahead_cells: int,
+        max_branch_candidates: int,
+        scoring_policy: NavigationVoxelScoringPolicy,
+        diagnostics: Callable[[str, Mapping[str, object]], None] | None,
+    ) -> NavigationVoxelRoutePlan | None:
+        """Search the persisted graph with position-and-heading states."""
+        graph = self.prepared_graph
+        if graph is None:
+            return None
+        component = {
+            (int(cell[0]), int(cell[1]))
+            for cell in component_cells
+            if len(cell) == 2
+        }
+        graph_cells = {
+            cell
+            for cell in graph.nodes
+            if cell in self.cell_metrics
+            and cell in component
+            and int(self.cell_metrics[cell].free_cell_count) > 0
+        }
+        if len(graph_cells) < 2:
+            return None
+        current_cell = _nearest_prepared_graph_cell(
+            graph_cells,
+            graph.nodes,
+            position=position,
+            cell_size=footprint_cell_size,
+        )
+        if current_cell is None:
+            return None
+        current_metric = self.cell_metrics[current_cell]
+        start_progress = float(current_metric.progress_m)
+        tolerance = (
+            max(float(footprint_cell_size), float(self.voxel_size_m))
+            if backtrack_tolerance_m is None
+            else max(0.0, float(backtrack_tolerance_m))
+        )
+        progress_gain = (
+            max(float(footprint_cell_size) * 0.5, float(self.voxel_size_m))
+            if min_progress_gain_m is None
+            else max(0.0, float(min_progress_gain_m))
+        )
+        heading = _normalised_graph_direction(preferred_direction)
+        requested_lookahead = (
+            DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_DISTANCE_M
+            if lookahead_distance_m is None
+            else float(lookahead_distance_m)
+        )
+        if not math.isfinite(requested_lookahead) or requested_lookahead <= 0.0:
+            requested_lookahead = DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_DISTANCE_M
+        lookahead_distance = max(
+            float(footprint_cell_size) * 4.0,
+            requested_lookahead,
+        )
+        expansion_limit = max(1, int(max_expansions))
+        branch_edges: list[tuple[NavigationVoxelGraphEdge, float]] = []
+        rejected_backward = 0
+        for edge in graph.outgoing(current_cell):
+            if not edge.line_of_sight or edge.target not in graph_cells:
+                continue
+            target_progress = float(self.cell_metrics[edge.target].progress_m)
+            if target_progress < start_progress - tolerance:
+                continue
+            alignment = (
+                1.0
+                if heading is None
+                else _graph_dot(heading, edge.direction)
+            )
+            if heading is not None and alignment < 0.0:
+                rejected_backward += 1
+                continue
+            if (
+                edge.target != current_cell
+                and target_progress < start_progress + progress_gain * 0.10
+                and len(graph.outgoing(current_cell)) > 1
+            ):
+                continue
+            branch_edges.append((edge, alignment))
+
+        if not branch_edges:
+            _record_voxel_route_diagnostic(
+                diagnostics,
+                "voxel_route_rejected",
+                {
+                    "reason": "no_forward_continuation",
+                    "prepared_graph": True,
+                    "start_cell": [int(current_cell[0]), int(current_cell[1])],
+                    "start_progress_m": float(start_progress),
+                    "heading": _graph_direction_payload(heading),
+                    "rejected_backward_edges": int(rejected_backward),
+                },
+            )
+            return None
+
+        branch_budget = max(
+            4,
+            expansion_limit // max(1, len(branch_edges)),
+        )
+        evaluations: list[_NavigationVoxelBranchEvaluation] = []
+        for edge, alignment in branch_edges:
+            evaluation = _evaluate_prepared_graph_branch(
+                graph=graph,
+                metrics=self.cell_metrics,
+                current_cell=current_cell,
+                first_edge=edge,
+                first_alignment=alignment,
+                start_progress=start_progress,
+                tolerance=tolerance,
+                progress_gain=progress_gain,
+                lookahead_distance_m=lookahead_distance,
+                lookahead_cells=max(4, int(lookahead_cells)),
+                expansion_budget=branch_budget,
+                cell_size_m=footprint_cell_size,
+                scoring_policy=scoring_policy,
+            )
+            if evaluation is not None:
+                evaluations.append(evaluation)
+
+        if not evaluations:
+            _record_voxel_route_diagnostic(
+                diagnostics,
+                "voxel_route_rejected",
+                {
+                    "reason": "prepared_graph_search_empty",
+                    "prepared_graph": True,
+                    "start_cell": [int(current_cell[0]), int(current_cell[1])],
+                    "heading": _graph_direction_payload(heading),
+                    "branch_count": len(branch_edges),
+                    "scoring_policy": scoring_policy.diagnostic_payload(),
+                },
+            )
+            return None
+
+        continuing = [
+            item
+            for item in evaluations
+            if not item.score.dead_end
+            and (
+                item.score.continuation_distance_m > 0.0
+                or item.score.unknown_boundary
+            )
+        ]
+        terminal_candidates = [
+            item
+            for item in evaluations
+            if item.score.target_is_terminal
+            and not item.score.unknown_boundary
+        ]
+        if continuing:
+            selected = max(continuing, key=lambda item: item.sort_key)
+            terminal_reached = False
+            selection_reason = "prepared_forward_graph"
+        elif terminal_candidates:
+            selected = max(
+                terminal_candidates,
+                key=lambda item: scoring_policy.branch_sort_key(item.score),
+            )
+            terminal_reached = True
+            selection_reason = "cave_terminal"
+        else:
+            _record_voxel_route_diagnostic(
+                diagnostics,
+                "voxel_route_rejected",
+                {
+                    "reason": "no_non_dead_end_forward_branch",
+                    "prepared_graph": True,
+                    "start_cell": [int(current_cell[0]), int(current_cell[1])],
+                    "heading": _graph_direction_payload(heading),
+                    "scoring_policy": scoring_policy.diagnostic_payload(),
+                    "branch_count": len(branch_edges),
+                    "dead_end_rejections": sum(
+                        1 for item in evaluations if item.score.dead_end
+                    ),
+                    "branch_candidates": [
+                        item.score.diagnostic_payload()
+                        for item in sorted(
+                            evaluations,
+                            key=lambda item: item.sort_key,
+                            reverse=True,
+                        )[: max(1, int(max_branch_candidates))]
+                    ],
+                },
+            )
+            return None
+
+        path_tuple = _bound_voxel_route_cells(
+            selected.path,
+            max_route_cells=max_route_cells,
+        )
+        if len(path_tuple) < 2:
+            return None
+        goal_cell = selected.score.target_cell
+        goal_metric = self.cell_metrics[goal_cell]
+        route_volume = sum(
+            float(self.cell_metrics[cell].available_volume_m3)
+            for cell in path_tuple
+            if cell in self.cell_metrics
+        )
+        ordered_scores = tuple(
+            item.score
+            for item in sorted(
+                evaluations,
+                key=lambda item: item.sort_key,
+                reverse=True,
+            )[: max(1, int(max_branch_candidates))]
+        )
+        _record_voxel_route_diagnostic(
+            diagnostics,
+            "voxel_prepared_graph_selection",
+            {
+                "prepared_graph": graph.diagnostic_payload(),
+                "selection_reason": selection_reason,
+                "start_cell": [int(current_cell[0]), int(current_cell[1])],
+                "goal_cell": [int(goal_cell[0]), int(goal_cell[1])],
+                "heading": _graph_direction_payload(heading),
+                "scoring_policy": scoring_policy.diagnostic_payload(),
+                "branch_count": len(branch_edges),
+                "branch_candidates": [
+                    item.diagnostic_payload()
+                    for item in ordered_scores
+                ],
+                "dead_end_rejections": sum(
+                    1 for item in evaluations if item.score.dead_end
+                ),
+            },
+        )
+        return NavigationVoxelRoutePlan(
+            cells=path_tuple,
+            start_cell=current_cell,
+            goal_cell=goal_cell,
+            start_progress_m=start_progress,
+            goal_progress_m=float(goal_metric.progress_m),
+            goal_volume_m3=float(goal_metric.available_volume_m3),
+            route_volume_m3=float(route_volume),
+            goal_clearance_m=float(goal_metric.mean_clearance_m),
+            expanded_count=sum(
+                int(item.score.expanded_count) for item in evaluations
+            ),
+            selection_reason=selection_reason,
+            lookahead_distance_m=float(lookahead_distance),
+            replan_at_lookahead=not terminal_reached,
+            branch_score=selected.score,
+            branch_candidates=ordered_scores,
+            scoring_policy=scoring_policy.diagnostic_payload(),
+            prepared_graph=True,
+            heading_state_count=sum(
+                int(item.score.heading_state_count) for item in evaluations
+            ),
+            connectivity_score=float(selected.score.connectivity_score),
+            terminal_reached=terminal_reached,
+            unknown_boundary_reached=bool(selected.score.unknown_boundary),
+            dead_end_rejections=sum(
+                1 for item in evaluations if item.score.dead_end
+            ),
         )
 
     def diagnostic_payload(self) -> dict[str, object]:
         """Return bounded atlas diagnostics for the Guided Dive blackbox."""
+        chunk_store_stats = (
+            None if self.chunk_store is None else self.chunk_store.stats()
+        )
         tile_sizes = [float(tile.voxel_size_m) for tile in self.tiles]
+        fine_tile_sizes = [float(tile.voxel_size_m) for tile in self.fine_tiles]
+        if self.chunk_store is not None:
+            if not tile_sizes:
+                tile_sizes = [
+                    float(descriptor.voxel_size_m)
+                    for descriptor in self.chunk_store.descriptors(
+                        fine_only=False,
+                    )
+                ]
+            if not fine_tile_sizes:
+                fine_tile_sizes = [
+                    float(descriptor.voxel_size_m)
+                    for descriptor in self.chunk_store.descriptors(
+                        fine_only=True,
+                    )
+                ]
+        surface_occupied_volume_m3 = sum(
+            len(tile.surface_cells) * tile.voxel_size_m ** 3
+            for tile in self.tiles
+        )
+        if self.chunk_store is not None and not self.tiles:
+            surface_occupied_volume_m3 = sum(
+                descriptor.surface_cell_count * descriptor.voxel_size_m ** 3
+                for descriptor in self.chunk_store.descriptors(
+                    fine_only=False,
+                )
+            )
         return {
             "model_kind": NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            "cache_quality_profile": "advanced_graph_native_v1",
             "coverage_scope": self.coverage_scope,
-            "tile_count": len(self.tiles),
+            "tile_count": int(self.tile_count),
+            "fine_tile_count": int(self.fine_tile_count),
             "voxel_size_m": float(self.voxel_size_m),
             "voxel_size_max_m": max(tile_sizes, default=0.0),
+            "fine_voxel_size_m": min(fine_tile_sizes, default=0.0),
+            "fine_voxel_size_max_m": max(fine_tile_sizes, default=0.0),
             "bounds_min": [float(value) for value in self.bounds_min],
             "bounds_max": [float(value) for value in self.bounds_max],
             "voxel_count": int(self.voxel_count),
+            "fine_voxel_count": int(self.fine_voxel_count),
             "surface_cells": len(self.surface_cells),
-            "surface_occupied_volume_m3": float(
-                sum(
-                    len(tile.surface_cells) * tile.voxel_size_m ** 3
-                    for tile in self.tiles
-                )
-            ),
+            "surface_occupied_volume_m3": float(surface_occupied_volume_m3),
             "triangle_count": int(sum(tile.triangle_count for tile in self.tiles)),
             "surface_sample_count": int(
                 sum(tile.surface_sample_count for tile in self.tiles)
@@ -728,7 +2278,28 @@ class NavigationVoxelAtlas:
             "sampling_truncated": any(
                 bool(tile.sampling_truncated) for tile in self.tiles
             ),
-            "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
+            "navigation_graph_method": (
+                NAVIGATION_VOXEL_GRAPH_METHOD
+                if self.has_prepared_3d_graph
+                else (
+                    self.prepared_graph.method
+                    if self.prepared_graph is not None
+                    else NAVIGATION_VOXEL_GRAPH_METHOD
+                )
+            ),
+            "graph_routing_authority": (
+                "prepared_true_3d_voxel_graph"
+                if self.has_prepared_3d_graph
+                else "prepared_footprint_graph"
+            ),
+            "graph_resolution_m": (
+                None
+                if self.prepared_3d_graph is None
+                else [
+                    float(value)
+                    for value in self.prepared_3d_graph.grid_size_m
+                ]
+            ),
             "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
             "branch_lookahead_default_distance_m": float(
                 DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_DISTANCE_M
@@ -737,8 +2308,25 @@ class NavigationVoxelAtlas:
                 DEFAULT_NAVIGATION_VOXEL_LOOKAHEAD_CELLS
             ),
             "navigation_cell_count": int(self.navigation_cell_count),
+            "navigation_3d_cell_count": int(self.navigation_3d_cell_count),
             "filled_free_cell_count": int(self.filled_free_cell_count),
             "max_progress_m": float(self.max_progress_m),
+            "prepared_graph": (
+                None
+                if self.prepared_graph is None
+                else self.prepared_graph.diagnostic_payload()
+            ),
+            "prepared_3d_graph": (
+                None
+                if self.prepared_3d_graph is None
+                else self.prepared_3d_graph.diagnostic_payload()
+            ),
+            "prepared_3d_motion_geometry_safe": bool(
+                self.prepared_3d_motion_geometry_safe
+            ),
+            "chunk_store": (
+                chunk_store_stats
+            ),
         }
 
 
@@ -763,6 +2351,1261 @@ def _direction_payload(
     return [float(direction[0]), float(direction[1])]
 
 
+def _graph_direction_payload(
+    direction: tuple[float, float, float] | None,
+) -> list[float] | None:
+    if direction is None:
+        return None
+    return [float(value) for value in direction]
+
+
+def _true_3d_entrance_guard_tolerance(
+    *,
+    footprint_cell_size: float,
+    voxel_size_m: float,
+    graph_grid_size_m: tuple[float, float, float],
+    backtrack_tolerance_m: float | None,
+) -> tuple[float, str]:
+    """Return a no-return tolerance without coupling it to vertical coarsening.
+
+    The prepared true-3D graph may coarsen Y much more aggressively than X/Z
+    to stay within the consumer-hardware node budget. That vertical spacing is
+    not a meaningful horizontal entrance boundary. The coarse centerline
+    footprint is also not used: it can be ten metres wide while the graph
+    itself remains at one-metre resolution. The default guard therefore uses
+    only the raw voxel and horizontal graph scales. Callers may still provide
+    an explicit tolerance for a map-specific entrance.
+    """
+    del footprint_cell_size
+    if backtrack_tolerance_m is not None:
+        return max(0.0, float(backtrack_tolerance_m)), (
+            "explicit_backtrack_tolerance"
+        )
+    horizontal_graph_scale = max(
+        0.0,
+        float(graph_grid_size_m[0]),
+        float(graph_grid_size_m[2]),
+    )
+    return max(
+        1e-6,
+        float(voxel_size_m),
+        horizontal_graph_scale,
+    ), "horizontal_voxel_spacing"
+
+
+def _normalised_graph_direction(
+    direction: Sequence[float] | None,
+) -> tuple[float, float, float] | None:
+    if direction is None:
+        return None
+    try:
+        if len(direction) != 3:
+            return None
+        values = tuple(float(value) for value in direction)
+    except (TypeError, ValueError):
+        return None
+    norm = math.sqrt(sum(value * value for value in values))
+    if not math.isfinite(norm) or norm <= 1e-9:
+        return None
+    return tuple(value / norm for value in values)  # type: ignore[return-value]
+
+
+def _graph_dot(
+    first: Sequence[float],
+    second: Sequence[float],
+) -> float:
+    return sum(float(first[index]) * float(second[index]) for index in range(3))
+
+
+def _nearest_prepared_3d_graph_key(
+    graph_keys: set[VoxelGraphKey],
+    nodes: Mapping[VoxelGraphKey, object],
+    *,
+    position: tuple[float, float, float],
+) -> VoxelGraphKey | None:
+    """Find the closest prepared 3D node without collapsing its height."""
+    if not graph_keys:
+        return None
+    return min(
+        graph_keys,
+        key=lambda key: (
+            sum(
+                (
+                    float(nodes[key].center[axis]) - float(position[axis])
+                )
+                ** 2
+                for axis in range(3)
+            ),
+            key,
+        ),
+    )
+
+
+def _prepared_3d_graph_edge_cost(
+    edge: NavigationVoxel3DEdge,
+    *,
+    target_node: object,
+    alignment: float,
+    graph_scale_m: float,
+    scoring_policy: NavigationVoxelScoringPolicy,
+) -> float:
+    """Cost one prepared true-3D edge using the active request policy."""
+    scale = max(1e-6, float(graph_scale_m))
+    turn_penalty = (
+        max(0.0, 1.0 - float(alignment))
+        * scale
+        * float(scoring_policy.turn_weight)
+    )
+    connectivity_penalty = (
+        scale
+        * float(scoring_policy.connectivity_weight)
+        / (1.0 + max(0.0, float(target_node.connectivity_score)))
+    )
+    clearance_penalty = (
+        scale
+        * float(scoring_policy.clearance_weight)
+        / (1.0 + max(0.0, float(edge.min_clearance_m)))
+    )
+    volume_penalty = (
+        scale
+        * float(scoring_policy.volume_weight)
+        / (
+            1.0
+            + _navigation_volume_score(
+                float(target_node.available_volume_m3)
+            )
+        )
+    )
+    return (
+        float(edge.distance_m)
+        + turn_penalty
+        + connectivity_penalty
+        + clearance_penalty
+        + volume_penalty
+    )
+
+
+def _evaluate_prepared_3d_graph_branch(
+    *,
+    graph: NavigationVoxel3DGraph,
+    graph_keys: set[VoxelGraphKey],
+    graph_component_id: int,
+    current_key: VoxelGraphKey,
+    first_edge: NavigationVoxel3DEdge,
+    first_alignment: float,
+    entrance_progress_floor_m: float,
+    lookahead_distance_m: float,
+    lookahead_cells: int,
+    expansion_budget: int,
+    graph_scale_m: float,
+    scoring_policy: NavigationVoxelScoringPolicy,
+) -> _NavigationVoxel3DBranchEvaluation | None:
+    """Explore a bounded true-3D branch and retain its best partial prefix."""
+    first_node = graph.nodes.get(first_edge.target)
+    if first_node is None:
+        return None
+    initial_cost = _prepared_3d_graph_edge_cost(
+        first_edge,
+        target_node=first_node,
+        alignment=first_alignment,
+        graph_scale_m=graph_scale_m,
+        scoring_policy=scoring_policy,
+    )
+    initial_path = (current_key, first_edge.target)
+    queue: list[
+        tuple[
+            float,
+            int,
+            VoxelGraphKey,
+            VoxelGraphKey,
+            float,
+            int,
+            tuple[VoxelGraphKey, ...],
+            float,
+        ]
+    ] = [
+        (
+            initial_cost,
+            0,
+            first_edge.target,
+            current_key,
+            float(first_edge.distance_m),
+            1,
+            initial_path,
+            float(first_node.connectivity_score),
+        )
+    ]
+    best_cost: dict[tuple[VoxelGraphKey, VoxelGraphKey], float] = {
+        (first_edge.target, current_key): initial_cost
+    }
+    frontier: list[tuple[object, ...]] = []
+    terminal: list[tuple[object, ...]] = []
+    best_partial: tuple[object, ...] | None = None
+    entrance_floor_rejections = 0
+    expanded = 0
+    state_counter = 1
+    while queue and expanded < max(1, int(expansion_budget)):
+        (
+            cost,
+            _queue_index,
+            key,
+            previous,
+            distance,
+            depth,
+            path,
+            connectivity_total,
+        ) = heapq.heappop(queue)
+        if cost > best_cost.get((key, previous), float("inf")) + 1e-9:
+            continue
+        expanded += 1
+        node = graph.nodes.get(key)
+        if node is None:
+            continue
+        state = (
+            cost,
+            depth,
+            key,
+            previous,
+            distance,
+            path,
+            connectivity_total,
+        )
+        if best_partial is None or (
+            _true_3d_partial_key(state, graph)
+            > _true_3d_partial_key(best_partial, graph)
+        ):
+            best_partial = state
+
+        outgoing: list[tuple[NavigationVoxel3DEdge, float]] = []
+        for edge in graph.outgoing(key):
+            if (
+                not edge.line_of_sight
+                or edge.target not in graph_keys
+                or edge.target == previous
+            ):
+                continue
+            if (
+                edge.target in path
+                and scoring_policy.loop_policy
+                == NAVIGATION_VOXEL_LOOP_POLICY_AVOID
+            ):
+                continue
+            if not _true_3d_edge_stays_in_component(
+                graph,
+                edge,
+                component_id=graph_component_id,
+            ):
+                continue
+            target_node = graph.nodes.get(edge.target)
+            if target_node is None:
+                continue
+            if target_node.progress_m < entrance_progress_floor_m - 1e-6:
+                entrance_floor_rejections += 1
+                continue
+            incoming_direction = (
+                first_edge.direction
+                if depth == 1
+                else _incoming_direction_3d(path, graph)
+            )
+            # A non-negative dot product keeps the route in the complete
+            # forward hemisphere, including vertical and diagonal turns. It
+            # deliberately does not compare centerline progress, so a valid
+            # forward segment may enter a shallower region.
+            alignment = _graph_dot(incoming_direction, edge.direction)
+            if alignment < 0.0:
+                continue
+            outgoing.append((edge, alignment))
+
+        has_forward_progress = _true_3d_has_progress_edge(
+            graph,
+            path,
+            graph_keys=graph_keys,
+            graph_component_id=graph_component_id,
+            entrance_progress_floor_m=entrance_progress_floor_m,
+            forward_only=True,
+        )
+        if (node.terminal or node.local_degree <= 1) and not has_forward_progress:
+            # Same-depth samples can describe the cross-section of a terminal
+            # room; they are not evidence of a route beyond that room. A
+            # shallower/deeper edge, however, keeps the branch alive when it
+            # is aligned with the current heading.
+            terminal.append(state)
+            continue
+
+        if (
+            distance >= float(lookahead_distance_m)
+            or depth >= max(1, int(lookahead_cells))
+        ):
+            frontier.append(state)
+            continue
+        if not outgoing:
+            if node.unknown_boundary:
+                terminal.append(state)
+            continue
+        for edge, alignment in outgoing:
+            target_node = graph.nodes.get(edge.target)
+            if target_node is None:
+                continue
+            next_cost = cost + _prepared_3d_graph_edge_cost(
+                edge,
+                target_node=target_node,
+                alignment=alignment,
+                graph_scale_m=graph_scale_m,
+                scoring_policy=scoring_policy,
+            )
+            state_key = (edge.target, key)
+            if next_cost >= best_cost.get(state_key, float("inf")) - 1e-9:
+                continue
+            best_cost[state_key] = next_cost
+            state_counter += 1
+            heapq.heappush(
+                queue,
+                (
+                    next_cost,
+                    state_counter,
+                    edge.target,
+                    key,
+                    distance + float(edge.distance_m),
+                    depth + 1,
+                    path + (edge.target,),
+                    connectivity_total + float(target_node.connectivity_score),
+                ),
+            )
+
+    candidates = [*frontier, *terminal]
+    if not candidates and best_partial is not None:
+        candidates.append(best_partial)
+    if not candidates:
+        return None
+    selected = max(
+        candidates,
+        key=lambda item: (
+            not _prepared_3d_path_is_dead_end(
+                graph,
+                item[5],
+                graph_keys=graph_keys,
+                graph_component_id=graph_component_id,
+                entrance_progress_floor_m=entrance_progress_floor_m,
+            ),
+            bool(graph.nodes[item[5][-1]].unknown_boundary),
+            float(scoring_policy.connectivity_weight)
+            * float(item[6])
+            / max(1, len(item[5]) - 1),
+            float(scoring_policy.smooth_forward_weight)
+            * _navigation_smooth_forward_score(
+                first_step_alignment=first_alignment,
+                continuation_distance_m=float(item[4]),
+                lookahead_distance_m=lookahead_distance_m,
+            ),
+            -float(scoring_policy.backtrack_weight)
+            * float(
+                _true_3d_path_revisit_count(
+                    _expand_true_3d_path(item[5], graph.nodes),
+                    graph.nodes,
+                )
+            ),
+            float(scoring_policy.volume_weight)
+            * _navigation_volume_score(
+                sum(
+                    max(0.0, float(graph.nodes[key].available_volume_m3))
+                    for key in item[5]
+                    if key in graph.nodes
+                )
+            ),
+            float(item[4]),
+            float(item[1]),
+            -float(item[0]),
+        ),
+    )
+    cost, depth, target, _previous, distance, path, connectivity_total = selected
+    target_node = graph.nodes[target]
+    target_has_forward_progress = _true_3d_has_progress_edge(
+        graph,
+        path,
+        graph_keys=graph_keys,
+        graph_component_id=graph_component_id,
+        entrance_progress_floor_m=entrance_progress_floor_m,
+        forward_only=True,
+    )
+    target_is_terminal = bool(
+        (target_node.terminal or target_node.local_degree <= 1)
+        and not target_node.unknown_boundary
+        and not target_has_forward_progress
+    )
+    expanded_path = _expand_true_3d_path(path, graph.nodes)
+    revisited_footprint_count = _true_3d_path_revisit_count(
+        expanded_path,
+        graph.nodes,
+    )
+    unknown_boundary = any(
+        graph.nodes[key].unknown_boundary
+        for key in path
+        if key in graph.nodes
+    )
+    dead_end = _prepared_3d_path_is_dead_end(
+        graph,
+        path,
+        graph_keys=graph_keys,
+        graph_component_id=graph_component_id,
+        entrance_progress_floor_m=entrance_progress_floor_m,
+    ) or (
+        target_is_terminal and not unknown_boundary
+    ) or (
+        not target_node.terminal
+        and _true_3d_has_progress_edge(
+            graph,
+            path,
+            graph_keys=graph_keys,
+            graph_component_id=graph_component_id,
+            entrance_progress_floor_m=entrance_progress_floor_m,
+            forward_only=False,
+        )
+        and not target_has_forward_progress
+    )
+    continuation_distance = 0.0 if target_is_terminal else float(distance)
+    onward_exit_count = sum(
+        1
+        for edge in graph.outgoing(target)
+        if edge.target not in path
+        and edge.target in graph_keys
+        and graph.nodes[edge.target].progress_m
+        >= entrance_progress_floor_m - 1e-6
+    )
+    average_connectivity = connectivity_total / max(1, len(path) - 1)
+    route_volume_m3 = sum(
+        max(0.0, float(graph.nodes[key].available_volume_m3))
+        for key in path
+        if key in graph.nodes
+    )
+    smooth_forward_score = _navigation_smooth_forward_score(
+        first_step_alignment=first_alignment,
+        continuation_distance_m=continuation_distance,
+        lookahead_distance_m=lookahead_distance_m,
+    )
+    volume_score = _navigation_volume_score(route_volume_m3)
+    backtrack_penalty = float(revisited_footprint_count)
+    weighted_score = _navigation_weighted_branch_score(
+        policy=scoring_policy,
+        connectivity_score=average_connectivity,
+        smooth_forward_score=smooth_forward_score,
+        volume_score=volume_score,
+        backtrack_penalty=backtrack_penalty,
+    )
+    score = NavigationVoxelBranchScore(
+        branch_start_cell=graph.nodes[first_edge.target].footprint_cell,
+        target_cell=target_node.footprint_cell,
+        reached_distance_m=float(distance),
+        continuation_distance_m=float(continuation_distance),
+        onward_exit_count=int(onward_exit_count),
+        frontier_count=len(frontier),
+        first_step_alignment=float(first_alignment),
+        path_cost_m=float(cost),
+        expanded_count=int(expanded),
+        dead_end=bool(dead_end),
+        target_is_terminal=target_is_terminal,
+        connectivity_score=float(average_connectivity),
+        heading_state_count=int(expanded),
+        unknown_boundary=bool(unknown_boundary),
+        branch_start_key=tuple(first_edge.target),
+        target_key=tuple(target),
+        graph_method=NAVIGATION_VOXEL_3D_GRAPH_METHOD,
+        revisited_footprint_count=int(revisited_footprint_count),
+        entrance_floor_rejections=int(entrance_floor_rejections),
+        route_volume_m3=float(route_volume_m3),
+        smooth_forward_score=float(smooth_forward_score),
+        volume_score=float(volume_score),
+        backtrack_penalty=float(backtrack_penalty),
+        weighted_score=float(weighted_score),
+    )
+    sort_key = scoring_policy.branch_sort_key(score)
+    return _NavigationVoxel3DBranchEvaluation(
+        score=score,
+        path=tuple(path),
+        sort_key=sort_key,
+    )
+
+
+def _true_3d_partial_key(
+    state: tuple[object, ...],
+    graph: NavigationVoxel3DGraph,
+) -> tuple[object, ...]:
+    """Rank partial search states without using an unbounded global search."""
+    path = state[5]
+    target = path[-1]
+    node = graph.nodes[target]
+    return (
+        not node.dead_end,
+        bool(node.unknown_boundary),
+        -int(
+            _true_3d_path_revisit_count(
+                _expand_true_3d_path(path, graph.nodes),
+                graph.nodes,
+            )
+        ),
+        float(state[4]),
+        float(state[6]),
+        float(state[1]),
+        -float(state[0]),
+    )
+
+
+def _incoming_direction_3d(
+    path: Sequence[VoxelGraphKey],
+    graph: NavigationVoxel3DGraph,
+) -> tuple[float, float, float]:
+    if len(path) < 2:
+        return (1.0, 0.0, 0.0)
+    source, target = path[-2], path[-1]
+    edge = next(
+        (edge for edge in graph.outgoing(source) if edge.target == target),
+        None,
+    )
+    return (1.0, 0.0, 0.0) if edge is None else edge.direction
+
+
+def _true_3d_edge_stays_in_component(
+    graph: NavigationVoxel3DGraph,
+    edge: NavigationVoxel3DEdge,
+    *,
+    component_id: int | None = None,
+    component_cells: set[FootprintCell] | None = None,
+) -> bool:
+    """Return whether an edge remains inside one prepared graph component.
+
+    ``component_cells`` is retained only for readable legacy callers. Native
+    true-3D routing uses graph component IDs; applying a coarse footprint
+    corner test to fine graph nodes reintroduces the coordinate mismatch that
+    prevented Guided Dive startup.
+    """
+    source = graph.nodes.get(edge.source)
+    target = graph.nodes.get(edge.target)
+    if source is None or target is None:
+        return False
+    if component_id is not None:
+        return (
+            int(source.component_id) == int(component_id)
+            and int(target.component_id) == int(component_id)
+        )
+    if component_cells is None:
+        return int(source.component_id) == int(target.component_id)
+    first = source.footprint_cell
+    last = target.footprint_cell
+    if first not in component_cells or last not in component_cells:
+        return False
+    steps = max(1, abs(last[0] - first[0]), abs(last[1] - first[1]))
+    previous = first
+    for index in range(1, steps + 1):
+        fraction = float(index) / float(steps)
+        current = (
+            int(math.floor(first[0] + (last[0] - first[0]) * fraction + 0.5)),
+            int(math.floor(first[1] + (last[1] - first[1]) * fraction + 0.5)),
+        )
+        if not _true_3d_footprint_step_is_valid(
+            previous,
+            current,
+            component_cells=component_cells,
+        ):
+            return False
+        previous = current
+    return True
+
+
+def _true_3d_footprint_step_is_valid(
+    first: FootprintCell,
+    second: FootprintCell,
+    *,
+    component_cells: set[FootprintCell],
+) -> bool:
+    if first not in component_cells or second not in component_cells:
+        return False
+    delta_x = second[0] - first[0]
+    delta_z = second[1] - first[1]
+    if max(abs(delta_x), abs(delta_z)) > 1:
+        return False
+    if abs(delta_x) == 1 and abs(delta_z) == 1:
+        return (
+            (first[0] + delta_x, first[1]) in component_cells
+            and (first[0], first[1] + delta_z) in component_cells
+        )
+    return True
+
+
+def _true_3d_has_progress_edge(
+    graph: NavigationVoxel3DGraph,
+    path: Sequence[VoxelGraphKey],
+    *,
+    graph_keys: set[VoxelGraphKey],
+    graph_component_id: int,
+    entrance_progress_floor_m: float,
+    forward_only: bool,
+) -> bool:
+    """Return whether an unvisited edge changes cached route progress."""
+    if not path:
+        return False
+    current = path[-1]
+    current_node = graph.nodes.get(current)
+    if current_node is None:
+        return False
+    incoming_direction = _incoming_direction_3d(path, graph)
+    for edge in graph.outgoing(current):
+        if (
+            not edge.line_of_sight
+            or edge.target not in graph_keys
+            or edge.target in path
+        ):
+            continue
+        if not _true_3d_edge_stays_in_component(
+            graph,
+            edge,
+            component_id=graph_component_id,
+        ):
+            continue
+        target = graph.nodes.get(edge.target)
+        if target is None or target.progress_m < entrance_progress_floor_m - 1e-6:
+            continue
+        if abs(float(target.progress_m) - float(current_node.progress_m)) <= 1e-6:
+            continue
+        if forward_only and _graph_dot(incoming_direction, edge.direction) < 0.0:
+            continue
+        return True
+    return False
+
+
+def _true_3d_has_forward_continuation(
+    graph: NavigationVoxel3DGraph,
+    path: Sequence[VoxelGraphKey],
+    *,
+    graph_keys: set[VoxelGraphKey],
+    graph_component_id: int | None,
+    entrance_progress_floor_m: float,
+) -> bool:
+    """Return whether a cached edge continues in the current heading."""
+    if len(path) < 2:
+        return False
+    incoming_direction = _incoming_direction_3d(path, graph)
+    for edge in graph.outgoing(path[-1]):
+        if (
+            not edge.line_of_sight
+            or edge.target not in graph_keys
+            or edge.target in path
+        ):
+            continue
+        if not _true_3d_edge_stays_in_component(
+            graph,
+            edge,
+            component_id=graph_component_id,
+        ):
+            continue
+        target = graph.nodes.get(edge.target)
+        if target is None or target.progress_m < entrance_progress_floor_m - 1e-6:
+            continue
+        # Forward/reverse is a dot-product question. Keep the complete
+        # hemisphere, including right-angle and vertical turns.
+        if _graph_dot(incoming_direction, edge.direction) >= 0.0:
+            return True
+    return False
+
+
+def _prepared_3d_path_is_dead_end(
+    graph: NavigationVoxel3DGraph,
+    path: Sequence[VoxelGraphKey],
+    *,
+    graph_keys: set[VoxelGraphKey] | None = None,
+    graph_component_id: int | None = None,
+    entrance_progress_floor_m: float = float("-inf"),
+) -> bool:
+    """Ignore the entrance-side part of a true-3D branch after a junction."""
+    last_junction_index = 0
+    for index, key in enumerate(path):
+        node = graph.nodes.get(key)
+        if node is None:
+            continue
+        if node.local_degree >= 3 or node.unknown_boundary:
+            last_junction_index = index
+    allowed_keys = graph_keys or set(graph.nodes)
+    allowed_component_id = graph_component_id
+    if allowed_component_id is None and allowed_keys:
+        first_node = graph.nodes.get(next(iter(allowed_keys)))
+        if first_node is not None:
+            allowed_component_id = int(first_node.component_id)
+    for index, key in enumerate(
+        path[last_junction_index + 1 :],
+        start=last_junction_index + 1,
+    ):
+        node = graph.nodes.get(key)
+        if node is None or not node.dead_end:
+            continue
+        prefix = path[: index + 1]
+        if _true_3d_has_forward_continuation(
+            graph,
+            prefix,
+            graph_keys=allowed_keys,
+            graph_component_id=allowed_component_id,
+            entrance_progress_floor_m=entrance_progress_floor_m,
+        ):
+            continue
+        return True
+    return False
+
+
+def _bound_voxel_route_keys(
+    keys: Sequence[VoxelGraphKey],
+    *,
+    max_route_cells: int,
+) -> tuple[VoxelGraphKey, ...]:
+    limit = max(2, int(max_route_cells))
+    if len(keys) <= limit:
+        return tuple(keys)
+    stride = max(1, math.ceil((len(keys) - 1) / max(1, limit - 1)))
+    bounded = list(keys[::stride])
+    if bounded[-1] != keys[-1]:
+        bounded.append(keys[-1])
+    return tuple(bounded[:limit])
+
+
+def _project_3d_route_cells(
+    keys: Sequence[VoxelGraphKey],
+    nodes: Mapping[VoxelGraphKey, object],
+) -> tuple[FootprintCell, ...]:
+    cells: list[FootprintCell] = []
+    for key in keys:
+        cell = nodes[key].footprint_cell
+        if not cells or cells[-1] != cell:
+            cells.append(cell)
+    return tuple(cells)
+
+
+def _true_3d_path_revisit_count(
+    keys: Sequence[VoxelGraphKey],
+    nodes: Mapping[VoxelGraphKey, object],
+) -> int:
+    """Count non-consecutive returns to a footprint corridor cell.
+
+    Consecutive samples may legitimately share a footprint while changing
+    elevation in a stacked passage. A later return to that footprint is a
+    stronger signal that a candidate is circling through a room or retracing
+    a route, so it receives a selection penalty without forbidding valid
+    stacked 3-D movement.
+    """
+    seen: set[FootprintCell] = set()
+    previous: FootprintCell | None = None
+    revisits = 0
+    for key in keys:
+        node = nodes.get(key)
+        if node is None:
+            continue
+        cell = node.footprint_cell
+        if cell in seen and cell != previous:
+            revisits += 1
+        seen.add(cell)
+        previous = cell
+    return revisits
+
+
+def _expand_true_3d_path(
+    keys: Sequence[VoxelGraphKey],
+    nodes: Mapping[VoxelGraphKey, object],
+) -> tuple[VoxelGraphKey, ...]:
+    """Insert cached grid cells crossed by any-angle edges.
+
+    The prepared graph may contain a line-of-sight shortcut, but the runtime
+    collision guard validates footprint transitions one cell at a time. The
+    intermediate nodes are already guaranteed free by cache-time line-of-
+    sight construction, so exposing them as route samples preserves both
+    representations without reverting to centerline geometry.
+    """
+    if len(keys) < 2:
+        return tuple(keys)
+    expanded: list[VoxelGraphKey] = [keys[0]]
+    for source, target in zip(keys, keys[1:], strict=False):
+        steps = max(abs(target[axis] - source[axis]) for axis in range(3))
+        for step in range(1, max(1, steps) + 1):
+            fraction = float(step) / float(max(1, steps))
+            candidate = tuple(
+                int(math.floor(
+                    float(source[axis])
+                    + (float(target[axis] - source[axis]) * fraction)
+                    + 0.5
+                ))
+                for axis in range(3)
+            )
+            if candidate not in nodes:
+                candidate = target
+            if expanded[-1] != candidate:
+                expanded.append(candidate)
+    return tuple(expanded)
+
+
+def _nearest_prepared_graph_cell(
+    graph_cells: set[FootprintCell],
+    nodes: Mapping[FootprintCell, NavigationVoxelGraphNode],
+    *,
+    position: tuple[float, float, float],
+    cell_size: float,
+) -> FootprintCell | None:
+    if not graph_cells:
+        return None
+    return min(
+        graph_cells,
+        key=lambda cell: (
+            (
+                (float(cell[0]) + 0.5) * float(cell_size)
+                - float(position[0])
+            )
+            ** 2
+            + (
+                float(nodes[cell].center_y_m) - float(position[1])
+            )
+            ** 2
+            + (
+                (float(cell[1]) + 0.5) * float(cell_size)
+                - float(position[2])
+            )
+            ** 2,
+            cell,
+        ),
+    )
+
+
+def _prepared_graph_edge_cost(
+    edge: NavigationVoxelGraphEdge,
+    *,
+    target_node: NavigationVoxelGraphNode,
+    alignment: float,
+    cell_size: float,
+    scoring_policy: NavigationVoxelScoringPolicy,
+) -> float:
+    """Cost a compatibility-graph edge using the active request policy."""
+    turn_penalty = (
+        max(0.0, 1.0 - float(alignment))
+        * float(cell_size)
+        * float(scoring_policy.turn_weight)
+    )
+    connectivity_penalty = (
+        float(cell_size)
+        * float(scoring_policy.connectivity_weight)
+        / (1.0 + max(0.0, float(target_node.connectivity_score)))
+    )
+    clearance_penalty = (
+        float(cell_size)
+        * float(scoring_policy.clearance_weight)
+        / (1.0 + max(0.0, float(edge.min_clearance_m)))
+    )
+    volume_penalty = (
+        float(cell_size)
+        * float(scoring_policy.volume_weight)
+        / (
+            1.0
+            + _navigation_volume_score(
+                float(target_node.available_volume_m3)
+            )
+        )
+    )
+    return (
+        float(edge.distance_m)
+        + turn_penalty
+        + connectivity_penalty
+        + clearance_penalty
+        + volume_penalty
+    )
+
+
+def _evaluate_prepared_graph_branch(
+    *,
+    graph: NavigationVoxelGraph,
+    metrics: Mapping[FootprintCell, NavigationVoxelCellMetric],
+    current_cell: FootprintCell,
+    first_edge: NavigationVoxelGraphEdge,
+    first_alignment: float,
+    start_progress: float,
+    tolerance: float,
+    progress_gain: float,
+    lookahead_distance_m: float,
+    lookahead_cells: int,
+    expansion_budget: int,
+    cell_size_m: float,
+    scoring_policy: NavigationVoxelScoringPolicy,
+) -> _NavigationVoxelBranchEvaluation | None:
+    """Explore one first edge while retaining the incoming heading in state."""
+    first_node = graph.nodes.get(first_edge.target)
+    if first_node is None:
+        return None
+    cell_size = max(1e-6, float(cell_size_m))
+    initial_cost = _prepared_graph_edge_cost(
+        first_edge,
+        target_node=first_node,
+        alignment=first_alignment,
+        cell_size=cell_size,
+        scoring_policy=scoring_policy,
+    )
+    initial_path = (current_cell, first_edge.target)
+    queue: list[
+        tuple[
+            float,
+            int,
+            FootprintCell,
+            FootprintCell,
+            float,
+            int,
+            tuple[FootprintCell, ...],
+            float,
+        ]
+    ] = [
+        (
+            initial_cost,
+            0,
+            first_edge.target,
+            current_cell,
+            float(first_edge.distance_m),
+            1,
+            initial_path,
+            float(first_node.connectivity_score),
+        )
+    ]
+    best_cost: dict[tuple[FootprintCell, FootprintCell], float] = {
+        (first_edge.target, current_cell): initial_cost
+    }
+    frontier: list[
+        tuple[
+            float,
+            int,
+            FootprintCell,
+            FootprintCell,
+            float,
+            tuple[FootprintCell, ...],
+            float,
+        ]
+    ] = []
+    terminal: list[
+        tuple[
+            float,
+            int,
+            FootprintCell,
+            FootprintCell,
+            float,
+            tuple[FootprintCell, ...],
+            float,
+        ]
+    ] = []
+    expanded = 0
+    state_counter = 1
+    best_partial: tuple[
+        float,
+        int,
+        FootprintCell,
+        FootprintCell,
+        float,
+        tuple[FootprintCell, ...],
+        float,
+    ] | None = None
+    while queue and expanded < max(1, int(expansion_budget)):
+        (
+            cost,
+            _queue_index,
+            cell,
+            previous,
+            distance,
+            depth,
+            path,
+            connectivity_total,
+        ) = heapq.heappop(queue)
+        if cost > best_cost.get((cell, previous), float("inf")) + 1e-9:
+            continue
+        expanded += 1
+        node = graph.nodes.get(cell)
+        if node is None:
+            continue
+        partial = (
+            cost,
+            depth,
+            cell,
+            previous,
+            distance,
+            path,
+            connectivity_total,
+        )
+        if best_partial is None or (
+            float(partial[4]),
+            float(partial[6]),
+            int(partial[1]),
+            -float(partial[0]),
+        ) > (
+            float(best_partial[4]),
+            float(best_partial[6]),
+            int(best_partial[1]),
+            -float(best_partial[0]),
+        ):
+            best_partial = partial
+        outgoing: list[tuple[NavigationVoxelGraphEdge, float]] = []
+        for edge in graph.outgoing(cell):
+            if not edge.line_of_sight or edge.target == previous:
+                continue
+            if (
+                edge.target in path
+                and scoring_policy.loop_policy
+                == NAVIGATION_VOXEL_LOOP_POLICY_AVOID
+            ):
+                continue
+            target_metric = metrics.get(edge.target)
+            if target_metric is None:
+                continue
+            target_progress = float(target_metric.progress_m)
+            if target_progress < start_progress - tolerance:
+                continue
+            incoming_direction = (
+                first_edge.direction
+                if depth == 1
+                else _incoming_direction(path, graph)
+            )
+            alignment = _graph_dot(incoming_direction, edge.direction)
+            if alignment < 0.0:
+                continue
+            if (
+                cell == first_edge.target
+                and target_progress < start_progress + progress_gain * 0.10
+                and len(graph.outgoing(current_cell)) > 1
+            ):
+                continue
+            outgoing.append((edge, alignment))
+
+        if (
+            distance >= float(lookahead_distance_m)
+            or depth >= max(1, int(lookahead_cells))
+        ):
+            frontier.append(
+                (
+                    cost,
+                    depth,
+                    cell,
+                    previous,
+                    distance,
+                    path,
+                    connectivity_total,
+                )
+            )
+            continue
+        if not outgoing:
+            if node.terminal or node.unknown_boundary:
+                terminal.append(
+                    (
+                        cost,
+                        depth,
+                        cell,
+                        previous,
+                        distance,
+                        path,
+                        connectivity_total,
+                    )
+                )
+            continue
+        for edge, alignment in outgoing:
+            target_node = graph.nodes.get(edge.target)
+            if target_node is None:
+                continue
+            next_cost = cost + _prepared_graph_edge_cost(
+                edge,
+                target_node=target_node,
+                alignment=alignment,
+                cell_size=cell_size,
+                scoring_policy=scoring_policy,
+            )
+            state = (edge.target, cell)
+            if next_cost >= best_cost.get(state, float("inf")) - 1e-9:
+                continue
+            best_cost[state] = next_cost
+            state_counter += 1
+            heapq.heappush(
+                queue,
+                (
+                    next_cost,
+                    state_counter,
+                    edge.target,
+                    cell,
+                    distance + float(edge.distance_m),
+                    depth + 1,
+                    path + (edge.target,),
+                    connectivity_total + float(target_node.connectivity_score),
+                ),
+            )
+
+    candidates = [*frontier, *terminal]
+    if not candidates and best_partial is not None:
+        candidates.append(best_partial)
+    if not candidates:
+        return None
+    selected = max(
+        candidates,
+        key=lambda item: (
+            bool(
+                item[5][-1] in graph.nodes
+                and graph.nodes[item[5][-1]].unknown_boundary
+            ),
+            not _prepared_path_is_dead_end(graph, item[5]),
+            float(scoring_policy.connectivity_weight)
+            * float(item[6])
+            / max(1, len(item[5]) - 1),
+            float(scoring_policy.smooth_forward_weight)
+            * _navigation_smooth_forward_score(
+                first_step_alignment=first_alignment,
+                continuation_distance_m=float(item[4]),
+                lookahead_distance_m=lookahead_distance_m,
+            ),
+            -float(scoring_policy.backtrack_weight)
+            * float(
+                sum(
+                    1
+                    for index, cell in enumerate(item[5])
+                    if cell in item[5][:index]
+                )
+            ),
+            float(scoring_policy.volume_weight)
+            * _navigation_volume_score(
+                sum(
+                    max(0.0, float(metrics[cell].available_volume_m3))
+                    for cell in item[5]
+                    if cell in metrics
+                )
+            ),
+            float(item[4]),
+            float(item[6]),
+            float(item[2][0]),
+            float(item[2][1]),
+            -float(item[0]),
+        ),
+    )
+    cost, depth, target, _previous, distance, path, connectivity_total = selected
+    target_node = graph.nodes[target]
+    target_is_terminal = bool(
+        target_node.terminal and not target_node.unknown_boundary
+    )
+    unknown_boundary = any(
+        graph.nodes[cell].unknown_boundary
+        for cell in path
+        if cell in graph.nodes
+    )
+    dead_end = _prepared_path_is_dead_end(graph, path) or (
+        target_is_terminal and not unknown_boundary
+    )
+    continuation_distance = (
+        0.0
+        if target_is_terminal
+        else float(distance)
+    )
+    onward_exit_count = sum(
+        1
+        for edge in graph.outgoing(target)
+        if edge.target not in path
+        and edge.target in metrics
+        and float(metrics[edge.target].progress_m)
+        >= start_progress - tolerance
+    )
+    average_connectivity = connectivity_total / max(1, len(path) - 1)
+    route_volume_m3 = sum(
+        max(0.0, float(metrics[cell].available_volume_m3))
+        for cell in path
+        if cell in metrics
+    )
+    smooth_forward_score = _navigation_smooth_forward_score(
+        first_step_alignment=first_alignment,
+        continuation_distance_m=continuation_distance,
+        lookahead_distance_m=lookahead_distance_m,
+    )
+    volume_score = _navigation_volume_score(route_volume_m3)
+    backtrack_penalty = float(
+        sum(
+            1
+            for index, cell in enumerate(path)
+            if cell in path[:index]
+        )
+    )
+    weighted_score = _navigation_weighted_branch_score(
+        policy=scoring_policy,
+        connectivity_score=average_connectivity,
+        smooth_forward_score=smooth_forward_score,
+        volume_score=volume_score,
+        backtrack_penalty=backtrack_penalty,
+    )
+    score = NavigationVoxelBranchScore(
+        branch_start_cell=first_edge.target,
+        target_cell=target,
+        reached_distance_m=float(distance),
+        continuation_distance_m=float(continuation_distance),
+        onward_exit_count=int(onward_exit_count),
+        frontier_count=len(frontier),
+        first_step_alignment=float(first_alignment),
+        path_cost_m=float(cost),
+        expanded_count=int(expanded),
+        dead_end=bool(dead_end),
+        target_is_terminal=target_is_terminal,
+        connectivity_score=float(average_connectivity),
+        heading_state_count=int(expanded),
+        unknown_boundary=bool(unknown_boundary),
+        route_volume_m3=float(route_volume_m3),
+        revisited_footprint_count=int(backtrack_penalty),
+        smooth_forward_score=float(smooth_forward_score),
+        volume_score=float(volume_score),
+        backtrack_penalty=float(backtrack_penalty),
+        weighted_score=float(weighted_score),
+    )
+    sort_key = scoring_policy.branch_sort_key(score)
+    return _NavigationVoxelBranchEvaluation(
+        score=score,
+        path=tuple(path),
+        sort_key=sort_key,
+    )
+
+
+def _path_distance(
+    path: Sequence[FootprintCell],
+    graph: NavigationVoxelGraph,
+) -> float:
+    distance = 0.0
+    for source, target in zip(path, path[1:], strict=False):
+        edge = next(
+            (
+                edge
+                for edge in graph.outgoing(source)
+                if edge.target == target
+            ),
+            None,
+        )
+        distance += float(edge.distance_m if edge is not None else 0.0)
+    return distance
+
+
+def _prepared_path_is_dead_end(
+    graph: NavigationVoxelGraph,
+    path: Sequence[FootprintCell],
+) -> bool:
+    """Ignore the entrance-side branch after a path reaches a junction."""
+    last_junction_index = 0
+    for index, cell in enumerate(path):
+        node = graph.nodes.get(cell)
+        if node is None:
+            continue
+        if node.local_degree >= 3 or node.unknown_boundary:
+            last_junction_index = index
+    return any(
+        graph.nodes[cell].dead_end
+        for cell in path[last_junction_index + 1 :]
+        if cell in graph.nodes
+    )
+
+
+def _incoming_direction(
+    path: Sequence[FootprintCell],
+    graph: NavigationVoxelGraph,
+) -> tuple[float, float, float]:
+    if len(path) < 2:
+        return (1.0, 0.0, 0.0)
+    source, target = path[-2], path[-1]
+    edge = next(
+        (edge for edge in graph.outgoing(source) if edge.target == target),
+        None,
+    )
+    return (1.0, 0.0, 0.0) if edge is None else edge.direction
+
+
 def _evaluate_voxel_branch(
     *,
     current_cell: FootprintCell,
@@ -777,6 +3620,7 @@ def _evaluate_voxel_branch(
     lookahead_distance_m: float,
     lookahead_cells: int,
     expansion_budget: int,
+    scoring_policy: NavigationVoxelScoringPolicy,
 ) -> _NavigationVoxelBranchEvaluation | None:
     """Score one immediate branch without searching to a global endpoint."""
     initial_cost = _voxel_graph_edge_cost(
@@ -786,6 +3630,7 @@ def _evaluate_voxel_branch(
         voxel_size_m=1.0,
         metric=metrics[branch_start],
         preferred_direction=preferred_direction,
+        scoring_policy=scoring_policy,
     )
     distances: dict[FootprintCell, float] = {branch_start: initial_cost}
     depths: dict[FootprintCell, int] = {branch_start: 1}
@@ -837,6 +3682,7 @@ def _evaluate_voxel_branch(
                 voxel_size_m=1.0,
                 metric=metrics[neighbor],
                 preferred_direction=preferred_direction,
+                scoring_policy=scoring_policy,
             )
             next_distance = distance + edge_cost
             next_depth = depths.get(cell, 1) + 1
@@ -961,6 +3807,38 @@ def _evaluate_voxel_branch(
         target_is_terminal = False
         frontier_count = 0
 
+    route_volume_m3 = float(
+        sum(
+            max(0.0, float(metrics[cell].available_volume_m3))
+            for cell in path
+            if cell in metrics
+        )
+    )
+    first_step_alignment = _cell_direction_alignment(
+        current_cell,
+        branch_start,
+        preferred_direction,
+    )
+    smooth_forward_score = _navigation_smooth_forward_score(
+        first_step_alignment=first_step_alignment,
+        continuation_distance_m=float(continuation),
+        lookahead_distance_m=lookahead_distance_m,
+    )
+    volume_score = _navigation_volume_score(route_volume_m3)
+    backtrack_penalty = float(
+        sum(
+            1
+            for index, cell in enumerate(path)
+            if cell in path[:index]
+        )
+    )
+    weighted_score = _navigation_weighted_branch_score(
+        policy=scoring_policy,
+        connectivity_score=0.0,
+        smooth_forward_score=smooth_forward_score,
+        volume_score=volume_score,
+        backtrack_penalty=backtrack_penalty,
+    )
     score = NavigationVoxelBranchScore(
         branch_start_cell=branch_start,
         target_cell=target,
@@ -968,23 +3846,19 @@ def _evaluate_voxel_branch(
         continuation_distance_m=float(continuation),
         onward_exit_count=int(exit_count),
         frontier_count=int(frontier_count),
-        first_step_alignment=_cell_direction_alignment(
-            current_cell,
-            branch_start,
-            preferred_direction,
-        ),
+        first_step_alignment=first_step_alignment,
         path_cost_m=reached_distance,
         expanded_count=int(expanded_count),
         dead_end=bool(dead_end),
         target_is_terminal=bool(target_is_terminal),
+        route_volume_m3=route_volume_m3,
+        revisited_footprint_count=int(backtrack_penalty),
+        smooth_forward_score=float(smooth_forward_score),
+        volume_score=float(volume_score),
+        backtrack_penalty=float(backtrack_penalty),
+        weighted_score=float(weighted_score),
     )
-    sort_key: tuple[object, ...] = (
-        not score.dead_end,
-        float(score.continuation_distance_m),
-        float(score.reached_distance_m),
-        int(score.onward_exit_count),
-        float(score.first_step_alignment),
-        -float(score.path_cost_m),
+    sort_key = scoring_policy.branch_sort_key(score) + (
         -int(score.branch_start_cell[0]),
         -int(score.branch_start_cell[1]),
     )
@@ -1140,26 +4014,30 @@ def _voxel_graph_edge_cost(
     voxel_size_m: float,
     metric: NavigationVoxelCellMetric,
     preferred_direction: tuple[float, float] | None,
+    scoring_policy: NavigationVoxelScoringPolicy,
 ) -> float:
     """Return a topology/direction cost for bounded branch exploration.
 
-    Filled volume and clearance are intentionally not used here. They remain
-    attached to each cell for diagnostics and the later cross-section policy,
-    but using them during this first lookahead pass would make a large room
-    win before the planner has checked whether that room continues.
+    Volume is a small comfort term. Topology and forward continuation are
+    still evaluated by the branch score before it can influence selection.
     """
     base_distance = max(1e-6, footprint_cell_distance(first, second) * cell_size)
-    del metric, voxel_size_m
+    del voxel_size_m
     # Direction is a soft cost: a turn is valid even when the user's last
     # displacement points along the previous leg, but a backward first step
     # must not beat a forward continuation with comparable topology.
-    cost_multiplier = 1.0
     alignment = _cell_direction_alignment(first, second, preferred_direction)
-    if preferred_direction is not None and alignment < 0.0:
-        cost_multiplier += min(1.5, -alignment * 1.25)
-    elif preferred_direction is not None and alignment < 0.25:
-        cost_multiplier += (0.25 - alignment) * 0.15
-    return base_distance * cost_multiplier
+    turn_multiplier = 1.0
+    if preferred_direction is not None and alignment < 0.25:
+        # Preserve the compatibility planner's small soft turn cost. Its
+        # footprint direction is not the true-3D incoming heading, so applying
+        # the full 3-D turn weight here would distort its geometric horizon.
+        turn_multiplier += (0.25 - alignment) * 0.15
+    # The compatibility graph stores only 2-D footprint distances. Keep its
+    # horizon geometric; volume and clearance are applied to the final branch
+    # score, otherwise a nominal four-metre lookahead can stop one cell early.
+    del metric, scoring_policy
+    return base_distance * turn_multiplier
 
 
 def _bound_voxel_route_cells(
@@ -1198,9 +4076,13 @@ def build_navigation_voxel_cache(
             payload=_empty_payload(resolved),
             built_route_count=0,
             recommended_route_id=None,
+            chunked_payload=None,
+            chunk_payloads={},
         )
 
     model_routes: dict[str, object] = {}
+    chunked_model_routes: dict[str, object] = {}
+    chunk_payloads: dict[str, Mapping[str, object]] = {}
     route_summaries: dict[str, Mapping[str, object]] = {}
     built_route_ids: list[str] = []
     for route_index, route_value in enumerate(routes):
@@ -1214,6 +4096,7 @@ def build_navigation_voxel_cache(
             manifest,
             route_value,
             points,
+            route_id=route_id,
             triangle_provider=triangle_provider,
             config=resolved,
         )
@@ -1224,10 +4107,24 @@ def build_navigation_voxel_cache(
         model = summary.pop("_model", None)
         if not isinstance(model, Mapping):
             continue
+        chunked_model = summary.pop("_chunked_model", None)
+        route_chunk_payloads = summary.pop("_chunk_payloads", {})
         model_routes[route_id] = {
             "summary": dict(summary),
             "model": dict(model),
         }
+        if isinstance(chunked_model, Mapping):
+            chunked_model_routes[route_id] = {
+                "summary": dict(summary),
+                "model": dict(chunked_model),
+            }
+        if isinstance(route_chunk_payloads, Mapping):
+            for relative_path, chunk_payload in route_chunk_payloads.items():
+                if (
+                    isinstance(relative_path, str)
+                    and isinstance(chunk_payload, Mapping)
+                ):
+                    chunk_payloads[relative_path] = chunk_payload
         built_route_ids.append(route_id)
         _augment_recovery_hotspots_with_volume(route_value, summary)
 
@@ -1251,6 +4148,18 @@ def build_navigation_voxel_cache(
         "max_surface_samples": int(resolved.max_surface_samples),
         "tile_size_m": float(resolved.tile_size_m),
         "max_tiles": int(resolved.max_tiles),
+        "fine_voxel_size_m": float(resolved.fine_voxel_size_m),
+        "fine_tile_radius_m": float(resolved.fine_tile_radius_m),
+        "max_fine_tiles": int(resolved.max_fine_tiles),
+        "max_fine_tile_cells": int(resolved.max_fine_tile_cells),
+        "graph_max_nodes": int(resolved.graph_max_nodes),
+        "graph_max_edges": int(resolved.graph_max_edges),
+        "graph_max_edge_distance_cells": int(
+            resolved.graph_max_edge_distance_cells
+        ),
+        "graph_max_edges_per_node": int(resolved.graph_max_edges_per_node),
+        "graph_routing_authority": "prepared_true_3d_voxel_graph",
+        "cache_quality_profile": "advanced_graph_native_v1",
         "coverage_scope": "entire_cave_component",
         "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
         "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
@@ -1268,11 +4177,38 @@ def build_navigation_voxel_cache(
             "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
             "tile_size_m": float(resolved.tile_size_m),
             "max_tiles": int(resolved.max_tiles),
+            "fine_voxel_size_m": float(resolved.fine_voxel_size_m),
+            "fine_tile_radius_m": float(resolved.fine_tile_radius_m),
+            "max_fine_tiles": int(resolved.max_fine_tiles),
+            "max_fine_tile_cells": int(resolved.max_fine_tile_cells),
+            "graph_max_nodes": int(resolved.graph_max_nodes),
+            "graph_max_edges": int(resolved.graph_max_edges),
+            "graph_max_edge_distance_cells": int(
+                resolved.graph_max_edge_distance_cells
+            ),
+            "graph_max_edges_per_node": int(resolved.graph_max_edges_per_node),
+            "cache_quality_profile": "advanced_graph_native_v1",
+            "storage_method": NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD,
+            "chunk_directory": "navigation_voxel_chunks",
+            "chunk_count": int(len(chunk_payloads)),
         }
+    chunked_payload: dict[str, object] | None = None
+    if chunked_model_routes:
+        chunked_payload = dict(payload)
+        chunked_payload.update(
+            {
+                "storage_method": NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD,
+                "chunk_directory": "navigation_voxel_chunks",
+                "chunk_count": int(len(chunk_payloads)),
+                "routes": chunked_model_routes,
+            }
+        )
     return NavigationVoxelCacheBuildResult(
         payload=payload,
         built_route_count=len(built_route_ids),
         recommended_route_id=recommended_route_id,
+        chunked_payload=chunked_payload,
+        chunk_payloads=chunk_payloads,
     )
 
 
@@ -1299,13 +4235,41 @@ def load_cached_navigation_voxel_volume(
         return None
     path = os.path.join(os.fspath(cache_dir), NAVIGATION_VOXEL_CACHE_NAME)
     try:
-        payload = load_bounded_json(
-            path,
-            max_bytes=NAVIGATION_VOXEL_CACHE_MAX_BYTES,
-            description="navigation voxel cache",
-        )
-    except (OSError, ValueError):
+        signature_info = os.stat(path)
+    except OSError:
         return None
+    signature = (
+        os.path.abspath(path),
+        int(getattr(signature_info, "st_mtime_ns", 0)),
+        int(signature_info.st_size),
+    )
+    model_key = (*signature, str(route_id))
+    with _runtime_voxel_cache_lock:
+        cached_model = _runtime_voxel_model_cache.get(model_key)
+        if cached_model is not None:
+            _runtime_voxel_model_cache.move_to_end(model_key)
+            return cached_model
+
+        payload = _runtime_voxel_payload_cache.get(signature)
+        if payload is not None:
+            _runtime_voxel_payload_cache.move_to_end(signature)
+        else:
+            payload = None
+            try:
+                payload = load_bounded_json(
+                    path,
+                    max_bytes=NAVIGATION_VOXEL_CACHE_MAX_BYTES,
+                    description="navigation voxel cache",
+                )
+            except (OSError, ValueError):
+                return None
+            if not isinstance(payload, Mapping):
+                return None
+            _runtime_voxel_payload_cache[signature] = payload
+            _runtime_voxel_payload_cache.move_to_end(signature)
+            while len(_runtime_voxel_payload_cache) > _RUNTIME_VOXEL_PAYLOAD_CACHE_LIMIT:
+                _runtime_voxel_payload_cache.popitem(last=False)
+
     if not isinstance(payload, Mapping):
         return None
     if not _supported_cache_identity(payload.get("version"), payload.get("method")):
@@ -1320,9 +4284,113 @@ def load_cached_navigation_voxel_volume(
     if not isinstance(model, Mapping):
         return None
     try:
-        return deserialize_navigation_voxel_volume(model)
+        chunk_store = _navigation_voxel_chunk_store_from_model(
+            model,
+            cache_dir=os.fspath(cache_dir),
+        )
+        restored = deserialize_navigation_voxel_volume(
+            model,
+            chunk_store=chunk_store,
+        )
     except (TypeError, ValueError, binascii.Error, zlib.error):
         return None
+    with _runtime_voxel_cache_lock:
+        _runtime_voxel_model_cache[model_key] = restored
+        _runtime_voxel_model_cache.move_to_end(model_key)
+        while len(_runtime_voxel_model_cache) > _RUNTIME_VOXEL_MODEL_CACHE_LIMIT:
+            _evicted_key, evicted_model = _runtime_voxel_model_cache.popitem(
+                last=False
+            )
+            del _evicted_key
+            close_store = getattr(
+                getattr(evicted_model, "chunk_store", None),
+                "close",
+                None,
+            )
+            if callable(close_store):
+                close_store()
+    return restored
+
+
+def _navigation_voxel_chunk_store_from_model(
+    model: Mapping[str, object],
+    *,
+    cache_dir: str,
+) -> NavigationVoxelChunkStore | None:
+    """Restore the bounded disk backend described by a graph-only model."""
+    raw_store = model.get("chunk_store")
+    if raw_store is None:
+        return None
+    if not isinstance(raw_store, Mapping):
+        raise ValueError("cached navigation voxel chunk store is malformed")
+    if raw_store.get("method") != NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD:
+        raise ValueError("unsupported navigation voxel chunk store method")
+    if raw_store.get("root") != "navigation_voxel_chunks":
+        raise ValueError("cached navigation voxel chunk root is invalid")
+    raw_chunks = raw_store.get("chunks")
+    if not isinstance(raw_chunks, Sequence) or isinstance(raw_chunks, (str, bytes)):
+        raise ValueError("cached navigation voxel chunk descriptors are missing")
+    if len(raw_chunks) > (
+        DEFAULT_CACHE_VOXEL_MAX_TILES + DEFAULT_CACHE_FINE_MAX_TILES
+    ):
+        raise ValueError("cached navigation voxel chunk descriptor count is too large")
+    descriptors = tuple(
+        NavigationVoxelChunkDescriptor.from_payload(raw_chunk)
+        for raw_chunk in raw_chunks
+    )
+    try:
+        declared_chunk_count = int(
+            raw_store.get("chunk_count", len(descriptors))
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("cached navigation voxel chunk count is malformed") from exc
+    for descriptor in descriptors:
+        relative_path = descriptor.relative_path
+        if (
+            not relative_path
+            or os.path.isabs(relative_path)
+            or os.path.normpath(relative_path) != relative_path
+            or not relative_path.startswith("navigation_voxel_chunks/")
+        ):
+            raise ValueError("cached navigation voxel chunk path is invalid")
+    coarse_count = sum(descriptor.kind == "coarse" for descriptor in descriptors)
+    fine_count = sum(descriptor.kind == "fine" for descriptor in descriptors)
+    try:
+        expected_coarse_count = int(model.get("tile_count", coarse_count))
+        expected_fine_count = int(
+            model.get("fine_tile_count", fine_count)
+        )
+        max_resident = int(
+            raw_store.get(
+                "max_resident_chunks",
+                DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_RESIDENT,
+            )
+        )
+        max_chunk_bytes = int(
+            raw_store.get(
+                "max_chunk_bytes",
+                DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_BYTES,
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("cached navigation voxel chunk limits are malformed") from exc
+    if (
+        declared_chunk_count != len(descriptors)
+        or declared_chunk_count <= 0
+        or expected_coarse_count != coarse_count
+        or expected_fine_count != fine_count
+        or expected_coarse_count <= 0
+        or max_resident <= 0
+        or max_chunk_bytes <= 0
+    ):
+        raise ValueError("cached navigation voxel chunk index is inconsistent")
+    return DiskNavigationVoxelChunkStore(
+        cache_dir,
+        descriptors,
+        decoder=deserialize_local_voxel_volume,
+        max_resident_chunks=max_resident,
+        max_chunk_bytes=max_chunk_bytes,
+    )
 
 
 def serialize_local_voxel_volume(volume: LocalVoxelVolume) -> dict[str, object]:
@@ -1357,37 +4425,129 @@ def serialize_navigation_voxel_volume(
         return {
             "version": NAVIGATION_VOXEL_CACHE_VERSION,
             "method": NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            "cache_quality_profile": "advanced_graph_native_v1",
             "coverage_scope": volume.coverage_scope,
             "tile_count": len(volume.tiles),
+            "fine_tile_count": len(volume.fine_tiles),
             "tiles": [serialize_local_voxel_volume(tile) for tile in volume.tiles],
+            "fine_tiles": [
+                serialize_local_voxel_volume(tile)
+                for tile in volume.fine_tiles
+            ],
             "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
+            "footprint_graph_method": NAVIGATION_VOXEL_FOOTPRINT_GRAPH_METHOD,
             "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
             "cell_metrics": _serialize_cell_metrics(volume.cell_metrics),
+            "prepared_graph": (
+                None
+                if volume.prepared_graph is None
+                else serialize_navigation_voxel_graph(volume.prepared_graph)
+            ),
+            "prepared_3d_graph": (
+                None
+                if volume.prepared_3d_graph is None
+                else serialize_navigation_voxel_3d_graph(volume.prepared_3d_graph)
+            ),
         }
     return serialize_local_voxel_volume(volume)
+
+
+def _serialize_navigation_voxel_chunked(
+    volume: NavigationVoxelAtlas,
+    *,
+    route_id: str,
+) -> tuple[dict[str, object], dict[str, Mapping[str, object]]]:
+    """Split dense atlas tiles from the graph/index sidecar payload.
+
+    The regular serializer remains embedded for compatibility with existing
+    callers and older tests. Cache publication uses this second representation
+    so only the graph, metrics, and compact chunk descriptors are loaded during
+    route planning; individual dense voxel fields are decoded on demand.
+    """
+    model = serialize_navigation_voxel_volume(volume)
+    route_digest = hashlib.sha256(str(route_id).encode("utf-8")).hexdigest()[:16]
+    chunk_root = "navigation_voxel_chunks"
+    route_root = f"{chunk_root}/route-{route_digest}"
+    descriptors: list[dict[str, object]] = []
+    chunk_payloads: dict[str, Mapping[str, object]] = {}
+
+    for kind, tiles in (
+        ("coarse", volume.tiles),
+        ("fine", volume.fine_tiles),
+    ):
+        for index, tile in enumerate(tiles):
+            chunk_id = f"{kind}-{index:06d}"
+            relative_path = f"{route_root}/{chunk_id}.json"
+            descriptor = NavigationVoxelChunkDescriptor.from_volume(
+                chunk_id,
+                kind,
+                tile,
+                relative_path=relative_path,
+            )
+            descriptors.append(descriptor.payload())
+            chunk_payloads[relative_path] = serialize_local_voxel_volume(tile)
+
+    chunked_model = dict(model)
+    chunked_model.pop("tiles", None)
+    chunked_model.pop("fine_tiles", None)
+    chunked_model["chunk_store"] = {
+        "method": NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD,
+        "root": chunk_root,
+        "max_resident_chunks": int(DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_RESIDENT),
+        "max_chunk_bytes": int(DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_BYTES),
+        "chunk_count": int(len(descriptors)),
+        "chunks": descriptors,
+    }
+    return chunked_model, chunk_payloads
 
 
 def deserialize_navigation_voxel_volume(
     payload: Mapping[str, object],
     *,
     max_tiles: int = DEFAULT_CACHE_VOXEL_MAX_TILES,
+    chunk_store: NavigationVoxelChunkStore | None = None,
 ) -> LocalVoxelVolume | NavigationVoxelAtlas:
     """Restore a legacy local field or a validated bounded voxel atlas."""
-    if payload.get("method") == NAVIGATION_VOXEL_ATLAS_MODEL_METHOD:
-        if payload.get("version") != NAVIGATION_VOXEL_CACHE_VERSION:
+    atlas_method = payload.get("method")
+    if atlas_method in {
+        NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+    }:
+        expected_versions = {
+            NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: NAVIGATION_VOXEL_CACHE_VERSION,
+            _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION,
+            _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _OLDER_NAVIGATION_VOXEL_CACHE_VERSION,
+        }
+        expected_version = expected_versions[atlas_method]
+        if payload.get("version") != expected_version:
             raise ValueError("unsupported navigation voxel atlas version")
         raw_tiles = payload.get("tiles")
-        if not isinstance(raw_tiles, Sequence) or isinstance(raw_tiles, (str, bytes)):
+        if chunk_store is None and (
+            not isinstance(raw_tiles, Sequence)
+            or isinstance(raw_tiles, (str, bytes))
+        ):
             raise ValueError("cached navigation voxel atlas tiles are missing")
+        if chunk_store is not None and (
+            raw_tiles is None
+            or (
+                isinstance(raw_tiles, Sequence)
+                and not isinstance(raw_tiles, (str, bytes))
+                and len(raw_tiles) == 0
+            )
+        ):
+            raw_tiles = ()
+        if not isinstance(raw_tiles, Sequence) or isinstance(raw_tiles, (str, bytes)):
+            raise ValueError("cached navigation voxel atlas tiles are malformed")
         try:
             tile_count = int(payload.get("tile_count", len(raw_tiles)))
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 "cached navigation voxel atlas tile count is malformed"
             ) from exc
-        if tile_count != len(raw_tiles) or tile_count <= 0:
+        if chunk_store is None and (tile_count != len(raw_tiles) or tile_count <= 0):
             raise ValueError("cached navigation voxel atlas tile count is inconsistent")
-        if tile_count > max(1, int(max_tiles)):
+        if chunk_store is None and tile_count > max(1, int(max_tiles)):
             raise ValueError("cached navigation voxel atlas has too many tiles")
         tiles: list[LocalVoxelVolume] = []
         for raw_tile in raw_tiles:
@@ -1399,13 +4559,60 @@ def deserialize_navigation_voxel_volume(
                     max_voxels=DEFAULT_CACHE_VOXEL_MAX_TILE_CELLS,
                 )
             )
+        fine_tiles: list[LocalVoxelVolume] = []
+        raw_fine_tiles = payload.get("fine_tiles", ())
+        if chunk_store is not None and raw_fine_tiles is None:
+            raw_fine_tiles = ()
+        if not isinstance(raw_fine_tiles, Sequence) or isinstance(
+            raw_fine_tiles,
+            (str, bytes),
+        ):
+            raw_fine_tiles = ()
+        if len(raw_fine_tiles) > DEFAULT_CACHE_FINE_MAX_TILES:
+            raise ValueError("cached navigation voxel fine tile count is too large")
+        for raw_tile in raw_fine_tiles:
+            if not isinstance(raw_tile, Mapping):
+                raise ValueError("cached navigation voxel fine tile is malformed")
+            fine_tiles.append(
+                deserialize_local_voxel_volume(
+                    raw_tile,
+                    max_voxels=DEFAULT_CACHE_FINE_MAX_TILE_CELLS,
+                )
+            )
         cell_metrics = _deserialize_cell_metrics(payload.get("cell_metrics"))
+        prepared_graph = None
+        prepared_3d_graph = None
+        if atlas_method == NAVIGATION_VOXEL_ATLAS_MODEL_METHOD:
+            graph_3d_payload = payload.get("prepared_3d_graph")
+            if graph_3d_payload is not None:
+                prepared_3d_graph = deserialize_navigation_voxel_3d_graph(
+                    graph_3d_payload,
+                    max_nodes=DEFAULT_3D_GRAPH_MAX_NODES,
+                    max_edges=DEFAULT_3D_GRAPH_MAX_EDGES,
+                )
+        if atlas_method in {
+            NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        }:
+            graph_payload = payload.get("prepared_graph")
+            if graph_payload is not None:
+                prepared_graph = deserialize_navigation_voxel_graph(graph_payload)
+        resolved_chunk_store = chunk_store
+        if resolved_chunk_store is None:
+            resolved_chunk_store = InMemoryNavigationVoxelChunkStore(
+                tuple(tiles),
+                tuple(fine_tiles),
+            )
         return NavigationVoxelAtlas(
             tiles=tuple(tiles),
             coverage_scope=str(
                 payload.get("coverage_scope", "entire_cave_component")
             ),
             cell_metrics=cell_metrics,
+            prepared_graph=prepared_graph,
+            prepared_3d_graph=prepared_3d_graph,
+            fine_tiles=tuple(fine_tiles),
+            chunk_store=resolved_chunk_store,
         )
     return deserialize_local_voxel_volume(payload)
 
@@ -1425,6 +4632,7 @@ def _serialize_cell_metrics(
                 int(metric.free_cell_count),
                 float(metric.min_clearance_m),
                 float(metric.mean_clearance_m),
+                float(metric.center_y_m),
             ]
         )
     return serialized
@@ -1444,7 +4652,7 @@ def _deserialize_cell_metrics(
         if (
             not isinstance(raw, Sequence)
             or isinstance(raw, (str, bytes))
-            or len(raw) != 7
+            or len(raw) not in {7, 8}
         ):
             raise ValueError("cached navigation voxel cell metric is malformed")
         try:
@@ -1454,6 +4662,7 @@ def _deserialize_cell_metrics(
             free_count = int(raw[4])
             minimum_clearance = float(raw[5])
             mean_clearance = float(raw[6])
+            center_y = 0.0 if len(raw) == 7 else float(raw[7])
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 "cached navigation voxel cell metric is malformed"
@@ -1466,6 +4675,7 @@ def _deserialize_cell_metrics(
                     volume,
                     minimum_clearance,
                     mean_clearance,
+                    center_y,
                 )
             )
             or progress < 0.0
@@ -1482,6 +4692,7 @@ def _deserialize_cell_metrics(
             min_clearance_m=minimum_clearance,
             mean_clearance_m=mean_clearance,
             progress_m=progress,
+            center_y_m=center_y,
         )
     return metrics
 
@@ -1492,7 +4703,11 @@ def deserialize_local_voxel_volume(
     max_voxels: int = DEFAULT_VOXEL_MAX_CELLS * 4,
 ) -> LocalVoxelVolume | NavigationVoxelAtlas:
     """Validate and restore a bounded sparse surface voxel model."""
-    if payload.get("method") == NAVIGATION_VOXEL_ATLAS_MODEL_METHOD:
+    if payload.get("method") in {
+        NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+    }:
         return deserialize_navigation_voxel_volume(payload)
     if payload.get("version") != 1:
         raise ValueError("unsupported navigation voxel model version")
@@ -1558,6 +4773,7 @@ def _analyze_route(
     route: Mapping[str, object],
     points: tuple[Point, ...],
     *,
+    route_id: str,
     triangle_provider: TriangleProvider,
     config: NavigationVoxelCacheConfig,
 ) -> dict[str, object]:
@@ -1572,6 +4788,18 @@ def _analyze_route(
         "max_surface_samples": int(config.max_surface_samples),
         "tile_size_m": float(config.tile_size_m),
         "max_tiles": int(config.max_tiles),
+        "fine_voxel_size_m": float(config.fine_voxel_size_m),
+        "fine_tile_radius_m": float(config.fine_tile_radius_m),
+        "max_fine_tiles": int(config.max_fine_tiles),
+        "max_fine_tile_cells": int(config.max_fine_tile_cells),
+        "graph_max_nodes": int(config.graph_max_nodes),
+        "graph_max_edges": int(config.graph_max_edges),
+        "graph_max_edge_distance_cells": int(
+            config.graph_max_edge_distance_cells
+        ),
+        "graph_max_edges_per_node": int(config.graph_max_edges_per_node),
+        "graph_routing_authority": "prepared_true_3d_voxel_graph",
+        "cache_quality_profile": "advanced_graph_native_v1",
         "coverage_scope": "entire_cave_component",
         "coverage_includes_preceding_curvature": True,
         "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
@@ -1599,6 +4827,7 @@ def _analyze_route(
             points,
             triangle_provider=triangle_provider,
             config=config,
+            selected_regions=selected_regions,
         )
     except Exception as exc:
         common.update(
@@ -1649,6 +4878,14 @@ def _analyze_route(
             "model": serialize_navigation_voxel_volume(atlas),
         }
     )
+    chunked_model, chunk_payloads = _serialize_navigation_voxel_chunked(
+        atlas,
+        route_id=route_id,
+    )
+    common["chunk_storage_method"] = NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD
+    common["chunk_count"] = int(len(chunk_payloads))
+    common["_chunked_model"] = chunked_model
+    common["_chunk_payloads"] = chunk_payloads
     # ``model`` is needed by the sidecar but is intentionally removed from the
     # small manifest summary by the caller.
     common["_model"] = common.pop("model")
@@ -1662,6 +4899,7 @@ def _build_route_voxel_atlas(
     *,
     triangle_provider: TriangleProvider,
     config: NavigationVoxelCacheConfig,
+    selected_regions: Sequence[object] = (),
 ) -> tuple[
     NavigationVoxelAtlas | None,
     dict[str, float | int | bool],
@@ -1703,9 +4941,22 @@ def _build_route_voxel_atlas(
         tile_size=tile_size,
     )
     padding = max(config.voxel_size_m * 2.0, cell_size * 0.25)
+    progress_distances = _component_progress_distances(
+        component_cell_set,
+        route,
+        cell_size=cell_size,
+    )
     tiles: list[LocalVoxelVolume] = []
     total_metrics: list[dict[str, float | int | bool]] = []
     cell_accumulators: dict[FootprintCell, list[float]] = {}
+    true_3d_accumulator: dict[VoxelGraphKey, list[float]] = {}
+    true_3d_base_grid_size = max(
+        1e-6,
+        min(
+            float(config.voxel_size_m),
+            float(config.fine_voxel_size_m),
+        ),
+    )
     total_samples = 0
     total_triangles = 0
     sampling_truncated = False
@@ -1769,14 +5020,30 @@ def _build_route_voxel_atlas(
             )
             if cell not in component_cell_set:
                 continue
+            low_y, high_y = _cell_y_range(
+                cell,
+                y_ranges,
+                fallback_y_range,
+            )
+            if center[1] < low_y or center[1] > high_y:
+                continue
+            accumulate_navigation_voxel_3d_sample(
+                true_3d_accumulator,
+                center,
+                grid_size_m=true_3d_base_grid_size,
+                clearance_m=float(clearance_m),
+                volume_m3=float(tile.voxel_size_m ** 3),
+                progress_m=float(progress_distances.get(cell, 0.0)),
+            )
             accumulator = cell_accumulators.setdefault(
                 cell,
-                [0.0, 0.0, float("inf"), 0.0],
+                [0.0, 0.0, float("inf"), 0.0, 0.0],
             )
             accumulator[0] += 1.0
             accumulator[1] += float(clearance_m)
             accumulator[2] = min(accumulator[2], float(clearance_m))
             accumulator[3] += float(tile.voxel_size_m ** 3)
+            accumulator[4] += float(center[1])
 
     if not tiles:
         return None, {}, {
@@ -1795,11 +5062,17 @@ def _build_route_voxel_atlas(
             "navigation_cell_count": 0,
         }
 
-    progress_distances = _component_progress_distances(
-        component_cell_set,
-        route,
-        cell_size=cell_size,
+    fine_seed_points = _fine_frontier_seed_points(
+        points,
+        selected_regions=selected_regions,
+        max_tiles=config.max_fine_tiles,
     )
+    fine_tiles = _build_fine_frontier_tiles(
+        fine_seed_points,
+        triangle_provider=triangle_provider,
+        config=config,
+    )
+
     cell_metrics = {
         cell: NavigationVoxelCellMetric(
             available_volume_m3=float(accumulator[3]),
@@ -1807,14 +5080,37 @@ def _build_route_voxel_atlas(
             min_clearance_m=float(accumulator[2]),
             mean_clearance_m=float(accumulator[1] / max(1.0, accumulator[0])),
             progress_m=float(progress_distances[cell]),
+            center_y_m=float(accumulator[4] / max(1.0, accumulator[0])),
         )
         for cell, accumulator in cell_accumulators.items()
         if cell in progress_distances and accumulator[0] > 0.0
     }
+    true_3d_metrics, true_3d_grid_size = finalize_navigation_voxel_3d_metrics(
+        true_3d_accumulator,
+        grid_size_m=true_3d_base_grid_size,
+        footprint_cell_size_m=cell_size,
+        max_nodes=config.graph_max_nodes,
+        max_vertical_factor=4,
+    )
+    true_3d_unknown_boundary = _true_3d_unknown_boundary_keys(
+        true_3d_metrics,
+        component_cell_set=component_cell_set,
+        sampling_truncated=sampling_truncated,
+    )
+    prepared_3d_graph = build_navigation_voxel_3d_graph(
+        true_3d_metrics,
+        grid_size_m=true_3d_grid_size,
+        max_edge_distance_cells=config.graph_max_edge_distance_cells,
+        max_edges_per_node=config.graph_max_edges_per_node,
+        max_total_edges=config.graph_max_edges,
+        unknown_boundary=true_3d_unknown_boundary,
+    )
     atlas = NavigationVoxelAtlas(
         tuple(tiles),
         coverage_scope=coverage_scope,
         cell_metrics=cell_metrics,
+        prepared_3d_graph=prepared_3d_graph,
+        fine_tiles=tuple(fine_tiles),
     )
     metrics = _aggregate_tile_metrics(total_metrics, atlas)
     details = {
@@ -1822,6 +5118,12 @@ def _build_route_voxel_atlas(
         "bounds_max": _point_payload(atlas.bounds_max),
         "tile_size_m": float(tile_size),
         "tile_count": len(tiles),
+        "fine_tile_count": len(fine_tiles),
+        "fine_voxel_size_m": float(atlas.fine_voxel_size_m),
+        "fine_voxel_size_max_m": max(
+            (float(tile.voxel_size_m) for tile in fine_tiles),
+            default=0.0,
+        ),
         "coverage_cell_count": len(component_cells),
         "coverage_scope": coverage_scope,
         "coverage_includes_preceding_curvature": coverage_scope
@@ -1832,12 +5134,45 @@ def _build_route_voxel_atlas(
         "surface_sample_count": int(total_samples),
         "sampling_truncated": bool(sampling_truncated),
         "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
+        "footprint_graph_method": NAVIGATION_VOXEL_FOOTPRINT_GRAPH_METHOD,
         "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
         "navigation_cell_count": int(atlas.navigation_cell_count),
         "filled_free_cell_count": int(atlas.filled_free_cell_count),
         "progress_max_m": float(atlas.max_progress_m),
+        "prepared_graph": None,
+        "prepared_3d_graph": prepared_3d_graph.diagnostic_payload(),
+        "navigation_3d_cell_count": int(len(prepared_3d_graph.nodes)),
+        "graph_grid_size_m": [
+            float(value) for value in prepared_3d_graph.grid_size_m
+        ],
+        "graph_resolution_m": float(true_3d_base_grid_size),
+        "graph_native_routing": True,
+        "fine_sampling_truncated": any(
+            bool(tile.sampling_truncated) for tile in fine_tiles
+        ),
     }
     return atlas, metrics, details
+
+
+def _true_3d_unknown_boundary_keys(
+    metrics: Mapping[VoxelGraphKey, NavigationVoxel3DMetric],
+    *,
+    component_cell_set: set[FootprintCell],
+    sampling_truncated: bool,
+) -> set[VoxelGraphKey]:
+    """Mark graph nodes whose surrounding cache evidence is incomplete."""
+    if sampling_truncated:
+        return set(metrics)
+    sampled_footprints = {metric.footprint_cell for metric in metrics.values()}
+    unknown: set[VoxelGraphKey] = set()
+    for key, metric in metrics.items():
+        neighboring_component_cells = navigable_footprint_neighbors(
+            metric.footprint_cell,
+            component_cell_set,
+        )
+        if any(cell not in sampled_footprints for cell in neighboring_component_cells):
+            unknown.add(key)
+    return unknown
 
 
 def _tile_seed_points(
@@ -1854,6 +5189,112 @@ def _tile_seed_points(
         low_y, high_y = _cell_y_range(cell, y_ranges, fallback_y_range)
         points.append((x, (low_y + high_y) * 0.5, z))
     return tuple(points)
+
+
+def _fine_frontier_seed_points(
+    points: Sequence[Point],
+    *,
+    selected_regions: Sequence[object],
+    max_tiles: int,
+) -> tuple[Point, ...]:
+    """Select bounded cache-time fine-field seeds near bends and their lead-in."""
+    limit = max(0, int(max_tiles))
+    if limit <= 0 or not points:
+        return ()
+    indices: list[int] = []
+    seen: set[int] = set()
+
+    def add(index: int) -> None:
+        bounded = max(0, min(len(points) - 1, int(index)))
+        if bounded not in seen:
+            seen.add(bounded)
+            indices.append(bounded)
+
+    # Always cover the live entrance/frontier first. Previously a long
+    # curvature region could consume the whole fine-tile budget before the
+    # route origin was added, forcing runtime rasterization on the first
+    # replan. Keep a small contiguous lead-in so the first several frontiers
+    # are available before runtime planning has to fall back to coarser data.
+    for index in range(min(8, len(points))):
+        add(index)
+
+    # Put the bend and the preceding approach first. A tight turn often needs
+    # fine geometry before the actual curvature peak, not only at the peak.
+    for region in selected_regions:
+        start = int(getattr(region, "start_index", 0))
+        end = int(getattr(region, "end_index", start))
+        region_indices = (
+            max(0, start - 2),
+            start,
+            (start + end) // 2,
+            end,
+            min(len(points) - 1, end + 1),
+        )
+        for index in region_indices:
+            add(index)
+            if len(indices) >= limit:
+                return tuple(points[index] for index in indices[:limit])
+
+    # Spread the remaining budget along the route so long straight lead-ins
+    # also have a fine frontier available when a branch appears unexpectedly.
+    stride = max(1, math.ceil(len(points) / max(1, limit)))
+    for index in range(0, len(points), stride):
+        add(index)
+        if len(indices) >= limit:
+            break
+    if len(indices) < limit:
+        add(len(points) - 1)
+    return tuple(points[index] for index in indices[:limit])
+
+
+def _build_fine_frontier_tiles(
+    seed_points: Sequence[Point],
+    *,
+    triangle_provider: TriangleProvider,
+    config: NavigationVoxelCacheConfig,
+) -> tuple[LocalVoxelVolume, ...]:
+    """Build sparse 1 m refinement tiles around bounded route frontiers."""
+    if not seed_points or config.max_fine_tiles <= 0:
+        return ()
+    tile_limit = max(1, int(config.max_fine_tiles))
+    sample_budget = max(
+        4_096,
+        math.ceil(max(1, int(config.max_surface_samples)) / tile_limit),
+    )
+    radius = max(
+        float(config.fine_voxel_size_m) * 4.0,
+        float(config.fine_tile_radius_m),
+    )
+    tiles: list[LocalVoxelVolume] = []
+    for point in seed_points[:tile_limit]:
+        bounds_min = tuple(float(point[axis] - radius) for axis in range(3))
+        bounds_max = tuple(float(point[axis] + radius) for axis in range(3))
+        try:
+            tile = build_surface_voxel_volume(
+                triangle_provider(bounds_min, bounds_max),
+                bounds_min=bounds_min,
+                bounds_max=bounds_max,
+                config=VoxelVolumeConfig(
+                    voxel_size_m=float(config.fine_voxel_size_m),
+                    surface_inflation_cells=max(
+                        1,
+                        int(
+                            math.ceil(
+                                2.0 / max(1e-6, float(config.fine_voxel_size_m))
+                            )
+                        ),
+                    ),
+                    max_voxels=int(config.max_fine_tile_cells),
+                    max_surface_samples=sample_budget,
+                    max_clearance_search_cells=16,
+                ),
+            )
+        except Exception:
+            continue
+        if tile.triangle_count <= 0 or tile.surface_sample_count <= 0:
+            continue
+        tiles.append(tile)
+    return tuple(tiles)
 
 
 def _metrics_for_filled_cells(
@@ -1955,7 +5396,7 @@ def _aggregate_tile_metrics(
         ),
         "surface_fraction": float(
             sum(len(tile.surface_cells) for tile in atlas.tiles)
-            / max(1, atlas.voxel_count)
+            / max(1, sum(tile.voxel_count for tile in atlas.tiles))
         ),
         "min_clearance_m": min(
             (
@@ -2186,14 +5627,30 @@ def _select_recommended_route_id(
 
 
 def _supported_cache_identity(version: object, method: object) -> bool:
-    """Accept the current atlas and the previous local sidecar format."""
+    """Accept current prepared graphs and readable older sidecars."""
     return (version, method) in {
         (NAVIGATION_VOXEL_CACHE_VERSION, NAVIGATION_VOXEL_CACHE_METHOD),
+        (
+            _PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION,
+            _PREVIOUS_NAVIGATION_VOXEL_CACHE_METHOD,
+        ),
+        (
+            _OLDER_NAVIGATION_VOXEL_CACHE_VERSION,
+            _OLDER_NAVIGATION_VOXEL_CACHE_METHOD,
+        ),
         (
             _LEGACY_NAVIGATION_VOXEL_CACHE_VERSION,
             _LEGACY_NAVIGATION_VOXEL_CACHE_METHOD,
         ),
     }
+
+
+def supported_navigation_voxel_cache_identity(
+    version: object,
+    method: object,
+) -> bool:
+    """Return whether a navigation sidecar can be read by this build."""
+    return _supported_cache_identity(version, method)
 
 
 def _empty_payload(config: NavigationVoxelCacheConfig) -> dict[str, object]:
@@ -2204,6 +5661,17 @@ def _empty_payload(config: NavigationVoxelCacheConfig) -> dict[str, object]:
         "curvature_method": CURVATURE_PROFILE_METHOD,
         "tile_size_m": float(config.tile_size_m),
         "max_tiles": int(config.max_tiles),
+        "fine_voxel_size_m": float(config.fine_voxel_size_m),
+        "fine_tile_radius_m": float(config.fine_tile_radius_m),
+        "max_fine_tiles": int(config.max_fine_tiles),
+        "max_fine_tile_cells": int(config.max_fine_tile_cells),
+        "graph_max_nodes": int(config.graph_max_nodes),
+        "graph_max_edges": int(config.graph_max_edges),
+        "graph_max_edge_distance_cells": int(
+            config.graph_max_edge_distance_cells
+        ),
+        "graph_max_edges_per_node": int(config.graph_max_edges_per_node),
+        "cache_quality_profile": "advanced_graph_native_v1",
         "coverage_scope": "entire_cave_component",
         "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
         "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,

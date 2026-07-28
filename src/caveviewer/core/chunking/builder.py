@@ -964,14 +964,31 @@ def _attach_navigation_metadata(
                     triangle_provider=mesh_guard.triangle_meshes_for_bounds,
                 )
                 if voxel_result.built_route_count:
+                    published_payload = (
+                        voxel_result.chunked_payload
+                        if voxel_result.chunked_payload is not None
+                        else voxel_result.payload
+                    )
+                    for relative_path, chunk_payload in (
+                        voxel_result.chunk_payloads.items()
+                    ):
+                        _atomic_write_json(
+                            os.path.join(cache_dir, relative_path),
+                            dict(chunk_payload),
+                        )
                     _atomic_write_json(
                         os.path.join(cache_dir, NAVIGATION_VOXEL_CACHE_NAME),
-                        voxel_result.payload,
+                        published_payload,
                     )
                     _LOG.info(
-                        "Built whole-cave navigation voxel atlases for %d route(s); "
-                        "recommended route=%s.",
+                        "Built whole-cave navigation voxel atlases for %d route(s) "
+                        "using %s with %d persisted chunk(s); recommended route=%s.",
                         voxel_result.built_route_count,
+                        published_payload.get(
+                            "storage_method",
+                            "embedded_memory",
+                        ),
+                        len(voxel_result.chunk_payloads),
                         voxel_result.recommended_route_id,
                     )
             except Exception as exc:

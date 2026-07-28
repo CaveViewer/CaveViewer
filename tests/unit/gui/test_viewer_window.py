@@ -556,11 +556,13 @@ def test_auto_dive_initial_camera_pose_uses_runtime_preferences(monkeypatch):
     monkeypatch.setattr(
         viewer_window,
         "build_auto_dive_initial_camera_pose",
-        lambda manifest, *, settings: calls.append((manifest, settings)) or pose,
+        lambda manifest, *, settings, require_voxel_graph: calls.append(
+            (manifest, settings, require_voxel_graph)
+        ) or pose,
     )
 
     assert window._auto_dive_initial_camera_pose() is pose
-    assert calls == [(window.manifest, settings)]
+    assert calls == [(window.manifest, settings, True)]
 
 
 def _initial_auto_dive_pose_window():
@@ -624,6 +626,7 @@ def test_initial_auto_dive_pose_queues_without_blocking(monkeypatch):
     assert fn is viewer_window.build_auto_dive_initial_camera_pose
     assert args == (window.manifest,)
     assert kwargs["settings"] is settings
+    assert kwargs["require_voxel_graph"] is True
     assert np.allclose(
         window._initial_auto_dive_pose_start_position,
         [1.0, 2.0, 3.0],
@@ -770,7 +773,7 @@ def test_auto_dive_start_queues_initial_plan_without_blocking(monkeypatch):
     assert window._auto_dive_start_blackbox is blackbox
     assert len(executor.submit_calls) == 1
     fn, args, kwargs = executor.submit_calls[0]
-    assert fn is viewer_window.build_centerline_auto_dive_plan
+    assert fn is viewer_window.build_voxel_graph_auto_dive_plan
     assert args == (window.manifest,)
     assert kwargs["current_position"] == (1.0, 2.0, 3.0)
     assert kwargs["current_yaw"] == pytest.approx(0.25)
@@ -828,10 +831,19 @@ def test_auto_dive_start_completion_activates_controller(monkeypatch):
     created = {}
 
     class FakeReplanner:
-        def __init__(self, manifest, replanner_settings, *, cache_dir, blackbox):
+        def __init__(
+            self,
+            manifest,
+            replanner_settings,
+            *,
+            plan_builder,
+            cache_dir,
+            blackbox,
+        ):
             created["replanner"] = (
                 manifest,
                 replanner_settings,
+                plan_builder,
                 cache_dir,
                 blackbox,
             )
@@ -890,6 +902,7 @@ def test_auto_dive_start_completion_activates_controller(monkeypatch):
     assert created["replanner"] == (
         window.manifest,
         settings,
+        viewer_window.build_voxel_graph_auto_dive_plan,
         window.cache_dir,
         blackbox,
     )

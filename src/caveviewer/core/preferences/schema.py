@@ -391,8 +391,8 @@ PREFERENCE_FIELDS = (
         env_var="CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS",
         label="Diagnostics",
         hint=(
-            "Write Guided Dive blackbox events to auto_dive_debug.jsonl "
-            "in the active map cache."
+            "Write Guided Dive and application lifecycle events to "
+            "auto_dive_debug.jsonl in the active map cache."
         ),
         value_type=PreferenceValueType.INT,
         default="0",

@@ -42,7 +42,7 @@ from caveviewer.core.navigation.autodive import (
     DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS,
     DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
     build_auto_dive_initial_camera_pose,
-    build_centerline_auto_dive_plan,
+    build_voxel_graph_auto_dive_plan,
 )
 from caveviewer.core.navigation.cache_metadata import cached_centerline_path
 from caveviewer.core.navigation.centerline import (
@@ -2753,11 +2753,13 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return build_auto_dive_initial_camera_pose(
                     self.manifest,
                     settings=settings,
+                    require_voxel_graph=True,
                 )
             return build_auto_dive_initial_camera_pose(
                 self.manifest,
                 settings=settings,
                 cache_dir=cache_dir,
+                require_voxel_graph=True,
             )
         except NavigationConfigurationError as exc:
             _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
@@ -2781,6 +2783,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.manifest,
                 settings=settings,
                 cache_dir=self.cache_dir,
+                require_voxel_graph=True,
             )
         except Exception as exc:
             if executor is not None:
@@ -2869,6 +2872,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             mouse_sensitivity=float(
                 getattr(previous_camera, "mouse_sensitivity", 0.12)
             ),
+        )
+        self.camera.roll = math.radians(
+            float(getattr(initial_pose, "roll_deg", 0.0))
         )
         self._reset_initial_chunk_loading_state()
         _LOG.info(
@@ -3048,11 +3054,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                 thread_name_prefix="CaveViewer-AutoDiveStart",
             )
             future = executor.submit(
-                build_centerline_auto_dive_plan,
+                build_voxel_graph_auto_dive_plan,
                 self.manifest,
                 current_position=tuple(float(value) for value in start_position),
                 current_yaw=float(self.camera.yaw),
                 current_pitch=float(self.camera.pitch),
+                current_roll=float(getattr(self.camera, "roll", 0.0)),
                 settings=auto_dive_settings,
                 cache_dir=self.cache_dir,
                 diagnostics=_auto_dive_diagnostic_sink(
@@ -3274,6 +3281,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             replanner=AutoDiveReplanner(
                 self.manifest,
                 auto_dive_settings,
+                plan_builder=build_voxel_graph_auto_dive_plan,
                 cache_dir=self.cache_dir,
                 blackbox=blackbox,
             ),
@@ -3400,6 +3408,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.minimap.set_active_route_points_xz(())
             return
         if current_state is AutoDiveState.COMPLETE:
+            if bool(getattr(controller.plan, "terminal_reached", False)):
+                _LOG.info(
+                    "End of cave reached. No valid forward passage remains."
+                )
             self._stop_auto_dive(completed=True)
 
     def _render_auto_dive_progress(self, window_size: tuple[int, int]) -> None:

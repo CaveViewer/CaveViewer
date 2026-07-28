@@ -31,6 +31,7 @@ from caveviewer.core.navigation.voxel_cache import (
     NAVIGATION_VOXEL_CACHE_METHOD,
     NAVIGATION_VOXEL_CACHE_VERSION,
     load_cached_navigation_voxel_volume,
+    supported_navigation_voxel_cache_identity,
 )
 from caveviewer.core.navigation.route import NavigationConfigurationError
 
@@ -1122,13 +1123,14 @@ def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
     """Parse compact cache-time voxel metrics without loading the sidecar."""
     if not isinstance(value, Mapping):
         return None
-    if value.get("version") != NAVIGATION_VOXEL_CACHE_VERSION:
-        return None
-    if value.get("method") != NAVIGATION_VOXEL_CACHE_METHOD:
+    if not supported_navigation_voxel_cache_identity(
+        value.get("version"),
+        value.get("method"),
+    ):
         return None
     parsed: dict[str, Any] = {
-        "version": NAVIGATION_VOXEL_CACHE_VERSION,
-        "method": NAVIGATION_VOXEL_CACHE_METHOD,
+        "version": value.get("version"),
+        "method": value.get("method"),
     }
     for key in (
         "curvature_method",
@@ -1143,7 +1145,11 @@ def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
     numeric_keys = (
         "voxel_size_m",
         "tile_size_m",
+        "fine_voxel_size_m",
+        "fine_tile_radius_m",
         "max_tiles",
+        "max_fine_tiles",
+        "max_fine_tile_cells",
         "max_cells",
         "max_surface_samples",
         "available_volume_m3",
@@ -1160,6 +1166,7 @@ def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
         "curvature_region_count",
         "selected_region_count",
         "tile_count",
+        "fine_tile_count",
         "coverage_cell_count",
         "tiles_skipped",
         "navigation_cell_count",
@@ -1169,6 +1176,8 @@ def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
     float_keys = {
         "voxel_size_m",
         "tile_size_m",
+        "fine_voxel_size_m",
+        "fine_tile_radius_m",
         "available_volume_m3",
         "volume_per_route_m",
         "surface_fraction",
@@ -1188,6 +1197,7 @@ def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
     for key in (
         "built",
         "sampling_truncated",
+        "fine_sampling_truncated",
         "flood_fill_truncated",
         "coverage_includes_preceding_curvature",
     ):

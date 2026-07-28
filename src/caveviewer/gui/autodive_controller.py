@@ -18,7 +18,7 @@ from caveviewer.core.navigation.autodive import (
     DEFAULT_AUTO_DIVE_REPLAN_PLANNING_BUDGET_S,
     AutoDivePlan,
     AutoDiveSettings,
-    build_centerline_auto_dive_plan,
+    build_voxel_graph_auto_dive_plan,
     route_progress_fraction,
 )
 from caveviewer.core.navigation.route import apply_pose_to_camera
@@ -42,9 +42,24 @@ DEFAULT_AUTO_DIVE_MESH_RECOVERY_PITCH_DEGREES = 8.0
 # retries make the camera appear indecisive and can repeatedly select the same
 # unsafe branch before the user gets a meaningful handoff.
 DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_ATTEMPTS = 1
+DEFAULT_AUTO_DIVE_CONTINUOUS_SCAN_MAX_FAILURES = 3
 DEFAULT_AUTO_DIVE_MESH_RECOVERY_STANDOFF_CELLS = 2.0
 DEFAULT_AUTO_DIVE_MESH_RECOVERY_MIN_STANDOFF_M = 15.0
 DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_STANDOFF_FRACTION = 0.5
+DEFAULT_AUTO_DIVE_ROLLING_CLEARANCE_INTERVAL_SECONDS = 0.35
+DEFAULT_AUTO_DIVE_ROLLING_CLEARANCE_PLANNING_MARGIN = 1.25
+DEFAULT_AUTO_DIVE_ROLLING_CLEARANCE_MIN_LEAD_M = 15.0
+# Speculative replanning uses the same single bounded planner worker as an
+# authoritative replan. It starts early enough to keep the next route ready,
+# but does not interrupt short route legs that are better handled by their
+# explicit frontier/boundary handoff.
+DEFAULT_AUTO_DIVE_SPECULATIVE_REPLAN_PLANNING_MARGIN = 1.25
+DEFAULT_AUTO_DIVE_SPECULATIVE_REPLAN_MIN_LEAD_SECONDS = 6.0
+DEFAULT_AUTO_DIVE_SPECULATIVE_REPLAN_MIN_REMAINING_SECONDS = 2.0
+DEFAULT_AUTO_DIVE_SPECULATIVE_REPLAN_INITIAL_GRACE_SECONDS = 1.0
+DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_INTERVAL_SECONDS = 1.0
+DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_HORIZON_SECONDS = 12.0
+DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_MAX_POINTS = 48
 DEFAULT_AUTO_DIVE_USER_ASSIST_MOVEMENT_THRESHOLD_M = 0.1
 DEFAULT_AUTO_DIVE_USER_ASSIST_SAMPLE_INTERVAL_S = 0.25
 DEFAULT_AUTO_DIVE_USER_ASSIST_SAMPLE_DISTANCE_M = 1.0
@@ -81,6 +96,588 @@ class AutoDiveReadiness:
         return self.missing_cells == 0
 
 
+@dataclass(frozen=True)
+class AutoDiveRollingClearanceReport:
+    """Immutable result from one bounded forward-route preflight."""
+
+    plan_sequence: int
+    checked_elapsed_s: float
+    remaining_distance_m: float
+    trigger_distance_m: float
+    safe_elapsed_s: float
+    safe_to_continue: bool
+    needs_replan: bool
+    reason: str
+    sample_count: int
+    maximum_turn_degrees: float
+    prepared_branch_count: int
+    prepared_goal_clearance_m: float | None
+    error: str | None = None
+    voxel_sample_count: int = 0
+    voxel_covered_count: int = 0
+    voxel_uncovered_count: int = 0
+    voxel_occupied_count: int = 0
+    voxel_min_clearance_m: float | None = None
+
+    def diagnostic_payload(self) -> dict[str, Any]:
+        return {
+            "plan_sequence": int(self.plan_sequence),
+            "checked_elapsed_s": float(self.checked_elapsed_s),
+            "remaining_distance_m": float(self.remaining_distance_m),
+            "trigger_distance_m": float(self.trigger_distance_m),
+            "safe_elapsed_s": float(self.safe_elapsed_s),
+            "safe_to_continue": bool(self.safe_to_continue),
+            "needs_replan": bool(self.needs_replan),
+            "reason": str(self.reason),
+            "sample_count": int(self.sample_count),
+            "maximum_turn_degrees": float(self.maximum_turn_degrees),
+            "prepared_branch_count": int(self.prepared_branch_count),
+            "prepared_goal_clearance_m": (
+                None
+                if self.prepared_goal_clearance_m is None
+                else float(self.prepared_goal_clearance_m)
+            ),
+            "error": self.error,
+            "voxel_sample_count": int(self.voxel_sample_count),
+            "voxel_covered_count": int(self.voxel_covered_count),
+            "voxel_uncovered_count": int(self.voxel_uncovered_count),
+            "voxel_occupied_count": int(self.voxel_occupied_count),
+            "voxel_min_clearance_m": (
+                None
+                if self.voxel_min_clearance_m is None
+                else float(self.voxel_min_clearance_m)
+            ),
+        }
+
+
+class AutoDiveRollingClearanceWorker:
+    """Run forward-horizon route checks away from the render thread.
+
+    This worker deliberately performs only bounded, immutable route inspection.
+    The exact mesh/voxel route build remains owned by ``AutoDiveReplanner``.
+    The two stages complement each other: this worker starts that expensive
+    decision before the current safe prefix ends, while the replanner performs
+    the authoritative collision and branch validation.
+    """
+
+    def __init__(self) -> None:
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="AutoDiveClearance",
+        )
+        self._lock = threading.Lock()
+        self._pending_future: Future | None = None
+        self._pending_context: tuple[int, float, float, float] | None = None
+        self._shutdown = False
+
+    def request(
+        self,
+        plan: AutoDivePlan,
+        *,
+        plan_sequence: int,
+        elapsed_s: float,
+        trigger_distance_m: float,
+        standoff_distance_m: float,
+    ) -> bool:
+        with self._lock:
+            if self._shutdown:
+                return False
+            if self._pending_future is not None:
+                return False
+            self._pending_context = (
+                int(plan_sequence),
+                float(elapsed_s),
+                float(trigger_distance_m),
+                float(standoff_distance_m),
+            )
+            self._pending_future = self._executor.submit(
+                _compute_rolling_clearance_report,
+                plan,
+                int(plan_sequence),
+                float(elapsed_s),
+                float(trigger_distance_m),
+                float(standoff_distance_m),
+            )
+            return True
+
+    def take_latest_report(self) -> AutoDiveRollingClearanceReport | None:
+        with self._lock:
+            future = self._pending_future
+            if future is None or not future.done():
+                return None
+            self._pending_future = None
+            context = self._pending_context
+            self._pending_context = None
+        try:
+            return future.result()
+        except Exception as exc:  # pragma: no cover - defensive worker seam
+            plan_sequence = -1 if context is None else context[0]
+            elapsed_s = 0.0 if context is None else context[1]
+            trigger_distance_m = 0.0 if context is None else context[2]
+            return AutoDiveRollingClearanceReport(
+                plan_sequence=plan_sequence,
+                checked_elapsed_s=elapsed_s,
+                remaining_distance_m=0.0,
+                trigger_distance_m=trigger_distance_m,
+                safe_elapsed_s=0.0,
+                safe_to_continue=False,
+                needs_replan=True,
+                reason="worker_error",
+                sample_count=0,
+                maximum_turn_degrees=0.0,
+                prepared_branch_count=0,
+                prepared_goal_clearance_m=None,
+                error=f"{type(exc).__name__}: {exc}",
+                voxel_sample_count=0,
+            )
+
+    def has_pending(self) -> bool:
+        with self._lock:
+            return bool(
+                self._pending_future is not None
+                and not self._pending_future.done()
+            )
+
+    def poll(self) -> AutoDiveRollingClearanceReport | None:
+        return self.take_latest_report()
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+@dataclass(frozen=True)
+class AutoDiveVoxelPrefetchReport:
+    """Bounded result from one predicted navigation-voxel prefetch."""
+
+    plan_sequence: int
+    elapsed_s: float
+    horizon_s: float
+    reason: str
+    outcome: str
+    point_count: int
+    requested_chunk_count: int
+    resident_chunk_count: int
+    resident_chunk_ids: tuple[str, ...]
+    storage_backend: str | None
+    storage_stats: Mapping[str, object] | None
+    duration_ms: float
+    error: str | None = None
+
+    def diagnostic_payload(self) -> dict[str, Any]:
+        return {
+            "plan_sequence": int(self.plan_sequence),
+            "elapsed_s": float(self.elapsed_s),
+            "horizon_s": float(self.horizon_s),
+            "reason": str(self.reason),
+            "outcome": str(self.outcome),
+            "point_count": int(self.point_count),
+            "requested_chunk_count": int(self.requested_chunk_count),
+            "resident_chunk_count": int(self.resident_chunk_count),
+            "resident_chunk_ids": [
+                str(chunk_id) for chunk_id in self.resident_chunk_ids[:16]
+            ],
+            "resident_chunk_ids_truncated": len(self.resident_chunk_ids) > 16,
+            "storage_backend": self.storage_backend,
+            "storage_stats": (
+                None
+                if self.storage_stats is None
+                else dict(self.storage_stats)
+            ),
+            "duration_ms": float(self.duration_ms),
+            "error": self.error,
+        }
+
+
+class AutoDiveVoxelPrefetchWorker:
+    """Materialize a bounded future voxel horizon off the navigation thread."""
+
+    def __init__(self) -> None:
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="AutoDiveVoxelPrefetch",
+        )
+        self._lock = threading.Lock()
+        self._pending_future: Future | None = None
+        self._pending_context: tuple[int, float, float, str] | None = None
+        self._shutdown = False
+
+    def request(
+        self,
+        plan: AutoDivePlan,
+        *,
+        plan_sequence: int,
+        elapsed_s: float,
+        reason: str,
+        horizon_s: float = DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_HORIZON_SECONDS,
+        max_points: int = DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_MAX_POINTS,
+    ) -> bool:
+        """Queue one bounded future-horizon materialization."""
+        elapsed = max(0.0, float(elapsed_s))
+        horizon = max(0.0, float(horizon_s))
+        points = _predicted_voxel_prefetch_points(
+            plan,
+            elapsed_s=elapsed,
+            horizon_s=horizon,
+            max_points=max_points,
+        )
+        context = (int(plan_sequence), elapsed, horizon, str(reason))
+        with self._lock:
+            if self._shutdown:
+                return False
+            if self._pending_future is not None and not self._pending_future.done():
+                return False
+            self._pending_context = context
+            self._pending_future = self._executor.submit(
+                _compute_voxel_prefetch_report,
+                plan,
+                plan_sequence=int(plan_sequence),
+                elapsed_s=elapsed,
+                horizon_s=horizon,
+                reason=str(reason),
+                points=points,
+            )
+            return True
+
+    def take_latest_report(self) -> AutoDiveVoxelPrefetchReport | None:
+        """Return one completed report without blocking the owner thread."""
+        with self._lock:
+            future = self._pending_future
+            if future is None or not future.done():
+                return None
+            self._pending_future = None
+            context = self._pending_context
+            self._pending_context = None
+        try:
+            return future.result()
+        except Exception as exc:  # pragma: no cover - defensive worker seam
+            plan_sequence, elapsed_s, horizon_s, reason = context or (
+                -1,
+                0.0,
+                0.0,
+                "unknown",
+            )
+            return AutoDiveVoxelPrefetchReport(
+                plan_sequence=plan_sequence,
+                elapsed_s=elapsed_s,
+                horizon_s=horizon_s,
+                reason=reason,
+                outcome="worker_error",
+                point_count=0,
+                requested_chunk_count=0,
+                resident_chunk_count=0,
+                resident_chunk_ids=(),
+                storage_backend=None,
+                storage_stats=None,
+                duration_ms=0.0,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    def has_pending(self) -> bool:
+        with self._lock:
+            return bool(
+                self._pending_future is not None
+                and not self._pending_future.done()
+            )
+
+    def cancel_pending(self) -> None:
+        with self._lock:
+            future = self._pending_future
+            self._pending_future = None
+            self._pending_context = None
+        if future is not None:
+            future.cancel()
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            future = self._pending_future
+            self._pending_future = None
+            self._pending_context = None
+        if future is not None:
+            future.cancel()
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _predicted_voxel_prefetch_points(
+    plan: AutoDivePlan,
+    *,
+    elapsed_s: float,
+    horizon_s: float,
+    max_points: int,
+) -> tuple[tuple[float, float, float], ...]:
+    """Sample the route horizon at bounded spacing for chunk prediction."""
+    route = getattr(plan, "route", None)
+    pose_at = getattr(route, "pose_at", None)
+    duration = max(0.0, float(getattr(route, "duration_s", 0.0)))
+    start = max(0.0, min(duration, float(elapsed_s)))
+    end = min(duration, start + max(0.0, float(horizon_s)))
+    if callable(pose_at) and duration > 1e-9:
+        route_length = max(0.0, float(getattr(plan, "route_length_m", 0.0)))
+        speed = route_length / duration
+        estimated_distance = max(0.0, (end - start) * speed)
+        sample_count = max(
+            2 if end > start + 1e-9 else 1,
+            min(
+                max(1, int(max_points)),
+                int(math.ceil(estimated_distance / 4.0)) + 1,
+            ),
+        )
+        points: list[tuple[float, float, float]] = []
+        for index in range(sample_count):
+            sample_time = start + (end - start) * index / max(1, sample_count - 1)
+            try:
+                position = pose_at(sample_time).position
+                point = tuple(float(value) for value in position)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if len(point) == 3 and all(math.isfinite(value) for value in point):
+                points.append(point)
+        if points:
+            return tuple(dict.fromkeys(points))
+    fallback = getattr(plan, "route_points", ())
+    points = []
+    for value in fallback:
+        try:
+            point = tuple(float(item) for item in value)
+        except (TypeError, ValueError):
+            continue
+        if len(point) == 3 and all(math.isfinite(item) for item in point):
+            points.append(point)
+    return tuple(dict.fromkeys(points[: max(1, int(max_points))]))
+
+
+def _compute_voxel_prefetch_report(
+    plan: AutoDivePlan,
+    *,
+    plan_sequence: int,
+    elapsed_s: float,
+    horizon_s: float,
+    reason: str,
+    points: tuple[tuple[float, float, float], ...],
+) -> AutoDiveVoxelPrefetchReport:
+    """Load predicted chunks and release chunks outside the current horizon."""
+    started_at = time.perf_counter()
+    volume = getattr(
+        getattr(plan, "centerline_path", None),
+        "cached_voxel_volume",
+        None,
+    )
+    prefetch = getattr(volume, "prefetch_for_points", None)
+    store = getattr(volume, "chunk_store", None)
+    if not callable(prefetch) or store is None:
+        return AutoDiveVoxelPrefetchReport(
+            plan_sequence=int(plan_sequence),
+            elapsed_s=float(elapsed_s),
+            horizon_s=float(horizon_s),
+            reason=str(reason),
+            outcome="no_navigation_chunk_store",
+            point_count=len(points),
+            requested_chunk_count=0,
+            resident_chunk_count=0,
+            resident_chunk_ids=(),
+            storage_backend=None,
+            storage_stats=None,
+            duration_ms=(time.perf_counter() - started_at) * 1000.0,
+        )
+
+    requested_ids: tuple[str, ...] = ()
+    requested: list[str] = []
+    for point in points:
+        requested.extend(store.chunk_ids_for_point(point))
+    requested_ids = tuple(dict.fromkeys(requested))
+    try:
+        prefetch(points)
+        resident_before_release = tuple(store.resident_chunk_ids())
+        # Keep the complete requested horizon, including chunks loaded by the
+        # prefetch call itself. Passing only the previously resident subset
+        # would immediately evict newly materialized route chunks.
+        del resident_before_release
+        store.release_unused(requested_ids)
+        resident_ids = tuple(store.resident_chunk_ids())
+        stats = store.stats()
+        backend = stats.get("backend")
+        backend_name = None if backend is None else str(backend)
+    except Exception as exc:
+        return AutoDiveVoxelPrefetchReport(
+            plan_sequence=int(plan_sequence),
+            elapsed_s=float(elapsed_s),
+            horizon_s=float(horizon_s),
+            reason=str(reason),
+            outcome="prefetch_error",
+            point_count=len(points),
+            requested_chunk_count=len(requested_ids),
+            resident_chunk_count=0,
+            resident_chunk_ids=(),
+            storage_backend=None,
+            storage_stats=None,
+            duration_ms=(time.perf_counter() - started_at) * 1000.0,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    outcome = (
+        "prefetched"
+        if not requested_ids or set(requested_ids) <= set(resident_ids)
+        else "partially_prefetched"
+    )
+    return AutoDiveVoxelPrefetchReport(
+        plan_sequence=int(plan_sequence),
+        elapsed_s=float(elapsed_s),
+        horizon_s=float(horizon_s),
+        reason=str(reason),
+        outcome=outcome,
+        point_count=len(points),
+        requested_chunk_count=len(requested_ids),
+        resident_chunk_count=len(resident_ids),
+        resident_chunk_ids=resident_ids,
+        storage_backend=backend_name,
+        storage_stats=stats,
+        duration_ms=(time.perf_counter() - started_at) * 1000.0,
+    )
+
+
+def _compute_rolling_clearance_report(
+    plan: AutoDivePlan,
+    plan_sequence: int,
+    elapsed_s: float,
+    trigger_distance_m: float,
+    standoff_distance_m: float,
+) -> AutoDiveRollingClearanceReport:
+    """Inspect a bounded route horizon without touching camera/world state."""
+    duration_s = max(0.0, float(getattr(plan.route, "duration_s", 0.0)))
+    route_length_m = max(0.0, float(getattr(plan, "route_length_m", 0.0)))
+    elapsed = max(0.0, min(duration_s, float(elapsed_s)))
+    speed = route_length_m / max(1e-9, duration_s)
+    remaining_distance = max(0.0, (duration_s - elapsed) * speed)
+    trigger_distance = max(0.0, float(trigger_distance_m))
+    standoff_distance = max(0.0, min(route_length_m, float(standoff_distance_m)))
+    safe_remaining = min(remaining_distance, standoff_distance)
+    safe_elapsed = max(0.0, duration_s - safe_remaining / max(1e-9, speed))
+
+    sample_distance = max(0.5, min(trigger_distance, route_length_m))
+    horizon_s = min(
+        max(0.0, duration_s - elapsed),
+        sample_distance / max(1e-9, speed),
+    )
+    sample_count = max(2, min(16, int(math.ceil(sample_distance / 5.0)) + 1))
+    sample_times = [
+        elapsed + horizon_s * index / max(1, sample_count - 1)
+        for index in range(sample_count)
+    ]
+    sample_positions = [
+        np.asarray(plan.route.pose_at(sample_time).position, dtype=np.float64)
+        for sample_time in sample_times
+    ]
+    voxel_sample_count = 0
+    voxel_covered_count = 0
+    voxel_uncovered_count = 0
+    voxel_occupied_count = 0
+    voxel_clearances: list[float] = []
+    centerline_path = getattr(plan, "centerline_path", None)
+    voxel_volume = getattr(centerline_path, "cached_voxel_volume", None)
+    probe_point = getattr(voxel_volume, "probe_point", None)
+    if callable(probe_point):
+        for point in sample_positions:
+            voxel_sample_count += 1
+            try:
+                probe = probe_point(point, include_clearance=True)
+            except Exception:
+                probe = None
+            if probe is None:
+                voxel_uncovered_count += 1
+                continue
+            is_free, clearance_m = probe
+            voxel_covered_count += 1
+            if bool(is_free):
+                voxel_clearances.append(max(0.0, float(clearance_m)))
+            else:
+                voxel_occupied_count += 1
+    maximum_turn_degrees = 0.0
+    previous_direction: np.ndarray | None = None
+    for first, second in zip(sample_positions, sample_positions[1:], strict=False):
+        direction = second - first
+        norm = float(np.linalg.norm(direction))
+        if norm <= 1e-9:
+            continue
+        direction /= norm
+        if previous_direction is not None:
+            dot = max(-1.0, min(1.0, float(np.dot(previous_direction, direction))))
+            maximum_turn_degrees = max(
+                maximum_turn_degrees,
+                math.degrees(math.acos(dot)),
+            )
+        previous_direction = direction
+
+    route_selection = getattr(plan, "voxel_route_selection", None)
+    if not isinstance(route_selection, Mapping):
+        route_selection = {}
+    raw_candidates = route_selection.get("branch_candidates")
+    prepared_branch_count = (
+        len(raw_candidates)
+        if isinstance(raw_candidates, Sequence)
+        and not isinstance(raw_candidates, (str, bytes))
+        else 0
+    )
+    prepared_goal_clearance = route_selection.get("goal_clearance_m")
+    try:
+        prepared_goal_clearance_m = (
+            None
+            if prepared_goal_clearance is None
+            else float(prepared_goal_clearance)
+        )
+    except (TypeError, ValueError):
+        prepared_goal_clearance_m = None
+
+    boundary_plan = bool(getattr(plan, "replan_at_end", False))
+    terminal_plan = bool(getattr(plan, "terminal_reached", False))
+    voxel_blocked = voxel_occupied_count > 0
+    needs_replan = (
+        not terminal_plan
+        and (
+            voxel_blocked
+            or (boundary_plan and remaining_distance <= trigger_distance)
+        )
+    )
+    if terminal_plan:
+        reason = "terminal_route"
+    elif voxel_blocked:
+        reason = "voxel_forward_clearance_blocked"
+    elif not boundary_plan:
+        reason = "no_rolling_boundary"
+    elif needs_replan:
+        reason = "approaching_forward_clearance_boundary"
+    else:
+        reason = "forward_clearance_horizon_clear"
+    return AutoDiveRollingClearanceReport(
+        plan_sequence=int(plan_sequence),
+        checked_elapsed_s=float(elapsed),
+        remaining_distance_m=float(remaining_distance),
+        trigger_distance_m=float(trigger_distance),
+        safe_elapsed_s=float(safe_elapsed),
+        safe_to_continue=bool(
+            not voxel_blocked
+            and (not needs_replan or elapsed < safe_elapsed - 1e-6)
+        ),
+        needs_replan=bool(needs_replan),
+        reason=reason,
+        sample_count=len(sample_positions),
+        maximum_turn_degrees=float(maximum_turn_degrees),
+        prepared_branch_count=int(prepared_branch_count),
+        prepared_goal_clearance_m=prepared_goal_clearance_m,
+        voxel_sample_count=int(voxel_sample_count),
+        voxel_covered_count=int(voxel_covered_count),
+        voxel_uncovered_count=int(voxel_uncovered_count),
+        voxel_occupied_count=int(voxel_occupied_count),
+        voxel_min_clearance_m=(
+            None if not voxel_clearances else min(voxel_clearances)
+        ),
+    )
+
+
 class AutoDiveReplanner:
     """Single-worker receding-horizon Guided Dive replanner.
 
@@ -94,7 +691,7 @@ class AutoDiveReplanner:
         manifest: Any,
         settings: AutoDiveSettings,
         *,
-        plan_builder: Callable[..., AutoDivePlan] = build_centerline_auto_dive_plan,
+        plan_builder: Callable[..., AutoDivePlan] = build_voxel_graph_auto_dive_plan,
         cache_dir: str | None = None,
         blackbox: Any | None = None,
         perf_counter: Callable[[], float] | None = None,
@@ -114,14 +711,38 @@ class AutoDiveReplanner:
             max_workers=1,
             thread_name_prefix="AutoDiveReplanner",
         )
+        # Continuous recovery scanning is intentionally independent from the
+        # authoritative replan worker. It may run for the whole route horizon
+        # on capable hardware without consuming the bounded handoff budget.
+        self._continuous_scan_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="AutoDiveContinuousScan",
+        )
         self._lock = threading.Lock()
         self._generation = 0
         self._latest_generation = 0
         self._latest_plan: AutoDivePlan | None = None
         self._latest_plan_generation: int | None = None
+        self._latest_plan_source_sequence: int | None = None
         self._last_taken_plan_generation: int | None = None
+        self._last_taken_plan_source_sequence: int | None = None
         self._pending_future: Future | None = None
+        self._pending_generation: int | None = None
+        self._generation_source_sequences: dict[int, int | None] = {}
         self._shutdown = False
+        self._voxel_prefetch_worker = AutoDiveVoxelPrefetchWorker()
+        self._continuous_scan_generation = 0
+        self._continuous_scan_latest_generation = 0
+        self._continuous_scan_pending_future: Future | None = None
+        self._continuous_scan_pending_generation: int | None = None
+        self._continuous_scan_generation_sources: dict[int, int | None] = {}
+        self._latest_continuous_scan_plan: AutoDivePlan | None = None
+        self._latest_continuous_scan_generation: int | None = None
+        self._latest_continuous_scan_source_sequence: int | None = None
+        self._last_taken_continuous_scan_generation: int | None = None
+        self._last_taken_continuous_scan_source_sequence: int | None = None
+        self._continuous_scan_failure_count = 0
+        self._continuous_scan_last_failure_generation: int | None = None
 
     def request(
         self,
@@ -129,10 +750,14 @@ class AutoDiveReplanner:
         *,
         current_yaw: float | None = None,
         current_pitch: float | None = None,
+        current_roll: float | None = None,
         current_travel_yaw: float | None = None,
         current_travel_pitch: float | None = None,
         avoid_positions: Sequence[Sequence[float]] | None = None,
         user_reposition: bool = False,
+        force_hemisphere_scan: bool = False,
+        source_plan_sequence: int | None = None,
+        speculative_replan: bool = False,
     ) -> bool:
         """Queue one replan from the current camera position if none is pending."""
         request_started_at = self._perf_counter()
@@ -142,6 +767,7 @@ class AutoDiveReplanner:
         )
         yaw = None if current_yaw is None else float(current_yaw)
         pitch = None if current_pitch is None else float(current_pitch)
+        roll = None if current_roll is None else float(current_roll)
         travel_yaw = (
             None if current_travel_yaw is None else float(current_travel_yaw)
         )
@@ -149,6 +775,14 @@ class AutoDiveReplanner:
             None if current_travel_pitch is None else float(current_travel_pitch)
         )
         avoided = _normalized_avoid_positions(avoid_positions)
+        try:
+            source_sequence = (
+                None
+                if source_plan_sequence is None
+                else int(source_plan_sequence)
+            )
+        except (TypeError, ValueError):
+            source_sequence = None
         with self._lock:
             if self._shutdown:
                 self._record_blackbox(
@@ -158,10 +792,14 @@ class AutoDiveReplanner:
                     position=position,
                     yaw=yaw,
                     pitch=pitch,
+                    roll=roll,
                     travel_yaw=travel_yaw,
                     travel_pitch=travel_pitch,
                     avoid_positions=avoided,
                     user_reposition=bool(user_reposition),
+                    force_hemisphere_scan=bool(force_hemisphere_scan),
+                    source_plan_sequence=source_sequence,
+                    speculative_replan=bool(speculative_replan),
                     planning_budget_s=float(self._planning_budget_s),
                 )
                 return False
@@ -173,10 +811,14 @@ class AutoDiveReplanner:
                     position=position,
                     yaw=yaw,
                     pitch=pitch,
+                    roll=roll,
                     travel_yaw=travel_yaw,
                     travel_pitch=travel_pitch,
                     avoid_positions=avoided,
                     user_reposition=bool(user_reposition),
+                    force_hemisphere_scan=bool(force_hemisphere_scan),
+                    source_plan_sequence=source_sequence,
+                    speculative_replan=bool(speculative_replan),
                     planning_budget_s=float(self._planning_budget_s),
                 )
                 return False
@@ -190,35 +832,212 @@ class AutoDiveReplanner:
                 position=position,
                 yaw=yaw,
                 pitch=pitch,
+                roll=roll,
                 travel_yaw=travel_yaw,
                 travel_pitch=travel_pitch,
                 avoid_positions=avoided,
                 user_reposition=bool(user_reposition),
+                force_hemisphere_scan=bool(force_hemisphere_scan),
+                source_plan_sequence=source_sequence,
+                speculative_replan=bool(speculative_replan),
                 planning_budget_s=float(self._planning_budget_s),
             )
+            self._generation_source_sequences[generation] = source_sequence
             future = self._executor.submit(
                 self._build_plan,
                 generation,
                 position,
                 yaw,
                 pitch,
+                roll,
                 travel_yaw,
                 travel_pitch,
                 avoided,
                 bool(user_reposition),
+                bool(force_hemisphere_scan),
                 request_started_at,
+                source_sequence,
+                bool(speculative_replan),
             )
             self._pending_future = future
-            future.add_done_callback(self._store_completed_plan)
-            return True
+            self._pending_generation = generation
+        # Register outside the replanner lock. ``Future.add_done_callback``
+        # invokes immediately when a tiny plan already completed; registering
+        # while holding the lock would make the callback wait on itself.
+        future.add_done_callback(self._store_completed_plan)
+        return True
+
+    def request_speculative(
+        self,
+        current_position: np.ndarray | tuple[float, float, float],
+        *,
+        source_plan_sequence: int,
+        current_yaw: float | None = None,
+        current_pitch: float | None = None,
+        current_roll: float | None = None,
+        current_travel_yaw: float | None = None,
+        current_travel_pitch: float | None = None,
+        avoid_positions: Sequence[Sequence[float]] | None = None,
+    ) -> bool:
+        """Queue one ahead-of-frontier plan without taking ownership of it.
+
+        The controller keeps the currently accepted route active while this
+        request runs. ``source_plan_sequence`` lets the owner discard a
+        result that belongs to an older route after a concurrent handoff.
+        """
+        return self.request(
+            current_position,
+            current_yaw=current_yaw,
+            current_pitch=current_pitch,
+            current_roll=current_roll,
+            current_travel_yaw=current_travel_yaw,
+            current_travel_pitch=current_travel_pitch,
+            avoid_positions=avoid_positions,
+            source_plan_sequence=source_plan_sequence,
+            speculative_replan=True,
+        )
+
+    def request_continuous_scan(
+        self,
+        current_position: np.ndarray | tuple[float, float, float],
+        *,
+        current_yaw: float | None = None,
+        current_pitch: float | None = None,
+        current_roll: float | None = None,
+        current_travel_yaw: float | None = None,
+        current_travel_pitch: float | None = None,
+        avoid_positions: Sequence[Sequence[float]] | None = None,
+        source_plan_sequence: int | None = None,
+    ) -> bool:
+        """Keep one unbounded speculative hemisphere scan running.
+
+        The scan is advisory until the owner thread accepts its immutable
+        plan. It is deliberately separate from ``request()`` so an expensive
+        scan cannot consume the bounded authoritative-replan handoff budget.
+        """
+        request_started_at = self._perf_counter()
+        position = tuple(
+            float(value)
+            for value in np.asarray(current_position, dtype=np.float64).reshape(3)
+        )
+        yaw = None if current_yaw is None else float(current_yaw)
+        pitch = None if current_pitch is None else float(current_pitch)
+        roll = None if current_roll is None else float(current_roll)
+        travel_yaw = (
+            None if current_travel_yaw is None else float(current_travel_yaw)
+        )
+        travel_pitch = (
+            None if current_travel_pitch is None else float(current_travel_pitch)
+        )
+        avoided = _normalized_avoid_positions(avoid_positions)
+        try:
+            source_sequence = (
+                None
+                if source_plan_sequence is None
+                else int(source_plan_sequence)
+            )
+        except (TypeError, ValueError):
+            source_sequence = None
+        with self._lock:
+            if self._shutdown:
+                return False
+            if (
+                self._continuous_scan_pending_future is not None
+                or self._latest_continuous_scan_plan is not None
+            ):
+                return False
+            self._continuous_scan_generation += 1
+            generation = self._continuous_scan_generation
+            scan_id = f"continuous-scan-{generation}"
+            self._record_blackbox(
+                "continuous_scan_requested",
+                scan_id=scan_id,
+                scan_generation=generation,
+                position=position,
+                yaw=yaw,
+                pitch=pitch,
+                roll=roll,
+                travel_yaw=travel_yaw,
+                travel_pitch=travel_pitch,
+                avoid_positions=avoided,
+                source_plan_sequence=source_sequence,
+                planning_budget_s=None,
+            )
+            self._continuous_scan_generation_sources[generation] = source_sequence
+            future = self._continuous_scan_executor.submit(
+                self._build_continuous_scan_plan,
+                generation,
+                position,
+                yaw,
+                pitch,
+                roll,
+                travel_yaw,
+                travel_pitch,
+                avoided,
+                source_sequence,
+                request_started_at,
+            )
+            self._continuous_scan_pending_future = future
+            self._continuous_scan_pending_generation = generation
+        future.add_done_callback(self._store_completed_continuous_scan)
+        return True
+
+    def take_latest_continuous_scan(self) -> AutoDivePlan | None:
+        """Return one completed speculative scan plan, if available."""
+        with self._lock:
+            plan = self._latest_continuous_scan_plan
+            self._last_taken_continuous_scan_generation = (
+                self._latest_continuous_scan_generation
+            )
+            self._last_taken_continuous_scan_source_sequence = (
+                self._latest_continuous_scan_source_sequence
+            )
+            self._latest_continuous_scan_plan = None
+            self._latest_continuous_scan_generation = None
+            self._latest_continuous_scan_source_sequence = None
+            return plan
+
+    @property
+    def last_taken_continuous_scan_generation(self) -> int | None:
+        with self._lock:
+            return self._last_taken_continuous_scan_generation
+
+    @property
+    def last_taken_continuous_scan_source_sequence(self) -> int | None:
+        with self._lock:
+            return self._last_taken_continuous_scan_source_sequence
+
+    def has_continuous_scan_pending(self) -> bool:
+        with self._lock:
+            return self._continuous_scan_pending_future is not None
+
+    def has_continuous_scan_result(self) -> bool:
+        with self._lock:
+            return self._latest_continuous_scan_plan is not None
+
+    @property
+    def continuous_scan_failure_count(self) -> int:
+        """Return consecutive continuous-scan build failures."""
+        with self._lock:
+            return int(self._continuous_scan_failure_count)
+
+    @property
+    def continuous_scan_last_failure_generation(self) -> int | None:
+        """Return the generation of the latest failed continuous scan."""
+        with self._lock:
+            return self._continuous_scan_last_failure_generation
 
     def take_latest_plan(self) -> AutoDivePlan | None:
         """Return and clear the newest completed plan."""
         with self._lock:
             plan = self._latest_plan
             self._last_taken_plan_generation = self._latest_plan_generation
+            self._last_taken_plan_source_sequence = (
+                self._latest_plan_source_sequence
+            )
             self._latest_plan = None
             self._latest_plan_generation = None
+            self._latest_plan_source_sequence = None
             return plan
 
     @property
@@ -226,6 +1045,12 @@ class AutoDiveReplanner:
         """Return the generation associated with the last taken plan."""
         with self._lock:
             return self._last_taken_plan_generation
+
+    @property
+    def last_taken_plan_source_sequence(self) -> int | None:
+        """Return the accepted-route sequence a completed plan was based on."""
+        with self._lock:
+            return self._last_taken_plan_source_sequence
 
     @property
     def planning_budget_s(self) -> float:
@@ -239,12 +1064,40 @@ class AutoDiveReplanner:
                 and not self._pending_future.done()
             )
 
+    def request_voxel_prefetch(
+        self,
+        plan: AutoDivePlan,
+        *,
+        plan_sequence: int,
+        elapsed_s: float,
+        reason: str,
+        horizon_s: float = DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_HORIZON_SECONDS,
+    ) -> bool:
+        """Queue predicted navigation chunks without blocking route planning."""
+        return self._voxel_prefetch_worker.request(
+            plan,
+            plan_sequence=plan_sequence,
+            elapsed_s=elapsed_s,
+            reason=reason,
+            horizon_s=horizon_s,
+        )
+
+    def take_voxel_prefetch_report(self) -> AutoDiveVoxelPrefetchReport | None:
+        """Return one completed navigation-voxel prefetch report."""
+        return self._voxel_prefetch_worker.take_latest_report()
+
+    def has_voxel_prefetch_pending(self) -> bool:
+        """Return whether predicted voxel materialization is still running."""
+        return self._voxel_prefetch_worker.has_pending()
+
     def shutdown(self) -> None:
         with self._lock:
             if self._shutdown:
                 return
             self._shutdown = True
+        self._voxel_prefetch_worker.shutdown()
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self._continuous_scan_executor.shutdown(wait=False, cancel_futures=True)
 
     def cancel_pending(self) -> None:
         """Discard queued/completed work without ending this replanner."""
@@ -256,10 +1109,172 @@ class AutoDiveReplanner:
             self._latest_generation = invalidation_generation
             future = self._pending_future
             self._pending_future = None
+            self._pending_generation = None
+            self._generation_source_sequences.clear()
             self._latest_plan = None
             self._latest_plan_generation = None
+            self._latest_plan_source_sequence = None
         if future is not None:
             future.cancel()
+        self._voxel_prefetch_worker.cancel_pending()
+
+    def cancel_continuous_scan(self) -> None:
+        """Discard a stale scan result without cancelling authoritative work."""
+        with self._lock:
+            if self._shutdown:
+                return
+            self._continuous_scan_generation += 1
+            invalidation_generation = self._continuous_scan_generation
+            self._continuous_scan_latest_generation = invalidation_generation
+            future = self._continuous_scan_pending_future
+            self._continuous_scan_pending_future = None
+            self._continuous_scan_pending_generation = None
+            self._continuous_scan_generation_sources.clear()
+            self._latest_continuous_scan_plan = None
+            self._latest_continuous_scan_generation = None
+            self._latest_continuous_scan_source_sequence = None
+            self._continuous_scan_failure_count = 0
+            self._continuous_scan_last_failure_generation = None
+        if future is not None:
+            future.cancel()
+
+    def _build_continuous_scan_plan(
+        self,
+        generation: int,
+        current_position: tuple[float, float, float],
+        current_yaw: float | None,
+        current_pitch: float | None,
+        current_roll: float | None,
+        current_travel_yaw: float | None,
+        current_travel_pitch: float | None,
+        avoid_positions: tuple[tuple[float, float, float], ...],
+        source_plan_sequence: int | None,
+        request_started_at: float,
+    ) -> tuple[int, int | None, AutoDivePlan]:
+        build_started_at = self._perf_counter()
+        scan_id = f"continuous-scan-{generation}"
+        self._record_blackbox(
+            "continuous_scan_build_started",
+            scan_id=scan_id,
+            scan_generation=generation,
+            position=current_position,
+            source_plan_sequence=source_plan_sequence,
+            planning_budget_s=None,
+            queue_duration_ms=max(
+                0.0,
+                (build_started_at - request_started_at) * 1000.0,
+            ),
+        )
+        try:
+            kwargs: dict[str, Any] = {
+                "current_position": current_position,
+                "settings": replace(
+                    self._settings,
+                    planning_budget_s=None,
+                ),
+                "force_hemisphere_scan": True,
+            }
+            if current_yaw is not None:
+                kwargs["current_yaw"] = current_yaw
+            if current_pitch is not None:
+                kwargs["current_pitch"] = current_pitch
+            if current_roll is not None:
+                kwargs["current_roll"] = current_roll
+            if current_travel_yaw is not None:
+                kwargs["current_travel_yaw"] = current_travel_yaw
+            if current_travel_pitch is not None:
+                kwargs["current_travel_pitch"] = current_travel_pitch
+            if avoid_positions:
+                kwargs["avoid_positions"] = avoid_positions
+            if self._cache_dir is not None:
+                kwargs["cache_dir"] = self._cache_dir
+            if self._blackbox is not None:
+                def record_diagnostic(event: str, payload: Mapping[str, Any]) -> None:
+                    enriched = dict(payload)
+                    enriched.setdefault("scan_id", scan_id)
+                    enriched.setdefault("continuous_scan_generation", generation)
+                    enriched.setdefault("source_plan_sequence", source_plan_sequence)
+                    enriched.setdefault("continuous_scan", True)
+                    self._record_blackbox(event, **enriched)
+
+                kwargs["diagnostics"] = record_diagnostic
+            plan = self._plan_builder(self._manifest, **kwargs)
+        except Exception as exc:
+            now = self._perf_counter()
+            self._record_blackbox(
+                "continuous_scan_failed",
+                scan_id=scan_id,
+                scan_generation=generation,
+                position=current_position,
+                source_plan_sequence=source_plan_sequence,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                build_duration_ms=max(
+                    0.0,
+                    (now - build_started_at) * 1000.0,
+                ),
+                total_duration_ms=max(
+                    0.0,
+                    (now - request_started_at) * 1000.0,
+                ),
+            )
+            raise
+        completed_at = self._perf_counter()
+        self._record_blackbox(
+            "continuous_scan_completed",
+            scan_id=scan_id,
+            scan_generation=generation,
+            position=current_position,
+            source_plan_sequence=source_plan_sequence,
+            plan=_plan_summary(plan),
+            build_duration_ms=max(
+                0.0,
+                (completed_at - build_started_at) * 1000.0,
+            ),
+            total_duration_ms=max(
+                0.0,
+                (completed_at - request_started_at) * 1000.0,
+            ),
+        )
+        return generation, source_plan_sequence, plan
+
+    def _store_completed_continuous_scan(self, future: Future) -> None:
+        try:
+            generation, source_sequence, plan = future.result()
+        except Exception:
+            with self._lock:
+                failed_generation = self._continuous_scan_pending_generation
+                if self._continuous_scan_pending_future is future:
+                    self._continuous_scan_pending_future = None
+                    if self._continuous_scan_pending_generation is not None:
+                        self._continuous_scan_generation_sources.pop(
+                            self._continuous_scan_pending_generation,
+                            None,
+                        )
+                    self._continuous_scan_pending_generation = None
+                if (
+                    failed_generation is not None
+                    and not self._shutdown
+                    and failed_generation >= self._continuous_scan_latest_generation
+                ):
+                    self._continuous_scan_failure_count += 1
+                    self._continuous_scan_last_failure_generation = (
+                        failed_generation
+                    )
+            return
+        with self._lock:
+            if self._continuous_scan_pending_future is future:
+                self._continuous_scan_pending_future = None
+                self._continuous_scan_pending_generation = None
+            self._continuous_scan_generation_sources.pop(generation, None)
+            if self._shutdown or generation < self._continuous_scan_latest_generation:
+                return
+            self._continuous_scan_latest_generation = generation
+            self._latest_continuous_scan_plan = plan
+            self._latest_continuous_scan_generation = generation
+            self._latest_continuous_scan_source_sequence = source_sequence
+            self._continuous_scan_failure_count = 0
+            self._continuous_scan_last_failure_generation = None
 
     def _build_plan(
         self,
@@ -267,11 +1282,15 @@ class AutoDiveReplanner:
         current_position: tuple[float, float, float],
         current_yaw: float | None = None,
         current_pitch: float | None = None,
+        current_roll: float | None = None,
         current_travel_yaw: float | None = None,
         current_travel_pitch: float | None = None,
         avoid_positions: tuple[tuple[float, float, float], ...] = (),
         user_reposition: bool = False,
+        force_hemisphere_scan: bool = False,
         request_started_at: float | None = None,
+        source_plan_sequence: int | None = None,
+        speculative_replan: bool = False,
     ) -> tuple[int, AutoDivePlan]:
         build_started_at = self._perf_counter()
         replan_id = f"replan-{generation}"
@@ -287,10 +1306,14 @@ class AutoDiveReplanner:
             position=current_position,
             yaw=current_yaw,
             pitch=current_pitch,
+            roll=current_roll,
             travel_yaw=current_travel_yaw,
             travel_pitch=current_travel_pitch,
             avoid_positions=avoid_positions,
             user_reposition=bool(user_reposition),
+            force_hemisphere_scan=bool(force_hemisphere_scan),
+            source_plan_sequence=source_plan_sequence,
+            speculative_replan=bool(speculative_replan),
             queue_duration_ms=queue_duration_ms,
             planning_budget_s=float(self._planning_budget_s),
         )
@@ -306,6 +1329,8 @@ class AutoDiveReplanner:
                 kwargs["current_yaw"] = current_yaw
             if current_pitch is not None:
                 kwargs["current_pitch"] = current_pitch
+            if current_roll is not None:
+                kwargs["current_roll"] = current_roll
             if current_travel_yaw is not None:
                 kwargs["current_travel_yaw"] = current_travel_yaw
             if current_travel_pitch is not None:
@@ -314,6 +1339,8 @@ class AutoDiveReplanner:
                 kwargs["avoid_positions"] = avoid_positions
             if user_reposition:
                 kwargs["user_reposition"] = True
+            if force_hemisphere_scan:
+                kwargs["force_hemisphere_scan"] = True
             if self._cache_dir is not None:
                 kwargs["cache_dir"] = self._cache_dir
             if self._blackbox is not None:
@@ -346,6 +1373,9 @@ class AutoDiveReplanner:
                     if request_started_at is None
                     else max(0.0, (now - request_started_at) * 1000.0)
                 ),
+                source_plan_sequence=source_plan_sequence,
+                speculative_replan=bool(speculative_replan),
+                force_hemisphere_scan=bool(force_hemisphere_scan),
                 planning_budget_s=float(self._planning_budget_s),
             )
             raise
@@ -366,6 +1396,9 @@ class AutoDiveReplanner:
                 if request_started_at is None
                 else max(0.0, (completed_at - request_started_at) * 1000.0)
             ),
+            source_plan_sequence=source_plan_sequence,
+            speculative_replan=bool(speculative_replan),
+            force_hemisphere_scan=bool(force_hemisphere_scan),
             planning_budget_s=float(self._planning_budget_s),
         )
         return generation, plan
@@ -377,16 +1410,28 @@ class AutoDiveReplanner:
             with self._lock:
                 if self._pending_future is future:
                     self._pending_future = None
+                    if self._pending_generation is not None:
+                        self._generation_source_sequences.pop(
+                            self._pending_generation,
+                            None,
+                        )
+                    self._pending_generation = None
             return
 
         with self._lock:
             if self._pending_future is future:
                 self._pending_future = None
+                self._pending_generation = None
+            source_sequence = self._generation_source_sequences.pop(
+                generation,
+                None,
+            )
             if self._shutdown or generation < self._latest_generation:
                 return
             self._latest_generation = generation
             self._latest_plan = plan
             self._latest_plan_generation = generation
+            self._latest_plan_source_sequence = source_sequence
 
     def _record_blackbox(self, event: str, **payload: Any) -> None:
         record = getattr(self._blackbox, "record", None)
@@ -411,6 +1456,7 @@ class AutoDiveController:
         replan_distance_m: float = 0.0,
         replan_min_interval_s: float = DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS,
         replan_only_during_survey: bool = True,
+        speculative_replan_enabled: bool = True,
         route_prefetch_radius_cells: int | None = None,
         survey_interval_s: float = DEFAULT_AUTO_DIVE_SURVEY_INTERVAL_SECONDS,
         survey_duration_s: float = DEFAULT_AUTO_DIVE_SURVEY_DURATION_SECONDS,
@@ -437,6 +1483,7 @@ class AutoDiveController:
         self.replan_distance_m = max(0.0, float(replan_distance_m))
         self.replan_min_interval_s = max(0.0, float(replan_min_interval_s))
         self.replan_only_during_survey = bool(replan_only_during_survey)
+        self.speculative_replan_enabled = bool(speculative_replan_enabled)
         self.route_prefetch_radius_cells = max(
             1,
             int(
@@ -475,14 +1522,26 @@ class AutoDiveController:
         self._mesh_recovery_started_at: float | None = None
         self._mesh_recovery_replan_pending = False
         self._lookahead_replan_pending = False
+        self._speculative_replan_pending = False
+        self._speculative_replan_plan_sequence: int | None = None
+        self._speculative_replan_attempted_plan_sequence: int | None = None
+        self._speculative_replan_requested_at: float | None = None
         self._replan_wait_started_at: float | None = None
         self._replan_wait_kind: str | None = None
         self._mesh_recovery_attempts = 0
         self._mesh_recovery_boundary_positions: list[np.ndarray] = []
+        self._continuous_scan_frontier_requested = False
+        self._rolling_clearance_worker = AutoDiveRollingClearanceWorker()
+        self._rolling_clearance_next_check_at = 0.0
+        self._rolling_clearance_hold_elapsed_s: float | None = None
+        self._rolling_clearance_report: AutoDiveRollingClearanceReport | None = None
+        self._last_rolling_clearance_hold_at: float | None = None
         self._stuck_reference_time: float | None = None
         self._stuck_reference_position: np.ndarray | None = None
         self._last_stuck_event_at: float | None = None
         self._prefetch_cells: frozenset[tuple[int, int, int]] = frozenset()
+        self._next_voxel_prefetch_at = 0.0
+        self._last_voxel_prefetch_report: dict[str, object] | None = None
         self._readiness = AutoDiveReadiness(0, 0, 0, 0, 0, 1.0)
         self._user_assist_reason: str | None = None
         self._user_assist_anchor_position: np.ndarray | None = None
@@ -530,6 +1589,8 @@ class AutoDiveController:
             return "Finding a safe continuation"
         if self._lookahead_replan_pending:
             return "Finding the next branch"
+        if self._speculative_replan_pending:
+            return "Preparing the next route"
         if self._mesh_recovery_active():
             return "Thinking"
         if self.state == AutoDiveState.LOADING:
@@ -543,6 +1604,8 @@ class AutoDiveController:
         if self.state == AutoDiveState.DIVING:
             return "Diving centerline"
         if self.state == AutoDiveState.COMPLETE:
+            if bool(getattr(self.plan, "terminal_reached", False)):
+                return "End of cave reached"
             return "Guided Dive complete"
         if self.state == AutoDiveState.CANCELLED:
             return "Guided Dive stopped"
@@ -610,6 +1673,9 @@ class AutoDiveController:
             cancel_pending()
         self._mesh_recovery_replan_pending = False
         self._lookahead_replan_pending = False
+        self._speculative_replan_pending = False
+        self._speculative_replan_plan_sequence = None
+        self._speculative_replan_requested_at = None
         self._user_resume_replan_pending = False
         self._record_blackbox(
             "replan_planning_budget_exceeded",
@@ -663,9 +1729,20 @@ class AutoDiveController:
         self._mesh_recovery_started_at = None
         self._mesh_recovery_replan_pending = False
         self._lookahead_replan_pending = False
+        self._speculative_replan_pending = False
+        self._speculative_replan_plan_sequence = None
+        self._speculative_replan_attempted_plan_sequence = None
+        self._speculative_replan_requested_at = None
         self._clear_replan_wait()
         self._mesh_recovery_attempts = 0
         self._mesh_recovery_boundary_positions = []
+        self._continuous_scan_frontier_requested = False
+        self._rolling_clearance_next_check_at = now
+        self._rolling_clearance_hold_elapsed_s = None
+        self._rolling_clearance_report = None
+        self._last_rolling_clearance_hold_at = None
+        self._next_voxel_prefetch_at = now
+        self._last_voxel_prefetch_report = None
         self._user_assist_reason = None
         self._user_assist_anchor_position = None
         self._user_assist_last_position = None
@@ -678,6 +1755,12 @@ class AutoDiveController:
         self._set_observed_position(camera, now=now, reset=True)
         self.refresh_prefetch(world)
         self._readiness = self.readiness_for_world(world)
+        self._maybe_request_voxel_prefetch(now=now, reason="initial_plan")
+        self._request_continuous_scan_if_needed(
+            camera,
+            now=now,
+            reason="auto_dive_started",
+        )
         self._record_blackbox(
             "auto_dive_started",
             plan=_plan_summary(self.plan),
@@ -691,6 +1774,8 @@ class AutoDiveController:
             route_speed_m_per_second=float(self._route_speed_m_per_second()),
             lookahead_seconds=float(self._effective_lookahead_seconds()),
             replan_planning_budget_s=float(self._replan_planning_budget_s),
+            speculative_replan_enabled=bool(self.speculative_replan_enabled),
+            continuous_scan_enabled=bool(self._continuous_scan_supported()),
             prefetch=self._prefetch_payload(),
         )
 
@@ -750,6 +1835,9 @@ class AutoDiveController:
                 reason="replanner_unavailable",
             )
             return False
+        cancel_continuous_scan = getattr(replanner, "cancel_continuous_scan", None)
+        if callable(cancel_continuous_scan):
+            cancel_continuous_scan()
         take_latest_plan = getattr(replanner, "take_latest_plan", None)
         if callable(take_latest_plan):
             stale_plan = take_latest_plan()
@@ -802,7 +1890,15 @@ class AutoDiveController:
         self._plan_sequence = 0
         self._mesh_recovery_started_at = None
         self._mesh_recovery_replan_pending = False
+        self._continuous_scan_frontier_requested = False
         self._lookahead_replan_pending = False
+        self._speculative_replan_pending = False
+        self._speculative_replan_plan_sequence = None
+        self._speculative_replan_attempted_plan_sequence = None
+        self._speculative_replan_requested_at = None
+        self._rolling_clearance_next_check_at = now
+        self._rolling_clearance_hold_elapsed_s = None
+        self._rolling_clearance_report = None
         self._user_assist_reason = None
         self.state = AutoDiveState.LOADING
 
@@ -810,10 +1906,12 @@ class AutoDiveController:
             current_position,
             current_yaw=current_yaw,
             current_pitch=current_pitch,
+            current_roll=float(getattr(camera, "roll", 0.0)),
             current_travel_yaw=travel_yaw,
             current_travel_pitch=travel_pitch,
             avoid_positions=avoid_positions,
             user_reposition=True,
+            force_hemisphere_scan=True,
         )
         has_pending = getattr(replanner, "has_pending", None)
         waiting_for_plan = bool(requested)
@@ -864,6 +1962,12 @@ class AutoDiveController:
             "auto_dive_stopped",
             completed=bool(completed),
             outcome="completed" if completed else "stopped",
+            terminal_reached=bool(getattr(self.plan, "terminal_reached", False)),
+            completion_message=(
+                "End of cave reached. No valid forward passage remains."
+                if completed and bool(getattr(self.plan, "terminal_reached", False))
+                else None
+            ),
             state=str(self.state.value),
             elapsed_s=float(self._elapsed_s),
             progress=float(self.progress),
@@ -877,6 +1981,7 @@ class AutoDiveController:
             user_assist_reason=self._user_assist_reason,
             user_assist_trace=user_assist_trace,
             remaining_distance_m=self._route_remaining_distance_m(),
+            rolling_clearance=self._rolling_clearance_payload(),
             prefetch=self._prefetch_payload(),
         )
         if world is not None:
@@ -885,6 +1990,7 @@ class AutoDiveController:
                 set_prefetch(())
         if self.replanner is not None:
             self.replanner.shutdown()
+        self._rolling_clearance_worker.shutdown()
         self._prefetch_cells = frozenset()
         self.state = AutoDiveState.COMPLETE if completed else AutoDiveState.CANCELLED
         close = getattr(self.blackbox, "close", None)
@@ -917,8 +2023,13 @@ class AutoDiveController:
         self._readiness = self.readiness_for_world(world)
         if not self._readiness.ready:
             if self._mesh_recovery_active():
-                self._apply_mesh_recovery_pose_to_camera(camera, now=now)
-                self._request_mesh_recovery_replan_if_ready(camera, now=now)
+                if self._mesh_recovery_hold_reached(now=now):
+                    self._apply_mesh_recovery_pose_to_camera(camera, now=now)
+                self._request_mesh_recovery_replan_if_ready(
+                    camera,
+                    now=now,
+                    world=world,
+                )
                 self.state = AutoDiveState.LOADING
                 return self.state
             if self._survey_active(now=now):
@@ -943,10 +2054,14 @@ class AutoDiveController:
             return self.state
 
         if self._mesh_recovery_active():
-            self._apply_mesh_recovery_pose_to_camera(camera, now=now)
-            self._request_mesh_recovery_replan_if_ready(camera, now=now)
-            self.state = AutoDiveState.LOADING
-            return self.state
+            # Recovery scans are deliberately non-blocking before the safe
+            # frontier; the rolling-clearance hold below will update elapsed
+            # time to that exact boundary once it is reached.
+            self._request_mesh_recovery_replan_if_ready(
+                camera,
+                now=now,
+                world=world,
+            )
 
         if self._survey_pause_started_at is not None:
             survey_duration_s = max(0.0, now - self._survey_pause_started_at)
@@ -966,6 +2081,45 @@ class AutoDiveController:
             self.plan.route.duration_s,
             max(0.0, now - self._started_at - self._paused_seconds),
         )
+        if (
+            self._rolling_clearance_hold_elapsed_s is not None
+            and (
+                self._lookahead_replan_pending
+                or self._mesh_recovery_active()
+            )
+            and self._elapsed_s >= self._rolling_clearance_hold_elapsed_s
+        ):
+            self._elapsed_s = min(
+                self._elapsed_s,
+                max(0.0, float(self._rolling_clearance_hold_elapsed_s)),
+            )
+            apply_pose_to_camera(camera, self.plan.route.pose_at(self._elapsed_s))
+            self._set_commanded_position(camera)
+            if (
+                self._last_rolling_clearance_hold_at is None
+                or now - self._last_rolling_clearance_hold_at >= 1.0
+            ):
+                self._last_rolling_clearance_hold_at = now
+                self._record_blackbox(
+                    "rolling_clearance_hold",
+                    elapsed_s=float(self._elapsed_s),
+                    safe_elapsed_s=float(self._rolling_clearance_hold_elapsed_s),
+                    remaining_distance_m=self._route_remaining_distance_m(),
+                    plan_sequence=int(self._plan_sequence),
+                    report=(
+                        None
+                        if self._rolling_clearance_report is None
+                        else self._rolling_clearance_report.diagnostic_payload()
+                    ),
+                )
+            if self._mesh_recovery_active():
+                self._request_mesh_recovery_replan_if_ready(
+                    camera,
+                    now=now,
+                    world=world,
+                )
+            self.state = AutoDiveState.LOADING
+            return self.state
         if self._should_start_mesh_recovery_standoff():
             apply_pose_to_camera(camera, self.plan.route.pose_at(self._elapsed_s))
             self._set_commanded_position(camera)
@@ -999,6 +2153,18 @@ class AutoDiveController:
         apply_pose_to_camera(camera, self.plan.route.pose_at(self._elapsed_s))
         self._set_commanded_position(camera)
         if self._elapsed_s >= self.plan.route.duration_s:
+            if bool(getattr(self.plan, "terminal_reached", False)):
+                self._record_blackbox(
+                    "end_of_cave_reached",
+                    message="End of cave reached. No valid forward passage remains.",
+                    position=_vector_payload(camera.position),
+                    elapsed_s=float(self._elapsed_s),
+                    progress=float(self.progress),
+                    plan_sequence=int(self._plan_sequence),
+                    plan=auto_dive_plan_summary(self.plan),
+                )
+                self.stop(world, completed=True)
+                return self.state
             if _plan_requires_user_assist_at_boundary(self.plan):
                 self._enter_user_assist(
                     world,
@@ -1051,18 +2217,90 @@ class AutoDiveController:
         user_resume = self._user_resume_replan_pending
 
         swapped = False
-        latest_plan = replanner.take_latest_plan()
+        take_latest_plan = getattr(replanner, "take_latest_plan", None)
+        latest_plan = (
+            take_latest_plan() if callable(take_latest_plan) else None
+        )
         replan_generation = getattr(replanner, "last_taken_plan_generation", None)
+        replan_source_sequence = getattr(
+            replanner,
+            "last_taken_plan_source_sequence",
+            None,
+        )
+        continuous_scan_replan = False
+        take_continuous_scan = getattr(
+            replanner,
+            "take_latest_continuous_scan",
+            None,
+        )
+        continuous_scan_plan = (
+            take_continuous_scan() if callable(take_continuous_scan) else None
+        )
+        if continuous_scan_plan is not None:
+            continuous_generation = getattr(
+                replanner,
+                "last_taken_continuous_scan_generation",
+                None,
+            )
+            continuous_source_sequence = getattr(
+                replanner,
+                "last_taken_continuous_scan_source_sequence",
+                None,
+            )
+            if latest_plan is None and not user_resume:
+                latest_plan = continuous_scan_plan
+                replan_generation = continuous_generation
+                replan_source_sequence = continuous_source_sequence
+                continuous_scan_replan = True
+            else:
+                self._record_blackbox(
+                    "continuous_scan_discarded",
+                    reason=(
+                        "authoritative_replan_available"
+                        if latest_plan is not None
+                        else "user_resume_pending"
+                    ),
+                    scan_generation=continuous_generation,
+                    source_plan_sequence=continuous_source_sequence,
+                    current_plan_sequence=int(self._plan_sequence),
+                    plan=_plan_summary(continuous_scan_plan),
+                )
         rejected_replan = False
         if latest_plan is not None:
             mesh_recovery = self._mesh_recovery_active()
             lookahead_replan = self._lookahead_replan_pending
+            speculative_replan = bool(
+                self._speculative_replan_pending
+                and self._speculative_replan_plan_sequence
+                == self._plan_sequence
+                and (
+                    replan_source_sequence is None
+                    or replan_source_sequence == self._plan_sequence
+                )
+            )
+            stale_speculative_replan = bool(
+                self._speculative_replan_pending
+                and replan_source_sequence is not None
+                and replan_source_sequence
+                == self._speculative_replan_plan_sequence
+            )
             if (
+                replan_source_sequence is not None
+                and replan_source_sequence != self._plan_sequence
+            ):
+                rejection = {
+                    "reason": "stale_source_plan_sequence",
+                    "stale_source_plan_sequence": int(replan_source_sequence),
+                    "current_plan_sequence": int(self._plan_sequence),
+                }
+            elif (
                 self.replan_only_during_survey
                 and not self._survey_active(now=now)
                 and not mesh_recovery
                 and not lookahead_replan
                 and not user_resume
+                and not speculative_replan
+                and not continuous_scan_replan
             ):
                 rejection = {"reason": "outside_survey_pause"}
             else:
@@ -1081,6 +2319,13 @@ class AutoDiveController:
                     latest_plan,
                     current_position,
                 )
+                mesh_recovery_progressed = bool(
+                    mesh_recovery
+                    and self._mesh_recovery_plan_made_progress(
+                        latest_plan,
+                        current_position,
+                    )
+                )
                 self.plan = latest_plan
                 previous_plan_sequence = self._plan_sequence
                 self._plan_sequence += 1
@@ -1091,11 +2336,34 @@ class AutoDiveController:
                 self._last_rejected_replan_position = None
                 self._mesh_recovery_started_at = None
                 self._mesh_recovery_replan_pending = False
+                self._continuous_scan_frontier_requested = False
                 self._lookahead_replan_pending = False
+                self._speculative_replan_pending = False
+                self._speculative_replan_plan_sequence = None
+                self._speculative_replan_attempted_plan_sequence = None
+                self._speculative_replan_requested_at = None
+                self._rolling_clearance_next_check_at = now
+                self._rolling_clearance_hold_elapsed_s = None
+                self._rolling_clearance_report = None
+                self._next_voxel_prefetch_at = now
+                self._last_voxel_prefetch_report = None
                 self._user_resume_replan_pending = False
                 self._clear_replan_wait()
                 self._user_assist_reason = None
-                if not _plan_needs_boundary_replan(latest_plan) and not user_resume:
+                cancel_continuous_scan = getattr(
+                    replanner,
+                    "cancel_continuous_scan",
+                    None,
+                )
+                if callable(cancel_continuous_scan):
+                    cancel_continuous_scan()
+                if mesh_recovery_progressed:
+                    # Recovery attempts are bounded per frontier. Preserve the
+                    # prior frontier list for avoidance, but do not let a
+                    # successful forward handoff consume the next frontier's
+                    # one-shot scan budget.
+                    self._mesh_recovery_attempts = 0
+                elif not _plan_needs_boundary_replan(latest_plan) and not user_resume:
                     self._mesh_recovery_attempts = 0
                     self._mesh_recovery_boundary_positions = []
                 self.refresh_prefetch(world)
@@ -1104,6 +2372,9 @@ class AutoDiveController:
                     "replan_accepted",
                     camera_position=_vector_payload(current_position),
                     user_reposition=bool(user_resume),
+                    speculative_replan=bool(speculative_replan),
+                    continuous_scan=bool(continuous_scan_replan),
+                    source_plan_sequence=replan_source_sequence,
                     resume_elapsed_s=float(resume_elapsed_s),
                     resume_progress=float(self.progress),
                     plan=_plan_summary(latest_plan),
@@ -1111,26 +2382,46 @@ class AutoDiveController:
                     plan_sequence=int(self._plan_sequence),
                     previous_plan_sequence=int(previous_plan_sequence),
                     replan_generation=replan_generation,
+                    mesh_recovery_progressed=mesh_recovery_progressed,
+                    mesh_recovery_attempts=int(self._mesh_recovery_attempts),
                     remaining_distance_m=self._route_remaining_distance_m(),
                     prefetch=self._prefetch_payload(),
                 )
                 swapped = True
             else:
-                self._mesh_recovery_replan_pending = False
-                self._lookahead_replan_pending = False
-                self._user_resume_replan_pending = False
-                self._clear_replan_wait()
+                if not continuous_scan_replan:
+                    self._mesh_recovery_replan_pending = False
+                    self._lookahead_replan_pending = False
+                if speculative_replan or stale_speculative_replan:
+                    self._speculative_replan_pending = False
+                    self._speculative_replan_plan_sequence = None
+                    self._speculative_replan_requested_at = None
+                if not continuous_scan_replan:
+                    self._user_resume_replan_pending = False
+                    self._clear_replan_wait()
+                elif mesh_recovery:
+                    self._continuous_scan_frontier_requested = False
                 self._last_rejected_replan_position = current_position.copy()
                 rejected_replan = True
                 self._record_blackbox(
-                    "replan_rejected",
+                    "continuous_scan_rejected"
+                    if continuous_scan_replan
+                    else "replan_rejected",
                     camera_position=_vector_payload(current_position),
                     plan=_plan_summary(latest_plan),
                     plan_sequence=int(self._plan_sequence),
                     replan_generation=replan_generation,
+                    continuous_scan=bool(continuous_scan_replan),
+                    speculative_replan=bool(
+                        speculative_replan or stale_speculative_replan
+                    ),
+                    source_plan_sequence=replan_source_sequence,
                     **rejection,
                 )
-                if mesh_recovery or lookahead_replan or user_resume:
+                if (
+                    not continuous_scan_replan
+                    and (mesh_recovery or lookahead_replan or user_resume)
+                ):
                     self._enter_user_assist(
                         world,
                         reason=str(rejection.get("reason", "replan_rejected")),
@@ -1142,20 +2433,27 @@ class AutoDiveController:
             self._mesh_recovery_replan_pending
             or self._lookahead_replan_pending
             or self._user_resume_replan_pending
+            or self._speculative_replan_pending
         ):
             has_pending = getattr(replanner, "has_pending", None)
             if callable(has_pending) and not has_pending():
                 user_resume_without_plan = self._user_resume_replan_pending
                 lookahead_without_plan = self._lookahead_replan_pending
+                speculative_without_plan = self._speculative_replan_pending
                 self._mesh_recovery_replan_pending = False
                 self._lookahead_replan_pending = False
                 self._user_resume_replan_pending = False
+                self._speculative_replan_pending = False
+                self._speculative_replan_plan_sequence = None
+                self._speculative_replan_requested_at = None
                 self._clear_replan_wait()
                 event = (
                     "user_resume_replan_finished_without_plan"
                     if user_resume_without_plan
                     else "lookahead_replan_finished_without_plan"
                     if lookahead_without_plan
+                    else "speculative_replan_finished_without_plan"
+                    if speculative_without_plan
                     else "mesh_recovery_replan_finished_without_plan"
                 )
                 self._record_blackbox(
@@ -1166,41 +2464,401 @@ class AutoDiveController:
                     progress=float(self.progress),
                     plan_sequence=int(self._plan_sequence),
                     remaining_distance_m=self._route_remaining_distance_m(),
+                    speculative_replan=bool(speculative_without_plan),
                 )
-                self._enter_user_assist(
-                    world,
-                    reason=(
-                        "user_resume_replan_finished_without_plan"
-                        if user_resume_without_plan
-                        else "lookahead_replan_finished_without_plan"
-                        if lookahead_without_plan
-                        else "mesh_recovery_replan_finished_without_plan"
-                    ),
-                    position=current_position,
-                    now=now,
-                )
+                if not speculative_without_plan:
+                    self._enter_user_assist(
+                        world,
+                        reason=(
+                            "user_resume_replan_finished_without_plan"
+                            if user_resume_without_plan
+                            else "lookahead_replan_finished_without_plan"
+                            if lookahead_without_plan
+                            else "mesh_recovery_replan_finished_without_plan"
+                        ),
+                        position=current_position,
+                        now=now,
+                    )
+
+        self._poll_voxel_prefetch_report()
+        self._update_rolling_forward_clearance(
+            camera,
+            world,
+            now=now,
+        )
 
         if not rejected_replan and self._should_request_replan(
             current_position,
             now=now,
         ):
-            travel_yaw, travel_pitch = self._current_route_travel_angles(
-                current_position
+            if self._continuous_scan_supported():
+                self._request_continuous_scan_if_needed(
+                    camera,
+                    now=now,
+                    reason="route_horizon",
+                    world=world,
+                )
+            else:
+                travel_yaw, travel_pitch = self._current_route_travel_angles(
+                    current_position
+                )
+                if replanner.request(
+                    current_position,
+                    current_yaw=float(getattr(camera, "yaw", 0.0)),
+                    current_pitch=float(getattr(camera, "pitch", 0.0)),
+                    current_roll=float(getattr(camera, "roll", 0.0)),
+                    current_travel_yaw=travel_yaw,
+                    current_travel_pitch=travel_pitch,
+                ):
+                    self._begin_replan_wait("distance", now=now)
+                    self._last_replan_request_position = current_position.copy()
+                    self._last_replan_request_at = now
+                    if self._survey_active(now=now):
+                        self._survey_replan_requested = True
+
+        self._maybe_request_voxel_prefetch(now=now, reason="rolling_horizon")
+        if self._continuous_scan_supported():
+            self._request_continuous_scan_if_needed(
+                camera,
+                now=now,
+                reason="continuous_cycle",
+                world=world,
             )
-            if replanner.request(
-                current_position,
-                current_yaw=float(getattr(camera, "yaw", 0.0)),
-                current_pitch=float(getattr(camera, "pitch", 0.0)),
-                current_travel_yaw=travel_yaw,
-                current_travel_pitch=travel_pitch,
-            ):
-                self._begin_replan_wait("distance", now=now)
-                self._last_replan_request_position = current_position.copy()
-                self._last_replan_request_at = now
-                if self._survey_active(now=now):
-                    self._survey_replan_requested = True
+        else:
+            self._maybe_request_speculative_replan(camera, now=now)
 
         return swapped
+
+    def _maybe_request_speculative_replan(self, camera, *, now: float) -> bool:
+        """Keep one future route ready while the accepted route keeps running.
+
+        This is intentionally a separate seam from distance-triggered and
+        boundary-triggered replanning. A speculative request never enters the
+        replan wait state, so an unfinished future cannot freeze the camera or
+        replace the route that is currently being followed.
+        """
+        replanner = self.replanner
+        if (
+            not self.speculative_replan_enabled
+            or replanner is None
+            or not self.active
+            or self._continuous_scan_supported()
+            or bool(getattr(self.plan, "terminal_reached", False))
+            or self._mesh_recovery_active()
+            or self._lookahead_replan_pending
+            or self._mesh_recovery_replan_pending
+            or self._user_resume_replan_pending
+            or self._speculative_replan_pending
+            or self._speculative_replan_attempted_plan_sequence
+            == self._plan_sequence
+        ):
+            return False
+
+        request = getattr(replanner, "request_speculative", None)
+        if not callable(request):
+            # Keep compatibility with test/embedding replanners from before
+            # the speculative slot was introduced.
+            return False
+        has_pending = getattr(replanner, "has_pending", None)
+        if callable(has_pending) and has_pending():
+            return False
+
+        duration_s = max(0.0, float(getattr(self.plan.route, "duration_s", 0.0)))
+        elapsed_s = max(0.0, float(self._elapsed_s))
+        remaining_s = max(0.0, duration_s - elapsed_s)
+        if duration_s <= 1e-9:
+            return False
+        if elapsed_s < min(
+            DEFAULT_AUTO_DIVE_SPECULATIVE_REPLAN_INITIAL_GRACE_SECONDS,
+            duration_s * 0.25,
+        ):
+            return False
+        lead_s = max(
+            DEFAULT_AUTO_DIVE_SPECULATIVE_REPLAN_MIN_LEAD_SECONDS,
+            self._replan_planning_budget_s
+            * DEFAULT_AUTO_DIVE_SPECULATIVE_REPLAN_PLANNING_MARGIN,
+        )
+        minimum_remaining_s = (
+            DEFAULT_AUTO_DIVE_SPECULATIVE_REPLAN_MIN_REMAINING_SECONDS
+        )
+        # A short leg has no useful speculative window. Its explicit voxel or
+        # mesh frontier handoff remains the authoritative route transition.
+        if duration_s <= lead_s + minimum_remaining_s:
+            return False
+        if not minimum_remaining_s < remaining_s <= lead_s:
+            return False
+
+        current_position = np.asarray(camera.position, dtype=np.float64)
+        travel_yaw, travel_pitch = self._current_route_travel_angles(
+            current_position
+        )
+        try:
+            requested = bool(
+                request(
+                    current_position,
+                    source_plan_sequence=int(self._plan_sequence),
+                    current_yaw=float(getattr(camera, "yaw", 0.0)),
+                    current_pitch=float(getattr(camera, "pitch", 0.0)),
+                    current_roll=float(getattr(camera, "roll", 0.0)),
+                    current_travel_yaw=travel_yaw,
+                    current_travel_pitch=travel_pitch,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive worker seam
+            self._speculative_replan_attempted_plan_sequence = self._plan_sequence
+            self._record_blackbox(
+                "speculative_replan_request_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                position=_vector_payload(current_position),
+                elapsed_s=elapsed_s,
+                remaining_s=remaining_s,
+                lead_s=lead_s,
+                plan_sequence=int(self._plan_sequence),
+            )
+            return False
+
+        if requested:
+            self._speculative_replan_pending = True
+            self._speculative_replan_plan_sequence = self._plan_sequence
+            self._speculative_replan_attempted_plan_sequence = self._plan_sequence
+            self._speculative_replan_requested_at = float(now)
+        self._record_blackbox(
+            "speculative_replan_requested",
+            requested=bool(requested),
+            position=_vector_payload(current_position),
+            elapsed_s=elapsed_s,
+            remaining_s=remaining_s,
+            lead_s=lead_s,
+            planning_budget_s=float(self._replan_planning_budget_s),
+            plan_sequence=int(self._plan_sequence),
+            route_duration_s=duration_s,
+            worker="AutoDiveReplanner",
+        )
+        return requested
+
+    def _update_rolling_forward_clearance(
+        self,
+        camera,
+        world,
+        *,
+        now: float,
+    ) -> None:
+        """Poll and schedule the worker that protects the next route edge."""
+        report = self._rolling_clearance_worker.poll()
+        if report is not None:
+            if report.plan_sequence != self._plan_sequence:
+                self._record_blackbox(
+                    "rolling_clearance_result_discarded",
+                    reason="stale_plan_sequence",
+                    report=report.diagnostic_payload(),
+                    current_plan_sequence=int(self._plan_sequence),
+                )
+            else:
+                self._rolling_clearance_report = report
+                self._record_blackbox(
+                    "rolling_clearance_result",
+                    **report.diagnostic_payload(),
+                )
+                if report.needs_replan and self.replanner is not None:
+                    self._rolling_clearance_hold_elapsed_s = min(
+                        float(self.plan.route.duration_s),
+                        max(0.0, float(report.safe_elapsed_s)),
+                    )
+                    if report.reason == "voxel_forward_clearance_blocked":
+                        triggered = self._request_rolling_replan(
+                            camera,
+                            now=now,
+                            world=world,
+                        )
+                        kind = "voxel_clearance"
+                    elif _plan_uses_voxel_lookahead_boundary(self.plan):
+                        triggered = self._maybe_request_lookahead_replan(
+                            camera,
+                            now=now,
+                            world=world,
+                        )
+                        kind = "voxel_lookahead"
+                    elif _plan_needs_boundary_replan(self.plan):
+                        triggered = self._maybe_start_mesh_recovery_scan(
+                            now=now,
+                            world=world,
+                            reason="rolling_forward_clearance",
+                        )
+                        kind = "mesh_recovery"
+                    else:
+                        triggered = False
+                        kind = "none"
+                    self._record_blackbox(
+                        "rolling_clearance_replan_triggered",
+                        triggered=bool(triggered),
+                        kind=kind,
+                        report=report.diagnostic_payload(),
+                        plan_sequence=int(self._plan_sequence),
+                    )
+
+        if (
+            self.replanner is None
+            or bool(getattr(self.plan, "terminal_reached", False))
+            or self._lookahead_replan_pending
+            or self._mesh_recovery_active()
+            or self._user_resume_replan_pending
+            or now < self._rolling_clearance_next_check_at
+            or (
+                not _plan_needs_boundary_replan(self.plan)
+                and not self._plan_has_cached_voxel_volume()
+            )
+        ):
+            return
+        trigger_distance = self._rolling_clearance_trigger_distance_m()
+        standoff_distance = self._rolling_clearance_standoff_distance_m()
+        submitted = self._rolling_clearance_worker.request(
+            self.plan,
+            plan_sequence=self._plan_sequence,
+            elapsed_s=self._elapsed_s,
+            trigger_distance_m=trigger_distance,
+            standoff_distance_m=standoff_distance,
+        )
+        self._rolling_clearance_next_check_at = (
+            now + DEFAULT_AUTO_DIVE_ROLLING_CLEARANCE_INTERVAL_SECONDS
+        )
+        if submitted:
+            self._record_blackbox(
+                "rolling_clearance_check_started",
+                plan_sequence=int(self._plan_sequence),
+                elapsed_s=float(self._elapsed_s),
+                remaining_distance_m=self._route_remaining_distance_m(),
+                trigger_distance_m=float(trigger_distance),
+                standoff_distance_m=float(standoff_distance),
+                worker="AutoDiveClearance",
+            )
+
+    def _rolling_clearance_trigger_distance_m(self) -> float:
+        route_length = max(0.0, float(getattr(self.plan, "route_length_m", 0.0)))
+        if route_length <= 1e-9:
+            return 0.0
+        speed = self._route_speed_m_per_second()
+        planning_window_s = (
+            self._replan_planning_budget_s
+            * DEFAULT_AUTO_DIVE_ROLLING_CLEARANCE_PLANNING_MARGIN
+            + 1.0
+        )
+        lead_distance = max(
+            DEFAULT_AUTO_DIVE_ROLLING_CLEARANCE_MIN_LEAD_M,
+            speed * planning_window_s,
+            self.replan_distance_m * 2.0,
+        )
+        return min(route_length * 0.75, lead_distance)
+
+    def _rolling_clearance_standoff_distance_m(self) -> float:
+        route_length = max(0.0, float(getattr(self.plan, "route_length_m", 0.0)))
+        if route_length <= 1e-9:
+            return 0.0
+        return min(
+            route_length * 0.35,
+            max(
+                DEFAULT_AUTO_DIVE_ROLLING_CLEARANCE_MIN_LEAD_M,
+                self.replan_distance_m * 1.25,
+                self._route_speed_m_per_second() * 0.75,
+            ),
+        )
+
+    def _poll_voxel_prefetch_report(self) -> None:
+        """Consume completed navigation prefetch work without blocking frames."""
+        if self.replanner is None:
+            return
+        take_report = getattr(self.replanner, "take_voxel_prefetch_report", None)
+        if not callable(take_report):
+            return
+        report = take_report()
+        if report is None:
+            return
+        payload = report.diagnostic_payload()
+        if report.plan_sequence != self._plan_sequence:
+            self._record_blackbox(
+                "voxel_prefetch_result_discarded",
+                reason="stale_plan_sequence",
+                report=payload,
+                current_plan_sequence=int(self._plan_sequence),
+            )
+            return
+        self._last_voxel_prefetch_report = payload
+        self._record_blackbox("voxel_prefetch_result", **payload)
+
+    def _maybe_request_voxel_prefetch(self, *, now: float, reason: str) -> bool:
+        """Schedule a bounded future voxel horizon when the worker is free."""
+        replanner = self.replanner
+        if (
+            replanner is None
+            or not self.active
+            or bool(getattr(self.plan, "terminal_reached", False))
+            or float(now) < self._next_voxel_prefetch_at
+        ):
+            return False
+        volume = getattr(
+            getattr(self.plan, "centerline_path", None),
+            "cached_voxel_volume",
+            None,
+        )
+        if not callable(getattr(volume, "prefetch_for_points", None)):
+            return False
+        has_pending = getattr(replanner, "has_voxel_prefetch_pending", None)
+        if callable(has_pending) and has_pending():
+            self._next_voxel_prefetch_at = (
+                float(now) + DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_INTERVAL_SECONDS
+            )
+            return False
+        request = getattr(replanner, "request_voxel_prefetch", None)
+        if not callable(request):
+            return False
+        horizon_s = DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_HORIZON_SECONDS
+        if self._survey_active(now=now):
+            horizon_s *= max(
+                1.0,
+                DEFAULT_AUTO_DIVE_SURVEY_PREFETCH_LOOKAHEAD_MULTIPLIER,
+            )
+        try:
+            requested = bool(
+                request(
+                    self.plan,
+                    plan_sequence=int(self._plan_sequence),
+                    elapsed_s=float(self._elapsed_s),
+                    reason=str(reason),
+                    horizon_s=float(horizon_s),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive worker seam
+            self._record_blackbox(
+                "voxel_prefetch_request_failed",
+                reason=str(reason),
+                error_type=type(exc).__name__,
+                error=str(exc),
+                plan_sequence=int(self._plan_sequence),
+            )
+            requested = False
+        self._next_voxel_prefetch_at = (
+            float(now) + DEFAULT_AUTO_DIVE_VOXEL_PREFETCH_INTERVAL_SECONDS
+        )
+        if requested:
+            self._record_blackbox(
+                "voxel_prefetch_started",
+                reason=str(reason),
+                plan_sequence=int(self._plan_sequence),
+                elapsed_s=float(self._elapsed_s),
+                horizon_s=float(horizon_s),
+                worker="AutoDiveVoxelPrefetch",
+            )
+        return requested
+
+    def _plan_has_cached_voxel_volume(self) -> bool:
+        centerline_path = getattr(self.plan, "centerline_path", None)
+        return callable(
+            getattr(
+                getattr(centerline_path, "cached_voxel_volume", None),
+                "probe_point",
+                None,
+            )
+        )
 
     def _plan_is_useful_replan(
         self,
@@ -1404,8 +3062,22 @@ class AutoDiveController:
                 self._effective_route_prefetch_radius_cells()
             ),
             effective_lookahead_seconds=float(self._effective_lookahead_seconds()),
+            rolling_clearance=self._rolling_clearance_payload(),
             prefetch=self._prefetch_payload(),
         )
+
+    def _rolling_clearance_payload(self) -> dict[str, Any]:
+        report = self._rolling_clearance_report
+        return {
+            "worker": "AutoDiveClearance",
+            "pending": bool(self._rolling_clearance_worker.has_pending()),
+            "hold_elapsed_s": (
+                None
+                if self._rolling_clearance_hold_elapsed_s is None
+                else float(self._rolling_clearance_hold_elapsed_s)
+            ),
+            "report": None if report is None else report.diagnostic_payload(),
+        }
 
     def _update_stuck_detector(
         self,
@@ -1670,6 +3342,16 @@ class AutoDiveController:
             "cell_count": cell_count,
             "cell_sample": [list(cell) for cell in cells[:sample_limit]],
             "cell_sample_truncated": cell_count > sample_limit,
+            "navigation_voxel": self._last_voxel_prefetch_report,
+            "speculative_replan": {
+                "enabled": bool(self.speculative_replan_enabled),
+                "pending": bool(self._speculative_replan_pending),
+                "plan_sequence": self._speculative_replan_plan_sequence,
+                "attempted_plan_sequence": (
+                    self._speculative_replan_attempted_plan_sequence
+                ),
+                "requested_at": self._speculative_replan_requested_at,
+            },
         }
 
     def readiness_for_world(self, world) -> AutoDiveReadiness:
@@ -1736,6 +3418,30 @@ class AutoDiveController:
             return False
         return True
 
+    def _mesh_recovery_hold_reached(self, *, now: float | None = None) -> bool:
+        """Return whether a recovery scan has reached its safe frontier.
+
+        Rolling-clearance reports are intentionally consumed before the safe
+        prefix ends.  Starting the scan must not turn that lead time into a
+        camera freeze; the route is held only once its reported frontier is
+        reached.  Boundary recovery without a rolling report still holds
+        immediately, preserving the existing end-of-route behavior.
+        """
+        if not self._mesh_recovery_active():
+            return False
+        hold_elapsed_s = self._rolling_clearance_hold_elapsed_s
+        if hold_elapsed_s is None:
+            return True
+        if self._pause_started_at is not None or self._started_at is None:
+            elapsed_s = float(self._elapsed_s)
+        else:
+            now = self.perf_counter() if now is None else float(now)
+            elapsed_s = min(
+                float(self.plan.route.duration_s),
+                max(0.0, now - self._started_at - self._paused_seconds),
+            )
+        return elapsed_s + 1e-6 >= float(hold_elapsed_s)
+
     def _should_start_mesh_recovery_standoff(self) -> bool:
         if self._mesh_recovery_active():
             return False
@@ -1772,6 +3478,63 @@ class AutoDiveController:
             * float(DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_STANDOFF_FRACTION),
         )
 
+    def _request_rolling_replan(self, camera, *, now: float, world=None) -> bool:
+        """Request an authoritative route rebuild after a voxel preflight hit."""
+        if self.replanner is None:
+            return False
+        if self._continuous_scan_supported():
+            requested = self._request_continuous_scan_if_needed(
+                camera,
+                now=now,
+                reason="rolling_forward_clearance",
+                world=world,
+            )
+            self._record_blackbox(
+                "rolling_clearance_replan_requested",
+                requested=bool(requested),
+                continuous_scan=True,
+                position=_vector_payload(camera.position),
+                elapsed_s=float(self._elapsed_s),
+                progress=float(self.progress),
+                plan_sequence=int(self._plan_sequence),
+                plan=_plan_summary(self.plan),
+            )
+            return True
+        if self._lookahead_replan_pending:
+            return True
+        current_position = np.asarray(camera.position, dtype=np.float64)
+        travel_yaw, travel_pitch = self._current_route_travel_angles(
+            current_position
+        )
+        requested = self.replanner.request(
+            current_position,
+            current_yaw=float(getattr(camera, "yaw", 0.0)),
+            current_pitch=float(getattr(camera, "pitch", 0.0)),
+            current_roll=float(getattr(camera, "roll", 0.0)),
+            current_travel_yaw=travel_yaw,
+            current_travel_pitch=travel_pitch,
+        )
+        self._lookahead_replan_pending = True
+        if requested or self._replan_wait_started_at is None:
+            self._begin_replan_wait("rolling_clearance", now=now)
+        if requested:
+            self._last_replan_request_position = current_position.copy()
+            self._last_replan_request_at = now
+        self._record_blackbox(
+            "rolling_clearance_replan_requested",
+            requested=bool(requested),
+            position=_vector_payload(current_position),
+            yaw=float(getattr(camera, "yaw", 0.0)),
+            pitch=float(getattr(camera, "pitch", 0.0)),
+            travel_yaw=travel_yaw,
+            travel_pitch=travel_pitch,
+            elapsed_s=float(self._elapsed_s),
+            progress=float(self.progress),
+            plan_sequence=int(self._plan_sequence),
+            plan=_plan_summary(self.plan),
+        )
+        return True
+
     def _maybe_request_lookahead_replan(
         self,
         camera,
@@ -1790,6 +3553,24 @@ class AutoDiveController:
                 now=now,
             )
             return True
+        if self._continuous_scan_supported():
+            requested = self._request_continuous_scan_if_needed(
+                camera,
+                now=now,
+                reason="voxel_lookahead_boundary",
+                world=world,
+            )
+            self._record_blackbox(
+                "lookahead_replan_requested",
+                requested=bool(requested),
+                continuous_scan=True,
+                position=_vector_payload(camera.position),
+                elapsed_s=float(self._elapsed_s),
+                progress=float(self.progress),
+                plan_sequence=int(self._plan_sequence),
+                plan=_plan_summary(self.plan),
+            )
+            return True
         if self._lookahead_replan_pending:
             return True
 
@@ -1801,6 +3582,7 @@ class AutoDiveController:
             current_position,
             current_yaw=float(getattr(camera, "yaw", 0.0)),
             current_pitch=float(getattr(camera, "pitch", 0.0)),
+            current_roll=float(getattr(camera, "roll", 0.0)),
             current_travel_yaw=travel_yaw,
             current_travel_pitch=travel_pitch,
         )
@@ -1848,7 +3630,11 @@ class AutoDiveController:
             return True
         if self._mesh_recovery_replan_pending:
             return True
-        if self._mesh_recovery_attempts >= DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_ATTEMPTS:
+        if (
+            not self._continuous_scan_supported()
+            and self._mesh_recovery_attempts
+            >= DEFAULT_AUTO_DIVE_MESH_RECOVERY_MAX_ATTEMPTS
+        ):
             self._enter_user_assist(
                 world,
                 reason="mesh_recovery_exhausted",
@@ -1860,10 +3646,16 @@ class AutoDiveController:
 
         if self._mesh_recovery_started_at is None:
             self._mesh_recovery_started_at = now
+            self._continuous_scan_frontier_requested = False
             self._remember_mesh_recovery_boundary(route_position)
             self._record_blackbox(
                 "mesh_recovery_scan_started",
                 reason=str(reason),
+                scan_mode=(
+                    "continuous_forward_hemisphere"
+                    if self._continuous_scan_supported()
+                    else "forward_hemisphere"
+                ),
                 attempts=int(self._mesh_recovery_attempts),
                 boundary_positions=[
                     _vector_payload(position)
@@ -1877,9 +3669,57 @@ class AutoDiveController:
             )
         return True
 
-    def _request_mesh_recovery_replan_if_ready(self, camera, *, now: float) -> bool:
+    def _request_mesh_recovery_replan_if_ready(
+        self,
+        camera,
+        *,
+        now: float,
+        world=None,
+    ) -> bool:
         if self.replanner is None:
             return False
+        if self._continuous_scan_supported():
+            if self._mesh_recovery_started_at is None:
+                return False
+            scan_elapsed_s = max(
+                0.0,
+                float(now) - self._mesh_recovery_started_at,
+            )
+            if scan_elapsed_s < DEFAULT_AUTO_DIVE_MESH_RECOVERY_TURN_SECONDS:
+                return False
+            if not self._continuous_scan_frontier_requested:
+                requested = self._request_continuous_scan_if_needed(
+                    camera,
+                    now=now,
+                    reason="mesh_recovery_frontier",
+                    world=world,
+                )
+                self._continuous_scan_frontier_requested = True
+                self._record_blackbox(
+                    "mesh_recovery_replan_requested",
+                    requested=bool(requested),
+                    continuous_scan=True,
+                    attempts=int(self._mesh_recovery_attempts),
+                    scan_elapsed_s=float(scan_elapsed_s),
+                    position=_vector_payload(camera.position),
+                    yaw=float(getattr(camera, "yaw", 0.0)),
+                    pitch=float(getattr(camera, "pitch", 0.0)),
+                    travel_yaw=self._current_route_travel_angles(
+                        np.asarray(camera.position, dtype=np.float64)
+                    )[0],
+                    travel_pitch=self._current_route_travel_angles(
+                        np.asarray(camera.position, dtype=np.float64)
+                    )[1],
+                    force_hemisphere_scan=True,
+                    avoid_positions=[
+                        _vector_payload(position)
+                        for position in self._mesh_recovery_prior_boundary_positions()
+                    ],
+                    elapsed_s=float(self._elapsed_s),
+                    progress=float(self.progress),
+                    plan=_plan_summary(self.plan),
+                )
+            return True
         if self._mesh_recovery_replan_pending:
             return True
         if self._mesh_recovery_started_at is None:
@@ -1894,8 +3734,10 @@ class AutoDiveController:
             current_position,
             current_yaw=float(getattr(camera, "yaw", 0.0)),
             current_pitch=float(getattr(camera, "pitch", 0.0)),
+            current_roll=float(getattr(camera, "roll", 0.0)),
             current_travel_yaw=travel_yaw,
             current_travel_pitch=travel_pitch,
+            force_hemisphere_scan=True,
             avoid_positions=tuple(
                 tuple(float(value) for value in position)
                 for position in self._mesh_recovery_prior_boundary_positions()
@@ -1918,6 +3760,7 @@ class AutoDiveController:
             pitch=float(getattr(camera, "pitch", 0.0)),
             travel_yaw=travel_yaw,
             travel_pitch=travel_pitch,
+            force_hemisphere_scan=True,
             avoid_positions=[
                 _vector_payload(position)
                 for position in self._mesh_recovery_prior_boundary_positions()
@@ -1927,6 +3770,111 @@ class AutoDiveController:
             plan=_plan_summary(self.plan),
         )
         return True
+
+    def _continuous_scan_supported(self) -> bool:
+        """Return whether the attached replanner supports the always-on path."""
+        replanner = self.replanner
+        if replanner is None:
+            return False
+        return all(
+            callable(getattr(replanner, name, None))
+            for name in (
+                "request_continuous_scan",
+                "take_latest_continuous_scan",
+                "has_continuous_scan_pending",
+                "has_continuous_scan_result",
+            )
+        )
+
+    def _request_continuous_scan_if_needed(
+        self,
+        camera,
+        *,
+        now: float,
+        reason: str,
+        world=None,
+    ) -> bool:
+        """Keep one owner-safe, unbounded forward scan in flight."""
+        if (
+            not self._continuous_scan_supported()
+            or not self.active
+            or bool(getattr(self.plan, "terminal_reached", False))
+            or self._user_resume_replan_pending
+        ):
+            return False
+        replanner = self.replanner
+        failure_count = int(getattr(replanner, "continuous_scan_failure_count", 0))
+        if (
+            self._mesh_recovery_active()
+            and failure_count >= DEFAULT_AUTO_DIVE_CONTINUOUS_SCAN_MAX_FAILURES
+        ):
+            position = np.asarray(camera.position, dtype=np.float64).reshape(3)
+            details = {
+                "failure_count": failure_count,
+                "max_failures": int(DEFAULT_AUTO_DIVE_CONTINUOUS_SCAN_MAX_FAILURES),
+                "last_failure_generation": getattr(
+                    replanner,
+                    "continuous_scan_last_failure_generation",
+                    None,
+                ),
+            }
+            self._record_blackbox(
+                "continuous_scan_exhausted",
+                reason=str(reason),
+                position=_vector_payload(position),
+                plan_sequence=int(self._plan_sequence),
+                **details,
+            )
+            self._enter_user_assist(
+                world,
+                reason="continuous_scan_exhausted",
+                position=position,
+                details=details,
+                now=now,
+            )
+            return False
+        has_pending = getattr(replanner, "has_continuous_scan_pending")
+        has_result = getattr(replanner, "has_continuous_scan_result")
+        if bool(has_pending()) or bool(has_result()):
+            return False
+
+        current_position = np.asarray(camera.position, dtype=np.float64).reshape(3)
+        travel_yaw, travel_pitch = self._current_route_travel_angles(
+            current_position
+        )
+        requested = bool(
+            replanner.request_continuous_scan(
+                current_position,
+                current_yaw=float(getattr(camera, "yaw", 0.0)),
+                current_pitch=float(getattr(camera, "pitch", 0.0)),
+                current_roll=float(getattr(camera, "roll", 0.0)),
+                current_travel_yaw=travel_yaw,
+                current_travel_pitch=travel_pitch,
+                avoid_positions=tuple(
+                    tuple(float(value) for value in position)
+                    for position in self._mesh_recovery_prior_boundary_positions()
+                ),
+                source_plan_sequence=int(self._plan_sequence),
+            )
+        )
+        if requested:
+            self._last_replan_request_position = current_position.copy()
+            self._last_replan_request_at = float(now)
+        self._record_blackbox(
+            "continuous_scan_cycle_requested",
+            requested=bool(requested),
+            reason=str(reason),
+            position=_vector_payload(current_position),
+            yaw=float(getattr(camera, "yaw", 0.0)),
+            pitch=float(getattr(camera, "pitch", 0.0)),
+            travel_yaw=travel_yaw,
+            travel_pitch=travel_pitch,
+            source_plan_sequence=int(self._plan_sequence),
+            elapsed_s=float(self._elapsed_s),
+            progress=float(self.progress),
+            now=float(now),
+        )
+        return requested
 
     def _current_route_travel_angles(
         self,
@@ -1946,6 +3894,30 @@ class AutoDiveController:
         self._mesh_recovery_boundary_positions.append(point)
         if len(self._mesh_recovery_boundary_positions) > 8:
             del self._mesh_recovery_boundary_positions[:-8]
+
+    def _mesh_recovery_plan_made_progress(
+        self,
+        plan: AutoDivePlan,
+        current_position: np.ndarray,
+    ) -> bool:
+        """Return whether an accepted recovery plan moved beyond its frontier."""
+        if not self._mesh_recovery_boundary_positions:
+            return False
+        boundary = self._mesh_recovery_boundary_positions[-1]
+        threshold_m = max(0.5, float(self.replan_distance_m) * 0.5)
+        accepted_start = np.asarray(
+            plan.route.pose_at(0.0).position,
+            dtype=np.float64,
+        )
+        accepted_end = np.asarray(
+            plan.route.pose_at(float(plan.route.duration_s)).position,
+            dtype=np.float64,
+        )
+        return max(
+            float(np.linalg.norm(np.asarray(current_position) - boundary)),
+            float(np.linalg.norm(accepted_start - boundary)),
+            float(np.linalg.norm(accepted_end - boundary)),
+        ) > threshold_m
 
     def _mesh_recovery_prior_boundary_positions(self) -> tuple[np.ndarray, ...]:
         if len(self._mesh_recovery_boundary_positions) <= 1:
@@ -2460,6 +4432,13 @@ class AutoDiveController:
         cancel_pending = getattr(self.replanner, "cancel_pending", None)
         if callable(cancel_pending):
             cancel_pending()
+        cancel_continuous_scan = getattr(
+            self.replanner,
+            "cancel_continuous_scan",
+            None,
+        )
+        if callable(cancel_continuous_scan):
+            cancel_continuous_scan()
         self._remember_mesh_recovery_boundary(position)
         self._prefetch_cells = frozenset()
         self._readiness = AutoDiveReadiness(0, 0, 0, 0, 0, 1.0)
@@ -2468,7 +4447,12 @@ class AutoDiveController:
         self._survey_replan_requested = False
         self._mesh_recovery_started_at = None
         self._mesh_recovery_replan_pending = False
+        self._continuous_scan_frontier_requested = False
         self._lookahead_replan_pending = False
+        self._speculative_replan_pending = False
+        self._speculative_replan_plan_sequence = None
+        self._speculative_replan_attempted_plan_sequence = None
+        self._speculative_replan_requested_at = None
         self._user_resume_replan_pending = False
         self._clear_replan_wait()
         self._user_assist_anchor_position = position.copy()
@@ -2663,6 +4647,7 @@ def auto_dive_plan_summary(plan: AutoDivePlan) -> dict[str, Any]:
             getattr(plan, "route_truncated_by_mesh", False)
         ),
         "replan_at_end": bool(getattr(plan, "replan_at_end", False)),
+        "terminal_reached": bool(getattr(plan, "terminal_reached", False)),
         "voxel_route_selection": _bounded_voxel_route_selection_payload(
             getattr(plan, "voxel_route_selection", None)
         ),
@@ -2682,10 +4667,20 @@ def auto_dive_plan_summary(plan: AutoDivePlan) -> dict[str, Any]:
             if not route_points
             else _vector_payload(route_points[0])
         ),
+        "start_roll_deg": (
+            None
+            if not getattr(plan, "route", None)
+            else float(plan.route.keyframes[0].roll_deg)
+        ),
         "end": (
             None
             if not route_points
             else _vector_payload(route_points[-1])
+        ),
+        "end_roll_deg": (
+            None
+            if not getattr(plan, "route", None)
+            else float(plan.route.keyframes[-1].roll_deg)
         ),
     }
 
@@ -2751,6 +4746,7 @@ def _next_pose_payload(plan: AutoDivePlan, elapsed_s: float) -> dict[str, Any] |
         "position": _vector_payload(pose.position),
         "yaw_deg": float(pose.yaw_deg),
         "pitch_deg": float(pose.pitch_deg),
+        "roll_deg": float(pose.roll_deg),
     }
 
 
