@@ -37,10 +37,13 @@ from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.navigation.autodive import (
     AUTO_DIVE_RUNTIME_METHOD,
+    AutoDivePreflightResult,
     AutoDiveSettings,
     DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS,
     DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS,
     DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
+    auto_dive_plan_navigation_cell_size,
+    build_auto_dive_preflight_plan,
     build_auto_dive_initial_camera_pose,
     build_voxel_graph_auto_dive_plan,
 )
@@ -3014,10 +3017,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         if benchmark_controller is not None and not benchmark_controller.finished:
             return False
-        if self._navigation_guard_enabled:
-            self.camera.position = self._clamp_navigation_position_to_bounds(
-                self.camera.position
-            )
+        # The graph/voxel preflight validates the exact camera position. The
+        # legacy chunk guard only knows coarse mesh bounds and can move a
+        # graph-native start into an occupied voxel before preflight sees it.
+        # Leave the pose untouched here; invalid manual positions must fail
+        # preflight rather than being silently rewritten.
         blackbox = self._auto_dive_blackbox()
         executor: ThreadPoolExecutor | None = None
         try:
@@ -3054,17 +3058,16 @@ class CaveViewerWindow(mglw.WindowConfig):
                 thread_name_prefix="CaveViewer-AutoDiveStart",
             )
             future = executor.submit(
-                build_voxel_graph_auto_dive_plan,
+                build_auto_dive_preflight_plan,
                 self.manifest,
                 current_position=tuple(float(value) for value in start_position),
                 current_yaw=float(self.camera.yaw),
                 current_pitch=float(self.camera.pitch),
-                current_roll=float(getattr(self.camera, "roll", 0.0)),
                 settings=auto_dive_settings,
                 cache_dir=self.cache_dir,
                 diagnostics=_auto_dive_diagnostic_sink(
                     blackbox,
-                    phase="initial_plan",
+                    phase="initial_preflight",
                     position=start_position,
                 ),
             )
@@ -3076,7 +3079,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "auto_dive_unavailable",
                     reason=str(exc),
                     error_type=type(exc).__name__,
-                    plan_phase="initial_plan",
+                    plan_phase="initial_preflight",
                     planning_duration_ms=max(
                         0.0,
                         (time.perf_counter() - requested_at) * 1000.0,
@@ -3100,7 +3103,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "auto_dive_plan_requested",
                 position=[float(value) for value in start_position],
                 plan_id="initial",
-                plan_phase="initial_plan",
+                plan_phase="initial_preflight",
             )
         _LOG.info("Guided Dive planning started.")
         return True
@@ -3128,7 +3131,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             executor.shutdown(wait=False, cancel_futures=True)
 
         try:
-            plan = future.result()
+            preflight = future.result()
         except NavigationConfigurationError as exc:
             if blackbox is not None:
                 blackbox.record(
@@ -3136,7 +3139,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     reason=str(exc),
                     error_type=type(exc).__name__,
                     plan_id="initial",
-                    plan_phase="initial_plan",
+                    plan_phase="initial_preflight",
                     planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
@@ -3149,12 +3152,47 @@ class CaveViewerWindow(mglw.WindowConfig):
                     reason=str(exc),
                     error_type=type(exc).__name__,
                     plan_id="initial",
-                    plan_phase="initial_plan",
+                    plan_phase="initial_preflight",
                     planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             _LOG.exception("Guided Dive planning failed.")
             return
+
+        if isinstance(preflight, AutoDivePreflightResult):
+            if not preflight.ready:
+                if blackbox is not None:
+                    blackbox.record(
+                        "auto_dive_preflight_failed",
+                        status=preflight.status,
+                        reason=preflight.reason,
+                        preflight=preflight.diagnostic_payload(),
+                        plan_id="initial",
+                        plan_phase="initial_preflight",
+                        planning_duration_ms=planning_duration_ms,
+                    )
+                    blackbox.close()
+                _LOG.info(
+                    "Guided Dive preflight did not produce a validated route: %s",
+                    preflight.reason,
+                )
+                return
+            plan = preflight.plan
+            assert plan is not None
+            if blackbox is not None:
+                blackbox.record(
+                    "auto_dive_preflight_completed",
+                    status=preflight.status,
+                    reason=preflight.reason,
+                    preflight=preflight.diagnostic_payload(),
+                    plan_id="initial",
+                    plan_phase="initial_preflight",
+                    planning_duration_ms=planning_duration_ms,
+                )
+        else:
+            # Keep the handoff tolerant of test doubles and older embedders
+            # while production startup always uses AutoDivePreflightResult.
+            plan = preflight
 
         if (
             self.manifest is not requested_manifest
@@ -3173,7 +3211,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                         else [float(value) for value in start_position]
                     ),
                     plan_id="initial",
-                    plan_phase="initial_plan",
+                    plan_phase="initial_preflight",
                     planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
@@ -3186,7 +3224,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "auto_dive_plan_discarded",
                     reason="missing_settings",
                     plan_id="initial",
-                    plan_phase="initial_plan",
+                    plan_phase="initial_preflight",
                     planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
@@ -3196,7 +3234,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             blackbox.record(
                 "auto_dive_plan_completed",
                 plan_id="initial",
-                plan_phase="initial_plan",
+                plan_phase="initial_preflight",
                 planning_duration_ms=planning_duration_ms,
                 plan=auto_dive_plan_summary(plan),
             )
@@ -3230,7 +3268,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     None if position is None else [float(value) for value in position]
                 ),
                 plan_id="initial",
-                plan_phase="initial_plan",
+                plan_phase="initial_preflight",
                 planning_duration_ms=(
                     None
                     if requested_at is None
@@ -3273,17 +3311,23 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.world.config.load_radius_cells = self.render_distance_stepper.value
         replan_distance_m = max(
             0.5,
-            float(plan.centerline_path.footprint_cell_size),
+            float(auto_dive_plan_navigation_cell_size(plan)),
         )
+        replanner_kwargs = {
+            "plan_builder": build_voxel_graph_auto_dive_plan,
+            "cache_dir": self.cache_dir,
+            "blackbox": blackbox,
+        }
+        navigation_route_id = getattr(plan, "navigation_route_id", None)
+        if navigation_route_id is not None:
+            replanner_kwargs["navigation_route_id"] = navigation_route_id
         controller = AutoDiveController(
             plan,
             perf_counter=lambda: time.perf_counter(),
             replanner=AutoDiveReplanner(
                 self.manifest,
                 auto_dive_settings,
-                plan_builder=build_voxel_graph_auto_dive_plan,
-                cache_dir=self.cache_dir,
-                blackbox=blackbox,
+                **replanner_kwargs,
             ),
             replan_distance_m=replan_distance_m,
             blackbox=blackbox,
@@ -3363,7 +3407,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
         state = controller.update(self.camera, self.world, now=now)
         navigation_clamped = False
-        if self._navigation_guard_enabled:
+        plan = getattr(controller, "plan", None)
+        graph_native_plan = getattr(plan, "navigation_graph", None) is not None
+        if self._navigation_guard_enabled and not graph_native_plan:
             before_clamp = self.camera.position.copy()
             self.camera.position = self._clamp_navigation_position_to_bounds(
                 self.camera.position,
@@ -3423,7 +3469,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "planning guided dive",
                 None,
                 title="",
-                note="Finding a forward route…",
+                note="Validating the cave route…",
             )
             return
 

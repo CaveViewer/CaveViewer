@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
+import copy
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
+import caveviewer.core.navigation.autodive as autodive
 from caveviewer.core.chunking import io as chunk_io
 from caveviewer.core.navigation.autodive import (
+    AUTO_DIVE_PREFLIGHT_INDETERMINATE,
+    AUTO_DIVE_PREFLIGHT_READY,
+    NavigationVoxelGraphAuthorityError,
     AutoDivePlanningBudgetExceeded,
+    AutoDivePreflightResult,
     DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
     DEFAULT_AUTO_DIVE_VERTICAL_POSITION_FRACTION,
     _AutoDivePlanningBudget,
     _AutoDiveCollisionValidator,
+    _AutoDiveSelectedRoute,
     AutoDiveSettings,
     _AutoDiveRouteSamples,
     _auto_dive_points_for_waypoint_cells,
     _build_hemisphere_probe_route_candidate,
+    _build_bounded_local_frontier_graph_route,
     _centerline_cells_form_closed_loop,
     _cone_chain_anchor_indices,
     _mesh_clear_recovery_footprint_path,
@@ -26,8 +36,10 @@ from caveviewer.core.navigation.autodive import (
     _mesh_recovery_turn_angle,
     _mesh_recovery_view_alignment,
     _route_segment_stays_in_footprint,
+    build_auto_dive_preflight_plan,
     build_auto_dive_initial_camera_pose,
     build_centerline_auto_dive_plan,
+    build_voxel_graph_auto_dive_plan,
 )
 from caveviewer.core.navigation.centerline import (
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
@@ -41,6 +53,14 @@ from caveviewer.core.navigation.cache_metadata import (
     cached_centerline_path,
 )
 from caveviewer.core.navigation.voxel_volume import LocalVoxelVolume
+from caveviewer.core.navigation.voxel_cache import NavigationVoxelAtlas
+from caveviewer.core.navigation.voxel_graph_3d import (
+    NavigationVoxel3DMetric,
+    NavigationVoxel3DEdge,
+    NavigationVoxel3DGraph,
+    NavigationVoxel3DNode,
+    build_navigation_voxel_3d_graph,
+)
 
 
 def test_auto_dive_uses_longest_centerline_component():
@@ -148,6 +168,658 @@ def test_auto_dive_prefers_cached_navigation_centerline_metadata():
     assert plan.route_points[1][1] == pytest.approx(1.5)
 
 
+def test_auto_dive_preflight_validates_farthest_graph_terminal(
+    monkeypatch,
+    tmp_path,
+):
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0), (2, 0)),
+        route_cells=((0, 0), (1, 0), (2, 0)),
+        route_points=(
+            (0.5, 1.0, 0.5),
+            (1.5, 1.0, 0.5),
+            (2.5, 1.0, 0.5),
+        ),
+    )
+    short_route = copy.deepcopy(manifest["navigation"]["routes"][0])
+    short_route["id"] = "short"
+    short_route["length_m"] = 1.0
+    short_route["cells"] = [0, 0, 1, 0]
+    short_route["points"] = [0.5, 1.0, 0.5, 1.5, 1.0, 0.5]
+    long_route = copy.deepcopy(manifest["navigation"]["routes"][0])
+    long_route["id"] = "long"
+    long_route["length_m"] = 2.0
+    manifest["navigation"]["recommended_route_id"] = "short"
+    manifest["navigation"]["routes"] = [short_route, long_route]
+    manifest["navigation"]["navigation_start"] = {
+        "position": [0.5, 1.0, 0.5],
+    }
+
+    centerline_path = cached_centerline_path(manifest, route_id="long")
+    assert centerline_path is not None
+    metrics = {
+        (x, 0, 0): NavigationVoxel3DMetric(
+            center=(x + 0.5, 1.0, 0.5),
+            footprint_cell=(x, 0),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(x),
+        )
+        for x in range(3)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    captured = {}
+
+    def fake_authority(manifest_value, *, cache_dir, settings, diagnostics, route_id):
+        del manifest_value, cache_dir, settings, diagnostics
+        captured["route_id"] = route_id
+        return atlas, {"route_id": route_id}
+
+    class NoHitMeshGuard:
+        def segment_collision(self, first, second):
+            del first, second
+            return None
+
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        fake_authority,
+    )
+    monkeypatch.setattr(
+        autodive.CachedChunkMeshCollisionGuard,
+        "from_manifest",
+        classmethod(
+            lambda cls, manifest_value, *, cache_dir: NoHitMeshGuard()
+        ),
+    )
+
+    result = build_auto_dive_preflight_plan(
+        manifest,
+        current_position=(0.5, 1.0, 0.5),
+        # A backward-facing camera must not prevent the graph-wide terminal
+        # validation from finding the complete passage.
+        current_yaw=np.pi,
+        current_pitch=0.0,
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            max_keyframes=16,
+            smoothing_radius_cells=0,
+        ),
+        cache_dir=str(tmp_path),
+    )
+
+    assert isinstance(result, AutoDivePreflightResult)
+    assert result.status == AUTO_DIVE_PREFLIGHT_READY
+    assert result.ready is True
+    assert captured["route_id"] == "long"
+    assert result.navigation_route_id == "long"
+    assert result.start_graph_key == (0, 0, 0)
+    assert result.terminal_graph_key == (2, 0, 0)
+    assert result.terminal_point == pytest.approx((2.5, 1.0, 0.5))
+    assert result.details["terminal_rule"] == (
+        "farthest_reachable_true_3d_graph_terminal"
+    )
+    assert result.details["terminal_selection_source"] == "graph_terminal"
+    assert result.details["terminal_graph_distance_m"] == pytest.approx(2.0)
+    assert "terminal_snap_distance_m" not in result.details
+    assert result.plan is not None
+    assert result.plan.preflight_validated is True
+    assert result.plan.selection_reason == (
+        "preflight_farthest_graph_terminal_true_3d"
+    )
+    assert result.plan.route_points[-1] == pytest.approx((2.5, 1.0, 0.5))
+    assert all(
+        keyframe.roll_deg == pytest.approx(0.0)
+        for keyframe in result.plan.route.keyframes
+    )
+
+
+def test_auto_dive_preflight_uses_mesh_safe_frontier_when_longest_edge_is_blocked(
+    monkeypatch,
+):
+    manifest = _manifest_with_cached_route(
+        component_cells=(
+            (0, 0),
+            (1, 0),
+            (2, 0),
+            (3, 0),
+            (4, 0),
+            (0, 1),
+            (1, 1),
+            (2, 1),
+        ),
+        route_cells=((0, 0), (1, 0), (2, 0), (3, 0), (4, 0)),
+        route_points=tuple(
+            (float(x), 0.0, 0.0)
+            for x in range(5)
+        ),
+    )
+
+    keys = (
+        (0, 0, 0),
+        (1, 0, 0),
+        (2, 0, 0),
+        (3, 0, 0),
+        (4, 0, 0),
+        (0, 1, 0),
+        (1, 1, 0),
+        (2, 1, 0),
+    )
+    terminal_key = (4, 0, 0)
+    safe_frontier_key = (2, 1, 0)
+    nodes = {
+        key: NavigationVoxel3DNode(
+            key=key,
+            center=tuple(float(value) for value in key),
+            footprint_cell=(int(key[0]), int(key[2])),
+            component_id=0,
+            progress_m=float(key[0]),
+            connectivity_score=1.0,
+            local_degree=1,
+            dead_end=False,
+            terminal=key == terminal_key,
+            unknown_boundary=key == safe_frontier_key,
+            available_volume_m3=10.0,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+        )
+        for key in keys
+    }
+
+    def make_edge(source, target):
+        delta = np.asarray(target, dtype=np.float64) - np.asarray(
+            source,
+            dtype=np.float64,
+        )
+        distance = float(np.linalg.norm(delta))
+        return NavigationVoxel3DEdge(
+            source=source,
+            target=target,
+            distance_m=distance,
+            direction=tuple(float(value) for value in (delta / distance)),
+            min_clearance_m=1.0,
+        )
+
+    directed_edges = (
+        ((0, 0, 0), (1, 0, 0)),
+        ((1, 0, 0), (2, 0, 0)),
+        ((2, 0, 0), (3, 0, 0)),
+        ((3, 0, 0), (4, 0, 0)),
+        ((0, 0, 0), (0, 1, 0)),
+        ((0, 1, 0), (1, 1, 0)),
+        ((1, 1, 0), (2, 1, 0)),
+    )
+    graph = NavigationVoxel3DGraph(
+        nodes=nodes,
+        edges={
+            key: tuple(
+                make_edge(source, target)
+                for source, target in directed_edges
+                if source == key
+            )
+            for key in keys
+        },
+        component_count=1,
+        grid_size_m=(1.0, 1.0, 1.0),
+        max_edge_distance_cells=4,
+        max_edges_per_node=8,
+        max_edge_distance_m=4.0,
+        max_vertical_edge_distance_m=4.0,
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda manifest_value, **kwargs: (
+            atlas,
+            {"route_id": "cached-main"},
+        ),
+    )
+
+    class SelectiveMeshGuard:
+        def segment_collision(self, first, second):
+            if tuple(first) == (3.0, 0.0, 0.0) and tuple(second) == (
+                4.0,
+                0.0,
+                0.0,
+            ):
+                return SimpleNamespace(point=(3.5, 0.0, 0.0))
+            return None
+
+    monkeypatch.setattr(
+        autodive.CachedChunkMeshCollisionGuard,
+        "from_manifest",
+        classmethod(
+            lambda cls, manifest_value, *, cache_dir: SelectiveMeshGuard()
+        ),
+    )
+
+    result = build_auto_dive_preflight_plan(
+        manifest,
+        current_position=(0.0, 0.0, 0.0),
+        current_yaw=0.0,
+        current_pitch=0.0,
+        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        cache_dir="/cache/devils-eye",
+    )
+
+    assert result.status == AUTO_DIVE_PREFLIGHT_READY
+    assert result.reason == "validated_mesh_safe_graph_frontier_route"
+    assert result.start_graph_key == (0, 0, 0)
+    assert result.terminal_graph_key == safe_frontier_key
+    assert result.terminal_point == pytest.approx((2.0, 1.0, 0.0))
+    assert result.coverage_incomplete is True
+    assert result.details["requested_terminal_graph_key"] == [4, 0, 0]
+    assert result.details["mesh_safe_frontier_fallback"] is True
+    assert result.plan is not None
+    assert result.plan.selection_reason == "preflight_mesh_safe_graph_frontier"
+    assert result.plan.replan_at_end is True
+    assert result.plan.terminal_reached is False
+    assert np.allclose(
+        result.plan.route_points,
+        (
+            (0.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (2.0, 1.0, 0.0),
+        ),
+    )
+
+
+def test_auto_dive_preflight_uses_farthest_voxel_frontier_not_centerline_endpoint(
+    monkeypatch,
+):
+    component_cells = (
+        (0, 0),
+        (1, 0),
+        (2, 0),
+        (1, 1),
+        (1, 2),
+        (1, 3),
+        (1, 4),
+    )
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=((0, 0), (1, 0), (2, 0)),
+        route_points=(
+            (0.5, 1.0, 0.5),
+            (1.5, 1.0, 0.5),
+            (2.5, 1.0, 0.5),
+        ),
+    )
+    centerline_path = cached_centerline_path(manifest)
+    assert centerline_path is not None
+    metrics = {
+        (x, 0, z): NavigationVoxel3DMetric(
+            center=(x + 0.5, 1.0, z + 0.5),
+            footprint_cell=(x, z),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(x + z),
+        )
+        for x, z in component_cells
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+        # This models a prepared cache whose sampled boundary is incomplete.
+        unknown_boundary=set(metrics),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda manifest_value, **kwargs: (
+            atlas,
+            {"route_id": "cached-main"},
+        ),
+    )
+
+    class NoHitMeshGuard:
+        def segment_collision(self, first, second):
+            del first, second
+            return None
+
+    monkeypatch.setattr(
+        autodive.CachedChunkMeshCollisionGuard,
+        "from_manifest",
+        classmethod(
+            lambda cls, manifest_value, *, cache_dir: NoHitMeshGuard()
+        ),
+    )
+
+    result = build_auto_dive_preflight_plan(
+        manifest,
+        current_position=(0.5, 1.0, 0.5),
+        settings=AutoDiveSettings(
+            max_keyframes=32,
+            smoothing_radius_cells=0,
+        ),
+        cache_dir="/cache/devils-eye",
+    )
+
+    assert result.status == AUTO_DIVE_PREFLIGHT_READY
+    assert result.terminal_graph_key == (1, 0, 4)
+    assert result.terminal_point == pytest.approx((1.5, 1.0, 4.5))
+    assert result.details["terminal_selection_source"] == (
+        "unknown_boundary_frontier"
+    )
+    assert result.coverage_incomplete is True
+    assert result.plan is not None
+    assert result.plan.route_points[-1] == pytest.approx(
+        (1.5, 1.0, 4.5)
+    )
+
+
+def test_auto_dive_preflight_does_not_fallback_to_centerline_without_graph_endpoint(
+    monkeypatch,
+):
+    component_cells = ((0, 0), (1, 0), (1, 1), (0, 1))
+    manifest = _manifest_with_cached_route(
+        component_cells=component_cells,
+        route_cells=component_cells,
+        route_points=tuple(
+            (float(x) + 0.5, 1.0, float(z) + 0.5)
+            for x, z in component_cells
+        ),
+    )
+    centerline_path = cached_centerline_path(manifest)
+    assert centerline_path is not None
+    metrics = {
+        (x, 0, z): NavigationVoxel3DMetric(
+            center=(x + 0.5, 1.0, z + 0.5),
+            footprint_cell=(x, z),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(x + z),
+        )
+        for x, z in component_cells
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda manifest_value, **kwargs: (
+            atlas,
+            {"route_id": "cached-main"},
+        ),
+    )
+
+    result = build_auto_dive_preflight_plan(
+        manifest,
+        current_position=(0.5, 1.0, 0.5),
+        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        cache_dir="/cache/devils-eye",
+    )
+
+    assert result.status == AUTO_DIVE_PREFLIGHT_INDETERMINATE
+    assert result.reason == "prepared_graph_terminal_candidates_missing"
+    assert result.terminal_graph_key is None
+    assert result.terminal_point is None
+    assert result.plan is None
+
+
+def test_auto_dive_preflight_is_indeterminate_without_mesh_validation(
+    monkeypatch,
+):
+    manifest = _manifest_with_cached_navigation_route()
+    centerline_path = cached_centerline_path(manifest)
+    assert centerline_path is not None
+    metrics = {
+        (x, 0, 0): NavigationVoxel3DMetric(
+            center=(x + 20.5, 1.0, 0.5),
+            footprint_cell=(x + 20, 0),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(x),
+        )
+        for x in range(3)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda manifest_value, **kwargs: (
+            atlas,
+            {"route_id": "cached-main"},
+        ),
+    )
+    monkeypatch.setattr(
+        autodive.CachedChunkMeshCollisionGuard,
+        "from_manifest",
+        classmethod(lambda cls, manifest_value, *, cache_dir: None),
+    )
+
+    result = build_auto_dive_preflight_plan(
+        manifest,
+        current_position=(20.5, 1.5, 0.5),
+        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        cache_dir="/cache/devils-eye",
+    )
+
+    assert result.status == AUTO_DIVE_PREFLIGHT_INDETERMINATE
+    assert result.reason == "mesh_collision_guard_unavailable"
+    assert result.plan is None
+
+
+def test_auto_dive_preflight_does_not_cross_graph_components_for_terminal(
+    monkeypatch,
+):
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0), (10, 0), (11, 0)),
+        route_cells=((0, 0), (10, 0), (11, 0)),
+        route_points=(
+            (0.5, 1.0, 0.5),
+            (10.5, 1.0, 0.5),
+            (11.5, 1.0, 0.5),
+        ),
+    )
+    centerline_path = cached_centerline_path(manifest)
+    assert centerline_path is not None
+    metrics = {
+        (x, 0, 0): NavigationVoxel3DMetric(
+            center=(x + 0.5, 1.0, 0.5),
+            footprint_cell=(x, 0),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(x),
+        )
+        for x in (0, 1, 10, 11)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda manifest_value, **kwargs: (
+            atlas,
+            {"route_id": "cached-main"},
+        ),
+    )
+
+    result = build_auto_dive_preflight_plan(
+        manifest,
+        current_position=(0.5, 1.0, 0.5),
+        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        cache_dir="/cache/devils-eye",
+    )
+
+    assert result.status == AUTO_DIVE_PREFLIGHT_READY
+    assert result.reason == "validated_farthest_graph_terminal_route"
+    assert result.start_graph_key == (0, 0, 0)
+    assert result.terminal_graph_key == (1, 0, 0)
+    assert result.terminal_point == pytest.approx((1.5, 1.0, 0.5))
+    assert result.plan is not None
+    assert all(point[0] < 2.0 for point in result.plan.route_points)
+
+
+def test_graph_native_plan_does_not_load_or_consult_centerline_clearance(
+    monkeypatch,
+):
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0), (2, 0)),
+        route_cells=((0, 0), (1, 0), (2, 0)),
+        route_points=(
+            (0.5, 1.0, 0.5),
+            (1.5, 1.0, 0.5),
+            (2.5, 1.0, 0.5),
+        ),
+    )
+    metrics = {
+        (x, 0, 0): NavigationVoxel3DMetric(
+            center=(x + 0.5, 1.0, 0.5),
+            footprint_cell=(x, 0),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=7.16,
+            mean_clearance_m=7.16,
+            progress_m=float(x),
+        )
+        for x in range(3)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+
+    monkeypatch.setattr(
+        autodive,
+        "cached_centerline_path",
+        lambda *args, **kwargs: pytest.fail(
+            "graph-native planning must not load a centerline"
+        ),
+    )
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda manifest_value, **kwargs: (
+            atlas,
+            {"route_id": "graph-native"},
+        ),
+    )
+
+    class NoHitMeshGuard:
+        def segment_collision(self, first, second):
+            del first, second
+            return None
+
+    monkeypatch.setattr(
+        autodive.CachedChunkMeshCollisionGuard,
+        "from_manifest",
+        classmethod(
+            lambda cls, manifest_value, *, cache_dir: NoHitMeshGuard()
+        ),
+    )
+
+    plan = build_voxel_graph_auto_dive_plan(
+        manifest,
+        current_position=(0.5, 1.0, 0.5),
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            minimum_graph_clearance_m=5.0,
+            smoothing_radius_cells=0,
+        ),
+        cache_dir="/cache/devils-eye",
+    )
+
+    assert plan.centerline_path is None
+    assert plan.navigation_atlas is atlas
+    assert plan.navigation_graph is graph
+    assert plan.route_points[0] == pytest.approx((0.5, 1.0, 0.5))
+    assert plan.route_points[-1][0] > plan.route_points[0][0]
+    assert plan.voxel_route_selection is not None
+    assert plan.voxel_route_selection["authority"] == (
+        "prepared_true_3d_voxel_graph"
+    )
+
+
+def test_graph_native_runtime_plan_fails_closed_without_mesh_guard(monkeypatch):
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0), (2, 0)),
+        route_cells=((0, 0), (1, 0), (2, 0)),
+        route_points=(
+            (0.5, 1.0, 0.5),
+            (1.5, 1.0, 0.5),
+            (2.5, 1.0, 0.5),
+        ),
+    )
+    metrics = {
+        (x, 0, 0): NavigationVoxel3DMetric(
+            center=(x + 0.5, 1.0, 0.5),
+            footprint_cell=(x, 0),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(x),
+        )
+        for x in range(3)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    events = []
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda manifest_value, **kwargs: (
+            atlas,
+            {"route_id": "graph-native", "cache_version": "3"},
+        ),
+    )
+    monkeypatch.setattr(
+        autodive.CachedChunkMeshCollisionGuard,
+        "from_manifest",
+        classmethod(lambda cls, manifest_value, *, cache_dir: None),
+    )
+
+    with pytest.raises(NavigationVoxelGraphAuthorityError) as error:
+        build_voxel_graph_auto_dive_plan(
+            manifest,
+            current_position=(0.5, 1.0, 0.5),
+            settings=AutoDiveSettings(smoothing_radius_cells=0),
+            cache_dir="/cache/devils-eye",
+            diagnostics=lambda event, payload: events.append((event, payload)),
+        )
+
+    assert error.value.reason == "mesh_collision_guard_unavailable"
+    assert any(
+        event == "navigation_authority"
+        and payload["reason"] == "mesh_collision_guard_unavailable"
+        for event, payload in events
+    )
+
+
 def test_auto_dive_initial_camera_pose_uses_cached_route_endpoint():
     pose = build_auto_dive_initial_camera_pose(
         _manifest_with_cached_navigation_route(),
@@ -195,6 +867,88 @@ def test_auto_dive_initial_camera_pose_uses_navigation_start_route_direction():
 
     assert pose.position == (3.5, 1.0, 0.5)
     assert pose.yaw_deg == pytest.approx(90.0)
+
+
+def test_graph_initial_camera_uses_route_start_when_sidecar_start_is_missing():
+    navigation = {
+        "recommended_route_id": "route-main",
+        "routes": [
+            {
+                "id": "route-main",
+                "points": [
+                    3.5,
+                    4.0,
+                    5.5,
+                    4.5,
+                    4.0,
+                    5.5,
+                ],
+            }
+        ],
+    }
+
+    assert autodive._navigation_start_point(navigation) == (
+        3.5,
+        4.0,
+        5.5,
+    )
+
+
+def test_graph_initial_camera_pose_uses_route_start_fallback(monkeypatch):
+    metrics = {
+        (x, 0, 0): NavigationVoxel3DMetric(
+            center=(float(x) + 0.5, 4.0, 0.5),
+            footprint_cell=(x, 0),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(x),
+        )
+        for x in range(3)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    manifest = {
+        "navigation": {
+            "recommended_route_id": "route-main",
+            "routes": [
+                {
+                    "id": "route-main",
+                    "points": [
+                        0.5,
+                        4.0,
+                        0.5,
+                        1.5,
+                        4.0,
+                        0.5,
+                    ],
+                }
+            ],
+        }
+    }
+
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda manifest_value, **kwargs: (
+            atlas,
+            {"route_id": "route-main"},
+        ),
+    )
+
+    pose = build_auto_dive_initial_camera_pose(
+        manifest,
+        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        cache_dir="/cache/devils-eye",
+        require_voxel_graph=True,
+    )
+
+    assert pose.position == (0.5, 4.0, 0.5)
+    assert pose.yaw_deg == pytest.approx(0.0)
 
 
 def test_auto_dive_initial_camera_pose_prefers_clear_endpoint():
@@ -406,6 +1160,41 @@ def test_auto_dive_hemisphere_recovery_scans_roll_and_vertical_offsets():
     assert scan_payload["top_candidates"]
 
 
+def test_auto_dive_execution_keyframes_ignore_probe_roll(monkeypatch):
+    manifest = _l_bend_manifest()
+    selected_cells = tuple(
+        [(x, 0) for x in range(7)] + [(6, 1), (6, 2)]
+    )
+    selected_points = tuple(
+        (float(x) + 0.5, 1.0, float(z) + 0.5)
+        for x, z in selected_cells
+    )
+    selected = _AutoDiveSelectedRoute(
+        points=selected_points,
+        selection_reason="hemisphere-probe",
+        roll_deg=90.0,
+    )
+    monkeypatch.setattr(
+        autodive,
+        "_select_best_auto_dive_route_candidate",
+        lambda *args, **kwargs: selected,
+    )
+
+    plan = build_centerline_auto_dive_plan(
+        manifest,
+        current_position=(0.5, 1.0, 0.5),
+        settings=AutoDiveSettings(
+            speed_m_per_second=1.0,
+            smoothing_radius_cells=0,
+        ),
+    )
+
+    assert all(
+        keyframe.roll_deg == pytest.approx(0.0)
+        for keyframe in plan.route.keyframes
+    )
+
+
 def test_auto_dive_forced_hemisphere_scan_bypasses_local_voxel_route():
     component_cells = [(x, z) for x in range(8) for z in range(8)]
     route_cells = tuple((x, 3) for x in range(8))
@@ -464,6 +1253,49 @@ def test_auto_dive_forced_hemisphere_scan_bypasses_local_voxel_route():
     ][-1]
     assert scan_payload["forced_full_scan"] is True
     assert scan_payload["generated_count"] == 32 * 4 * 9
+
+
+def test_bounded_local_frontier_is_converted_to_safe_true_3d_graph():
+    volume = LocalVoxelVolume(
+        voxel_size_m=1.0,
+        origin=(-2.0, -2.0, -2.0),
+        shape=(20, 12, 12),
+        surface_cells=frozenset(),
+        triangle_count=1,
+        surface_sample_count=1,
+        sampling_truncated=False,
+        max_clearance_search_cells=16,
+    )
+    result = _build_bounded_local_frontier_graph_route(
+        volume=volume,
+        current=(0.5, 0.5, 0.5),
+        forward=(1.0, 0.0, 0.0),
+        settings=AutoDiveSettings(
+            max_keyframes=32,
+            voxel_local_refinement_forward_m=8.0,
+            voxel_local_refinement_max_cells=2048,
+            lookahead_distance_m=4.0,
+        ),
+        mesh_guard=None,
+        avoid_positions=None,
+        authority_status={
+            "route_id": "longest-passage",
+            "cache_version": "3",
+            "cache_method": "navigation_voxel_cache_v3",
+        },
+        diagnostics=None,
+    )
+
+    assert result is not None
+    atlas, graph, route_points, graph_keys, route_cells, selection = result
+    assert atlas.prepared_3d_graph is graph
+    assert graph.motion_geometry_safe is True
+    assert graph.edge_integrity_safe is True
+    assert len(route_points) == len(graph_keys) + 1
+    assert len(route_cells) == len(graph_keys)
+    assert route_points[-1][0] > route_points[0][0]
+    assert selection["authority"] == "bounded_runtime_local_true_3d_graph"
+    assert selection["coverage_incomplete"] is True
 
 
 def test_auto_dive_applies_runtime_cached_y_smoothing_radius():
@@ -782,6 +1614,30 @@ def test_auto_dive_enables_recovery_when_dense_triangles_are_chunked(tmp_path):
 
     assert guard is not None
     assert guard.mesh_recovery_enabled is True
+
+
+def test_auto_dive_mesh_guard_bounds_decoded_triangle_residency(monkeypatch, tmp_path):
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
+        _split_manifest(),
+        cache_dir=str(tmp_path / "cache"),
+        max_cached_triangles=2,
+    )
+
+    assert guard is not None
+    monkeypatch.setattr(
+        guard,
+        "_load_triangles_for_chunk",
+        lambda _cell: np.zeros((1, 3, 3), dtype=np.float64),
+    )
+
+    meshes = guard.triangle_meshes_for_bounds(
+        (0.0, 0.0, 0.0),
+        (72.0, 10.0, 6.0),
+    )
+    assert not guard._triangle_cache
+    assert len(tuple(meshes)) > 10
+    assert guard._cached_triangle_count <= 2
+    assert len(guard._triangle_cache) <= 2
 
 
 def test_auto_dive_mesh_guard_trims_fully_blocked_route_to_safe_prefix(tmp_path):

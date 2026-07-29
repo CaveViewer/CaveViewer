@@ -15,6 +15,7 @@ from caveviewer.core.navigation.autodive import (
     AutoDivePlan,
     AutoDivePlanningBudgetExceeded,
     AutoDiveSettings,
+    NavigationVoxelGraphAuthorityError,
 )
 from caveviewer.core.navigation.route import CameraRoute, RouteKeyframe
 from caveviewer.gui.autodive_controller import (
@@ -26,6 +27,7 @@ from caveviewer.gui.autodive_controller import (
     AutoDiveVoxelPrefetchReport,
     AutoDiveVoxelPrefetchWorker,
     DEFAULT_AUTO_DIVE_REPLAN_MIN_INTERVAL_SECONDS,
+    DEFAULT_AUTO_DIVE_CONTINUOUS_SCAN_MAX_BUDGET_S,
     DEFAULT_AUTO_DIVE_ROUTE_PREFETCH_RADIUS_CELLS,
     DEFAULT_AUTO_DIVE_ROUTE_LOOKAHEAD_SECONDS,
     DEFAULT_AUTO_DIVE_SURVEY_DURATION_SECONDS,
@@ -167,6 +169,7 @@ class _ContinuousFakeReplanner(_FakeReplanner):
         self._last_continuous_generation = None
         self.continuous_scan_failure_count = 0
         self.continuous_scan_last_failure_generation = None
+        self.continuous_scan_last_failure_reason = None
 
     def request_continuous_scan(self, current_position, **kwargs):
         self.continuous_requests.append(
@@ -1633,6 +1636,27 @@ def test_auto_dive_replanner_forwards_cache_dir_to_plan_builder():
     assert calls[0][1]["cache_dir"] == "/cache/cave"
 
 
+def test_auto_dive_replanner_preserves_preflight_navigation_route_id():
+    calls = []
+
+    def build_plan(manifest, **kwargs):
+        calls.append((manifest, kwargs))
+        return _plan()
+
+    replanner = AutoDiveReplanner(
+        {"chunks": {}},
+        AutoDiveSettings(),
+        plan_builder=build_plan,
+        navigation_route_id="longest-passage",
+    )
+
+    _generation, plan = replanner._build_plan(1, (1.0, 2.0, 3.0))
+    replanner.shutdown()
+
+    assert plan is not None
+    assert calls[0][1]["route_id"] == "longest-passage"
+
+
 def test_auto_dive_replanner_preserves_speculative_source_sequence():
     blackbox = _FakeBlackbox()
     replanner = AutoDiveReplanner(
@@ -1673,7 +1697,7 @@ def test_auto_dive_replanner_preserves_speculative_source_sequence():
         replanner.shutdown()
 
 
-def test_auto_dive_replanner_continuous_scan_is_unbounded_and_sequence_safe():
+def test_auto_dive_replanner_continuous_scan_is_bounded_and_sequence_safe():
     calls = []
     blackbox = _FakeBlackbox()
 
@@ -1702,12 +1726,219 @@ def test_auto_dive_replanner_continuous_scan_is_unbounded_and_sequence_safe():
         assert replanner.has_continuous_scan_result() is True
         assert replanner.take_latest_continuous_scan() is not None
         assert replanner.last_taken_continuous_scan_source_sequence == 7
-        assert calls[0][1]["settings"].planning_budget_s is None
+        assert calls[0][1]["settings"].planning_budget_s == pytest.approx(
+            DEFAULT_AUTO_DIVE_CONTINUOUS_SCAN_MAX_BUDGET_S,
+            abs=0.05,
+        )
+        assert calls[0][1]["settings"].planning_budget_s > 0.0
         assert calls[0][1]["force_hemisphere_scan"] is True
         assert any(
             event == "continuous_scan_completed"
             for event, _payload in blackbox.events
         )
+    finally:
+        replanner.shutdown()
+
+
+def test_auto_dive_replanner_discards_scan_that_misses_deadline():
+    blackbox = _FakeBlackbox()
+
+    def build_plan(manifest, **kwargs):
+        del manifest, kwargs
+        time.sleep(0.02)
+        return _plan()
+
+    replanner = AutoDiveReplanner(
+        {"chunks": {}},
+        AutoDiveSettings(),
+        plan_builder=build_plan,
+        blackbox=blackbox,
+    )
+    try:
+        assert replanner.request_continuous_scan(
+            (0.0, 0.0, 0.0),
+            scan_budget_s=0.005,
+        ) is True
+        for _ in range(100):
+            if not replanner.has_continuous_scan_pending():
+                break
+            time.sleep(0.005)
+
+        assert replanner.has_continuous_scan_result() is False
+        assert replanner.continuous_scan_last_failure_reason == (
+            "deadline_exceeded"
+        )
+        assert replanner.continuous_scan_last_failure_outcome.value == (
+            "deadline_exceeded"
+        )
+        failed = [
+            payload
+            for event, payload in blackbox.events
+            if event == "continuous_scan_failed"
+        ][-1]
+        assert failed["scan_outcome"] == "deadline_exceeded"
+        assert failed["failure_reason"] == "deadline_exceeded"
+    finally:
+        replanner.shutdown()
+
+
+def test_auto_dive_continuous_scan_uses_one_authoritative_fallback_at_frontier():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _ContinuousFakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        blackbox=_FakeBlackbox(),
+    )
+
+    controller.start(camera, world)
+    replanner._continuous_pending = False
+    controller._elapsed_s = 9.0
+
+    assert controller._request_continuous_scan_if_needed(
+        camera,
+        now=9.0,
+        reason="safe_frontier_deadline",
+        world=world,
+    ) is True
+    assert len(replanner.continuous_requests) == 1
+    assert len(replanner.requests) == 1
+    assert replanner.requests[0][1]["force_hemisphere_scan"] == pytest.approx(1.0)
+    assert controller._lookahead_replan_pending is True
+    assert controller._continuous_scan_fallback_attempted is True
+
+    controller.stop(world)
+
+
+def test_auto_dive_holds_frontier_ended_scan_until_expansion():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    selection = {
+        "graph_snapshot": {
+            "cache_version": 8,
+            "cache_method": "whole_cave_voxel_atlas_v8",
+            "graph_method": "navigation_voxel_graph_3d_v1",
+            "node_count": 20,
+            "edge_count": 19,
+        },
+        "graph_keys": [[0, 0, 0], [1, 0, 0]],
+        "executed_start_graph_key": [0, 0, 0],
+        "unknown_boundary_reached": True,
+        "branch": {
+            "branch_start_key": [0, 0, 0],
+            "target_key": [1, 0, 0],
+            "frontier_count": 0,
+            "onward_exit_count": 0,
+            "unknown_boundary": True,
+        },
+    }
+    initial = _plan(
+        replan_at_end=True,
+        voxel_route_selection=selection,
+    )
+    expansion = _plan(
+        end=(12.0, 0.0, 0.0),
+        replan_at_end=True,
+        selection_reason="continuous_local_frontier_expansion",
+        voxel_route_selection=selection,
+    )
+    replanner = _ContinuousFakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+        replan_only_during_survey=False,
+    )
+
+    controller.start(camera, world)
+    replanner.publish_continuous_plan(initial, source_plan_sequence=0)
+
+    assert controller.update_replan(camera, world, now=1.0) is False
+    assert controller.plan is not initial
+    assert len(replanner.continuous_requests) == 2
+    assert replanner.continuous_requests[-1][1]["expand_frontier"] == 1.0
+
+    replanner.publish_continuous_plan(expansion, source_plan_sequence=0)
+    assert controller.update_replan(camera, world, now=1.1) is True
+    assert controller.plan is expansion
+
+    controller.stop(world)
+
+
+def test_auto_dive_does_not_start_full_scan_with_less_than_seven_safe_seconds():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    replanner = _ContinuousFakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        blackbox=blackbox,
+    )
+
+    controller.start(camera, world)
+    replanner._continuous_pending = False
+    controller._elapsed_s = 4.0
+
+    assert controller._request_continuous_scan_if_needed(
+        camera,
+        now=4.0,
+        reason="safe_frontier_deadline",
+        world=world,
+    ) is True
+    assert len(replanner.continuous_requests) == 1
+    assert len(replanner.requests) == 1
+    fallback = [
+        payload
+        for event, payload in blackbox.events
+        if event == "continuous_scan_deadline_fallback_requested"
+    ][-1]
+    assert fallback["reason"] == "safe_frontier_horizon_too_short"
+
+    controller.stop(world)
+
+
+def test_auto_dive_replanner_retains_fatal_mesh_guard_failure_reason():
+    blackbox = _FakeBlackbox()
+
+    def build_plan(manifest, **kwargs):
+        del manifest, kwargs
+        raise NavigationVoxelGraphAuthorityError(
+            "mesh guard unavailable",
+            reason="mesh_collision_guard_unavailable",
+            status={"available": False},
+        )
+
+    replanner = AutoDiveReplanner(
+        {"chunks": {}},
+        AutoDiveSettings(),
+        plan_builder=build_plan,
+        blackbox=blackbox,
+    )
+    try:
+        assert replanner.request_continuous_scan((0.0, 0.0, 0.0)) is True
+        for _ in range(100):
+            if not replanner.has_continuous_scan_pending():
+                break
+            time.sleep(0.005)
+
+        assert replanner.continuous_scan_failure_count == 1
+        assert replanner.continuous_scan_last_failure_reason == (
+            "mesh_collision_guard_unavailable"
+        )
+        failed = [
+            payload
+            for event, payload in blackbox.events
+            if event == "continuous_scan_failed"
+        ][-1]
+        assert failed["failure_reason"] == "mesh_collision_guard_unavailable"
     finally:
         replanner.shutdown()
 
@@ -1743,6 +1974,159 @@ def test_auto_dive_accepts_continuous_scan_and_starts_next_cycle():
     assert len(replanner.continuous_requests) == 2
 
     controller.stop(world)
+
+
+def test_auto_dive_continuous_scan_forwards_frontier_expansion_request():
+    blackbox = _FakeBlackbox()
+    calls = []
+
+    def build_plan(manifest, **kwargs):
+        calls.append((manifest, kwargs))
+        return _plan()
+
+    replanner = AutoDiveReplanner(
+        {"chunks": {}},
+        AutoDiveSettings(),
+        plan_builder=build_plan,
+        blackbox=blackbox,
+    )
+    try:
+        assert replanner.request_continuous_scan(
+            (1.0, 2.0, 3.0),
+            current_travel_yaw=0.5,
+            expand_frontier=True,
+        ) is True
+        for _ in range(100):
+            if replanner.has_continuous_scan_result():
+                break
+            time.sleep(0.005)
+
+        assert replanner.has_continuous_scan_result() is True
+        assert calls[0][1]["expand_frontier"] is True
+        completed = [
+            payload
+            for event, payload in blackbox.events
+            if event == "continuous_scan_completed"
+        ][-1]
+        assert completed["expand_frontier"] is True
+        assert completed["scan_outcome"] == "route_ready"
+    finally:
+        replanner.shutdown()
+
+
+def test_auto_dive_rejects_same_continuous_frontier_after_one_bounded_expansion():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    blackbox = _FakeBlackbox()
+    selection = {
+        "graph_snapshot": {
+            "cache_version": 7,
+            "cache_method": "navigation_voxel_cache_v3",
+            "graph_method": "navigation_voxel_graph_3d_v1",
+            "node_count": 20,
+            "edge_count": 19,
+        },
+        "graph_keys": [[-2, 6, 2], [-2, 5, 1]],
+        "executed_start_graph_key": [-2, 6, 2],
+        "unknown_boundary_reached": True,
+        "branch": {
+            "branch_start_key": [-2, 6, 2],
+            "target_key": [-2, 5, 1],
+            "frontier_count": 0,
+            "onward_exit_count": 0,
+            "unknown_boundary": True,
+        },
+    }
+    stalled = _plan(
+        start=(0.0, 0.0, 0.0),
+        end=(0.01, 0.0, 0.0),
+        replan_at_end=True,
+        voxel_route_selection=selection,
+    )
+    replanner = _ContinuousFakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+        replan_only_during_survey=False,
+        blackbox=blackbox,
+    )
+
+    controller.start(camera, world)
+    replanner.publish_continuous_plan(stalled, source_plan_sequence=0)
+    assert controller.update_replan(camera, world, now=1.0) is False
+    assert controller.state is not AutoDiveState.WAITING_FOR_USER
+    assert len(replanner.continuous_requests) == 2
+    assert replanner.continuous_requests[-1][1]["expand_frontier"] == 1.0
+
+    replanner.publish_continuous_plan(stalled, source_plan_sequence=0)
+    assert controller.update_replan(camera, world, now=1.1) is False
+    assert controller.state is AutoDiveState.WAITING_FOR_USER
+    assert len(replanner.continuous_requests) == 2
+    assert any(
+        event == "continuous_scan_frontier_exhausted"
+        for event, _payload in blackbox.events
+    )
+
+
+def test_auto_dive_holds_safe_route_when_mesh_guard_disappears():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    replanner = _ContinuousFakeReplanner()
+    controller = AutoDiveController(
+        _plan(replan_at_end=True),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        blackbox=_FakeBlackbox(),
+    )
+
+    controller.start(camera, world)
+    replanner._continuous_pending = False
+    replanner.continuous_scan_failure_count = 3
+    replanner.continuous_scan_last_failure_reason = (
+        "mesh_collision_guard_unavailable"
+    )
+
+    assert controller._request_continuous_scan_if_needed(
+        camera,
+        now=1.0,
+        reason="runtime_mesh_guard_loss",
+        world=world,
+    ) is False
+    assert controller.state is AutoDiveState.WAITING_FOR_USER
+
+
+def test_auto_dive_handoff_skips_near_duplicate_graph_anchor():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    route_plan = _plan(start=(0.0, 0.0, 0.0), end=(4.0, 0.0, 0.0))
+    route_plan = route_plan.__class__(
+        **{
+            **route_plan.__dict__,
+            "route_points": (
+                (0.0, 0.0, 0.0),
+                (0.01, 0.0, 0.0),
+                (4.0, 0.0, 0.0),
+            ),
+            "route_length_m": 4.0,
+        }
+    )
+    replanner = _FakeReplanner(route_plan)
+    controller = AutoDiveController(
+        _plan(),
+        perf_counter=clock,
+        replanner=replanner,  # type: ignore[arg-type]
+        replan_distance_m=0.25,
+        replan_only_during_survey=False,
+    )
+
+    controller.start(camera, world)
+    assert controller.update_replan(camera, world, now=1.0) is True
+    assert controller.plan is route_plan
 
 
 def test_auto_dive_continuous_mesh_recovery_does_not_start_bounded_wait():
@@ -1956,6 +2340,30 @@ def test_auto_dive_frame_and_stop_log_motion_and_prefetch_summary():
     assert stopped["outcome"] == "stopped"
     assert stopped["observed_distance_m"] == pytest.approx(1.25)
     assert stopped["final_command_error_m"] == pytest.approx(0.25)
+
+
+def test_auto_dive_mesh_safe_frontier_plan_moves_before_boundary_replan():
+    clock = _FakeClock()
+    world = _FakeWorld()
+    camera = _FakeCamera(position=np.zeros(3, dtype=np.float64))
+    controller = AutoDiveController(
+        _plan(
+            replan_at_end=True,
+            selection_reason="preflight_mesh_safe_graph_frontier",
+        ),
+        perf_counter=clock,
+    )
+
+    controller.start(camera, world, now=0.0)
+    world.loaded_cells = set(world.available_cells)
+    controller.update(camera, world)
+    clock.now = 5.0
+
+    state = controller.update(camera, world)
+
+    assert state is AutoDiveState.DIVING
+    assert camera.position[0] == pytest.approx(5.0)
+    controller.stop(world)
 
 
 def _plan(

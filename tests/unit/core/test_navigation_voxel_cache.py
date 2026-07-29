@@ -24,6 +24,8 @@ from caveviewer.core.navigation.voxel_cache import (
     NavigationVoxelBranchScore,
     NavigationVoxelCacheConfig,
     NavigationVoxelScoringPolicy,
+    _cache_graph_base_grid_size,
+    _true_3d_unknown_boundary_keys,
     build_navigation_voxel_cache,
     deserialize_local_voxel_volume,
     load_cached_navigation_voxel_volume,
@@ -49,6 +51,50 @@ def test_cache_identity_rejects_previous_two_metre_atlas():
         5,
         "whole_cave_voxel_atlas_v5",
     )
+
+
+def test_truncated_sampling_marks_only_unrepresented_footprint_frontier():
+    metrics = {
+        (0, 0, 0): NavigationVoxel3DMetric(
+            center=(0.5, 0.5, 0.5),
+            footprint_cell=(0, 0),
+            available_volume_m3=1.0,
+            free_voxel_count=1,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=0.0,
+        ),
+        (1, 0, 0): NavigationVoxel3DMetric(
+            center=(1.5, 0.5, 0.5),
+            footprint_cell=(1, 0),
+            available_volume_m3=1.0,
+            free_voxel_count=1,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=1.0,
+        ),
+    }
+
+    unknown = _true_3d_unknown_boundary_keys(
+        metrics,
+        component_cell_set={(0, 0), (1, 0), (2, 0)},
+        sampling_truncated=True,
+    )
+
+    assert unknown == {(1, 0, 0)}
+
+
+def test_cache_graph_buckets_large_filled_sample_sets_before_materialization():
+    assert _cache_graph_base_grid_size(
+        1_000,
+        base_voxel_size=1.0,
+        max_nodes=262_144,
+    ) == (1.0, 1.0, 1.0)
+    assert _cache_graph_base_grid_size(
+        7_500_000,
+        base_voxel_size=1.0,
+        max_nodes=262_144,
+    ) == (16.0, 1.0, 16.0)
 
 
 def test_cache_time_builds_model_and_volume_metrics(tmp_path):
@@ -251,7 +297,7 @@ def test_cache_time_voxel_atlas_covers_the_entire_component():
     assert summary["coverage_cell_count"] == len(component_cells)
     assert summary["tile_count"] >= 2
     model = result.payload["routes"]["centerline-0"]["model"]
-    assert model["method"] == "navigation_voxel_atlas_v7"
+    assert model["method"] == "navigation_voxel_atlas_v8"
     assert model["branch_lookahead_method"] == "voxel_branch_lookahead_v1"
     assert model["prepared_graph"] is None
     assert model["prepared_3d_graph"]["method"] == NAVIGATION_VOXEL_3D_GRAPH_METHOD
@@ -271,6 +317,40 @@ def test_cache_time_voxel_atlas_covers_the_entire_component():
     assert restored.fine_tiles
     assert restored.fine_voxel_size_m == 1.0
     assert restored.fine_tile_for_point(route["points"][:3]) is not None
+
+
+def test_prepared_3d_route_reroots_past_stale_camera_anchor():
+    metrics = {
+        (index, 0, 0): NavigationVoxel3DMetric(
+            center=(float(index) + 0.5, 0.5, 0.5),
+            footprint_cell=(index, 0),
+            available_volume_m3=4.0,
+            free_voxel_count=4,
+            min_clearance_m=2.0,
+            mean_clearance_m=2.0,
+            progress_m=float(index),
+        )
+        for index in range(4)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    current = (1.9, 0.5, 0.5)
+
+    plan = atlas.plan_footprint_route(
+        (),
+        current_position=current,
+        footprint_cell_size=1.0,
+        preferred_direction=(1.0, 0.0, 0.0),
+        lookahead_distance_m=2.0,
+    )
+
+    assert plan is not None
+    assert plan.world_points[0] == pytest.approx(current)
+    assert plan.world_points[1][0] > current[0]
+    assert all(point[0] >= current[0] for point in plan.world_points[1:])
 
 
 def test_filled_voxel_graph_rejects_terminal_branch_through_a_turn():

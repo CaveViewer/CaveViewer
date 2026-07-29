@@ -36,6 +36,11 @@ from caveviewer.core.navigation.centerline import (
     route_points_for_xz_points,
 )
 from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGuard
+from caveviewer.core.navigation.graph_route_safety import (
+    GraphRouteSafetyFailure,
+    GraphRouteSafetyPolicy,
+    GraphRouteSafetyValidator,
+)
 from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
 from caveviewer.core.navigation.route import (
     CameraRoute,
@@ -77,6 +82,14 @@ from caveviewer.core.navigation.voxel_cache import (
     NavigationVoxelAtlas,
     NavigationVoxelRoutePlan,
     NavigationVoxelScoringPolicy,
+    load_cached_navigation_voxel_volume,
+)
+from caveviewer.core.navigation.voxel_graph_3d import (
+    NavigationVoxel3DEdge,
+    NavigationVoxel3DGraph,
+    NavigationVoxel3DMetric,
+    VoxelGraphKey,
+    build_navigation_voxel_3d_graph,
 )
 
 
@@ -186,6 +199,10 @@ class AutoDiveSettings:
     # None is intentional for the initial route. AutoDiveReplanner replaces
     # this value on each runtime replan with its bounded planning budget.
     planning_budget_s: float | None = None
+    # Graph-native clearance is expressed in metres. Zero keeps occupancy and
+    # exact mesh collision as hard gates while allowing a map-specific vehicle
+    # envelope to opt into a larger explicit margin.
+    minimum_graph_clearance_m: float = 0.0
     # The policy is request-scoped so experiments can change route priorities
     # without changing the prepared graph or the navigation-thread contract.
     voxel_scoring_policy: NavigationVoxelScoringPolicy = field(
@@ -200,6 +217,7 @@ class AutoDivePlanningBudgetExceeded(NavigationConfigurationError):
         self.budget_s = float(budget_s)
         self.elapsed_s = float(elapsed_s)
         self.phase = str(phase)
+        self.reason = "planning_budget_exceeded"
         super().__init__(
             "Guided Dive planning budget exceeded during "
             f"{self.phase} ({self.elapsed_s:.3f}s >= {self.budget_s:.3f}s)"
@@ -635,10 +653,12 @@ class _AutoDiveCollisionValidator:
 
 @dataclass(frozen=True)
 class AutoDivePlan:
-    """Finite Guided Dive route derived from a manifest centerline."""
+    """Finite Guided Dive route with graph-native navigation evidence."""
 
     route: CameraRoute
-    centerline_path: CenterlinePath
+    # Optional compatibility descriptor for the legacy centerline planner.
+    # Graph-native production plans do not load or depend on it.
+    centerline_path: CenterlinePath | None
     route_points: tuple[Point, ...]
     route_cells: tuple[FootprintCell, ...]
     circular_arc: bool
@@ -651,11 +671,45 @@ class AutoDivePlan:
     replan_at_end: bool = False
     voxel_route_selection: Mapping[str, Any] | None = None
     terminal_reached: bool = False
+    navigation_route_id: str | None = None
+    preflight_validated: bool = False
+    navigation_atlas: NavigationVoxelAtlas | None = None
+    navigation_graph: NavigationVoxel3DGraph | None = None
+    # Keep the exact graph route alongside the published camera points.  The
+    # certificate and diagnostics use this to validate the same graph path
+    # that the runtime planner handed to the controller.
+    navigation_graph_keys: tuple[VoxelGraphKey, ...] = ()
 
     @property
     def route_points_xz(self) -> tuple[PointXZ, ...]:
         """Return route points projected into minimap X/Z space."""
         return tuple((point[0], point[2]) for point in self.route_points)
+
+
+def auto_dive_plan_navigation_cell_size(plan: AutoDivePlan) -> float:
+    """Return graph scale for GUI/replanner distance calculations."""
+    graph = getattr(plan, "navigation_graph", None)
+    if graph is not None:
+        values = [
+            float(value)
+            for value in getattr(graph, "grid_size_m", ())
+            if math.isfinite(float(value)) and float(value) > 0.0
+        ]
+        if values:
+            return max(values)
+    atlas = getattr(plan, "navigation_atlas", None)
+    atlas_size = getattr(atlas, "voxel_size_m", None)
+    try:
+        if atlas_size is not None and math.isfinite(float(atlas_size)) and float(atlas_size) > 0.0:
+            return float(atlas_size)
+    except (TypeError, ValueError):
+        pass
+    centerline = getattr(plan, "centerline_path", None)
+    try:
+        centerline_size = float(getattr(centerline, "footprint_cell_size", 1.0))
+    except (TypeError, ValueError):
+        centerline_size = 1.0
+    return max(1.0, centerline_size)
 
 
 class NavigationVoxelGraphAuthorityError(NavigationConfigurationError):
@@ -679,6 +733,7 @@ def _authoritative_navigation_voxel_context(
     cache_dir: str | os.PathLike[str] | None,
     settings: AutoDiveSettings,
     diagnostics: AutoDiveDiagnosticSink | None,
+    route_id: str | None = None,
 ) -> tuple[CenterlinePath, NavigationVoxelAtlas, dict[str, Any]]:
     """Load the graph-only runtime navigation context.
 
@@ -697,12 +752,14 @@ def _authoritative_navigation_voxel_context(
         if isinstance(navigation, Mapping)
         else None
     )
-    route_id: str | None = None
-    if isinstance(navigation, Mapping):
+    selected_route_id: str | None = None
+    if isinstance(route_id, str) and route_id:
+        selected_route_id = route_id
+    if selected_route_id is None and isinstance(navigation, Mapping):
         candidate = navigation.get("recommended_route_id")
         if isinstance(candidate, str) and candidate:
-            route_id = candidate
-    if route_id is None and isinstance(routes, Sequence) and not isinstance(
+            selected_route_id = candidate
+    if selected_route_id is None and isinstance(routes, Sequence) and not isinstance(
         routes,
         (str, bytes),
     ):
@@ -711,7 +768,7 @@ def _authoritative_navigation_voxel_context(
                 continue
             candidate = route.get("id")
             if isinstance(candidate, str) and candidate:
-                route_id = candidate
+                selected_route_id = candidate
                 break
 
     status: dict[str, Any] = {
@@ -736,7 +793,7 @@ def _authoritative_navigation_voxel_context(
             if not isinstance(descriptor, Mapping)
             else descriptor.get("path")
         ),
-        "route_id": route_id,
+        "route_id": selected_route_id,
     }
 
     def reject(reason: str, message: str) -> NoReturn:
@@ -788,7 +845,7 @@ def _authoritative_navigation_voxel_context(
             "voxel_cache_path_invalid",
             "Guided Dive navigation voxel cache path is invalid; rebuild the cache",
         )
-    if route_id is None:
+    if selected_route_id is None:
         reject(
             "navigation_route_missing",
             "Guided Dive requires a selected cached navigation route",
@@ -796,6 +853,7 @@ def _authoritative_navigation_voxel_context(
 
     centerline_path = cached_centerline_path(
         manifest,
+        route_id=selected_route_id,
         cache_dir=os.fspath(cache_dir),
     )
     if centerline_path is None:
@@ -872,6 +930,162 @@ def _authoritative_navigation_voxel_context(
     return centerline_path, cached_volume, status
 
 
+def _authoritative_graph_navigation_context(
+    manifest: Mapping[str, Any],
+    *,
+    cache_dir: str | os.PathLike[str] | None,
+    settings: AutoDiveSettings,
+    diagnostics: AutoDiveDiagnosticSink | None,
+    route_id: str | None = None,
+) -> tuple[NavigationVoxelAtlas, dict[str, Any]]:
+    """Load the production graph context without constructing a centerline.
+
+    Cache metadata still identifies which route-specific sidecar to load, but
+    the returned navigation object is the atlas and prepared graph themselves.
+    This is the boundary used by preflight, runtime replanning, and continuous
+    scanning; the compatibility centerline planner is intentionally bypassed.
+    """
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    descriptor = (
+        navigation.get("voxel_cache")
+        if isinstance(navigation, Mapping)
+        else None
+    )
+    selected_route_id: str | None = (
+        str(route_id) if isinstance(route_id, str) and route_id else None
+    )
+    if selected_route_id is None and isinstance(navigation, Mapping):
+        candidate = navigation.get("recommended_route_id")
+        if isinstance(candidate, str) and candidate:
+            selected_route_id = candidate
+    if selected_route_id is None:
+        routes = navigation.get("routes") if isinstance(navigation, Mapping) else None
+        if isinstance(routes, Sequence) and not isinstance(routes, (str, bytes)):
+            for route in routes:
+                if not isinstance(route, Mapping):
+                    continue
+                candidate = route.get("id")
+                if isinstance(candidate, str) and candidate:
+                    selected_route_id = candidate
+                    break
+
+    status: dict[str, Any] = {
+        "authority": "prepared_true_3d_voxel_graph",
+        "required": True,
+        "available": False,
+        "reason": None,
+        "cache_directory_present": bool(cache_dir),
+        "cache_declared": isinstance(descriptor, Mapping),
+        "cache_version": (
+            None if not isinstance(descriptor, Mapping) else descriptor.get("version")
+        ),
+        "cache_method": (
+            None if not isinstance(descriptor, Mapping) else descriptor.get("method")
+        ),
+        "cache_path": (
+            None if not isinstance(descriptor, Mapping) else descriptor.get("path")
+        ),
+        "route_id": selected_route_id,
+        "source": "cached_navigation_voxel_graph",
+    }
+
+    def reject(reason: str, message: str) -> NoReturn:
+        status["reason"] = str(reason)
+        status["message"] = str(message)
+        _record_auto_dive_diagnostic(diagnostics, "navigation_authority", status)
+        raise NavigationVoxelGraphAuthorityError(
+            message,
+            reason=reason,
+            status=status,
+        )
+
+    if not bool(settings.voxel_analysis_enabled):
+        reject(
+            "voxel_analysis_disabled",
+            "Guided Dive requires voxel graph navigation, but voxel analysis is disabled",
+        )
+    if not cache_dir:
+        reject(
+            "cache_directory_missing",
+            "Guided Dive requires a navigation voxel cache directory",
+        )
+    if not isinstance(navigation, Mapping):
+        reject("navigation_metadata_missing", "Guided Dive requires cached navigation metadata")
+    if not isinstance(descriptor, Mapping):
+        reject("voxel_cache_not_declared", "Guided Dive requires a declared navigation voxel graph cache")
+    if (
+        descriptor.get("version") != NAVIGATION_VOXEL_CACHE_VERSION
+        or descriptor.get("method") != NAVIGATION_VOXEL_CACHE_METHOD
+    ):
+        reject(
+            "stale_or_unsupported_cache",
+            "Guided Dive requires the current prepared voxel graph cache; rebuild the navigation cache",
+        )
+    if descriptor.get("path") != NAVIGATION_VOXEL_CACHE_NAME:
+        reject(
+            "voxel_cache_path_invalid",
+            "Guided Dive navigation voxel cache path is invalid; rebuild the cache",
+        )
+    if selected_route_id is None:
+        reject(
+            "navigation_route_missing",
+            "Guided Dive requires a selected cached navigation route",
+        )
+
+    cached_volume = load_cached_navigation_voxel_volume(
+        cache_dir,
+        manifest,
+        selected_route_id,
+    )
+    if not isinstance(cached_volume, NavigationVoxelAtlas):
+        reject(
+            "voxel_graph_model_missing",
+            "Guided Dive could not load the prepared voxel graph; rebuild the cache",
+        )
+    graph = cached_volume.prepared_3d_graph
+    if not cached_volume.has_prepared_3d_graph or graph is None:
+        reject(
+            "true_3d_graph_missing",
+            "Guided Dive cache does not contain a prepared true-3D voxel graph",
+        )
+    status.update(
+        {
+            "graph_method": str(graph.method),
+            "graph_node_count": len(graph.nodes),
+            "graph_edge_count": int(graph.edge_count),
+            "graph_routable_node_count": int(graph.routable_node_count),
+            "graph_component_count": int(graph.component_count),
+            "graph_edge_integrity_safe": bool(graph.edge_integrity_safe),
+            "motion_geometry_safe": bool(cached_volume.prepared_3d_motion_geometry_safe),
+        }
+    )
+    if str(graph.method) != NAVIGATION_VOXEL_GRAPH_METHOD:
+        reject(
+            "true_3d_graph_method_unsupported",
+            "Guided Dive cache contains an unsupported true-3D voxel graph",
+        )
+    if not cached_volume.prepared_3d_motion_geometry_safe:
+        reject(
+            "true_3d_graph_geometry_unsafe",
+            "Guided Dive true-3D voxel graph geometry is too coarse for motion; rebuild the navigation cache",
+        )
+    if len(graph.nodes) <= 0:
+        reject("true_3d_graph_empty", "Guided Dive cache contains an empty true-3D voxel graph")
+    if not graph.edge_integrity_safe:
+        reject(
+            "true_3d_graph_edge_integrity_invalid",
+            "Guided Dive cache contains an invalid true-3D voxel graph edge set; rebuild the cache",
+        )
+    if graph.edge_count <= 0 or graph.routable_node_count <= 0:
+        reject(
+            "true_3d_graph_has_no_routes",
+            "Guided Dive cache contains voxel density but no prepared graph routes; rebuild the cache",
+        )
+    status.update({"available": True, "reason": "ready"})
+    _record_auto_dive_diagnostic(diagnostics, "navigation_authority", status)
+    return cached_volume, status
+
+
 def build_auto_dive_initial_camera_pose(
     manifest: Mapping[str, Any],
     *,
@@ -890,6 +1104,12 @@ def build_auto_dive_initial_camera_pose(
     """
     settings = settings or AutoDiveSettings()
     _validate_auto_dive_settings(settings)
+    if require_voxel_graph:
+        return _build_graph_initial_camera_pose(
+            manifest,
+            settings=settings,
+            cache_dir=cache_dir,
+        )
     centerline_path = cached_centerline_path(manifest, cache_dir=cache_dir)
     if centerline_path is None and require_voxel_graph:
         raise NavigationConfigurationError(
@@ -934,6 +1154,134 @@ def build_auto_dive_initial_camera_pose(
     )
 
 
+def _build_graph_initial_camera_pose(
+    manifest: Mapping[str, Any],
+    *,
+    settings: AutoDiveSettings,
+    cache_dir: str | os.PathLike[str] | None,
+) -> RouteKeyframe:
+    """Choose the initial pose from the graph entrance, not a centerline end."""
+    atlas, _authority_status = _authoritative_graph_navigation_context(
+        manifest,
+        cache_dir=cache_dir,
+        settings=settings,
+        diagnostics=None,
+    )
+    graph = atlas.prepared_3d_graph
+    if graph is None:
+        raise NavigationConfigurationError("Guided Dive prepared graph is unavailable")
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    start_point = _navigation_start_point(navigation)
+    if start_point is None:
+        start_key = min(
+            graph.nodes,
+            key=lambda key: (
+                float(graph.nodes[key].progress_m),
+                key,
+            ),
+        )
+    else:
+        start_key, _distance_m = _preflight_nearest_graph_key(
+            graph,
+            start_point,
+            routable_only=True,
+        )
+        if start_key is None:
+            raise NavigationConfigurationError(
+                "Guided Dive graph has no routable entrance node"
+            )
+    start_node = graph.nodes[start_key]
+    target_edge = max(
+        (
+            edge
+            for edge in graph.outgoing(start_key)
+            if edge.line_of_sight and edge.target in graph.nodes
+        ),
+        key=lambda edge: (
+            float(graph.nodes[edge.target].min_clearance_m),
+            float(edge.distance_m),
+            edge.target,
+        ),
+        default=None,
+    )
+    points = [tuple(float(value) for value in start_node.center)]
+    if target_edge is not None:
+        points.append(tuple(float(value) for value in graph.nodes[target_edge.target].center))
+    route_points = tuple(points)
+    keyframe_payloads = route_keyframes_for_points(
+        route_points,
+        duration_s=(
+            path_length(route_points) / float(settings.speed_m_per_second)
+            if len(route_points) > 1
+            else 0.0
+        ),
+        lookahead_distance_m=max(0.0, float(settings.lookahead_distance_m)),
+    )
+    return RouteKeyframe.from_mapping(keyframe_payloads[0], index=0)
+
+
+def _navigation_start_point(navigation: object) -> Point | None:
+    if not isinstance(navigation, Mapping):
+        return None
+    value = navigation.get("navigation_start")
+    if value is None:
+        # Older manifests may not have the explicit navigation sidecar.  The
+        # first point of the selected route is still a valid map-start hint
+        # for initial camera placement; it is never used as the terminal or
+        # as graph-route safety evidence.
+        routes = navigation.get("routes")
+        if isinstance(routes, Sequence) and not isinstance(routes, (str, bytes)):
+            recommended_id = navigation.get("recommended_route_id")
+            selected_route = None
+            if isinstance(recommended_id, str) and recommended_id:
+                selected_route = next(
+                    (
+                        route
+                        for route in routes
+                        if isinstance(route, Mapping)
+                        and route.get("id") == recommended_id
+                    ),
+                    None,
+                )
+            if selected_route is None:
+                selected_route = next(
+                    (route for route in routes if isinstance(route, Mapping)),
+                    None,
+                )
+            if isinstance(selected_route, Mapping):
+                route_points = selected_route.get("points")
+                if isinstance(route_points, Sequence) and not isinstance(
+                    route_points,
+                    (str, bytes),
+                ):
+                    if len(route_points) >= 3 and all(
+                        isinstance(item, (int, float))
+                        and not isinstance(item, bool)
+                        for item in route_points[:3]
+                    ):
+                        value = route_points[:3]
+                    elif route_points:
+                        first_point = route_points[0]
+                        if isinstance(first_point, Sequence) and not isinstance(
+                            first_point,
+                            (str, bytes),
+                        ):
+                            value = first_point
+    if isinstance(value, Mapping):
+        value = value.get("position", value.get("point"))
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    if len(value) != 3:
+        return None
+    try:
+        point = tuple(float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(item) for item in point):
+        return None
+    return point  # type: ignore[return-value]
+
+
 def build_centerline_auto_dive_plan(
     manifest: Mapping[str, Any],
     *,
@@ -950,6 +1298,7 @@ def build_centerline_auto_dive_plan(
     cache_dir: str | os.PathLike[str] | None = None,
     diagnostics: AutoDiveDiagnosticSink | None = None,
     require_voxel_graph: bool = False,
+    route_id: str | None = None,
 ) -> AutoDivePlan:
     """Build a finite voxel-guided Guided Dive route near the current camera.
 
@@ -977,9 +1326,14 @@ def build_centerline_auto_dive_plan(
             cache_dir=cache_dir,
             settings=settings,
             diagnostics=diagnostics,
+            route_id=route_id,
         )
     else:
-        centerline_path = cached_centerline_path(manifest, cache_dir=cache_dir)
+        centerline_path = cached_centerline_path(
+            manifest,
+            route_id=route_id,
+            cache_dir=cache_dir,
+        )
         if centerline_path is None:
             centerline_path = generate_centerline_path(
                 manifest,
@@ -1372,7 +1726,9 @@ def build_centerline_auto_dive_plan(
         lookahead_distance_m=max(0.0, float(settings.lookahead_distance_m)),
     )
     for payload in keyframe_payloads:
-        payload["roll_deg"] = round(float(selected_route.roll_deg), 6)
+        # Hemisphere probe roll is a scanner orientation used for candidate
+        # scoring only. It must never rotate the executed camera route.
+        payload["roll_deg"] = 0.0
     keyframe_payloads = _wall_aware_auto_dive_keyframe_payloads(
         keyframe_payloads,
         route_points=route_points,
@@ -1410,19 +1766,1791 @@ def build_centerline_auto_dive_plan(
             else voxel_route_plan.diagnostic_payload()
         ),
         terminal_reached=bool(selected_route.terminal_reached),
+        navigation_route_id=(
+            None
+            if authority_status is None
+            else authority_status.get("route_id")
+        ),
     )
 
 
 def build_voxel_graph_auto_dive_plan(
     manifest: Mapping[str, Any],
-    **kwargs: Any,
+    *,
+    current_position: tuple[float, float, float] | np.ndarray,
+    current_yaw: float | None = None,
+    current_pitch: float | None = None,
+    current_roll: float | None = None,
+    current_travel_yaw: float | None = None,
+    current_travel_pitch: float | None = None,
+    avoid_positions: Sequence[Sequence[float]] | None = None,
+    user_reposition: bool = False,
+    force_hemisphere_scan: bool = False,
+    settings: AutoDiveSettings | None = None,
+    cache_dir: str | os.PathLike[str] | None = None,
+    diagnostics: AutoDiveDiagnosticSink | None = None,
+    route_id: str | None = None,
+    expand_frontier: bool = False,
 ) -> AutoDivePlan:
-    """Build a production Guided Dive plan using only the prepared voxel graph."""
-    return build_centerline_auto_dive_plan(
+    """Build a production Guided Dive plan directly from the prepared graph.
+
+    This is deliberately separate from ``build_centerline_auto_dive_plan``.
+    The compatibility planner remains available to older callers, while the
+    GUI, preflight, runtime replanner, and continuous scan all use this path.
+    """
+    del current_roll, user_reposition
+    settings = settings or AutoDiveSettings()
+    _validate_auto_dive_settings(settings)
+    planning_budget = _AutoDivePlanningBudget.from_settings(settings)
+    planning_budget.check("initialization", diagnostics=diagnostics)
+    current_array = np.asarray(current_position, dtype=np.float64)
+    if current_array.shape != (3,) or not np.all(np.isfinite(current_array)):
+        raise NavigationConfigurationError(
+            "Guided Dive graph planning requires a finite 3D camera position"
+        )
+    current: Point = tuple(float(value) for value in current_array)
+
+    atlas, authority_status = _authoritative_graph_navigation_context(
         manifest,
-        require_voxel_graph=True,
-        **kwargs,
+        cache_dir=cache_dir,
+        settings=settings,
+        diagnostics=diagnostics,
+        route_id=route_id,
     )
+    planning_budget.check("graph_context_loaded", diagnostics=diagnostics)
+    graph = atlas.prepared_3d_graph
+    if graph is None:
+        raise NavigationVoxelGraphAuthorityError(
+            "Guided Dive prepared graph disappeared after authority validation",
+            reason="true_3d_graph_missing",
+            status=authority_status,
+        )
+
+    direction_yaw = (
+        current_travel_yaw if current_travel_yaw is not None else current_yaw
+    )
+    direction_pitch = (
+        current_travel_pitch
+        if current_travel_pitch is not None
+        else current_pitch
+    )
+    # A full hemisphere scan widens discovery; it does not revoke the
+    # current-travel handoff invariant.  Keep the travel direction in the
+    # graph query so a nearest-node anchor behind the camera is re-rooted
+    # before the route is published.  If no heading-aligned branch exists,
+    # the bounded relaxed-heading retry below still gives the scan a chance
+    # to find a valid lateral or vertical continuation.
+    preferred_direction = _direction_from_radians(
+        direction_yaw,
+        direction_pitch,
+    )
+    graph_scale = max(
+        0.25,
+        *(float(value) for value in graph.grid_size_m),
+        float(atlas.voxel_size_m or 0.0),
+    )
+    voxel_route_plan = atlas.plan_footprint_route(
+        (),
+        current_position=current,
+        footprint_cell_size=graph_scale,
+        preferred_direction=preferred_direction,
+        lookahead_distance_m=float(settings.lookahead_distance_m),
+        scoring_policy=settings.voxel_scoring_policy,
+        diagnostics=diagnostics,
+        deadline_check=lambda: planning_budget.check(
+            "voxel_route_search",
+            diagnostics=diagnostics,
+        ),
+    )
+    planning_budget.check("voxel_route_selected", diagnostics=diagnostics)
+    if voxel_route_plan is None and preferred_direction is not None:
+        # A continuous scan is a graph query with relaxed heading preference,
+        # not a return to centerline hemisphere recovery.
+        voxel_route_plan = atlas.plan_footprint_route(
+            (),
+            current_position=current,
+            footprint_cell_size=graph_scale,
+            preferred_direction=None,
+            lookahead_distance_m=float(settings.lookahead_distance_m),
+            scoring_policy=settings.voxel_scoring_policy,
+            diagnostics=diagnostics,
+            deadline_check=lambda: planning_budget.check(
+                "voxel_route_search_relaxed_heading",
+                diagnostics=diagnostics,
+            ),
+        )
+        planning_budget.check("voxel_route_selected", diagnostics=diagnostics)
+    mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=cache_dir,
+    )
+    planning_budget.check("mesh_guard_loaded", diagnostics=diagnostics)
+    if mesh_guard is None:
+        status = {
+            **authority_status,
+            "available": False,
+            "reason": "mesh_collision_guard_unavailable",
+            "message": (
+                "Guided Dive runtime planning requires cached mesh collision "
+                "evidence"
+            ),
+        }
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "navigation_authority",
+            status,
+        )
+        raise NavigationVoxelGraphAuthorityError(
+            "Guided Dive runtime planning requires a cached mesh collision guard",
+            reason="mesh_collision_guard_unavailable",
+            status=status,
+        )
+    if bool(expand_frontier) and _voxel_route_needs_local_frontier_expansion(
+        voxel_route_plan
+    ):
+        local_forward = _direction_from_radians(direction_yaw, direction_pitch)
+        local_builder = _make_auto_dive_local_frontier_voxel_builder(
+            current=np.asarray(current, dtype=np.float64),
+            forward=local_forward,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            diagnostics=diagnostics,
+            planning_budget=planning_budget,
+        )
+        local_volume = None if local_builder is None else local_builder()
+        planning_budget.check("local_frontier_volume_built", diagnostics=diagnostics)
+        local_expansion = (
+            None
+            if local_volume is None
+            else _build_bounded_local_frontier_graph_route(
+                volume=local_volume,
+                current=current,
+                forward=local_forward,
+                settings=settings,
+                mesh_guard=mesh_guard,
+                avoid_positions=avoid_positions,
+                authority_status=authority_status,
+                diagnostics=diagnostics,
+                planning_budget=planning_budget,
+            )
+        )
+        planning_budget.check("local_frontier_graph_built", diagnostics=diagnostics)
+        if local_expansion is not None:
+            (
+                local_atlas,
+                local_graph,
+                local_route_points,
+                local_graph_keys,
+                local_route_cells,
+                local_selection,
+            ) = local_expansion
+            local_route_points = _dedupe_consecutive_points(local_route_points)
+            if len(local_route_points) >= 2:
+                local_length_m = path_length(local_route_points)
+                local_duration_s = local_length_m / float(
+                    settings.speed_m_per_second
+                )
+                local_keyframe_payloads = route_keyframes_for_points(
+                    local_route_points,
+                    duration_s=local_duration_s,
+                    lookahead_distance_m=max(
+                        0.0,
+                        float(settings.lookahead_distance_m),
+                    ),
+                )
+                for payload in local_keyframe_payloads:
+                    payload["roll_deg"] = 0.0
+                local_keyframes = [
+                    RouteKeyframe.from_mapping(payload, index=index)
+                    for index, payload in enumerate(local_keyframe_payloads)
+                ]
+                _record_auto_dive_diagnostic(
+                    diagnostics,
+                    "voxel_local_frontier_graph_expansion",
+                    {
+                        **local_selection,
+                        "accepted": True,
+                        "route_point_count": len(local_route_points),
+                        "route_length_m": float(local_length_m),
+                    },
+                )
+                return AutoDivePlan(
+                    route=CameraRoute.from_keyframes(local_keyframes),
+                    centerline_path=None,
+                    route_points=local_route_points,
+                    route_cells=local_route_cells,
+                    circular_arc=False,
+                    route_length_m=float(local_length_m),
+                    duration_s=float(local_duration_s),
+                    render_distance_cells=max(
+                        1,
+                        int(settings.render_distance_cells),
+                    ),
+                    selection_reason="continuous_local_frontier_expansion",
+                    replan_at_end=True,
+                    voxel_route_selection=local_selection,
+                    terminal_reached=False,
+                    navigation_route_id=authority_status.get("route_id"),
+                    navigation_atlas=local_atlas,
+                    navigation_graph=local_graph,
+                    navigation_graph_keys=local_graph_keys,
+                )
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_frontier_graph_expansion",
+            {
+                "accepted": False,
+                "reason": "no_mesh_safe_local_graph_route",
+                "authority": "bounded_runtime_local_true_3d_graph",
+            },
+        )
+    if (
+        voxel_route_plan is None
+        or len(voxel_route_plan.world_points) < 2
+        or not voxel_route_plan.graph_keys
+    ):
+        raise NavigationVoxelGraphAuthorityError(
+            "Guided Dive found no valid route in the prepared true-3D voxel graph",
+            reason="no_valid_forward_route",
+            status={
+                **authority_status,
+                "available": False,
+                "reason": "no_valid_forward_route",
+            },
+        )
+
+    route_points = _dedupe_consecutive_points(
+        tuple(tuple(float(value) for value in point) for point in voxel_route_plan.world_points)
+    )
+    route_cells = tuple(voxel_route_plan.cells)
+    if len(route_points) > int(settings.max_keyframes):
+        bounded_points, bounded_cells = _preflight_bounded_route_geometry(
+            route_points,
+            route_cells,
+            max_keyframes=int(settings.max_keyframes),
+        )
+        if bounded_points is None or bounded_cells is None:
+            raise NavigationConfigurationError(
+                "Guided Dive graph route exceeds the keyframe budget"
+            )
+        route_points = bounded_points
+        route_cells = bounded_cells
+
+    executed_start_key = _graph_key_for_route_point(
+        route_points[1],
+        voxel_route_plan.graph_keys,
+        graph,
+    )
+    graph_safety_validator = GraphRouteSafetyValidator(
+        atlas,
+        graph,
+        mesh_guard=mesh_guard,
+        policy=GraphRouteSafetyPolicy(
+            minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+        ),
+    )
+    planning_budget.check("graph_safety_validation", diagnostics=diagnostics)
+    safety_failure = graph_safety_validator.route_clearance_failure(
+        route_points,
+        voxel_route_plan.graph_keys,
+        start_graph_key=executed_start_key,
+    )
+    if safety_failure is not None:
+        payload = safety_failure.diagnostic_payload()
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "graph_route_safety_failed",
+            {
+                **payload,
+                "route_id": authority_status.get("route_id"),
+                "minimum_graph_clearance_m": float(
+                    settings.minimum_graph_clearance_m
+                ),
+            },
+        )
+        raise NavigationConfigurationError(
+            "Guided Dive graph route failed safety validation: "
+            f"{safety_failure.reason}"
+        )
+    planning_budget.check("graph_safety_validation", diagnostics=diagnostics)
+
+    prefetched_chunk_ids = atlas.prefetch_for_points(route_points)
+    planning_budget.check("route_prefetch", diagnostics=diagnostics)
+    route_length_m = path_length(route_points)
+    if route_length_m <= 1e-6:
+        raise NavigationConfigurationError("Guided Dive graph route has no travel distance")
+    duration_s = route_length_m / float(settings.speed_m_per_second)
+    keyframe_payloads = route_keyframes_for_points(
+        route_points,
+        duration_s=duration_s,
+        lookahead_distance_m=max(0.0, float(settings.lookahead_distance_m)),
+    )
+    for payload in keyframe_payloads:
+        payload["roll_deg"] = 0.0
+    keyframes = [
+        RouteKeyframe.from_mapping(payload, index=index)
+        for index, payload in enumerate(keyframe_payloads)
+    ]
+    planning_budget.check("route_published", diagnostics=diagnostics)
+    return AutoDivePlan(
+        route=CameraRoute.from_keyframes(keyframes),
+        centerline_path=None,
+        route_points=route_points,
+        route_cells=route_cells,
+        circular_arc=False,
+        route_length_m=route_length_m,
+        duration_s=duration_s,
+        render_distance_cells=max(1, int(settings.render_distance_cells)),
+        selection_reason=(
+            "continuous_graph_scan" if force_hemisphere_scan else "prepared_true_3d_graph"
+        ),
+        replan_at_end=bool(voxel_route_plan.replan_at_lookahead),
+        voxel_route_selection={
+            **voxel_route_plan.diagnostic_payload(),
+            "route_geometry_source": "prepared_true_3d_graph",
+            "authority": "prepared_true_3d_voxel_graph",
+            "graph_snapshot": _graph_snapshot_payload(
+                graph,
+                authority_status,
+            ),
+            "minimum_graph_clearance_m": float(
+                settings.minimum_graph_clearance_m
+            ),
+            "prefetched_chunk_count": len(prefetched_chunk_ids),
+            "executed_start_graph_key": [
+                int(value) for value in executed_start_key
+            ],
+        },
+        terminal_reached=bool(voxel_route_plan.terminal_reached),
+        navigation_route_id=authority_status.get("route_id"),
+        navigation_atlas=atlas,
+        navigation_graph=graph,
+        navigation_graph_keys=tuple(voxel_route_plan.graph_keys),
+    )
+
+
+def _graph_snapshot_payload(
+    graph: NavigationVoxel3DGraph,
+    authority_status: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the stable graph identity used by frontier handoff logic."""
+    return {
+        "cache_version": authority_status.get("cache_version"),
+        "cache_method": authority_status.get("cache_method"),
+        "graph_method": str(graph.method),
+        "node_count": int(len(graph.nodes)),
+        "edge_count": int(graph.edge_count),
+    }
+
+
+def _voxel_route_needs_local_frontier_expansion(
+    route_plan: NavigationVoxelRoutePlan | None,
+) -> bool:
+    """Return whether a prepared route stopped at an unresolved frontier."""
+    if route_plan is None:
+        return True
+    branch = route_plan.branch_score
+    return bool(
+        route_plan.unknown_boundary_reached
+        and branch is not None
+        and int(branch.frontier_count) <= 0
+        and int(branch.onward_exit_count) <= 0
+        and not route_plan.terminal_reached
+    )
+
+
+def _build_bounded_local_frontier_graph_route(
+    *,
+    volume: LocalVoxelVolume,
+    current: Point,
+    forward: Sequence[float] | None,
+    settings: AutoDiveSettings,
+    mesh_guard: CachedChunkMeshCollisionGuard | None,
+    avoid_positions: Sequence[Sequence[float]] | None,
+    authority_status: Mapping[str, Any],
+    diagnostics: AutoDiveDiagnosticSink | None,
+    planning_budget: _AutoDivePlanningBudget | None = None,
+) -> tuple[
+    NavigationVoxelAtlas,
+    NavigationVoxel3DGraph,
+    tuple[Point, ...],
+    tuple[VoxelGraphKey, ...],
+    tuple[FootprintCell, ...],
+    dict[str, Any],
+] | None:
+    """Turn one bounded local search result into a graph-native route.
+
+    The local field is an expansion of the prepared cache, not a replacement
+    route authority. It is converted to a small true-3D graph and passed
+    through the same graph/voxel/mesh safety validator before execution.
+    """
+    if forward is None:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_frontier_graph_expansion",
+            {"accepted": False, "reason": "travel_direction_unavailable"},
+        )
+        return None
+    direction_values = tuple(float(value) for value in forward)
+    direction_norm = math.sqrt(sum(value * value for value in direction_values))
+    if direction_norm <= 1e-9:
+        return None
+    direction = tuple(value / direction_norm for value in direction_values)
+    local_route = volume.find_forward_route(
+        current,
+        direction,
+        max_distance_m=float(settings.voxel_local_refinement_forward_m),
+        max_nodes=int(settings.voxel_local_refinement_max_cells),
+        min_target_distance_m=max(3.0, float(settings.lookahead_distance_m)),
+        deadline_monotonic_s=(
+            None
+            if planning_budget is None
+            else planning_budget.deadline_monotonic_s
+        ),
+    )
+    if planning_budget is not None:
+        planning_budget.check(
+            "local_frontier_route_search",
+            diagnostics=diagnostics,
+        )
+    if local_route is None or not local_route.indices:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_frontier_graph_expansion",
+            {"accepted": False, "reason": "local_forward_route_missing"},
+        )
+        return None
+
+    size = max(1e-6, float(volume.voxel_size_m))
+    centers = tuple(volume.voxel_center(index) for index in local_route.indices)
+    if not centers:
+        return None
+    try:
+        avoided = tuple(
+            tuple(float(value) for value in position)
+            for position in (avoid_positions or ())
+        )
+    except (TypeError, ValueError):
+        avoided = ()
+    avoid_radius = max(0.5, size * 1.5)
+    if any(
+        sum((center[axis] - position[axis]) ** 2 for axis in range(3))
+        <= avoid_radius * avoid_radius
+        for center in centers[1:]
+        for position in avoided
+        if len(position) == 3
+    ):
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_frontier_graph_expansion",
+            {
+                "accepted": False,
+                "reason": "local_route_intersects_avoided_frontier",
+                "avoid_radius_m": float(avoid_radius),
+            },
+        )
+        return None
+
+    max_graph_points = max(1, int(settings.max_keyframes) - 1)
+    selected_indices = tuple(local_route.indices[:max_graph_points])
+    if selected_indices:
+        first_center = volume.voxel_center(selected_indices[0])
+        if sum(
+            (float(first_center[axis]) - float(current[axis])) ** 2
+            for axis in range(3)
+        ) <= 1e-12:
+            selected_indices = selected_indices[1:]
+    selected_centers = tuple(
+        volume.voxel_center(index) for index in selected_indices
+    )
+    if not selected_centers:
+        return None
+    graph_keys: tuple[VoxelGraphKey, ...] = tuple(
+        tuple(int(value) for value in index)  # type: ignore[misc]
+        for index in selected_indices
+    )
+    if len(set(graph_keys)) != len(graph_keys):
+        return None
+
+    # The local voxel search permits 26-connected diagonal steps. Preserve
+    # the exact route keys, but add the intermediate free voxels needed by
+    # the graph builder's line-of-sight invariant so a diagonal edge is not
+    # accidentally discarded from the expanded graph.
+    metric_indices: list[tuple[int, int, int]] = list(selected_indices)
+    metric_index_set = set(metric_indices)
+    for first, second in zip(selected_indices, selected_indices[1:], strict=False):
+        changed_axes = [
+            axis for axis in range(3) if int(first[axis]) != int(second[axis])
+        ]
+        for mask in range(1, 1 << len(changed_axes)):
+            candidate = list(first)
+            for bit, axis in enumerate(changed_axes):
+                if mask & (1 << bit):
+                    candidate[axis] = int(second[axis])
+            candidate_index = tuple(int(value) for value in candidate)
+            if (
+                candidate_index in metric_index_set
+                or not volume.contains_index(candidate_index)
+                or candidate_index in volume.surface_cells
+            ):
+                continue
+            metric_index_set.add(candidate_index)
+            metric_indices.append(candidate_index)
+
+    metrics: dict[VoxelGraphKey, NavigationVoxel3DMetric] = {}
+    for index in metric_indices:
+        key = tuple(int(value) for value in index)  # type: ignore[misc]
+        center = volume.voxel_center(index)
+        clearance = max(0.0, float(volume.surface_clearance_m(index)))
+        progress = sum(
+            (float(center[axis]) - float(current[axis])) * direction[axis]
+            for axis in range(3)
+        )
+        metrics[key] = NavigationVoxel3DMetric(
+            center=tuple(float(value) for value in center),
+            footprint_cell=(
+                int(math.floor(float(center[0]) / size)),
+                int(math.floor(float(center[2]) / size)),
+            ),
+            available_volume_m3=float(size**3),
+            free_voxel_count=1,
+            min_clearance_m=clearance,
+            mean_clearance_m=clearance,
+            progress_m=float(progress),
+        )
+    unknown_boundary = (
+        (graph_keys[-1],)
+        if bool(local_route.boundary_reached)
+        else ()
+    )
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(size, size, size),
+        max_edge_distance_cells=1,
+        max_edges_per_node=26,
+        max_total_edges=max(64, len(metrics) * 26),
+        unknown_boundary=unknown_boundary,
+    )
+    if not graph.motion_geometry_safe or not graph.edge_integrity_safe:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_frontier_graph_expansion",
+            {
+                "accepted": False,
+                "reason": "local_graph_geometry_unsafe",
+                "graph": graph.diagnostic_payload(),
+            },
+        )
+        return None
+
+    local_atlas = NavigationVoxelAtlas(
+        tiles=(),
+        fine_tiles=(volume,),
+        prepared_3d_graph=graph,
+        coverage_scope="runtime_local_frontier",
+    )
+    route_points = (tuple(float(value) for value in current),) + selected_centers
+    safety_failure = GraphRouteSafetyValidator(
+        local_atlas,
+        graph,
+        mesh_guard=mesh_guard,
+        policy=GraphRouteSafetyPolicy(
+            minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+        ),
+    ).route_clearance_failure(
+        route_points,
+        graph_keys,
+        start_graph_key=graph_keys[0],
+    )
+    if safety_failure is not None:
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "graph_route_safety_failed",
+            {
+                **safety_failure.diagnostic_payload(),
+                "route_id": authority_status.get("route_id"),
+                "local_frontier_expansion": True,
+            },
+        )
+        return None
+
+    branch = {
+        "branch_start_key": [int(value) for value in graph_keys[0]],
+        "target_key": [int(value) for value in graph_keys[-1]],
+        "continuation_distance_m": float(local_route.distance_m),
+        "onward_exit_count": 0 if local_route.boundary_reached else 1,
+        "frontier_count": 1 if local_route.boundary_reached else 0,
+        "unknown_boundary": bool(local_route.boundary_reached),
+        "target_is_terminal": False,
+        "dead_end": False,
+    }
+    selection = {
+        "method": str(graph.method),
+        "selection_reason": "continuous_local_frontier_expansion",
+        "authority": "bounded_runtime_local_true_3d_graph",
+        "route_geometry_source": "bounded_cached_mesh_local_voxels",
+        "coverage_incomplete": True,
+        "unknown_boundary_reached": bool(local_route.boundary_reached),
+        "terminal_reached": False,
+        "replan_at_lookahead": True,
+        "graph_keys": [
+            [int(value) for value in key] for key in graph_keys[:8]
+        ],
+        "graph_snapshot": {
+            **_graph_snapshot_payload(graph, authority_status),
+            "expansion": "bounded_cached_mesh_frontier",
+            "base_cache_version": authority_status.get("cache_version"),
+        },
+        "branch": branch,
+        "local_route": local_route.diagnostic_payload(),
+        "prepared_graph": graph.diagnostic_payload(),
+        "avoid_positions_applied": len(avoided),
+    }
+    return (
+        local_atlas,
+        graph,
+        route_points,
+        graph_keys,
+        tuple(
+            graph.nodes[key].footprint_cell
+            for key in graph_keys
+            if key in graph.nodes
+        ),
+        selection,
+    )
+
+
+def _graph_key_for_route_point(
+    point: Point,
+    graph_keys: Sequence[VoxelGraphKey],
+    graph: NavigationVoxel3DGraph,
+) -> VoxelGraphKey:
+    return min(
+        graph_keys,
+        key=lambda key: (
+            _point_distance_squared(graph.nodes[key].center, point),
+            key,
+        ),
+    )
+
+
+AUTO_DIVE_PREFLIGHT_READY = "READY"
+AUTO_DIVE_PREFLIGHT_INDETERMINATE = "INDETERMINATE"
+AUTO_DIVE_PREFLIGHT_FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class AutoDivePreflightResult:
+    """The startup validation decision for one exact Guided Dive route."""
+
+    status: str
+    reason: str
+    plan: AutoDivePlan | None = None
+    navigation_route_id: str | None = None
+    terminal_point: Point | None = None
+    terminal_graph_key: VoxelGraphKey | None = None
+    start_graph_key: VoxelGraphKey | None = None
+    route_point_count: int = 0
+    coverage_incomplete: bool = False
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def ready(self) -> bool:
+        """Return whether the exact validated plan may be activated."""
+        return self.status == AUTO_DIVE_PREFLIGHT_READY and self.plan is not None
+
+    def diagnostic_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "status": str(self.status),
+            "reason": str(self.reason),
+            "navigation_route_id": self.navigation_route_id,
+            "terminal_point": (
+                None
+                if self.terminal_point is None
+                else [float(value) for value in self.terminal_point]
+            ),
+            "terminal_graph_key": (
+                None
+                if self.terminal_graph_key is None
+                else [int(value) for value in self.terminal_graph_key]
+            ),
+            "start_graph_key": (
+                None
+                if self.start_graph_key is None
+                else [int(value) for value in self.start_graph_key]
+            ),
+            "route_point_count": int(self.route_point_count),
+            "coverage_incomplete": bool(self.coverage_incomplete),
+            "details": dict(self.details),
+        }
+        if self.plan is not None:
+            payload["route_length_m"] = float(self.plan.route_length_m)
+            payload["duration_s"] = float(self.plan.duration_s)
+            payload["preflight_validated"] = bool(
+                self.plan.preflight_validated
+            )
+        return payload
+
+
+def build_auto_dive_preflight_plan(
+    manifest: Mapping[str, Any],
+    *,
+    current_position: tuple[float, float, float] | np.ndarray,
+    current_yaw: float | None = None,
+    current_pitch: float | None = None,
+    settings: AutoDiveSettings | None = None,
+    cache_dir: str | os.PathLike[str] | None = None,
+    diagnostics: AutoDiveDiagnosticSink | None = None,
+) -> AutoDivePreflightResult:
+    """Validate one complete cave route before Guided Dive activation.
+
+    Startup preflight deliberately differs from receding-horizon replanning:
+    it searches the prepared true-3D graph all the way to the farthest
+    reachable graph terminal/frontier in the starting component. The returned
+    plan is the same graph path that the controller receives, so activation
+    cannot succeed on a route that was not the route validated here.
+    """
+    settings = settings or AutoDiveSettings()
+    _validate_auto_dive_settings(settings)
+    current_array = np.asarray(current_position, dtype=np.float64)
+    if current_array.shape != (3,) or not np.all(np.isfinite(current_array)):
+        raise NavigationConfigurationError(
+            "Guided Dive preflight requires a finite 3D camera position"
+        )
+    current: Point = tuple(float(value) for value in current_array)
+
+    route_id = _longest_navigation_route_id(manifest)
+    if route_id is None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_INDETERMINATE,
+            reason="longest_passage_metadata_missing",
+            details={"route_selection": "prepared_graph_cache_identity"},
+        )
+
+    try:
+        cached_volume, _authority_status = _authoritative_graph_navigation_context(
+            manifest,
+            cache_dir=cache_dir,
+            settings=settings,
+            diagnostics=diagnostics,
+            route_id=route_id,
+        )
+    except NavigationVoxelGraphAuthorityError as exc:
+        status = (
+            AUTO_DIVE_PREFLIGHT_INDETERMINATE
+            if exc.reason
+            in {
+                "cache_directory_missing",
+                "navigation_metadata_missing",
+                "voxel_cache_not_declared",
+                "stale_or_unsupported_cache",
+                "voxel_cache_path_invalid",
+                "navigation_route_missing",
+                "navigation_route_metadata_invalid",
+                "voxel_graph_model_missing",
+                "true_3d_graph_missing",
+            }
+            else AUTO_DIVE_PREFLIGHT_FAILED
+        )
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=status,
+            reason=f"navigation_authority:{exc.reason}",
+            navigation_route_id=route_id,
+            details=dict(exc.status),
+        )
+
+    graph = cached_volume.prepared_3d_graph
+    if graph is None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_INDETERMINATE,
+            reason="prepared_graph_missing_after_authority_check",
+            navigation_route_id=route_id,
+        )
+
+    snap_tolerance_m = _preflight_graph_snap_tolerance_m(
+        graph,
+        cached_volume=cached_volume,
+    )
+    start_key, start_distance_m = _preflight_nearest_graph_key(
+        graph,
+        current,
+        routable_only=True,
+    )
+    if start_key is None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_FAILED,
+            reason="prepared_graph_start_unroutable",
+            navigation_route_id=route_id,
+            details={
+                "graph_node_count": len(graph.nodes),
+            },
+        )
+    if start_distance_m > snap_tolerance_m:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_INDETERMINATE,
+            reason="camera_outside_prepared_graph_snap_tolerance",
+            navigation_route_id=route_id,
+            start_graph_key=start_key,
+            details={
+                "start_snap_distance_m": float(start_distance_m),
+                "snap_tolerance_m": float(snap_tolerance_m),
+            },
+        )
+
+    component_id = int(graph.nodes[start_key].component_id)
+    terminal_key, terminal_details = _preflight_select_graph_terminal(
+        graph,
+        start_key=start_key,
+        component_id=component_id,
+    )
+    if terminal_key is None:
+        terminal_reason = str(
+            terminal_details.get(
+                "reason",
+                "prepared_graph_terminal_unavailable",
+            )
+        )
+        terminal_status = (
+            AUTO_DIVE_PREFLIGHT_FAILED
+            if terminal_reason == "graph_terminal_search_expansion_limit"
+            else AUTO_DIVE_PREFLIGHT_INDETERMINATE
+        )
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=terminal_status,
+            reason=terminal_reason,
+            navigation_route_id=route_id,
+            start_graph_key=start_key,
+            details={**terminal_details, "start_component_id": component_id},
+        )
+    terminal_point = tuple(
+        float(value) for value in graph.nodes[terminal_key].center
+    )
+    terminal_coverage_incomplete = bool(
+        terminal_details.get("terminal_unknown_boundary", False)
+    )
+
+    graph_keys, graph_search_details = _preflight_global_graph_route(
+        graph,
+        start_key=start_key,
+        terminal_key=terminal_key,
+        preferred_direction=_direction_from_radians(
+            current_yaw,
+            current_pitch,
+        ),
+    )
+    if graph_keys is None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_FAILED,
+            reason=str(graph_search_details.get("reason", "no_graph_route")),
+            navigation_route_id=route_id,
+            terminal_point=terminal_point,
+            start_graph_key=start_key,
+            terminal_graph_key=terminal_key,
+            details={
+                **terminal_details,
+                **graph_search_details,
+                "start_component_id": component_id,
+            },
+            coverage_incomplete=terminal_coverage_incomplete,
+        )
+
+    coverage_incomplete = terminal_coverage_incomplete or any(
+        bool(graph.nodes[key].unknown_boundary)
+        for key in graph_keys
+        if key in graph.nodes
+    )
+    full_route_points, full_route_cells = _preflight_route_geometry(
+        current,
+        graph_keys,
+        graph,
+    )
+    if len(full_route_points) < 2:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_FAILED,
+            reason="terminal_already_at_camera",
+            navigation_route_id=route_id,
+            terminal_point=terminal_point,
+            start_graph_key=start_key,
+            terminal_graph_key=terminal_key,
+            details={**terminal_details, **graph_search_details},
+            coverage_incomplete=coverage_incomplete,
+        )
+
+    mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=cache_dir,
+    )
+    if mesh_guard is None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_INDETERMINATE,
+            reason="mesh_collision_guard_unavailable",
+            navigation_route_id=route_id,
+            terminal_point=terminal_point,
+            start_graph_key=start_key,
+            terminal_graph_key=terminal_key,
+            details={
+                **terminal_details,
+                **graph_search_details,
+                "start_component_id": component_id,
+            },
+            coverage_incomplete=coverage_incomplete,
+        )
+
+    graph_safety_validator = GraphRouteSafetyValidator(
+        cached_volume,
+        graph,
+        mesh_guard=mesh_guard,
+        policy=GraphRouteSafetyPolicy(
+            minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+        ),
+    )
+    full_failure = graph_safety_validator.route_clearance_failure(
+        full_route_points,
+        graph_keys,
+    )
+    mesh_safe_frontier = False
+    mesh_safe_frontier_details: dict[str, Any] | None = None
+    if full_failure is not None:
+        original_failure_payload = _preflight_clearance_failure_payload(
+            full_failure
+        )
+        if full_failure.reason == "mesh_intersection":
+            (
+                safe_graph_keys,
+                safe_terminal_key,
+                safe_details,
+            ) = _preflight_mesh_safe_graph_frontier(
+                graph,
+                start_key=start_key,
+                component_id=component_id,
+                graph_safety_validator=graph_safety_validator,
+            )
+            if safe_graph_keys is not None and safe_terminal_key is not None:
+                requested_terminal_key = terminal_key
+                terminal_key = safe_terminal_key
+                terminal_point = tuple(
+                    float(value) for value in graph.nodes[terminal_key].center
+                )
+                graph_keys = safe_graph_keys
+                terminal_details = {
+                    **terminal_details,
+                    **safe_details,
+                    "mesh_safe_frontier_fallback": True,
+                    "requested_terminal_graph_key": [
+                        int(value) for value in requested_terminal_key
+                    ],
+                }
+                graph_search_details = {
+                    **graph_search_details,
+                    **safe_details,
+                    "mesh_safe_frontier_fallback": True,
+                    "requested_terminal_graph_key": [
+                        int(value) for value in requested_terminal_key
+                    ],
+                }
+                coverage_incomplete = True
+                full_route_points, full_route_cells = _preflight_route_geometry(
+                    current,
+                    graph_keys,
+                    graph,
+                )
+                full_failure = graph_safety_validator.route_clearance_failure(
+                    full_route_points,
+                    graph_keys,
+                )
+                if full_failure is None:
+                    mesh_safe_frontier = True
+                    mesh_safe_frontier_details = {
+                        **safe_details,
+                        "requested_terminal_graph_key": [
+                            int(value) for value in requested_terminal_key
+                        ],
+                        "original_collision_failure": original_failure_payload,
+                    }
+        if full_failure is not None:
+            failure_details = {
+                **terminal_details,
+                **graph_search_details,
+                "start_component_id": component_id,
+                "collision_failure": _preflight_clearance_failure_payload(
+                    full_failure
+                ),
+            }
+            if mesh_safe_frontier_details is not None:
+                failure_details["mesh_safe_frontier_attempt"] = (
+                    mesh_safe_frontier_details
+                )
+            else:
+                failure_details["original_collision_failure"] = (
+                    original_failure_payload
+                )
+            return _auto_dive_preflight_result(
+                diagnostics,
+                status=AUTO_DIVE_PREFLIGHT_FAILED,
+                reason=f"route_collision:{full_failure.reason}",
+                navigation_route_id=route_id,
+                terminal_point=terminal_point,
+                start_graph_key=start_key,
+                terminal_graph_key=terminal_key,
+                details=failure_details,
+                coverage_incomplete=coverage_incomplete,
+            )
+
+    route_points, route_cells = _preflight_bounded_route_geometry(
+        full_route_points,
+        full_route_cells,
+        max_keyframes=int(settings.max_keyframes),
+    )
+    if route_points is None or route_cells is None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_FAILED,
+            reason="route_exceeds_keyframe_budget_without_safe_shortcut",
+            navigation_route_id=route_id,
+            terminal_point=terminal_point,
+            start_graph_key=start_key,
+            terminal_graph_key=terminal_key,
+            details={
+                **terminal_details,
+                **graph_search_details,
+                "full_route_point_count": len(full_route_points),
+                "max_keyframes": int(settings.max_keyframes),
+            },
+            coverage_incomplete=coverage_incomplete,
+        )
+    bounded_failure = graph_safety_validator.route_clearance_failure(
+        route_points,
+        graph_keys,
+    )
+    if bounded_failure is not None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_FAILED,
+            reason=f"bounded_route_collision:{bounded_failure.reason}",
+            navigation_route_id=route_id,
+            terminal_point=terminal_point,
+            start_graph_key=start_key,
+            terminal_graph_key=terminal_key,
+            details={
+                **terminal_details,
+                **graph_search_details,
+                "collision_failure": _preflight_clearance_failure_payload(
+                    bounded_failure
+                ),
+            },
+            coverage_incomplete=coverage_incomplete,
+        )
+
+    prefetched_chunk_ids = cached_volume.prefetch_for_points(route_points)
+    route_length_m = path_length(route_points)
+    duration_s = route_length_m / float(settings.speed_m_per_second)
+    keyframe_payloads = route_keyframes_for_points(
+        route_points,
+        duration_s=duration_s,
+        lookahead_distance_m=max(0.0, float(settings.lookahead_distance_m)),
+    )
+    # Probe roll is an analysis dimension only. Camera execution is always
+    # roll-independent, including the initial preflight handoff.
+    for payload in keyframe_payloads:
+        payload["roll_deg"] = 0.0
+    keyframes = [
+        RouteKeyframe.from_mapping(payload, index=index)
+        for index, payload in enumerate(keyframe_payloads)
+    ]
+    plan = AutoDivePlan(
+        route=CameraRoute.from_keyframes(keyframes),
+        centerline_path=None,
+        route_points=route_points,
+        route_cells=route_cells,
+        circular_arc=False,
+        route_length_m=route_length_m,
+        duration_s=duration_s,
+        render_distance_cells=max(1, int(settings.render_distance_cells)),
+        selection_reason=(
+            "preflight_mesh_safe_graph_frontier"
+            if mesh_safe_frontier
+            else "preflight_farthest_graph_terminal_true_3d"
+        ),
+        replan_at_end=mesh_safe_frontier,
+        voxel_route_selection={
+            "method": NAVIGATION_VOXEL_GRAPH_METHOD,
+            "route_geometry_source": "preflight_global_true_3d_graph",
+            "start_key": [int(value) for value in start_key],
+            "terminal_key": [int(value) for value in terminal_key],
+            "terminal_rule": terminal_details.get("terminal_rule"),
+            "terminal_selection_source": terminal_details.get(
+                "terminal_selection_source"
+            ),
+            "terminal_graph_distance_m": terminal_details.get(
+                "terminal_graph_distance_m"
+            ),
+            "terminal_unknown_boundary": bool(
+                terminal_details.get("terminal_unknown_boundary", False)
+            ),
+            "graph_path_key_count": len(graph_keys),
+            "graph_geometry_key_count": len(graph_keys),
+            "full_route_point_count": len(full_route_points),
+            "route_point_count": len(route_points),
+            "prefetched_chunk_count": len(prefetched_chunk_ids),
+            "coverage_incomplete": coverage_incomplete,
+            "mesh_safe_frontier_fallback": mesh_safe_frontier,
+        },
+        terminal_reached=not mesh_safe_frontier,
+        navigation_route_id=route_id,
+        preflight_validated=True,
+        navigation_atlas=cached_volume,
+        navigation_graph=graph,
+        navigation_graph_keys=tuple(graph_keys),
+    )
+    return _auto_dive_preflight_result(
+        diagnostics,
+        status=AUTO_DIVE_PREFLIGHT_READY,
+        reason=(
+            "validated_mesh_safe_graph_frontier_route"
+            if mesh_safe_frontier
+            else "validated_farthest_graph_terminal_route"
+        ),
+        plan=plan,
+        navigation_route_id=route_id,
+        terminal_point=terminal_point,
+        start_graph_key=start_key,
+        terminal_graph_key=terminal_key,
+        route_point_count=len(route_points),
+        coverage_incomplete=coverage_incomplete,
+        details={
+            **terminal_details,
+            **graph_search_details,
+            "start_component_id": component_id,
+            "start_snap_distance_m": float(start_distance_m),
+            "snap_tolerance_m": float(snap_tolerance_m),
+            "prefetched_chunk_count": len(prefetched_chunk_ids),
+        },
+    )
+
+
+def _auto_dive_preflight_result(
+    diagnostics: AutoDiveDiagnosticSink | None,
+    *,
+    status: str,
+    reason: str,
+    plan: AutoDivePlan | None = None,
+    navigation_route_id: str | None = None,
+    terminal_point: Point | None = None,
+    terminal_graph_key: VoxelGraphKey | None = None,
+    start_graph_key: VoxelGraphKey | None = None,
+    route_point_count: int = 0,
+    coverage_incomplete: bool = False,
+    details: Mapping[str, Any] | None = None,
+) -> AutoDivePreflightResult:
+    result = AutoDivePreflightResult(
+        status=status,
+        reason=reason,
+        plan=plan,
+        navigation_route_id=navigation_route_id,
+        terminal_point=terminal_point,
+        terminal_graph_key=terminal_graph_key,
+        start_graph_key=start_graph_key,
+        route_point_count=int(route_point_count),
+        coverage_incomplete=bool(coverage_incomplete),
+        details=dict(details or {}),
+    )
+    _record_auto_dive_diagnostic(
+        diagnostics,
+        "auto_dive_preflight",
+        result.diagnostic_payload(),
+    )
+    return result
+
+
+def _longest_navigation_route_id(manifest: Mapping[str, Any]) -> str | None:
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    routes = navigation.get("routes") if isinstance(navigation, Mapping) else None
+    if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
+        return None
+    candidates: list[tuple[float, str]] = []
+    for route in routes:
+        if not isinstance(route, Mapping):
+            continue
+        route_id = route.get("id")
+        try:
+            length_m = float(route.get("length_m"))
+        except (TypeError, ValueError):
+            continue
+        if (
+            not isinstance(route_id, str)
+            or not route_id
+            or not math.isfinite(length_m)
+            or length_m <= 0.0
+        ):
+            continue
+        candidates.append((length_m, route_id))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: (candidate[0], candidate[1]))[1]
+
+
+def _preflight_select_graph_terminal(
+    graph: NavigationVoxel3DGraph,
+    *,
+    start_key: VoxelGraphKey,
+    component_id: int,
+) -> tuple[VoxelGraphKey | None, dict[str, Any]]:
+    """Select the farthest reachable terminal/frontier in graph space.
+
+    ``terminal`` identifies a known local topological endpoint. An
+    ``unknown_boundary`` node is also an eligible frontier: it is the end of
+    the prepared evidence, not proof that the cave ends there. Both are
+    evaluated by accumulated directed graph distance from the starting node,
+    so a centerline endpoint or a Cartesian coordinate cannot choose the
+    startup destination.
+    """
+    candidates = tuple(
+        key
+        for key, node in graph.nodes.items()
+        if int(node.component_id) == int(component_id)
+        and (bool(node.terminal) or bool(node.unknown_boundary))
+    )
+    terminal_candidate_count = sum(
+        1
+        for key in candidates
+        if bool(graph.nodes[key].terminal)
+        and not bool(graph.nodes[key].unknown_boundary)
+    )
+    unknown_candidate_count = sum(
+        1 for key in candidates if bool(graph.nodes[key].unknown_boundary)
+    )
+    base_details = {
+        "terminal_candidate_count": len(candidates),
+        "terminal_candidate_terminal_count": terminal_candidate_count,
+        "terminal_candidate_unknown_boundary_count": unknown_candidate_count,
+    }
+    if not candidates:
+        return None, {
+            **base_details,
+            "reason": "prepared_graph_terminal_candidates_missing",
+        }
+
+    distances: dict[VoxelGraphKey, float] = {start_key: 0.0}
+    queue: list[tuple[float, VoxelGraphKey]] = [(0.0, start_key)]
+    expanded_count = 0
+    max_expansions = max(len(graph.nodes) * 4, graph.edge_count + 1)
+    while queue:
+        distance_m, current_key = heapq.heappop(queue)
+        if distance_m > distances.get(current_key, math.inf) + 1e-9:
+            continue
+        expanded_count += 1
+        if expanded_count > max_expansions:
+            return None, {
+                **base_details,
+                "reason": "graph_terminal_search_expansion_limit",
+                "expanded_terminal_search_count": expanded_count,
+                "terminal_search_max_expansions": max_expansions,
+            }
+        current_node = graph.nodes.get(current_key)
+        if current_node is None:
+            continue
+        for edge in graph.outgoing(current_key):
+            target_node = graph.nodes.get(edge.target)
+            edge_distance_m = float(edge.distance_m)
+            if (
+                target_node is None
+                or not edge.line_of_sight
+                or edge.source != current_key
+                or int(target_node.component_id) != int(component_id)
+                or not math.isfinite(edge_distance_m)
+                or edge_distance_m <= 0.0
+            ):
+                continue
+            next_distance_m = distance_m + edge_distance_m
+            if next_distance_m + 1e-9 >= distances.get(
+                edge.target,
+                math.inf,
+            ):
+                continue
+            distances[edge.target] = next_distance_m
+            heapq.heappush(queue, (next_distance_m, edge.target))
+
+    reachable_candidates = tuple(
+        key for key in candidates if key in distances
+    )
+    if not reachable_candidates:
+        return None, {
+            **base_details,
+            "reason": "no_reachable_graph_terminal_candidate",
+            "expanded_terminal_search_count": expanded_count,
+            "terminal_search_max_expansions": max_expansions,
+        }
+
+    selected = max(
+        reachable_candidates,
+        key=lambda key: (
+            distances[key],
+            bool(
+                graph.nodes[key].terminal
+                and not graph.nodes[key].unknown_boundary
+            ),
+            key,
+        ),
+    )
+    selected_node = graph.nodes[selected]
+    selected_is_unknown = bool(selected_node.unknown_boundary)
+    return selected, {
+        **base_details,
+        "reason": "farthest_reachable_graph_terminal_selected",
+        "terminal_rule": (
+            "farthest_reachable_true_3d_graph_frontier"
+            if selected_is_unknown
+            else "farthest_reachable_true_3d_graph_terminal"
+        ),
+        "terminal_selection_source": (
+            "unknown_boundary_frontier"
+            if selected_is_unknown
+            else "graph_terminal"
+        ),
+        "terminal_reachable_candidate_count": len(reachable_candidates),
+        "terminal_graph_distance_m": float(distances[selected]),
+        "terminal_unknown_boundary": selected_is_unknown,
+        "terminal_local_degree": int(selected_node.local_degree),
+        "terminal_dead_end": bool(selected_node.dead_end),
+        "terminal_clearance_m": float(selected_node.min_clearance_m),
+        "expanded_terminal_search_count": expanded_count,
+        "terminal_search_max_expansions": max_expansions,
+    }
+
+
+def _point_distance_squared(first: Point, second: Point) -> float:
+    return sum((float(first[index]) - float(second[index])) ** 2 for index in range(3))
+
+
+def _point_alignment(
+    source: Point,
+    target: Point,
+    direction: np.ndarray,
+) -> float:
+    delta = np.asarray(target, dtype=np.float64) - np.asarray(source, dtype=np.float64)
+    norm = float(np.linalg.norm(delta))
+    if norm <= 1e-9:
+        return 0.0
+    return float(np.dot(delta / norm, direction))
+
+
+def _preflight_graph_snap_tolerance_m(
+    graph: NavigationVoxel3DGraph,
+    *,
+    cached_volume: NavigationVoxelAtlas,
+) -> float:
+    graph_scale = max((float(value) for value in graph.grid_size_m), default=0.0)
+    return max(
+        2.0 * graph_scale,
+        2.0 * max(0.0, float(cached_volume.voxel_size_m)),
+        1.0,
+    )
+
+
+def _preflight_nearest_graph_key(
+    graph: NavigationVoxel3DGraph,
+    point: Point,
+    *,
+    component_id: int | None = None,
+    routable_only: bool = False,
+) -> tuple[VoxelGraphKey | None, float]:
+    candidates: list[VoxelGraphKey] = []
+    for key, node in graph.nodes.items():
+        if component_id is not None and int(node.component_id) != int(component_id):
+            continue
+        if routable_only and not any(
+            edge.line_of_sight
+            and edge.target in graph.nodes
+            and int(graph.nodes[edge.target].component_id) == int(node.component_id)
+            for edge in graph.outgoing(key)
+        ):
+            continue
+        candidates.append(key)
+    if not candidates:
+        return None, math.inf
+    selected = min(
+        candidates,
+        key=lambda key: (_point_distance_squared(graph.nodes[key].center, point), key),
+    )
+    return selected, math.sqrt(
+        _point_distance_squared(graph.nodes[selected].center, point)
+    )
+
+
+def _preflight_global_graph_route(
+    graph: NavigationVoxel3DGraph,
+    *,
+    start_key: VoxelGraphKey,
+    terminal_key: VoxelGraphKey,
+    preferred_direction: np.ndarray | None,
+) -> tuple[tuple[VoxelGraphKey, ...] | None, dict[str, Any]]:
+    """Run a bounded graph-wide Dijkstra search to the preflight terminal."""
+    if start_key == terminal_key:
+        return (start_key,), {"expanded_state_count": 0, "reason": "same_node"}
+
+    scale = max((float(value) for value in graph.grid_size_m), default=1.0)
+    start_state: tuple[VoxelGraphKey, VoxelGraphKey | None] = (start_key, None)
+    distances: dict[tuple[VoxelGraphKey, VoxelGraphKey | None], float] = {
+        start_state: 0.0
+    }
+    parents: dict[
+        tuple[VoxelGraphKey, VoxelGraphKey | None],
+        tuple[VoxelGraphKey, VoxelGraphKey | None] | None,
+    ] = {start_state: None}
+    queue: list[
+        tuple[float, int, VoxelGraphKey, VoxelGraphKey | None]
+    ] = [(0.0, 0, start_key, None)]
+    serial = 0
+    expanded_count = 0
+    max_expansions = max(len(graph.nodes) * 4, graph.edge_count + 1)
+    goal_state: tuple[VoxelGraphKey, VoxelGraphKey | None] | None = None
+    while queue:
+        cost, _serial, current_key, previous_key = heapq.heappop(queue)
+        state = (current_key, previous_key)
+        if cost > distances.get(state, math.inf) + 1e-9:
+            continue
+        expanded_count += 1
+        if current_key == terminal_key:
+            goal_state = state
+            break
+        if expanded_count > max_expansions:
+            return None, {
+                "reason": "graph_search_expansion_limit",
+                "expanded_state_count": expanded_count,
+                "max_expansions": max_expansions,
+            }
+        current_node = graph.nodes.get(current_key)
+        if current_node is None:
+            continue
+        incoming_direction: np.ndarray | None = None
+        if previous_key is not None:
+            incoming_edge = _preflight_graph_edge_between(
+                graph,
+                previous_key,
+                current_key,
+            )
+            if incoming_edge is not None:
+                incoming_direction = np.asarray(
+                    incoming_edge.direction,
+                    dtype=np.float64,
+                )
+        for edge in graph.outgoing(current_key):
+            target_node = graph.nodes.get(edge.target)
+            if (
+                target_node is None
+                or not edge.line_of_sight
+                or int(target_node.component_id) != int(current_node.component_id)
+            ):
+                continue
+            direction = np.asarray(edge.direction, dtype=np.float64)
+            alignment = 1.0
+            if incoming_direction is not None:
+                alignment = float(np.dot(incoming_direction, direction))
+            elif preferred_direction is not None:
+                alignment = float(np.dot(preferred_direction, direction))
+            alignment = max(-1.0, min(1.0, alignment))
+            edge_cost = (
+                float(edge.distance_m)
+                + scale * 0.20 * (1.0 - alignment)
+                + scale
+                * 0.35
+                / (1.0 + max(0.0, float(edge.min_clearance_m)))
+                + scale
+                * 0.10
+                / (1.0 + max(0.0, float(target_node.connectivity_score)))
+            )
+            next_state = (edge.target, current_key)
+            next_cost = cost + edge_cost
+            if next_cost + 1e-9 >= distances.get(next_state, math.inf):
+                continue
+            distances[next_state] = next_cost
+            parents[next_state] = state
+            serial += 1
+            heapq.heappush(
+                queue,
+                (next_cost, serial, edge.target, current_key),
+            )
+
+    if goal_state is None:
+        return None, {
+            "reason": "no_graph_route_to_longest_terminal",
+            "expanded_state_count": expanded_count,
+            "max_expansions": max_expansions,
+        }
+    states = [goal_state]
+    while parents[states[-1]] is not None:
+        parent = parents[states[-1]]
+        assert parent is not None
+        states.append(parent)
+    states.reverse()
+    keys = tuple(state[0] for state in states)
+    return keys, {
+        "reason": "global_graph_route_found",
+        "expanded_state_count": expanded_count,
+        "max_expansions": max_expansions,
+        "graph_route_cost": float(distances[goal_state]),
+        "graph_path_key_count": len(keys),
+    }
+
+
+def _preflight_mesh_safe_graph_frontier(
+    graph: NavigationVoxel3DGraph,
+    *,
+    start_key: VoxelGraphKey,
+    component_id: int,
+    graph_safety_validator: GraphRouteSafetyValidator,
+) -> tuple[tuple[VoxelGraphKey, ...] | None, VoxelGraphKey | None, dict[str, Any]]:
+    """Find the farthest graph frontier reachable through safe graph edges.
+
+    The graph terminal search deliberately reasons about prepared topology,
+    but a cached mesh can invalidate one or more graph edges.  When the
+    requested longest route is mesh-blocked, preflight may authorize only the
+    farthest mesh-safe frontier.  The controller then performs its normal
+    continuous scan at that frontier; it never treats the shortened route as
+    proof that the cave ends there.
+    """
+    candidates = tuple(
+        key
+        for key, node in graph.nodes.items()
+        if key != start_key
+        and int(node.component_id) == int(component_id)
+        and (bool(node.terminal) or bool(node.unknown_boundary))
+    )
+    base_details = {
+        "mesh_safe_frontier_candidate_count": len(candidates),
+        "mesh_safe_frontier_terminal_count": sum(
+            1
+            for key in candidates
+            if bool(graph.nodes[key].terminal)
+            and not bool(graph.nodes[key].unknown_boundary)
+        ),
+        "mesh_safe_frontier_unknown_boundary_count": sum(
+            1 for key in candidates if bool(graph.nodes[key].unknown_boundary)
+        ),
+    }
+    if not candidates:
+        return None, None, {
+            **base_details,
+            "mesh_safe_frontier_reason": "mesh_safe_frontier_candidates_missing",
+        }
+
+    distances: dict[VoxelGraphKey, float] = {start_key: 0.0}
+    parents: dict[VoxelGraphKey, VoxelGraphKey | None] = {start_key: None}
+    queue: list[tuple[float, VoxelGraphKey]] = [(0.0, start_key)]
+    edge_safety_cache: dict[
+        tuple[VoxelGraphKey, VoxelGraphKey], GraphRouteSafetyFailure | None
+    ] = {}
+    expanded_count = 0
+    safe_edge_count = 0
+    rejected_edge_count = 0
+    max_expansions = max(len(graph.nodes) * 4, graph.edge_count + 1)
+    while queue:
+        distance_m, current_key = heapq.heappop(queue)
+        if distance_m > distances.get(current_key, math.inf) + 1e-9:
+            continue
+        expanded_count += 1
+        if expanded_count > max_expansions:
+            return None, None, {
+                **base_details,
+                "mesh_safe_frontier_reason": "mesh_safe_frontier_search_expansion_limit",
+                "expanded_mesh_safe_frontier_count": expanded_count,
+                "mesh_safe_frontier_search_max_expansions": max_expansions,
+                "mesh_safe_edge_count": safe_edge_count,
+                "mesh_rejected_edge_count": rejected_edge_count,
+            }
+        current_node = graph.nodes.get(current_key)
+        if current_node is None:
+            continue
+        for edge in graph.outgoing(current_key):
+            target_node = graph.nodes.get(edge.target)
+            if (
+                target_node is None
+                or not edge.line_of_sight
+                or edge.source != current_key
+                or int(target_node.component_id) != int(component_id)
+            ):
+                continue
+            edge_key = (current_key, edge.target)
+            failure = edge_safety_cache.get(edge_key)
+            if edge_key not in edge_safety_cache:
+                failure = graph_safety_validator.edge_clearance_failure(
+                    current_key,
+                    edge.target,
+                )
+                edge_safety_cache[edge_key] = failure
+            if failure is not None:
+                rejected_edge_count += 1
+                continue
+            safe_edge_count += 1
+            next_distance_m = distance_m + float(edge.distance_m)
+            if next_distance_m + 1e-9 >= distances.get(
+                edge.target,
+                math.inf,
+            ):
+                continue
+            distances[edge.target] = next_distance_m
+            parents[edge.target] = current_key
+            heapq.heappush(queue, (next_distance_m, edge.target))
+
+    reachable_candidates = tuple(
+        key for key in candidates if key in distances
+    )
+    if not reachable_candidates:
+        return None, None, {
+            **base_details,
+            "mesh_safe_frontier_reason": "no_mesh_safe_graph_frontier_reachable",
+            "expanded_mesh_safe_frontier_count": expanded_count,
+            "mesh_safe_frontier_search_max_expansions": max_expansions,
+            "mesh_safe_edge_count": safe_edge_count,
+            "mesh_rejected_edge_count": rejected_edge_count,
+        }
+
+    selected = max(
+        reachable_candidates,
+        key=lambda key: (
+            distances[key],
+            bool(
+                graph.nodes[key].terminal
+                and not graph.nodes[key].unknown_boundary
+            ),
+            key,
+        ),
+    )
+    path: list[VoxelGraphKey] = [selected]
+    while path[-1] != start_key:
+        parent = parents.get(path[-1])
+        if parent is None:
+            return None, None, {
+                **base_details,
+                "mesh_safe_frontier_reason": "mesh_safe_frontier_parent_missing",
+                "expanded_mesh_safe_frontier_count": expanded_count,
+                "mesh_safe_edge_count": safe_edge_count,
+                "mesh_rejected_edge_count": rejected_edge_count,
+            }
+        path.append(parent)
+    path.reverse()
+    selected_node = graph.nodes[selected]
+    selected_is_unknown = bool(selected_node.unknown_boundary)
+    return tuple(path), selected, {
+        **base_details,
+        "reason": "mesh_safe_graph_frontier_selected",
+        "terminal_rule": (
+            "farthest_mesh_safe_true_3d_graph_frontier"
+            if selected_is_unknown
+            else "farthest_mesh_safe_true_3d_graph_terminal"
+        ),
+        "terminal_selection_source": (
+            "mesh_safe_unknown_boundary_frontier"
+            if selected_is_unknown
+            else "mesh_safe_graph_terminal"
+        ),
+        "terminal_reachable_candidate_count": len(reachable_candidates),
+        "terminal_graph_distance_m": float(distances[selected]),
+        "terminal_unknown_boundary": selected_is_unknown,
+        "terminal_local_degree": int(selected_node.local_degree),
+        "terminal_dead_end": bool(selected_node.dead_end),
+        "terminal_clearance_m": float(selected_node.min_clearance_m),
+        "expanded_terminal_search_count": expanded_count,
+        "terminal_search_max_expansions": max_expansions,
+        "mesh_safe_edge_count": safe_edge_count,
+        "mesh_rejected_edge_count": rejected_edge_count,
+        "mesh_safe_frontier_reachable_node_count": len(distances),
+        "graph_path_key_count": len(path),
+    }
+
+
+def _preflight_graph_edge_between(
+    graph: NavigationVoxel3DGraph,
+    source: VoxelGraphKey,
+    target: VoxelGraphKey,
+) -> NavigationVoxel3DEdge | None:
+    return next(
+        (
+            edge
+            for edge in graph.outgoing(source)
+            if edge.target == target and edge.line_of_sight
+        ),
+        None,
+    )
+
+
+def _preflight_route_geometry(
+    current: Point,
+    keys: Sequence[VoxelGraphKey],
+    graph: NavigationVoxel3DGraph,
+) -> tuple[tuple[Point, ...], tuple[FootprintCell, ...]]:
+    points: list[Point] = [current]
+    cells: list[FootprintCell] = []
+    for key in keys:
+        node = graph.nodes.get(key)
+        if node is None:
+            continue
+        point = tuple(float(value) for value in node.center)
+        if _point_distance_squared(points[-1], point) <= 1e-12:
+            continue
+        points.append(point)
+        cells.append(node.footprint_cell)
+    return tuple(points), tuple(cells)
+
+
+def _preflight_bounded_route_geometry(
+    points: tuple[Point, ...],
+    cells: tuple[FootprintCell, ...],
+    *,
+    max_keyframes: int,
+) -> tuple[tuple[Point, ...] | None, tuple[FootprintCell, ...] | None]:
+    if len(points) <= max_keyframes:
+        return points, cells
+    stride = max(1, int(math.ceil((len(points) - 1) / max(1, max_keyframes - 1))))
+    indices = list(range(0, len(points), stride))
+    if indices[-1] != len(points) - 1:
+        indices.append(len(points) - 1)
+    if len(indices) > max_keyframes:
+        return None, None
+    bounded_points = tuple(points[index] for index in indices)
+    bounded_cells = tuple(
+        cells[index - 1]
+        for index in indices
+        if index > 0 and index - 1 < len(cells)
+    )
+    return bounded_points, bounded_cells
+
+
+def _preflight_clearance_failure_payload(
+    failure: _AutoDiveClearanceFailure | GraphRouteSafetyFailure,
+) -> dict[str, Any]:
+    if isinstance(failure, GraphRouteSafetyFailure):
+        return failure.diagnostic_payload()
+    return {
+        "kind": str(failure.kind),
+        "reason": str(failure.reason),
+        "index": failure.index,
+        "segment_index": failure.segment_index,
+        "cell": (
+            None
+            if failure.cell is None
+            else [int(value) for value in failure.cell]
+        ),
+        "chunk_cell": (
+            None
+            if failure.chunk_cell is None
+            else [int(value) for value in failure.chunk_cell]
+        ),
+        "point": (
+            None
+            if failure.point is None
+            else [float(value) for value in failure.point]
+        ),
+    }
 
 
 def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
@@ -1498,6 +3626,14 @@ def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
             raise NavigationConfigurationError(
                 "Guided Dive planning budget must be positive"
             )
+    minimum_graph_clearance = float(settings.minimum_graph_clearance_m)
+    if (
+        not math.isfinite(minimum_graph_clearance)
+        or minimum_graph_clearance < 0.0
+    ):
+        raise NavigationConfigurationError(
+            "Guided Dive minimum graph clearance must be finite and non-negative"
+        )
     if not isinstance(
         settings.voxel_scoring_policy,
         NavigationVoxelScoringPolicy,
@@ -3613,6 +5749,7 @@ def _make_auto_dive_local_frontier_voxel_builder(
     mesh_guard: CachedChunkMeshCollisionGuard | None,
     settings: AutoDiveSettings,
     diagnostics: AutoDiveDiagnosticSink | None,
+    planning_budget: _AutoDivePlanningBudget | None = None,
 ) -> Callable[[], LocalVoxelVolume | None] | None:
     """Return a bounded 1 m field for local 3D frontier recovery."""
     common_payload = {
@@ -3691,9 +5828,16 @@ def _make_auto_dive_local_frontier_voxel_builder(
 
     def build() -> LocalVoxelVolume | None:
         try:
-            meshes = mesh_guard.triangle_meshes_for_bounds(
-                bounds_min,
-                bounds_max,
+            if planning_budget is not None:
+                planning_budget.check(
+                    "local_frontier_mesh_sampling",
+                    diagnostics=diagnostics,
+                )
+            meshes = tuple(
+                mesh_guard.triangle_meshes_for_bounds(
+                    bounds_min,
+                    bounds_max,
+                )
             )
             if not meshes:
                 _record_auto_dive_diagnostic(
@@ -3708,6 +5852,11 @@ def _make_auto_dive_local_frontier_voxel_builder(
                     },
                 )
                 return None
+            if planning_budget is not None:
+                planning_budget.check(
+                    "local_frontier_mesh_sampling",
+                    diagnostics=diagnostics,
+                )
             max_cells = max(
                 4_096,
                 min(
@@ -3729,7 +5878,22 @@ def _make_auto_dive_local_frontier_voxel_builder(
                     ),
                     max_clearance_search_cells=16,
                 ),
+                deadline_check=(
+                    None
+                    if planning_budget is None
+                    else lambda: planning_budget.check(
+                        "local_frontier_voxel_sampling",
+                        diagnostics=diagnostics,
+                    )
+                ),
             )
+            if planning_budget is not None:
+                planning_budget.check(
+                    "local_frontier_voxel_sampling",
+                    diagnostics=diagnostics,
+                )
+        except AutoDivePlanningBudgetExceeded:
+            raise
         except Exception as exc:
             _record_auto_dive_diagnostic(
                 diagnostics,

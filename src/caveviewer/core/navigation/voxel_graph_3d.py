@@ -18,6 +18,7 @@ from caveviewer.core.navigation.centerline import FootprintCell, Point
 
 
 VoxelGraphKey = tuple[int, int, int]
+GridSize = float | Sequence[float]
 
 NAVIGATION_VOXEL_3D_GRAPH_METHOD = "heading_aware_true_3d_voxel_graph_v4"
 NAVIGATION_VOXEL_3D_GRAPH_VERSION = 4
@@ -272,19 +273,36 @@ class NavigationVoxel3DGraph:
         }
 
 
+def _normalise_grid_size(grid_size_m: GridSize) -> tuple[float, float, float]:
+    """Return positive X/Y/Z bucket sizes from scalar or anisotropic input."""
+    if isinstance(grid_size_m, Sequence) and not isinstance(
+        grid_size_m,
+        (str, bytes),
+    ):
+        if len(grid_size_m) != 3:
+            raise ValueError("3-D graph grid size must have three values")
+        values = tuple(float(value) for value in grid_size_m)
+    else:
+        size = float(grid_size_m)
+        values = (size, size, size)
+    if not all(math.isfinite(value) and value > 0.0 for value in values):
+        raise ValueError("3-D graph grid sizes must be positive and finite")
+    return values  # type: ignore[return-value]
+
+
 def accumulate_navigation_voxel_3d_sample(
     accumulator: dict[VoxelGraphKey, list[float]],
     center: Point,
     *,
-    grid_size_m: float,
+    grid_size_m: GridSize,
     clearance_m: float,
     volume_m3: float,
     progress_m: float,
 ) -> None:
     """Accumulate one filled raw voxel into a bounded-grid bucket."""
-    size = max(1e-6, float(grid_size_m))
+    sizes = _normalise_grid_size(grid_size_m)
     key = tuple(
-        math.floor(float(center[axis]) / size)
+        math.floor(float(center[axis]) / sizes[axis])
         for axis in range(3)
     )  # type: ignore[assignment]
     record = accumulator.get(key)
@@ -315,25 +333,25 @@ def accumulate_navigation_voxel_3d_sample(
 def finalize_navigation_voxel_3d_metrics(
     accumulator: Mapping[VoxelGraphKey, Sequence[float]],
     *,
-    grid_size_m: float,
+    grid_size_m: GridSize,
     footprint_cell_size_m: float | None = None,
     max_nodes: int = DEFAULT_3D_GRAPH_MAX_NODES,
     max_vertical_factor: int = DEFAULT_3D_GRAPH_MAX_VERTICAL_COARSENING_FACTOR,
 ) -> tuple[dict[VoxelGraphKey, NavigationVoxel3DMetric], tuple[float, float, float]]:
     """Finalize bounded metrics while preserving useful vertical resolution."""
-    base_size = max(1e-6, float(grid_size_m))
+    base_sizes = _normalise_grid_size(grid_size_m)
     footprint_size = (
-        base_size
+        base_sizes[0]
         if footprint_cell_size_m is None
         else max(1e-6, float(footprint_cell_size_m))
     )
     metrics = _metrics_from_accumulator(
         accumulator,
-        base_size,
+        base_sizes,
         footprint_cell_size_m=footprint_size,
     )
     if len(metrics) <= max(1, int(max_nodes)):
-        return metrics, (base_size, base_size, base_size)
+        return metrics, base_sizes
 
     vertical_factor = 1
     horizontal_factor = 1
@@ -344,23 +362,33 @@ def finalize_navigation_voxel_3d_metrics(
         # Preserve Y resolution first. Horizontal coarsening is much less
         # destructive for cave routing because it keeps stacked passages and
         # up/down openings independently traversable.
+        step_horizontal_factor = 1
+        step_vertical_factor = 1
         if horizontal_factor < 64:
             horizontal_factor *= 2
+            step_horizontal_factor = 2
         elif vertical_factor < vertical_limit:
             vertical_factor *= 2
+            step_vertical_factor = 2
         else:
             horizontal_factor *= 2
+            step_horizontal_factor = 2
+        # ``metrics`` already contains the result of the preceding pass.  The
+        # factors passed to _coarsen_metrics must therefore describe only this
+        # pass; passing the cumulative factors again collapses the keys by
+        # 2, 4, 8, ... repeatedly while the persisted grid reports only the
+        # final cumulative factor.
         metrics = _coarsen_metrics(
             metrics,
-            horizontal_factor=horizontal_factor,
-            vertical_factor=vertical_factor,
-            base_size=base_size,
+            horizontal_factor=step_horizontal_factor,
+            vertical_factor=step_vertical_factor,
+            base_size=base_sizes,
             footprint_cell_size_m=footprint_size,
         )
     return metrics, (
-        base_size * horizontal_factor,
-        base_size * vertical_factor,
-        base_size * horizontal_factor,
+        base_sizes[0] * horizontal_factor,
+        base_sizes[1] * vertical_factor,
+        base_sizes[2] * horizontal_factor,
     )
 
 
@@ -386,7 +414,7 @@ def build_navigation_voxel_3d_graph(
             component_count=0,
             grid_size_m=tuple(float(value) for value in grid_size_m),
             max_edge_distance_cells=max(1, int(max_edge_distance_cells)),
-            max_edges_per_node=max(6, int(max_edges_per_node)),
+            max_edges_per_node=max(1, int(max_edges_per_node)),
         )
     unknown = set(unknown_boundary)
     edge_distance_m_limit = (
@@ -430,10 +458,11 @@ def build_navigation_voxel_3d_graph(
     requested_edge_limit = max(6, int(max_edges_per_node))
     edge_limit = min(
         requested_edge_limit,
-        max(6, int(max_total_edges) // max(1, len(keys))),
+        max(1, int(max_total_edges) // max(1, len(keys))),
     )
     edge_distance_limit = max(1, int(max_edge_distance_cells))
     edge_map: dict[VoxelGraphKey, tuple[NavigationVoxel3DEdge, ...]] = {}
+    remaining_edge_budget = max(0, int(max_total_edges))
     for source in sorted(keys):
         source_metric = metrics[source]
         candidates: list[tuple[float, VoxelGraphKey, bool]] = []
@@ -474,7 +503,7 @@ def build_navigation_voxel_3d_graph(
             source,
             candidates,
             local_neighbors=local_neighbors[source],
-            max_targets=edge_limit,
+            max_targets=min(edge_limit, remaining_edge_budget),
         )
         edges: list[NavigationVoxel3DEdge] = []
         for _distance_cells, target, _is_local in selected:
@@ -502,6 +531,7 @@ def build_navigation_voxel_3d_graph(
                 )
             )
         edge_map[source] = tuple(edges)
+        remaining_edge_budget -= len(edges)
 
     nodes: dict[VoxelGraphKey, NavigationVoxel3DNode] = {}
     for key in sorted(keys):
@@ -807,7 +837,7 @@ def deserialize_navigation_voxel_3d_graph(
         component_count=component_count,
         grid_size_m=grid_size,
         max_edge_distance_cells=max(1, int(payload.get("max_edge_distance_cells", 1))),
-        max_edges_per_node=max(6, int(payload.get("max_edges_per_node", 6))),
+        max_edges_per_node=max(1, int(payload.get("max_edges_per_node", 1))),
         max_edge_distance_m=max(
             1e-6,
             float(
@@ -832,13 +862,14 @@ def deserialize_navigation_voxel_3d_graph(
 
 def _metrics_from_accumulator(
     accumulator: Mapping[VoxelGraphKey, Sequence[float]],
-    grid_size_m: float,
+    grid_size_m: GridSize,
     *,
     footprint_cell_size_m: float | None = None,
 ) -> dict[VoxelGraphKey, NavigationVoxel3DMetric]:
     metrics: dict[VoxelGraphKey, NavigationVoxel3DMetric] = {}
+    grid_sizes = _normalise_grid_size(grid_size_m)
     footprint_size = (
-        max(1e-6, float(grid_size_m))
+        grid_sizes[0]
         if footprint_cell_size_m is None
         else max(1e-6, float(footprint_cell_size_m))
     )
@@ -873,7 +904,7 @@ def _coarsen_metrics(
     *,
     horizontal_factor: int,
     vertical_factor: int,
-    base_size: float,
+    base_size: GridSize,
     footprint_cell_size_m: float | None = None,
 ) -> dict[VoxelGraphKey, NavigationVoxel3DMetric]:
     accumulator: dict[VoxelGraphKey, list[float]] = {}
@@ -1057,7 +1088,7 @@ def _select_directionally_diverse_targets(
     selected_keys: set[VoxelGraphKey] = set()
     by_target = {item[1]: item for item in candidates}
 
-    limit = max(1, int(max_targets))
+    limit = max(0, int(max_targets))
 
     def append(item: tuple[float, VoxelGraphKey, bool] | None) -> None:
         if item is None or len(selected) >= limit:
@@ -1068,9 +1099,11 @@ def _select_directionally_diverse_targets(
         selected.append(item)
         selected_keys.add(target)
 
-    # A six-axis set is the minimum representation needed to permit forward,
+    # A six-axis set is the preferred representation needed to permit forward,
     # reverse, lateral, and vertical camera moves without depending on key
-    # ordering. ``edge_limit`` is clamped to at least six by the graph builder.
+    # ordering. A very large graph may receive a smaller global edge budget;
+    # in that case append whichever cardinal candidates actually exist before
+    # considering longer shortcuts.
     for offset in _CARDINAL_OFFSETS:
         target = tuple(source[index] + offset[index] for index in range(3))
         append(by_target.get(target))

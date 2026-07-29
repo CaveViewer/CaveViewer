@@ -73,6 +73,23 @@ def test_true_3d_graph_preserves_all_cardinal_moves_when_edges_are_capped():
     }
 
 
+def test_true_3d_graph_never_exceeds_global_edge_budget():
+    metrics = {
+        (x, y, z): _metric((x, y, z), progress=float(x))
+        for x in range(4)
+        for y in range(2)
+        for z in range(4)
+    }
+
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+        max_total_edges=10,
+    )
+
+    assert graph.edge_count <= 10
+
+
 def test_true_3d_graph_labels_terminal_and_dead_end_topology():
     keys = ((0, 0, 0), (1, 0, 0), (2, 0, 0), (1, 0, 1))
     metrics = {
@@ -132,6 +149,32 @@ def test_true_3d_metrics_coarsen_to_consumer_hardware_bound():
 
     assert len(metrics) <= 12
     assert grid_size[1] >= 1.0
+    for key, metric in metrics.items():
+        for axis in range(3):
+            lower = key[axis] * grid_size[axis]
+            upper = (key[axis] + 1) * grid_size[axis]
+            assert lower <= metric.center[axis] < upper
+
+
+def test_true_3d_metrics_accept_anisotropic_horizontal_buckets():
+    accumulator = {}
+    accumulate_navigation_voxel_3d_sample(
+        accumulator,
+        (3.5, 2.5, 3.5),
+        grid_size_m=(4.0, 1.0, 4.0),
+        clearance_m=1.0,
+        volume_m3=1.0,
+        progress_m=2.0,
+    )
+
+    metrics, grid_size = finalize_navigation_voxel_3d_metrics(
+        accumulator,
+        grid_size_m=(4.0, 1.0, 4.0),
+        max_nodes=8,
+    )
+
+    assert tuple(metrics) == ((0, 2, 0),)
+    assert grid_size == (4.0, 1.0, 4.0)
 
 
 def test_true_3d_metrics_preserve_vertical_resolution_when_coarsening():

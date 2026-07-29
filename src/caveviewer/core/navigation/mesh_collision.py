@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import OrderedDict
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import math
 import os
@@ -34,6 +35,12 @@ _DEFAULT_MAX_MESH_RECOVERY_TRIANGLES = 5_000_000
 _MAX_MESH_RECOVERY_TRIANGLES_ENV = (
     "CAVEVIEWER_AUTO_DIVE_MESH_RECOVERY_MAX_TRIANGLES"
 )
+# Cache-time voxel construction visits many render chunks. Retaining every
+# decoded chunk duplicates a large part of the source mesh while the importer
+# and navigation atlas are still resident. Bound residency by triangle count;
+# a single oversized chunk is still allowed as a transient query result but is
+# not retained after that query.
+_DEFAULT_MAX_CACHED_COLLISION_TRIANGLES = 250_000
 
 
 @dataclass(frozen=True)
@@ -67,11 +74,20 @@ class CachedChunkMeshCollisionGuard:
         chunk_bounds: tuple[_ChunkBounds, ...],
         *,
         mesh_recovery_enabled: bool = True,
+        max_cached_triangles: int | None = None,
     ) -> None:
         self._cache_dir = os.path.abspath(os.fspath(cache_dir))
         self._chunk_bounds = chunk_bounds
         self.mesh_recovery_enabled = bool(mesh_recovery_enabled)
-        self._triangle_cache: dict[Cell, _ChunkTriangleMesh] = {}
+        self._max_cached_triangles = (
+            _DEFAULT_MAX_CACHED_COLLISION_TRIANGLES
+            if max_cached_triangles is None
+            else max(0, int(max_cached_triangles))
+        )
+        self._triangle_cache: OrderedDict[Cell, _ChunkTriangleMesh] = (
+            OrderedDict()
+        )
+        self._cached_triangle_count = 0
         self._cache_lock = threading.Lock()
 
     @classmethod
@@ -80,6 +96,7 @@ class CachedChunkMeshCollisionGuard:
         manifest: Mapping[str, Any],
         *,
         cache_dir: str | os.PathLike[str] | None,
+        max_cached_triangles: int | None = None,
     ) -> "CachedChunkMeshCollisionGuard | None":
         if not cache_dir:
             return None
@@ -125,6 +142,7 @@ class CachedChunkMeshCollisionGuard:
             os.fspath(cache_dir),
             tuple(sorted(chunk_bounds, key=lambda chunk: chunk.cell)),
             mesh_recovery_enabled=mesh_recovery_enabled,
+            max_cached_triangles=max_cached_triangles,
         )
 
     def segment_collision(
@@ -170,22 +188,22 @@ class CachedChunkMeshCollisionGuard:
         self,
         bounds_min: Point,
         bounds_max: Point,
-    ) -> tuple[np.ndarray, ...]:
+    ) -> Iterable[np.ndarray]:
         """Return cached chunk triangle arrays intersecting local bounds.
 
         Navigation refinements use this bounded provider to build optional
         local analyses without loading the whole map into one mesh array.
+        The result is lazy so cache-time rasterization can consume one chunk
+        at a time instead of retaining every candidate array in a tuple.
         """
         first = np.asarray(bounds_min, dtype=np.float64).reshape(3)
         second = np.asarray(bounds_max, dtype=np.float64).reshape(3)
         lower = np.minimum(first, second)
         upper = np.maximum(first, second)
-        meshes: list[np.ndarray] = []
         for chunk in self._candidate_chunks(lower, upper):
             mesh = self._triangle_mesh_for_chunk(chunk.cell)
             if mesh.triangles.size:
-                meshes.append(mesh.triangles)
-        return tuple(meshes)
+                yield mesh.triangles
 
     def _candidate_chunks(
         self,
@@ -207,6 +225,7 @@ class CachedChunkMeshCollisionGuard:
         with self._cache_lock:
             cached = self._triangle_cache.get(cell)
             if cached is not None:
+                self._triangle_cache.move_to_end(cell)
                 return cached
             triangles = self._load_triangles_for_chunk(cell)
             if triangles.size == 0:
@@ -221,7 +240,21 @@ class CachedChunkMeshCollisionGuard:
                     triangle_min=triangles.min(axis=1),
                     triangle_max=triangles.max(axis=1),
                 )
-            self._triangle_cache[cell] = mesh
+            triangle_count = int(len(mesh.triangles))
+            if (
+                self._max_cached_triangles > 0
+                and triangle_count <= self._max_cached_triangles
+            ):
+                while self._triangle_cache and (
+                    self._cached_triangle_count + triangle_count
+                    > self._max_cached_triangles
+                ):
+                    _evicted_cell, evicted = self._triangle_cache.popitem(
+                        last=False
+                    )
+                    self._cached_triangle_count -= len(evicted.triangles)
+                self._triangle_cache[cell] = mesh
+                self._cached_triangle_count += triangle_count
             return mesh
 
     def _load_triangles_for_chunk(self, cell: Cell) -> np.ndarray:

@@ -236,7 +236,13 @@ Cache-time voxel occupancy is kept in the atomically published
 `navigation_voxels.json` sidecar rather than in the render manifest. A
 cache-format change must either remain backward compatible or increment its
 version and force a deliberate rebuild; unsupported or missing optional voxel
-artifacts must never make a render cache unusable.
+artifacts must never make a render cache unusable. Large cache-time navigation
+builds first measure the filled-cell cardinality and aggregate graph samples
+into bounded horizontal buckets while retaining the configured vertical
+resolution; they do not materialize an unbounded 1 m graph metric dictionary.
+The cached-mesh collision provider also streams render-chunk triangles through
+a bounded LRU during this pass, so importer, voxel, and collision geometry do
+not all remain resident at once.
 The render-chunk binary format remains at version 1: unknown manifest fields
 and extra subdirectories inside a selected generated cache are ignored, while
 imports write only the active cache artifacts.

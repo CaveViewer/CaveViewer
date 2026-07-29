@@ -973,8 +973,15 @@ def build_surface_voxel_volume(
     bounds_min: Sequence[float],
     bounds_max: Sequence[float],
     config: VoxelVolumeConfig | None = None,
+    deadline_check: Callable[[], None] | None = None,
 ) -> LocalVoxelVolume:
-    """Rasterize cached triangle surfaces into a bounded sparse voxel field."""
+    """Rasterize cached triangle surfaces into a bounded sparse voxel field.
+
+    ``deadline_check`` is a cooperative owner-supplied guard. It is called at
+    bounded intervals so a runtime recovery field cannot outlive the route
+    handoff window. A raised exception aborts construction; no partial volume
+    is returned.
+    """
     resolved = (config or VoxelVolumeConfig()).validated()
     lower = _point(bounds_min)
     upper = _point(bounds_max)
@@ -986,10 +993,14 @@ def build_surface_voxel_volume(
     sample_count = 0
     sampling_truncated = False
     for mesh in triangle_meshes:
+        if deadline_check is not None:
+            deadline_check()
         triangles = _normalise_triangles(mesh)
         if triangles is None:
             continue
         for triangle in triangles:
+            if deadline_check is not None:
+                deadline_check()
             triangle_lower = triangle.min(axis=0)
             triangle_upper = triangle.max(axis=0)
             if not _aabb_intersects(
@@ -1002,6 +1013,11 @@ def build_surface_voxel_volume(
             triangle_count += 1
             steps = _triangle_steps(triangle, voxel_size)
             for sample in _triangle_samples(triangle, steps):
+                if (
+                    deadline_check is not None
+                    and sample_count % 128 == 0
+                ):
+                    deadline_check()
                 if sample_count >= resolved.max_surface_samples:
                     sampling_truncated = True
                     break

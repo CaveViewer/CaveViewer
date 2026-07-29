@@ -89,19 +89,22 @@ from caveviewer.core.navigation.voxel_store import (
 )
 
 
-NAVIGATION_VOXEL_CACHE_VERSION = 7
-NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v7"
-_PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION = 6
-_PREVIOUS_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v6"
-_OLDER_NAVIGATION_VOXEL_CACHE_VERSION = 3
-_OLDER_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v3"
+NAVIGATION_VOXEL_CACHE_VERSION = 8
+NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v8"
+_PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION = 7
+_PREVIOUS_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v7"
+_OLDER_NAVIGATION_VOXEL_CACHE_VERSION = 6
+_OLDER_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v6"
+_LEGACY_PREPARED_NAVIGATION_VOXEL_CACHE_VERSION = 3
+_LEGACY_PREPARED_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v3"
 _LEGACY_NAVIGATION_VOXEL_CACHE_VERSION = 1
 _LEGACY_NAVIGATION_VOXEL_CACHE_METHOD = "curvature_corridor_voxels_v1"
 NAVIGATION_VOXEL_CACHE_NAME = "navigation_voxels.json"
 NAVIGATION_VOXEL_CACHE_MAX_BYTES = 256 * 1024 * 1024
-NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v7"
-_PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v6"
-_OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v3"
+NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v8"
+_PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v7"
+_OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v6"
+_LEGACY_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v3"
 
 # Replans run on a worker, but repeatedly decoding the whole-cave sidecar still
 # consumed most of the worker budget on consumer hardware. Keep a small,
@@ -502,6 +505,7 @@ class NavigationVoxelRoutePlan:
     dead_end_rejections: int = 0
     world_points: tuple[Point, ...] = ()
     three_d_graph: bool = False
+    graph_keys: tuple[VoxelGraphKey, ...] = ()
     entrance_progress_floor_m: float | None = None
     entrance_guard_tolerance_m: float | None = None
     entrance_guard_source: str | None = None
@@ -538,6 +542,11 @@ class NavigationVoxelRoutePlan:
             "prepared_graph": bool(self.prepared_graph),
             "three_d_graph": bool(self.three_d_graph),
             "world_point_count": len(self.world_points),
+            "graph_key_count": len(self.graph_keys),
+            "graph_keys": [
+                [int(value) for value in key]
+                for key in self.graph_keys[:8]
+            ],
             "heading_state_count": int(self.heading_state_count),
             "connectivity_score": float(self.connectivity_score),
             "terminal_reached": bool(self.terminal_reached),
@@ -1195,6 +1204,7 @@ class NavigationVoxelAtlas:
         max_branch_candidates: int = DEFAULT_NAVIGATION_VOXEL_BRANCH_MAX_CANDIDATES,
         scoring_policy: NavigationVoxelScoringPolicy | None = None,
         diagnostics: Callable[[str, Mapping[str, object]], None] | None = None,
+        deadline_check: Callable[[], None] | None = None,
     ) -> NavigationVoxelRoutePlan | None:
         """Select a forward branch with bounded continuation lookahead.
 
@@ -1218,6 +1228,8 @@ class NavigationVoxelAtlas:
         ):
             return None
         policy = scoring_policy or NavigationVoxelScoringPolicy()
+        if deadline_check is not None:
+            deadline_check()
         if self.has_prepared_3d_graph:
             return self._plan_prepared_3d_graph_route(
                 component_cells=component_cells,
@@ -1233,6 +1245,7 @@ class NavigationVoxelAtlas:
                 max_branch_candidates=max_branch_candidates,
                 scoring_policy=policy,
                 diagnostics=diagnostics,
+                deadline_check=deadline_check,
             )
         if self.has_prepared_graph:
             return self._plan_prepared_graph_route(
@@ -1249,6 +1262,7 @@ class NavigationVoxelAtlas:
                 max_branch_candidates=max_branch_candidates,
                 scoring_policy=policy,
                 diagnostics=diagnostics,
+                deadline_check=deadline_check,
             )
         component = {
             (int(cell[0]), int(cell[1]))
@@ -1356,6 +1370,8 @@ class NavigationVoxelAtlas:
         branch_budget = max(1, expansion_limit // max(1, len(branch_starts)))
         evaluations: list[_NavigationVoxelBranchEvaluation] = []
         for branch_start in branch_starts:
+            if deadline_check is not None:
+                deadline_check()
             evaluation = _evaluate_voxel_branch(
                 current_cell=current_cell,
                 branch_start=branch_start,
@@ -1370,6 +1386,7 @@ class NavigationVoxelAtlas:
                 lookahead_cells=lookahead_cell_limit,
                 expansion_budget=branch_budget,
                 scoring_policy=policy,
+                deadline_check=deadline_check,
             )
             if evaluation is not None:
                 evaluations.append(evaluation)
@@ -1517,11 +1534,14 @@ class NavigationVoxelAtlas:
         max_branch_candidates: int,
         scoring_policy: NavigationVoxelScoringPolicy,
         diagnostics: Callable[[str, Mapping[str, object]], None] | None,
+        deadline_check: Callable[[], None] | None,
     ) -> NavigationVoxelRoutePlan | None:
         """Search independent X/Y/Z nodes with bounded heading-aware states."""
         graph = self.prepared_3d_graph
         if graph is None:
             return None
+        if deadline_check is not None:
+            deadline_check()
         # True-3D graph nodes use the graph's native sparse voxel coordinates.
         # The caller's component_cells belong to the coarse centerline grid and
         # must never be compared directly with node.footprint_cell.
@@ -1544,14 +1564,15 @@ class NavigationVoxelAtlas:
         # cache can contain an isolated sample closer to the camera than the
         # actual prepared route; anchoring the component to that sample would
         # make a valid route appear unavailable at startup.
-        routable_graph_keys = {
-            key
-            for key in graph_keys
+        routable_graph_keys: set[VoxelGraphKey] = set()
+        for key in graph_keys:
+            if deadline_check is not None:
+                deadline_check()
             if any(
                 edge.line_of_sight and edge.target in graph_keys
                 for edge in graph.outgoing(key)
-            )
-        }
+            ):
+                routable_graph_keys.add(key)
         nearest_key = _nearest_prepared_3d_graph_key(
             routable_graph_keys or graph_keys,
             graph.nodes,
@@ -1560,22 +1581,24 @@ class NavigationVoxelAtlas:
         if nearest_key is None:
             return None
         graph_component_id = int(graph.nodes[nearest_key].component_id)
-        graph_keys = {
-            key
-            for key, node in graph.nodes.items()
-            if int(node.component_id) == graph_component_id
-        }
+        graph_keys = set()
+        for key, node in graph.nodes.items():
+            if deadline_check is not None:
+                deadline_check()
+            if int(node.component_id) == graph_component_id:
+                graph_keys.add(key)
         # Keep the search in the graph-native topological component.  The
         # nearest routable node above normally is already in this set, but
         # recomputing it here makes the invariant explicit after filtering.
-        route_start_keys = {
-            key
-            for key in graph_keys
+        route_start_keys: set[VoxelGraphKey] = set()
+        for key in graph_keys:
+            if deadline_check is not None:
+                deadline_check()
             if any(
                 edge.line_of_sight and edge.target in graph_keys
                 for edge in graph.outgoing(key)
-            )
-        }
+            ):
+                route_start_keys.add(key)
         current_key = _nearest_prepared_3d_graph_key(
             route_start_keys or graph_keys,
             graph.nodes,
@@ -1630,6 +1653,8 @@ class NavigationVoxelAtlas:
         rejected_entrance_floor = 0
         rejected_backward = 0
         for edge in outgoing_edges:
+            if deadline_check is not None:
+                deadline_check()
             if not edge.line_of_sight or edge.target not in graph_keys:
                 rejected_nontraversable += 1
                 continue
@@ -1738,6 +1763,8 @@ class NavigationVoxelAtlas:
         )
         evaluations: list[_NavigationVoxel3DBranchEvaluation] = []
         for edge, alignment in branch_edges:
+            if deadline_check is not None:
+                deadline_check()
             evaluation = _evaluate_prepared_3d_graph_branch(
                 graph=graph,
                 graph_keys=graph_keys,
@@ -1751,6 +1778,7 @@ class NavigationVoxelAtlas:
                 expansion_budget=branch_budget,
                 graph_scale_m=graph_scale,
                 scoring_policy=scoring_policy,
+                deadline_check=deadline_check,
             )
             if evaluation is not None:
                 evaluations.append(evaluation)
@@ -1842,26 +1870,36 @@ class NavigationVoxelAtlas:
         graph_world_points = tuple(graph.nodes[key].center for key in path_keys)
         # The nearest graph node is a routing anchor, not necessarily the
         # camera's current position.  Replans can begin after the camera has
-        # moved past that anchor; retaining it as the first waypoint would
-        # make the new route point backward.  Keep the actual position as the
-        # route origin and omit only an anchor that lies behind the requested
-        # travel direction.  Forward anchors remain in the route so their
-        # collision-safe centerline is preserved.
+        # moved past one or more anchors; retaining a stale prefix would make
+        # the new route point backward.  Keep the actual position as the
+        # route origin and omit only the leading anchors that are either the
+        # current graph sample or clearly behind the requested travel
+        # direction.  Forward anchors remain in the route so their
+        # collision-safe geometry is preserved.
         world_points_list = [position]
-        first_graph_point = graph_world_points[0]
-        first_offset = tuple(
-            float(first_graph_point[index]) - float(position[index])
-            for index in range(3)
-        )
-        first_is_current = sum(value * value for value in first_offset) <= 1e-12
-        first_is_backward = bool(
-            heading is not None
-            and not first_is_current
-            and _graph_dot(first_offset, heading) < -1e-6
-        )
-        if not first_is_current and not first_is_backward:
-            world_points_list.append(first_graph_point)
-        world_points_list.extend(graph_world_points[1:])
+        graph_start_index = 0
+        skipped_graph_anchor_count = 0
+        while graph_start_index < len(graph_world_points):
+            graph_point = graph_world_points[graph_start_index]
+            graph_offset = tuple(
+                float(graph_point[index]) - float(position[index])
+                for index in range(3)
+            )
+            graph_point_is_current = (
+                sum(value * value for value in graph_offset) <= 1e-12
+            )
+            graph_point_is_backward = bool(
+                heading is not None
+                and not graph_point_is_current
+                and _graph_dot(graph_offset, heading) < -1e-6
+            )
+            if not graph_point_is_current and not graph_point_is_backward:
+                break
+            graph_start_index += 1
+            skipped_graph_anchor_count += 1
+        if graph_start_index < len(graph_world_points):
+            world_points_list.append(graph_world_points[graph_start_index])
+            world_points_list.extend(graph_world_points[graph_start_index + 1:])
         world_points = tuple(world_points_list)
         if len(world_points) < 2:
             return None
@@ -1914,6 +1952,9 @@ class NavigationVoxelAtlas:
                 "dead_end_rejections": sum(
                     1 for item in evaluations if item.score.dead_end
                 ),
+                "skipped_leading_graph_anchor_count": int(
+                    skipped_graph_anchor_count
+                ),
             },
         )
         return NavigationVoxelRoutePlan(
@@ -1946,6 +1987,7 @@ class NavigationVoxelAtlas:
             ),
             world_points=world_points,
             three_d_graph=True,
+            graph_keys=path_keys,
             entrance_progress_floor_m=float(entrance_progress_floor),
             entrance_guard_tolerance_m=float(tolerance),
             entrance_guard_source=entrance_guard_source,
@@ -1969,11 +2011,14 @@ class NavigationVoxelAtlas:
         max_branch_candidates: int,
         scoring_policy: NavigationVoxelScoringPolicy,
         diagnostics: Callable[[str, Mapping[str, object]], None] | None,
+        deadline_check: Callable[[], None] | None,
     ) -> NavigationVoxelRoutePlan | None:
         """Search the persisted graph with position-and-heading states."""
         graph = self.prepared_graph
         if graph is None:
             return None
+        if deadline_check is not None:
+            deadline_check()
         component = {
             (int(cell[0]), int(cell[1]))
             for cell in component_cells
@@ -2024,6 +2069,8 @@ class NavigationVoxelAtlas:
         branch_edges: list[tuple[NavigationVoxelGraphEdge, float]] = []
         rejected_backward = 0
         for edge in graph.outgoing(current_cell):
+            if deadline_check is not None:
+                deadline_check()
             if not edge.line_of_sight or edge.target not in graph_cells:
                 continue
             target_progress = float(self.cell_metrics[edge.target].progress_m)
@@ -2066,6 +2113,8 @@ class NavigationVoxelAtlas:
         )
         evaluations: list[_NavigationVoxelBranchEvaluation] = []
         for edge, alignment in branch_edges:
+            if deadline_check is not None:
+                deadline_check()
             evaluation = _evaluate_prepared_graph_branch(
                 graph=graph,
                 metrics=self.cell_metrics,
@@ -2080,6 +2129,7 @@ class NavigationVoxelAtlas:
                 expansion_budget=branch_budget,
                 cell_size_m=footprint_cell_size,
                 scoring_policy=scoring_policy,
+                deadline_check=deadline_check,
             )
             if evaluation is not None:
                 evaluations.append(evaluation)
@@ -2499,6 +2549,7 @@ def _evaluate_prepared_3d_graph_branch(
     expansion_budget: int,
     graph_scale_m: float,
     scoring_policy: NavigationVoxelScoringPolicy,
+    deadline_check: Callable[[], None] | None = None,
 ) -> _NavigationVoxel3DBranchEvaluation | None:
     """Explore a bounded true-3D branch and retain its best partial prefix."""
     first_node = graph.nodes.get(first_edge.target)
@@ -2545,6 +2596,8 @@ def _evaluate_prepared_3d_graph_branch(
     expanded = 0
     state_counter = 1
     while queue and expanded < max(1, int(expansion_budget)):
+        if deadline_check is not None:
+            deadline_check()
         (
             cost,
             _queue_index,
@@ -2578,6 +2631,8 @@ def _evaluate_prepared_3d_graph_branch(
 
         outgoing: list[tuple[NavigationVoxel3DEdge, float]] = []
         for edge in graph.outgoing(key):
+            if deadline_check is not None:
+                deadline_check()
             if (
                 not edge.line_of_sight
                 or edge.target not in graph_keys
@@ -2643,6 +2698,8 @@ def _evaluate_prepared_3d_graph_branch(
                 terminal.append(state)
             continue
         for edge, alignment in outgoing:
+            if deadline_check is not None:
+                deadline_check()
             target_node = graph.nodes.get(edge.target)
             if target_node is None:
                 continue
@@ -3225,6 +3282,7 @@ def _evaluate_prepared_graph_branch(
     expansion_budget: int,
     cell_size_m: float,
     scoring_policy: NavigationVoxelScoringPolicy,
+    deadline_check: Callable[[], None] | None = None,
 ) -> _NavigationVoxelBranchEvaluation | None:
     """Explore one first edge while retaining the incoming heading in state."""
     first_node = graph.nodes.get(first_edge.target)
@@ -3299,6 +3357,8 @@ def _evaluate_prepared_graph_branch(
         float,
     ] | None = None
     while queue and expanded < max(1, int(expansion_budget)):
+        if deadline_check is not None:
+            deadline_check()
         (
             cost,
             _queue_index,
@@ -3338,6 +3398,8 @@ def _evaluate_prepared_graph_branch(
             best_partial = partial
         outgoing: list[tuple[NavigationVoxelGraphEdge, float]] = []
         for edge in graph.outgoing(cell):
+            if deadline_check is not None:
+                deadline_check()
             if not edge.line_of_sight or edge.target == previous:
                 continue
             if (
@@ -3399,6 +3461,8 @@ def _evaluate_prepared_graph_branch(
                 )
             continue
         for edge, alignment in outgoing:
+            if deadline_check is not None:
+                deadline_check()
             target_node = graph.nodes.get(edge.target)
             if target_node is None:
                 continue
@@ -3621,6 +3685,7 @@ def _evaluate_voxel_branch(
     lookahead_cells: int,
     expansion_budget: int,
     scoring_policy: NavigationVoxelScoringPolicy,
+    deadline_check: Callable[[], None] | None = None,
 ) -> _NavigationVoxelBranchEvaluation | None:
     """Score one immediate branch without searching to a global endpoint."""
     initial_cost = _voxel_graph_edge_cost(
@@ -3651,6 +3716,8 @@ def _evaluate_voxel_branch(
         cell_size * 2.0,
     )
     while queue and expanded_count < main_search_budget:
+        if deadline_check is not None:
+            deadline_check()
         distance, cell = heapq.heappop(queue)
         if distance > distances.get(cell, float("inf")) + 1e-9:
             continue
@@ -3675,6 +3742,8 @@ def _evaluate_voxel_branch(
             terminal.append(cell)
             continue
         for neighbor in neighbors:
+            if deadline_check is not None:
+                deadline_check()
             edge_cost = _voxel_graph_edge_cost(
                 cell,
                 neighbor,
@@ -3699,6 +3768,8 @@ def _evaluate_voxel_branch(
     candidates: list[tuple[FootprintCell, float, int, bool, int]] = []
     frontier_candidates = frontier[:16]
     for index, cell in enumerate(frontier_candidates):
+        if deadline_check is not None:
+            deadline_check()
         remaining_budget = expansion_limit - expanded_count
         if remaining_budget <= 0:
             break
@@ -3725,6 +3796,7 @@ def _evaluate_voxel_branch(
                 max_distance_m=max_distance,
                 max_cells=max(4, int(lookahead_cells // 2)),
                 expansion_budget=probe_budget,
+                deadline_check=deadline_check,
             )
         )
         expanded_count += probe_expanded
@@ -3926,6 +3998,7 @@ def _probe_voxel_branch_continuation(
     max_distance_m: float,
     max_cells: int,
     expansion_budget: int,
+    deadline_check: Callable[[], None] | None = None,
 ) -> tuple[float, int, bool, int]:
     """Probe only beyond a frontier to distinguish continuation from rooms."""
     distances: dict[FootprintCell, float] = {frontier_cell: 0.0}
@@ -3936,6 +4009,8 @@ def _probe_voxel_branch_continuation(
     terminal = False
     expanded = 0
     while queue and expanded < max(1, int(expansion_budget)):
+        if deadline_check is not None:
+            deadline_check()
         distance, cell = heapq.heappop(queue)
         if distance > distances.get(cell, float("inf")) + 1e-9:
             continue
@@ -3951,6 +4026,8 @@ def _probe_voxel_branch_continuation(
             terminal = True
             continue
         for neighbor in neighbors:
+            if deadline_check is not None:
+                deadline_check()
             edge = footprint_cell_distance(cell, neighbor)
             next_distance = distance + max(1e-6, edge)
             next_depth = depths.get(cell, 0) + 1
@@ -4513,11 +4590,13 @@ def deserialize_navigation_voxel_volume(
         NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _LEGACY_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
     }:
         expected_versions = {
             NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: NAVIGATION_VOXEL_CACHE_VERSION,
             _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION,
             _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _OLDER_NAVIGATION_VOXEL_CACHE_VERSION,
+            _LEGACY_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _LEGACY_PREPARED_NAVIGATION_VOXEL_CACHE_VERSION,
         }
         expected_version = expected_versions[atlas_method]
         if payload.get("version") != expected_version:
@@ -4892,6 +4971,33 @@ def _analyze_route(
     return common
 
 
+def _cache_graph_base_grid_size(
+    filled_cell_count: int,
+    *,
+    base_voxel_size: float,
+    max_nodes: int,
+) -> tuple[float, float, float]:
+    """Choose bounded horizontal graph buckets before metric materialization.
+
+    The filled-space flood fill can produce millions of 1 m samples on a
+    large map. Keeping those samples as Python dictionary entries until the
+    later graph coarsening pass creates a needless multi-gigabyte peak. A
+    power-of-two horizontal bucket reduces that temporary cardinality to
+    roughly one quarter of the final node budget while retaining the base
+    vertical resolution for stacked passages.
+    """
+    base = max(1e-6, float(base_voxel_size))
+    target_nodes = max(1_024, int(max_nodes) // 4)
+    horizontal_factor = 1
+    while (
+        int(filled_cell_count) > target_nodes * horizontal_factor * horizontal_factor
+        and horizontal_factor < 64
+    ):
+        horizontal_factor *= 2
+    horizontal_size = base * horizontal_factor
+    return horizontal_size, base, horizontal_size
+
+
 def _build_route_voxel_atlas(
     manifest: Mapping[str, object],
     route: Mapping[str, object],
@@ -4947,10 +5053,11 @@ def _build_route_voxel_atlas(
         cell_size=cell_size,
     )
     tiles: list[LocalVoxelVolume] = []
+    tile_seed_points: list[tuple[Point, ...]] = []
     total_metrics: list[dict[str, float | int | bool]] = []
     cell_accumulators: dict[FootprintCell, list[float]] = {}
     true_3d_accumulator: dict[VoxelGraphKey, list[float]] = {}
-    true_3d_base_grid_size = max(
+    true_3d_base_voxel_size = max(
         1e-6,
         min(
             float(config.voxel_size_m),
@@ -4961,6 +5068,7 @@ def _build_route_voxel_atlas(
     total_triangles = 0
     sampling_truncated = False
     skipped_tiles = 0
+    total_filled_cell_count = 0
 
     for group_index, cells in enumerate(groups):
         remaining_groups = max(1, len(groups) - group_index)
@@ -5008,7 +5116,9 @@ def _build_route_voxel_atlas(
             skipped_tiles += 1
             continue
         tiles.append(tile)
+        tile_seed_points.append(tile_points)
         filled_cells = tile.filled_free_cell_clearance_m(tile_points)
+        total_filled_cell_count += len(filled_cells)
         total_metrics.append(
             _metrics_for_filled_cells(tile, tile_points, filled_cells)
         )
@@ -5027,14 +5137,6 @@ def _build_route_voxel_atlas(
             )
             if center[1] < low_y or center[1] > high_y:
                 continue
-            accumulate_navigation_voxel_3d_sample(
-                true_3d_accumulator,
-                center,
-                grid_size_m=true_3d_base_grid_size,
-                clearance_m=float(clearance_m),
-                volume_m3=float(tile.voxel_size_m ** 3),
-                progress_m=float(progress_distances.get(cell, 0.0)),
-            )
             accumulator = cell_accumulators.setdefault(
                 cell,
                 [0.0, 0.0, float("inf"), 0.0, 0.0],
@@ -5072,6 +5174,43 @@ def _build_route_voxel_atlas(
         triangle_provider=triangle_provider,
         config=config,
     )
+
+    true_3d_base_grid_size = _cache_graph_base_grid_size(
+        total_filled_cell_count,
+        base_voxel_size=true_3d_base_voxel_size,
+        max_nodes=config.graph_max_nodes,
+    )
+    # The first pass above already produced the bounded per-footprint metrics.
+    # Revisit each retained tile only for the graph samples, now that the
+    # measured filled-cell count lets us choose a coarse horizontal bucket.
+    # This avoids retaining millions of 1 m Python dictionary entries before
+    # the graph coarsening pass while keeping the vertical bucket at 1 m when
+    # the configured voxel size permits it.
+    for tile, tile_points in zip(tiles, tile_seed_points):
+        filled_cells = tile.filled_free_cell_clearance_m(tile_points)
+        for voxel_index, clearance_m in filled_cells.items():
+            center = tile.voxel_center(voxel_index)
+            cell = (
+                math.floor(center[0] / cell_size),
+                math.floor(center[2] / cell_size),
+            )
+            if cell not in component_cell_set:
+                continue
+            low_y, high_y = _cell_y_range(
+                cell,
+                y_ranges,
+                fallback_y_range,
+            )
+            if center[1] < low_y or center[1] > high_y:
+                continue
+            accumulate_navigation_voxel_3d_sample(
+                true_3d_accumulator,
+                center,
+                grid_size_m=true_3d_base_grid_size,
+                clearance_m=float(clearance_m),
+                volume_m3=float(tile.voxel_size_m ** 3),
+                progress_m=float(progress_distances.get(cell, 0.0)),
+            )
 
     cell_metrics = {
         cell: NavigationVoxelCellMetric(
@@ -5145,7 +5284,10 @@ def _build_route_voxel_atlas(
         "graph_grid_size_m": [
             float(value) for value in prepared_3d_graph.grid_size_m
         ],
-        "graph_resolution_m": float(true_3d_base_grid_size),
+        "graph_resolution_m": float(true_3d_base_grid_size[1]),
+        "graph_base_grid_size_m": [
+            float(value) for value in true_3d_base_grid_size
+        ],
         "graph_native_routing": True,
         "fine_sampling_truncated": any(
             bool(tile.sampling_truncated) for tile in fine_tiles
@@ -5160,9 +5302,16 @@ def _true_3d_unknown_boundary_keys(
     component_cell_set: set[FootprintCell],
     sampling_truncated: bool,
 ) -> set[VoxelGraphKey]:
-    """Mark graph nodes whose surrounding cache evidence is incomplete."""
-    if sampling_truncated:
-        return set(metrics)
+    """Mark nodes adjacent to an unrepresented navigable footprint cell.
+
+    A surface-sampling budget can be exhausted after a valid portion of the
+    cave has been sampled.  That quality flag does not prove that every
+    sampled graph node is at an unknown topological boundary.  Only a
+    navigable footprint neighbor absent from the prepared metrics is evidence
+    of an unknown continuation; ``sampling_truncated`` remains diagnostic
+    metadata for cache quality and does not broaden that boundary claim.
+    """
+    del sampling_truncated
     sampled_footprints = {metric.footprint_cell for metric in metrics.values()}
     unknown: set[VoxelGraphKey] = set()
     for key, metric in metrics.items():
@@ -5637,6 +5786,10 @@ def _supported_cache_identity(version: object, method: object) -> bool:
         (
             _OLDER_NAVIGATION_VOXEL_CACHE_VERSION,
             _OLDER_NAVIGATION_VOXEL_CACHE_METHOD,
+        ),
+        (
+            _LEGACY_PREPARED_NAVIGATION_VOXEL_CACHE_VERSION,
+            _LEGACY_PREPARED_NAVIGATION_VOXEL_CACHE_METHOD,
         ),
         (
             _LEGACY_NAVIGATION_VOXEL_CACHE_VERSION,

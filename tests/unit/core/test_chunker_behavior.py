@@ -626,7 +626,7 @@ def test_build_cache_writes_bounded_whole_cave_voxel_sidecar(tmp_path):
     manifest = chunker.load_manifest(str(cache_dir))
     navigation = manifest["navigation"]
     assert navigation["voxel_cache"]["method"] == (
-        "whole_cave_voxel_atlas_v7"
+        "whole_cave_voxel_atlas_v8"
     )
     assert navigation["route_selection_method"] == (
         "largest_cached_cave_volume_v2"
