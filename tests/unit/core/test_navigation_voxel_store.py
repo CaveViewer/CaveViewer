@@ -12,6 +12,7 @@ from caveviewer.core.navigation.voxel_store import (
     DiskNavigationVoxelChunkStore,
     InMemoryNavigationVoxelChunkStore,
     NavigationVoxelChunkDescriptor,
+    navigation_voxel_chunk_relative_path_parts,
 )
 from caveviewer.core.navigation.voxel_volume import LocalVoxelVolume
 
@@ -101,3 +102,27 @@ def test_disk_store_rejects_chunk_path_escape(tmp_path):
 
     assert store.get_chunk("coarse-000000") is None
     assert store.stats()["load_errors"] == 1
+
+
+def test_chunk_paths_use_portable_posix_cache_components():
+    relative_path = (
+        "navigation_voxel_chunks/route-deadbeef/fine-000000.json"
+    )
+
+    assert navigation_voxel_chunk_relative_path_parts(relative_path) == (
+        "navigation_voxel_chunks",
+        "route-deadbeef",
+        "fine-000000.json",
+    )
+    assert (
+        navigation_voxel_chunk_relative_path_parts(
+            r"navigation_voxel_chunks\route-deadbeef\fine-000000.json"
+        )
+        is None
+    )
+    assert (
+        navigation_voxel_chunk_relative_path_parts(
+            "navigation_voxel_chunks/../outside.json"
+        )
+        is None
+    )

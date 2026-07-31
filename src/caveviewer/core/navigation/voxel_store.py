@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import binascii
 import math
 import os
+import posixpath
 import threading
 import zlib
 
@@ -35,6 +36,28 @@ ChunkDecoder = Callable[[Mapping[str, object]], LocalVoxelVolume]
 NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD = "navigation_voxel_chunks_v1"
 DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_RESIDENT = 8
+
+
+def navigation_voxel_chunk_relative_path_parts(
+    relative_path: str,
+) -> tuple[str, ...] | None:
+    """Parse one portable, cache-relative chunk path.
+
+    Chunk paths are persisted in JSON with POSIX separators regardless of the
+    host platform.  Native ``os.path`` normalization would rewrite those
+    separators on Windows and incorrectly reject a valid cache descriptor.
+    """
+    if not relative_path or "\\" in relative_path:
+        return None
+    if (
+        posixpath.isabs(relative_path)
+        or posixpath.normpath(relative_path) != relative_path
+    ):
+        return None
+    parts = tuple(relative_path.split("/"))
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
+    return parts
 
 
 @dataclass(frozen=True)
@@ -375,7 +398,12 @@ class DiskNavigationVoxelChunkStore(NavigationVoxelChunkStore):
             self._resident.clear()
 
     def _safe_path(self, relative_path: str) -> str | None:
-        candidate = os.path.abspath(os.path.join(self._root_dir, relative_path))
+        path_parts = navigation_voxel_chunk_relative_path_parts(relative_path)
+        if path_parts is None:
+            return None
+        # Join the persisted POSIX components with the host separator so the
+        # same cache layout opens correctly on Linux, macOS, and Windows.
+        candidate = os.path.abspath(os.path.join(self._root_dir, *path_parts))
         try:
             if os.path.commonpath((self._root_dir, candidate)) != self._root_dir:
                 return None

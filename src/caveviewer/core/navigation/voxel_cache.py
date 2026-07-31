@@ -96,6 +96,7 @@ from caveviewer.core.navigation.voxel_store import (
     NavigationVoxelChunkDescriptor,
     NavigationVoxelChunkStore,
     NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD,
+    navigation_voxel_chunk_relative_path_parts,
 )
 
 
@@ -4932,11 +4933,15 @@ def _navigation_voxel_chunk_store_from_model(
         raise ValueError("cached navigation voxel chunk count is malformed") from exc
     for descriptor in descriptors:
         relative_path = descriptor.relative_path
+        path_parts = (
+            navigation_voxel_chunk_relative_path_parts(relative_path)
+            if relative_path is not None
+            else None
+        )
         if (
-            not relative_path
-            or os.path.isabs(relative_path)
-            or os.path.normpath(relative_path) != relative_path
-            or not relative_path.startswith("navigation_voxel_chunks/")
+            path_parts is None
+            or len(path_parts) < 2
+            or path_parts[0] != "navigation_voxel_chunks"
         ):
             raise ValueError("cached navigation voxel chunk path is invalid")
     coarse_count = sum(descriptor.kind == "coarse" for descriptor in descriptors)
