@@ -14,7 +14,8 @@ simple lookup-and-release.
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import asdict, replace
 import hashlib
 import json
 import logging
@@ -35,20 +36,26 @@ from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.navigation.autodive import (
+    AUTO_DIVE_RUNTIME_METHOD,
+    AutoDivePreflightResult,
     AutoDiveSettings,
     DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS,
     DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS,
     DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
+    auto_dive_plan_navigation_cell_size,
+    build_auto_dive_preflight_plan,
     build_auto_dive_initial_camera_pose,
-    build_centerline_auto_dive_plan,
+    build_voxel_graph_auto_dive_plan,
 )
 from caveviewer.core.navigation.cache_metadata import cached_centerline_path
 from caveviewer.core.navigation.centerline import (
     CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
     generate_centerline_path,
 )
+from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
 from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
+from caveviewer.core.navigation.voxel_volume import VOXEL_VOLUME_METHOD
 from caveviewer.gui.autodive_blackbox import (
     AutoDiveBlackbox,
     auto_dive_blackbox_path,
@@ -57,6 +64,7 @@ from caveviewer.gui.autodive_controller import (
     AutoDiveController,
     AutoDiveReplanner,
     AutoDiveState,
+    auto_dive_plan_summary,
 )
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
@@ -566,7 +574,8 @@ def _auto_dive_settings_with_env_overrides(settings: AutoDiveSettings) -> AutoDi
         acceleration = _auto_dive_acceleration_from_speed_m_per_second(
             legacy_speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
         )
-    return AutoDiveSettings(
+    return replace(
+        settings,
         render_distance_cells=_env_int(
             "CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS",
             int(settings.render_distance_cells),
@@ -583,10 +592,179 @@ def _auto_dive_settings_with_env_overrides(settings: AutoDiveSettings) -> AutoDi
     )
 
 
-def _auto_dive_diagnostic_sink(blackbox: AutoDiveBlackbox | None):
+def _auto_dive_settings_payload(settings: AutoDiveSettings) -> dict[str, Any]:
+    """Return every effective planner setting for a session record."""
+    try:
+        return dict(asdict(settings))
+    except Exception:
+        return {
+            "render_distance_cells": int(settings.render_distance_cells),
+            "speed_m_per_second": float(settings.speed_m_per_second),
+            "smoothing_radius_cells": int(settings.smoothing_radius_cells),
+            "lookahead_distance_m": float(settings.lookahead_distance_m),
+        }
+
+
+def _auto_dive_navigation_context(
+    manifest: Mapping[str, Any],
+    cache_dir: str | None,
+    settings: AutoDiveSettings,
+) -> dict[str, Any]:
+    """Build bounded cache, algorithm, and coordinate context for diagnostics."""
+    chunks = manifest.get("chunks", {})
+    chunks = chunks if isinstance(chunks, Mapping) else {}
+    map_bounds_min_array: np.ndarray | None = None
+    map_bounds_max_array: np.ndarray | None = None
+    chunk_triangle_count = 0
+    has_chunk_triangle_count = False
+    for info in chunks.values():
+        if not isinstance(info, Mapping):
+            continue
+        try:
+            minimum = np.asarray(info["bounds_min"], dtype=np.float64).reshape(3)
+            maximum = np.asarray(info["bounds_max"], dtype=np.float64).reshape(3)
+            if np.all(np.isfinite(minimum)) and np.all(np.isfinite(maximum)):
+                map_bounds_min_array = (
+                    minimum.copy()
+                    if map_bounds_min_array is None
+                    else np.minimum(map_bounds_min_array, minimum)
+                )
+                map_bounds_max_array = (
+                    maximum.copy()
+                    if map_bounds_max_array is None
+                    else np.maximum(map_bounds_max_array, maximum)
+                )
+        except Exception:
+            pass
+        try:
+            if "triangle_count" in info:
+                chunk_triangle_count += max(0, int(info["triangle_count"]))
+                has_chunk_triangle_count = True
+        except Exception:
+            pass
+
+    navigation = manifest.get("navigation", {})
+    navigation = navigation if isinstance(navigation, Mapping) else {}
+    selected_route_id = navigation.get("recommended_route_id")
+    selected_route = next(
+        (
+            route
+            for route in navigation.get("routes", ())
+            if isinstance(route, Mapping)
+            and (
+                selected_route_id is None
+                or route.get("id") == selected_route_id
+            )
+        ),
+        None,
+    ) if isinstance(navigation.get("routes"), Sequence) else None
+    selected_voxel_summary = (
+        selected_route.get("voxel_corridor")
+        if isinstance(selected_route, Mapping)
+        else None
+    )
+    triangle_count = manifest.get("triangle_count")
+    try:
+        triangle_count = int(triangle_count)
+    except Exception:
+        triangle_count = chunk_triangle_count if has_chunk_triangle_count else None
+
+    cache_manifest_sha256 = None
+    if cache_dir:
+        try:
+            cache_manifest_sha256 = _cache_manifest_sha256(cache_dir)
+        except Exception:
+            cache_manifest_sha256 = None
+
+    def _finite_float(value: Any) -> float | None:
+        try:
+            value = float(value)
+        except Exception:
+            return None
+        return value if math.isfinite(value) else None
+
+    map_bounds_min = (
+        None
+        if map_bounds_min_array is None
+        else [float(value) for value in map_bounds_min_array]
+    )
+    map_bounds_max = (
+        None
+        if map_bounds_max_array is None
+        else [float(value) for value in map_bounds_max_array]
+    )
+    return {
+        "app_version": APP_VERSION,
+        "cache_dir": None if cache_dir is None else os.path.abspath(cache_dir),
+        "cache_manifest_sha256": cache_manifest_sha256,
+        "source_obj": manifest.get("source_obj"),
+        "cache_manifest_version": manifest.get("version"),
+        "chunk_count": len(chunks),
+        "triangle_count": triangle_count,
+        "chunk_size_m": _finite_float(manifest.get("chunk_size")),
+        "footprint_cell_size_m": _finite_float(
+            manifest.get("footprint_cell_size")
+            or navigation.get("footprint_cell_size")
+        ),
+        "map_bounds_min": map_bounds_min,
+        "map_bounds_max": map_bounds_max,
+        "coordinate_frame": {
+            "units": "m",
+            "vertical_axis": "y",
+            "horizontal_axes": ["x", "z"],
+        },
+        "navigation_metadata": {
+            "version": navigation.get("version"),
+            "method": navigation.get("method"),
+            "route_count": navigation.get("route_count"),
+            "recommended_route_id": navigation.get("recommended_route_id"),
+            "surface_driven": navigation.get("surface_driven"),
+            "footprint_source": navigation.get("navigation_footprint_source"),
+            "route_selection_method": navigation.get("route_selection_method"),
+            "voxel_cache": navigation.get("voxel_cache"),
+            "recommended_route_voxel": selected_voxel_summary,
+        },
+        "algorithm_versions": {
+            "runtime": AUTO_DIVE_RUNTIME_METHOD,
+            "centerline": navigation.get("method"),
+            "curvature": CURVATURE_PROFILE_METHOD,
+            "voxel": VOXEL_VOLUME_METHOD,
+            "voxel_branch_lookahead": (
+                selected_voxel_summary.get("branch_lookahead_method")
+                if isinstance(selected_voxel_summary, Mapping)
+                else None
+            ),
+            "voxel_cache": (
+                navigation.get("voxel_cache", {}).get("method")
+                if isinstance(navigation.get("voxel_cache"), Mapping)
+                else None
+            ),
+        },
+        "settings": _auto_dive_settings_payload(settings),
+    }
+
+
+def _auto_dive_diagnostic_sink(
+    blackbox: AutoDiveBlackbox | None,
+    *,
+    phase: str | None = None,
+    position: Sequence[float] | None = None,
+):
     if blackbox is None:
         return None
-    return lambda event, payload: blackbox.record(event, **dict(payload))
+
+    def record(event: str, payload: Mapping[str, Any]) -> None:
+        enriched = dict(payload)
+        if phase is not None:
+            enriched.setdefault("phase", phase)
+        if position is not None:
+            enriched.setdefault(
+                "position",
+                [float(value) for value in position],
+            )
+        blackbox.record(event, **enriched)
+
+    return record
 
 
 SHADER_DIR = str(resource_path("shaders"))
@@ -1051,6 +1229,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._auto_dive_start_manifest: dict | None = None
         self._auto_dive_start_cache_dir: str | None = None
         self._auto_dive_start_position: np.ndarray | None = None
+        self._auto_dive_start_requested_at: float | None = None
         self._initial_auto_dive_pose_executor: ThreadPoolExecutor | None = None
         self._initial_auto_dive_pose_future: Future | None = None
         self._initial_auto_dive_pose_manifest: dict | None = None
@@ -1059,6 +1238,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_auto_dive_pose_start_yaw: float | None = None
         self._initial_auto_dive_pose_start_pitch: float | None = None
         self._initial_auto_dive_pose_start_roll: float | None = None
+        self._auto_dive_start_after_initial_pose = False
         self._texture_validation_executor: ThreadPoolExecutor | None = None
         self._texture_validation_future: Future | None = None
         self._texture_validation_manager: TextureManager | None = None
@@ -2571,9 +2751,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self.manifest is None:
             return None
         try:
+            settings = _auto_dive_settings_from_preferences()
+            cache_dir = getattr(self, "cache_dir", None)
+            if cache_dir is None:
+                return build_auto_dive_initial_camera_pose(
+                    self.manifest,
+                    settings=settings,
+                    require_voxel_graph=True,
+                )
             return build_auto_dive_initial_camera_pose(
                 self.manifest,
-                settings=_auto_dive_settings_from_preferences(),
+                settings=settings,
+                cache_dir=cache_dir,
+                require_voxel_graph=True,
             )
         except NavigationConfigurationError as exc:
             _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
@@ -2596,6 +2786,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 build_auto_dive_initial_camera_pose,
                 self.manifest,
                 settings=settings,
+                cache_dir=self.cache_dir,
+                require_voxel_graph=True,
             )
         except Exception as exc:
             if executor is not None:
@@ -2622,9 +2814,25 @@ class CaveViewerWindow(mglw.WindowConfig):
         if future is None or not future.done():
             return
 
+        start_after_pose = bool(
+            getattr(self, "_auto_dive_start_after_initial_pose", False)
+        )
+        self._auto_dive_start_after_initial_pose = False
         executor = getattr(self, "_initial_auto_dive_pose_executor", None)
         requested_manifest = getattr(self, "_initial_auto_dive_pose_manifest", None)
         requested_cache_dir = getattr(self, "_initial_auto_dive_pose_cache_dir", None)
+
+        def resume_start_if_current() -> None:
+            if (
+                start_after_pose
+                and self.manifest is requested_manifest
+                and self.cache_dir == requested_cache_dir
+                and self.camera is not None
+                and self.world is not None
+                and self._has_map_loaded
+            ):
+                self._start_auto_dive()
+
         start_position = getattr(
             self,
             "_initial_auto_dive_pose_start_position",
@@ -2642,12 +2850,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             initial_pose = future.result()
         except NavigationConfigurationError as exc:
             _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
+            resume_start_if_current()
             return
         except Exception:
             _LOG.exception("Guided Dive initial camera planning failed.")
+            resume_start_if_current()
             return
 
         if initial_pose is None:
+            resume_start_if_current()
             return
         if (
             self.manifest is not requested_manifest
@@ -2658,7 +2869,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         ):
             _LOG.debug("Discarded stale Guided Dive initial camera after map changed.")
             return
-        if self._auto_dive_is_active() or self._auto_dive_start_is_pending():
+        if self._auto_dive_is_active() or getattr(
+            self,
+            "_auto_dive_start_future",
+            None,
+        ) is not None:
             _LOG.debug(
                 "Discarded Guided Dive initial camera because Guided Dive is active."
             )
@@ -2673,6 +2888,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "Skipped Guided Dive initial camera because the camera changed "
                 "before planning finished."
             )
+            resume_start_if_current()
             return
 
         previous_camera = self.camera
@@ -2685,14 +2901,18 @@ class CaveViewerWindow(mglw.WindowConfig):
                 getattr(previous_camera, "mouse_sensitivity", 0.12)
             ),
         )
+        self.camera.roll = math.radians(
+            float(getattr(initial_pose, "roll_deg", 0.0))
+        )
         self._reset_initial_chunk_loading_state()
         _LOG.info(
-            "Initial camera placed at Guided Dive endpoint: "
+            "Initial camera placed at Guided Dive graph entrance: "
             "position=(%.2f, %.2f, %.2f).",
             float(initial_pose.position[0]),
             float(initial_pose.position[1]),
             float(initial_pose.position[2]),
         )
+        resume_start_if_current()
 
     def _camera_angle(self, attribute_name: str) -> float | None:
         camera = getattr(self, "camera", None)
@@ -2775,6 +2995,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if future is None:
             return False
         future.cancel()
+        self._auto_dive_start_after_initial_pose = False
         self._clear_initial_auto_dive_pose_state(shutdown_executor=True)
         _LOG.info("Guided Dive initial camera planning cancelled.")
         return True
@@ -2791,7 +3012,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _auto_dive_start_is_pending(self) -> bool:
-        return getattr(self, "_auto_dive_start_future", None) is not None
+        return bool(
+            getattr(self, "_auto_dive_start_future", None) is not None
+            or getattr(self, "_auto_dive_start_after_initial_pose", False)
+        )
 
     def _toggle_auto_dive(self) -> bool:
         if not self._has_map_loaded or self.camera is None or self.world is None:
@@ -2823,33 +3047,44 @@ class CaveViewerWindow(mglw.WindowConfig):
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         if benchmark_controller is not None and not benchmark_controller.finished:
             return False
-        if self._navigation_guard_enabled:
-            self.camera.position = self._clamp_navigation_position_to_bounds(
-                self.camera.position
-            )
+        initial_pose_future = getattr(
+            self,
+            "_initial_auto_dive_pose_future",
+            None,
+        )
+        if initial_pose_future is not None:
+            # Map load starts a bounded worker that resolves the certified
+            # mesh-graph entrance. Starting preflight from the temporary first
+            # render-chunk center races that worker and can fail a valid map.
+            # Preserve one click and continue automatically once placement has
+            # either applied or been skipped because the user moved manually.
+            self._auto_dive_start_after_initial_pose = True
+            if initial_pose_future.done():
+                self._update_initial_auto_dive_pose()
+            return True
+        # The graph/voxel preflight validates the exact camera position. The
+        # legacy chunk guard only knows coarse mesh bounds and can move a
+        # graph-native start into an occupied voxel before preflight sees it.
+        # Leave the pose untouched here; invalid manual positions must fail
+        # preflight rather than being silently rewritten.
         blackbox = self._auto_dive_blackbox()
         executor: ThreadPoolExecutor | None = None
         try:
             auto_dive_settings = _auto_dive_settings_from_preferences()
+            start_position = np.asarray(self.camera.position, dtype=np.float64).copy()
+            requested_at = time.perf_counter()
+            self._auto_dive_start_requested_at = requested_at
             if blackbox is not None:
                 blackbox.record(
                     "session_started",
                     cache_dir=self.cache_dir,
                     source_obj=self.manifest.get("source_obj"),
-                    settings={
-                        "render_distance_cells": int(
-                            auto_dive_settings.render_distance_cells
-                        ),
-                        "speed_m_per_second": float(
-                            auto_dive_settings.speed_m_per_second
-                        ),
-                        "smoothing_radius_cells": int(
-                            auto_dive_settings.smoothing_radius_cells
-                        ),
-                        "lookahead_distance_m": float(
-                            auto_dive_settings.lookahead_distance_m
-                        ),
-                    },
+                    settings=_auto_dive_settings_payload(auto_dive_settings),
+                    navigation_context=_auto_dive_navigation_context(
+                        self.manifest,
+                        self.cache_dir,
+                        auto_dive_settings,
+                    ),
                     camera={
                         "position": [
                             float(value)
@@ -2860,22 +3095,26 @@ class CaveViewerWindow(mglw.WindowConfig):
                         ],
                         "yaw_deg": math.degrees(float(self.camera.yaw)),
                         "pitch_deg": math.degrees(float(self.camera.pitch)),
+                        "roll_deg": math.degrees(float(getattr(self.camera, "roll", 0.0))),
                     },
                 )
-            start_position = np.asarray(self.camera.position, dtype=np.float64).copy()
             executor = ThreadPoolExecutor(
                 max_workers=1,
                 thread_name_prefix="CaveViewer-AutoDiveStart",
             )
             future = executor.submit(
-                build_centerline_auto_dive_plan,
+                build_auto_dive_preflight_plan,
                 self.manifest,
                 current_position=tuple(float(value) for value in start_position),
                 current_yaw=float(self.camera.yaw),
                 current_pitch=float(self.camera.pitch),
                 settings=auto_dive_settings,
                 cache_dir=self.cache_dir,
-                diagnostics=_auto_dive_diagnostic_sink(blackbox),
+                diagnostics=_auto_dive_diagnostic_sink(
+                    blackbox,
+                    phase="initial_preflight",
+                    position=start_position,
+                ),
             )
         except Exception as exc:
             if executor is not None:
@@ -2885,6 +3124,13 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "auto_dive_unavailable",
                     reason=str(exc),
                     error_type=type(exc).__name__,
+                    plan_phase="initial_preflight",
+                    planning_duration_ms=max(
+                        0.0,
+                        (time.perf_counter() - requested_at) * 1000.0,
+                    )
+                    if "requested_at" in locals()
+                    else None,
                 )
                 blackbox.close()
             _LOG.info("Guided Dive unavailable: %s", exc)
@@ -2901,6 +3147,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             blackbox.record(
                 "auto_dive_plan_requested",
                 position=[float(value) for value in start_position],
+                plan_id="initial",
+                plan_phase="initial_preflight",
             )
         _LOG.info("Guided Dive planning started.")
         return True
@@ -2916,19 +3164,28 @@ class CaveViewerWindow(mglw.WindowConfig):
         requested_manifest = getattr(self, "_auto_dive_start_manifest", None)
         requested_cache_dir = getattr(self, "_auto_dive_start_cache_dir", None)
         start_position = getattr(self, "_auto_dive_start_position", None)
+        requested_at = getattr(self, "_auto_dive_start_requested_at", None)
+        planning_duration_ms = (
+            None
+            if requested_at is None
+            else max(0.0, (time.perf_counter() - requested_at) * 1000.0)
+        )
         self._clear_auto_dive_start_state(shutdown_executor=False)
 
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
 
         try:
-            plan = future.result()
+            preflight = future.result()
         except NavigationConfigurationError as exc:
             if blackbox is not None:
                 blackbox.record(
                     "auto_dive_unavailable",
                     reason=str(exc),
                     error_type=type(exc).__name__,
+                    plan_id="initial",
+                    plan_phase="initial_preflight",
+                    planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             _LOG.info("Guided Dive unavailable: %s", exc)
@@ -2939,10 +3196,48 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "auto_dive_unavailable",
                     reason=str(exc),
                     error_type=type(exc).__name__,
+                    plan_id="initial",
+                    plan_phase="initial_preflight",
+                    planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             _LOG.exception("Guided Dive planning failed.")
             return
+
+        if isinstance(preflight, AutoDivePreflightResult):
+            if not preflight.ready:
+                if blackbox is not None:
+                    blackbox.record(
+                        "auto_dive_preflight_failed",
+                        status=preflight.status,
+                        reason=preflight.reason,
+                        preflight=preflight.diagnostic_payload(),
+                        plan_id="initial",
+                        plan_phase="initial_preflight",
+                        planning_duration_ms=planning_duration_ms,
+                    )
+                    blackbox.close()
+                _LOG.info(
+                    "Guided Dive preflight did not produce a validated route: %s",
+                    preflight.reason,
+                )
+                return
+            plan = preflight.plan
+            assert plan is not None
+            if blackbox is not None:
+                blackbox.record(
+                    "auto_dive_preflight_completed",
+                    status=preflight.status,
+                    reason=preflight.reason,
+                    preflight=preflight.diagnostic_payload(),
+                    plan_id="initial",
+                    plan_phase="initial_preflight",
+                    planning_duration_ms=planning_duration_ms,
+                )
+        else:
+            # Keep the handoff tolerant of test doubles and older embedders
+            # while production startup always uses AutoDivePreflightResult.
+            plan = preflight
 
         if (
             self.manifest is not requested_manifest
@@ -2960,6 +3255,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                         if start_position is None
                         else [float(value) for value in start_position]
                     ),
+                    plan_id="initial",
+                    plan_phase="initial_preflight",
+                    planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             _LOG.info("Discarded stale Guided Dive plan after map changed.")
@@ -2970,10 +3268,21 @@ class CaveViewerWindow(mglw.WindowConfig):
                 blackbox.record(
                     "auto_dive_plan_discarded",
                     reason="missing_settings",
+                    plan_id="initial",
+                    plan_phase="initial_preflight",
+                    planning_duration_ms=planning_duration_ms,
                 )
                 blackbox.close()
             return
 
+        if blackbox is not None:
+            blackbox.record(
+                "auto_dive_plan_completed",
+                plan_id="initial",
+                plan_phase="initial_preflight",
+                planning_duration_ms=planning_duration_ms,
+                plan=auto_dive_plan_summary(plan),
+            )
         self._activate_auto_dive_plan(plan, auto_dive_settings, blackbox)
 
     def _clear_auto_dive_start_state(self, *, shutdown_executor: bool) -> None:
@@ -2987,19 +3296,37 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._auto_dive_start_manifest = None
         self._auto_dive_start_cache_dir = None
         self._auto_dive_start_position = None
+        self._auto_dive_start_requested_at = None
 
     def _cancel_auto_dive_start(self) -> bool:
         future = getattr(self, "_auto_dive_start_future", None)
         blackbox = getattr(self, "_auto_dive_start_blackbox", None)
         position = getattr(self, "_auto_dive_start_position", None)
+        requested_at = getattr(self, "_auto_dive_start_requested_at", None)
         if future is None:
-            return False
+            if not bool(
+                getattr(self, "_auto_dive_start_after_initial_pose", False)
+            ):
+                return False
+            self._auto_dive_start_after_initial_pose = False
+            _LOG.info("Queued Guided Dive start cancelled.")
+            return True
         future.cancel()
         if blackbox is not None:
             blackbox.record(
                 "auto_dive_plan_cancelled",
                 position=(
                     None if position is None else [float(value) for value in position]
+                ),
+                plan_id="initial",
+                plan_phase="initial_preflight",
+                planning_duration_ms=(
+                    None
+                    if requested_at is None
+                    else max(
+                        0.0,
+                        (time.perf_counter() - requested_at) * 1000.0,
+                    )
                 ),
             )
             blackbox.close()
@@ -3035,16 +3362,23 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.world.config.load_radius_cells = self.render_distance_stepper.value
         replan_distance_m = max(
             0.5,
-            float(plan.centerline_path.footprint_cell_size),
+            float(auto_dive_plan_navigation_cell_size(plan)),
         )
+        replanner_kwargs = {
+            "plan_builder": build_voxel_graph_auto_dive_plan,
+            "cache_dir": self.cache_dir,
+            "blackbox": blackbox,
+        }
+        navigation_route_id = getattr(plan, "navigation_route_id", None)
+        if navigation_route_id is not None:
+            replanner_kwargs["navigation_route_id"] = navigation_route_id
         controller = AutoDiveController(
             plan,
             perf_counter=lambda: time.perf_counter(),
             replanner=AutoDiveReplanner(
                 self.manifest,
                 auto_dive_settings,
-                cache_dir=self.cache_dir,
-                blackbox=blackbox,
+                **replanner_kwargs,
             ),
             replan_distance_m=replan_distance_m,
             blackbox=blackbox,
@@ -3082,6 +3416,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             getattr(self, "_auto_dive_previous_render_distance", None) is not None
         ) or (
             getattr(self, "_auto_dive_start_future", None) is not None
+        ) or (
+            getattr(self, "_auto_dive_start_after_initial_pose", False)
         )
         start_cancelled = self._cancel_auto_dive_start()
         if controller is not None:
@@ -3114,10 +3450,19 @@ class CaveViewerWindow(mglw.WindowConfig):
             None,
         )
         if callable(observe_assist_position):
-            observe_assist_position(self.camera.position)
+            observe_assist_position(
+                self.camera.position,
+                now=now,
+                yaw=float(getattr(self.camera, "yaw", 0.0)),
+                pitch=float(getattr(self.camera, "pitch", 0.0)),
+                roll=float(getattr(self.camera, "roll", 0.0)),
+                world=self.world,
+            )
         state = controller.update(self.camera, self.world, now=now)
         navigation_clamped = False
-        if self._navigation_guard_enabled:
+        plan = getattr(controller, "plan", None)
+        graph_native_plan = getattr(plan, "navigation_graph", None) is not None
+        if self._navigation_guard_enabled and not graph_native_plan:
             before_clamp = self.camera.position.copy()
             self.camera.position = self._clamp_navigation_position_to_bounds(
                 self.camera.position,
@@ -3162,6 +3507,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.minimap.set_active_route_points_xz(())
             return
         if current_state is AutoDiveState.COMPLETE:
+            if bool(getattr(controller.plan, "terminal_reached", False)):
+                _LOG.info(
+                    "End of cave reached. No valid forward passage remains."
+                )
             self._stop_auto_dive(completed=True)
 
     def _render_auto_dive_progress(self, window_size: tuple[int, int]) -> None:
@@ -3173,7 +3522,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "planning guided dive",
                 None,
                 title="",
-                note="Finding a forward route…",
+                note="Validating the cave route…",
             )
             return
 

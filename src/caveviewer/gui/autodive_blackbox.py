@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
-import json
 import math
 import os
 import threading
@@ -13,8 +12,14 @@ from typing import Any
 
 import numpy as np
 
+from caveviewer.core.diagnostics.application import (
+    append_jsonl_record,
+    get_active_application_diagnostics,
+)
+
 
 AUTO_DIVE_BLACKBOX_FILENAME = "auto_dive_debug.jsonl"
+AUTO_DIVE_BLACKBOX_SCHEMA_VERSION = 2
 
 
 class AutoDiveBlackbox:
@@ -37,6 +42,13 @@ class AutoDiveBlackbox:
         self._lock = threading.Lock()
         self._closed = False
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        application_diagnostics = get_active_application_diagnostics()
+        if application_diagnostics is not None:
+            application_diagnostics.bind_path(
+                self.path,
+                cache_dir=os.path.dirname(self.path),
+                source="guided_dive_blackbox",
+            )
 
     def record(self, event: str, **payload: Any) -> None:
         """Append one JSON event, ignoring logging failures."""
@@ -47,15 +59,16 @@ class AutoDiveBlackbox:
             "session_id": self.session_id,
             "event": str(event),
             **payload,
+            "schema_version": AUTO_DIVE_BLACKBOX_SCHEMA_VERSION,
         }
-        line = json.dumps(_json_safe(record), sort_keys=True, separators=(",", ":"))
         try:
             with self._lock:
                 if self._closed:
                     return
-                with open(self.path, "a", encoding="utf-8") as file_obj:
-                    file_obj.write(line)
-                    file_obj.write("\n")
+                append_jsonl_record(
+                    self.path,
+                    _json_safe(record),
+                )
         except Exception:
             return
 

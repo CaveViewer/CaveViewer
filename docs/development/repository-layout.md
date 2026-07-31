@@ -35,6 +35,7 @@ src/caveviewer/core/chunking/staging.py        cache staging and import resume c
 src/caveviewer/core/chunking/upload.py         CPU upload preparation and vertex packing
 src/caveviewer/core/diagnostics/              diagnostics and logging policy
 src/caveviewer/core/diagnostics/logging.py     runtime logging and console progress
+src/caveviewer/core/diagnostics/application.py  process lifecycle and exception diagnostics
 src/caveviewer/core/hardware/                 hardware capability and memory policy
 src/caveviewer/core/hardware/gpu_memory.py     active-GPU memory detection and fallbacks
 src/caveviewer/core/hardware/memory_targets.py RAM/GPU utilization target parsing
@@ -43,6 +44,9 @@ src/caveviewer/core/streaming/                 runtime chunk streaming policy
 src/caveviewer/core/streaming/world.py         worker lifecycle and render callbacks
 src/caveviewer/core/streaming/scheduler.py     backlog, selection, and eviction policy
 src/caveviewer/core/streaming/budget.py        residency budget calculation
+src/caveviewer/core/navigation/                 centerline, curvature, and voxel route policy
+src/caveviewer/core/navigation/voxel_cache.py   cache-time voxel graph/index models and summaries
+src/caveviewer/core/navigation/voxel_store.py   in-memory and bounded-LRU navigation voxel chunks
 src/caveviewer/core/workers/                  worker allocation policy
 src/caveviewer/core/workers/allocation.py      CPU caps and RAM admission policy
 src/caveviewer/core/preferences/               preference schema and validation policy

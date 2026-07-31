@@ -27,6 +27,12 @@ from caveviewer.core.navigation.centerline import (
     navigable_footprint_neighbors,
     positive_manifest_float,
 )
+from caveviewer.core.navigation.voxel_cache import (
+    NAVIGATION_VOXEL_CACHE_METHOD,
+    NAVIGATION_VOXEL_CACHE_VERSION,
+    load_cached_navigation_voxel_volume,
+    supported_navigation_voxel_cache_identity,
+)
 from caveviewer.core.navigation.route import NavigationConfigurationError
 
 
@@ -35,7 +41,12 @@ NAVIGATION_METADATA_METHOD = "footprint_centerline_paths_v1"
 NAVIGATION_METADATA_KEY = "navigation"
 NAVIGATION_SURFACE_Y_SEARCH_RADIUS_CELLS = 4
 NAVIGATION_SURFACE_Y_HISTOGRAM_BINS = 96
+# The navigation footprint is inferred from surface vertices.  The voxel
+# builder later normalizes this candidate component to the mesh-backed cells
+# it can actually sample, so retain the established span cap here while
+# keeping that evidence-driven normalization explicit at cache build time.
 NAVIGATION_SURFACE_SPAN_FILL_MAX_CELLS = 32
+NAVIGATION_SURFACE_SPAN_SUPPORT_MAX_CELLS = 32
 # Suggested runtime Guided Dive Y smoothing radius for viewers that expose a
 # preference. Metadata stores raw route samples; smoothing is applied by the
 # route planner so the radius can be tuned without rebuilding cache.
@@ -141,6 +152,9 @@ def build_navigation_metadata(
             candidate_count=candidate.candidate_count,
             starts_at_navigation_start=candidate.starts_at_navigation_start,
             navigation_start_distance_m=candidate.navigation_start_distance_m,
+            voxel_sampling_cells=_parse_flat_cells(
+                source_manifest.get("_voxel_sampling_cells")
+            ),
         )
         for index, candidate in enumerate(selected_candidates)
     ]
@@ -175,6 +189,7 @@ def cached_centerline_path(
     manifest: Mapping[str, Any],
     *,
     route_id: str | None = None,
+    cache_dir: str | None = None,
 ) -> CenterlinePath | None:
     """Return the selected cached centerline path, if the manifest has one."""
     navigation = manifest.get(NAVIGATION_METADATA_KEY)
@@ -202,7 +217,11 @@ def cached_centerline_path(
             break
     if selected_route is None:
         return None
-    return _centerline_path_from_metadata_route(manifest, selected_route)
+    return _centerline_path_from_metadata_route(
+        manifest,
+        selected_route,
+        cache_dir=cache_dir,
+    )
 
 
 def _select_navigation_route_candidate(
@@ -571,6 +590,8 @@ def _path_with_cells(
         cached_y_ranges=path.cached_y_ranges,
         cached_clearance_margins=path.cached_clearance_margins,
         cached_recovery_hotspots=path.cached_recovery_hotspots,
+        cached_voxel_volume=path.cached_voxel_volume,
+        cached_voxel_metrics=path.cached_voxel_metrics,
     )
 
 
@@ -633,6 +654,7 @@ def _metadata_route_for_centerline_path(
     candidate_count: int = 1,
     starts_at_navigation_start: bool = False,
     navigation_start_distance_m: float | None = None,
+    voxel_sampling_cells: Sequence[FootprintCell] = (),
 ) -> dict[str, Any]:
     route_id = f"centerline-{index}"
     component_cells = tuple(sorted(path.component_cells))
@@ -654,6 +676,9 @@ def _metadata_route_for_centerline_path(
             path.endpoint_threshold_clearance_cells
         ),
     }
+    support_cells = tuple(sorted(set(voxel_sampling_cells)))
+    if support_cells:
+        route["voxel_sampling_cells"] = _flat_cells(support_cells)
     if starts_at_navigation_start:
         route["starts_at_navigation_start"] = True
     if navigation_start_distance_m is not None:
@@ -853,6 +878,8 @@ def _recommended_route_id(routes: Sequence[Mapping[str, Any]]) -> str:
 def _centerline_path_from_metadata_route(
     manifest: Mapping[str, Any],
     route: Mapping[str, Any],
+    *,
+    cache_dir: str | None = None,
 ) -> CenterlinePath | None:
     try:
         cell_size = positive_manifest_float(
@@ -918,6 +945,19 @@ def _centerline_path_from_metadata_route(
         cached_recovery_hotspots = _parse_recovery_hotspots(
             route.get("recovery_hotspots")
         )
+        cached_voxel_metrics = _parse_voxel_metrics(
+            route.get("voxel_corridor")
+        )
+        route_id = _string_or_none(route.get("id"))
+        cached_voxel_volume = (
+            None
+            if cache_dir is None or route_id is None
+            else load_cached_navigation_voxel_volume(
+                cache_dir,
+                manifest,
+                route_id,
+            )
+        )
         clearance_scores = clearance_scores_for_footprint(component)
         length_m = _float_or_default(
             route.get("length_m"),
@@ -954,6 +994,8 @@ def _centerline_path_from_metadata_route(
         cached_y_ranges=cached_y_ranges,
         cached_clearance_margins=cached_clearance_margins,
         cached_recovery_hotspots=cached_recovery_hotspots,
+        cached_voxel_volume=cached_voxel_volume,
+        cached_voxel_metrics=cached_voxel_metrics,
     )
 
 
@@ -1057,6 +1099,15 @@ def _parse_recovery_hotspots(
     straight_runs = _parse_float_sequence(value.get("straight_run_cells"))
     corridor_runs = _parse_float_sequence(value.get("corridor_run_cells"))
     degree_scores = _parse_float_sequence(value.get("degree_scores"))
+    available_volumes = _parse_float_sequence(
+        value.get("available_volume_m3")
+    )
+    volume_per_route = _parse_float_sequence(
+        value.get("volume_per_route_m")
+    )
+    voxel_clearance = _parse_float_sequence(
+        value.get("voxel_mean_clearance_m")
+    )
     parsed: dict[FootprintCell, dict[str, float]] = {}
     for index, cell in enumerate(cells):
         hotspot = {"score": float(scores[index])}
@@ -1068,7 +1119,145 @@ def _parse_recovery_hotspots(
             hotspot["corridor_run_cells"] = float(corridor_runs[index])
         if index < len(degree_scores):
             hotspot["degree_score"] = float(degree_scores[index])
+        if index < len(available_volumes):
+            hotspot["available_volume_m3"] = float(
+                available_volumes[index]
+            )
+        if index < len(volume_per_route):
+            hotspot["volume_per_route_m"] = float(volume_per_route[index])
+        if index < len(voxel_clearance):
+            hotspot["voxel_mean_clearance_m"] = float(voxel_clearance[index])
         parsed[cell] = hotspot
+    return parsed
+
+
+def _parse_voxel_metrics(value: object) -> dict[str, Any] | None:
+    """Parse compact cache-time voxel metrics without loading the sidecar."""
+    if not isinstance(value, Mapping):
+        return None
+    if not supported_navigation_voxel_cache_identity(
+        value.get("version"),
+        value.get("method"),
+    ):
+        return None
+    parsed: dict[str, Any] = {
+        "version": value.get("version"),
+        "method": value.get("method"),
+    }
+    for key in (
+        "curvature_method",
+        "coverage_scope",
+        "model_kind",
+        "navigation_graph_method",
+        "branch_lookahead_method",
+    ):
+        raw = value.get(key)
+        if isinstance(raw, str):
+            parsed[key] = raw
+    numeric_keys = (
+        "voxel_size_m",
+        "tile_size_m",
+        "fine_voxel_size_m",
+        "fine_tile_radius_m",
+        "max_tiles",
+        "max_fine_tiles",
+        "max_fine_tile_cells",
+        "max_cells",
+        "max_surface_samples",
+        "available_volume_m3",
+        "volume_per_route_m",
+        "free_cell_count",
+        "seed_count",
+        "surface_fraction",
+        "min_clearance_m",
+        "mean_clearance_m",
+        "clearance_sample_count",
+        "route_length_m",
+        "triangle_count",
+        "surface_sample_count",
+        "curvature_region_count",
+        "selected_region_count",
+        "tile_count",
+        "fine_tile_count",
+        "coverage_cell_count",
+        "tiles_skipped",
+        "navigation_cell_count",
+        "filled_free_cell_count",
+        "progress_max_m",
+    )
+    float_keys = {
+        "voxel_size_m",
+        "tile_size_m",
+        "fine_voxel_size_m",
+        "fine_tile_radius_m",
+        "available_volume_m3",
+        "volume_per_route_m",
+        "surface_fraction",
+        "min_clearance_m",
+        "mean_clearance_m",
+        "route_length_m",
+        "progress_max_m",
+    }
+    for key in numeric_keys:
+        raw = value.get(key)
+        if raw is None:
+            continue
+        try:
+            parsed[key] = float(raw) if key in float_keys else int(raw)
+        except (TypeError, ValueError):
+            continue
+    for key in (
+        "built",
+        "sampling_truncated",
+        "fine_sampling_truncated",
+        "flood_fill_truncated",
+        "coverage_includes_preceding_curvature",
+    ):
+        if key in value:
+            parsed[key] = bool(value.get(key))
+    for key in ("bounds_min", "bounds_max"):
+        raw = value.get(key)
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+            continue
+        if len(raw) != 3:
+            continue
+        try:
+            bounds = [float(item) for item in raw]
+        except (TypeError, ValueError):
+            continue
+        if all(math.isfinite(item) for item in bounds):
+            parsed[key] = bounds
+    raw_regions = value.get("selected_regions")
+    if isinstance(raw_regions, Sequence) and not isinstance(
+        raw_regions,
+        (str, bytes),
+    ):
+        regions: list[dict[str, Any]] = []
+        for raw_region in raw_regions[:8]:
+            if not isinstance(raw_region, Mapping):
+                continue
+            region: dict[str, Any] = {}
+            for key in ("start_index", "end_index", "max_rank_0_100"):
+                raw = raw_region.get(key)
+                try:
+                    region[key] = int(raw)
+                except (TypeError, ValueError):
+                    continue
+            for key in (
+                "start_distance_m",
+                "end_distance_m",
+                "max_curvature_density_rad_per_m",
+            ):
+                raw = raw_region.get(key)
+                try:
+                    number = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(number):
+                    region[key] = number
+            if region:
+                regions.append(region)
+        parsed["selected_regions"] = regions
     return parsed
 
 
@@ -1097,6 +1286,10 @@ def _navigation_manifest_from_surface_positions(
         surface_cells,
         max_span_cells=NAVIGATION_SURFACE_SPAN_FILL_MAX_CELLS,
     )
+    sampling_cells = _surface_span_filled_footprint_cells(
+        surface_cells,
+        max_span_cells=NAVIGATION_SURFACE_SPAN_SUPPORT_MAX_CELLS,
+    )
     navigation_manifest = dict(manifest)
     navigation_manifest["footprint_cell_size"] = cell_size
     navigation_manifest["footprint_cells"] = _flat_cells(
@@ -1104,6 +1297,7 @@ def _navigation_manifest_from_surface_positions(
     )
     navigation_manifest["surface_footprint_cell_count"] = len(surface_cells)
     navigation_manifest["navigation_footprint_source"] = "surface_span_fill_v1"
+    navigation_manifest["_voxel_sampling_cells"] = _flat_cells(sampling_cells)
     return navigation_manifest
 
 
