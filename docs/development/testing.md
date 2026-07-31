@@ -131,12 +131,24 @@ The default Guided Dive startup goal is `easiest_terminal`: it chooses the
 shortest known terminal and uses the same shortest-physical prepared-graph
 path before exact graph, voxel, and cached-mesh validation. It then executes
 that preflighted route without continuous or speculative replacement. A V10
-cache persists a compact path from an exact-mesh seeded component while
-retaining the voxel atlas, coarse graph, and fine evidence. Every executable
-edge and the camera ingress are exact-validated again at startup; an incomplete
-prefix is not valid. Rebuild V9 or older caches before this test because they
-do not contain the production mesh graph. Artifact and graph phases can still
-pass while full-cave route preflight correctly fails.
+cache persists one compact, goal-directed path to the route's real endpoint
+while retaining the voxel atlas, coarse graph, and fine evidence. Its bounded
+multi-entry search must bypass an isolated early route sample automatically;
+both immediate lattice edges and longer guide portals require sampled voxel
+evidence plus an exact mesh check, and a failed coarse search gets one 1 m
+corridor retry. Every executable edge and the camera ingress are exact-validated
+again at startup; an intermediate hint or incomplete prefix is not valid.
+Rebuild V9 or older caches before this test because they do not contain the
+production mesh graph. Artifact and graph phases can still pass while full-cave
+route preflight correctly fails.
+Large-map regression fixtures must also prove that whole-map and average-chunk
+triangle thresholds disable only optional speculative recovery. They must not
+make the lazy exact collision guard unavailable or cause a render-only cache to
+be published solely because a map exceeds those thresholds.
+GUI startup coverage must exercise a Guided Dive click while asynchronous
+graph-entrance placement is pending. The click is retained, placement finishes
+without blocking the render thread, and preflight starts from that pose; a
+manual camera change still prevents automatic repositioning.
 Use the explicit farthest/frontier profile only when testing continuation
 behavior on incomplete or mesh-blocked evidence.
 During a live Guided Dive, a `replan_pacing_hold_started` event is expected

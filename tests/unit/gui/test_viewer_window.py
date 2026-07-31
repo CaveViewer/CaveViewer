@@ -587,6 +587,7 @@ def _initial_auto_dive_pose_window():
     window._initial_auto_dive_pose_start_yaw = None
     window._initial_auto_dive_pose_start_pitch = None
     window._initial_auto_dive_pose_start_roll = None
+    window._auto_dive_start_after_initial_pose = False
     window._initial_chunks_loaded = True
     window._initial_visual_ready = True
     window._initial_visual_ready_logged = True
@@ -707,6 +708,39 @@ def test_initial_auto_dive_pose_cancel_shuts_down_executor():
     assert window._initial_auto_dive_pose_future is None
 
 
+def test_auto_dive_start_waits_for_initial_graph_pose():
+    window = _initial_auto_dive_pose_window()
+    pose = SimpleNamespace(
+        position=(10.0, 20.0, 30.0),
+        yaw_deg=45.0,
+        pitch_deg=8.0,
+    )
+    future = FakeFuture(pose, done=False)
+    executor = FakeExecutor(future)
+    window._initial_auto_dive_pose_future = future
+    window._initial_auto_dive_pose_executor = executor
+    window._initial_auto_dive_pose_manifest = window.manifest
+    window._initial_auto_dive_pose_cache_dir = window.cache_dir
+    window._initial_auto_dive_pose_start_position = window.camera.position.copy()
+    window._initial_auto_dive_pose_start_yaw = window.camera.yaw
+    window._initial_auto_dive_pose_start_pitch = window.camera.pitch
+    window._initial_auto_dive_pose_start_roll = window.camera.roll
+
+    assert window._start_auto_dive() is True
+    assert window._auto_dive_start_after_initial_pose is True
+    assert window._auto_dive_start_future is None
+
+    resumed = []
+    window._start_auto_dive = (
+        lambda: resumed.append(tuple(window.camera.position)) or True
+    )
+    future._done = True
+    window._update_initial_auto_dive_pose()
+
+    assert resumed == [(10.0, 20.0, 30.0)]
+    assert window._auto_dive_start_after_initial_pose is False
+
+
 def _auto_dive_start_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.manifest = {"source_obj": "/maps/devils_eye.obj"}
@@ -729,6 +763,7 @@ def _auto_dive_start_window():
     window._auto_dive_start_manifest = None
     window._auto_dive_start_cache_dir = None
     window._auto_dive_start_position = None
+    window._auto_dive_start_after_initial_pose = False
     window.render_distance_stepper = SimpleNamespace(
         value=3,
         min_value=1,

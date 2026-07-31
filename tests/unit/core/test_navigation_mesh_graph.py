@@ -11,6 +11,7 @@ from caveviewer.core.navigation.mesh_graph import (
     MESH_NAVIGATION_GRAPH_METHOD,
     MeshNavigationGraphAnchor,
     MeshNavigationGraphConfig,
+    build_goal_directed_seeded_mesh_navigation_path_graph,
     build_mesh_anchored_navigation_graph,
     build_mesh_navigation_graph,
     build_seeded_mesh_navigation_path_graph,
@@ -263,6 +264,169 @@ def test_seeded_mesh_graph_fails_closed_when_component_hits_node_limit():
     assert result.details["reason"] == "seeded_mesh_graph_node_limit_reached"
 
 
+def test_goal_directed_mesh_graph_reaches_known_terminal_without_full_flood():
+    free_keys = {(x, 0, 0) for x in range(9)}
+
+    result = build_goal_directed_seeded_mesh_navigation_path_graph(
+        ((0.5, 0.5, 0.5),),
+        footprint_cell_size_m=32.0,
+        component_cells=((0, 0),),
+        point_probe=_grid_probe(free_keys, spacing_m=1.0),
+        edge_is_clear=lambda _first, _second: True,
+        terminal_point=(8.5, 0.5, 0.5),
+        config=MeshNavigationGraphConfig(
+            horizontal_sample_spacing_m=1.0,
+            vertical_sample_spacing_m=1.0,
+            max_nodes=64,
+            max_edge_distance_m=4.0,
+            max_vertical_edge_distance_m=4.0,
+        ),
+    )
+
+    assert result.graph is not None
+    assert result.details["reason"] == (
+        "goal_directed_mesh_terminal_path_built"
+    )
+    assert result.details["search_method"] == "weighted_a_star"
+    assert result.details["expanded_node_count"] < 16
+    assert result.details["terminal_attachment_distance_m"] <= math.sqrt(3.0)
+    assert result.graph.terminal_count == 1
+    assert max(node.center[0] for node in result.graph.nodes.values()) >= 7.5
+
+
+def test_goal_directed_mesh_graph_uses_later_entry_when_first_is_isolated():
+    free_keys = {(0, 0, 0), *((x, 0, 0) for x in range(3, 9))}
+    guides = tuple((float(x) + 0.5, 0.5, 0.5) for x in range(9))
+
+    result = build_goal_directed_seeded_mesh_navigation_path_graph(
+        (guides[0], guides[3]),
+        footprint_cell_size_m=32.0,
+        component_cells=((0, 0),),
+        point_probe=_grid_probe(free_keys, spacing_m=1.0),
+        edge_is_clear=lambda _first, _second: True,
+        terminal_point=guides[-1],
+        route_guide_points=guides,
+        config=MeshNavigationGraphConfig(
+            horizontal_sample_spacing_m=1.0,
+            vertical_sample_spacing_m=1.0,
+            max_nodes=64,
+            max_edge_distance_m=4.0,
+            max_vertical_edge_distance_m=4.0,
+        ),
+    )
+
+    assert result.graph is not None
+    assert result.details["entry_seed_candidate_count"] == 2
+    assert result.details["seed_hint_index"] == 1
+    assert min(node.center[0] for node in result.graph.nodes.values()) == 3.5
+    assert result.graph.terminal_count == 1
+
+
+def test_goal_directed_mesh_graph_uses_exact_voxel_sampled_guide_portal():
+    def edge_is_clear(first, second):
+        return math.dist(first, second) >= 5.0
+
+    result = build_goal_directed_seeded_mesh_navigation_path_graph(
+        ((1.0, 1.0, 1.0),),
+        footprint_cell_size_m=32.0,
+        component_cells=((0, 0),),
+        point_probe=lambda _point: (True, 2.0),
+        edge_is_clear=edge_is_clear,
+        terminal_point=(7.0, 1.0, 1.0),
+        route_guide_points=((1.0, 1.0, 1.0), (7.0, 1.0, 1.0)),
+        config=MeshNavigationGraphConfig(
+            horizontal_sample_spacing_m=2.0,
+            vertical_sample_spacing_m=2.0,
+            max_nodes=64,
+            max_edge_distance_m=8.0,
+            max_vertical_edge_distance_m=4.0,
+        ),
+    )
+
+    assert result.graph is not None
+    assert result.details["guided_portal_accepted_count"] >= 1
+    assert result.details["guided_portal_voxel_probe_count"] >= 1
+    assert len(result.graph.nodes) == 2
+    assert result.graph.max_edge_distance_m == 6.0
+    assert result.graph.motion_geometry_safe is True
+
+
+def test_goal_directed_mesh_graph_rejects_guide_portal_without_voxel_evidence():
+    endpoints = {(1.0, 1.0, 1.0), (7.0, 1.0, 1.0)}
+
+    result = build_goal_directed_seeded_mesh_navigation_path_graph(
+        ((1.0, 1.0, 1.0),),
+        footprint_cell_size_m=32.0,
+        component_cells=((0, 0),),
+        point_probe=lambda point: (
+            (True, 2.0) if tuple(point) in endpoints else None
+        ),
+        edge_is_clear=lambda _first, _second: True,
+        terminal_point=(7.0, 1.0, 1.0),
+        route_guide_points=((1.0, 1.0, 1.0), (7.0, 1.0, 1.0)),
+        config=MeshNavigationGraphConfig(
+            horizontal_sample_spacing_m=2.0,
+            vertical_sample_spacing_m=2.0,
+            max_nodes=64,
+            max_edge_distance_m=8.0,
+            max_vertical_edge_distance_m=4.0,
+        ),
+    )
+
+    assert result.graph is None
+    assert result.details["guided_portal_voxel_rejection_count"] >= 1
+    assert result.details["reason"] == (
+        "goal_directed_mesh_graph_terminal_unreachable"
+    )
+
+
+def test_goal_directed_mesh_graph_rejects_blocked_local_edge_midpoint():
+    free_keys = {
+        (0, 0, 0),
+        (1, 0, 0),
+        (0, 0, 1),
+        (1, 0, 1),
+        (2, 0, 0),
+        (3, 0, 0),
+    }
+    blocked_midpoint = (1.0, 0.5, 0.5)
+
+    def point_probe(point):
+        if tuple(point) == blocked_midpoint:
+            return False, 0.0
+        key = tuple(int(math.floor(value)) for value in point)
+        return (True, 2.0) if key in free_keys else None
+
+    result = build_goal_directed_seeded_mesh_navigation_path_graph(
+        ((0.5, 0.5, 0.5),),
+        footprint_cell_size_m=32.0,
+        component_cells=((0, 0),),
+        point_probe=point_probe,
+        edge_is_clear=lambda _first, _second: True,
+        terminal_point=(3.5, 0.5, 0.5),
+        route_guide_points=((0.5, 0.5, 0.5), (3.5, 0.5, 0.5)),
+        config=MeshNavigationGraphConfig(
+            horizontal_sample_spacing_m=1.0,
+            vertical_sample_spacing_m=1.0,
+            max_nodes=64,
+            max_edge_candidates_per_node=12,
+            max_edge_distance_m=1.75,
+            max_vertical_edge_distance_m=1.0,
+        ),
+    )
+
+    assert result.graph is not None
+    assert result.details["edge_voxel_probe_count"] > 0
+    assert result.details["edge_voxel_rejection_count"] > 0
+    route_centers = tuple(node.center for node in result.graph.nodes.values())
+    assert any(center[2] > 0.5 for center in route_centers)
+    assert all(
+        {edge.source, edge.target} != {(0, 0, 0), (1, 0, 0)}
+        for edges in result.graph.edges.values()
+        for edge in edges
+    )
+
+
 def _manifest() -> dict[str, object]:
     return {
         "footprint_cell_size": 8.0,
@@ -275,9 +439,13 @@ def _manifest() -> dict[str, object]:
     }
 
 
-def _grid_probe(free_keys: set[tuple[int, int, int]]):
+def _grid_probe(
+    free_keys: set[tuple[int, int, int]],
+    *,
+    spacing_m: float = 2.0,
+):
     def probe(point: tuple[float, float, float]):
-        key = tuple(int(math.floor(value / 2.0)) for value in point)
+        key = tuple(int(math.floor(value / spacing_m)) for value in point)
         if key not in free_keys:
             return None
         return True, 2.0

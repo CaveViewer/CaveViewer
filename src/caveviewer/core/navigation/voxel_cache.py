@@ -84,8 +84,9 @@ from caveviewer.core.navigation.mesh_graph import (
     MESH_NAVIGATION_GRAPH_METHOD,
     MeshEdgeSafetyCheck,
     MeshNavigationGraphAnchor,
+    MeshNavigationGraphBuildResult,
     MeshNavigationGraphConfig,
-    build_seeded_mesh_navigation_path_graph,
+    build_goal_directed_seeded_mesh_navigation_path_graph,
 )
 from caveviewer.core.navigation.voxel_store import (
     DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_BYTES,
@@ -762,6 +763,11 @@ class NavigationVoxelAtlas:
     prepared_graph: NavigationVoxelGraph | None = None
     prepared_3d_graph: NavigationVoxel3DGraph | None = None
     prepared_mesh_graph: NavigationVoxel3DGraph | None = None
+    # Maximum bounded camera-to-roadmap ingress considered at preflight.  The
+    # connector is still accepted only after exact voxel and cached-mesh
+    # validation; persisting this build policy prevents runtime behavior from
+    # depending on per-map environment variables.
+    mesh_graph_entry_anchor_radius_m: float = 0.0
     fine_tiles: tuple[LocalVoxelVolume, ...] = ()
     chunk_store: NavigationVoxelChunkStore | None = None
     _probe_tile_bucket_size_m: float = field(
@@ -5035,6 +5041,9 @@ def serialize_navigation_voxel_volume(
                 if volume.prepared_mesh_graph is None
                 else serialize_navigation_voxel_3d_graph(volume.prepared_mesh_graph)
             ),
+            "mesh_graph_entry_anchor_radius_m": float(
+                volume.mesh_graph_entry_anchor_radius_m
+            ),
         }
     return serialize_local_voxel_volume(volume)
 
@@ -5213,6 +5222,18 @@ def deserialize_navigation_voxel_volume(
                 tuple(tiles),
                 tuple(fine_tiles),
             )
+        try:
+            mesh_entry_radius_m = float(
+                payload.get("mesh_graph_entry_anchor_radius_m", 0.0)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "cached mesh graph entry anchor radius is malformed"
+            ) from exc
+        if not math.isfinite(mesh_entry_radius_m) or mesh_entry_radius_m < 0.0:
+            raise ValueError(
+                "cached mesh graph entry anchor radius is invalid"
+            )
         return NavigationVoxelAtlas(
             tiles=tuple(tiles),
             coverage_scope=str(
@@ -5222,6 +5243,7 @@ def deserialize_navigation_voxel_volume(
             prepared_graph=prepared_graph,
             prepared_3d_graph=prepared_3d_graph,
             prepared_mesh_graph=prepared_mesh_graph,
+            mesh_graph_entry_anchor_radius_m=mesh_entry_radius_m,
             fine_tiles=tuple(fine_tiles),
             chunk_store=resolved_chunk_store,
         )
@@ -5906,8 +5928,8 @@ def _build_route_voxel_atlas(
             prepared_3d_graph=prepared_3d_graph,
         )
         mesh_config = config.mesh_navigation_graph_config()
-        mesh_build = build_seeded_mesh_navigation_path_graph(
-            points[:1],
+        mesh_build = _build_adaptive_seeded_mesh_navigation_path(
+            points,
             footprint_cell_size_m=cell_size,
             component_cells=requested_component_cell_set,
             point_probe=lambda point: provisional_atlas.probe_point(
@@ -5915,8 +5937,8 @@ def _build_route_voxel_atlas(
                 include_clearance=True,
             ),
             edge_is_clear=mesh_edge_is_clear,
-            terminal_hint_points=points,
-            config=mesh_config,
+            coarse_config=mesh_config,
+            fine_spacing_m=float(config.fine_voxel_size_m),
         )
         prepared_mesh_graph = mesh_build.graph
         mesh_graph_details = dict(mesh_build.details)
@@ -5968,6 +5990,9 @@ def _build_route_voxel_atlas(
         cell_metrics=cell_metrics,
         prepared_3d_graph=prepared_3d_graph,
         prepared_mesh_graph=prepared_mesh_graph,
+        mesh_graph_entry_anchor_radius_m=float(
+            config.mesh_graph_entry_anchor_radius_m
+        ),
         fine_tiles=tuple(fine_tiles),
     )
     metrics = _aggregate_tile_metrics(total_metrics, atlas)
@@ -6032,6 +6057,159 @@ def _build_route_voxel_atlas(
         "_certified_component_cells": tuple(sorted(component_cell_set)),
     }
     return atlas, metrics, details
+
+
+def _build_adaptive_seeded_mesh_navigation_path(
+    route_points: Sequence[Point],
+    *,
+    footprint_cell_size_m: float,
+    component_cells: set[FootprintCell],
+    point_probe: Callable[[Point], tuple[bool, float] | None],
+    edge_is_clear: MeshEdgeSafetyCheck,
+    coarse_config: MeshNavigationGraphConfig,
+    fine_spacing_m: float,
+) -> MeshNavigationGraphBuildResult:
+    """Build one fixed path, refining only when 2 m loses the terminal.
+
+    Intermediate metadata points are breadcrumbs, not known cave terminals.
+    A coarse goal-directed search is accepted only when it reaches the final
+    route hint. Otherwise a fine search gets one bounded route-corridor retry.
+    Failure publishes no mesh graph instead of mislabeling a short disconnected
+    prefix as a successful terminal route.
+    """
+    points = tuple(route_points)
+    if len(points) < 2:
+        return MeshNavigationGraphBuildResult(
+            graph=None,
+            details={
+                "method": MESH_NAVIGATION_GRAPH_METHOD,
+                "reason": "adaptive_mesh_route_points_missing",
+            },
+        )
+    corridor_cells = _mesh_entry_route_sampling_cells(
+        points,
+        footprint_cell_size_m=footprint_cell_size_m,
+        component_cells=component_cells,
+    )
+    coarse_goal_config = MeshNavigationGraphConfig(
+        horizontal_sample_spacing_m=(
+            coarse_config.horizontal_sample_spacing_m
+        ),
+        vertical_sample_spacing_m=coarse_config.vertical_sample_spacing_m,
+        minimum_clearance_m=coarse_config.minimum_clearance_m,
+        max_nodes=coarse_config.max_nodes,
+        max_edges_per_node=coarse_config.max_edges_per_node,
+        max_edge_candidates_per_node=min(
+            12,
+            coarse_config.max_edge_candidates_per_node,
+        ),
+        max_edge_candidates_per_direction=(
+            coarse_config.max_edge_candidates_per_direction
+        ),
+        max_edge_distance_m=coarse_config.max_edge_distance_m,
+        max_vertical_edge_distance_m=(
+            coarse_config.max_vertical_edge_distance_m
+        ),
+        max_interval_points_per_column=(
+            coarse_config.max_interval_points_per_column
+        ),
+        ray_merge_epsilon_m=coarse_config.ray_merge_epsilon_m,
+    ).validated()
+    coarse = build_goal_directed_seeded_mesh_navigation_path_graph(
+        points[:DEFAULT_MESH_GRAPH_ENTRY_SEED_POINTS],
+        footprint_cell_size_m=footprint_cell_size_m,
+        component_cells=corridor_cells,
+        point_probe=point_probe,
+        edge_is_clear=edge_is_clear,
+        terminal_point=points[-1],
+        route_guide_points=points,
+        config=coarse_goal_config,
+    )
+    coarse_details = dict(coarse.details)
+    if coarse.graph is not None:
+        return MeshNavigationGraphBuildResult(
+            graph=coarse.graph,
+            details={
+                **coarse_details,
+                "adaptive_retry_used": False,
+                "known_terminal_reached": True,
+                "adaptive_corridor_cell_count": len(corridor_cells),
+                "adaptive_coarse_spacing_m": float(
+                    coarse_goal_config.horizontal_sample_spacing_m
+                ),
+            },
+        )
+
+    fine_spacing = min(
+        float(coarse_config.horizontal_sample_spacing_m),
+        max(0.25, float(fine_spacing_m)),
+    )
+    fine_config = MeshNavigationGraphConfig(
+        horizontal_sample_spacing_m=fine_spacing,
+        vertical_sample_spacing_m=fine_spacing,
+        minimum_clearance_m=coarse_config.minimum_clearance_m,
+        max_nodes=coarse_config.max_nodes,
+        max_edges_per_node=coarse_config.max_edges_per_node,
+        max_edge_candidates_per_node=min(
+            12,
+            coarse_config.max_edge_candidates_per_node,
+        ),
+        max_edge_candidates_per_direction=(
+            coarse_config.max_edge_candidates_per_direction
+        ),
+        max_edge_distance_m=coarse_config.max_edge_distance_m,
+        max_vertical_edge_distance_m=(
+            coarse_config.max_vertical_edge_distance_m
+        ),
+        max_interval_points_per_column=(
+            coarse_config.max_interval_points_per_column
+        ),
+        ray_merge_epsilon_m=coarse_config.ray_merge_epsilon_m,
+    ).validated()
+    fine = build_goal_directed_seeded_mesh_navigation_path_graph(
+        points[:DEFAULT_MESH_GRAPH_ENTRY_SEED_POINTS],
+        footprint_cell_size_m=footprint_cell_size_m,
+        component_cells=corridor_cells,
+        point_probe=point_probe,
+        edge_is_clear=edge_is_clear,
+        terminal_point=points[-1],
+        route_guide_points=points,
+        config=fine_config,
+    )
+    fine_details = dict(fine.details)
+    shared_details = {
+        "adaptive_retry_used": True,
+        "known_terminal_reached": fine.graph is not None,
+        "coarse_reason": str(coarse_details.get("reason", "")),
+        "coarse_maximum_route_guide_index_seen": int(
+            coarse_details.get("maximum_route_guide_index_seen", -1)
+        ),
+        "coarse_maximum_route_guide_fraction_seen": float(
+            coarse_details.get("maximum_route_guide_fraction_seen", 0.0)
+        ),
+        "coarse_persisted_path_node_count": int(
+            coarse_details.get("persisted_path_node_count", 0)
+        ),
+        "adaptive_corridor_cell_count": len(corridor_cells),
+        "adaptive_coarse_spacing_m": float(
+            coarse_goal_config.horizontal_sample_spacing_m
+        ),
+        "adaptive_fine_spacing_m": float(fine_spacing),
+    }
+    if fine.graph is not None:
+        return MeshNavigationGraphBuildResult(
+            graph=fine.graph,
+            details={**fine_details, **shared_details},
+        )
+    return MeshNavigationGraphBuildResult(
+        graph=None,
+        details={
+            **fine_details,
+            **shared_details,
+            "reason": "adaptive_mesh_known_terminal_unreachable",
+            "adaptive_reason": str(fine_details.get("reason", "")),
+        },
+    )
 
 
 def _mesh_prepared_spine_sampling_envelope(

@@ -1238,6 +1238,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_auto_dive_pose_start_yaw: float | None = None
         self._initial_auto_dive_pose_start_pitch: float | None = None
         self._initial_auto_dive_pose_start_roll: float | None = None
+        self._auto_dive_start_after_initial_pose = False
         self._texture_validation_executor: ThreadPoolExecutor | None = None
         self._texture_validation_future: Future | None = None
         self._texture_validation_manager: TextureManager | None = None
@@ -2813,9 +2814,25 @@ class CaveViewerWindow(mglw.WindowConfig):
         if future is None or not future.done():
             return
 
+        start_after_pose = bool(
+            getattr(self, "_auto_dive_start_after_initial_pose", False)
+        )
+        self._auto_dive_start_after_initial_pose = False
         executor = getattr(self, "_initial_auto_dive_pose_executor", None)
         requested_manifest = getattr(self, "_initial_auto_dive_pose_manifest", None)
         requested_cache_dir = getattr(self, "_initial_auto_dive_pose_cache_dir", None)
+
+        def resume_start_if_current() -> None:
+            if (
+                start_after_pose
+                and self.manifest is requested_manifest
+                and self.cache_dir == requested_cache_dir
+                and self.camera is not None
+                and self.world is not None
+                and self._has_map_loaded
+            ):
+                self._start_auto_dive()
+
         start_position = getattr(
             self,
             "_initial_auto_dive_pose_start_position",
@@ -2833,12 +2850,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             initial_pose = future.result()
         except NavigationConfigurationError as exc:
             _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
+            resume_start_if_current()
             return
         except Exception:
             _LOG.exception("Guided Dive initial camera planning failed.")
+            resume_start_if_current()
             return
 
         if initial_pose is None:
+            resume_start_if_current()
             return
         if (
             self.manifest is not requested_manifest
@@ -2849,7 +2869,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         ):
             _LOG.debug("Discarded stale Guided Dive initial camera after map changed.")
             return
-        if self._auto_dive_is_active() or self._auto_dive_start_is_pending():
+        if self._auto_dive_is_active() or getattr(
+            self,
+            "_auto_dive_start_future",
+            None,
+        ) is not None:
             _LOG.debug(
                 "Discarded Guided Dive initial camera because Guided Dive is active."
             )
@@ -2864,6 +2888,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "Skipped Guided Dive initial camera because the camera changed "
                 "before planning finished."
             )
+            resume_start_if_current()
             return
 
         previous_camera = self.camera
@@ -2881,12 +2906,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._reset_initial_chunk_loading_state()
         _LOG.info(
-            "Initial camera placed at Guided Dive endpoint: "
+            "Initial camera placed at Guided Dive graph entrance: "
             "position=(%.2f, %.2f, %.2f).",
             float(initial_pose.position[0]),
             float(initial_pose.position[1]),
             float(initial_pose.position[2]),
         )
+        resume_start_if_current()
 
     def _camera_angle(self, attribute_name: str) -> float | None:
         camera = getattr(self, "camera", None)
@@ -2969,6 +2995,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if future is None:
             return False
         future.cancel()
+        self._auto_dive_start_after_initial_pose = False
         self._clear_initial_auto_dive_pose_state(shutdown_executor=True)
         _LOG.info("Guided Dive initial camera planning cancelled.")
         return True
@@ -2985,7 +3012,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _auto_dive_start_is_pending(self) -> bool:
-        return getattr(self, "_auto_dive_start_future", None) is not None
+        return bool(
+            getattr(self, "_auto_dive_start_future", None) is not None
+            or getattr(self, "_auto_dive_start_after_initial_pose", False)
+        )
 
     def _toggle_auto_dive(self) -> bool:
         if not self._has_map_loaded or self.camera is None or self.world is None:
@@ -3017,6 +3047,21 @@ class CaveViewerWindow(mglw.WindowConfig):
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         if benchmark_controller is not None and not benchmark_controller.finished:
             return False
+        initial_pose_future = getattr(
+            self,
+            "_initial_auto_dive_pose_future",
+            None,
+        )
+        if initial_pose_future is not None:
+            # Map load starts a bounded worker that resolves the certified
+            # mesh-graph entrance. Starting preflight from the temporary first
+            # render-chunk center races that worker and can fail a valid map.
+            # Preserve one click and continue automatically once placement has
+            # either applied or been skipped because the user moved manually.
+            self._auto_dive_start_after_initial_pose = True
+            if initial_pose_future.done():
+                self._update_initial_auto_dive_pose()
+            return True
         # The graph/voxel preflight validates the exact camera position. The
         # legacy chunk guard only knows coarse mesh bounds and can move a
         # graph-native start into an occupied voxel before preflight sees it.
@@ -3259,7 +3304,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         position = getattr(self, "_auto_dive_start_position", None)
         requested_at = getattr(self, "_auto_dive_start_requested_at", None)
         if future is None:
-            return False
+            if not bool(
+                getattr(self, "_auto_dive_start_after_initial_pose", False)
+            ):
+                return False
+            self._auto_dive_start_after_initial_pose = False
+            _LOG.info("Queued Guided Dive start cancelled.")
+            return True
         future.cancel()
         if blackbox is not None:
             blackbox.record(
@@ -3365,6 +3416,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             getattr(self, "_auto_dive_previous_render_distance", None) is not None
         ) or (
             getattr(self, "_auto_dive_start_future", None) is not None
+        ) or (
+            getattr(self, "_auto_dive_start_after_initial_pose", False)
         )
         start_cancelled = self._cancel_auto_dive_start()
         if controller is not None:

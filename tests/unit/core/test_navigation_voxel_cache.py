@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+import math
 
 import numpy as np
 import pytest
@@ -18,6 +19,7 @@ from caveviewer.core.navigation.autodive import (
     NavigationVoxelGraphAuthorityError,
     build_centerline_auto_dive_plan,
 )
+from caveviewer.core.navigation.mesh_graph import MeshNavigationGraphConfig
 from caveviewer.core.navigation.voxel_cache import (
     NAVIGATION_VOXEL_CACHE_NAME,
     NavigationVoxelCellMetric,
@@ -26,6 +28,7 @@ from caveviewer.core.navigation.voxel_cache import (
     NavigationVoxelCacheConfig,
     NavigationVoxelScoringPolicy,
     _cache_graph_base_grid_size,
+    _build_adaptive_seeded_mesh_navigation_path,
     _fine_seed_tile_coverage_details,
     _fine_prepared_graph_seed_points,
     _mesh_entry_route_sampling_cells,
@@ -101,6 +104,7 @@ def test_current_atlas_round_trips_the_mesh_graph_separately_from_voxel_graph():
             tiles=(tile,),
             prepared_3d_graph=voxel_graph,
             prepared_mesh_graph=mesh_graph,
+            mesh_graph_entry_anchor_radius_m=24.0,
         )
     )
 
@@ -111,6 +115,7 @@ def test_current_atlas_round_trips_the_mesh_graph_separately_from_voxel_graph():
     assert restored.prepared_mesh_graph is not None
     assert restored.prepared_mesh_graph.method == NAVIGATION_MESH_3D_GRAPH_METHOD
     assert restored.authoritative_graph is restored.prepared_mesh_graph
+    assert restored.mesh_graph_entry_anchor_radius_m == 24.0
     assert not supported_navigation_voxel_cache_identity(
         5,
         "whole_cave_voxel_atlas_v5",
@@ -138,6 +143,81 @@ def test_mesh_entry_sampling_uses_world_cells_across_negative_boundaries():
     assert (-9, 12) in cells
     assert (-10, 10) in cells
     assert all(cell in component_cells for cell in cells)
+
+
+def test_adaptive_mesh_path_uses_fine_corridor_when_two_metre_seed_is_missing():
+    route_points = tuple(
+        (float(index) + 0.5, 0.5, 0.5)
+        for index in range(9)
+    )
+
+    def one_metre_probe(point):
+        key = tuple(int(math.floor(value)) for value in point)
+        if key not in {(x, 0, 0) for x in range(9)}:
+            return None
+        return True, 1.0
+
+    result = _build_adaptive_seeded_mesh_navigation_path(
+        route_points,
+        footprint_cell_size_m=32.0,
+        component_cells={(0, 0)},
+        point_probe=one_metre_probe,
+        edge_is_clear=lambda _first, _second: True,
+        coarse_config=MeshNavigationGraphConfig(
+            horizontal_sample_spacing_m=2.0,
+            vertical_sample_spacing_m=2.0,
+            max_nodes=64,
+            max_edge_distance_m=4.0,
+            max_vertical_edge_distance_m=4.0,
+        ),
+        fine_spacing_m=1.0,
+    )
+
+    assert result.graph is not None
+    assert result.details["adaptive_retry_used"] is True
+    assert result.details["known_terminal_reached"] is True
+    assert result.details["adaptive_fine_spacing_m"] == 1.0
+    assert result.details["edge_candidate_limit_per_node"] == 12
+    assert result.details["coarse_reason"] == (
+        "goal_directed_mesh_graph_entry_missing"
+    )
+    assert result.graph.terminal_count == 1
+
+
+def test_adaptive_mesh_path_does_not_publish_intermediate_hint_as_terminal():
+    route_points = (
+        (1.0, 1.0, 1.0),
+        (5.0, 1.0, 1.0),
+        (11.0, 1.0, 1.0),
+    )
+
+    def coarse_only_probe(point):
+        if point[1:] != (1.0, 1.0) or point[0] not in {1.0, 3.0, 5.0}:
+            return None
+        return True, 1.0
+
+    result = _build_adaptive_seeded_mesh_navigation_path(
+        route_points,
+        footprint_cell_size_m=32.0,
+        component_cells={(0, 0)},
+        point_probe=coarse_only_probe,
+        edge_is_clear=lambda _first, _second: True,
+        coarse_config=MeshNavigationGraphConfig(
+            horizontal_sample_spacing_m=2.0,
+            vertical_sample_spacing_m=2.0,
+            max_nodes=64,
+            max_edge_distance_m=4.0,
+            max_vertical_edge_distance_m=4.0,
+        ),
+        fine_spacing_m=1.0,
+    )
+
+    assert result.graph is None
+    assert result.details["reason"] == (
+        "adaptive_mesh_known_terminal_unreachable"
+    )
+    assert result.details["coarse_maximum_route_guide_index_seen"] == 1
+    assert result.details["known_terminal_reached"] is False
 
 
 def test_mesh_anchor_quantization_keeps_highest_clearance_candidate():

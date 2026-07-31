@@ -1219,14 +1219,13 @@ def build_auto_dive_initial_camera_pose(
     cache_dir: str | os.PathLike[str] | None = None,
     require_voxel_graph: bool = False,
 ) -> RouteKeyframe:
-    """Return a safe endpoint camera pose for a newly loaded map.
+    """Return a safe navigation-start camera pose for a newly loaded map.
 
     Viewer startup historically used the first manifest chunk center. On maps
     imported in phases, that can place the camera in the middle of a passage
-    or close to a cave face, which makes the first Guided Dive replan fight its
-    way out of a bad local pose. This helper chooses one endpoint of the
-    selected centerline route, then returns the first route keyframe looking
-    down the clearest available initial segment.
+    or close to a cave face. Graph-native startup uses the prepared roadmap's
+    entrance; the compatibility planner chooses a selected centerline endpoint
+    and looks down the clearest available initial segment.
     """
     settings = settings or AutoDiveSettings()
     _validate_auto_dive_settings(settings)
@@ -3686,12 +3685,11 @@ def _preflight_graph_snap_tolerance_m(
     if str(graph.method) != MESH_NAVIGATION_GRAPH_METHOD:
         return tolerance_m
 
-    # A version-10 mesh graph persists the shortest certified path through the
-    # complete seeded component, not every off-spine lattice sample discovered
-    # while proving that component.  A valid camera pose can consequently sit
-    # just beyond the ordinary two-cell graph snap radius.  Bound startup
-    # ingress to one graph edge plus half a lattice-cell diagonal, then let the
-    # exact voxel/mesh connector check below remain the movement authority.
+    # A version-10 mesh graph persists one certified path, not every off-spine
+    # lattice sample considered while proving it. A valid camera pose can
+    # consequently sit beyond the ordinary two-cell graph snap radius. Bound
+    # startup ingress by both the path geometry and the cache-time entry policy;
+    # the exact voxel/mesh connector check remains the movement authority.
     cell_diagonal_m = math.sqrt(
         sum(
             max(0.0, float(value)) ** 2
@@ -3703,7 +3701,16 @@ def _preflight_graph_snap_tolerance_m(
         max(0.0, float(graph.max_edge_distance_m))
         + 0.5 * cell_diagonal_m
     )
-    return max(tolerance_m, compact_path_ingress_m)
+    cached_entry_ingress_m = float(
+        cached_volume.mesh_graph_entry_anchor_radius_m
+    )
+    if not math.isfinite(cached_entry_ingress_m):
+        cached_entry_ingress_m = 0.0
+    return max(
+        tolerance_m,
+        compact_path_ingress_m,
+        max(0.0, cached_entry_ingress_m),
+    )
 
 
 def _preflight_nearest_graph_key(

@@ -19,27 +19,28 @@ from caveviewer.core.navigation.centerline import (
     parse_cell_key,
 )
 
-_DEFAULT_MAX_COLLISION_GUARD_TRIANGLES = 5_000_000
-_MAX_COLLISION_GUARD_TRIANGLES_ENV = (
-    "CAVEVIEWER_AUTO_DIVE_MESH_COLLISION_MAX_TRIANGLES"
-)
-_DEFAULT_MAX_COLLISION_GUARD_AVG_CHUNK_TRIANGLES = 50_000
-_MAX_COLLISION_GUARD_AVG_CHUNK_TRIANGLES_ENV = (
-    "CAVEVIEWER_AUTO_DIVE_MESH_COLLISION_MAX_AVG_CHUNK_TRIANGLES"
-)
-# Recovery performs lazy, local segment checks and is bounded by the
-# navigation search budget. A whole-map triangle cap is therefore a poor
-# proxy for recovery cost; keep the opt-out limit aligned with the collision
-# guard while retaining the environment override for unusually large maps.
+# Exact route validation performs lazy, local segment checks over chunked
+# geometry. Whole-map or average-chunk triangle counts are therefore resource
+# hints, not reasons to remove collision authority. Keep the guard available
+# for every structurally valid cache and use these thresholds only to disable
+# optional speculative recovery whose short runtime deadline could otherwise
+# be monopolized by dense geometry.
 _DEFAULT_MAX_MESH_RECOVERY_TRIANGLES = 5_000_000
 _MAX_MESH_RECOVERY_TRIANGLES_ENV = (
     "CAVEVIEWER_AUTO_DIVE_MESH_RECOVERY_MAX_TRIANGLES"
 )
+_DEFAULT_MAX_MESH_RECOVERY_AVG_CHUNK_TRIANGLES = 50_000
+_MAX_MESH_RECOVERY_AVG_CHUNK_TRIANGLES_ENV = (
+    "CAVEVIEWER_AUTO_DIVE_MESH_RECOVERY_MAX_AVG_CHUNK_TRIANGLES"
+)
 # Cache-time voxel construction visits many render chunks. Retaining every
 # decoded chunk duplicates a large part of the source mesh while the importer
 # and navigation atlas are still resident. Bound residency by triangle count;
-# a single oversized chunk is still allowed as a transient query result but is
-# not retained after that query.
+# a single oversized chunk is retained separately from the normal LRU. Exact
+# checks already have to decode that chunk once; one bounded oversized slot
+# prevents a dense local passage from re-reading the same large file for every
+# neighboring graph edge without turning the regular LRU into a whole-map
+# geometry cache.
 _DEFAULT_MAX_CACHED_COLLISION_TRIANGLES = 250_000
 
 
@@ -87,6 +88,10 @@ class CachedChunkMeshCollisionGuard:
         self._triangle_cache: OrderedDict[Cell, _ChunkTriangleMesh] = (
             OrderedDict()
         )
+        self._oversized_triangle_cache: tuple[
+            Cell,
+            _ChunkTriangleMesh,
+        ] | None = None
         self._cached_triangle_count = 0
         self._cache_lock = threading.Lock()
 
@@ -105,19 +110,19 @@ class CachedChunkMeshCollisionGuard:
             return None
         chunk_count = len(chunks)
         triangle_count = _manifest_triangle_count(manifest)
-        if _exceeds_triangle_limit(
+        average_chunk_triangles = _average_chunk_triangle_count(
             triangle_count,
-            _collision_guard_triangle_limit(),
-        ):
-            return None
-        if _exceeds_triangle_limit(
-            _average_chunk_triangle_count(triangle_count, chunk_count),
-            _collision_guard_average_chunk_triangle_limit(),
-        ):
-            return None
-        mesh_recovery_enabled = not _exceeds_triangle_limit(
-            triangle_count,
-            _mesh_recovery_triangle_limit(),
+            chunk_count,
+        )
+        mesh_recovery_enabled = not (
+            _exceeds_triangle_limit(
+                triangle_count,
+                _mesh_recovery_triangle_limit(),
+            )
+            or _exceeds_triangle_limit(
+                average_chunk_triangles,
+                _mesh_recovery_average_chunk_triangle_limit(),
+            )
         )
         chunk_bounds: list[_ChunkBounds] = []
         for raw_cell, info in chunks.items():
@@ -227,6 +232,9 @@ class CachedChunkMeshCollisionGuard:
             if cached is not None:
                 self._triangle_cache.move_to_end(cell)
                 return cached
+            oversized = self._oversized_triangle_cache
+            if oversized is not None and oversized[0] == cell:
+                return oversized[1]
             triangles = self._load_triangles_for_chunk(cell)
             if triangles.size == 0:
                 mesh = _ChunkTriangleMesh(
@@ -241,20 +249,20 @@ class CachedChunkMeshCollisionGuard:
                     triangle_max=triangles.max(axis=1),
                 )
             triangle_count = int(len(mesh.triangles))
-            if (
-                self._max_cached_triangles > 0
-                and triangle_count <= self._max_cached_triangles
-            ):
-                while self._triangle_cache and (
-                    self._cached_triangle_count + triangle_count
-                    > self._max_cached_triangles
-                ):
-                    _evicted_cell, evicted = self._triangle_cache.popitem(
-                        last=False
-                    )
-                    self._cached_triangle_count -= len(evicted.triangles)
-                self._triangle_cache[cell] = mesh
-                self._cached_triangle_count += triangle_count
+            if self._max_cached_triangles > 0:
+                if triangle_count > self._max_cached_triangles:
+                    self._oversized_triangle_cache = (cell, mesh)
+                else:
+                    while self._triangle_cache and (
+                        self._cached_triangle_count + triangle_count
+                        > self._max_cached_triangles
+                    ):
+                        _evicted_cell, evicted = self._triangle_cache.popitem(
+                            last=False
+                        )
+                        self._cached_triangle_count -= len(evicted.triangles)
+                    self._triangle_cache[cell] = mesh
+                    self._cached_triangle_count += triangle_count
             return mesh
 
     def _load_triangles_for_chunk(self, cell: Cell) -> np.ndarray:
@@ -308,24 +316,17 @@ def _average_chunk_triangle_count(
     return int(math.ceil(float(triangle_count) / float(chunk_count)))
 
 
-def _collision_guard_triangle_limit() -> int:
-    return _triangle_limit_from_env(
-        _MAX_COLLISION_GUARD_TRIANGLES_ENV,
-        _DEFAULT_MAX_COLLISION_GUARD_TRIANGLES,
-    )
-
-
-def _collision_guard_average_chunk_triangle_limit() -> int:
-    return _triangle_limit_from_env(
-        _MAX_COLLISION_GUARD_AVG_CHUNK_TRIANGLES_ENV,
-        _DEFAULT_MAX_COLLISION_GUARD_AVG_CHUNK_TRIANGLES,
-    )
-
-
 def _mesh_recovery_triangle_limit() -> int:
     return _triangle_limit_from_env(
         _MAX_MESH_RECOVERY_TRIANGLES_ENV,
         _DEFAULT_MAX_MESH_RECOVERY_TRIANGLES,
+    )
+
+
+def _mesh_recovery_average_chunk_triangle_limit() -> int:
+    return _triangle_limit_from_env(
+        _MAX_MESH_RECOVERY_AVG_CHUNK_TRIANGLES_ENV,
+        _DEFAULT_MAX_MESH_RECOVERY_AVG_CHUNK_TRIANGLES,
     )
 
 

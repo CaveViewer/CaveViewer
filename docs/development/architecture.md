@@ -276,7 +276,32 @@ into bounded horizontal buckets while retaining the configured vertical
 resolution; they do not materialize an unbounded 1 m graph metric dictionary.
 The cached-mesh collision provider also streams render-chunk triangles through
 a bounded LRU during this pass, so importer, voxel, and collision geometry do
-not all remain resident at once.
+not all remain resident at once. Whole-map and average-chunk triangle counts
+may disable deadline-bound speculative mesh recovery, but they do not remove
+the lazy exact collision guard from cache construction, fixed-route preflight,
+or route certification. Large chunked maps therefore retain the same collision
+authority without requiring per-map environment overrides.
+For each selected V10 route, cache construction runs a bounded, goal-directed
+mesh-roadmap search inside that route's footprint corridor. Up to the first
+eight route points provide automatic ingress candidates, but only candidates
+with cached free-space evidence and an exact-safe mesh attachment enter the
+multi-source search. The primary lattice is 2 m. Local moves use its immediate
+neighbors, while longer route-guided moves provide bounded shortcuts. Every
+candidate edge samples intermediate voxel evidence at half-lattice spacing and
+then passes an exact cached-mesh segment check. If 2 m cannot reach the actual
+final route endpoint, the same bounded search retries on a 1 m lattice.
+Intermediate route points remain heuristics, never terminals, and
+an unreachable endpoint publishes no authoritative mesh graph. A successful
+build persists only the resulting branch-free path, alongside the existing
+voxel atlas, coarse graph, and separately generated fine tiles. It also
+persists the bounded startup-ingress radius; runtime still proves any camera
+connector with voxel and exact-mesh checks before movement.
+Map load resolves the certified mesh-graph entrance asynchronously. If the
+user requests Guided Dive while that bounded placement worker is still
+running, the request waits for the result and then starts preflight from the
+resolved pose. It must not race preflight from the temporary first-render-chunk
+fallback. Camera input during the wait still cancels automatic placement and
+preflight uses the user's current manual pose.
 Navigation cache certification is deliberately split into independent phases.
 The `artifacts` phase validates the manifest, render chunks, navigation sidecar
 paths, and navigation-chunk counts without deserializing the large graph. The

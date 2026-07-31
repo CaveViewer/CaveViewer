@@ -181,6 +181,31 @@ def test_mesh_graph_start_tolerance_covers_one_compact_path_ingress():
     assert tolerance_m > 4.27583027524432
 
 
+def test_mesh_graph_start_tolerance_uses_persisted_entry_policy():
+    graph = NavigationVoxel3DGraph(
+        nodes={},
+        edges={},
+        component_count=0,
+        grid_size_m=(2.0, 2.0, 2.0),
+        max_edge_distance_cells=1,
+        max_edges_per_node=26,
+        max_edge_distance_m=math.sqrt(12.0),
+        max_vertical_edge_distance_m=2.0,
+        method=NAVIGATION_MESH_3D_GRAPH_METHOD,
+    )
+    atlas = NavigationVoxelAtlas(
+        tiles=(),
+        mesh_graph_entry_anchor_radius_m=24.0,
+    )
+
+    tolerance_m = autodive._preflight_graph_snap_tolerance_m(
+        graph,
+        cached_volume=atlas,
+    )
+
+    assert tolerance_m == pytest.approx(24.0)
+
+
 def test_voxel_graph_start_tolerance_does_not_gain_mesh_path_ingress():
     graph = NavigationVoxel3DGraph(
         nodes={},
@@ -2610,39 +2635,32 @@ def test_auto_dive_mesh_guard_rejects_cached_wall_shortcut(tmp_path):
     assert plan.route_points_xz == tuple((point[0], point[2]) for point in raw_route_points)
 
 
-def test_auto_dive_skips_mesh_guard_for_dense_chunk_cache(monkeypatch, tmp_path):
-    manifest, raw_route_points = _manifest_with_cached_mesh_wall_route()
+def test_auto_dive_keeps_exact_mesh_guard_for_dense_chunk_cache(tmp_path):
+    manifest, _raw_route_points = _manifest_with_cached_mesh_wall_route()
     manifest["triangle_count"] = 1_000_000
-    events = []
-
-    def fail_load_triangles(_self, _cell):
-        raise AssertionError("high-poly startup must not load chunk triangles")
-
-    monkeypatch.setattr(
-        CachedChunkMeshCollisionGuard,
-        "_load_triangles_for_chunk",
-        fail_load_triangles,
-    )
-
-    plan = build_centerline_auto_dive_plan(
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
         manifest,
-        current_position=raw_route_points[0],
-        settings=AutoDiveSettings(
-            speed_m_per_second=1.0,
-            smoothing_radius_cells=4,
-        ),
         cache_dir=str(tmp_path / "cache"),
-        diagnostics=lambda event, payload: events.append((event, payload)),
     )
 
-    candidate_payload = [
-        payload
-        for event, payload in events
-        if event == "candidate_scores"
-    ][-1]
+    assert guard is not None
+    # A single dense chunk can make speculative recovery too expensive, but
+    # exact cache-build and fixed-route collision checks remain available.
+    assert guard.mesh_recovery_enabled is False
 
-    assert candidate_payload["mesh_collision_enabled"] is False
-    assert plan.route_length_m > 0.0
+
+def test_auto_dive_keeps_exact_mesh_guard_for_peacock_scale_cache(tmp_path):
+    manifest = _split_manifest()
+    manifest["triangle_count"] = 8_000_000
+
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=str(tmp_path / "cache"),
+    )
+
+    assert len(manifest["chunks"]) == 73
+    assert guard is not None
+    assert guard.mesh_recovery_enabled is False
 
 
 def test_auto_dive_enables_recovery_when_dense_triangles_are_chunked(tmp_path):
@@ -2680,6 +2698,34 @@ def test_auto_dive_mesh_guard_bounds_decoded_triangle_residency(monkeypatch, tmp
     assert len(tuple(meshes)) > 10
     assert guard._cached_triangle_count <= 2
     assert len(guard._triangle_cache) <= 2
+
+
+def test_auto_dive_mesh_guard_reuses_one_oversized_chunk(monkeypatch, tmp_path):
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
+        _split_manifest(),
+        cache_dir=str(tmp_path / "cache"),
+        max_cached_triangles=2,
+    )
+
+    assert guard is not None
+    load_count = 0
+
+    def load_oversized(_cell):
+        nonlocal load_count
+        load_count += 1
+        return np.zeros((3, 3, 3), dtype=np.float64)
+
+    monkeypatch.setattr(guard, "_load_triangles_for_chunk", load_oversized)
+
+    first = guard._triangle_mesh_for_chunk((0, 0, 0))
+    second = guard._triangle_mesh_for_chunk((0, 0, 0))
+
+    assert first is second
+    assert load_count == 1
+    assert not guard._triangle_cache
+    assert guard._cached_triangle_count == 0
+    assert guard._oversized_triangle_cache is not None
+    assert guard._oversized_triangle_cache[0] == (0, 0, 0)
 
 
 def test_auto_dive_mesh_guard_trims_fully_blocked_route_to_safe_prefix(tmp_path):
