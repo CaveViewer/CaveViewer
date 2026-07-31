@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -25,18 +26,25 @@ from caveviewer.core.navigation.voxel_cache import (
     NavigationVoxelCacheConfig,
     NavigationVoxelScoringPolicy,
     _cache_graph_base_grid_size,
+    _fine_seed_tile_coverage_details,
+    _fine_prepared_graph_seed_points,
+    _mesh_entry_route_sampling_cells,
+    _mesh_spine_roadmap_anchors,
     _true_3d_unknown_boundary_keys,
     build_navigation_voxel_cache,
     deserialize_local_voxel_volume,
     load_cached_navigation_voxel_volume,
+    serialize_navigation_voxel_volume,
     supported_navigation_voxel_cache_identity,
 )
 from caveviewer.core.navigation.voxel_graph_3d import (
+    NAVIGATION_MESH_3D_GRAPH_METHOD,
     NAVIGATION_VOXEL_3D_GRAPH_METHOD,
     NavigationVoxel3DMetric,
     build_navigation_voxel_3d_graph,
 )
 from caveviewer.core.navigation.voxel_volume import (
+    LocalVoxelVolume,
     VoxelVolumeConfig,
     build_surface_voxel_volume,
 )
@@ -47,10 +55,144 @@ def test_cache_identity_rejects_previous_two_metre_atlas():
         6,
         "whole_cave_voxel_atlas_v6",
     )
+
+
+def test_current_atlas_round_trips_the_mesh_graph_separately_from_voxel_graph():
+    metrics = {
+        (0, 0, 0): NavigationVoxel3DMetric(
+            center=(0.5, 0.5, 0.5),
+            footprint_cell=(0, 0),
+            available_volume_m3=1.0,
+            free_voxel_count=1,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=0.0,
+        ),
+        (1, 0, 0): NavigationVoxel3DMetric(
+            center=(1.5, 0.5, 0.5),
+            footprint_cell=(1, 0),
+            available_volume_m3=1.0,
+            free_voxel_count=1,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=1.0,
+        ),
+    }
+    voxel_graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    mesh_graph = replace(
+        voxel_graph,
+        method=NAVIGATION_MESH_3D_GRAPH_METHOD,
+    )
+    tile = LocalVoxelVolume(
+        voxel_size_m=1.0,
+        origin=(0.0, 0.0, 0.0),
+        shape=(2, 1, 1),
+        surface_cells=frozenset(),
+        triangle_count=1,
+        surface_sample_count=1,
+        sampling_truncated=False,
+        max_clearance_search_cells=2,
+    )
+    payload = serialize_navigation_voxel_volume(
+        NavigationVoxelAtlas(
+            tiles=(tile,),
+            prepared_3d_graph=voxel_graph,
+            prepared_mesh_graph=mesh_graph,
+        )
+    )
+
+    restored = deserialize_local_voxel_volume(payload)
+
+    assert isinstance(restored, NavigationVoxelAtlas)
+    assert restored.prepared_3d_graph is not None
+    assert restored.prepared_mesh_graph is not None
+    assert restored.prepared_mesh_graph.method == NAVIGATION_MESH_3D_GRAPH_METHOD
+    assert restored.authoritative_graph is restored.prepared_mesh_graph
     assert not supported_navigation_voxel_cache_identity(
         5,
         "whole_cave_voxel_atlas_v5",
     )
+
+
+def test_mesh_entry_sampling_uses_world_cells_across_negative_boundaries():
+    component_cells = {
+        (x, z)
+        for x in range(-12, -6)
+        for z in range(8, 17)
+    }
+
+    cells = _mesh_entry_route_sampling_cells(
+        (
+            (-84.4, 10.0, 142.4),
+            (-89.7, 8.0, 131.9),
+            (-95.0, 9.0, 110.8),
+        ),
+        footprint_cell_size_m=10.554,
+        component_cells=component_cells,
+    )
+
+    assert (-8, 13) in cells
+    assert (-9, 12) in cells
+    assert (-10, 10) in cells
+    assert all(cell in component_cells for cell in cells)
+
+
+def test_mesh_anchor_quantization_keeps_highest_clearance_candidate():
+    metrics = {
+        (0, 0, 0): NavigationVoxel3DMetric(
+            center=(0.2, 0.5, 0.2),
+            footprint_cell=(0, 0),
+            available_volume_m3=1.0,
+            free_voxel_count=1,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=0.0,
+        ),
+        (1, 0, 0): NavigationVoxel3DMetric(
+            center=(2.2, 0.5, 0.2),
+            footprint_cell=(0, 0),
+            available_volume_m3=1.0,
+            free_voxel_count=1,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=2.0,
+        ),
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(2.0, 1.0, 2.0),
+    )
+
+    class _AlwaysFreeAtlas:
+        @staticmethod
+        def probe_point(point, *, include_clearance):
+            assert include_clearance is True
+            return True, 2.0 if point == route_start else 1.0
+
+    route_start = (0.8, 0.5, 0.8)
+    anchors, _details = _mesh_spine_roadmap_anchors(
+        graph,
+        ((0, 0, 0), (1, 0, 0)),
+        atlas=_AlwaysFreeAtlas(),
+        allowed_cells={(0, 0)},
+        route_seed_points=(route_start, (2.8, 0.5, 0.8)),
+        footprint_cell_size_m=8.0,
+        horizontal_spacing_m=2.0,
+        vertical_spacing_m=1.0,
+        entry_anchor_radius_m=2.0,
+    )
+    selected = next(
+        anchor
+        for anchor in anchors
+        if anchor.point[0] // 2.0 == 0
+        and anchor.point[1] // 1.0 == 0
+        and anchor.point[2] // 2.0 == 0
+    )
+
+    assert selected.point == route_start
 
 
 def test_truncated_sampling_marks_only_unrepresented_footprint_frontier():
@@ -84,6 +226,29 @@ def test_truncated_sampling_marks_only_unrepresented_footprint_frontier():
     assert unknown == {(1, 0, 0)}
 
 
+def test_coarsened_graph_does_not_mark_sampled_footprint_as_unknown():
+    metrics = {
+        (0, 0, 0): NavigationVoxel3DMetric(
+            center=(0.5, 0.5, 0.5),
+            footprint_cell=(0, 0),
+            available_volume_m3=1.0,
+            free_voxel_count=1,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=0.0,
+        ),
+    }
+
+    unknown = _true_3d_unknown_boundary_keys(
+        metrics,
+        component_cell_set={(0, 0)},
+        covered_footprint_cells={(0, 0)},
+        sampling_truncated=True,
+    )
+
+    assert unknown == set()
+
+
 def test_cache_graph_buckets_large_filled_sample_sets_before_materialization():
     assert _cache_graph_base_grid_size(
         1_000,
@@ -95,6 +260,69 @@ def test_cache_graph_buckets_large_filled_sample_sets_before_materialization():
         base_voxel_size=1.0,
         max_nodes=262_144,
     ) == (16.0, 1.0, 16.0)
+
+
+def test_fine_seed_uses_prepared_easiest_terminal_spine_not_centerline():
+    metrics = {
+        (index, 0, 0): NavigationVoxel3DMetric(
+            center=(float(index) + 0.5, 0.5, 0.5),
+            footprint_cell=(index, 0),
+            available_volume_m3=1.0,
+            free_voxel_count=1,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(index),
+        )
+        for index in range(3)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+        max_edge_distance_cells=1,
+    )
+
+    seeds, details = _fine_prepared_graph_seed_points(
+        graph,
+        route_points=(
+            (0.5, 100.0, 0.5),
+            (1.5, 100.0, 0.5),
+            (2.5, 100.0, 0.5),
+        ),
+        selected_regions=(),
+        max_tiles=4,
+        fine_tile_radius_m=1.0,
+    )
+
+    assert details["fine_route_seed_method"] == (
+        "prepared_easiest_terminal_graph_spine_v1"
+    )
+    assert details["fine_graph_spine_coverage_complete"] is True
+    assert seeds[0] == (0.5, 0.5, 0.5)
+    assert seeds[-1] == (2.5, 0.5, 0.5)
+
+
+def test_fine_seed_coverage_reports_missing_persisted_tile():
+    tile = LocalVoxelVolume(
+        voxel_size_m=1.0,
+        origin=(0.0, 0.0, 0.0),
+        shape=(2, 2, 2),
+        surface_cells=frozenset(),
+        triangle_count=0,
+        surface_sample_count=0,
+        sampling_truncated=False,
+        max_clearance_search_cells=2,
+    )
+
+    details = _fine_seed_tile_coverage_details(
+        ((0.5, 0.5, 0.5), (3.5, 0.5, 0.5)),
+        (tile,),
+    )
+
+    assert details["fine_built_tile_seed_coverage_complete"] is False
+    assert details["fine_built_tile_uncovered_seed_count"] == 1
+    assert details["fine_built_tile_uncovered_seed_examples"] == [
+        [3.5, 0.5, 0.5]
+    ]
 
 
 def test_cache_time_builds_model_and_volume_metrics(tmp_path):
@@ -121,6 +349,7 @@ def test_cache_time_builds_model_and_volume_metrics(tmp_path):
     assert summary["outcome"] == "built"
     assert summary["available_volume_m3"] > 0.0
     assert summary["volume_per_route_m"] > 0.0
+    assert navigation["routes"][0]["component_cells"]
     assert "surface_cells" not in summary
     model = result.payload["routes"]["centerline-0"]["model"]
     restored = deserialize_local_voxel_volume(model)
@@ -297,7 +526,7 @@ def test_cache_time_voxel_atlas_covers_the_entire_component():
     assert summary["coverage_cell_count"] == len(component_cells)
     assert summary["tile_count"] >= 2
     model = result.payload["routes"]["centerline-0"]["model"]
-    assert model["method"] == "navigation_voxel_atlas_v8"
+    assert model["method"] == "navigation_voxel_atlas_v10"
     assert model["branch_lookahead_method"] == "voxel_branch_lookahead_v1"
     assert model["prepared_graph"] is None
     assert model["prepared_3d_graph"]["method"] == NAVIGATION_VOXEL_3D_GRAPH_METHOD
@@ -645,6 +874,71 @@ def test_voxel_probe_point_distinguishes_free_occupied_and_uncovered_space():
     indexed_atlas = NavigationVoxelAtlas(tiles=(volume, second_volume))
     assert indexed_atlas.probe_point((8.5, 1.0, 0.5)) == second_free
     assert indexed_atlas.probe_point((20.0, 1.0, 0.5)) is None
+
+
+def test_fine_surface_cell_can_defer_to_coarse_evidence_for_global_waypoints():
+    """A 1 m surface raster must not veto an exact mesh-safe coarse point."""
+    coarse = LocalVoxelVolume(
+        voxel_size_m=1.0,
+        origin=(0.0, 0.0, 0.0),
+        shape=(1, 1, 1),
+        surface_cells=frozenset(),
+        triangle_count=1,
+        surface_sample_count=1,
+        sampling_truncated=False,
+        max_clearance_search_cells=2,
+    )
+    fine = LocalVoxelVolume(
+        voxel_size_m=1.0,
+        origin=(0.0, 0.0, 0.0),
+        shape=(1, 1, 1),
+        surface_cells=frozenset({(0, 0, 0)}),
+        triangle_count=1,
+        surface_sample_count=1,
+        sampling_truncated=False,
+        max_clearance_search_cells=2,
+    )
+    atlas = NavigationVoxelAtlas(tiles=(coarse,), fine_tiles=(fine,))
+
+    assert atlas.probe_fine_point((0.5, 0.5, 0.5)) == (False, 0.0)
+    probe = atlas.probe_point((0.5, 0.5, 0.5))
+    assert probe is not None and probe[0] is True
+    assert atlas.fine_tiles_covering_points(((0.5, 0.5, 0.5),)) == (fine,)
+    assert atlas.fine_tiles_covering_points(
+        ((0.5, 0.5, 0.5), (1.5, 0.5, 0.5))
+    ) == ()
+
+
+def test_navigation_atlas_reuses_exact_point_probe_results(monkeypatch):
+    volume = build_surface_voxel_volume(
+        [_floor_provider((-2.0, -1.0, -2.0), (4.0, 4.0, 4.0))[0]],
+        bounds_min=(-2.0, -1.0, -2.0),
+        bounds_max=(4.0, 4.0, 4.0),
+        config=VoxelVolumeConfig(voxel_size_m=1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(volume,))
+    calls = 0
+    original = NavigationVoxelAtlas._probe_point_uncached
+
+    def counted_probe(self, point, *, include_clearance):
+        nonlocal calls
+        calls += 1
+        return original(
+            self,
+            point,
+            include_clearance=include_clearance,
+        )
+
+    monkeypatch.setattr(
+        NavigationVoxelAtlas,
+        "_probe_point_uncached",
+        counted_probe,
+    )
+
+    expected = atlas.probe_point((0.5, 1.0, 0.5))
+    assert atlas.probe_point((0.5, 1.0, 0.5)) == expected
+    assert atlas.probe_point((0.5, 1.0, 0.5)) == expected
+    assert calls == 1
 
 
 def test_runtime_plan_uses_cached_model_without_voxel_rebuild(tmp_path):
@@ -1138,11 +1432,13 @@ def test_true_3d_entrance_guard_uses_horizontal_spacing_and_logs_filter_counts()
         payload for event, payload in events if event == "voxel_route_edge_filter"
     )
     assert edge_filter["outgoing_edge_count"] == 2
-    assert edge_filter["rejected_entrance_floor_edges"] == 1
+    assert edge_filter["rejected_entrance_floor_edges"] == 0
+    assert edge_filter["rejected_backward_edges"] == 1
+    assert edge_filter["allowed_initial_entrance_edges"] == 1
     assert edge_filter["accepted_forward_edges"] == 1
 
 
-def test_true_3d_entrance_floor_rejection_is_explicit_when_it_blocks_route():
+def test_true_3d_entrance_departure_rejects_only_backward_route():
     metrics = {
         key: NavigationVoxel3DMetric(
             center=(key[0] + 0.5, key[1] + 0.5, key[2] + 0.5),
@@ -1174,7 +1470,9 @@ def test_true_3d_entrance_floor_rejection_is_explicit_when_it_blocks_route():
     edge_filter = next(
         payload for event, payload in events if event == "voxel_route_edge_filter"
     )
-    assert edge_filter["rejected_entrance_floor_edges"] == 1
+    assert edge_filter["rejected_entrance_floor_edges"] == 0
+    assert edge_filter["rejected_backward_edges"] == 1
+    assert edge_filter["allowed_initial_entrance_edges"] == 1
     assert edge_filter["accepted_forward_edges"] == 0
     rejection = next(
         payload
@@ -1182,8 +1480,41 @@ def test_true_3d_entrance_floor_rejection_is_explicit_when_it_blocks_route():
         if event == "voxel_route_rejected"
     )
     assert rejection["reason"] == "no_forward_continuation"
-    assert rejection["rejected_entrance_floor_edges"] == 1
+    assert rejection["rejected_entrance_floor_edges"] == 0
     assert rejection["entrance_guard_tolerance_m"] == 1.0
+
+
+def test_true_3d_route_allows_bounded_initial_entrance_departure():
+    metrics = {
+        key: NavigationVoxel3DMetric(
+            center=(key[0] * 2.0 + 1.0, 0.5, 0.5),
+            footprint_cell=(key[0], key[2]),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(index),
+        )
+        for index, key in enumerate(
+            ((0, 0, 0), (1, 0, 0), (2, 0, 0))
+        )
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(2.0, 32.0, 2.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+
+    plan = atlas.plan_footprint_route(
+        ((0, 0), (1, 0), (2, 0)),
+        current_position=(1.0, 0.5, 0.5),
+        footprint_cell_size=1.0,
+        preferred_direction=(1.0, 0.0, 0.0),
+        lookahead_distance_m=8.0,
+    )
+
+    assert plan is not None
+    assert plan.world_points[-1][0] > plan.world_points[0][0]
 
 
 def _route(route_id: str, *, scale: float) -> dict[str, object]:

@@ -46,12 +46,17 @@ local voxel fields. During cache construction, `core.navigation.voxel_cache`
 reuses the already-written chunk files to build a tiled atlas for every cell in
 each navigable cave component. Curvature-ranked regions remain diagnostic
 metadata, while the atlas also covers the approach before a bend and the
-straight sections after it. The current v6 sidecar uses 1 m voxels for both
-the whole-cave coarse atlas and bounded fine frontier tiles. Fine tiles are
-seeded around curvature regions, their lead-in sections, and route samples, so
-the approach to a bend is resolved before the bend is reached. Per-tile limits
-keep memory and sampling work bounded on consumer hardware. Compact route
-volume summaries are stored in the manifest. New caches publish the complete
+straight sections after it. The current v10 sidecar preserves 1 m voxels for
+the whole-cave coarse atlas and bounded fine refinement tiles. It also stores
+a compact 2 m mesh-derived route graph built by a seeded free-space flood:
+voxel probes nominate inside-space candidates and every accepted neighbour
+edge must pass the cached triangle-mesh guard. Only the shortest certified
+path to the selected reachable route hint is persisted; the complete
+cache-time flood is discarded. Fine tiles are seeded along that mesh path, so
+local evidence follows the production route rather than an unrelated
+centerline.
+Per-tile limits keep memory and sampling work bounded on consumer hardware.
+Compact route volume summaries are stored in the manifest. New caches publish the complete
 navigation graph and chunk descriptors in the optional `navigation_voxels.json`
 sidecar, while dense tile occupancy is stored below
 `navigation_voxel_chunks/`. Runtime navigation keeps the graph/index resident
@@ -65,15 +70,14 @@ remain readable but do not provide fine frontier coverage.
 At runtime production Guided Dive requires the current cached model; it does
 not silently fall back to a centerline when the graph is missing, stale, or
 unsafe. This keeps replanning from rasterizing triangles on the render machine.
-Filled free voxels are
-aggregated into bounded navigation cells with independent X, Y, and Z keys;
-stacked passages therefore remain distinct instead of collapsing into one
-footprint representative. Cache construction persists a prepared true-3D
-heading-aware graph with local 26-neighbor topology, connected-component
-membership, bounded any-angle line-of-sight edges, cardinal-axis guarantees,
-directionally diverse movement representatives, volume/clearance metadata,
-connectivity scores, terminal/unknown-boundary labels, and preferred forward
-neighbors. Runtime replanning searches that graph with
+Filled free voxels are aggregated into bounded navigation cells with
+independent X, Y, and Z keys; stacked passages therefore remain distinct
+instead of collapsing into one footprint representative. Cache construction
+retains that prepared true-3D heading-aware graph for voxel evidence and legacy
+frontier diagnostics. Production easiest-terminal routing uses the V10
+mesh-derived graph, whose local 26-neighbour edges were exact-checked offline
+and are checked again before execution. Legacy frontier replanning searches the
+coarse graph with
 position-and-incoming-heading states, rejects reverse edges, prunes known
 dead-end branches, and biases comparable routes toward higher connectivity.
 It evaluates each immediate forward branch to a bounded lookahead, retains a
@@ -91,10 +95,26 @@ centerline remains only the cache-generation entrance seed and footprint
 geometry bounds for production graph validation; current v6 route geometry comes
 from true 3D voxel centers. A separate compatibility caller may request the
 legacy centerline planner explicitly, but the viewer never uses that mode. A
-terminal route stops with an explicit end-of-cave
+startup preflight defaults to the shortest known terminal and uses the same
+physical-distance mesh-graph path to it before applying exact voxel and mesh
+safety checks.
+When that route is accepted, the
+returned `fixed_route` plan is the immutable route executed by the controller;
+continuous scans, speculative replans, and rolling-horizon replacement are
+disabled for that dive. An explicit farthest-terminal policy remains available
+for frontier diagnostics and incomplete-cache exploration. A terminal route
+stops with an explicit end-of-cave
 event; a continuing prefix is marked for a forward boundary replan so a large
 room cannot end the dive just because it is locally deep. The exact triangle
-intersection guard still accepts or rejects the selected route. Ordinary
+intersection guard still accepts or rejects the selected route. If a coarse
+graph edge intersects the mesh, easiest mode may use a bounded local 2 m
+refinement, with a native 1 m fallback, built from persisted evidence to hand
+off only to a later node on that same fixed graph spine. It cannot globally
+replan into a different branch. The resulting prepared/refined segment ledger
+is exact-checked before publication. If that complete ledger
+cannot be proven, easiest mode fails closed; farthest/frontier-mode preflight
+may publish the farthest exact-safe prefix as an incomplete handoff. It must
+replan at the frontier and is never a terminal claim. Ordinary
 event-driven replans receive a cooperative wall-clock budget; when it expires,
 the worker reports the phase
 and the owner thread hands control back to user assist instead of holding the
@@ -104,7 +124,21 @@ mesh checks without the handoff deadline, keeps one forward-hemisphere result
 in flight, and hands immutable results to the owner thread only after
 source-sequence, start-distance, and forward-direction checks. The accepted
 route remains active while that worker scans, and the controller holds at the
-last rolling-clearance-safe frontier until a valid result arrives. A separate
+last rolling-clearance-safe frontier until a valid result arrives. An explicit
+pacing hold also pins the route at the position used to request an
+authoritative continuation when the handoff window is short; this keeps a
+valid result attachable under the small camera-to-route tolerance. Late
+results are re-anchored from the actual camera with a bounded retry count. The
+scan remains speculative even when it is mesh-safe: a materially shorter scan
+result is kept as diagnostic evidence and does not replace a longer validated
+prefix. The next scan is deferred until the current route has a comparable
+remaining horizon. Local mesh-safe continuation planning trims the route at
+the first exact mesh failure and reuses the already-ranked local voxel route
+while rebuilding its smaller graph; it does not rerun the bounded voxel search
+for each mesh retry. Replan handoff filtering uses the local route/voxel scale
+and bounds near-duplicate filtering by that fine scale, rather than deriving a
+fixed minimum travel step from coarse graph cadence. The
+separate
 bounded `AutoDiveClearance` worker performs
 rolling forward-horizon checks and cached voxel probes before a frontier; it
 starts the authoritative replan while a safe prefix remains and holds at a
@@ -243,6 +277,16 @@ resolution; they do not materialize an unbounded 1 m graph metric dictionary.
 The cached-mesh collision provider also streams render-chunk triangles through
 a bounded LRU during this pass, so importer, voxel, and collision geometry do
 not all remain resident at once.
+Navigation cache certification is deliberately split into independent phases.
+The `artifacts` phase validates the manifest, render chunks, navigation sidecar
+paths, and navigation-chunk counts without deserializing the large graph. The
+`graph` phase loads and validates the authoritative prepared graph (the V10
+mesh-derived graph for current caches) and coverage profile. The `route` phase
+adds start-position preflight, exact graph/voxel/mesh safety, and bounded
+execution simulation (with no replan requests for a fixed route); `all` runs
+the complete strict sequence. Artifact certification belongs immediately after cache publication;
+graph and route certification are deeper post-build or preflight checks and
+must not be mistaken for a cheap GUI-startup probe.
 The render-chunk binary format remains at version 1: unknown manifest fields
 and extra subdirectories inside a selected generated cache are ignored, while
 imports write only the active cache artifacts.

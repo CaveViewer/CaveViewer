@@ -278,6 +278,30 @@ class GraphRouteSafetyValidator:
             required_clearance_m=failure.required_clearance_m,
         )
 
+    def segment_clearance_failure(
+        self,
+        first: Sequence[float],
+        second: Sequence[float],
+        *,
+        segment_index: int = 0,
+        kind: str = "route_segment",
+        uncovered_reason: str = "route_segment_uncovered",
+    ) -> GraphRouteSafetyFailure | None:
+        """Validate one executable geometric segment.
+
+        Callers that already validated their graph topology can recheck a
+        published camera segment against cached voxel evidence and the exact
+        mesh without pretending that its endpoints belong to one graph.
+        Fixed routes use this for seams between prepared and refined segments.
+        """
+        return self._segment_failure(
+            _point(first),
+            _point(second),
+            segment_index=int(segment_index),
+            kind=str(kind),
+            uncovered_reason=str(uncovered_reason),
+        )
+
     def _node_failure(
         self,
         key: VoxelGraphKey,
@@ -321,6 +345,7 @@ class GraphRouteSafetyValidator:
             kind=kind,
             node_key=key,
             uncovered_reason="graph_node_uncovered",
+            include_clearance=False,
         )
 
     def _edge_failure(
@@ -410,8 +435,12 @@ class GraphRouteSafetyValidator:
         kind: str,
         node_key: VoxelGraphKey | None = None,
         uncovered_reason: str,
+        include_clearance: bool = True,
     ) -> GraphRouteSafetyFailure | None:
-        probe = self.atlas.probe_point(point, include_clearance=True)
+        probe = self.atlas.probe_point(
+            point,
+            include_clearance=include_clearance,
+        )
         if probe is None:
             # Unit-sized graph fixtures may intentionally contain only graph
             # evidence. Real persisted caches have tile/chunk coverage and
@@ -436,7 +465,10 @@ class GraphRouteSafetyValidator:
                 clearance_m=max(0.0, clearance),
             )
         required = float(self.policy.minimum_clearance_m)
-        if not math.isfinite(clearance) or clearance + 1e-9 < required:
+        if (
+            include_clearance
+            and (not math.isfinite(clearance) or clearance + 1e-9 < required)
+        ):
             return GraphRouteSafetyFailure(
                 kind=kind,
                 reason="graph_point_clearance_below_policy",

@@ -9,10 +9,14 @@ cell without carrying the full raw voxel volume into route search.
 
 from __future__ import annotations
 
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import heapq
 import math
+import threading
+
+import numpy as np
 
 from caveviewer.core.navigation.centerline import FootprintCell, Point
 
@@ -21,6 +25,19 @@ VoxelGraphKey = tuple[int, int, int]
 GridSize = float | Sequence[float]
 
 NAVIGATION_VOXEL_3D_GRAPH_METHOD = "heading_aware_true_3d_voxel_graph_v4"
+# The serialized record layout is shared by the voxel graph and the newer
+# direct-mesh roadmap.  Their topology sources remain explicit in ``method``;
+# accepting the mesh method here lets the existing compact graph index and
+# safety seam remain reusable without pretending a mesh graph is voxel data.
+LEGACY_NAVIGATION_MESH_3D_GRAPH_METHOD = "mesh_free_space_roadmap_v1"
+NAVIGATION_MESH_3D_GRAPH_METHOD = "mesh_free_space_roadmap_v2"
+SUPPORTED_NAVIGATION_3D_GRAPH_METHODS = frozenset(
+    {
+        NAVIGATION_VOXEL_3D_GRAPH_METHOD,
+        LEGACY_NAVIGATION_MESH_3D_GRAPH_METHOD,
+        NAVIGATION_MESH_3D_GRAPH_METHOD,
+    }
+)
 NAVIGATION_VOXEL_3D_GRAPH_VERSION = 4
 # Guided Dive now keeps a substantially denser graph in the cache. The graph
 # is sparse (only filled navigable voxels become nodes), so this is a cap on
@@ -38,6 +55,12 @@ DEFAULT_3D_GRAPH_MAX_VERTICAL_GRID_SIZE_M = 4.0
 DEFAULT_3D_GRAPH_MAX_VERTICAL_EDGE_DISTANCE_M = 4.0
 DEFAULT_3D_GRAPH_MAX_EDGE_DISTANCE_M = 24.0
 DEFAULT_3D_GRAPH_MAX_VERTICAL_COARSENING_FACTOR = 4
+# Reverse physical-distance fields are shared by initial preflight and every
+# local portal handoff to the same terminal.  Keep a small bounded LRU so
+# reusing a graph for a few routes does not turn into an unbounded RAM cache.
+DEFAULT_GRAPH_RUNTIME_DISTANCE_CACHE_ENTRIES = 8
+
+_GRAPH_RUNTIME_INDEX_LOCK = threading.Lock()
 
 _CARDINAL_OFFSETS = (
     (1, 0, 0),
@@ -148,105 +171,68 @@ class NavigationVoxel3DGraph:
         DEFAULT_3D_GRAPH_MAX_VERTICAL_EDGE_DISTANCE_M
     )
     method: str = NAVIGATION_VOXEL_3D_GRAPH_METHOD
+    _runtime_index: "NavigationVoxel3DGraphIndex | None" = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def edge_count(self) -> int:
-        return sum(len(edges) for edges in self.edges.values())
+        return self.runtime_index.edge_count
 
     @property
     def routable_node_count(self) -> int:
         """Return nodes with at least one valid in-component edge."""
-        return sum(
-            1
-            for key in self.nodes
-            if any(
-                edge.line_of_sight
-                and edge.source == key
-                and edge.target in self.nodes
-                and self.nodes[edge.target].component_id
-                == self.nodes[key].component_id
-                for edge in self.outgoing(key)
-            )
-        )
+        return self.runtime_index.routable_node_count
 
     @property
     def edge_integrity_safe(self) -> bool:
         """Return whether persisted edges match the graph topology."""
-        if not self.nodes:
-            return False
-        declared_components = {
-            int(node.component_id) for node in self.nodes.values()
-        }
-        if not declared_components or self.component_count < len(
-            declared_components
-        ):
-            return False
-        for source, edges in self.edges.items():
-            if source not in self.nodes:
-                return False
-            source_node = self.nodes[source]
-            for edge in edges:
-                target_node = self.nodes.get(edge.target)
-                if (
-                    not edge.line_of_sight
-                    or edge.source != source
-                    or target_node is None
-                    or target_node.component_id != source_node.component_id
-                    or not math.isfinite(float(edge.distance_m))
-                    or float(edge.distance_m) <= 0.0
-                    or not all(
-                        math.isfinite(float(value)) for value in edge.direction
-                    )
-                ):
-                    return False
-        return True
+        return self.runtime_index.edge_integrity_safe
 
     @property
     def terminal_count(self) -> int:
-        return sum(1 for node in self.nodes.values() if node.terminal)
+        return self.runtime_index.terminal_count
 
     @property
     def dead_end_count(self) -> int:
-        return sum(1 for node in self.nodes.values() if node.dead_end)
+        return self.runtime_index.dead_end_count
 
     @property
     def unknown_boundary_count(self) -> int:
-        return sum(1 for node in self.nodes.values() if node.unknown_boundary)
+        return self.runtime_index.unknown_boundary_count
 
     @property
     def motion_geometry_safe(self) -> bool:
         """Return whether graph centers are safe to use as camera waypoints."""
-        if not all(
-            math.isfinite(float(value)) and float(value) > 0.0
-            for value in self.grid_size_m
-        ):
-            return False
-        if (
-            float(self.grid_size_m[1])
-            > DEFAULT_3D_GRAPH_MAX_VERTICAL_GRID_SIZE_M
-        ):
-            return False
-        max_edge_distance = max(1e-6, float(self.max_edge_distance_m))
-        max_vertical_distance = max(
-            1e-6,
-            float(self.max_vertical_edge_distance_m),
-        )
-        for edges in self.edges.values():
-            for edge in edges:
-                if float(edge.distance_m) > max_edge_distance + 1e-6:
-                    return False
-                if (
-                    abs(float(edge.direction[1]) * float(edge.distance_m))
-                    > max_vertical_distance + 1e-6
-                ):
-                    return False
-        return True
+        return self.runtime_index.motion_geometry_safe
 
     def outgoing(
         self,
         key: VoxelGraphKey,
     ) -> tuple[NavigationVoxel3DEdge, ...]:
         return self.edges.get(key, ())
+
+    @property
+    def runtime_index(self) -> "NavigationVoxel3DGraphIndex":
+        """Return the reusable runtime index for this immutable graph.
+
+        The serialized graph remains the source of truth.  The index is an
+        in-memory acceleration structure built once per graph object so route
+        requests do not repeatedly scan every node to recover topology that is
+        already present in the graph.
+        """
+        index = self._runtime_index
+        if index is not None:
+            return index
+        with _GRAPH_RUNTIME_INDEX_LOCK:
+            index = self._runtime_index
+            if index is None:
+                index = NavigationVoxel3DGraphIndex.from_graph(self)
+                object.__setattr__(self, "_runtime_index", index)
+        return index
 
     def diagnostic_payload(self) -> dict[str, object]:
         return {
@@ -271,6 +257,583 @@ class NavigationVoxel3DGraph:
             "edge_integrity_safe": bool(self.edge_integrity_safe),
             "motion_geometry_safe": bool(self.motion_geometry_safe),
         }
+
+
+@dataclass(frozen=True)
+class NavigationVoxel3DGraphIndex:
+    """Immutable, integer-backed indexes for repeated graph queries."""
+
+    keys: tuple[VoxelGraphKey, ...]
+    node_ids: Mapping[VoxelGraphKey, int]
+    centers: np.ndarray = field(repr=False, compare=False)
+    component_ids: np.ndarray = field(repr=False, compare=False)
+    routable_mask: np.ndarray = field(repr=False, compare=False)
+    node_ids_by_component: Mapping[int, np.ndarray] = field(
+        repr=False,
+        compare=False,
+    )
+    routable_node_ids_by_component: Mapping[int, np.ndarray] = field(
+        repr=False,
+        compare=False,
+    )
+    keys_by_component: Mapping[int, tuple[VoxelGraphKey, ...]]
+    key_sets_by_component: Mapping[int, frozenset[VoxelGraphKey]] = field(
+        repr=False,
+        compare=False,
+    )
+    routable_keys_by_component: Mapping[int, frozenset[VoxelGraphKey]] = field(
+        repr=False,
+        compare=False,
+    )
+    terminal_keys_by_component: Mapping[int, tuple[VoxelGraphKey, ...]]
+    terminal_candidate_keys_by_component: Mapping[
+        int,
+        tuple[VoxelGraphKey, ...],
+    ]
+    component_min_progress: Mapping[int, float]
+    adjacency: tuple[tuple[tuple[int, float], ...], ...] = field(
+        repr=False,
+        compare=False,
+    )
+    reverse_offsets: np.ndarray = field(repr=False, compare=False)
+    reverse_sources: np.ndarray = field(repr=False, compare=False)
+    reverse_distances: np.ndarray = field(repr=False, compare=False)
+    outgoing_edges_by_id: tuple[
+        tuple[NavigationVoxel3DEdge, ...],
+        ...,
+    ] = field(
+        repr=False,
+        compare=False,
+    )
+    edge_count: int
+    routable_node_count: int
+    component_count: int
+    terminal_count: int
+    dead_end_count: int
+    unknown_boundary_count: int
+    edge_integrity_safe: bool
+    motion_geometry_safe: bool
+    _physical_distance_cache: OrderedDict[
+        tuple[VoxelGraphKey, int], np.ndarray
+    ] = field(
+        default_factory=OrderedDict,
+        repr=False,
+        compare=False,
+    )
+    _physical_distance_cache_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        repr=False,
+        compare=False,
+    )
+
+    @classmethod
+    def from_graph(cls, graph: NavigationVoxel3DGraph) -> "NavigationVoxel3DGraphIndex":
+        """Build all reusable topology and nearest-node indexes once."""
+        keys = tuple(graph.nodes)
+        node_ids = {key: index for index, key in enumerate(keys)}
+        node_count = len(keys)
+        centers = np.asarray(
+            [graph.nodes[key].center for key in keys],
+            dtype=np.float64,
+        ).reshape((-1, 3))
+        component_ids = np.asarray(
+            [int(graph.nodes[key].component_id) for key in keys],
+            dtype=np.int32,
+        )
+        routable_mask = np.zeros(node_count, dtype=np.bool_)
+        component_node_ids: dict[int, list[int]] = {}
+        component_routable_ids: dict[int, list[int]] = {}
+        component_keys: dict[int, list[VoxelGraphKey]] = {}
+        component_routable_keys: dict[int, set[VoxelGraphKey]] = {}
+        terminal_keys: dict[int, list[VoxelGraphKey]] = {}
+        terminal_candidate_keys: dict[int, list[VoxelGraphKey]] = {}
+        component_min_progress: dict[int, float] = {}
+
+        terminal_count = 0
+        dead_end_count = 0
+        unknown_boundary_count = 0
+        for index, key in enumerate(keys):
+            node = graph.nodes[key]
+            component_id = int(node.component_id)
+            component_node_ids.setdefault(component_id, []).append(index)
+            component_keys.setdefault(component_id, []).append(key)
+            component_min_progress[component_id] = min(
+                float(node.progress_m),
+                component_min_progress.get(component_id, math.inf),
+            )
+            if bool(node.terminal):
+                terminal_count += 1
+                terminal_keys.setdefault(component_id, []).append(key)
+            if bool(node.terminal) or bool(node.unknown_boundary):
+                terminal_candidate_keys.setdefault(component_id, []).append(key)
+            if bool(node.dead_end):
+                dead_end_count += 1
+            if bool(node.unknown_boundary):
+                unknown_boundary_count += 1
+
+        edge_count = sum(len(edges) for edges in graph.edges.values())
+        adjacency_lists: list[list[tuple[int, float]]] = [
+            [] for _ in keys
+        ]
+        outgoing_edge_lists: list[list[NavigationVoxel3DEdge]] = [
+            [] for _ in keys
+        ]
+        edge_integrity_safe = bool(keys)
+        declared_components = {
+            int(node.component_id) for node in graph.nodes.values()
+        }
+        if not declared_components or graph.component_count < len(
+            declared_components
+        ):
+            edge_integrity_safe = False
+        motion_geometry_safe = all(
+            math.isfinite(float(value)) and float(value) > 0.0
+            for value in graph.grid_size_m
+        ) and float(graph.grid_size_m[1]) <= DEFAULT_3D_GRAPH_MAX_VERTICAL_GRID_SIZE_M
+        max_edge_distance = max(1e-6, float(graph.max_edge_distance_m))
+        max_vertical_distance = max(
+            1e-6,
+            float(graph.max_vertical_edge_distance_m),
+        )
+
+        for source, edges in graph.edges.items():
+            source_index = node_ids.get(source)
+            source_node = graph.nodes.get(source)
+            if source_index is None or source_node is None:
+                edge_integrity_safe = False
+                continue
+            source_component = int(source_node.component_id)
+            for edge in edges:
+                target_node = graph.nodes.get(edge.target)
+                target_index = node_ids.get(edge.target)
+                edge_valid = (
+                    edge.line_of_sight
+                    and edge.source == source
+                    and target_node is not None
+                    and target_index is not None
+                    and target_node.component_id == source_node.component_id
+                    and math.isfinite(float(edge.distance_m))
+                    and float(edge.distance_m) > 0.0
+                    and all(
+                        math.isfinite(float(value)) for value in edge.direction
+                    )
+                )
+                if not edge_valid:
+                    edge_integrity_safe = False
+                else:
+                    adjacency_lists[source_index].append(
+                        (int(target_index), float(edge.distance_m))
+                    )
+                    outgoing_edge_lists[source_index].append(edge)
+                    if not routable_mask[source_index]:
+                        routable_mask[source_index] = True
+                        component_routable_ids.setdefault(
+                            source_component,
+                            [],
+                        ).append(source_index)
+                        component_routable_keys.setdefault(
+                            source_component,
+                            set(),
+                        ).add(source)
+                if (
+                    float(edge.distance_m) > max_edge_distance + 1e-6
+                    or abs(
+                        float(edge.direction[1]) * float(edge.distance_m)
+                    )
+                    > max_vertical_distance + 1e-6
+                ):
+                    motion_geometry_safe = False
+
+        reverse_offsets = np.zeros(node_count + 1, dtype=np.int64)
+        for source_edges in adjacency_lists:
+            for target_id, _edge_distance_m in source_edges:
+                reverse_offsets[target_id + 1] += 1
+        reverse_offsets = np.cumsum(reverse_offsets, dtype=np.int64)
+        valid_edge_count = sum(len(source_edges) for source_edges in adjacency_lists)
+        reverse_sources = np.empty(valid_edge_count, dtype=np.int32)
+        reverse_distances = np.empty(valid_edge_count, dtype=np.float64)
+        reverse_cursors = reverse_offsets[:-1].copy()
+        for source_id, source_edges in enumerate(adjacency_lists):
+            for target_id, edge_distance_m in source_edges:
+                reverse_index = int(reverse_cursors[target_id])
+                reverse_sources[reverse_index] = int(source_id)
+                reverse_distances[reverse_index] = float(edge_distance_m)
+                reverse_cursors[target_id] += 1
+
+        centers.setflags(write=False)
+        component_ids.setflags(write=False)
+        routable_mask.setflags(write=False)
+        node_ids_by_component = {
+            component_id: np.asarray(indices, dtype=np.int32)
+            for component_id, indices in component_node_ids.items()
+        }
+        routable_node_ids_by_component = {
+            component_id: np.asarray(indices, dtype=np.int32)
+            for component_id, indices in component_routable_ids.items()
+        }
+        for values in (
+            *node_ids_by_component.values(),
+            *routable_node_ids_by_component.values(),
+        ):
+            values.setflags(write=False)
+        reverse_offsets.setflags(write=False)
+        reverse_sources.setflags(write=False)
+        reverse_distances.setflags(write=False)
+        return cls(
+            keys=keys,
+            node_ids=node_ids,
+            centers=centers,
+            component_ids=component_ids,
+            routable_mask=routable_mask,
+            node_ids_by_component=node_ids_by_component,
+            routable_node_ids_by_component=routable_node_ids_by_component,
+            keys_by_component={
+                component_id: tuple(values)
+                for component_id, values in component_keys.items()
+            },
+            key_sets_by_component={
+                component_id: frozenset(values)
+                for component_id, values in component_keys.items()
+            },
+            routable_keys_by_component={
+                component_id: frozenset(values)
+                for component_id, values in component_routable_keys.items()
+            },
+            terminal_keys_by_component={
+                component_id: tuple(values)
+                for component_id, values in terminal_keys.items()
+            },
+            terminal_candidate_keys_by_component={
+                component_id: tuple(values)
+                for component_id, values in terminal_candidate_keys.items()
+            },
+            component_min_progress=component_min_progress,
+            adjacency=tuple(tuple(values) for values in adjacency_lists),
+            reverse_offsets=reverse_offsets,
+            reverse_sources=reverse_sources,
+            reverse_distances=reverse_distances,
+            outgoing_edges_by_id=tuple(
+                tuple(values) for values in outgoing_edge_lists
+            ),
+            edge_count=edge_count,
+            routable_node_count=int(np.count_nonzero(routable_mask)),
+            component_count=int(graph.component_count),
+            terminal_count=terminal_count,
+            dead_end_count=dead_end_count,
+            unknown_boundary_count=unknown_boundary_count,
+            edge_integrity_safe=edge_integrity_safe,
+            motion_geometry_safe=motion_geometry_safe,
+        )
+
+    def physical_distances_to_target(
+        self,
+        target_key: VoxelGraphKey,
+        *,
+        component_id: int | None = None,
+    ) -> np.ndarray:
+        """Return exact physical-distance lower bounds to one target.
+
+        Reverse Dijkstra uses compact CSR arrays rather than Python adjacency
+        containers.  The result is an admissible lower bound for route costs
+        that add only non-negative heading, clearance, and connectivity
+        penalties to physical edge distance.
+        """
+        target_id = self.node_ids.get(target_key)
+        distances = np.full(len(self.keys), np.inf, dtype=np.float64)
+        if target_id is None:
+            return distances
+        selected_component = (
+            int(self.component_ids[target_id])
+            if component_id is None
+            else int(component_id)
+        )
+        if int(self.component_ids[target_id]) != selected_component:
+            return distances
+        cache_key = (target_key, selected_component)
+        with self._physical_distance_cache_lock:
+            cached = self._physical_distance_cache.get(cache_key)
+            if cached is not None:
+                self._physical_distance_cache.move_to_end(cache_key)
+                return cached
+        distances[int(target_id)] = 0.0
+        queue: list[tuple[float, int]] = [(0.0, int(target_id))]
+        while queue:
+            distance_m, current_id = heapq.heappop(queue)
+            if distance_m > distances[current_id] + 1e-9:
+                continue
+            start = int(self.reverse_offsets[current_id])
+            end = int(self.reverse_offsets[current_id + 1])
+            for reverse_index in range(start, end):
+                source_id = int(self.reverse_sources[reverse_index])
+                if int(self.component_ids[source_id]) != selected_component:
+                    continue
+                next_distance_m = (
+                    distance_m
+                    + float(self.reverse_distances[reverse_index])
+                )
+                if next_distance_m + 1e-9 >= distances[source_id]:
+                    continue
+                distances[source_id] = next_distance_m
+                heapq.heappush(queue, (next_distance_m, source_id))
+        distances.setflags(write=False)
+        with self._physical_distance_cache_lock:
+            cached = self._physical_distance_cache.get(cache_key)
+            if cached is not None:
+                self._physical_distance_cache.move_to_end(cache_key)
+                return cached
+            self._physical_distance_cache[cache_key] = distances
+            while (
+                len(self._physical_distance_cache)
+                > DEFAULT_GRAPH_RUNTIME_DISTANCE_CACHE_ENTRIES
+            ):
+                self._physical_distance_cache.popitem(last=False)
+        return distances
+
+    def nearest_key(
+        self,
+        position: Sequence[float],
+        *,
+        component_id: int | None = None,
+        routable_only: bool = False,
+    ) -> tuple[VoxelGraphKey | None, float]:
+        """Find a nearest node using vectorized immutable node coordinates."""
+        if component_id is None:
+            candidate_ids = np.arange(len(self.keys), dtype=np.int32)
+            if routable_only:
+                candidate_ids = candidate_ids[self.routable_mask]
+        elif routable_only:
+            candidate_ids = self.routable_node_ids_by_component.get(
+                int(component_id),
+                np.empty(0, dtype=np.int32),
+            )
+        else:
+            candidate_ids = self.node_ids_by_component.get(
+                int(component_id),
+                np.empty(0, dtype=np.int32),
+            )
+        if len(candidate_ids) == 0:
+            return None, math.inf
+        point = np.asarray(tuple(float(value) for value in position), dtype=np.float64)
+        if point.shape != (3,) or not np.all(np.isfinite(point)):
+            return None, math.inf
+        delta = self.centers[candidate_ids] - point
+        distances = np.einsum("ij,ij->i", delta, delta)
+        minimum = float(np.min(distances))
+        tied = candidate_ids[np.isclose(distances, minimum, rtol=0.0, atol=1e-12)]
+        selected_id = min((int(value) for value in tied), key=lambda value: self.keys[value])
+        return self.keys[selected_id], minimum
+
+    def keys_in_bounds(
+        self,
+        bounds_min: Sequence[float],
+        bounds_max: Sequence[float],
+        *,
+        component_id: int | None = None,
+        routable_only: bool = False,
+    ) -> tuple[VoxelGraphKey, ...]:
+        """Return prepared graph keys whose centers fall within one AABB.
+
+        This vectorized runtime-index query avoids Python-level scans of a
+        whole-cave graph whenever a persisted fine tile needs nearby portal
+        candidates.  It is intentionally an exact center-in-bounds filter;
+        callers retain responsibility for voxel and mesh validation.
+        """
+        try:
+            lower = np.asarray(tuple(float(value) for value in bounds_min), dtype=np.float64)
+            upper = np.asarray(tuple(float(value) for value in bounds_max), dtype=np.float64)
+        except (TypeError, ValueError):
+            return ()
+        if (
+            lower.shape != (3,)
+            or upper.shape != (3,)
+            or not np.all(np.isfinite(lower))
+            or not np.all(np.isfinite(upper))
+            or np.any(lower > upper)
+        ):
+            return ()
+        if component_id is None:
+            candidate_ids = np.arange(len(self.keys), dtype=np.int32)
+            if routable_only:
+                candidate_ids = candidate_ids[self.routable_mask]
+        elif routable_only:
+            candidate_ids = self.routable_node_ids_by_component.get(
+                int(component_id),
+                np.empty(0, dtype=np.int32),
+            )
+        else:
+            candidate_ids = self.node_ids_by_component.get(
+                int(component_id),
+                np.empty(0, dtype=np.int32),
+            )
+        if len(candidate_ids) == 0:
+            return ()
+        centers = self.centers[candidate_ids]
+        within_bounds = np.all(
+            (centers >= lower - 1e-9) & (centers <= upper + 1e-9),
+            axis=1,
+        )
+        return tuple(self.keys[int(node_id)] for node_id in candidate_ids[within_bounds])
+
+    def shortest_distances_to_candidates(
+        self,
+        start_key: VoxelGraphKey,
+        candidate_keys: Sequence[VoxelGraphKey],
+        *,
+        component_id: int,
+        max_expansions: int,
+    ) -> tuple[dict[VoxelGraphKey, float], int, bool]:
+        """Run Dijkstra over integer adjacency until candidates are settled."""
+        start_id = self.node_ids.get(start_key)
+        candidate_ids = {
+            self.node_ids[key]
+            for key in candidate_keys
+            if key in self.node_ids
+            and int(self.component_ids[self.node_ids[key]]) == int(component_id)
+        }
+        if start_id is None or not candidate_ids:
+            return {}, 0, False
+        distances: dict[int, float] = {int(start_id): 0.0}
+        queue: list[tuple[float, int]] = [(0.0, int(start_id))]
+        expanded_count = 0
+        while queue:
+            distance_m, current_id = heapq.heappop(queue)
+            if distance_m > distances.get(current_id, math.inf) + 1e-9:
+                continue
+            expanded_count += 1
+            if expanded_count > max(1, int(max_expansions)):
+                return {}, expanded_count, True
+            candidate_ids.discard(current_id)
+            if not candidate_ids:
+                break
+            for target_id, edge_distance_m in self.adjacency[current_id]:
+                if int(self.component_ids[target_id]) != int(component_id):
+                    continue
+                next_distance_m = distance_m + float(edge_distance_m)
+                if next_distance_m + 1e-9 >= distances.get(
+                    target_id,
+                    math.inf,
+                ):
+                    continue
+                distances[target_id] = next_distance_m
+                heapq.heappush(queue, (next_distance_m, target_id))
+        return {
+            self.keys[node_id]: float(distance)
+            for node_id, distance in distances.items()
+        }, expanded_count, False
+
+
+def shortest_navigation_voxel_3d_graph_path(
+    graph: NavigationVoxel3DGraph,
+    *,
+    start_key: VoxelGraphKey,
+    terminal_key: VoxelGraphKey,
+    forbidden_keys: Sequence[VoxelGraphKey] = (),
+    blocked_edges: Sequence[tuple[VoxelGraphKey, VoxelGraphKey]] = (),
+    max_expansions: int | None = None,
+) -> tuple[tuple[VoxelGraphKey, ...] | None, dict[str, object]]:
+    """Return the shortest physical path through one prepared component.
+
+    This deliberately uses only persisted graph-edge distance.  It is the
+    canonical route for the ``easiest_terminal`` policy, whose terminal is
+    also selected by physical graph distance.  Callers still apply their
+    graph/voxel/mesh validation before treating the returned keys as an
+    executable camera route.
+    """
+    if start_key == terminal_key:
+        return (start_key,), {
+            "reason": "same_node",
+            "expanded_state_count": 0,
+            "graph_route_cost": 0.0,
+            "graph_path_key_count": 1,
+            "route_cost_method": "physical_graph_distance",
+        }
+    index = graph.runtime_index
+    start_id = index.node_ids.get(start_key)
+    terminal_id = index.node_ids.get(terminal_key)
+    if start_id is None or terminal_id is None:
+        return None, {
+            "reason": "physical_graph_route_endpoint_missing",
+            "expanded_state_count": 0,
+            "route_cost_method": "physical_graph_distance",
+        }
+    component_id = int(index.component_ids[int(start_id)])
+    if int(index.component_ids[int(terminal_id)]) != component_id:
+        return None, {
+            "reason": "physical_graph_route_component_mismatch",
+            "expanded_state_count": 0,
+            "route_cost_method": "physical_graph_distance",
+        }
+    forbidden = frozenset(key for key in forbidden_keys if key != start_key)
+    blocked = frozenset(blocked_edges)
+    if terminal_key in forbidden:
+        return None, {
+            "reason": "physical_graph_terminal_forbidden",
+            "expanded_state_count": 0,
+            "route_cost_method": "physical_graph_distance",
+        }
+    expansion_limit = (
+        max(len(graph.nodes) * 4, int(graph.edge_count) + 1)
+        if max_expansions is None
+        else max(1, int(max_expansions))
+    )
+    distances: dict[int, float] = {int(start_id): 0.0}
+    parents: dict[int, int | None] = {int(start_id): None}
+    queue: list[tuple[float, int]] = [(0.0, int(start_id))]
+    expanded_count = 0
+    while queue:
+        distance_m, current_id = heapq.heappop(queue)
+        if distance_m > distances.get(current_id, math.inf) + 1e-9:
+            continue
+        expanded_count += 1
+        if current_id == int(terminal_id):
+            path_ids: list[int] = [current_id]
+            while parents[path_ids[-1]] is not None:
+                parent_id = parents[path_ids[-1]]
+                assert parent_id is not None
+                path_ids.append(parent_id)
+            path_ids.reverse()
+            keys = tuple(index.keys[node_id] for node_id in path_ids)
+            return keys, {
+                "reason": "physical_graph_route_found",
+                "expanded_state_count": expanded_count,
+                "max_expansions": expansion_limit,
+                "graph_route_cost": float(distance_m),
+                "graph_path_key_count": len(keys),
+                "forbidden_key_count": len(forbidden),
+                "blocked_edge_count": len(blocked),
+                "route_cost_method": "physical_graph_distance",
+            }
+        if expanded_count > expansion_limit:
+            return None, {
+                "reason": "physical_graph_search_expansion_limit",
+                "expanded_state_count": expanded_count,
+                "max_expansions": expansion_limit,
+                "route_cost_method": "physical_graph_distance",
+            }
+        current_key = index.keys[current_id]
+        for target_id, edge_distance_m in index.adjacency[current_id]:
+            target_key = index.keys[int(target_id)]
+            if (
+                target_key in forbidden
+                or (current_key, target_key) in blocked
+                or int(index.component_ids[int(target_id)]) != component_id
+            ):
+                continue
+            next_distance_m = float(distance_m) + float(edge_distance_m)
+            if next_distance_m + 1e-9 >= distances.get(
+                int(target_id),
+                math.inf,
+            ):
+                continue
+            distances[int(target_id)] = next_distance_m
+            parents[int(target_id)] = current_id
+            heapq.heappush(queue, (next_distance_m, int(target_id)))
+    return None, {
+        "reason": "no_physical_graph_route_to_terminal",
+        "expanded_state_count": expanded_count,
+        "max_expansions": expansion_limit,
+        "route_cost_method": "physical_graph_distance",
+    }
 
 
 def _normalise_grid_size(grid_size_m: GridSize) -> tuple[float, float, float]:
@@ -668,8 +1231,8 @@ def deserialize_navigation_voxel_3d_graph(
         raise ValueError("cached true-3D voxel graph is missing")
     if payload.get("version") != NAVIGATION_VOXEL_3D_GRAPH_VERSION:
         raise ValueError("unsupported true-3D voxel graph version")
-    if payload.get("method") != NAVIGATION_VOXEL_3D_GRAPH_METHOD:
-        raise ValueError("unsupported true-3D voxel graph method")
+    if payload.get("method") not in SUPPORTED_NAVIGATION_3D_GRAPH_METHODS:
+        raise ValueError("unsupported true-3D navigation graph method")
     raw_nodes = payload.get("nodes")
     raw_edges = payload.get("edges")
     if not isinstance(raw_nodes, Sequence) or isinstance(raw_nodes, (str, bytes)):
@@ -699,6 +1262,7 @@ def deserialize_navigation_voxel_3d_graph(
             tuple[int, ...],
         ]
     ] = []
+    seen_keys: set[VoxelGraphKey] = set()
     for raw in raw_nodes:
         if (
             not isinstance(raw, Sequence)
@@ -730,7 +1294,7 @@ def deserialize_navigation_voxel_3d_graph(
         except (TypeError, ValueError) as exc:
             raise ValueError("cached true-3D voxel graph preferences are malformed") from exc
         if (
-            key in keys
+            key in seen_keys
             or not all(
                 math.isfinite(value)
                 for value in (
@@ -752,6 +1316,7 @@ def deserialize_navigation_voxel_3d_graph(
         ):
             raise ValueError("cached true-3D voxel graph node is invalid")
         keys.append(key)
+        seen_keys.add(key)
         values.append(
             (
                 center,

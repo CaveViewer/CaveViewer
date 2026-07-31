@@ -11,12 +11,14 @@ from caveviewer.core.navigation.autodive import (
     AUTO_DIVE_PREFLIGHT_READY,
     AutoDivePlan,
     AutoDivePreflightResult,
+    AutoDiveRouteSegment,
 )
 from caveviewer.core.navigation.voxel_cache import (
     NavigationVoxelAtlas,
     NavigationVoxelCellMetric,
 )
 from caveviewer.core.navigation.voxel_graph_3d import (
+    NAVIGATION_MESH_3D_GRAPH_METHOD,
     NavigationVoxel3DMetric,
     build_navigation_voxel_3d_graph,
 )
@@ -41,7 +43,7 @@ def _graph_and_atlas():
         )
         for index in range(3)
     }
-    graph = build_navigation_voxel_3d_graph(
+    voxel_graph = build_navigation_voxel_3d_graph(
         metrics,
         grid_size_m=(1.0, 1.0, 1.0),
         unknown_boundary=(),
@@ -69,9 +71,14 @@ def _graph_and_atlas():
             )
             for index in range(3)
         },
-        prepared_3d_graph=graph,
+        prepared_3d_graph=voxel_graph,
+        prepared_mesh_graph=replace(
+            voxel_graph,
+            method=NAVIGATION_MESH_3D_GRAPH_METHOD,
+        ),
     )
-    return graph, atlas
+    assert atlas.prepared_mesh_graph is not None
+    return atlas.prepared_mesh_graph, atlas
 
 
 def _manifest():
@@ -88,8 +95,8 @@ def _manifest():
             "recommended_route_id": "main",
             "voxel_cache": {
                 "path": "navigation_voxels.json",
-                "version": 8,
-                "method": "whole_cave_voxel_atlas_v8",
+                "version": 10,
+                "method": "whole_cave_voxel_atlas_v10",
             },
         },
     }
@@ -117,6 +124,7 @@ def _plan(graph, atlas):
         navigation_graph=graph,
         navigation_graph_keys=keys,
         terminal_reached=True,
+        fixed_route=True,
     )
 
 
@@ -137,6 +145,18 @@ def test_certificate_passes_only_after_artifact_route_and_replan_gates(
 ):
     graph, atlas = _graph_and_atlas()
     plan = _plan(graph, atlas)
+    plan = replace(
+        plan,
+        route_segments=(
+            AutoDiveRouteSegment(
+                route_points=plan.route_points,
+                route_cells=plan.route_cells,
+                source="prepared_global_graph",
+                graph_keys=plan.navigation_graph_keys,
+                details={"kind": "prepared_global_route"},
+            ),
+        ),
+    )
     preflight = AutoDivePreflightResult(
         status=AUTO_DIVE_PREFLIGHT_READY,
         reason="validated_farthest_graph_terminal_route",
@@ -160,6 +180,11 @@ def test_certificate_passes_only_after_artifact_route_and_replan_gates(
         lambda *_args, **_kwargs: atlas,
     )
     monkeypatch.setattr(
+        certificate,
+        "_verify_navigation_artifact_index",
+        lambda *_args, **_kwargs: {"passed": True},
+    )
+    monkeypatch.setattr(
         certificate.CachedChunkMeshCollisionGuard,
         "from_manifest",
         classmethod(lambda cls, *_args, **_kwargs: _NoCollisionGuard()),
@@ -172,7 +197,9 @@ def test_certificate_passes_only_after_artifact_route_and_replan_gates(
     monkeypatch.setattr(
         certificate,
         "build_voxel_graph_auto_dive_plan",
-        lambda *_args, **_kwargs: plan,
+        lambda *_args, **_kwargs: pytest.fail(
+            "fixed-route certification must not invoke runtime replanning"
+        ),
     )
 
     result = certificate.certify_navigation_cache(
@@ -188,6 +215,7 @@ def test_certificate_passes_only_after_artifact_route_and_replan_gates(
         "cache_artifacts",
         "render_chunk_decoding",
         "navigation_route",
+        "navigation_artifact_index",
         "navigation_artifact",
         "navigation_chunk_decoding",
         "graph_geometry",
@@ -198,6 +226,13 @@ def test_certificate_passes_only_after_artifact_route_and_replan_gates(
         "runtime_replanning",
     }
     assert all(check.passed for check in result.checks)
+    route_safety = next(check for check in result.checks if check.name == "route_safety")
+    assert route_safety.details["route_geometry_source"] == "fixed_route_ledger"
+    simulation = next(
+        check for check in result.checks if check.name == "runtime_replanning"
+    )
+    assert simulation.details["execution_mode"] == "fixed_route_no_replan"
+    assert simulation.details["replan_request_count"] == 0
 
 
 def test_full_cave_profile_rejects_unknown_frontier(monkeypatch, tmp_path):
@@ -209,9 +244,14 @@ def test_full_cave_profile_rejects_unknown_frontier(monkeypatch, tmp_path):
             for key, node in graph.nodes.items()
         },
     )
-    atlas = replace(atlas, prepared_3d_graph=graph)
+    atlas = replace(atlas, prepared_mesh_graph=graph)
     monkeypatch.setattr(certificate, "cache_dir_is_valid", lambda *_args: True)
     monkeypatch.setattr(certificate, "load_chunk_file", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        certificate,
+        "_verify_navigation_artifact_index",
+        lambda *_args, **_kwargs: {"passed": True},
+    )
     monkeypatch.setattr(
         certificate,
         "load_cached_navigation_voxel_volume",
@@ -227,6 +267,83 @@ def test_full_cave_profile_rejects_unknown_frontier(monkeypatch, tmp_path):
     coverage = next(check for check in result.checks if check.name == "graph_coverage")
     assert coverage.passed is False
     assert coverage.reason == "unknown_graph_boundary"
+
+
+def test_artifact_phase_does_not_deserialize_navigation_graph(monkeypatch, tmp_path):
+    monkeypatch.setattr(certificate, "cache_dir_is_valid", lambda *_args: True)
+    monkeypatch.setattr(
+        certificate,
+        "load_chunk_file",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        certificate,
+        "_verify_navigation_artifact_index",
+        lambda *_args, **_kwargs: {"passed": True},
+    )
+
+    def fail_if_graph_loads(*_args, **_kwargs):
+        pytest.fail("artifact certification must not load the navigation graph")
+
+    monkeypatch.setattr(
+        certificate,
+        "load_cached_navigation_voxel_volume",
+        fail_if_graph_loads,
+    )
+
+    result = certificate.certify_navigation_cache(
+        _manifest(),
+        cache_dir=tmp_path,
+        phase=certificate.PHASE_ARTIFACTS,
+    )
+
+    assert result.passed is True
+    assert result.phase == certificate.PHASE_ARTIFACTS
+    assert "navigation_artifact" not in {
+        check.name for check in result.checks
+    }
+
+
+def test_graph_phase_stops_before_route_preflight(monkeypatch, tmp_path):
+    graph, atlas = _graph_and_atlas()
+    monkeypatch.setattr(certificate, "cache_dir_is_valid", lambda *_args: True)
+    monkeypatch.setattr(certificate, "load_chunk_file", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        certificate,
+        "_verify_navigation_artifact_index",
+        lambda *_args, **_kwargs: {"passed": True},
+    )
+    monkeypatch.setattr(
+        certificate,
+        "load_cached_navigation_voxel_volume",
+        lambda *_args, **_kwargs: atlas,
+    )
+    monkeypatch.setattr(
+        certificate.CachedChunkMeshCollisionGuard,
+        "from_manifest",
+        classmethod(lambda cls, *_args, **_kwargs: _NoCollisionGuard()),
+    )
+
+    def fail_if_route_runs(*_args, **_kwargs):
+        pytest.fail("graph certification must stop before route preflight")
+
+    monkeypatch.setattr(
+        certificate,
+        "build_auto_dive_preflight_plan",
+        fail_if_route_runs,
+    )
+
+    result = certificate.certify_navigation_cache(
+        _manifest(),
+        cache_dir=tmp_path,
+        phase=certificate.PHASE_GRAPH,
+    )
+
+    assert result.passed is True
+    assert result.phase == certificate.PHASE_GRAPH
+    assert "route_preflight" not in {
+        check.name for check in result.checks
+    }
 
 
 @pytest.mark.parametrize("value", [(0.0, 1.0), (float("nan"), 1.0)])

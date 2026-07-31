@@ -41,7 +41,12 @@ NAVIGATION_METADATA_METHOD = "footprint_centerline_paths_v1"
 NAVIGATION_METADATA_KEY = "navigation"
 NAVIGATION_SURFACE_Y_SEARCH_RADIUS_CELLS = 4
 NAVIGATION_SURFACE_Y_HISTOGRAM_BINS = 96
+# The navigation footprint is inferred from surface vertices.  The voxel
+# builder later normalizes this candidate component to the mesh-backed cells
+# it can actually sample, so retain the established span cap here while
+# keeping that evidence-driven normalization explicit at cache build time.
 NAVIGATION_SURFACE_SPAN_FILL_MAX_CELLS = 32
+NAVIGATION_SURFACE_SPAN_SUPPORT_MAX_CELLS = 32
 # Suggested runtime Guided Dive Y smoothing radius for viewers that expose a
 # preference. Metadata stores raw route samples; smoothing is applied by the
 # route planner so the radius can be tuned without rebuilding cache.
@@ -147,6 +152,9 @@ def build_navigation_metadata(
             candidate_count=candidate.candidate_count,
             starts_at_navigation_start=candidate.starts_at_navigation_start,
             navigation_start_distance_m=candidate.navigation_start_distance_m,
+            voxel_sampling_cells=_parse_flat_cells(
+                source_manifest.get("_voxel_sampling_cells")
+            ),
         )
         for index, candidate in enumerate(selected_candidates)
     ]
@@ -646,6 +654,7 @@ def _metadata_route_for_centerline_path(
     candidate_count: int = 1,
     starts_at_navigation_start: bool = False,
     navigation_start_distance_m: float | None = None,
+    voxel_sampling_cells: Sequence[FootprintCell] = (),
 ) -> dict[str, Any]:
     route_id = f"centerline-{index}"
     component_cells = tuple(sorted(path.component_cells))
@@ -667,6 +676,9 @@ def _metadata_route_for_centerline_path(
             path.endpoint_threshold_clearance_cells
         ),
     }
+    support_cells = tuple(sorted(set(voxel_sampling_cells)))
+    if support_cells:
+        route["voxel_sampling_cells"] = _flat_cells(support_cells)
     if starts_at_navigation_start:
         route["starts_at_navigation_start"] = True
     if navigation_start_distance_m is not None:
@@ -1274,6 +1286,10 @@ def _navigation_manifest_from_surface_positions(
         surface_cells,
         max_span_cells=NAVIGATION_SURFACE_SPAN_FILL_MAX_CELLS,
     )
+    sampling_cells = _surface_span_filled_footprint_cells(
+        surface_cells,
+        max_span_cells=NAVIGATION_SURFACE_SPAN_SUPPORT_MAX_CELLS,
+    )
     navigation_manifest = dict(manifest)
     navigation_manifest["footprint_cell_size"] = cell_size
     navigation_manifest["footprint_cells"] = _flat_cells(
@@ -1281,6 +1297,7 @@ def _navigation_manifest_from_surface_positions(
     )
     navigation_manifest["surface_footprint_cell_count"] = len(surface_cells)
     navigation_manifest["navigation_footprint_source"] = "surface_span_fill_v1"
+    navigation_manifest["_voxel_sampling_cells"] = _flat_cells(sampling_cells)
     return navigation_manifest
 
 

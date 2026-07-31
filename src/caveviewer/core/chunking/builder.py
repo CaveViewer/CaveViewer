@@ -962,6 +962,9 @@ def _attach_navigation_metadata(
                     manifest,
                     navigation_metadata,
                     triangle_provider=mesh_guard.triangle_meshes_for_bounds,
+                    mesh_edge_is_clear=lambda first, second: (
+                        mesh_guard.segment_collision(first, second) is None
+                    ),
                 )
                 if voxel_result.built_route_count:
                     published_payload = (

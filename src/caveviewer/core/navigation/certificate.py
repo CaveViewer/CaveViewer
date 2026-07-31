@@ -21,8 +21,10 @@ from caveviewer.core.chunking.io import load_chunk_file
 from caveviewer.core.chunking.metadata import cache_dir_is_valid, load_manifest
 from caveviewer.core.navigation.autodive import (
     AUTO_DIVE_PREFLIGHT_READY,
+    AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL,
     AutoDivePlan,
     AutoDiveSettings,
+    DEFAULT_AUTO_DIVE_ROUTE_GOAL,
     NavigationVoxelGraphAuthorityError,
     _direction_from_radians,
     build_auto_dive_preflight_plan,
@@ -38,6 +40,7 @@ from caveviewer.core.navigation.mesh_collision import (
     CachedChunkMeshCollisionGuard,
 )
 from caveviewer.core.navigation.voxel_cache import (
+    NAVIGATION_VOXEL_CACHE_MAX_BYTES,
     NavigationVoxelAtlas,
     load_cached_navigation_voxel_volume,
 )
@@ -51,8 +54,16 @@ Point = tuple[float, float, float]
 PROFILE_FULL_CAVE = "full-cave"
 PROFILE_FRONTIER = "frontier"
 CERTIFICATE_PROFILES = (PROFILE_FULL_CAVE, PROFILE_FRONTIER)
+PHASE_ARTIFACTS = "artifacts"
+PHASE_GRAPH = "graph"
+PHASE_ROUTE = "route"
+PHASE_ALL = "all"
+CERTIFICATE_PHASES = (PHASE_ARTIFACTS, PHASE_GRAPH, PHASE_ROUTE, PHASE_ALL)
 DEFAULT_CHECKPOINT_SPACING_M = 4.0
-DEFAULT_MAX_CHECKPOINTS = 512
+# Full fixed-route execution is sampled at up to one metre, so the default
+# must cover a kilometre-scale certified passage without silently weakening
+# the proof. Longer routes still fail closed unless the caller opts in.
+DEFAULT_MAX_CHECKPOINTS = 4_096
 
 
 @dataclass(frozen=True)
@@ -78,6 +89,7 @@ class NavigationCertificateResult:
     """Complete offline navigation certification result."""
 
     passed: bool
+    phase: str
     profile: str
     cache_dir: str
     route_id: str | None
@@ -88,6 +100,7 @@ class NavigationCertificateResult:
         return {
             "certificate": "PASS" if self.passed else "FAIL",
             "passed": bool(self.passed),
+            "phase": str(self.phase),
             "profile": str(self.profile),
             "cache_dir": str(self.cache_dir),
             "route_id": self.route_id,
@@ -103,12 +116,13 @@ def certify_navigation_cache(
     manifest: Mapping[str, Any],
     *,
     cache_dir: str | os.PathLike[str],
-    start_position: Sequence[float],
+    start_position: Sequence[float] | None = None,
     start_yaw: float | None = None,
     start_pitch: float | None = None,
     source_path: str | os.PathLike[str] | None = None,
     route_id: str | None = None,
     profile: str = PROFILE_FULL_CAVE,
+    phase: str = PHASE_ALL,
     settings: AutoDiveSettings | None = None,
     checkpoint_spacing_m: float = DEFAULT_CHECKPOINT_SPACING_M,
     max_checkpoints: int = DEFAULT_MAX_CHECKPOINTS,
@@ -124,13 +138,20 @@ def certify_navigation_cache(
         raise ValueError(
             f"unsupported navigation certificate profile: {profile!r}"
         )
+    if phase not in CERTIFICATE_PHASES:
+        raise ValueError(f"unsupported navigation certificate phase: {phase!r}")
     if not math.isfinite(float(checkpoint_spacing_m)) or checkpoint_spacing_m <= 0.0:
         raise ValueError("checkpoint spacing must be finite and positive")
     if int(max_checkpoints) < 2:
         raise ValueError("max_checkpoints must be at least 2")
 
     cache_path = os.path.abspath(os.fspath(cache_dir))
-    point = _finite_point(start_position)
+    point = (
+        None
+        if start_position is None
+        else _finite_point(start_position)
+    )
+    requires_start = phase in {PHASE_ROUTE, PHASE_ALL}
     checks: list[NavigationCertificateCheck] = []
 
     def add_check(
@@ -149,18 +170,25 @@ def certify_navigation_cache(
             )
         )
 
-    add_check(
-        "input",
-        point is not None,
-        reason="" if point is not None else "start_position_must_be_finite_xyz",
-        details={
-            "start_position": _point_payload(point),
-            "start_yaw": _finite_number(start_yaw),
-            "start_pitch": _finite_number(start_pitch),
-        },
-    )
-    if point is None:
-        return _result(profile, cache_path, route_id, point, checks)
+    if requires_start or start_position is not None:
+        add_check(
+            "input",
+            point is not None,
+            reason=(
+                "start_position_required_for_phase"
+                if start_position is None and requires_start
+                else ""
+                if point is not None
+                else "start_position_must_be_finite_xyz"
+            ),
+            details={
+                "start_position": _point_payload(point),
+                "start_yaw": _finite_number(start_yaw),
+                "start_pitch": _finite_number(start_pitch),
+            },
+        )
+    if requires_start and point is None:
+        return _result(phase, profile, cache_path, route_id, point, checks)
 
     source = None if source_path is None else os.fspath(source_path)
     try:
@@ -202,12 +230,33 @@ def certify_navigation_cache(
             False,
             reason="navigation_route_missing",
         )
-        return _result(profile, cache_path, route_id, point, checks)
+        return _result(phase, profile, cache_path, route_id, point, checks)
     add_check(
         "navigation_route",
         True,
         details={"route_id": selected_route_id},
     )
+
+    artifact_details = _verify_navigation_artifact_index(
+        cache_path,
+        manifest,
+        selected_route_id,
+    )
+    add_check(
+        "navigation_artifact_index",
+        bool(artifact_details["passed"]),
+        reason=str(artifact_details.get("reason", "")),
+        details=artifact_details,
+    )
+    if phase == PHASE_ARTIFACTS:
+        return _result(
+            phase,
+            profile,
+            cache_path,
+            selected_route_id,
+            point,
+            checks,
+        )
 
     atlas: NavigationVoxelAtlas | None = None
     try:
@@ -225,12 +274,20 @@ def certify_navigation_cache(
         atlas = loaded
     add_check(
         "navigation_artifact",
-        atlas is not None and atlas.prepared_3d_graph is not None,
+        (
+            atlas is not None
+            and atlas.prepared_3d_graph is not None
+            and atlas.prepared_mesh_graph is not None
+        ),
         reason=(
             navigation_load_error
-            or "prepared_true_3d_navigation_atlas_missing"
+            or "prepared_mesh_navigation_atlas_missing"
         )
-        if atlas is None or atlas.prepared_3d_graph is None
+        if (
+            atlas is None
+            or atlas.prepared_3d_graph is None
+            or atlas.prepared_mesh_graph is None
+        )
         else "",
         details=(
             {}
@@ -241,6 +298,7 @@ def certify_navigation_cache(
                 "fine_tile_count": int(atlas.fine_tile_count),
                 "navigation_cell_count": int(atlas.navigation_cell_count),
                 "navigation_3d_cell_count": int(atlas.navigation_3d_cell_count),
+                "mesh_navigation_cell_count": int(atlas.mesh_navigation_cell_count),
                 "chunk_backend": (
                     None
                     if atlas.chunk_store is None
@@ -249,8 +307,19 @@ def certify_navigation_cache(
             }
         ),
     )
-    if atlas is None or atlas.prepared_3d_graph is None:
-        return _result(profile, cache_path, selected_route_id, point, checks)
+    if (
+        atlas is None
+        or atlas.prepared_3d_graph is None
+        or atlas.prepared_mesh_graph is None
+    ):
+        return _result(
+            phase,
+            profile,
+            cache_path,
+            selected_route_id,
+            point,
+            checks,
+        )
 
     chunk_details = _verify_navigation_chunks(atlas)
     add_check(
@@ -260,7 +329,7 @@ def certify_navigation_cache(
         details=chunk_details,
     )
 
-    graph = atlas.prepared_3d_graph
+    graph = atlas.prepared_mesh_graph
     graph_details = _verify_graph_geometry(graph)
     add_check(
         "graph_geometry",
@@ -301,7 +370,37 @@ def certify_navigation_cache(
         details={"available": mesh_guard is not None, "error": mesh_error},
     )
 
-    settings = settings or AutoDiveSettings()
+    if phase == PHASE_GRAPH:
+        if atlas.chunk_store is not None:
+            atlas.chunk_store.close()
+        return _result(
+            phase,
+            profile,
+            cache_path,
+            selected_route_id,
+            point,
+            checks,
+        )
+
+    if point is None:
+        if atlas.chunk_store is not None:
+            atlas.chunk_store.close()
+        return _result(
+            phase,
+            profile,
+            cache_path,
+            selected_route_id,
+            point,
+            checks,
+        )
+    if settings is None:
+        settings = AutoDiveSettings(
+            route_goal=(
+                AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL
+                if profile == PROFILE_FRONTIER
+                else DEFAULT_AUTO_DIVE_ROUTE_GOAL
+            )
+        )
     preflight = None
     try:
         preflight = build_auto_dive_preflight_plan(
@@ -324,6 +423,8 @@ def certify_navigation_cache(
                 or (
                     not preflight.coverage_incomplete
                     and preflight.plan.terminal_reached
+                    and preflight.plan.fixed_route
+                    and not preflight.plan.replan_at_end
                 )
             )
         )
@@ -343,45 +444,14 @@ def certify_navigation_cache(
     route_safety_passed = False
     route_safety_details: dict[str, object] = {}
     if preflight is not None and preflight.plan is not None:
-        plan = preflight.plan
-        route_keys = tuple(plan.navigation_graph_keys)
-        if not route_keys:
-            route_safety_details = {"reason": "preflight_graph_route_keys_missing"}
-        elif mesh_guard is None:
-            route_safety_details = {"reason": "mesh_collision_guard_unavailable"}
-        else:
-            try:
-                failure = GraphRouteSafetyValidator(
-                    atlas,
-                    graph,
-                    mesh_guard=mesh_guard,
-                    policy=GraphRouteSafetyPolicy(
-                        minimum_clearance_m=float(
-                            settings.minimum_graph_clearance_m
-                        ),
-                    ),
-                ).route_clearance_failure(
-                    plan.route_points,
-                    route_keys,
-                    start_graph_key=preflight.start_graph_key,
-                )
-            except Exception as exc:  # pragma: no cover - artifact boundary
-                failure = None
-                route_safety_details = {
-                    "passed": False,
-                    "reason": "route_safety_exception",
-                    "exception": _exception_text(exc),
-                }
-            else:
-                route_safety_passed = failure is None
-                route_safety_details = _route_failure_details(failure)
-            route_safety_details.update(
-                {
-                    "route_point_count": len(plan.route_points),
-                    "graph_key_count": len(route_keys),
-                    "route_length_m": float(plan.route_length_m),
-                }
-            )
+        route_safety_passed, route_safety_details = _validate_published_route(
+            preflight.plan,
+            atlas=atlas,
+            graph=graph,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            start_graph_key=preflight.start_graph_key,
+        )
     else:
         route_safety_details = {"reason": "preflight_plan_missing"}
     add_check(
@@ -396,18 +466,29 @@ def certify_navigation_cache(
     simulation_passed = False
     simulation_details: dict[str, object]
     if preflight is not None and preflight.plan is not None:
-        simulation_passed, simulation_details = _simulate_replanning(
-            manifest,
-            cache_path=cache_path,
-            start_yaw=start_yaw,
-            start_pitch=start_pitch,
-            settings=settings,
-            plan=preflight.plan,
-            atlas=atlas,
-            mesh_guard=mesh_guard,
-            checkpoint_spacing_m=float(checkpoint_spacing_m),
-            max_checkpoints=int(max_checkpoints),
-        )
+        if preflight.plan.fixed_route:
+            simulation_passed, simulation_details = _simulate_fixed_route_execution(
+                plan=preflight.plan,
+                atlas=atlas,
+                graph=graph,
+                mesh_guard=mesh_guard,
+                settings=settings,
+                checkpoint_spacing_m=float(checkpoint_spacing_m),
+                max_checkpoints=int(max_checkpoints),
+            )
+        else:
+            simulation_passed, simulation_details = _simulate_replanning(
+                manifest,
+                cache_path=cache_path,
+                start_yaw=start_yaw,
+                start_pitch=start_pitch,
+                settings=settings,
+                plan=preflight.plan,
+                atlas=atlas,
+                mesh_guard=mesh_guard,
+                checkpoint_spacing_m=float(checkpoint_spacing_m),
+                max_checkpoints=int(max_checkpoints),
+            )
     else:
         simulation_details = {"reason": "preflight_plan_missing"}
     add_check(
@@ -421,7 +502,116 @@ def certify_navigation_cache(
 
     if atlas.chunk_store is not None:
         atlas.chunk_store.close()
-    return _result(profile, cache_path, selected_route_id, point, checks)
+    return _result(phase, profile, cache_path, selected_route_id, point, checks)
+
+
+def _verify_navigation_artifact_index(
+    cache_dir: str,
+    manifest: Mapping[str, Any],
+    route_id: str,
+) -> dict[str, object]:
+    """Verify navigation paths and counts without deserializing the graph.
+
+    This is the fast phase used immediately after cache construction.  The
+    sidecar and chunk files must exist and remain inside the selected cache,
+    but the large JSON graph is intentionally left unopened for the graph
+    phase.  That keeps an artifact failure cheap to report and makes the
+    expensive graph load an explicit post-build operation.
+    """
+    navigation = manifest.get("navigation")
+    voxel_cache = (
+        navigation.get("voxel_cache")
+        if isinstance(navigation, Mapping)
+        else None
+    )
+    failures: list[str] = []
+    if not isinstance(voxel_cache, Mapping):
+        return {
+            "passed": False,
+            "reason": "navigation_voxel_cache_metadata_missing",
+            "route_id": route_id,
+        }
+
+    sidecar_raw = voxel_cache.get("path")
+    sidecar_path = _safe_cache_child_path(cache_dir, sidecar_raw)
+    sidecar_bytes: int | None = None
+    if sidecar_path is None or not os.path.isfile(sidecar_path):
+        failures.append("navigation_sidecar_missing")
+    else:
+        try:
+            sidecar_bytes = int(os.path.getsize(sidecar_path))
+        except OSError:
+            failures.append("navigation_sidecar_stat_failed")
+        else:
+            if sidecar_bytes <= 0:
+                failures.append("navigation_sidecar_empty")
+            elif sidecar_bytes > NAVIGATION_VOXEL_CACHE_MAX_BYTES:
+                failures.append("navigation_sidecar_too_large")
+
+    chunk_directory_raw = voxel_cache.get("chunk_directory")
+    chunk_directory = _safe_cache_child_path(cache_dir, chunk_directory_raw)
+    if chunk_directory is None or not os.path.isdir(chunk_directory):
+        failures.append("navigation_chunk_directory_missing")
+
+    expected_chunk_count: int | None
+    try:
+        expected_chunk_count = int(voxel_cache.get("chunk_count"))
+    except (TypeError, ValueError):
+        expected_chunk_count = None
+        failures.append("navigation_chunk_count_invalid")
+    actual_chunk_count = (
+        _count_regular_files(chunk_directory)
+        if chunk_directory is not None and os.path.isdir(chunk_directory)
+        else 0
+    )
+    if expected_chunk_count is not None and (
+        expected_chunk_count <= 0 or actual_chunk_count != expected_chunk_count
+    ):
+        failures.append("navigation_chunk_count_mismatch")
+
+    return {
+        "passed": not failures,
+        "reason": failures[0] if failures else "",
+        "route_id": route_id,
+        "navigation_version": voxel_cache.get("version"),
+        "navigation_method": voxel_cache.get("method"),
+        "sidecar_path": sidecar_raw,
+        "sidecar_bytes": sidecar_bytes,
+        "sidecar_max_bytes": NAVIGATION_VOXEL_CACHE_MAX_BYTES,
+        "chunk_directory": chunk_directory_raw,
+        "expected_chunk_count": expected_chunk_count,
+        "actual_chunk_count": actual_chunk_count,
+        "storage_method": voxel_cache.get("storage_method"),
+    }
+
+
+def _safe_cache_child_path(cache_dir: str, raw_path: object) -> str | None:
+    if not isinstance(raw_path, str) or not raw_path or os.path.isabs(raw_path):
+        return None
+    root = os.path.realpath(cache_dir)
+    candidate = os.path.realpath(os.path.join(root, raw_path))
+    try:
+        if os.path.commonpath((root, candidate)) != root:
+            return None
+    except ValueError:
+        return None
+    return candidate
+
+
+def _count_regular_files(directory: str | None) -> int:
+    if directory is None:
+        return 0
+    count = 0
+    try:
+        for _root, _directories, files in os.walk(directory):
+            count += sum(
+                1
+                for name in files
+                if not name.startswith(".")
+            )
+    except OSError:
+        return 0
+    return count
 
 
 def _verify_render_chunks(
@@ -594,6 +784,7 @@ def _verify_graph_geometry(graph: NavigationVoxel3DGraph) -> dict[str, object]:
             if not (edge_integrity_safe and motion_geometry_safe)
             else ""
         ),
+        "method": str(graph.method),
         "node_count": len(graph.nodes),
         "edge_count": int(graph.edge_count),
         "routable_node_count": int(graph.routable_node_count),
@@ -661,6 +852,260 @@ def _verify_graph_coverage(
         "graph_unknown_boundary_count": unknown_count,
         "graph_terminal_count": int(graph.terminal_count),
         "graph_dead_end_count": int(graph.dead_end_count),
+    }
+
+
+def _validate_published_route(
+    plan: AutoDivePlan,
+    *,
+    atlas: NavigationVoxelAtlas,
+    graph: NavigationVoxel3DGraph,
+    mesh_guard: CachedChunkMeshCollisionGuard | None,
+    settings: AutoDiveSettings,
+    start_graph_key: VoxelGraphKey | None,
+) -> tuple[bool, dict[str, object]]:
+    """Validate the exact route geometry handed to the controller.
+
+    Legacy plans have one prepared-graph path.  A fixed full-cave plan may
+    instead contain a lightweight ledger with prepared graph segments and
+    2 m refined segments.  The latter still receives exact cache/mesh checks;
+    its temporary local graph was already checked during preflight and is not
+    retained merely for certification.
+    """
+    if mesh_guard is None:
+        return False, {"reason": "mesh_collision_guard_unavailable"}
+    try:
+        validator = GraphRouteSafetyValidator(
+            atlas,
+            graph,
+            mesh_guard=mesh_guard,
+            policy=GraphRouteSafetyPolicy(
+                minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+            ),
+        )
+        segments = tuple(getattr(plan, "route_segments", ()) or ())
+        route_keys = tuple(getattr(plan, "navigation_graph_keys", ()) or ())
+        if not segments:
+            if not route_keys:
+                return False, {"reason": "preflight_graph_route_keys_missing"}
+            failure = validator.route_clearance_failure(
+                plan.route_points,
+                route_keys,
+                start_graph_key=start_graph_key,
+            )
+            details = _route_failure_details(failure)
+            details.update(
+                {
+                    "route_point_count": len(plan.route_points),
+                    "graph_key_count": len(route_keys),
+                    "route_length_m": float(plan.route_length_m),
+                    "route_segment_count": 0,
+                }
+            )
+            return failure is None, details
+
+        ledger_points: list[Point] = []
+        refined_segment_count = 0
+        for segment_index, segment in enumerate(segments):
+            raw_points = tuple(getattr(segment, "route_points", ()) or ())
+            points = tuple(_finite_point(point) for point in raw_points)
+            if len(points) < 2 or any(point is None for point in points):
+                return False, {
+                    "reason": "route_ledger_segment_points_invalid",
+                    "failed_segment_index": segment_index,
+                }
+            resolved_points = tuple(point for point in points if point is not None)
+            if (
+                ledger_points
+                and _distance(ledger_points[-1], resolved_points[0]) > 1e-5
+            ):
+                return False, {
+                    "reason": "route_ledger_segment_seam_mismatch",
+                    "failed_segment_index": segment_index,
+                }
+            source = str(getattr(segment, "source", ""))
+            if source == "prepared_global_graph":
+                segment_keys = tuple(
+                    getattr(segment, "graph_keys", ()) or ()
+                )
+                if not segment_keys:
+                    return False, {
+                        "reason": "route_ledger_global_graph_keys_missing",
+                        "failed_segment_index": segment_index,
+                    }
+                failure = validator.route_clearance_failure(
+                    resolved_points,
+                    segment_keys,
+                    start_graph_key=segment_keys[0],
+                )
+            elif source == "refined_fine_2m_graph":
+                refined_segment_count += 1
+                raw_details = getattr(segment, "details", {})
+                details_map = (
+                    raw_details if isinstance(raw_details, Mapping) else {}
+                )
+                if not bool(details_map.get("mesh_safe", False)):
+                    return False, {
+                        "reason": "route_ledger_refined_proof_missing",
+                        "failed_segment_index": segment_index,
+                    }
+                failure = None
+                for local_index, (first, second) in enumerate(
+                    zip(resolved_points, resolved_points[1:], strict=False)
+                ):
+                    failure = validator.segment_clearance_failure(
+                        first,
+                        second,
+                        segment_index=local_index,
+                        kind="certificate_refined_route_segment",
+                        uncovered_reason="certificate_refined_route_uncovered",
+                    )
+                    if failure is not None:
+                        break
+            else:
+                return False, {
+                    "reason": "route_ledger_segment_source_unknown",
+                    "failed_segment_index": segment_index,
+                    "source": source,
+                }
+            if failure is not None:
+                details = _route_failure_details(failure)
+                details.update({"failed_segment_index": segment_index})
+                return False, details
+            if not ledger_points:
+                ledger_points.extend(resolved_points)
+            else:
+                ledger_points.extend(resolved_points[1:])
+
+        published = tuple(_finite_point(point) for point in plan.route_points)
+        if any(point is None for point in published):
+            return False, {"reason": "published_route_points_invalid"}
+        published_points = tuple(point for point in published if point is not None)
+        if (
+            len(published_points) != len(ledger_points)
+            or any(
+                _distance(first, second) > 1e-5
+                for first, second in zip(
+                    published_points,
+                    ledger_points,
+                    strict=False,
+                )
+            )
+        ):
+            return False, {"reason": "route_ledger_geometry_mismatch"}
+        return True, {
+            "passed": True,
+            "reason": "",
+            "route_point_count": len(plan.route_points),
+            "graph_key_count": len(route_keys),
+            "route_length_m": float(plan.route_length_m),
+            "route_segment_count": len(segments),
+            "prepared_global_segment_count": len(segments) - refined_segment_count,
+            "refined_segment_count": refined_segment_count,
+            "route_geometry_source": "fixed_route_ledger",
+        }
+    except Exception as exc:  # pragma: no cover - artifact boundary
+        return False, {
+            "reason": "route_safety_exception",
+            "exception": _exception_text(exc),
+        }
+
+
+def _simulate_fixed_route_execution(
+    *,
+    plan: AutoDivePlan,
+    atlas: NavigationVoxelAtlas,
+    graph: NavigationVoxel3DGraph,
+    mesh_guard: CachedChunkMeshCollisionGuard | None,
+    settings: AutoDiveSettings,
+    checkpoint_spacing_m: float,
+    max_checkpoints: int,
+) -> tuple[bool, dict[str, object]]:
+    """Simulate execution of an immutable terminal route without replanning."""
+    if (
+        not plan.preflight_validated
+        or not plan.terminal_reached
+        or plan.replan_at_end
+    ):
+        return False, {
+            "reason": "fixed_route_execution_contract_invalid",
+            "preflight_validated": bool(plan.preflight_validated),
+            "terminal_reached": bool(plan.terminal_reached),
+            "replan_at_end": bool(plan.replan_at_end),
+        }
+    if mesh_guard is None:
+        return False, {"reason": "mesh_collision_guard_unavailable"}
+    spacing_m = min(1.0, float(checkpoint_spacing_m))
+    try:
+        checkpoints = _route_checkpoints(
+            plan.route_points,
+            spacing_m=spacing_m,
+            max_checkpoints=max_checkpoints,
+        )
+    except ValueError as exc:
+        return False, {
+            "reason": str(exc),
+            "checkpoint_count": 0,
+            "execution_mode": "fixed_route_no_replan",
+        }
+    if len(checkpoints) < 2:
+        return False, {
+            "reason": "route_has_no_execution_horizon",
+            "execution_mode": "fixed_route_no_replan",
+        }
+
+    validator = GraphRouteSafetyValidator(
+        atlas,
+        graph,
+        mesh_guard=mesh_guard,
+        policy=GraphRouteSafetyPolicy(
+            minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+        ),
+    )
+    failures: list[dict[str, object]] = []
+    initial_load_errors = _chunk_load_errors(atlas)
+    prefetched_chunk_ids = atlas.prefetch_for_points(checkpoints)
+    simulated_count = 0
+    for index, (first, second) in enumerate(
+        zip(checkpoints, checkpoints[1:], strict=False)
+    ):
+        failure = validator.segment_clearance_failure(
+            first,
+            second,
+            segment_index=index,
+            kind="fixed_route_execution_segment",
+            uncovered_reason="fixed_route_execution_uncovered",
+        )
+        if failure is not None:
+            failures.append(
+                {
+                    "checkpoint_index": index,
+                    "position": _point_payload(first),
+                    **_route_failure_details(failure),
+                }
+            )
+            break
+        simulated_count += 1
+        if _chunk_load_errors(atlas) > initial_load_errors:
+            failures.append(
+                {
+                    "checkpoint_index": index,
+                    "position": _point_payload(first),
+                    "reason": "navigation_chunk_load_error_during_fixed_execution",
+                }
+            )
+            break
+    passed = not failures and simulated_count == len(checkpoints) - 1
+    return passed, {
+        "reason": "" if passed else (str(failures[0]["reason"]) if failures else ""),
+        "execution_mode": "fixed_route_no_replan",
+        "checkpoint_spacing_m": float(spacing_m),
+        "checkpoint_count": len(checkpoints),
+        "simulated_checkpoint_count": simulated_count,
+        "replan_request_count": 0,
+        "prefetched_chunk_count": len(prefetched_chunk_ids),
+        "failure_count": len(failures),
+        "failure_examples": failures[:8],
     }
 
 
@@ -1020,6 +1465,7 @@ def _chunk_load_errors(atlas: NavigationVoxelAtlas) -> int:
 
 
 def _result(
+    phase: str,
     profile: str,
     cache_dir: str,
     route_id: str | None,
@@ -1029,6 +1475,7 @@ def _result(
     resolved = tuple(checks)
     return NavigationCertificateResult(
         passed=bool(resolved) and all(check.passed for check in resolved),
+        phase=phase,
         profile=profile,
         cache_dir=cache_dir,
         route_id=route_id,
@@ -1080,9 +1527,9 @@ def _exception_text(exc: BaseException) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Certify a CaveViewer cache before starting the GUI. The full-cave "
-            "profile only passes when an offline route and runtime replans "
-            "reach a known terminal."
+            "Certify a CaveViewer cache in independent artifact, graph, route, "
+            "or complete phases. The full-cave profile only passes when an "
+            "offline fixed route and simulated execution reach a known terminal."
         )
     )
     parser.add_argument(
@@ -1094,14 +1541,24 @@ def _parser() -> argparse.ArgumentParser:
         "--start",
         nargs=3,
         type=float,
-        required=True,
+        required=False,
         metavar=("X", "Y", "Z"),
-        help="Initial camera position in world coordinates.",
+        help="Initial camera position; required for route/all phases.",
     )
     parser.add_argument("--yaw", type=float, help="Initial camera yaw in radians.")
     parser.add_argument("--pitch", type=float, help="Initial camera pitch in radians.")
     parser.add_argument("--source", help="Optional source model for stale-cache checking.")
     parser.add_argument("--route-id", help="Explicit cached navigation route ID.")
+    parser.add_argument(
+        "--phase",
+        choices=CERTIFICATE_PHASES,
+        default=PHASE_ALL,
+        help=(
+            "Certification phase: artifacts skips graph deserialization; "
+            "graph validates the loaded graph; route adds preflight and "
+            "execution simulation; all runs every phase."
+        ),
+    )
     parser.add_argument(
         "--profile",
         choices=CERTIFICATE_PROFILES,
@@ -1127,16 +1584,23 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the navigation certificate CLI and return a process exit code."""
     args = _parser().parse_args(argv)
+    if args.phase in {PHASE_ROUTE, PHASE_ALL} and args.start is None:
+        _parser().error("--start is required for route/all phases")
     cache_dir = Path(args.cache_dir)
     manifest = load_manifest(cache_dir)
     if manifest is None:
         payload = {
             "certificate": "FAIL",
             "passed": False,
+            "phase": args.phase,
             "profile": args.profile,
             "cache_dir": str(cache_dir),
             "route_id": args.route_id,
-            "start_position": [float(value) for value in args.start],
+            "start_position": (
+                None
+                if args.start is None
+                else [float(value) for value in args.start]
+            ),
             "checks": [
                 {
                     "name": "manifest",
@@ -1159,6 +1623,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_path=args.source,
         route_id=args.route_id,
         profile=args.profile,
+        phase=args.phase,
         checkpoint_spacing_m=args.checkpoint_spacing_m,
         max_checkpoints=args.max_checkpoints,
     )
@@ -1170,7 +1635,11 @@ def _print_result(payload: Mapping[str, object], *, json_output: bool) -> None:
     if json_output:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return
-    print(f"NAVIGATION CERTIFICATE: {payload.get('certificate', 'FAIL')}")
+    print(
+        "NAVIGATION CERTIFICATE "
+        f"[{payload.get('phase', 'all')}]: "
+        f"{payload.get('certificate', 'FAIL')}"
+    )
     for check in payload.get("checks", ()):
         if not isinstance(check, Mapping):
             continue

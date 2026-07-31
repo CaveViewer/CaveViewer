@@ -37,6 +37,11 @@ _LOCAL_26_NEIGHBOR_OFFSETS = tuple(
     for dz in (-1, 0, 1)
     if (dx, dy, dz) != (0, 0, 0)
 )
+_LOCAL_CARDINAL_NEIGHBOR_OFFSETS = tuple(
+    offset
+    for offset in _LOCAL_26_NEIGHBOR_OFFSETS
+    if sum(abs(value) for value in offset) == 1
+)
 
 DEFAULT_VOXEL_SIZE_M = 1.0
 DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD = 65
@@ -259,6 +264,8 @@ class LocalVoxelVolume:
         max_nodes: int = DEFAULT_VOXEL_LOCAL_REFINEMENT_MAX_CELLS,
         min_target_distance_m: float = 4.0,
         deadline_monotonic_s: float | None = None,
+        edge_safety_check: Callable[[Point, Point], bool] | None = None,
+        allow_diagonal: bool = True,
     ) -> "LocalVoxelRoute | None":
         """Find a bounded, heading-aware route through fine free voxels.
 
@@ -319,6 +326,11 @@ class LocalVoxelVolume:
         search_truncated = False
         expanded_nodes = 0
         surface_cells = self.surface_cells
+        neighbor_offsets = (
+            _LOCAL_26_NEIGHBOR_OFFSETS
+            if allow_diagonal
+            else _LOCAL_CARDINAL_NEIGHBOR_OFFSETS
+        )
 
         def dot_from_current(index: VoxelIndex) -> tuple[float, float, float]:
             point = self.voxel_center(index)
@@ -389,7 +401,7 @@ class LocalVoxelVolume:
                 )
 
             free_neighbors = 0
-            for offset in _LOCAL_26_NEIGHBOR_OFFSETS:
+            for offset in neighbor_offsets:
                 neighbor = (
                     index[0] + offset[0],
                     index[1] + offset[1],
@@ -407,8 +419,25 @@ class LocalVoxelVolume:
                     continue
                 if forward_projection(neighbor_delta) < -size * 0.5:
                     continue
+                # The first executable step is the camera handoff, not an
+                # exploratory graph move. Keep it in the current forward
+                # half-space so a local route cannot ask the controller to
+                # move backward before turning around an obstacle. Once the
+                # route has left the seed, the broader voxel search may use
+                # lateral/vertical turns that remain globally forward.
+                if index == start and forward_projection(neighbor_delta) < 0.0:
+                    continue
                 if neighbor in surface_cells:
                     continue
+                if edge_safety_check is not None:
+                    first_point = (
+                        current_point
+                        if index == start
+                        else self.voxel_center(index)
+                    )
+                    second_point = self.voxel_center(neighbor)
+                    if not edge_safety_check(first_point, second_point):
+                        continue
                 free_neighbors += 1
                 if neighbor in previous:
                     continue

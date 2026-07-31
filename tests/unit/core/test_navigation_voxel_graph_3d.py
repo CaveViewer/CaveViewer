@@ -10,6 +10,7 @@ from caveviewer.core.navigation.voxel_graph_3d import (
     deserialize_navigation_voxel_3d_graph,
     finalize_navigation_voxel_3d_metrics,
     serialize_navigation_voxel_3d_graph,
+    shortest_navigation_voxel_3d_graph_path,
 )
 
 
@@ -125,6 +126,97 @@ def test_true_3d_graph_round_trip_preserves_nodes_and_edges():
     assert restored.method == graph.method
     assert restored.nodes == graph.nodes
     assert restored.edge_count == graph.edge_count
+
+
+def test_true_3d_graph_runtime_index_reuses_topology_and_nearest_queries():
+    metrics = {
+        key: _metric(key, progress=float(key[0]))
+        for key in (
+            (0, 0, 0),
+            (1, 0, 0),
+            (2, 0, 0),
+            (3, 0, 0),
+        )
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+
+    index = graph.runtime_index
+
+    assert graph.runtime_index is index
+    component_id = graph.nodes[(0, 0, 0)].component_id
+    assert set(index.keys_by_component[component_id]) == set(metrics)
+    assert index.routable_keys_by_component[component_id]
+    nearest, distance_squared = index.nearest_key(
+        (0.1, 0.5, 0.5),
+        component_id=component_id,
+        routable_only=True,
+    )
+    assert nearest == (0, 0, 0)
+    assert abs(distance_squared - 0.16) < 1e-12
+
+    distances, expanded_count, expansion_limited = (
+        index.shortest_distances_to_candidates(
+            (0, 0, 0),
+            ((3, 0, 0),),
+            component_id=component_id,
+            max_expansions=100,
+        )
+    )
+    assert expansion_limited is False
+    assert expanded_count >= 1
+    assert distances[(3, 0, 0)] > 0.0
+
+    reverse_distances = index.physical_distances_to_target(
+        (3, 0, 0),
+        component_id=component_id,
+    )
+    assert reverse_distances[index.node_ids[(3, 0, 0)]] == 0.0
+    assert reverse_distances[index.node_ids[(0, 0, 0)]] > 0.0
+    # The target field is immutable and reused by every local portal handoff
+    # to this terminal instead of rerunning reverse Dijkstra.
+    assert (
+        index.physical_distances_to_target(
+            (3, 0, 0),
+            component_id=component_id,
+        )
+        is reverse_distances
+    )
+    assert index.keys_in_bounds(
+        (0.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0),
+        component_id=component_id,
+        routable_only=True,
+    ) == ((0, 0, 0),)
+    assert index.keys_in_bounds(
+        (8.0, 0.0, 0.0),
+        (9.0, 1.0, 1.0),
+        component_id=component_id,
+    ) == ()
+
+
+def test_true_3d_graph_physical_path_matches_easiest_distance_policy():
+    metrics = {
+        key: _metric(key, progress=float(key[0]))
+        for key in ((0, 0, 0), (1, 0, 0), (2, 0, 0))
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+        max_edge_distance_cells=1,
+    )
+
+    path, details = shortest_navigation_voxel_3d_graph_path(
+        graph,
+        start_key=(0, 0, 0),
+        terminal_key=(2, 0, 0),
+    )
+
+    assert path == ((0, 0, 0), (1, 0, 0), (2, 0, 0))
+    assert details["route_cost_method"] == "physical_graph_distance"
+    assert details["graph_route_cost"] == 2.0
 
 
 def test_true_3d_metrics_coarsen_to_consumer_hardware_bound():

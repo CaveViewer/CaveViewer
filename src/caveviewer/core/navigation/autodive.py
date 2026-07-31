@@ -62,6 +62,7 @@ from caveviewer.core.navigation.voxel_volume import (
     DEFAULT_VOXEL_LOCAL_REFINEMENT_MAX_CELLS,
     DEFAULT_VOXEL_LOCAL_REFINEMENT_RADIUS_M,
     DEFAULT_VOXEL_SIZE_M,
+    LocalVoxelRoute,
     LocalVoxelVolume,
     VoxelVolumeConfig,
     VOXEL_ANALYSIS_OUTCOME_BUILT,
@@ -84,18 +85,25 @@ from caveviewer.core.navigation.voxel_cache import (
     NavigationVoxelScoringPolicy,
     load_cached_navigation_voxel_volume,
 )
+from caveviewer.core.navigation.mesh_graph import MESH_NAVIGATION_GRAPH_METHOD
 from caveviewer.core.navigation.voxel_graph_3d import (
     NavigationVoxel3DEdge,
     NavigationVoxel3DGraph,
     NavigationVoxel3DMetric,
     VoxelGraphKey,
+    accumulate_navigation_voxel_3d_sample,
     build_navigation_voxel_3d_graph,
+    finalize_navigation_voxel_3d_metrics,
+    shortest_navigation_voxel_3d_graph_path,
 )
 
 
 DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS = 4
 DEFAULT_AUTO_DIVE_CLOSED_LOOP_GAP_FRACTION = 0.15
-DEFAULT_AUTO_DIVE_MAX_KEYFRAMES = 512
+# A complete 2 m refined route through a roughly kilometre-long passage can
+# legitimately contain more than the historical lookahead-oriented cap. This
+# remains bounded, but does not force an unsafe shortcut in a fixed dive.
+DEFAULT_AUTO_DIVE_MAX_KEYFRAMES = 1024
 DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND = (
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND * 2.25
 )
@@ -105,6 +113,85 @@ DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS = (
 )
 DEFAULT_AUTO_DIVE_LOOKAHEAD_DISTANCE_M = 8.0
 DEFAULT_AUTO_DIVE_LOCAL_REFINEMENT_ENABLED = True
+AUTO_DIVE_PREFLIGHT_MAX_START_CONNECTOR_CANDIDATES = 64
+# Startup Guided Dive can either select the shortest certified known terminal
+# or retain the historical farthest-terminal behavior.  The former is the
+# production default while fixed-route execution is being validated; the
+# latter remains useful for compatibility and diagnostics.
+AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL = "easiest_terminal"
+AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL = "farthest_terminal"
+AUTO_DIVE_ROUTE_GOAL_POLICIES = frozenset(
+    {
+        AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL,
+        AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL,
+    }
+)
+DEFAULT_AUTO_DIVE_ROUTE_GOAL = AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+# Runtime frontier expansion must leave time for graph construction, route
+# validation, and owner-thread handoff. The exact cached mesh remains the hard
+# safety gate, so a bounded 32k-cell local field is preferable to spending the
+# entire replan budget on a denser speculative rasterization.
+DEFAULT_AUTO_DIVE_LOCAL_REFINEMENT_RUNTIME_MAX_CELLS = 32_768
+# Full-route refinement uses only persisted 1 m tiles and normally aggregates
+# them to an anisotropic 2 m x/z, 1 m y graph. It is deliberately local to one
+# bridge so startup never retains a whole-cave fine graph in memory.
+AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M = (2.0, 1.0, 2.0)
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_NODES = 32_768
+# The 2 m graph intentionally uses only its immediate 26-neighbour topology.
+# Longer shortcuts make graph construction quadratic enough to erase the
+# preflight performance gain; A* still has fine-grained freedom to turn.
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_EDGE_DISTANCE_CELLS = 1
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_EDGES_PER_NODE = 24
+AUTO_DIVE_FIXED_ROUTE_REFINED_SNAP_TOLERANCE_M = 4.0
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_MESH_RETRIES = 128
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_CONNECTOR_CANDIDATES = 8
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_CONNECTOR_PROBES = 32
+# A 2 m aggregate can still invent a mesh-blocked shortcut in a tight passage.
+# When that happens, materialize the already-persisted 1 m evidence for just
+# that tile as a bounded preflight fallback. This is never a whole-cave graph
+# and is discarded after the portal handoff has been prepared.
+AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_GRID_SIZE_M = (1.0, 1.0, 1.0)
+AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_NODES = 65_536
+AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_EDGES_PER_NODE = 26
+# Native 1 m paths normally validate on their first mesh pass. Keep this
+# fallback deliberately short so an absent portal cannot turn preflight into
+# dozens of expensive exact searches after the tile has already been built.
+AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_PORTAL_CANDIDATES = 12
+AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_PORTAL_FAST_MESH_RETRIES = 1
+AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_PORTAL_DEEP_CANDIDATES = 1
+AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_PORTAL_DEEP_MESH_RETRIES = 8
+# A coarse route can select a mesh-blocked heading shortcut even when one of
+# its immediate prepared-graph neighbours is already exact-safe. Prefer that
+# small global bypass before paying to materialize a local 2 m portal graph.
+AUTO_DIVE_FIXED_ROUTE_SAFE_GLOBAL_BYPASS_MAX_CANDIDATES = 4
+AUTO_DIVE_FIXED_ROUTE_SAFE_GLOBAL_BYPASS_MAX_DETOUR_M = 32.0
+# A refined tile can expose many graph portals. Keep the search local in world
+# space first; reverse global distance breaks ties but must not pull the route
+# through a vertically nearby, mesh-disconnected chamber elsewhere in the tile.
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_CANDIDATES = 16
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_DISTANCE_M = 24.0
+# Most valid local portals use the shortest local path and pass exact mesh
+# checks immediately. Try each nearby candidate once before deepening a small
+# subset, rather than spending the whole retry budget on one bad shortcut.
+AUTO_DIVE_FIXED_ROUTE_REFINED_PORTAL_FAST_MESH_RETRIES = 1
+AUTO_DIVE_FIXED_ROUTE_REFINED_PORTAL_DEEP_CANDIDATES = 2
+AUTO_DIVE_FIXED_ROUTE_REFINED_PORTAL_DEEP_MESH_RETRIES = 24
+# Fine tiles are seeded every 12 m along long passages. A full kilometre-scale
+# fixed route can therefore need more than the former 32 local handoffs; each
+# remains bounded and loop-free through the ledger's visited-node set.
+AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_HANDOFFS = 128
+# A retained local graph can be much larger than its serialized fine tile.
+# Adjacent fixed-spine repairs benefit from one recent context, but keeping a
+# graph for every failed portal turns a kilometre route into an unbounded
+# startup-memory accumulation.
+AUTO_DIVE_FIXED_ROUTE_REFINED_CONTEXT_CACHE_ENTRIES = 2
+# The fixed-route search treats exact-safe prepared edges and exact-safe
+# fine-tile bridges as one bounded preflight graph. This prevents a greedy
+# portal choice from committing the whole dive to a local cul-de-sac.
+AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_EXPANSIONS = 256
+AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_LOCAL_OPTIONS = 1
+AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_DETOUR_M = 256.0
+AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_LOCAL_MESH_RETRIES = 1
 # Runtime replans must not monopolize a consumer machine. Initial route
 # planning remains uncapped; the replanner supplies this budget explicitly.
 DEFAULT_AUTO_DIVE_REPLAN_PLANNING_BUDGET_S = 8.0
@@ -208,6 +295,9 @@ class AutoDiveSettings:
     voxel_scoring_policy: NavigationVoxelScoringPolicy = field(
         default_factory=NavigationVoxelScoringPolicy
     )
+    # Startup route goal.  Easiest-terminal plans are immutable, exact-safe
+    # routes; farthest-terminal retains the older frontier-capable behavior.
+    route_goal: str = DEFAULT_AUTO_DIVE_ROUTE_GOAL
 
 
 class AutoDivePlanningBudgetExceeded(NavigationConfigurationError):
@@ -652,6 +742,33 @@ class _AutoDiveCollisionValidator:
 
 
 @dataclass(frozen=True)
+class AutoDiveRouteSegment:
+    """One bounded, exact-validated piece of a published fixed route.
+
+    The ledger intentionally retains only route geometry and concise proof
+    metadata. A refined graph is built and validated during preflight, then
+    released instead of being retained for every cave segment in RAM.
+    """
+
+    route_points: tuple[Point, ...]
+    route_cells: tuple[FootprintCell, ...]
+    source: str
+    graph_keys: tuple[VoxelGraphKey, ...] = ()
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+    def diagnostic_payload(self) -> dict[str, object]:
+        """Return a bounded proof summary suitable for logs/certificates."""
+        return {
+            "source": str(self.source),
+            "route_point_count": len(self.route_points),
+            "route_length_m": float(path_length(self.route_points)),
+            "route_cell_count": len(self.route_cells),
+            "graph_key_count": len(self.graph_keys),
+            "details": dict(self.details),
+        }
+
+
+@dataclass(frozen=True)
 class AutoDivePlan:
     """Finite Guided Dive route with graph-native navigation evidence."""
 
@@ -675,10 +792,19 @@ class AutoDivePlan:
     preflight_validated: bool = False
     navigation_atlas: NavigationVoxelAtlas | None = None
     navigation_graph: NavigationVoxel3DGraph | None = None
+    # A fixed route is fully preflighted to a known terminal.  The GUI keeps
+    # its safety/readiness checks but must not replace this route with a
+    # speculative or receding-horizon plan during execution.
+    fixed_route: bool = False
     # Keep the exact graph route alongside the published camera points.  The
     # certificate and diagnostics use this to validate the same graph path
     # that the runtime planner handed to the controller.
     navigation_graph_keys: tuple[VoxelGraphKey, ...] = ()
+    # A fixed route can combine exact-safe prepared graph segments with small
+    # 2 m graphs constructed from persisted 1 m tiles. The controller follows
+    # ``route_points`` only; this lightweight ledger lets certification prove
+    # the exact same composed route without retaining every local graph.
+    route_segments: tuple[AutoDiveRouteSegment, ...] = ()
 
     @property
     def route_points_xz(self) -> tuple[PointXZ, ...]:
@@ -970,7 +1096,7 @@ def _authoritative_graph_navigation_context(
                     break
 
     status: dict[str, Any] = {
-        "authority": "prepared_true_3d_voxel_graph",
+        "authority": "prepared_mesh_free_space_graph",
         "required": True,
         "available": False,
         "reason": None,
@@ -986,7 +1112,7 @@ def _authoritative_graph_navigation_context(
             None if not isinstance(descriptor, Mapping) else descriptor.get("path")
         ),
         "route_id": selected_route_id,
-        "source": "cached_navigation_voxel_graph",
+        "source": "cached_navigation_mesh_graph",
     }
 
     def reject(reason: str, message: str) -> NoReturn:
@@ -1042,11 +1168,11 @@ def _authoritative_graph_navigation_context(
             "voxel_graph_model_missing",
             "Guided Dive could not load the prepared voxel graph; rebuild the cache",
         )
-    graph = cached_volume.prepared_3d_graph
-    if not cached_volume.has_prepared_3d_graph or graph is None:
+    graph = cached_volume.prepared_mesh_graph
+    if not cached_volume.has_prepared_mesh_graph or graph is None:
         reject(
-            "true_3d_graph_missing",
-            "Guided Dive cache does not contain a prepared true-3D voxel graph",
+            "mesh_graph_missing",
+            "Guided Dive cache does not contain a prepared mesh free-space graph",
         )
     status.update(
         {
@@ -1056,30 +1182,30 @@ def _authoritative_graph_navigation_context(
             "graph_routable_node_count": int(graph.routable_node_count),
             "graph_component_count": int(graph.component_count),
             "graph_edge_integrity_safe": bool(graph.edge_integrity_safe),
-            "motion_geometry_safe": bool(cached_volume.prepared_3d_motion_geometry_safe),
+            "motion_geometry_safe": bool(cached_volume.authoritative_motion_geometry_safe),
         }
     )
-    if str(graph.method) != NAVIGATION_VOXEL_GRAPH_METHOD:
+    if str(graph.method) != MESH_NAVIGATION_GRAPH_METHOD:
         reject(
-            "true_3d_graph_method_unsupported",
-            "Guided Dive cache contains an unsupported true-3D voxel graph",
+            "mesh_graph_method_unsupported",
+            "Guided Dive cache contains an unsupported mesh free-space graph",
         )
-    if not cached_volume.prepared_3d_motion_geometry_safe:
+    if not cached_volume.authoritative_motion_geometry_safe:
         reject(
-            "true_3d_graph_geometry_unsafe",
-            "Guided Dive true-3D voxel graph geometry is too coarse for motion; rebuild the navigation cache",
+            "mesh_graph_geometry_unsafe",
+            "Guided Dive mesh free-space graph geometry is unsafe; rebuild the navigation cache",
         )
     if len(graph.nodes) <= 0:
-        reject("true_3d_graph_empty", "Guided Dive cache contains an empty true-3D voxel graph")
+        reject("mesh_graph_empty", "Guided Dive cache contains an empty mesh free-space graph")
     if not graph.edge_integrity_safe:
         reject(
-            "true_3d_graph_edge_integrity_invalid",
-            "Guided Dive cache contains an invalid true-3D voxel graph edge set; rebuild the cache",
+            "mesh_graph_edge_integrity_invalid",
+            "Guided Dive cache contains an invalid mesh free-space graph edge set; rebuild the cache",
         )
     if graph.edge_count <= 0 or graph.routable_node_count <= 0:
         reject(
-            "true_3d_graph_has_no_routes",
-            "Guided Dive cache contains voxel density but no prepared graph routes; rebuild the cache",
+            "mesh_graph_has_no_routes",
+            "Guided Dive cache contains mesh samples but no prepared graph routes; rebuild the cache",
         )
     status.update({"available": True, "reason": "ready"})
     _record_auto_dive_diagnostic(diagnostics, "navigation_authority", status)
@@ -1167,7 +1293,7 @@ def _build_graph_initial_camera_pose(
         settings=settings,
         diagnostics=None,
     )
-    graph = atlas.prepared_3d_graph
+    graph = atlas.authoritative_graph
     if graph is None:
         raise NavigationConfigurationError("Guided Dive prepared graph is unavailable")
     navigation = manifest.get(NAVIGATION_METADATA_KEY)
@@ -1798,7 +1924,7 @@ def build_voxel_graph_auto_dive_plan(
     The compatibility planner remains available to older callers, while the
     GUI, preflight, runtime replanner, and continuous scan all use this path.
     """
-    del current_roll, user_reposition
+    del current_roll
     settings = settings or AutoDiveSettings()
     _validate_auto_dive_settings(settings)
     planning_budget = _AutoDivePlanningBudget.from_settings(settings)
@@ -1818,11 +1944,11 @@ def build_voxel_graph_auto_dive_plan(
         route_id=route_id,
     )
     planning_budget.check("graph_context_loaded", diagnostics=diagnostics)
-    graph = atlas.prepared_3d_graph
+    graph = atlas.authoritative_graph
     if graph is None:
         raise NavigationVoxelGraphAuthorityError(
             "Guided Dive prepared graph disappeared after authority validation",
-            reason="true_3d_graph_missing",
+            reason="mesh_graph_missing",
             status=authority_status,
         )
 
@@ -1844,42 +1970,6 @@ def build_voxel_graph_auto_dive_plan(
         direction_yaw,
         direction_pitch,
     )
-    graph_scale = max(
-        0.25,
-        *(float(value) for value in graph.grid_size_m),
-        float(atlas.voxel_size_m or 0.0),
-    )
-    voxel_route_plan = atlas.plan_footprint_route(
-        (),
-        current_position=current,
-        footprint_cell_size=graph_scale,
-        preferred_direction=preferred_direction,
-        lookahead_distance_m=float(settings.lookahead_distance_m),
-        scoring_policy=settings.voxel_scoring_policy,
-        diagnostics=diagnostics,
-        deadline_check=lambda: planning_budget.check(
-            "voxel_route_search",
-            diagnostics=diagnostics,
-        ),
-    )
-    planning_budget.check("voxel_route_selected", diagnostics=diagnostics)
-    if voxel_route_plan is None and preferred_direction is not None:
-        # A continuous scan is a graph query with relaxed heading preference,
-        # not a return to centerline hemisphere recovery.
-        voxel_route_plan = atlas.plan_footprint_route(
-            (),
-            current_position=current,
-            footprint_cell_size=graph_scale,
-            preferred_direction=None,
-            lookahead_distance_m=float(settings.lookahead_distance_m),
-            scoring_policy=settings.voxel_scoring_policy,
-            diagnostics=diagnostics,
-            deadline_check=lambda: planning_budget.check(
-                "voxel_route_search_relaxed_heading",
-                diagnostics=diagnostics,
-            ),
-        )
-        planning_budget.check("voxel_route_selected", diagnostics=diagnostics)
     mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
         manifest,
         cache_dir=cache_dir,
@@ -1905,14 +1995,61 @@ def build_voxel_graph_auto_dive_plan(
             reason="mesh_collision_guard_unavailable",
             status=status,
         )
-    if bool(expand_frontier) and _voxel_route_needs_local_frontier_expansion(
-        voxel_route_plan
-    ):
+    graph_safety_validator = GraphRouteSafetyValidator(
+        atlas,
+        graph,
+        mesh_guard=mesh_guard,
+        policy=GraphRouteSafetyPolicy(
+            minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+        ),
+    )
+    edge_safety_cache: dict[tuple[VoxelGraphKey, VoxelGraphKey], bool] = {}
+
+    def runtime_edge_is_safe(
+        source: VoxelGraphKey,
+        target: VoxelGraphKey,
+    ) -> bool:
+        """Keep runtime graph search aligned with exact mesh/atlas safety."""
+        edge_key = (source, target)
+        cached = edge_safety_cache.get(edge_key)
+        if cached is not None:
+            return cached
+        planning_budget.check(
+            "voxel_route_mesh_safety",
+            diagnostics=diagnostics,
+        )
+        source_node = graph.nodes.get(source)
+        target_node = graph.nodes.get(target)
+        if source_node is None or target_node is None:
+            edge_safety_cache[edge_key] = False
+            return False
+        failure = graph_safety_validator.route_clearance_failure(
+            (
+                tuple(float(value) for value in source_node.center),
+                tuple(float(value) for value in target_node.center),
+            ),
+            (source, target),
+            start_graph_key=source,
+        )
+        result = failure is None
+        edge_safety_cache[edge_key] = result
+        return result
+
+    def build_local_frontier_plan() -> AutoDivePlan | None:
+        """Build the bounded mesh-backed continuation used at a frontier.
+
+        Frontier requests are made while the camera is already holding a safe
+        route prefix.  The local mesh expansion is therefore the useful
+        authority for that request; making it wait behind a global graph
+        search can consume the entire handoff budget before the expansion is
+        attempted.
+        """
         local_forward = _direction_from_radians(direction_yaw, direction_pitch)
         local_builder = _make_auto_dive_local_frontier_voxel_builder(
             current=np.asarray(current, dtype=np.float64),
             forward=local_forward,
             mesh_guard=mesh_guard,
+            cached_volume=atlas,
             settings=settings,
             diagnostics=diagnostics,
             planning_budget=planning_budget,
@@ -1928,6 +2065,7 @@ def build_voxel_graph_auto_dive_plan(
                 forward=local_forward,
                 settings=settings,
                 mesh_guard=mesh_guard,
+                camera_atlas=atlas,
                 avoid_positions=avoid_positions,
                 authority_status=authority_status,
                 diagnostics=diagnostics,
@@ -1935,66 +2073,138 @@ def build_voxel_graph_auto_dive_plan(
             )
         )
         planning_budget.check("local_frontier_graph_built", diagnostics=diagnostics)
-        if local_expansion is not None:
-            (
-                local_atlas,
-                local_graph,
-                local_route_points,
-                local_graph_keys,
-                local_route_cells,
-                local_selection,
-            ) = local_expansion
-            local_route_points = _dedupe_consecutive_points(local_route_points)
-            if len(local_route_points) >= 2:
-                local_length_m = path_length(local_route_points)
-                local_duration_s = local_length_m / float(
-                    settings.speed_m_per_second
-                )
-                local_keyframe_payloads = route_keyframes_for_points(
-                    local_route_points,
-                    duration_s=local_duration_s,
-                    lookahead_distance_m=max(
-                        0.0,
-                        float(settings.lookahead_distance_m),
-                    ),
-                )
-                for payload in local_keyframe_payloads:
-                    payload["roll_deg"] = 0.0
-                local_keyframes = [
-                    RouteKeyframe.from_mapping(payload, index=index)
-                    for index, payload in enumerate(local_keyframe_payloads)
-                ]
-                _record_auto_dive_diagnostic(
-                    diagnostics,
-                    "voxel_local_frontier_graph_expansion",
-                    {
-                        **local_selection,
-                        "accepted": True,
-                        "route_point_count": len(local_route_points),
-                        "route_length_m": float(local_length_m),
-                    },
-                )
-                return AutoDivePlan(
-                    route=CameraRoute.from_keyframes(local_keyframes),
-                    centerline_path=None,
-                    route_points=local_route_points,
-                    route_cells=local_route_cells,
-                    circular_arc=False,
-                    route_length_m=float(local_length_m),
-                    duration_s=float(local_duration_s),
-                    render_distance_cells=max(
-                        1,
-                        int(settings.render_distance_cells),
-                    ),
-                    selection_reason="continuous_local_frontier_expansion",
-                    replan_at_end=True,
-                    voxel_route_selection=local_selection,
-                    terminal_reached=False,
-                    navigation_route_id=authority_status.get("route_id"),
-                    navigation_atlas=local_atlas,
-                    navigation_graph=local_graph,
-                    navigation_graph_keys=local_graph_keys,
-                )
+        if local_expansion is None:
+            return None
+        (
+            local_atlas,
+            local_graph,
+            local_route_points,
+            local_graph_keys,
+            local_route_cells,
+            local_selection,
+        ) = local_expansion
+        local_route_points = _dedupe_consecutive_points(local_route_points)
+        if len(local_route_points) < 2:
+            return None
+        local_length_m = path_length(local_route_points)
+        local_duration_s = local_length_m / float(settings.speed_m_per_second)
+        local_keyframe_payloads = route_keyframes_for_points(
+            local_route_points,
+            duration_s=local_duration_s,
+            lookahead_distance_m=max(
+                0.0,
+                float(settings.lookahead_distance_m),
+            ),
+        )
+        for payload in local_keyframe_payloads:
+            payload["roll_deg"] = 0.0
+        local_keyframes = [
+            RouteKeyframe.from_mapping(payload, index=index)
+            for index, payload in enumerate(local_keyframe_payloads)
+        ]
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_frontier_graph_expansion",
+            {
+                **local_selection,
+                "accepted": True,
+                "route_point_count": len(local_route_points),
+                "route_length_m": float(local_length_m),
+            },
+        )
+        return AutoDivePlan(
+            route=CameraRoute.from_keyframes(local_keyframes),
+            centerline_path=None,
+            route_points=local_route_points,
+            route_cells=local_route_cells,
+            circular_arc=False,
+            route_length_m=float(local_length_m),
+            duration_s=float(local_duration_s),
+            render_distance_cells=max(
+                1,
+                int(settings.render_distance_cells),
+            ),
+            selection_reason="continuous_local_frontier_expansion",
+            route_truncated_by_mesh=bool(
+                local_selection.get("route_truncated_by_mesh", False)
+            ),
+            mesh_safe_prefix_length_m=(
+                float(local_length_m)
+                if bool(local_selection.get("route_truncated_by_mesh", False))
+                else None
+            ),
+            replan_at_end=True,
+            voxel_route_selection=local_selection,
+            terminal_reached=False,
+            navigation_route_id=authority_status.get("route_id"),
+            navigation_atlas=local_atlas,
+            navigation_graph=local_graph,
+            navigation_graph_keys=local_graph_keys,
+        )
+
+    # Manual user-resume requests need the same bounded local-first path as
+    # frontier handoffs.  Otherwise a corrected position in a tight passage
+    # is sent straight into the expensive whole-graph search and can consume
+    # the complete replan budget before local mesh evidence is consulted.
+    local_first = bool(expand_frontier or user_reposition)
+    if local_first:
+        local_plan = build_local_frontier_plan()
+        if local_plan is not None:
+            return local_plan
+        _record_auto_dive_diagnostic(
+            diagnostics,
+            "voxel_local_frontier_graph_expansion",
+            {
+                "accepted": False,
+                "reason": "no_mesh_safe_local_graph_route",
+                "authority": "bounded_runtime_local_true_3d_graph",
+                "phase": "before_prepared_graph_search",
+            },
+        )
+    graph_scale = max(
+        0.25,
+        *(float(value) for value in graph.grid_size_m),
+        float(atlas.voxel_size_m or 0.0),
+    )
+    voxel_route_plan = atlas.plan_footprint_route(
+        (),
+        current_position=current,
+        footprint_cell_size=graph_scale,
+        preferred_direction=preferred_direction,
+        edge_safety_check=runtime_edge_is_safe,
+        lookahead_distance_m=float(settings.lookahead_distance_m),
+        scoring_policy=settings.voxel_scoring_policy,
+        diagnostics=diagnostics,
+        deadline_check=lambda: planning_budget.check(
+            "voxel_route_search",
+            diagnostics=diagnostics,
+        ),
+    )
+    planning_budget.check("voxel_route_selected", diagnostics=diagnostics)
+    if voxel_route_plan is None and preferred_direction is not None:
+        # A continuous scan is a graph query with relaxed heading preference,
+        # not a return to centerline hemisphere recovery.
+        voxel_route_plan = atlas.plan_footprint_route(
+            (),
+            current_position=current,
+            footprint_cell_size=graph_scale,
+            preferred_direction=None,
+            edge_safety_check=runtime_edge_is_safe,
+            lookahead_distance_m=float(settings.lookahead_distance_m),
+            scoring_policy=settings.voxel_scoring_policy,
+            diagnostics=diagnostics,
+            deadline_check=lambda: planning_budget.check(
+                "voxel_route_search_relaxed_heading",
+                diagnostics=diagnostics,
+            ),
+        )
+        planning_budget.check("voxel_route_selected", diagnostics=diagnostics)
+    if local_first and _voxel_route_needs_local_frontier_expansion(
+        voxel_route_plan
+    ):
+        local_plan = build_local_frontier_plan()
+        if local_plan is not None:
+            return local_plan
         _record_auto_dive_diagnostic(
             diagnostics,
             "voxel_local_frontier_graph_expansion",
@@ -2040,14 +2250,6 @@ def build_voxel_graph_auto_dive_plan(
         route_points[1],
         voxel_route_plan.graph_keys,
         graph,
-    )
-    graph_safety_validator = GraphRouteSafetyValidator(
-        atlas,
-        graph,
-        mesh_guard=mesh_guard,
-        policy=GraphRouteSafetyPolicy(
-            minimum_clearance_m=float(settings.minimum_graph_clearance_m),
-        ),
     )
     planning_budget.check("graph_safety_validation", diagnostics=diagnostics)
     safety_failure = graph_safety_validator.route_clearance_failure(
@@ -2126,6 +2328,10 @@ def build_voxel_graph_auto_dive_plan(
         navigation_atlas=atlas,
         navigation_graph=graph,
         navigation_graph_keys=tuple(voxel_route_plan.graph_keys),
+        fixed_route=bool(
+            voxel_route_plan.terminal_reached
+            and settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+        ),
     )
 
 
@@ -2166,10 +2372,14 @@ def _build_bounded_local_frontier_graph_route(
     forward: Sequence[float] | None,
     settings: AutoDiveSettings,
     mesh_guard: CachedChunkMeshCollisionGuard | None,
+    camera_atlas: NavigationVoxelAtlas | None = None,
     avoid_positions: Sequence[Sequence[float]] | None,
     authority_status: Mapping[str, Any],
     diagnostics: AutoDiveDiagnosticSink | None,
     planning_budget: _AutoDivePlanningBudget | None = None,
+    _mesh_retry_count: int = 0,
+    _route_indices_override: tuple[tuple[int, int, int], ...] | None = None,
+    _local_route_override: LocalVoxelRoute | None = None,
 ) -> tuple[
     NavigationVoxelAtlas,
     NavigationVoxel3DGraph,
@@ -2196,23 +2406,40 @@ def _build_bounded_local_frontier_graph_route(
     if direction_norm <= 1e-9:
         return None
     direction = tuple(value / direction_norm for value in direction_values)
-    local_route = volume.find_forward_route(
-        current,
-        direction,
-        max_distance_m=float(settings.voxel_local_refinement_forward_m),
-        max_nodes=int(settings.voxel_local_refinement_max_cells),
-        min_target_distance_m=max(3.0, float(settings.lookahead_distance_m)),
-        deadline_monotonic_s=(
-            None
-            if planning_budget is None
-            else planning_budget.deadline_monotonic_s
-        ),
-    )
-    if planning_budget is not None:
-        planning_budget.check(
-            "local_frontier_route_search",
-            diagnostics=diagnostics,
+    if _local_route_override is None:
+        local_route = volume.find_forward_route(
+            current,
+            direction,
+            max_distance_m=float(settings.voxel_local_refinement_forward_m),
+            max_nodes=int(settings.voxel_local_refinement_max_cells),
+            min_target_distance_m=max(3.0, float(settings.lookahead_distance_m)),
+            deadline_monotonic_s=(
+                None
+                if planning_budget is None
+                else planning_budget.deadline_monotonic_s
+            ),
+            # Diagonal fine-voxel steps can cut across a one-voxel corner even
+            # when both endpoints are free. Cardinal local steps keep the
+            # temporary route topology conservative; the exact mesh/voxel graph
+            # validator remains the final permission check below.
+            allow_diagonal=False,
         )
+        if planning_budget is not None:
+            planning_budget.check(
+                "local_frontier_route_search",
+                diagnostics=diagnostics,
+            )
+    else:
+        # A mesh failure only invalidates the suffix after its first failed
+        # segment. Reuse the already-ranked local route while trimming that
+        # suffix; rerunning the bounded BFS for every mesh retry was the main
+        # source of budget overruns on dense caves.
+        local_route = _local_route_override
+        if planning_budget is not None:
+            planning_budget.check(
+                "local_frontier_route_prefix_reuse",
+                diagnostics=diagnostics,
+            )
     if local_route is None or not local_route.indices:
         _record_auto_dive_diagnostic(
             diagnostics,
@@ -2252,13 +2479,30 @@ def _build_bounded_local_frontier_graph_route(
         return None
 
     max_graph_points = max(1, int(settings.max_keyframes) - 1)
-    selected_indices = tuple(local_route.indices[:max_graph_points])
+    selected_indices = (
+        tuple(local_route.indices[:max_graph_points])
+        if _route_indices_override is None
+        else tuple(_route_indices_override[:max_graph_points])
+    )
     if selected_indices:
+        # ``find_forward_route`` includes the voxel containing the camera as
+        # its search seed.  Its center is not normally identical to the
+        # camera, and a locally inflated surface field may conservatively
+        # mark that seed occupied even when the prepared atlas proves the
+        # actual camera position free.  The seed is not an executable graph
+        # step; publish the first distinct free voxel instead.
+        try:
+            current_index = volume.voxel_index(current)
+        except (TypeError, ValueError):
+            current_index = None
         first_center = volume.voxel_center(selected_indices[0])
-        if sum(
-            (float(first_center[axis]) - float(current[axis])) ** 2
-            for axis in range(3)
-        ) <= 1e-12:
+        if (
+            (current_index is not None and selected_indices[0] == current_index)
+            or sum(
+                (float(first_center[axis]) - float(current[axis])) ** 2
+                for axis in range(3)
+            ) <= 1e-12
+        ):
             selected_indices = selected_indices[1:]
     selected_centers = tuple(
         volume.voxel_center(index) for index in selected_indices
@@ -2272,10 +2516,10 @@ def _build_bounded_local_frontier_graph_route(
     if len(set(graph_keys)) != len(graph_keys):
         return None
 
-    # The local voxel search permits 26-connected diagonal steps. Preserve
-    # the exact route keys, but add the intermediate free voxels needed by
-    # the graph builder's line-of-sight invariant so a diagonal edge is not
-    # accidentally discarded from the expanded graph.
+    # Preserve the local route keys and add any intermediate free voxels
+    # needed by the graph builder's line-of-sight invariant.  The current
+    # local search is cardinal-only, but keeping this normalization makes the
+    # temporary graph safe if a caller supplies a diagonal route override.
     metric_indices: list[tuple[int, int, int]] = list(selected_indices)
     metric_index_set = set(metric_indices)
     for first, second in zip(selected_indices, selected_indices[1:], strict=False):
@@ -2350,19 +2594,86 @@ def _build_bounded_local_frontier_graph_route(
         coverage_scope="runtime_local_frontier",
     )
     route_points = (tuple(float(value) for value in current),) + selected_centers
-    safety_failure = GraphRouteSafetyValidator(
+    local_safety_validator = GraphRouteSafetyValidator(
         local_atlas,
         graph,
         mesh_guard=mesh_guard,
         policy=GraphRouteSafetyPolicy(
             minimum_clearance_m=float(settings.minimum_graph_clearance_m),
         ),
-    ).route_clearance_failure(
-        route_points,
+    )
+    # Validate the graph-native local route without asking the conservative
+    # inflated local field to classify the already-occupied camera seed. The
+    # seed is checked separately against the prepared atlas and the exact
+    # cached mesh connector; local graph nodes and all onward steps still use
+    # the fine field and exact mesh guard.
+    safety_failure = local_safety_validator.route_clearance_failure(
+        selected_centers,
         graph_keys,
         start_graph_key=graph_keys[0],
     )
+    if safety_failure is None:
+        camera_validator = GraphRouteSafetyValidator(
+            camera_atlas if camera_atlas is not None else local_atlas,
+            graph,
+            mesh_guard=mesh_guard,
+            policy=GraphRouteSafetyPolicy(
+                minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+            ),
+        )
+        safety_failure = camera_validator.route_clearance_failure(
+            (route_points[0], route_points[1]),
+            (graph_keys[0],),
+            start_graph_key=graph_keys[0],
+        )
     if safety_failure is not None:
+        if str(safety_failure.reason) == "mesh_intersection" and local_route.indices:
+            segment_index = safety_failure.segment_index
+            if segment_index is not None:
+                safe_count = min(
+                    len(selected_indices),
+                    max(0, int(segment_index) + 1),
+                )
+                # A camera-to-first-node collision is not repaired by
+                # publishing the same first node again. Shrink an existing
+                # prefix on each bounded retry and stop once no executable
+                # node remains.
+                if _route_indices_override is not None and safe_count >= len(
+                    selected_indices
+                ):
+                    safe_count = len(selected_indices) - 1
+                if safe_count >= 1 and _mesh_retry_count < 4:
+                    _record_auto_dive_diagnostic(
+                        diagnostics,
+                        "voxel_local_frontier_mesh_safe_prefix",
+                        {
+                            "failed_segment_index": int(segment_index),
+                            "safe_graph_key_count": int(safe_count),
+                            "reason": "mesh_intersection",
+                            # The recursive prefix build below receives the
+                            # same LocalVoxelRoute; this event describes that
+                            # bounded reuse rather than a second BFS.
+                            "route_search_reused": True,
+                            "retry_count": int(_mesh_retry_count + 1),
+                        },
+                    )
+                    return _build_bounded_local_frontier_graph_route(
+                        volume=volume,
+                        current=current,
+                        forward=forward,
+                        settings=settings,
+                        mesh_guard=mesh_guard,
+                        camera_atlas=camera_atlas,
+                        avoid_positions=avoid_positions,
+                        authority_status=authority_status,
+                        diagnostics=diagnostics,
+                        planning_budget=planning_budget,
+                        _mesh_retry_count=_mesh_retry_count + 1,
+                        _route_indices_override=tuple(
+                            selected_indices[:safe_count]
+                        ),
+                        _local_route_override=local_route,
+                    )
         _record_auto_dive_diagnostic(
             diagnostics,
             "graph_route_safety_failed",
@@ -2374,22 +2685,36 @@ def _build_bounded_local_frontier_graph_route(
         )
         return None
 
+    published_length_m = path_length(route_points)
     branch = {
         "branch_start_key": [int(value) for value in graph_keys[0]],
         "target_key": [int(value) for value in graph_keys[-1]],
-        "continuation_distance_m": float(local_route.distance_m),
+        "continuation_distance_m": float(published_length_m),
         "onward_exit_count": 0 if local_route.boundary_reached else 1,
         "frontier_count": 1 if local_route.boundary_reached else 0,
         "unknown_boundary": bool(local_route.boundary_reached),
         "target_is_terminal": False,
         "dead_end": False,
     }
+    local_route_payload = local_route.diagnostic_payload()
+    local_route_payload.update(
+        {
+            "published_route_point_count": len(route_points),
+            "published_route_length_m": float(published_length_m),
+        }
+    )
     selection = {
         "method": str(graph.method),
         "selection_reason": "continuous_local_frontier_expansion",
         "authority": "bounded_runtime_local_true_3d_graph",
         "route_geometry_source": "bounded_cached_mesh_local_voxels",
         "coverage_incomplete": True,
+        "route_truncated_by_mesh": _route_indices_override is not None,
+        "mesh_safe_prefix_length_m": (
+            float(path_length(route_points))
+            if _route_indices_override is not None
+            else None
+        ),
         "unknown_boundary_reached": bool(local_route.boundary_reached),
         "terminal_reached": False,
         "replan_at_lookahead": True,
@@ -2402,7 +2727,7 @@ def _build_bounded_local_frontier_graph_route(
             "base_cache_version": authority_status.get("cache_version"),
         },
         "branch": branch,
-        "local_route": local_route.diagnostic_payload(),
+        "local_route": local_route_payload,
         "prepared_graph": graph.diagnostic_payload(),
         "avoid_positions_applied": len(avoided),
     }
@@ -2505,10 +2830,12 @@ def build_auto_dive_preflight_plan(
     """Validate one complete cave route before Guided Dive activation.
 
     Startup preflight deliberately differs from receding-horizon replanning:
-    it searches the prepared true-3D graph all the way to the farthest
-    reachable graph terminal/frontier in the starting component. The returned
-    plan is the same graph path that the controller receives, so activation
-    cannot succeed on a route that was not the route validated here.
+    the default easiest-terminal policy searches the prepared true-3D graph
+    for the shortest known terminal in the starting component. The explicit
+    farthest-terminal policy retains the historical terminal/frontier search.
+    The returned plan is the same graph path that the controller receives, so
+    activation cannot succeed on a route that was not the route validated
+    here.
     """
     settings = settings or AutoDiveSettings()
     _validate_auto_dive_settings(settings)
@@ -2549,7 +2876,7 @@ def build_auto_dive_preflight_plan(
                 "navigation_route_missing",
                 "navigation_route_metadata_invalid",
                 "voxel_graph_model_missing",
-                "true_3d_graph_missing",
+                "mesh_graph_missing",
             }
             else AUTO_DIVE_PREFLIGHT_FAILED
         )
@@ -2561,7 +2888,7 @@ def build_auto_dive_preflight_plan(
             details=dict(exc.status),
         )
 
-    graph = cached_volume.prepared_3d_graph
+    graph = cached_volume.authoritative_graph
     if graph is None:
         return _auto_dive_preflight_result(
             diagnostics,
@@ -2569,6 +2896,26 @@ def build_auto_dive_preflight_plan(
             reason="prepared_graph_missing_after_authority_check",
             navigation_route_id=route_id,
         )
+
+    mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=cache_dir,
+    )
+    if mesh_guard is None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_INDETERMINATE,
+            reason="mesh_collision_guard_unavailable",
+            navigation_route_id=route_id,
+        )
+    graph_safety_validator = GraphRouteSafetyValidator(
+        cached_volume,
+        graph,
+        mesh_guard=mesh_guard,
+        policy=GraphRouteSafetyPolicy(
+            minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+        ),
+    )
 
     snap_tolerance_m = _preflight_graph_snap_tolerance_m(
         graph,
@@ -2602,11 +2949,43 @@ def build_auto_dive_preflight_plan(
             },
         )
 
+    nearest_start_key = start_key
+    nearest_start_distance_m = start_distance_m
+    (
+        start_key,
+        start_distance_m,
+        start_connector_details,
+    ) = _preflight_mesh_safe_start_key(
+        graph,
+        current,
+        maximum_distance_m=snap_tolerance_m,
+        graph_safety_validator=graph_safety_validator,
+    )
+    if start_key is None:
+        return _auto_dive_preflight_result(
+            diagnostics,
+            status=AUTO_DIVE_PREFLIGHT_FAILED,
+            reason="camera_to_graph_start_connector_missing",
+            navigation_route_id=route_id,
+            start_graph_key=nearest_start_key,
+            details={
+                **start_connector_details,
+                "nearest_start_graph_key": [
+                    int(value) for value in nearest_start_key
+                ],
+                "nearest_start_snap_distance_m": float(
+                    nearest_start_distance_m
+                ),
+                "snap_tolerance_m": float(snap_tolerance_m),
+            },
+        )
+
     component_id = int(graph.nodes[start_key].component_id)
     terminal_key, terminal_details = _preflight_select_graph_terminal(
         graph,
         start_key=start_key,
         component_id=component_id,
+        selection_policy=settings.route_goal,
     )
     if terminal_key is None:
         terminal_reason = str(
@@ -2617,7 +2996,11 @@ def build_auto_dive_preflight_plan(
         )
         terminal_status = (
             AUTO_DIVE_PREFLIGHT_FAILED
-            if terminal_reason == "graph_terminal_search_expansion_limit"
+            if terminal_reason
+            in {
+                "graph_terminal_search_expansion_limit",
+                "mesh_graph_terminal_disconnected_from_camera",
+            }
             else AUTO_DIVE_PREFLIGHT_INDETERMINATE
         )
         return _auto_dive_preflight_result(
@@ -2626,7 +3009,11 @@ def build_auto_dive_preflight_plan(
             reason=terminal_reason,
             navigation_route_id=route_id,
             start_graph_key=start_key,
-            details={**terminal_details, "start_component_id": component_id},
+            details={
+                **terminal_details,
+                **start_connector_details,
+                "start_component_id": component_id,
+            },
         )
     terminal_point = tuple(
         float(value) for value in graph.nodes[terminal_key].center
@@ -2635,15 +3022,29 @@ def build_auto_dive_preflight_plan(
         terminal_details.get("terminal_unknown_boundary", False)
     )
 
-    graph_keys, graph_search_details = _preflight_global_graph_route(
-        graph,
-        start_key=start_key,
-        terminal_key=terminal_key,
-        preferred_direction=_direction_from_radians(
-            current_yaw,
-            current_pitch,
-        ),
-    )
+    if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL:
+        # The terminal itself is selected by physical graph distance.  Use
+        # that same deterministic shortest path for the fixed preflight
+        # spine, instead of allowing heading preferences to choose a longer
+        # coarse shortcut that later has to be repaired through another
+        # branch. Exact graph/voxel/mesh validation remains mandatory below.
+        graph_keys, graph_search_details = (
+            shortest_navigation_voxel_3d_graph_path(
+                graph,
+                start_key=start_key,
+                terminal_key=terminal_key,
+            )
+        )
+    else:
+        graph_keys, graph_search_details = _preflight_global_graph_route(
+            graph,
+            start_key=start_key,
+            terminal_key=terminal_key,
+            preferred_direction=_direction_from_radians(
+                current_yaw,
+                current_pitch,
+            ),
+        )
     if graph_keys is None:
         return _auto_dive_preflight_result(
             diagnostics,
@@ -2684,46 +3085,63 @@ def build_auto_dive_preflight_plan(
             coverage_incomplete=coverage_incomplete,
         )
 
-    mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
-        manifest,
-        cache_dir=cache_dir,
-    )
-    if mesh_guard is None:
-        return _auto_dive_preflight_result(
-            diagnostics,
-            status=AUTO_DIVE_PREFLIGHT_INDETERMINATE,
-            reason="mesh_collision_guard_unavailable",
-            navigation_route_id=route_id,
-            terminal_point=terminal_point,
-            start_graph_key=start_key,
-            terminal_graph_key=terminal_key,
-            details={
-                **terminal_details,
-                **graph_search_details,
-                "start_component_id": component_id,
-            },
-            coverage_incomplete=coverage_incomplete,
-        )
-
-    graph_safety_validator = GraphRouteSafetyValidator(
-        cached_volume,
-        graph,
-        mesh_guard=mesh_guard,
-        policy=GraphRouteSafetyPolicy(
-            minimum_clearance_m=float(settings.minimum_graph_clearance_m),
-        ),
-    )
     full_failure = graph_safety_validator.route_clearance_failure(
         full_route_points,
         graph_keys,
     )
     mesh_safe_frontier = False
+    mesh_safe_route_fallback = False
+    mesh_safe_search_details: dict[str, Any] | None = None
     mesh_safe_frontier_details: dict[str, Any] | None = None
+    route_segments: tuple[AutoDiveRouteSegment, ...] = ()
+    refined_route_details: dict[str, Any] | None = None
+    refined_fixed_route = False
     if full_failure is not None:
         original_failure_payload = _preflight_clearance_failure_payload(
             full_failure
         )
-        if full_failure.reason == "mesh_intersection":
+        # Easiest-terminal mode has a stricter contract than the historical
+        # frontier mode: the selected known terminal is either reached by one
+        # exact-safe route or it is not published.  Repair its *original*
+        # coarse route before considering any mesh-safe graph frontier.  This
+        # prevents a short prefix from masking a failed full-cave traversal.
+        if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL:
+            (
+                refined_segments,
+                refined_points,
+                refined_cells,
+                refined_details,
+            ) = _compose_preflight_spine_fixed_route(
+                current=current,
+                graph_keys=graph_keys,
+                graph=graph,
+                cached_volume=cached_volume,
+                graph_safety_validator=graph_safety_validator,
+                mesh_guard=mesh_guard,
+                settings=settings,
+            )
+            refined_route_details = dict(refined_details)
+            if refined_segments is not None:
+                route_segments = refined_segments
+                full_route_points = refined_points
+                full_route_cells = refined_cells
+                full_failure = None
+                refined_fixed_route = True
+                mesh_safe_route_fallback = True
+                terminal_details = {
+                    **terminal_details,
+                    "refined_fixed_route": True,
+                    "refined_route": refined_route_details,
+                }
+                graph_search_details = {
+                    **graph_search_details,
+                    "refined_fixed_route": True,
+                    "refined_route": refined_route_details,
+                }
+        # A safe frontier remains an explicit farthest/frontier-policy
+        # fallback only.  It is useful diagnostic behaviour, but it is never
+        # a substitute for the one complete easiest-terminal route.
+        elif full_failure.reason == "mesh_intersection":
             (
                 safe_graph_keys,
                 safe_terminal_key,
@@ -2733,8 +3151,11 @@ def build_auto_dive_preflight_plan(
                 start_key=start_key,
                 component_id=component_id,
                 graph_safety_validator=graph_safety_validator,
+                selection_policy=settings.route_goal,
             )
+            mesh_safe_search_details = dict(safe_details)
             if safe_graph_keys is not None and safe_terminal_key is not None:
+                mesh_safe_route_fallback = True
                 requested_terminal_key = terminal_key
                 terminal_key = safe_terminal_key
                 terminal_point = tuple(
@@ -2757,7 +3178,13 @@ def build_auto_dive_preflight_plan(
                         int(value) for value in requested_terminal_key
                     ],
                 }
-                coverage_incomplete = True
+                safe_terminal_route = bool(
+                    settings.route_goal
+                    == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+                    and safe_details.get("terminal_candidate", False)
+                    and not safe_details.get("terminal_unknown_boundary", False)
+                )
+                coverage_incomplete = not safe_terminal_route
                 full_route_points, full_route_cells = _preflight_route_geometry(
                     current,
                     graph_keys,
@@ -2768,9 +3195,10 @@ def build_auto_dive_preflight_plan(
                     graph_keys,
                 )
                 if full_failure is None:
-                    mesh_safe_frontier = True
+                    mesh_safe_frontier = not safe_terminal_route
                     mesh_safe_frontier_details = {
                         **safe_details,
+                        "safe_terminal_route": safe_terminal_route,
                         "requested_terminal_graph_key": [
                             int(value) for value in requested_terminal_key
                         ],
@@ -2789,9 +3217,17 @@ def build_auto_dive_preflight_plan(
                 failure_details["mesh_safe_frontier_attempt"] = (
                     mesh_safe_frontier_details
                 )
+            elif mesh_safe_search_details is not None:
+                failure_details["mesh_safe_terminal_search"] = (
+                    mesh_safe_search_details
+                )
             else:
                 failure_details["original_collision_failure"] = (
                     original_failure_payload
+                )
+            if refined_route_details is not None:
+                failure_details["refined_route_composition"] = (
+                    refined_route_details
                 )
             return _auto_dive_preflight_result(
                 diagnostics,
@@ -2805,32 +3241,52 @@ def build_auto_dive_preflight_plan(
                 coverage_incomplete=coverage_incomplete,
             )
 
-    route_points, route_cells = _preflight_bounded_route_geometry(
-        full_route_points,
-        full_route_cells,
-        max_keyframes=int(settings.max_keyframes),
-    )
-    if route_points is None or route_cells is None:
-        return _auto_dive_preflight_result(
-            diagnostics,
-            status=AUTO_DIVE_PREFLIGHT_FAILED,
-            reason="route_exceeds_keyframe_budget_without_safe_shortcut",
-            navigation_route_id=route_id,
-            terminal_point=terminal_point,
-            start_graph_key=start_key,
-            terminal_graph_key=terminal_key,
-            details={
-                **terminal_details,
-                **graph_search_details,
-                "full_route_point_count": len(full_route_points),
-                "max_keyframes": int(settings.max_keyframes),
-            },
-            coverage_incomplete=coverage_incomplete,
+    if route_segments:
+        # Refined graph waypoints are executable geometry, not candidates for
+        # a later coarse-graph shortcut. Keep every point and verify the
+        # merged ledger seams through the same cached voxel/mesh gate.
+        route_points = full_route_points
+        route_cells = full_route_cells
+        bounded_failure: GraphRouteSafetyFailure | None = None
+        for segment_index, (first, second) in enumerate(
+            zip(route_points, route_points[1:], strict=False)
+        ):
+            bounded_failure = graph_safety_validator.segment_clearance_failure(
+                first,
+                second,
+                segment_index=segment_index,
+                kind="composed_fixed_route_segment",
+                uncovered_reason="composed_fixed_route_uncovered",
+            )
+            if bounded_failure is not None:
+                break
+    else:
+        route_points, route_cells = _preflight_bounded_route_geometry(
+            full_route_points,
+            full_route_cells,
+            max_keyframes=int(settings.max_keyframes),
         )
-    bounded_failure = graph_safety_validator.route_clearance_failure(
-        route_points,
-        graph_keys,
-    )
+        if route_points is None or route_cells is None:
+            return _auto_dive_preflight_result(
+                diagnostics,
+                status=AUTO_DIVE_PREFLIGHT_FAILED,
+                reason="route_exceeds_keyframe_budget_without_safe_shortcut",
+                navigation_route_id=route_id,
+                terminal_point=terminal_point,
+                start_graph_key=start_key,
+                terminal_graph_key=terminal_key,
+                details={
+                    **terminal_details,
+                    **graph_search_details,
+                    "full_route_point_count": len(full_route_points),
+                    "max_keyframes": int(settings.max_keyframes),
+                },
+                coverage_incomplete=coverage_incomplete,
+            )
+        bounded_failure = graph_safety_validator.route_clearance_failure(
+            route_points,
+            graph_keys,
+        )
     if bounded_failure is not None:
         return _auto_dive_preflight_result(
             diagnostics,
@@ -2878,12 +3334,23 @@ def build_auto_dive_preflight_plan(
         selection_reason=(
             "preflight_mesh_safe_graph_frontier"
             if mesh_safe_frontier
+            else "preflight_refined_easiest_mesh_safe_graph_terminal"
+            if refined_fixed_route
+            else "preflight_easiest_mesh_safe_graph_terminal"
+            if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
             else "preflight_farthest_graph_terminal_true_3d"
         ),
         replan_at_end=mesh_safe_frontier,
         voxel_route_selection={
             "method": NAVIGATION_VOXEL_GRAPH_METHOD,
-            "route_geometry_source": "preflight_global_true_3d_graph",
+            "route_geometry_source": (
+                "preflight_physical_true_3d_graph_spine_with_fine_portals"
+                if refined_fixed_route
+                else "preflight_physical_true_3d_graph"
+                if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+                else "preflight_global_true_3d_graph"
+            ),
+            "route_goal": str(settings.route_goal),
             "start_key": [int(value) for value in start_key],
             "terminal_key": [int(value) for value in terminal_key],
             "terminal_rule": terminal_details.get("terminal_rule"),
@@ -2903,6 +3370,10 @@ def build_auto_dive_preflight_plan(
             "prefetched_chunk_count": len(prefetched_chunk_ids),
             "coverage_incomplete": coverage_incomplete,
             "mesh_safe_frontier_fallback": mesh_safe_frontier,
+            "mesh_safe_route_fallback": mesh_safe_route_fallback,
+            "refined_fixed_route": refined_fixed_route,
+            "route_segment_count": len(route_segments),
+            "refined_route": refined_route_details,
         },
         terminal_reached=not mesh_safe_frontier,
         navigation_route_id=route_id,
@@ -2910,6 +3381,11 @@ def build_auto_dive_preflight_plan(
         navigation_atlas=cached_volume,
         navigation_graph=graph,
         navigation_graph_keys=tuple(graph_keys),
+        fixed_route=bool(
+            settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            and not mesh_safe_frontier
+        ),
+        route_segments=route_segments,
     )
     return _auto_dive_preflight_result(
         diagnostics,
@@ -2917,6 +3393,10 @@ def build_auto_dive_preflight_plan(
         reason=(
             "validated_mesh_safe_graph_frontier_route"
             if mesh_safe_frontier
+            else "validated_refined_easiest_mesh_safe_graph_terminal_route"
+            if refined_fixed_route
+            else "validated_easiest_mesh_safe_graph_terminal_route"
+            if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
             else "validated_farthest_graph_terminal_route"
         ),
         plan=plan,
@@ -2929,10 +3409,14 @@ def build_auto_dive_preflight_plan(
         details={
             **terminal_details,
             **graph_search_details,
+            **start_connector_details,
             "start_component_id": component_id,
             "start_snap_distance_m": float(start_distance_m),
             "snap_tolerance_m": float(snap_tolerance_m),
             "prefetched_chunk_count": len(prefetched_chunk_ids),
+            "refined_fixed_route": refined_fixed_route,
+            "route_segment_count": len(route_segments),
+            "refined_route": refined_route_details,
         },
     )
 
@@ -3003,81 +3487,102 @@ def _preflight_select_graph_terminal(
     *,
     start_key: VoxelGraphKey,
     component_id: int,
+    selection_policy: str = AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL,
 ) -> tuple[VoxelGraphKey | None, dict[str, Any]]:
-    """Select the farthest reachable terminal/frontier in graph space.
+    """Select a graph-space startup goal before exact route validation.
 
     ``terminal`` identifies a known local topological endpoint. An
     ``unknown_boundary`` node is also an eligible frontier: it is the end of
     the prepared evidence, not proof that the cave ends there. Both are
     evaluated by accumulated directed graph distance from the starting node,
     so a centerline endpoint or a Cartesian coordinate cannot choose the
-    startup destination.
+    startup destination.  The easiest-terminal policy excludes unknown
+    boundaries and selects the shortest known terminal; the farthest policy
+    retains the historical longest-passage behavior.
     """
-    candidates = tuple(
-        key
-        for key, node in graph.nodes.items()
-        if int(node.component_id) == int(component_id)
-        and (bool(node.terminal) or bool(node.unknown_boundary))
+    if selection_policy not in AUTO_DIVE_ROUTE_GOAL_POLICIES:
+        raise NavigationConfigurationError(
+            f"unsupported Guided Dive route goal: {selection_policy!r}"
+        )
+    graph_index = graph.runtime_index
+    all_candidates = graph_index.terminal_candidate_keys_by_component.get(
+        int(component_id),
+        (),
+    )
+    candidates = (
+        tuple(
+            key
+            for key in all_candidates
+            if bool(graph.nodes[key].terminal)
+            and not bool(graph.nodes[key].unknown_boundary)
+            and key != start_key
+        )
+        if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+        else tuple(all_candidates)
     )
     terminal_candidate_count = sum(
         1
-        for key in candidates
+        for key in all_candidates
         if bool(graph.nodes[key].terminal)
         and not bool(graph.nodes[key].unknown_boundary)
     )
     unknown_candidate_count = sum(
-        1 for key in candidates if bool(graph.nodes[key].unknown_boundary)
+        1 for key in all_candidates if bool(graph.nodes[key].unknown_boundary)
     )
     base_details = {
-        "terminal_candidate_count": len(candidates),
+        "route_goal": str(selection_policy),
+        "terminal_candidate_count": len(all_candidates),
         "terminal_candidate_terminal_count": terminal_candidate_count,
         "terminal_candidate_unknown_boundary_count": unknown_candidate_count,
+        "eligible_terminal_count": len(candidates),
     }
     if not candidates:
+        disconnected_terminals = tuple(
+            key
+            for key, node in graph.nodes.items()
+            if int(node.component_id) != int(component_id)
+            and bool(node.terminal)
+            and not bool(node.unknown_boundary)
+        )
+        if disconnected_terminals:
+            return None, {
+                **base_details,
+                "reason": (
+                    "mesh_graph_terminal_disconnected_from_camera"
+                    if str(graph.method) == MESH_NAVIGATION_GRAPH_METHOD
+                    else "prepared_graph_terminal_disconnected_from_start_component"
+                ),
+                "disconnected_known_terminal_count": len(
+                    disconnected_terminals
+                ),
+                "disconnected_terminal_component_ids": sorted(
+                    {
+                        int(graph.nodes[key].component_id)
+                        for key in disconnected_terminals
+                    }
+                ),
+            }
         return None, {
             **base_details,
             "reason": "prepared_graph_terminal_candidates_missing",
         }
 
-    distances: dict[VoxelGraphKey, float] = {start_key: 0.0}
-    queue: list[tuple[float, VoxelGraphKey]] = [(0.0, start_key)]
-    expanded_count = 0
     max_expansions = max(len(graph.nodes) * 4, graph.edge_count + 1)
-    while queue:
-        distance_m, current_key = heapq.heappop(queue)
-        if distance_m > distances.get(current_key, math.inf) + 1e-9:
-            continue
-        expanded_count += 1
-        if expanded_count > max_expansions:
-            return None, {
-                **base_details,
-                "reason": "graph_terminal_search_expansion_limit",
-                "expanded_terminal_search_count": expanded_count,
-                "terminal_search_max_expansions": max_expansions,
-            }
-        current_node = graph.nodes.get(current_key)
-        if current_node is None:
-            continue
-        for edge in graph.outgoing(current_key):
-            target_node = graph.nodes.get(edge.target)
-            edge_distance_m = float(edge.distance_m)
-            if (
-                target_node is None
-                or not edge.line_of_sight
-                or edge.source != current_key
-                or int(target_node.component_id) != int(component_id)
-                or not math.isfinite(edge_distance_m)
-                or edge_distance_m <= 0.0
-            ):
-                continue
-            next_distance_m = distance_m + edge_distance_m
-            if next_distance_m + 1e-9 >= distances.get(
-                edge.target,
-                math.inf,
-            ):
-                continue
-            distances[edge.target] = next_distance_m
-            heapq.heappush(queue, (next_distance_m, edge.target))
+    distances, expanded_count, expansion_limited = (
+        graph_index.shortest_distances_to_candidates(
+            start_key,
+            candidates,
+            component_id=int(component_id),
+            max_expansions=max_expansions,
+        )
+    )
+    if expansion_limited:
+        return None, {
+            **base_details,
+            "reason": "graph_terminal_search_expansion_limit",
+            "expanded_terminal_search_count": expanded_count,
+            "terminal_search_max_expansions": max_expansions,
+        }
 
     reachable_candidates = tuple(
         key for key in candidates if key in distances
@@ -3090,31 +3595,54 @@ def _preflight_select_graph_terminal(
             "terminal_search_max_expansions": max_expansions,
         }
 
-    selected = max(
-        reachable_candidates,
-        key=lambda key: (
-            distances[key],
-            bool(
-                graph.nodes[key].terminal
-                and not graph.nodes[key].unknown_boundary
+    if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL:
+        selected = min(
+            reachable_candidates,
+            key=lambda key: (
+                distances[key],
+                -float(graph.nodes[key].min_clearance_m),
+                -float(graph.nodes[key].available_volume_m3),
+                key,
             ),
-            key,
-        ),
-    )
+        )
+    else:
+        selected = max(
+            reachable_candidates,
+            key=lambda key: (
+                distances[key],
+                bool(
+                    graph.nodes[key].terminal
+                    and not graph.nodes[key].unknown_boundary
+                ),
+                key,
+            ),
+        )
     selected_node = graph.nodes[selected]
     selected_is_unknown = bool(selected_node.unknown_boundary)
     return selected, {
         **base_details,
-        "reason": "farthest_reachable_graph_terminal_selected",
+        "reason": (
+            "easiest_reachable_graph_terminal_selected"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else "farthest_reachable_graph_terminal_selected"
+        ),
         "terminal_rule": (
-            "farthest_reachable_true_3d_graph_frontier"
-            if selected_is_unknown
-            else "farthest_reachable_true_3d_graph_terminal"
+            "easiest_reachable_true_3d_graph_terminal"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else (
+                "farthest_reachable_true_3d_graph_frontier"
+                if selected_is_unknown
+                else "farthest_reachable_true_3d_graph_terminal"
+            )
         ),
         "terminal_selection_source": (
-            "unknown_boundary_frontier"
-            if selected_is_unknown
-            else "graph_terminal"
+            "graph_terminal"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else (
+                "unknown_boundary_frontier"
+                if selected_is_unknown
+                else "graph_terminal"
+            )
         ),
         "terminal_reachable_candidate_count": len(reachable_candidates),
         "terminal_graph_distance_m": float(distances[selected]),
@@ -3149,11 +3677,33 @@ def _preflight_graph_snap_tolerance_m(
     cached_volume: NavigationVoxelAtlas,
 ) -> float:
     graph_scale = max((float(value) for value in graph.grid_size_m), default=0.0)
-    return max(
+    tolerance_m = max(
         2.0 * graph_scale,
+        max(0.0, float(graph.max_edge_distance_m)),
         2.0 * max(0.0, float(cached_volume.voxel_size_m)),
         1.0,
     )
+    if str(graph.method) != MESH_NAVIGATION_GRAPH_METHOD:
+        return tolerance_m
+
+    # A version-10 mesh graph persists the shortest certified path through the
+    # complete seeded component, not every off-spine lattice sample discovered
+    # while proving that component.  A valid camera pose can consequently sit
+    # just beyond the ordinary two-cell graph snap radius.  Bound startup
+    # ingress to one graph edge plus half a lattice-cell diagonal, then let the
+    # exact voxel/mesh connector check below remain the movement authority.
+    cell_diagonal_m = math.sqrt(
+        sum(
+            max(0.0, float(value)) ** 2
+            for value in graph.grid_size_m
+            if math.isfinite(float(value))
+        )
+    )
+    compact_path_ingress_m = (
+        max(0.0, float(graph.max_edge_distance_m))
+        + 0.5 * cell_diagonal_m
+    )
+    return max(tolerance_m, compact_path_ingress_m)
 
 
 def _preflight_nearest_graph_key(
@@ -3163,27 +3713,94 @@ def _preflight_nearest_graph_key(
     component_id: int | None = None,
     routable_only: bool = False,
 ) -> tuple[VoxelGraphKey | None, float]:
-    candidates: list[VoxelGraphKey] = []
-    for key, node in graph.nodes.items():
-        if component_id is not None and int(node.component_id) != int(component_id):
-            continue
-        if routable_only and not any(
-            edge.line_of_sight
-            and edge.target in graph.nodes
-            and int(graph.nodes[edge.target].component_id) == int(node.component_id)
-            for edge in graph.outgoing(key)
-        ):
-            continue
-        candidates.append(key)
-    if not candidates:
+    selected, distance_squared = graph.runtime_index.nearest_key(
+        point,
+        component_id=component_id,
+        routable_only=routable_only,
+    )
+    if selected is None:
         return None, math.inf
-    selected = min(
-        candidates,
-        key=lambda key: (_point_distance_squared(graph.nodes[key].center, point), key),
-    )
-    return selected, math.sqrt(
-        _point_distance_squared(graph.nodes[selected].center, point)
-    )
+    return selected, math.sqrt(distance_squared)
+
+
+def _preflight_mesh_safe_start_key(
+    graph: NavigationVoxel3DGraph,
+    current: Point,
+    *,
+    maximum_distance_m: float,
+    graph_safety_validator: GraphRouteSafetyValidator,
+) -> tuple[VoxelGraphKey | None, float, dict[str, Any]]:
+    """Choose the nearest graph node with an exact-safe camera connector.
+
+    A sparse mesh roadmap may have a closer node on the other side of a scan
+    sliver. Snapping to it and validating only afterwards turns a valid entry
+    into a false preflight failure. This bounded selection checks nearby
+    candidates in distance order before committing the starting component.
+    """
+    index = graph.runtime_index
+    point = np.asarray(current, dtype=np.float64)
+    maximum = max(0.0, float(maximum_distance_m))
+    if point.shape != (3,) or not np.all(np.isfinite(point)):
+        return None, math.inf, {
+            "reason": "camera_position_invalid",
+            "start_connector_candidate_count": 0,
+        }
+    candidate_ids = np.flatnonzero(index.routable_mask)
+    if len(candidate_ids) == 0:
+        return None, math.inf, {
+            "reason": "prepared_graph_start_unroutable",
+            "start_connector_candidate_count": 0,
+        }
+    delta = index.centers[candidate_ids] - point
+    distances_squared = np.einsum("ij,ij->i", delta, delta)
+    within_tolerance = candidate_ids[
+        distances_squared <= maximum * maximum + 1e-9
+    ]
+    if len(within_tolerance) == 0:
+        return None, math.inf, {
+            "reason": "camera_outside_prepared_graph_snap_tolerance",
+            "start_connector_candidate_count": 0,
+            "start_connector_snap_tolerance_m": maximum,
+        }
+    ranked_ids = sorted(
+        (int(node_id) for node_id in within_tolerance),
+        key=lambda node_id: (
+            float(np.sum((index.centers[node_id] - point) ** 2)),
+            index.keys[node_id],
+        ),
+    )[:AUTO_DIVE_PREFLIGHT_MAX_START_CONNECTOR_CANDIDATES]
+    rejection_counts: dict[str, int] = {}
+    for node_id in ranked_ids:
+        key = index.keys[node_id]
+        center = tuple(float(value) for value in index.centers[node_id])
+        failure = graph_safety_validator.route_clearance_failure(
+            (current, center),
+            (key,),
+            start_graph_key=key,
+        )
+        # ``route_clearance_failure`` intentionally rejects zero-length route
+        # segments. Here that segment merely represents an exact camera/node
+        # overlap; its node and point checks have already run successfully.
+        camera_matches_node = math.dist(current, center) <= 1e-9
+        if failure is None or (
+            camera_matches_node and failure.reason == "zero_length_segment"
+        ):
+            return key, math.dist(current, center), {
+                "reason": "mesh_safe_camera_connector_selected",
+                "start_connector_candidate_count": len(ranked_ids),
+                "start_connector_rejected_count": sum(rejection_counts.values()),
+                "start_connector_snap_tolerance_m": maximum,
+            }
+        rejection_counts[failure.reason] = (
+            rejection_counts.get(failure.reason, 0) + 1
+        )
+    return None, math.inf, {
+        "reason": "mesh_safe_camera_connector_missing",
+        "start_connector_candidate_count": len(ranked_ids),
+        "start_connector_rejected_count": sum(rejection_counts.values()),
+        "start_connector_rejection_reasons": dict(sorted(rejection_counts.items())),
+        "start_connector_snap_tolerance_m": maximum,
+    }
 
 
 def _preflight_global_graph_route(
@@ -3192,34 +3809,71 @@ def _preflight_global_graph_route(
     start_key: VoxelGraphKey,
     terminal_key: VoxelGraphKey,
     preferred_direction: np.ndarray | None,
+    forbidden_keys: Sequence[VoxelGraphKey] = (),
+    blocked_edges: Sequence[tuple[VoxelGraphKey, VoxelGraphKey]] = (),
 ) -> tuple[tuple[VoxelGraphKey, ...] | None, dict[str, Any]]:
-    """Run a bounded graph-wide Dijkstra search to the preflight terminal."""
+    """Run bounded heading-aware A* search to the preflight terminal.
+
+    The route cost is physical edge distance plus non-negative heading,
+    clearance, and connectivity penalties.  Straight-line distance to the
+    terminal is therefore an admissible heuristic for the physical-distance
+    portion of the cost, allowing the search to avoid expanding unrelated
+    branches while preserving the exact Dijkstra route ordering.
+    """
     if start_key == terminal_key:
         return (start_key,), {"expanded_state_count": 0, "reason": "same_node"}
 
+    graph_index = graph.runtime_index
+    start_id = graph_index.node_ids.get(start_key)
+    terminal_id = graph_index.node_ids.get(terminal_key)
+    if start_id is None or terminal_id is None:
+        return None, {
+            "reason": "no_graph_route_to_longest_terminal",
+            "expanded_state_count": 0,
+        }
+    forbidden = frozenset(key for key in forbidden_keys if key != start_key)
+    blocked = frozenset(blocked_edges)
+    if terminal_key in forbidden:
+        return None, {
+            "reason": "graph_terminal_forbidden",
+            "expanded_state_count": 0,
+            "forbidden_key_count": len(forbidden),
+        }
+
     scale = max((float(value) for value in graph.grid_size_m), default=1.0)
-    start_state: tuple[VoxelGraphKey, VoxelGraphKey | None] = (start_key, None)
-    distances: dict[tuple[VoxelGraphKey, VoxelGraphKey | None], float] = {
-        start_state: 0.0
-    }
+    target_center = graph_index.centers[int(terminal_id)]
+    physical_distances = graph_index.physical_distances_to_target(
+        terminal_key,
+        component_id=int(graph.nodes[start_key].component_id),
+    )
+
+    def heuristic(node_id: int) -> float:
+        physical_distance = float(physical_distances[node_id])
+        if math.isfinite(physical_distance):
+            return physical_distance
+        delta = graph_index.centers[node_id] - target_center
+        return float(np.linalg.norm(delta))
+
+    start_state: tuple[int, int] = (int(start_id), -1)
+    distances: dict[tuple[int, int], float] = {start_state: 0.0}
     parents: dict[
-        tuple[VoxelGraphKey, VoxelGraphKey | None],
-        tuple[VoxelGraphKey, VoxelGraphKey | None] | None,
+        tuple[int, int],
+        tuple[int, int] | None,
     ] = {start_state: None}
-    queue: list[
-        tuple[float, int, VoxelGraphKey, VoxelGraphKey | None]
-    ] = [(0.0, 0, start_key, None)]
+    queue: list[tuple[float, int, float, int, int]] = [
+        (heuristic(int(start_id)), 0, 0.0, int(start_id), -1)
+    ]
     serial = 0
     expanded_count = 0
     max_expansions = max(len(graph.nodes) * 4, graph.edge_count + 1)
-    goal_state: tuple[VoxelGraphKey, VoxelGraphKey | None] | None = None
+    goal_state: tuple[int, int] | None = None
     while queue:
-        cost, _serial, current_key, previous_key = heapq.heappop(queue)
-        state = (current_key, previous_key)
+        _priority, _serial, cost, current_id, previous_id = heapq.heappop(queue)
+        state = (current_id, previous_id)
         if cost > distances.get(state, math.inf) + 1e-9:
             continue
         expanded_count += 1
-        if current_key == terminal_key:
+        if current_id == int(terminal_id):
             goal_state = state
             break
         if expanded_count > max_expansions:
@@ -3228,33 +3882,39 @@ def _preflight_global_graph_route(
                 "expanded_state_count": expanded_count,
                 "max_expansions": max_expansions,
             }
-        current_node = graph.nodes.get(current_key)
-        if current_node is None:
-            continue
-        incoming_direction: np.ndarray | None = None
-        if previous_key is not None:
-            incoming_edge = _preflight_graph_edge_between(
-                graph,
-                previous_key,
-                current_key,
+        current_key = graph_index.keys[current_id]
+        current_node = graph.nodes[current_key]
+        incoming_direction: tuple[float, float, float] | None = None
+        if previous_id >= 0:
+            incoming_edge = next(
+                (
+                    edge
+                    for edge in graph_index.outgoing_edges_by_id[previous_id]
+                    if edge.target == current_key
+                ),
+                None,
             )
             if incoming_edge is not None:
-                incoming_direction = np.asarray(
-                    incoming_edge.direction,
-                    dtype=np.float64,
+                incoming_direction = tuple(
+                    float(value) for value in incoming_edge.direction
                 )
-        for edge in graph.outgoing(current_key):
-            target_node = graph.nodes.get(edge.target)
+        for edge in graph_index.outgoing_edges_by_id[current_id]:
             if (
-                target_node is None
-                or not edge.line_of_sight
-                or int(target_node.component_id) != int(current_node.component_id)
+                edge.target in forbidden
+                or (current_key, edge.target) in blocked
             ):
                 continue
-            direction = np.asarray(edge.direction, dtype=np.float64)
+            target_id = graph_index.node_ids[edge.target]
+            target_node = graph.nodes[edge.target]
+            if int(target_node.component_id) != int(current_node.component_id):
+                continue
+            direction = tuple(float(value) for value in edge.direction)
             alignment = 1.0
             if incoming_direction is not None:
-                alignment = float(np.dot(incoming_direction, direction))
+                alignment = sum(
+                    incoming_direction[axis] * direction[axis]
+                    for axis in range(3)
+                )
             elif preferred_direction is not None:
                 alignment = float(np.dot(preferred_direction, direction))
             alignment = max(-1.0, min(1.0, alignment))
@@ -3268,7 +3928,7 @@ def _preflight_global_graph_route(
                 * 0.10
                 / (1.0 + max(0.0, float(target_node.connectivity_score)))
             )
-            next_state = (edge.target, current_key)
+            next_state = (int(target_id), current_id)
             next_cost = cost + edge_cost
             if next_cost + 1e-9 >= distances.get(next_state, math.inf):
                 continue
@@ -3277,7 +3937,13 @@ def _preflight_global_graph_route(
             serial += 1
             heapq.heappush(
                 queue,
-                (next_cost, serial, edge.target, current_key),
+                (
+                    next_cost + heuristic(int(target_id)),
+                    serial,
+                    next_cost,
+                    int(target_id),
+                    current_id,
+                ),
             )
 
     if goal_state is None:
@@ -3286,19 +3952,183 @@ def _preflight_global_graph_route(
             "expanded_state_count": expanded_count,
             "max_expansions": max_expansions,
         }
-    states = [goal_state]
+    states: list[tuple[int, int]] = [goal_state]
     while parents[states[-1]] is not None:
         parent = parents[states[-1]]
         assert parent is not None
         states.append(parent)
     states.reverse()
-    keys = tuple(state[0] for state in states)
+    keys = tuple(graph_index.keys[state[0]] for state in states)
     return keys, {
         "reason": "global_graph_route_found",
         "expanded_state_count": expanded_count,
         "max_expansions": max_expansions,
         "graph_route_cost": float(distances[goal_state]),
         "graph_path_key_count": len(keys),
+        "forbidden_key_count": len(forbidden),
+        "blocked_edge_count": len(blocked),
+    }
+
+
+def _preflight_safe_global_bypass_for_terminal(
+    *,
+    source_key: VoxelGraphKey,
+    terminal_key: VoxelGraphKey,
+    graph: NavigationVoxel3DGraph,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    visited_portal_keys: set[VoxelGraphKey],
+    blocked_global_edges: set[tuple[VoxelGraphKey, VoxelGraphKey]] | None = None,
+) -> tuple[
+    AutoDiveRouteSegment | None,
+    VoxelGraphKey | None,
+    tuple[VoxelGraphKey, ...] | None,
+    dict[str, Any],
+]:
+    """Choose one exact-safe neighbouring graph bypass to the same terminal.
+
+    The heading-aware initial route can prefer a coarse shortcut through a
+    wall even though another prepared edge from the same node is safe.  This
+    helper turns such a neighbour into a bounded fixed-route handoff before a
+    local fine-tile graph is built.  It never accepts a graph edge without the
+    normal voxel/mesh validator and it forbids revisiting earlier ledger keys.
+    """
+    blocked_edges = blocked_global_edges or set()
+    source_node = graph.nodes.get(source_key)
+    terminal_node = graph.nodes.get(terminal_key)
+    if source_node is None or terminal_node is None:
+        return None, None, None, {"reason": "global_bypass_node_missing"}
+    component_id = int(source_node.component_id)
+    if int(terminal_node.component_id) != component_id:
+        return None, None, None, {
+            "reason": "global_bypass_terminal_component_mismatch",
+            "source_component_id": component_id,
+            "terminal_component_id": int(terminal_node.component_id),
+        }
+    runtime_index = graph.runtime_index
+    remaining_distances = runtime_index.physical_distances_to_target(
+        terminal_key,
+        component_id=component_id,
+    )
+    source_id = runtime_index.node_ids.get(source_key)
+    source_remaining_m = (
+        math.inf
+        if source_id is None
+        else float(remaining_distances[int(source_id)])
+    )
+    if not math.isfinite(source_remaining_m):
+        return None, None, None, {
+            "reason": "global_bypass_source_cannot_reach_terminal",
+        }
+
+    candidates: list[tuple[float, float, VoxelGraphKey]] = []
+    rejected: list[dict[str, Any]] = []
+    for edge in graph.outgoing(source_key):
+        target_key = edge.target
+        target_node = graph.nodes.get(target_key)
+        if (
+            target_node is None
+            or target_key in visited_portal_keys
+            or (source_key, target_key) in blocked_edges
+            or int(target_node.component_id) != component_id
+            or not edge.line_of_sight
+        ):
+            continue
+        target_id = runtime_index.node_ids.get(target_key)
+        remaining_m = (
+            math.inf
+            if target_id is None
+            else float(remaining_distances[int(target_id)])
+        )
+        if (
+            not math.isfinite(remaining_m)
+            or remaining_m
+            > source_remaining_m
+            + AUTO_DIVE_FIXED_ROUTE_SAFE_GLOBAL_BYPASS_MAX_DETOUR_M
+        ):
+            continue
+        failure = graph_safety_validator.edge_clearance_failure(
+            source_key,
+            target_key,
+        )
+        if failure is not None:
+            if len(rejected) < 8:
+                rejected.append(
+                    {
+                        "target_graph_key": [int(value) for value in target_key],
+                        "reason": str(
+                            getattr(failure, "reason", "edge_rejected")
+                        ),
+                    }
+                )
+            continue
+        candidates.append((float(remaining_m), float(edge.distance_m), target_key))
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+            -float(graph.nodes[item[2]].min_clearance_m),
+            item[2],
+        )
+    )
+    attempts: list[dict[str, Any]] = []
+    for remaining_m, edge_distance_m, target_key in candidates[
+        :AUTO_DIVE_FIXED_ROUTE_SAFE_GLOBAL_BYPASS_MAX_CANDIDATES
+    ]:
+        path, route_details = _preflight_global_graph_route(
+            graph,
+            start_key=target_key,
+            terminal_key=terminal_key,
+            preferred_direction=None,
+            forbidden_keys=tuple(visited_portal_keys),
+            blocked_edges=tuple(blocked_edges),
+        )
+        if path is None:
+            if len(attempts) < 8:
+                attempts.append(
+                    {
+                        "target_graph_key": [int(value) for value in target_key],
+                        "reason": str(route_details.get("reason", "global_route_missing")),
+                    }
+                )
+            continue
+        return (
+            AutoDiveRouteSegment(
+                route_points=(
+                    tuple(float(value) for value in source_node.center),
+                    tuple(float(value) for value in graph.nodes[target_key].center),
+                ),
+                route_cells=(
+                    source_node.footprint_cell,
+                    graph.nodes[target_key].footprint_cell,
+                ),
+                source="prepared_global_graph",
+                graph_keys=(source_key, target_key),
+                details={
+                    "kind": "mesh_safe_global_bypass",
+                    "mesh_safe": True,
+                    "remaining_graph_distance_m": float(remaining_m),
+                },
+            ),
+            target_key,
+            path,
+            {
+                "reason": "mesh_safe_global_bypass_selected",
+                "source_graph_key": [int(value) for value in source_key],
+                "portal_graph_key": [int(value) for value in target_key],
+                "portal_remaining_graph_distance_m": float(remaining_m),
+                "portal_edge_distance_m": float(edge_distance_m),
+                "candidate_count": len(candidates),
+                "global_route": route_details,
+            },
+        )
+    return None, None, None, {
+        "reason": "mesh_safe_global_bypass_unavailable",
+        "source_graph_key": [int(value) for value in source_key],
+        "terminal_graph_key": [int(value) for value in terminal_key],
+        "source_remaining_graph_distance_m": float(source_remaining_m),
+        "candidate_count": len(candidates),
+        "rejected": rejected,
+        "attempts": attempts,
     }
 
 
@@ -3308,34 +4138,55 @@ def _preflight_mesh_safe_graph_frontier(
     start_key: VoxelGraphKey,
     component_id: int,
     graph_safety_validator: GraphRouteSafetyValidator,
+    selection_policy: str = AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL,
 ) -> tuple[tuple[VoxelGraphKey, ...] | None, VoxelGraphKey | None, dict[str, Any]]:
-    """Find the farthest graph frontier reachable through safe graph edges.
+    """Find a graph goal reachable through exact mesh-safe graph edges.
 
     The graph terminal search deliberately reasons about prepared topology,
     but a cached mesh can invalidate one or more graph edges.  When the
-    requested longest route is mesh-blocked, preflight may authorize only the
-    farthest mesh-safe frontier.  The controller then performs its normal
-    continuous scan at that frontier; it never treats the shortened route as
-    proof that the cave ends there.
+    requested route is mesh-blocked, the farthest policy may authorize only a
+    mesh-safe frontier.  The easiest-terminal policy instead searches for the
+    shortest known terminal reachable through exact mesh-safe edges and never
+    publishes an incomplete prefix as a fixed route.
     """
-    candidates = tuple(
+    if selection_policy not in AUTO_DIVE_ROUTE_GOAL_POLICIES:
+        raise NavigationConfigurationError(
+            f"unsupported Guided Dive route goal: {selection_policy!r}"
+        )
+    graph_index = graph.runtime_index
+    all_candidates = tuple(
         key
-        for key, node in graph.nodes.items()
+        for key in graph_index.terminal_candidate_keys_by_component.get(
+            int(component_id),
+            (),
+        )
         if key != start_key
-        and int(node.component_id) == int(component_id)
-        and (bool(node.terminal) or bool(node.unknown_boundary))
+    )
+    candidates = (
+        tuple(
+            key
+            for key in all_candidates
+            if bool(graph.nodes[key].terminal)
+            and not bool(graph.nodes[key].unknown_boundary)
+        )
+        if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+        else all_candidates
     )
     base_details = {
-        "mesh_safe_frontier_candidate_count": len(candidates),
+        "route_goal": str(selection_policy),
+        "mesh_safe_frontier_candidate_count": len(all_candidates),
         "mesh_safe_frontier_terminal_count": sum(
             1
-            for key in candidates
+            for key in all_candidates
             if bool(graph.nodes[key].terminal)
             and not bool(graph.nodes[key].unknown_boundary)
         ),
         "mesh_safe_frontier_unknown_boundary_count": sum(
-            1 for key in candidates if bool(graph.nodes[key].unknown_boundary)
+            1
+            for key in all_candidates
+            if bool(graph.nodes[key].unknown_boundary)
         ),
+        "mesh_safe_goal_candidate_count": len(candidates),
     }
     if not candidates:
         return None, None, {
@@ -3404,26 +4255,60 @@ def _preflight_mesh_safe_graph_frontier(
     reachable_candidates = tuple(
         key for key in candidates if key in distances
     )
-    if not reachable_candidates:
+    # A mesh-blocked coarse graph can have a safe departure prefix without
+    # having a safe terminal/unknown-boundary candidate yet. Returning that
+    # prefix is valid only for the historical frontier policy. The easiest
+    # fixed-route policy must fail closed instead of turning an incomplete
+    # prefix into a terminal route.
+    prefix_fallback = (
+        selection_policy == AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL
+        and not reachable_candidates
+    )
+    selection_candidates = (
+        reachable_candidates
+        if reachable_candidates
+        else (
+            tuple(key for key in distances if key != start_key)
+            if prefix_fallback
+            else ()
+        )
+    )
+    if not selection_candidates:
         return None, None, {
             **base_details,
-            "mesh_safe_frontier_reason": "no_mesh_safe_graph_frontier_reachable",
+            "mesh_safe_frontier_reason": (
+                "no_mesh_safe_graph_terminal_reachable"
+                if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+                else "no_mesh_safe_graph_frontier_reachable"
+            ),
             "expanded_mesh_safe_frontier_count": expanded_count,
             "mesh_safe_frontier_search_max_expansions": max_expansions,
             "mesh_safe_edge_count": safe_edge_count,
             "mesh_rejected_edge_count": rejected_edge_count,
         }
 
-    selected = max(
-        reachable_candidates,
-        key=lambda key: (
-            distances[key],
-            bool(
-                graph.nodes[key].terminal
-                and not graph.nodes[key].unknown_boundary
+    selected = (
+        min(
+            selection_candidates,
+            key=lambda key: (
+                distances[key],
+                -float(graph.nodes[key].min_clearance_m),
+                -float(graph.nodes[key].available_volume_m3),
+                key,
             ),
-            key,
-        ),
+        )
+        if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+        else max(
+            selection_candidates,
+            key=lambda key: (
+                distances[key],
+                bool(
+                    graph.nodes[key].terminal
+                    and not graph.nodes[key].unknown_boundary
+                ),
+                key,
+            ),
+        )
     )
     path: list[VoxelGraphKey] = [selected]
     while path[-1] != start_key:
@@ -3440,22 +4325,43 @@ def _preflight_mesh_safe_graph_frontier(
     path.reverse()
     selected_node = graph.nodes[selected]
     selected_is_unknown = bool(selected_node.unknown_boundary)
+    selected_is_terminal = bool(
+        selected_node.terminal and not selected_node.unknown_boundary
+    )
     return tuple(path), selected, {
         **base_details,
-        "reason": "mesh_safe_graph_frontier_selected",
+        "reason": (
+            "easiest_mesh_safe_graph_terminal_selected"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else "mesh_safe_graph_frontier_selected"
+        ),
         "terminal_rule": (
-            "farthest_mesh_safe_true_3d_graph_frontier"
-            if selected_is_unknown
-            else "farthest_mesh_safe_true_3d_graph_terminal"
+            "easiest_mesh_safe_true_3d_graph_terminal"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else (
+                "farthest_mesh_safe_true_3d_graph_frontier"
+                if selected_is_unknown
+                else "farthest_mesh_safe_true_3d_graph_prefix"
+                if prefix_fallback
+                else "farthest_mesh_safe_true_3d_graph_terminal"
+            )
         ),
         "terminal_selection_source": (
-            "mesh_safe_unknown_boundary_frontier"
-            if selected_is_unknown
-            else "mesh_safe_graph_terminal"
+            "mesh_safe_graph_terminal"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else (
+                "mesh_safe_unknown_boundary_frontier"
+                if selected_is_unknown
+                else "mesh_safe_graph_prefix"
+                if prefix_fallback
+                else "mesh_safe_graph_terminal"
+            )
         ),
         "terminal_reachable_candidate_count": len(reachable_candidates),
+        "mesh_safe_prefix_fallback": prefix_fallback,
         "terminal_graph_distance_m": float(distances[selected]),
         "terminal_unknown_boundary": selected_is_unknown,
+        "terminal_candidate": selected_is_terminal,
         "terminal_local_degree": int(selected_node.local_degree),
         "terminal_dead_end": bool(selected_node.dead_end),
         "terminal_clearance_m": float(selected_node.min_clearance_m),
@@ -3481,6 +4387,2384 @@ def _preflight_graph_edge_between(
         ),
         None,
     )
+
+
+def _preflight_mesh_safe_graph_path(
+    graph: NavigationVoxel3DGraph,
+    *,
+    start_key: VoxelGraphKey,
+    target_key: VoxelGraphKey,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    blocked_edges: set[tuple[VoxelGraphKey, VoxelGraphKey]] | None = None,
+    exact_edge_validation: bool = True,
+) -> tuple[tuple[VoxelGraphKey, ...] | None, dict[str, Any]]:
+    """Find one exact mesh-safe path between two nodes of one graph.
+
+    This normally checks edge permission while searching. A local 2 m graph
+    can instead request a topology-only candidate path and feed its rejected
+    edges back through ``blocked_edges``. That keeps exact mesh calls focused
+    on the few paths that could actually be published.
+    """
+    if start_key == target_key:
+        return (start_key,), {
+            "reason": "same_refined_graph_node",
+            "expanded_state_count": 0,
+            "mesh_safe_edge_count": 0,
+            "mesh_rejected_edge_count": 0,
+        }
+    start_node = graph.nodes.get(start_key)
+    target_node = graph.nodes.get(target_key)
+    if start_node is None or target_node is None:
+        return None, {
+            "reason": "refined_graph_anchor_missing",
+            "expanded_state_count": 0,
+        }
+    if int(start_node.component_id) != int(target_node.component_id):
+        return None, {
+            "reason": "refined_graph_anchor_components_disconnected",
+            "expanded_state_count": 0,
+            "start_component_id": int(start_node.component_id),
+            "target_component_id": int(target_node.component_id),
+        }
+
+    target_center = np.asarray(target_node.center, dtype=np.float64)
+
+    def heuristic(key: VoxelGraphKey) -> float:
+        node = graph.nodes[key]
+        return float(
+            np.linalg.norm(np.asarray(node.center, dtype=np.float64) - target_center)
+        )
+
+    distances: dict[VoxelGraphKey, float] = {start_key: 0.0}
+    parents: dict[VoxelGraphKey, VoxelGraphKey | None] = {start_key: None}
+    queue: list[tuple[float, int, float, VoxelGraphKey]] = [
+        (heuristic(start_key), 0, 0.0, start_key)
+    ]
+    edge_safety: dict[
+        tuple[VoxelGraphKey, VoxelGraphKey], GraphRouteSafetyFailure | None
+    ] = {}
+    rejected_by_caller = set(blocked_edges or ())
+    serial = 0
+    expanded_count = 0
+    safe_edge_count = 0
+    rejected_edge_count = 0
+    max_expansions = max(len(graph.nodes) * 4, graph.edge_count + 1)
+
+    while queue:
+        _priority, _serial, distance_m, current_key = heapq.heappop(queue)
+        if distance_m > distances.get(current_key, math.inf) + 1e-9:
+            continue
+        expanded_count += 1
+        if current_key == target_key:
+            path: list[VoxelGraphKey] = [current_key]
+            while parents[path[-1]] is not None:
+                parent = parents[path[-1]]
+                assert parent is not None
+                path.append(parent)
+            path.reverse()
+            return tuple(path), {
+                "reason": "mesh_safe_refined_graph_route_found",
+                "expanded_state_count": expanded_count,
+                "max_expansions": max_expansions,
+                "mesh_safe_edge_count": safe_edge_count,
+                "mesh_rejected_edge_count": rejected_edge_count,
+                "graph_route_cost": float(distance_m),
+                "graph_path_key_count": len(path),
+            }
+        if expanded_count > max_expansions:
+            return None, {
+                "reason": "refined_graph_search_expansion_limit",
+                "expanded_state_count": expanded_count,
+                "max_expansions": max_expansions,
+                "mesh_safe_edge_count": safe_edge_count,
+                "mesh_rejected_edge_count": rejected_edge_count,
+            }
+        current_node = graph.nodes.get(current_key)
+        if current_node is None:
+            continue
+        for edge in graph.outgoing(current_key):
+            target = graph.nodes.get(edge.target)
+            if (
+                target is None
+                or not edge.line_of_sight
+                or int(target.component_id) != int(current_node.component_id)
+            ):
+                continue
+            edge_key = (current_key, edge.target)
+            if edge_key in rejected_by_caller:
+                rejected_edge_count += 1
+                continue
+            if exact_edge_validation and edge_key not in edge_safety:
+                edge_safety[edge_key] = graph_safety_validator.edge_clearance_failure(
+                    current_key,
+                    edge.target,
+                )
+            if exact_edge_validation and edge_safety[edge_key] is not None:
+                rejected_edge_count += 1
+                continue
+            safe_edge_count += 1
+            candidate_distance = distance_m + float(edge.distance_m)
+            if candidate_distance + 1e-9 >= distances.get(edge.target, math.inf):
+                continue
+            distances[edge.target] = candidate_distance
+            parents[edge.target] = current_key
+            serial += 1
+            heapq.heappush(
+                queue,
+                (
+                    candidate_distance + heuristic(edge.target),
+                    serial,
+                    candidate_distance,
+                    edge.target,
+                ),
+            )
+
+    return None, {
+        "reason": "no_mesh_safe_refined_graph_route",
+        "expanded_state_count": expanded_count,
+        "max_expansions": max_expansions,
+        "mesh_safe_edge_count": safe_edge_count,
+        "mesh_rejected_edge_count": rejected_edge_count,
+        "blocked_edge_count": len(rejected_by_caller),
+        "exact_edge_validation": bool(exact_edge_validation),
+    }
+
+
+def _preflight_refined_connector_candidates(
+    graph: NavigationVoxel3DGraph,
+    *,
+    point: Point,
+    camera_validator: GraphRouteSafetyValidator,
+    reverse: bool,
+) -> tuple[tuple[tuple[VoxelGraphKey, float], ...], dict[str, Any]]:
+    """Find nearby refined nodes with an exact-safe camera connector."""
+    nearest = heapq.nsmallest(
+        AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_CONNECTOR_PROBES,
+        (
+            (
+                _point_distance_squared(
+                    point,
+                    tuple(float(value) for value in node.center),
+                ),
+                key,
+            )
+            for key, node in graph.nodes.items()
+            if graph.outgoing(key)
+        ),
+    )
+    candidates: list[tuple[VoxelGraphKey, float]] = []
+    rejected = 0
+    for distance_squared, key in nearest:
+        distance_m = math.sqrt(max(0.0, float(distance_squared)))
+        if distance_m > AUTO_DIVE_FIXED_ROUTE_REFINED_SNAP_TOLERANCE_M:
+            break
+        node = graph.nodes[key]
+        node_point = tuple(float(value) for value in node.center)
+        failure = camera_validator.segment_clearance_failure(
+            node_point if reverse else point,
+            point if reverse else node_point,
+            kind=(
+                "refined_bridge_target_connector"
+                if reverse
+                else "refined_bridge_start_connector"
+            ),
+            uncovered_reason=(
+                "refined_bridge_target_uncovered"
+                if reverse
+                else "refined_bridge_start_uncovered"
+            ),
+        )
+        if failure is not None:
+            rejected += 1
+            continue
+        candidates.append((key, distance_m))
+        if len(candidates) >= AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_CONNECTOR_CANDIDATES:
+            break
+    return tuple(candidates), {
+        "connector_probe_count": len(nearest),
+        "connector_rejected_count": rejected,
+        "connector_candidate_count": len(candidates),
+        "connector_snap_tolerance_m": AUTO_DIVE_FIXED_ROUTE_REFINED_SNAP_TOLERANCE_M,
+        "connector_reverse": bool(reverse),
+    }
+
+
+@dataclass(frozen=True)
+class _PreflightRefinedTileContext:
+    """One source-connected local graph materialized from a fine tile."""
+
+    volume: LocalVoxelVolume
+    source_point: Point
+    filled_cells: Mapping[tuple[int, int, int], float]
+    metrics: Mapping[VoxelGraphKey, NavigationVoxel3DMetric]
+    grid_size: tuple[float, float, float]
+    graph: NavigationVoxel3DGraph
+    safety_validator: GraphRouteSafetyValidator
+
+
+_PreflightRefinedContextCache = dict[
+    tuple[object, ...],
+    _PreflightRefinedTileContext,
+]
+
+
+def _preflight_refined_context_cache_key(
+    volume: LocalVoxelVolume,
+    grid_size_m: Sequence[float],
+) -> tuple[object, ...]:
+    """Return a stable cache key for one persisted fine-tile graph."""
+    return (
+        *(
+            float(value)
+            for value in (
+                *volume.bounds_min,
+                *volume.bounds_max,
+                volume.voxel_size_m,
+            )
+        ),
+        *(float(value) for value in grid_size_m),
+    )
+
+
+def _preflight_cached_refined_tile_context(
+    *,
+    volume: LocalVoxelVolume,
+    current: Point,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+    grid_size_m: tuple[float, float, float],
+    max_nodes: int,
+    max_edges_per_node: int,
+    context_cache: _PreflightRefinedContextCache | None,
+    filled_cells: Mapping[tuple[int, int, int], float] | None = None,
+) -> tuple[_PreflightRefinedTileContext | None, dict[str, Any]]:
+    """Reuse a source-component graph when the route remains in its tile."""
+    cache_key = _preflight_refined_context_cache_key(volume, grid_size_m)
+    cached = None if context_cache is None else context_cache.get(cache_key)
+    if cached is not None and volume.contains_point(current):
+        # A cached graph is a conservative subset of this persisted tile. A
+        # later coarse-node center need not quantize to the original flood
+        # seed's exact voxel; the connector and every graph edge are still
+        # checked against voxels and mesh before a bridge is returned. Reuse
+        # first so adjacent search states do not rebuild the same tile.
+        return cached, {
+            "reason": "refined_tile_graph_reused",
+            "filled_free_cell_count": len(cached.filled_cells),
+            "refined_metric_count": len(cached.metrics),
+            "refined_graph_node_count": len(cached.graph.nodes),
+            "refined_graph_edge_count": int(cached.graph.edge_count),
+            "grid_size_m": [float(value) for value in cached.grid_size],
+        }
+    prepared_context, details = _prepare_preflight_refined_tile(
+        volume=volume,
+        current=current,
+        mesh_guard=mesh_guard,
+        settings=settings,
+        grid_size_m=grid_size_m,
+        max_nodes=max_nodes,
+        max_edges_per_node=max_edges_per_node,
+        filled_cells=filled_cells,
+    )
+    if prepared_context is not None and context_cache is not None:
+        context_cache[cache_key] = prepared_context
+        while (
+            len(context_cache)
+            > AUTO_DIVE_FIXED_ROUTE_REFINED_CONTEXT_CACHE_ENTRIES
+        ):
+            oldest_key = next(iter(context_cache))
+            if oldest_key == cache_key and len(context_cache) > 1:
+                oldest_key = next(
+                    key for key in context_cache if key != cache_key
+                )
+            context_cache.pop(oldest_key, None)
+    return prepared_context, details
+
+
+def _prepare_preflight_refined_tile(
+    *,
+    volume: LocalVoxelVolume,
+    current: Point,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+    grid_size_m: tuple[float, float, float] = (
+        AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M
+    ),
+    max_nodes: int = AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_NODES,
+    max_edges_per_node: int = AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_EDGES_PER_NODE,
+    filled_cells: Mapping[tuple[int, int, int], float] | None = None,
+) -> tuple[_PreflightRefinedTileContext | None, dict[str, Any]]:
+    """Materialize one source-connected local graph for portal choices."""
+    if not volume.contains_point(current):
+        return None, {"reason": "fine_tile_does_not_cover_bridge_start"}
+    if bool(volume.sampling_truncated):
+        return None, {
+            "reason": "fine_refinement_tile_sampling_truncated",
+            "tile_surface_sample_count": int(volume.surface_sample_count),
+            "tile_triangle_count": int(volume.triangle_count),
+        }
+    if float(volume.voxel_size_m) > 1.0 + 1e-9:
+        return None, {
+            "reason": "fine_tile_resolution_insufficient_for_2m_graph",
+            "tile_voxel_size_m": float(volume.voxel_size_m),
+        }
+
+    # Seed only from the current side.  Seeding both endpoints can merge two
+    # independent local components after coarse aggregation, creating a false
+    # bridge across the very wall this refinement is meant to repair.
+    requested_grid_size = tuple(float(value) for value in grid_size_m)
+    if len(requested_grid_size) != 3 or any(
+        value <= 0.0 for value in requested_grid_size
+    ):
+        return None, {"reason": "refined_graph_grid_size_invalid"}
+    if filled_cells is None:
+        filled_cells = volume.filled_free_cell_clearance_m((current,))
+    if not filled_cells:
+        return None, {"reason": "refined_tile_free_component_missing"}
+    accumulator: dict[VoxelGraphKey, list[float]] = {}
+    for voxel_index, clearance_m in filled_cells.items():
+        accumulate_navigation_voxel_3d_sample(
+            accumulator,
+            volume.voxel_center(voxel_index),
+            grid_size_m=requested_grid_size,
+            clearance_m=float(clearance_m),
+            volume_m3=float(volume.voxel_size_m**3),
+            progress_m=0.0,
+        )
+    metrics, grid_size = finalize_navigation_voxel_3d_metrics(
+        accumulator,
+        grid_size_m=requested_grid_size,
+        footprint_cell_size_m=requested_grid_size[0],
+        max_nodes=max(2, int(max_nodes)),
+        max_vertical_factor=1,
+    )
+    if tuple(float(value) for value in grid_size) != requested_grid_size:
+        return None, {
+            "reason": "refined_graph_node_budget_exceeded",
+            "refined_metric_count": len(metrics),
+            "grid_size_m": [float(value) for value in grid_size],
+            "requested_grid_size_m": [
+                float(value) for value in requested_grid_size
+            ],
+        }
+    if len(metrics) < 2:
+        return None, {
+            "reason": "refined_graph_has_too_few_nodes",
+            "refined_metric_count": len(metrics),
+        }
+    local_graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=grid_size,
+        max_edge_distance_cells=AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_EDGE_DISTANCE_CELLS,
+        max_edges_per_node=max(1, int(max_edges_per_node)),
+        max_total_edges=max(
+            64,
+            len(metrics) * max(1, int(max_edges_per_node)),
+        ),
+    )
+    if not local_graph.motion_geometry_safe or not local_graph.edge_integrity_safe:
+        return None, {
+            "reason": "refined_graph_geometry_unsafe",
+            "graph": local_graph.diagnostic_payload(),
+        }
+    local_atlas = NavigationVoxelAtlas(
+        tiles=(),
+        fine_tiles=(volume,),
+        prepared_3d_graph=local_graph,
+        coverage_scope="fixed_route_refinement",
+    )
+    return _PreflightRefinedTileContext(
+        volume=volume,
+        source_point=current,
+        filled_cells=filled_cells,
+        metrics=metrics,
+        grid_size=grid_size,
+        graph=local_graph,
+        safety_validator=GraphRouteSafetyValidator(
+            local_atlas,
+            local_graph,
+            mesh_guard=mesh_guard,
+            policy=GraphRouteSafetyPolicy(
+                minimum_clearance_m=float(settings.minimum_graph_clearance_m),
+            ),
+        ),
+    ), {
+        "reason": "refined_tile_graph_ready",
+        "filled_free_cell_count": len(filled_cells),
+        "refined_metric_count": len(metrics),
+        "refined_graph_node_count": len(local_graph.nodes),
+        "refined_graph_edge_count": int(local_graph.edge_count),
+        "grid_size_m": [float(value) for value in grid_size],
+        "requested_grid_size_m": [
+            float(value) for value in requested_grid_size
+        ],
+    }
+
+
+def _build_preflight_refined_bridge(
+    *,
+    volume: LocalVoxelVolume,
+    current: Point,
+    target: Point,
+    camera_atlas: NavigationVoxelAtlas,
+    camera_validator: GraphRouteSafetyValidator,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+    prepared_context: _PreflightRefinedTileContext | None = None,
+    max_mesh_retries: int | None = None,
+) -> tuple[AutoDiveRouteSegment | None, dict[str, Any]]:
+    """Build and validate one 2 m bridge inside a persisted 1 m tile."""
+    # ``camera_atlas`` remains in the private call signature for now so older
+    # internal callers retain their shape. The supplied camera validator is
+    # the authority for endpoint connectors.
+    del camera_atlas
+    if prepared_context is None:
+        prepared_context, preparation_details = _prepare_preflight_refined_tile(
+            volume=volume,
+            current=current,
+            mesh_guard=mesh_guard,
+            settings=settings,
+        )
+        if prepared_context is None:
+            return None, preparation_details
+    # A preflight context is a conservative source-component subset of one
+    # persisted tile. It remains safe to reuse after the route advances within
+    # that subset: both the connector from the new position and every local
+    # edge still pass the same exact voxel/mesh validator below.
+    volume = prepared_context.volume
+    if not volume.contains_point(target):
+        return None, {"reason": "fine_tile_does_not_cover_bridge_endpoints"}
+    filled_cells = prepared_context.filled_cells
+    metrics = prepared_context.metrics
+    grid_size = prepared_context.grid_size
+    local_graph = prepared_context.graph
+    local_validator = prepared_context.safety_validator
+    start_candidates, start_connector_details = (
+        _preflight_refined_connector_candidates(
+            local_graph,
+            point=current,
+            camera_validator=camera_validator,
+            reverse=False,
+        )
+    )
+    target_candidates, target_connector_details = (
+        _preflight_refined_connector_candidates(
+            local_graph,
+            point=target,
+            camera_validator=camera_validator,
+            reverse=True,
+        )
+    )
+    if not start_candidates or not target_candidates:
+        return None, {
+            "reason": "refined_graph_mesh_safe_connector_missing",
+            "start_connector": start_connector_details,
+            "target_connector": target_connector_details,
+        }
+    blocked_local_edges: set[tuple[VoxelGraphKey, VoxelGraphKey]] = set()
+    rejected_mesh_edge_count = 0
+    exact_edge_test_count = 0
+    local_keys: tuple[VoxelGraphKey, ...] | None = None
+    search_details: dict[str, Any] = {}
+    mesh_retry = 0
+    retry_limit = max(
+        1,
+        int(
+            AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_MESH_RETRIES
+            if max_mesh_retries is None
+            else max_mesh_retries
+        ),
+    )
+    for start_key, start_distance_m in start_candidates:
+        for target_key, target_distance_m in target_candidates:
+            start_node = local_graph.nodes[start_key]
+            target_node = local_graph.nodes[target_key]
+            if int(start_node.component_id) != int(target_node.component_id):
+                continue
+            while mesh_retry < retry_limit:
+                candidate_keys, candidate_details = _preflight_mesh_safe_graph_path(
+                    local_graph,
+                    start_key=start_key,
+                    target_key=target_key,
+                    graph_safety_validator=local_validator,
+                    blocked_edges=blocked_local_edges,
+                    exact_edge_validation=False,
+                )
+                search_details = dict(candidate_details)
+                if candidate_keys is None:
+                    break
+                rejected_edge: tuple[VoxelGraphKey, VoxelGraphKey] | None = None
+                rejected_failure: GraphRouteSafetyFailure | None = None
+                for source_key, target_key_candidate in zip(
+                    candidate_keys,
+                    candidate_keys[1:],
+                    strict=False,
+                ):
+                    exact_edge_test_count += 1
+                    failure = local_validator.edge_clearance_failure(
+                        source_key,
+                        target_key_candidate,
+                    )
+                    if failure is not None:
+                        rejected_edge = (source_key, target_key_candidate)
+                        rejected_failure = failure
+                        break
+                if rejected_edge is None:
+                    local_keys = candidate_keys
+                    search_details.update(
+                        {
+                            "reason": "mesh_safe_refined_graph_route_found",
+                            "mesh_retry_count": mesh_retry,
+                            "mesh_rejected_edge_count": rejected_mesh_edge_count,
+                            "exact_edge_test_count": exact_edge_test_count,
+                            "start_snap_distance_m": float(start_distance_m),
+                            "target_snap_distance_m": float(target_distance_m),
+                        }
+                    )
+                    break
+                blocked_local_edges.add(rejected_edge)
+                rejected_mesh_edge_count += 1
+                mesh_retry += 1
+                search_details.update(
+                    {
+                        "last_rejected_edge": [
+                            [int(value) for value in rejected_edge[0]],
+                            [int(value) for value in rejected_edge[1]],
+                        ],
+                        "last_rejected_failure": rejected_failure.diagnostic_payload()
+                        if rejected_failure is not None
+                        else None,
+                    }
+                )
+            if local_keys is not None:
+                break
+        if local_keys is not None:
+            break
+    if local_keys is None:
+        return None, {
+            **search_details,
+            "reason": "no_mesh_safe_refined_graph_route",
+            "mesh_retry_limit": retry_limit,
+            "mesh_rejected_edge_count": rejected_mesh_edge_count,
+            "exact_edge_test_count": exact_edge_test_count,
+            "refined_metric_count": len(metrics),
+            "refined_graph_node_count": len(local_graph.nodes),
+            "refined_graph_edge_count": int(local_graph.edge_count),
+            "start_connector": start_connector_details,
+            "target_connector": target_connector_details,
+        }
+    local_points = tuple(
+        tuple(float(value) for value in local_graph.nodes[key].center)
+        for key in local_keys
+    )
+
+    route_points = _dedupe_consecutive_points(
+        (current, *local_points, target)
+    )
+    if len(route_points) < 2:
+        return None, {"reason": "refined_bridge_has_no_travel_distance"}
+    return AutoDiveRouteSegment(
+        route_points=route_points,
+        route_cells=tuple(
+            local_graph.nodes[key].footprint_cell for key in local_keys
+        ),
+        source=(
+            "refined_fine_1m_graph"
+            if tuple(float(value) for value in grid_size)
+            == AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_GRID_SIZE_M
+            else "refined_fine_2m_graph"
+        ),
+        graph_keys=tuple(local_keys),
+        details={
+            **search_details,
+            "grid_size_m": [float(value) for value in grid_size],
+            "tile_bounds_min": [float(value) for value in volume.bounds_min],
+            "tile_bounds_max": [float(value) for value in volume.bounds_max],
+            "tile_voxel_size_m": float(volume.voxel_size_m),
+            "tile_sampling_truncated": bool(volume.sampling_truncated),
+            "source_component_seed_only": True,
+            "filled_free_cell_count": len(filled_cells),
+            "refined_metric_count": len(metrics),
+            "refined_graph_node_count": len(local_graph.nodes),
+            "refined_graph_edge_count": int(local_graph.edge_count),
+            "start_snap_distance_m": float(start_distance_m),
+            "target_snap_distance_m": float(target_distance_m),
+            "mesh_safe": True,
+        },
+    ), {
+        **search_details,
+        "refined_graph_node_count": len(local_graph.nodes),
+        "refined_graph_edge_count": int(local_graph.edge_count),
+    }
+
+
+def _preflight_refined_component_distance_m(
+    volume: LocalVoxelVolume,
+    filled_cells: Mapping[tuple[int, int, int], float],
+    point: Point,
+) -> float:
+    """Return the nearest source-component voxel-center distance to a point."""
+    if not filled_cells:
+        return math.inf
+    return min(
+        math.sqrt(
+            sum(
+                (float(center[axis]) - float(point[axis])) ** 2
+                for axis in range(3)
+            )
+        )
+        for center in (
+            volume.voxel_center(index)
+            for index in filled_cells
+        )
+    )
+
+
+def _preflight_refined_portal_bridge_candidates(
+    *,
+    current: Point,
+    source_key: VoxelGraphKey,
+    terminal_key: VoxelGraphKey,
+    graph: NavigationVoxel3DGraph,
+    cached_volume: NavigationVoxelAtlas,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+    prepared_context: _PreflightRefinedTileContext,
+    candidates: Sequence[tuple[float, float, float, VoxelGraphKey]],
+    visited_portal_keys: set[VoxelGraphKey],
+    blocked_global_edges: set[tuple[VoxelGraphKey, VoxelGraphKey]],
+    max_portal_candidates: int,
+    fast_mesh_retries: int,
+    deep_candidate_count: int,
+    deep_mesh_retries: int,
+) -> tuple[
+    AutoDiveRouteSegment | None,
+    VoxelGraphKey | None,
+    tuple[VoxelGraphKey, ...] | None,
+    dict[str, Any],
+]:
+    """Try exact-safe portal bridges in one prepared local graph.
+
+    The caller controls the resolution and bounded retry policy.  That keeps
+    the normal 2 m path inexpensive while allowing a persisted 1 m tile to
+    prove a route only when the aggregate cannot pass the exact mesh gate.
+    """
+    local_graph = prepared_context.graph
+    grid_size_m = [float(value) for value in prepared_context.grid_size]
+    start_connectors, start_connector_details = (
+        _preflight_refined_connector_candidates(
+            local_graph,
+            point=current,
+            camera_validator=graph_safety_validator,
+            reverse=False,
+        )
+    )
+    if not start_connectors:
+        return None, None, None, {
+            "reason": "refined_graph_mesh_safe_connector_missing",
+            "refinement_grid_size_m": grid_size_m,
+            "start_connector": start_connector_details,
+        }
+    start_components = {
+        int(local_graph.nodes[key].component_id)
+        for key, _distance_m in start_connectors
+    }
+    viable_candidates: list[tuple[float, float, float, VoxelGraphKey]] = []
+    target_connector_rejections = 0
+    for candidate in candidates:
+        (
+            _portal_distance_m,
+            _remaining_m,
+            _component_distance_m,
+            portal_key,
+        ) = candidate
+        portal_point = tuple(
+            float(value) for value in graph.nodes[portal_key].center
+        )
+        target_connectors, _target_connector_details = (
+            _preflight_refined_connector_candidates(
+                local_graph,
+                point=portal_point,
+                camera_validator=graph_safety_validator,
+                reverse=True,
+            )
+        )
+        if not any(
+            int(local_graph.nodes[key].component_id) in start_components
+            for key, _distance_m in target_connectors
+        ):
+            target_connector_rejections += 1
+            continue
+        viable_candidates.append(candidate)
+        if len(viable_candidates) >= max(1, int(max_portal_candidates)):
+            break
+    if not viable_candidates:
+        return None, None, None, {
+            "reason": "refined_portal_target_connector_missing",
+            "refinement_grid_size_m": grid_size_m,
+            "portal_candidate_count": len(candidates),
+            "target_connector_rejection_count": target_connector_rejections,
+            "start_connector": start_connector_details,
+        }
+
+    candidate_attempts = [
+        (candidate, max(1, int(fast_mesh_retries)))
+        for candidate in viable_candidates
+    ]
+    candidate_attempts.extend(
+        (
+            candidate,
+            max(1, int(deep_mesh_retries)),
+        )
+        for candidate in viable_candidates[: max(0, int(deep_candidate_count))]
+    )
+    attempts: list[dict[str, Any]] = []
+    for (
+        (
+            portal_distance_m,
+            remaining_m,
+            component_distance_m,
+            portal_key,
+        ),
+        mesh_retry_limit,
+    ) in candidate_attempts:
+        portal_node = graph.nodes[portal_key]
+        portal_point = tuple(float(value) for value in portal_node.center)
+        segment, bridge_details = _build_preflight_refined_bridge(
+            volume=prepared_context.volume,
+            current=current,
+            target=portal_point,
+            camera_atlas=cached_volume,
+            camera_validator=graph_safety_validator,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            prepared_context=prepared_context,
+            max_mesh_retries=mesh_retry_limit,
+        )
+        if segment is None:
+            if len(attempts) < 8:
+                attempts.append(
+                    {
+                        "portal_graph_key": [int(value) for value in portal_key],
+                        "remaining_graph_distance_m": float(remaining_m),
+                        "portal_distance_m": float(portal_distance_m),
+                        "component_snap_distance_m": float(component_distance_m),
+                        "mesh_retry_limit": int(mesh_retry_limit),
+                        "reason": str(
+                            bridge_details.get(
+                                "reason",
+                                "refined_portal_bridge_failed",
+                            )
+                        ),
+                    }
+                )
+            continue
+        portal_graph_keys, portal_search_details = _preflight_global_graph_route(
+            graph,
+            start_key=portal_key,
+            terminal_key=terminal_key,
+            preferred_direction=None,
+            forbidden_keys=tuple(visited_portal_keys),
+            blocked_edges=tuple(blocked_global_edges),
+        )
+        if portal_graph_keys is None:
+            if len(attempts) < 8:
+                attempts.append(
+                    {
+                        "portal_graph_key": [int(value) for value in portal_key],
+                        "mesh_retry_limit": int(mesh_retry_limit),
+                        "reason": str(
+                            portal_search_details.get(
+                                "reason",
+                                "portal_global_route_missing",
+                            )
+                        ),
+                    }
+                )
+            continue
+        return segment, portal_key, portal_graph_keys, {
+            "reason": "refined_portal_selected",
+            "source_graph_key": [int(value) for value in source_key],
+            "portal_graph_key": [int(value) for value in portal_key],
+            "portal_remaining_graph_distance_m": float(remaining_m),
+            "portal_distance_m": float(portal_distance_m),
+            "portal_component_snap_distance_m": float(component_distance_m),
+            "portal_candidate_count": len(candidates),
+            "viable_portal_candidate_count": len(viable_candidates),
+            "candidate_attempt_count": len(candidate_attempts),
+            "refinement_grid_size_m": grid_size_m,
+            "portal_global_route_key_count": len(portal_graph_keys),
+            "portal_global_route": portal_search_details,
+            "bridge": bridge_details,
+        }
+    return None, None, None, {
+        "reason": "refined_portal_bridge_candidates_exhausted",
+        "refinement_grid_size_m": grid_size_m,
+        "portal_candidate_count": len(candidates),
+        "viable_portal_candidate_count": len(viable_candidates),
+        "candidate_attempt_count": len(candidate_attempts),
+        "target_connector_rejection_count": target_connector_rejections,
+        "start_connector": start_connector_details,
+        "attempts": attempts,
+    }
+
+
+def _preflight_refined_portal_for_global_route(
+    *,
+    current: Point,
+    source_key: VoxelGraphKey,
+    terminal_key: VoxelGraphKey,
+    graph: NavigationVoxel3DGraph,
+    cached_volume: NavigationVoxelAtlas,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+    visited_portal_keys: set[VoxelGraphKey],
+    blocked_global_edges: set[tuple[VoxelGraphKey, VoxelGraphKey]] | None = None,
+    prepared_context_cache: _PreflightRefinedContextCache | None = None,
+) -> tuple[
+    AutoDiveRouteSegment | None,
+    VoxelGraphKey | None,
+    tuple[VoxelGraphKey, ...] | None,
+    dict[str, Any],
+]:
+    """Find one exact-safe fine-tile handoff back into the global graph.
+
+    A blocked coarse edge is frequently not a route that needs a tiny bend:
+    it can be a 16 m shortcut through a wall.  The local graph therefore
+    exposes all nearby global graph nodes reachable from the *current* fine
+    component as portals.  The prepared graph's reverse-distance index ranks
+    those portals toward the same known terminal, while exact voxel and mesh
+    checks decide which portal can be published.
+    """
+    source_node = graph.nodes.get(source_key)
+    blocked_edges = blocked_global_edges or set()
+    terminal_node = graph.nodes.get(terminal_key)
+    if source_node is None or terminal_node is None:
+        return None, None, None, {
+            "reason": "refined_portal_global_node_missing",
+        }
+    component_id = int(source_node.component_id)
+    if int(terminal_node.component_id) != component_id:
+        return None, None, None, {
+            "reason": "refined_portal_terminal_component_mismatch",
+            "source_component_id": component_id,
+            "terminal_component_id": int(terminal_node.component_id),
+        }
+    runtime_index = graph.runtime_index
+    source_id = runtime_index.node_ids.get(source_key)
+    remaining_distances = runtime_index.physical_distances_to_target(
+        terminal_key,
+        component_id=component_id,
+    )
+    source_remaining_m = (
+        math.inf
+        if source_id is None
+        else float(remaining_distances[int(source_id)])
+    )
+    if not math.isfinite(source_remaining_m):
+        return None, None, None, {
+            "reason": "refined_portal_source_cannot_reach_terminal",
+        }
+
+    tiles = cached_volume.fine_tiles_covering_points((current,))
+    if not tiles:
+        return None, None, None, {
+            "reason": "fine_refinement_coverage_missing",
+            "source_graph_key": [int(value) for value in source_key],
+        }
+
+    attempts: list[dict[str, Any]] = []
+    truncated_tile_count = 0
+    candidate_count = 0
+    for tile_index, volume in enumerate(tiles):
+        if bool(volume.sampling_truncated):
+            truncated_tile_count += 1
+        prepared_context, preparation_details = _preflight_cached_refined_tile_context(
+            volume=volume,
+            current=current,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            grid_size_m=AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M,
+            max_nodes=AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_NODES,
+            max_edges_per_node=AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_EDGES_PER_NODE,
+            context_cache=prepared_context_cache,
+        )
+        if prepared_context is None:
+            if len(attempts) < 8:
+                attempts.append(
+                    {
+                        "tile_index": int(tile_index),
+                        **preparation_details,
+                    }
+                )
+            continue
+        volume = prepared_context.volume
+        filled_cells = prepared_context.filled_cells
+        tile_radius_m = max(
+            float(volume.bounds_max[axis] - volume.bounds_min[axis])
+            for axis in range(3)
+        ) * 0.5
+        tile_diagonal_radius_m = 0.5 * math.sqrt(
+            sum(
+                float(volume.bounds_max[axis] - volume.bounds_min[axis]) ** 2
+                for axis in range(3)
+            )
+        )
+        maximum_detour_m = max(32.0, tile_radius_m * 4.0)
+        maximum_portal_distance_m = min(
+            tile_diagonal_radius_m,
+            max(8.0, AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_DISTANCE_M),
+        )
+        candidates: list[tuple[float, float, float, VoxelGraphKey]] = []
+        tile_graph_keys = runtime_index.keys_in_bounds(
+            volume.bounds_min,
+            volume.bounds_max,
+            component_id=component_id,
+            routable_only=True,
+        )
+        for key in tile_graph_keys:
+            node = graph.nodes[key]
+            if (
+                key == source_key
+                or key in visited_portal_keys
+                or int(node.component_id) != component_id
+            ):
+                continue
+            point = tuple(float(value) for value in node.center)
+            if not volume.contains_point(point):
+                continue
+            portal_distance_m = math.sqrt(
+                _point_distance_squared(current, point)
+            )
+            if portal_distance_m > maximum_portal_distance_m + 1e-9:
+                continue
+            node_id = runtime_index.node_ids.get(key)
+            remaining_m = (
+                math.inf
+                if node_id is None
+                else float(remaining_distances[int(node_id)])
+            )
+            if (
+                not math.isfinite(remaining_m)
+                or remaining_m > source_remaining_m + maximum_detour_m
+            ):
+                continue
+            component_distance_m = _preflight_refined_component_distance_m(
+                volume,
+                filled_cells,
+                point,
+            )
+            if (
+                component_distance_m
+                > AUTO_DIVE_FIXED_ROUTE_REFINED_SNAP_TOLERANCE_M + 1e-9
+            ):
+                continue
+            candidates.append(
+                (
+                    portal_distance_m,
+                    remaining_m,
+                    component_distance_m,
+                    key,
+                )
+            )
+        candidates.sort(
+            key=lambda item: (
+                item[0],
+                item[1],
+                item[2],
+                -float(graph.nodes[item[3]].min_clearance_m),
+                item[3],
+            )
+        )
+        candidate_count += len(candidates)
+        (
+            segment,
+            portal_key,
+            portal_graph_keys,
+            primary_details,
+        ) = _preflight_refined_portal_bridge_candidates(
+            current=current,
+            source_key=source_key,
+            terminal_key=terminal_key,
+            graph=graph,
+            cached_volume=cached_volume,
+            graph_safety_validator=graph_safety_validator,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            prepared_context=prepared_context,
+            candidates=candidates,
+            visited_portal_keys=visited_portal_keys,
+            blocked_global_edges=blocked_edges,
+            max_portal_candidates=(
+                AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_CANDIDATES
+            ),
+            fast_mesh_retries=(
+                AUTO_DIVE_FIXED_ROUTE_REFINED_PORTAL_FAST_MESH_RETRIES
+            ),
+            deep_candidate_count=(
+                AUTO_DIVE_FIXED_ROUTE_REFINED_PORTAL_DEEP_CANDIDATES
+            ),
+            deep_mesh_retries=(
+                AUTO_DIVE_FIXED_ROUTE_REFINED_PORTAL_DEEP_MESH_RETRIES
+            ),
+        )
+        if (
+            segment is not None
+            and portal_key is not None
+            and portal_graph_keys is not None
+        ):
+            return segment, portal_key, portal_graph_keys, {
+                **primary_details,
+                "tile_index": int(tile_index),
+                "refinement_strategy": "persisted_fine_2m_graph",
+                "portal_max_distance_m": float(maximum_portal_distance_m),
+                "portal_graph_nodes_in_tile": len(tile_graph_keys),
+            }
+        if len(attempts) < 8:
+            attempts.append(
+                {
+                    "tile_index": int(tile_index),
+                    "refinement_strategy": "persisted_fine_2m_graph",
+                    "reason": str(
+                        primary_details.get(
+                            "reason",
+                            "refined_portal_bridge_failed",
+                        )
+                    ),
+                    "portal_candidate_count": int(
+                        primary_details.get(
+                            "portal_candidate_count",
+                            len(candidates),
+                        )
+                    ),
+                    "viable_portal_candidate_count": int(
+                        primary_details.get(
+                            "viable_portal_candidate_count",
+                            0,
+                        )
+                    ),
+                }
+            )
+
+        # The aggregate is only a performance preference.  If it cannot
+        # prove a route through the exact mesh, retry this one persisted tile
+        # at its native 1 m evidence before considering another tile or
+        # failing the fixed route.
+        fallback_context, fallback_preparation = _preflight_cached_refined_tile_context(
+            volume=volume,
+            current=current,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            grid_size_m=AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_GRID_SIZE_M,
+            max_nodes=AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_NODES,
+            max_edges_per_node=(
+                AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_EDGES_PER_NODE
+            ),
+            filled_cells=filled_cells,
+            context_cache=prepared_context_cache,
+        )
+        if fallback_context is None:
+            if len(attempts) < 8:
+                attempts.append(
+                    {
+                        "tile_index": int(tile_index),
+                        "refinement_strategy": "persisted_fine_1m_fallback",
+                        **fallback_preparation,
+                    }
+                )
+            continue
+        (
+            segment,
+            portal_key,
+            portal_graph_keys,
+            fallback_details,
+        ) = _preflight_refined_portal_bridge_candidates(
+            current=current,
+            source_key=source_key,
+            terminal_key=terminal_key,
+            graph=graph,
+            cached_volume=cached_volume,
+            graph_safety_validator=graph_safety_validator,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            prepared_context=fallback_context,
+            candidates=candidates,
+            visited_portal_keys=visited_portal_keys,
+            blocked_global_edges=blocked_edges,
+            max_portal_candidates=(
+                AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_PORTAL_CANDIDATES
+            ),
+            fast_mesh_retries=(
+                AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_PORTAL_FAST_MESH_RETRIES
+            ),
+            deep_candidate_count=(
+                AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_PORTAL_DEEP_CANDIDATES
+            ),
+            deep_mesh_retries=(
+                AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_PORTAL_DEEP_MESH_RETRIES
+            ),
+        )
+        if (
+            segment is not None
+            and portal_key is not None
+            and portal_graph_keys is not None
+        ):
+            return segment, portal_key, portal_graph_keys, {
+                **fallback_details,
+                "tile_index": int(tile_index),
+                "refinement_strategy": "persisted_fine_1m_fallback",
+                "portal_max_distance_m": float(maximum_portal_distance_m),
+                "portal_graph_nodes_in_tile": len(tile_graph_keys),
+                "primary_2m_failure": {
+                    "reason": str(
+                        primary_details.get(
+                            "reason",
+                            "refined_portal_bridge_failed",
+                        )
+                    ),
+                    "viable_portal_candidate_count": int(
+                        primary_details.get(
+                            "viable_portal_candidate_count",
+                            0,
+                        )
+                    ),
+                },
+            }
+        if len(attempts) < 8:
+            attempts.append(
+                {
+                    "tile_index": int(tile_index),
+                    "refinement_strategy": "persisted_fine_1m_fallback",
+                    "reason": str(
+                        fallback_details.get(
+                            "reason",
+                            "refined_portal_bridge_failed",
+                        )
+                    ),
+                    "portal_candidate_count": int(
+                        fallback_details.get(
+                            "portal_candidate_count",
+                            len(candidates),
+                        )
+                    ),
+                    "viable_portal_candidate_count": int(
+                        fallback_details.get(
+                            "viable_portal_candidate_count",
+                            0,
+                        )
+                    ),
+                }
+            )
+    return None, None, None, {
+        "reason": (
+            "fine_refinement_tile_sampling_truncated"
+            if truncated_tile_count == len(tiles)
+            else "refined_portal_unavailable"
+        ),
+        "source_graph_key": [int(value) for value in source_key],
+        "terminal_graph_key": [int(value) for value in terminal_key],
+        "source_remaining_graph_distance_m": float(source_remaining_m),
+        "fine_tile_count": len(tiles),
+        "truncated_tile_count": int(truncated_tile_count),
+        "portal_candidate_count": int(candidate_count),
+        "attempts": attempts,
+    }
+
+
+def _preflight_hierarchical_local_bridge_options(
+    *,
+    source_key: VoxelGraphKey,
+    terminal_key: VoxelGraphKey,
+    graph: NavigationVoxel3DGraph,
+    cached_volume: NavigationVoxelAtlas,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+    prepared_context_cache: _PreflightRefinedContextCache,
+) -> tuple[tuple[tuple[AutoDiveRouteSegment, VoxelGraphKey], ...], dict[str, Any]]:
+    """Return bounded exact-safe local bridge edges for one graph node.
+
+    This is deliberately an edge generator, rather than a terminal-directed
+    portal chooser. The fixed-route search owns the choice among these edges,
+    so a locally attractive bridge cannot strand the complete route.
+    """
+    source_node = graph.nodes.get(source_key)
+    terminal_node = graph.nodes.get(terminal_key)
+    if source_node is None or terminal_node is None:
+        return (), {"reason": "hierarchical_local_global_node_missing"}
+    component_id = int(source_node.component_id)
+    if int(terminal_node.component_id) != component_id:
+        return (), {"reason": "hierarchical_local_component_mismatch"}
+    current = tuple(float(value) for value in source_node.center)
+    runtime_index = graph.runtime_index
+    source_id = runtime_index.node_ids.get(source_key)
+    remaining_distances = runtime_index.physical_distances_to_target(
+        terminal_key,
+        component_id=component_id,
+    )
+    source_remaining_m = (
+        math.inf
+        if source_id is None
+        else float(remaining_distances[int(source_id)])
+    )
+    if not math.isfinite(source_remaining_m):
+        return (), {"reason": "hierarchical_local_terminal_unreachable"}
+    maximum_remaining_m = (
+        source_remaining_m + AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_DETOUR_M
+    )
+    tiles = cached_volume.fine_tiles_covering_points((current,))
+    if not tiles:
+        return (), {
+            "reason": "hierarchical_local_fine_coverage_missing",
+            "source_graph_key": [int(value) for value in source_key],
+        }
+
+    options_by_target: dict[VoxelGraphKey, AutoDiveRouteSegment] = {}
+    candidate_count = 0
+    prepared_tile_count = 0
+    fallback_tile_count = 0
+    for volume in tiles:
+        prepared_context, _preparation_details = (
+            _preflight_cached_refined_tile_context(
+                volume=volume,
+                current=current,
+                mesh_guard=mesh_guard,
+                settings=settings,
+                grid_size_m=AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M,
+                max_nodes=AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_NODES,
+                max_edges_per_node=(
+                    AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_EDGES_PER_NODE
+                ),
+                context_cache=prepared_context_cache,
+            )
+        )
+        if prepared_context is None:
+            continue
+        prepared_tile_count += 1
+        volume = prepared_context.volume
+        tile_diagonal_radius_m = 0.5 * math.sqrt(
+            sum(
+                float(volume.bounds_max[axis] - volume.bounds_min[axis]) ** 2
+                for axis in range(3)
+            )
+        )
+        maximum_portal_distance_m = min(
+            tile_diagonal_radius_m,
+            max(8.0, AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_DISTANCE_M),
+        )
+        candidates: list[tuple[float, float, float, VoxelGraphKey]] = []
+        for key in runtime_index.keys_in_bounds(
+            volume.bounds_min,
+            volume.bounds_max,
+            component_id=component_id,
+            routable_only=True,
+        ):
+            if key == source_key:
+                continue
+            node = graph.nodes[key]
+            point = tuple(float(value) for value in node.center)
+            if not volume.contains_point(point):
+                continue
+            portal_distance_m = math.sqrt(
+                _point_distance_squared(current, point)
+            )
+            if portal_distance_m > maximum_portal_distance_m + 1e-9:
+                continue
+            node_id = runtime_index.node_ids.get(key)
+            remaining_m = (
+                math.inf
+                if node_id is None
+                else float(remaining_distances[int(node_id)])
+            )
+            if (
+                not math.isfinite(remaining_m)
+                or remaining_m > maximum_remaining_m
+            ):
+                continue
+            component_distance_m = _preflight_refined_component_distance_m(
+                volume,
+                prepared_context.filled_cells,
+                point,
+            )
+            if (
+                component_distance_m
+                > AUTO_DIVE_FIXED_ROUTE_REFINED_SNAP_TOLERANCE_M + 1e-9
+            ):
+                continue
+            candidates.append(
+                (
+                    portal_distance_m,
+                    remaining_m,
+                    component_distance_m,
+                    key,
+                )
+            )
+        candidates.sort(
+            key=lambda item: (
+                item[0],
+                item[1],
+                item[2],
+                -float(graph.nodes[item[3]].min_clearance_m),
+                item[3],
+            )
+        )
+        candidate_count += len(candidates)
+
+        # Nearby portals keep each local A* bounded. The outer search explores
+        # competing tiles and states, so it need not materialize every farther
+        # connector in an overlapping volume at once.
+        selected_candidates = candidates[
+            :AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_LOCAL_OPTIONS
+        ]
+
+        def collect(
+            context: _PreflightRefinedTileContext,
+            *,
+            mesh_retries: int,
+        ) -> int:
+            added = 0
+            for (
+                _remaining_m,
+                _portal_distance_m,
+                _component_distance_m,
+                portal_key,
+            ) in selected_candidates:
+                target = tuple(
+                    float(value) for value in graph.nodes[portal_key].center
+                )
+                segment, _bridge_details = _build_preflight_refined_bridge(
+                    volume=context.volume,
+                    current=current,
+                    target=target,
+                    camera_atlas=cached_volume,
+                    camera_validator=graph_safety_validator,
+                    mesh_guard=mesh_guard,
+                    settings=settings,
+                    prepared_context=context,
+                    max_mesh_retries=mesh_retries,
+                )
+                if segment is None:
+                    continue
+                existing = options_by_target.get(portal_key)
+                if existing is None or path_length(segment.route_points) < path_length(
+                    existing.route_points
+                ):
+                    options_by_target[portal_key] = segment
+                    added += 1
+            return added
+
+        added = collect(
+            prepared_context,
+            mesh_retries=AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_LOCAL_MESH_RETRIES,
+        )
+        if added:
+            continue
+        fallback_context, _fallback_details = (
+            _preflight_cached_refined_tile_context(
+                volume=volume,
+                current=current,
+                mesh_guard=mesh_guard,
+                settings=settings,
+                grid_size_m=AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_GRID_SIZE_M,
+                max_nodes=AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_NODES,
+                max_edges_per_node=(
+                    AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_EDGES_PER_NODE
+                ),
+                context_cache=prepared_context_cache,
+                filled_cells=prepared_context.filled_cells,
+            )
+        )
+        if fallback_context is None:
+            continue
+        fallback_tile_count += 1
+        collect(
+            fallback_context,
+            mesh_retries=AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_PORTAL_DEEP_MESH_RETRIES,
+        )
+
+    options = tuple(
+        (segment, target_key)
+        for target_key, segment in sorted(
+            options_by_target.items(),
+            key=lambda item: (
+                path_length(item[1].route_points),
+                item[0],
+            ),
+        )
+    )
+    return options, {
+        "reason": "hierarchical_local_bridge_options_ready",
+        "source_graph_key": [int(value) for value in source_key],
+        "candidate_count": candidate_count,
+        "prepared_tile_count": prepared_tile_count,
+        "fallback_tile_count": fallback_tile_count,
+        "option_count": len(options),
+    }
+
+
+def _preflight_hierarchical_fixed_route(
+    *,
+    current: Point,
+    start_key: VoxelGraphKey,
+    terminal_key: VoxelGraphKey,
+    graph: NavigationVoxel3DGraph,
+    cached_volume: NavigationVoxelAtlas,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+) -> tuple[
+    tuple[AutoDiveRouteSegment, ...] | None,
+    tuple[Point, ...],
+    tuple[FootprintCell, ...],
+    dict[str, Any],
+]:
+    """Search one bounded graph of exact-safe global and fine bridge edges."""
+    start_node = graph.nodes.get(start_key)
+    terminal_node = graph.nodes.get(terminal_key)
+    if start_node is None or terminal_node is None:
+        return None, (), (), {"reason": "hierarchical_graph_anchor_missing"}
+    component_id = int(start_node.component_id)
+    if int(terminal_node.component_id) != component_id:
+        return None, (), (), {
+            "reason": "hierarchical_terminal_component_mismatch",
+            "start_component_id": component_id,
+            "terminal_component_id": int(terminal_node.component_id),
+        }
+    start_center = tuple(float(value) for value in start_node.center)
+    anchor_segment: AutoDiveRouteSegment | None = None
+    if _point_distance_squared(current, start_center) > 1e-12:
+        anchor_failure = graph_safety_validator.route_clearance_failure(
+            (current, start_center),
+            (start_key,),
+            start_graph_key=start_key,
+        )
+        if anchor_failure is not None:
+            return None, (), (), {
+                "reason": "hierarchical_camera_anchor_unsafe",
+                "anchor_failure": anchor_failure.diagnostic_payload(),
+            }
+        anchor_segment = AutoDiveRouteSegment(
+            route_points=(current, start_center),
+            route_cells=(start_node.footprint_cell,),
+            source="prepared_global_graph",
+            graph_keys=(start_key,),
+            details={"kind": "camera_to_global_anchor"},
+        )
+
+    runtime_index = graph.runtime_index
+    start_id = runtime_index.node_ids.get(start_key)
+    terminal_id = runtime_index.node_ids.get(terminal_key)
+    if start_id is None or terminal_id is None:
+        return None, (), (), {"reason": "hierarchical_graph_index_missing"}
+    remaining_distances = runtime_index.physical_distances_to_target(
+        terminal_key,
+        component_id=component_id,
+    )
+    start_remaining_m = float(remaining_distances[int(start_id)])
+    if not math.isfinite(start_remaining_m):
+        return None, (), (), {"reason": "hierarchical_terminal_unreachable"}
+    maximum_remaining_m = (
+        start_remaining_m + AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_DETOUR_M
+    )
+    def heuristic(key: VoxelGraphKey) -> float:
+        node_id = runtime_index.node_ids.get(key)
+        physical_distance = (
+            math.inf
+            if node_id is None
+            else float(remaining_distances[int(node_id)])
+        )
+        if math.isfinite(physical_distance):
+            return physical_distance
+        return float(
+            np.linalg.norm(
+                np.asarray(graph.nodes[key].center, dtype=np.float64)
+                - np.asarray(terminal_node.center, dtype=np.float64)
+            )
+        )
+
+    distances: dict[VoxelGraphKey, float] = {start_key: 0.0}
+    parents: dict[
+        VoxelGraphKey,
+        tuple[VoxelGraphKey, AutoDiveRouteSegment] | None,
+    ] = {start_key: None}
+    queue: list[tuple[float, int, float, VoxelGraphKey]] = [
+        (heuristic(start_key), 0, 0.0, start_key)
+    ]
+    edge_safety: dict[
+        tuple[VoxelGraphKey, VoxelGraphKey], GraphRouteSafetyFailure | None
+    ] = {}
+    local_options_cache: dict[
+        VoxelGraphKey,
+        tuple[tuple[AutoDiveRouteSegment, VoxelGraphKey], ...],
+    ] = {}
+    prepared_context_cache: _PreflightRefinedContextCache = {}
+    serial = 0
+    expanded_count = 0
+    global_safe_edge_count = 0
+    global_rejected_edge_count = 0
+    local_option_count = 0
+
+    def relax(
+        *,
+        source: VoxelGraphKey,
+        target: VoxelGraphKey,
+        segment: AutoDiveRouteSegment,
+    ) -> bool:
+        nonlocal serial
+        if target == source:
+            return False
+        candidate_distance = distances[source] + path_length(segment.route_points)
+        if candidate_distance + 1e-9 >= distances.get(target, math.inf):
+            return False
+        distances[target] = candidate_distance
+        parents[target] = (source, segment)
+        serial += 1
+        heapq.heappush(
+            queue,
+            (
+                candidate_distance + heuristic(target),
+                serial,
+                candidate_distance,
+                target,
+            ),
+        )
+        return True
+
+    while queue:
+        _priority, _serial, distance_m, current_key = heapq.heappop(queue)
+        if distance_m > distances.get(current_key, math.inf) + 1e-9:
+            continue
+        expanded_count += 1
+        if current_key == terminal_key:
+            segments: list[AutoDiveRouteSegment] = []
+            cursor = terminal_key
+            while cursor != start_key:
+                parent = parents.get(cursor)
+                if parent is None:
+                    return None, (), (), {
+                        "reason": "hierarchical_parent_missing",
+                    }
+                previous_key, segment = parent
+                segments.append(segment)
+                cursor = previous_key
+            segments.reverse()
+            if anchor_segment is not None:
+                segments.insert(0, anchor_segment)
+            points: list[Point] = []
+            cells: list[FootprintCell] = []
+            for segment in segments:
+                if not points:
+                    points.extend(segment.route_points)
+                else:
+                    points.extend(segment.route_points[1:])
+                cells.extend(segment.route_cells)
+            route_points = _dedupe_consecutive_points(tuple(points))
+            route_cells = _dedupe_consecutive_cells(tuple(cells))
+            if len(route_points) < 2:
+                return None, (), (), {
+                    "reason": "hierarchical_route_has_no_travel_distance",
+                }
+            if len(route_points) > int(settings.max_keyframes):
+                return None, (), (), {
+                    "reason": "hierarchical_route_exceeds_keyframe_budget",
+                    "route_point_count": len(route_points),
+                    "max_keyframes": int(settings.max_keyframes),
+                }
+            refined_segment_count = sum(
+                segment.source.startswith("refined_fine_")
+                for segment in segments
+            )
+            return tuple(segments), route_points, route_cells, {
+                "reason": "hierarchical_fixed_route_ready",
+                "expanded_state_count": expanded_count,
+                "max_expansions": AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_EXPANSIONS,
+                "global_safe_edge_count": global_safe_edge_count,
+                "global_rejected_edge_count": global_rejected_edge_count,
+                "local_option_count": local_option_count,
+                "local_context_count": len(prepared_context_cache),
+                "segment_count": len(segments),
+                "refined_segment_count": refined_segment_count,
+                "route_point_count": len(route_points),
+                "route_length_m": float(path_length(route_points)),
+            }
+        if expanded_count > AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_EXPANSIONS:
+            break
+        current_node = graph.nodes.get(current_key)
+        if current_node is None:
+            continue
+        current_id = runtime_index.node_ids.get(current_key)
+        current_remaining_m = (
+            math.inf
+            if current_id is None
+            else float(remaining_distances[int(current_id)])
+        )
+        relaxed_global_exit_count = 0
+        for edge in graph.outgoing(current_key):
+            target_key = edge.target
+            target_node = graph.nodes.get(target_key)
+            if (
+                target_node is None
+                or not edge.line_of_sight
+                or int(target_node.component_id) != component_id
+            ):
+                continue
+            target_id = runtime_index.node_ids.get(target_key)
+            target_remaining_m = (
+                math.inf
+                if target_id is None
+                else float(remaining_distances[int(target_id)])
+            )
+            if target_remaining_m > maximum_remaining_m:
+                continue
+            edge_key = (current_key, target_key)
+            failure = edge_safety.get(edge_key)
+            if edge_key not in edge_safety:
+                failure = graph_safety_validator.edge_clearance_failure(
+                    current_key,
+                    target_key,
+                )
+                edge_safety[edge_key] = failure
+            if failure is not None:
+                global_rejected_edge_count += 1
+                continue
+            global_safe_edge_count += 1
+            if relax(
+                source=current_key,
+                target=target_key,
+                segment=AutoDiveRouteSegment(
+                    route_points=(
+                        tuple(float(value) for value in current_node.center),
+                        tuple(float(value) for value in target_node.center),
+                    ),
+                    route_cells=(
+                        current_node.footprint_cell,
+                        target_node.footprint_cell,
+                    ),
+                    source="prepared_global_graph",
+                    graph_keys=(current_key, target_key),
+                    details={"kind": "hierarchical_prepared_global_edge"},
+                ),
+            ):
+                if target_remaining_m <= current_remaining_m + 16.0:
+                    relaxed_global_exit_count += 1
+        # A cached fine graph is a repair mechanism for mesh-blocked coarse
+        # frontiers. Expanding it beside a newly relaxed exact-safe global
+        # edge burns time without improving the first complete route search.
+        if relaxed_global_exit_count:
+            continue
+        local_options = local_options_cache.get(current_key)
+        if local_options is None:
+            local_options, _local_details = (
+                _preflight_hierarchical_local_bridge_options(
+                    source_key=current_key,
+                    terminal_key=terminal_key,
+                    graph=graph,
+                    cached_volume=cached_volume,
+                    graph_safety_validator=graph_safety_validator,
+                    mesh_guard=mesh_guard,
+                    settings=settings,
+                    prepared_context_cache=prepared_context_cache,
+                )
+            )
+            local_options_cache[current_key] = local_options
+        local_option_count += len(local_options)
+        for segment, target_key in local_options:
+            relax(
+                source=current_key,
+                target=target_key,
+                segment=segment,
+            )
+    return None, (), (), {
+        "reason": "hierarchical_fixed_route_unreachable",
+        "expanded_state_count": expanded_count,
+        "max_expansions": AUTO_DIVE_FIXED_ROUTE_HIERARCHICAL_MAX_EXPANSIONS,
+        "global_safe_edge_count": global_safe_edge_count,
+        "global_rejected_edge_count": global_rejected_edge_count,
+        "local_option_count": local_option_count,
+        "local_context_count": len(prepared_context_cache),
+        "reached_state_count": len(distances),
+    }
+
+
+def _preflight_refined_spine_portal(
+    *,
+    source_key: VoxelGraphKey,
+    source_index: int,
+    graph_keys: Sequence[VoxelGraphKey],
+    graph: NavigationVoxel3DGraph,
+    cached_volume: NavigationVoxelAtlas,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+    prepared_context_cache: _PreflightRefinedContextCache,
+) -> tuple[AutoDiveRouteSegment | None, int | None, dict[str, Any]]:
+    """Bridge forward to a later node of one fixed global route spine."""
+    source_node = graph.nodes.get(source_key)
+    if source_node is None:
+        return None, None, {"reason": "spine_portal_source_node_missing"}
+    current = tuple(float(value) for value in source_node.center)
+    tiles = cached_volume.fine_tiles_covering_points((current,))
+    if not tiles:
+        return None, None, {"reason": "spine_portal_fine_coverage_missing"}
+
+    attempts: list[dict[str, Any]] = []
+    for tile_index, volume in enumerate(tiles):
+        primary_context, _primary_preparation = (
+            _preflight_cached_refined_tile_context(
+                volume=volume,
+                current=current,
+                mesh_guard=mesh_guard,
+                settings=settings,
+                grid_size_m=AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M,
+                max_nodes=AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_NODES,
+                max_edges_per_node=(
+                    AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_EDGES_PER_NODE
+                ),
+                context_cache=prepared_context_cache,
+            )
+        )
+        if primary_context is None:
+            continue
+        volume = primary_context.volume
+        tile_radius_m = max(
+            float(volume.bounds_max[axis] - volume.bounds_min[axis])
+            for axis in range(3)
+        ) * 0.5
+        maximum_portal_distance_m = min(
+            tile_radius_m,
+            max(8.0, AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_DISTANCE_M),
+        )
+        candidates: list[tuple[int, float, VoxelGraphKey]] = []
+        for target_index, target_key in enumerate(
+            graph_keys[source_index + 1 :],
+            start=source_index + 1,
+        ):
+            target_node = graph.nodes.get(target_key)
+            if target_node is None:
+                continue
+            target = tuple(float(value) for value in target_node.center)
+            if not volume.contains_point(target):
+                continue
+            portal_distance_m = math.sqrt(
+                _point_distance_squared(current, target)
+            )
+            if portal_distance_m > maximum_portal_distance_m + 1e-9:
+                continue
+            component_distance_m = _preflight_refined_component_distance_m(
+                volume,
+                primary_context.filled_cells,
+                target,
+            )
+            if (
+                component_distance_m
+                > AUTO_DIVE_FIXED_ROUTE_REFINED_SNAP_TOLERANCE_M + 1e-9
+            ):
+                continue
+            candidates.append((target_index, portal_distance_m, target_key))
+        # Stay on the original spine and repair the earliest failed edge
+        # first.  A farther local handoff is only a bounded fallback when the
+        # next spine node cannot be joined safely through this fine tile.
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        candidates = candidates[:8]
+        if not candidates:
+            prepared_context_cache.pop(
+                _preflight_refined_context_cache_key(
+                    volume,
+                    AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M,
+                ),
+                None,
+            )
+            continue
+
+        def try_context(
+            context: _PreflightRefinedTileContext,
+            *,
+            mesh_retries: int,
+        ) -> tuple[AutoDiveRouteSegment | None, int | None, dict[str, Any]]:
+            for target_index, portal_distance_m, target_key in candidates:
+                target = tuple(
+                    float(value) for value in graph.nodes[target_key].center
+                )
+                segment, bridge_details = _build_preflight_refined_bridge(
+                    volume=context.volume,
+                    current=current,
+                    target=target,
+                    camera_atlas=cached_volume,
+                    camera_validator=graph_safety_validator,
+                    mesh_guard=mesh_guard,
+                    settings=settings,
+                    prepared_context=context,
+                    max_mesh_retries=mesh_retries,
+                )
+                if segment is None:
+                    if len(attempts) < 8:
+                        attempts.append(
+                            {
+                                "tile_index": int(tile_index),
+                                "target_spine_index": int(target_index),
+                                "target_graph_key": [
+                                    int(value) for value in target_key
+                                ],
+                                "portal_distance_m": float(portal_distance_m),
+                                "grid_size_m": [
+                                    float(value) for value in context.grid_size
+                                ],
+                                "reason": str(
+                                    bridge_details.get(
+                                        "reason",
+                                        "spine_portal_bridge_failed",
+                                    )
+                                ),
+                            }
+                        )
+                    continue
+                return segment, target_index, {
+                    "reason": "spine_portal_selected",
+                    "tile_index": int(tile_index),
+                    "target_spine_index": int(target_index),
+                    "target_graph_key": [int(value) for value in target_key],
+                    "portal_distance_m": float(portal_distance_m),
+                    "grid_size_m": [
+                        float(value) for value in context.grid_size
+                    ],
+                    "bridge": bridge_details,
+                }
+            return None, None, {"reason": "spine_portal_candidates_failed"}
+
+        segment, target_index, details = try_context(
+            primary_context,
+            mesh_retries=AUTO_DIVE_FIXED_ROUTE_REFINED_PORTAL_FAST_MESH_RETRIES,
+        )
+        if segment is not None and target_index is not None:
+            return segment, target_index, details
+        # The native 1 m fallback can be substantially larger than the 2 m
+        # aggregate.  Do not retain both local graphs for this tile while the
+        # fallback is materialized; the fixed spine will never revisit the
+        # rejected aggregate for this handoff.
+        filled_cells = primary_context.filled_cells
+        prepared_context_cache.pop(
+            _preflight_refined_context_cache_key(
+                volume,
+                AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M,
+            ),
+            None,
+        )
+        del primary_context
+        fallback_context, _fallback_preparation = (
+            _preflight_cached_refined_tile_context(
+                volume=volume,
+                current=current,
+                mesh_guard=mesh_guard,
+                settings=settings,
+                grid_size_m=AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_GRID_SIZE_M,
+                max_nodes=AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_NODES,
+                max_edges_per_node=(
+                    AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_EDGES_PER_NODE
+                ),
+                context_cache=prepared_context_cache,
+                filled_cells=filled_cells,
+            )
+        )
+        if fallback_context is None:
+            continue
+        segment, target_index, details = try_context(
+            fallback_context,
+            mesh_retries=AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_PORTAL_DEEP_MESH_RETRIES,
+        )
+        if segment is not None and target_index is not None:
+            return segment, target_index, details
+        prepared_context_cache.pop(
+            _preflight_refined_context_cache_key(
+                volume,
+                AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_GRID_SIZE_M,
+            ),
+            None,
+        )
+    return None, None, {
+        "reason": "spine_portal_unavailable",
+        "source_graph_key": [int(value) for value in source_key],
+        "source_spine_index": int(source_index),
+        "attempts": attempts,
+    }
+
+
+def _compose_preflight_spine_fixed_route(
+    *,
+    current: Point,
+    graph_keys: Sequence[VoxelGraphKey],
+    graph: NavigationVoxel3DGraph,
+    cached_volume: NavigationVoxelAtlas,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+) -> tuple[
+    tuple[AutoDiveRouteSegment, ...] | None,
+    tuple[Point, ...],
+    tuple[FootprintCell, ...],
+    dict[str, Any],
+]:
+    """Repair one terminal route in-order without branch or node revisits."""
+    if len(graph_keys) < 2:
+        return None, (), (), {"reason": "spine_graph_route_keys_missing"}
+    start_key = graph_keys[0]
+    start_node = graph.nodes.get(start_key)
+    if start_node is None:
+        return None, (), (), {"reason": "spine_start_node_missing"}
+    start_center = tuple(float(value) for value in start_node.center)
+    segments: list[AutoDiveRouteSegment] = []
+    points: list[Point] = []
+    cells: list[FootprintCell] = []
+
+    def append(segment: AutoDiveRouteSegment) -> bool:
+        if len(segment.route_points) < 2:
+            return False
+        if points and _point_distance_squared(points[-1], segment.route_points[0]) > 1e-10:
+            return False
+        if points:
+            points.extend(segment.route_points[1:])
+        else:
+            points.extend(segment.route_points)
+        cells.extend(segment.route_cells)
+        segments.append(segment)
+        return True
+
+    if _point_distance_squared(current, start_center) > 1e-12:
+        anchor_failure = graph_safety_validator.route_clearance_failure(
+            (current, start_center),
+            (start_key,),
+            start_graph_key=start_key,
+        )
+        if anchor_failure is not None:
+            return None, (), (), {
+                "reason": "spine_camera_anchor_unsafe",
+                "anchor_failure": anchor_failure.diagnostic_payload(),
+            }
+        if not append(
+            AutoDiveRouteSegment(
+                route_points=(current, start_center),
+                route_cells=(start_node.footprint_cell,),
+                source="prepared_global_graph",
+                graph_keys=(start_key,),
+                details={"kind": "camera_to_global_anchor"},
+            )
+        ):
+            return None, (), (), {"reason": "spine_anchor_seam_invalid"}
+    else:
+        points.append(current)
+
+    prepared_context_cache: _PreflightRefinedContextCache = {}
+    portal_handoffs: list[dict[str, Any]] = []
+    current_graph_keys = tuple(graph_keys)
+    spine_index = 0
+    while spine_index < len(current_graph_keys) - 1:
+        source_key = current_graph_keys[spine_index]
+        target_key = current_graph_keys[spine_index + 1]
+        source_node = graph.nodes.get(source_key)
+        target_node = graph.nodes.get(target_key)
+        if source_node is None or target_node is None:
+            return None, (), (), {
+                "reason": "spine_graph_node_missing",
+                "source_spine_index": int(spine_index),
+            }
+        failure = graph_safety_validator.edge_clearance_failure(
+            source_key,
+            target_key,
+        )
+        if failure is None:
+            if not append(
+                AutoDiveRouteSegment(
+                    route_points=(
+                        tuple(float(value) for value in source_node.center),
+                        tuple(float(value) for value in target_node.center),
+                    ),
+                    route_cells=(
+                        source_node.footprint_cell,
+                        target_node.footprint_cell,
+                    ),
+                    source="prepared_global_graph",
+                    graph_keys=(source_key, target_key),
+                    details={"kind": "prepared_spine_edge"},
+                )
+            ):
+                return None, (), (), {
+                    "reason": "spine_global_segment_seam_invalid",
+                    "source_spine_index": int(spine_index),
+                }
+            spine_index += 1
+            continue
+        # This is a fixed-spine repair, not a global replan.  The bridge may
+        # only rejoin a later node of ``current_graph_keys``; otherwise the
+        # planner could escape into a different branch while composing what
+        # is supposed to be one stable, prevalidated dive route.
+        bridge, target_index, portal_details = _preflight_refined_spine_portal(
+            source_key=source_key,
+            source_index=spine_index,
+            graph_keys=current_graph_keys,
+            graph=graph,
+            cached_volume=cached_volume,
+            graph_safety_validator=graph_safety_validator,
+            mesh_guard=mesh_guard,
+            settings=settings,
+            prepared_context_cache=prepared_context_cache,
+        )
+        if (
+            bridge is None
+            or target_index is None
+            or target_index <= spine_index
+            or not append(bridge)
+        ):
+            return None, (), (), {
+                "reason": "spine_portal_unrecoverable",
+                "source_graph_key": [int(value) for value in source_key],
+                "target_graph_key": [int(value) for value in target_key],
+                "source_spine_index": int(spine_index),
+                "coarse_edge_failure": failure.diagnostic_payload(),
+                "refinement": portal_details,
+            }
+        spine_index = target_index
+        portal_handoffs.append(dict(portal_details))
+
+    route_points = _dedupe_consecutive_points(tuple(points))
+    route_cells = _dedupe_consecutive_cells(tuple(cells))
+    if len(route_points) < 2:
+        return None, (), (), {"reason": "spine_route_has_no_travel_distance"}
+    if len(route_points) > int(settings.max_keyframes):
+        return None, (), (), {
+            "reason": "spine_route_exceeds_keyframe_budget",
+            "route_point_count": len(route_points),
+            "max_keyframes": int(settings.max_keyframes),
+        }
+    refined_segment_count = sum(
+        segment.source.startswith("refined_fine_") for segment in segments
+    )
+    return tuple(segments), route_points, route_cells, {
+        "reason": "spine_fixed_route_ready",
+        "route_geometry_source": "prepared_global_route_spine_with_fine_bridges",
+        "segment_count": len(segments),
+        "refined_segment_count": refined_segment_count,
+        "portal_handoff_count": len(portal_handoffs),
+        "portal_handoffs": portal_handoffs[:8],
+        "local_context_count": len(prepared_context_cache),
+        "route_point_count": len(route_points),
+        "route_length_m": float(path_length(route_points)),
+    }
+
+
+def _compose_preflight_refined_fixed_route(
+    *,
+    current: Point,
+    graph_keys: Sequence[VoxelGraphKey],
+    graph: NavigationVoxel3DGraph,
+    cached_volume: NavigationVoxelAtlas,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    mesh_guard: CachedChunkMeshCollisionGuard,
+    settings: AutoDiveSettings,
+) -> tuple[
+    tuple[AutoDiveRouteSegment, ...] | None,
+    tuple[Point, ...],
+    tuple[FootprintCell, ...],
+    dict[str, Any],
+]:
+    """Compose a complete terminal route with bounded fine portal repairs."""
+    if not graph_keys:
+        return None, (), (), {"reason": "global_graph_route_keys_missing"}
+    terminal_key = graph_keys[-1]
+    if terminal_key not in graph.nodes:
+        return None, (), (), {"reason": "global_graph_terminal_node_missing"}
+    segments: list[AutoDiveRouteSegment] = []
+    merged_points: list[Point] = []
+    merged_cells: list[FootprintCell] = []
+    portal_handoffs: list[dict[str, Any]] = []
+    global_bypass_handoffs: list[dict[str, Any]] = []
+    visited_portal_keys: set[VoxelGraphKey] = set()
+    prepared_context_cache: _PreflightRefinedContextCache = {}
+    blocked_global_edges: set[tuple[VoxelGraphKey, VoxelGraphKey]] = set()
+    global_mesh_replans: list[dict[str, Any]] = []
+
+    def append(segment: AutoDiveRouteSegment) -> bool:
+        points = tuple(segment.route_points)
+        if len(points) < 2:
+            return False
+        if (
+            merged_points
+            and _point_distance_squared(merged_points[-1], points[0]) > 1e-10
+        ):
+            return False
+        if not merged_points:
+            merged_points.extend(points)
+        else:
+            merged_points.extend(points[1:])
+        merged_cells.extend(segment.route_cells)
+        segments.append(segment)
+        return True
+
+    start_key = graph_keys[0]
+    start_node = graph.nodes.get(start_key)
+    if start_node is None:
+        return None, (), (), {"reason": "global_graph_start_node_missing"}
+    current_key = start_key
+    current_graph_keys = tuple(graph_keys)
+    start_center = tuple(float(value) for value in start_node.center)
+    visited_portal_keys.add(start_key)
+    handoff_count = 0
+    if _point_distance_squared(current, start_center) > 1e-12:
+        anchor_failure = graph_safety_validator.route_clearance_failure(
+            (current, start_center),
+            (start_key,),
+            start_graph_key=start_key,
+        )
+        if anchor_failure is None:
+            if not append(
+                AutoDiveRouteSegment(
+                    route_points=(current, start_center),
+                    route_cells=(start_node.footprint_cell,),
+                    source="prepared_global_graph",
+                    graph_keys=(start_key,),
+                    details={"kind": "camera_to_global_anchor"},
+                )
+            ):
+                return None, (), (), {"reason": "fixed_route_anchor_seam_invalid"}
+        else:
+            (
+                bridge,
+                portal_key,
+                portal_graph_keys,
+                portal_details,
+            ) = _preflight_refined_portal_for_global_route(
+                current=current,
+                source_key=start_key,
+                terminal_key=terminal_key,
+                graph=graph,
+                cached_volume=cached_volume,
+                graph_safety_validator=graph_safety_validator,
+                mesh_guard=mesh_guard,
+                settings=settings,
+                visited_portal_keys=visited_portal_keys,
+                blocked_global_edges=blocked_global_edges,
+                prepared_context_cache=prepared_context_cache,
+            )
+            if (
+                bridge is None
+                or portal_key is None
+                or portal_graph_keys is None
+                or not append(bridge)
+            ):
+                return None, (), (), {
+                    "reason": "fixed_route_camera_anchor_unrecoverable",
+                    "anchor_failure": anchor_failure.diagnostic_payload(),
+                    "refinement": portal_details,
+                }
+            handoff_count += 1
+            current_key = portal_key
+            current_graph_keys = portal_graph_keys
+            visited_portal_keys.add(portal_key)
+            portal_handoffs.append(dict(portal_details))
+    else:
+        merged_points.append(current)
+
+    while True:
+        if handoff_count > AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_HANDOFFS:
+            return None, (), (), {
+                "reason": "fixed_route_repair_handoff_limit",
+                "repair_handoff_count": int(handoff_count),
+                "max_repair_handoffs": (
+                    AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_PORTAL_HANDOFFS
+                ),
+            }
+        if not current_graph_keys or current_graph_keys[0] != current_key:
+            return None, (), (), {
+                "reason": "fixed_route_portal_graph_seam_invalid",
+                "current_graph_key": [int(value) for value in current_key],
+            }
+        if current_key == terminal_key and len(current_graph_keys) == 1:
+            break
+
+        portal_selected = False
+        for target_key in current_graph_keys[1:]:
+            source_key = current_key
+            source_node = graph.nodes.get(source_key)
+            target_node = graph.nodes.get(target_key)
+            if source_node is None or target_node is None:
+                return None, (), (), {
+                    "reason": "global_graph_route_node_missing",
+                    "source_graph_key": [int(value) for value in source_key],
+                    "target_graph_key": [int(value) for value in target_key],
+                }
+            source = tuple(float(value) for value in source_node.center)
+            target = tuple(float(value) for value in target_node.center)
+            direct_failure = graph_safety_validator.edge_clearance_failure(
+                source_key,
+                target_key,
+            )
+            if direct_failure is None:
+                if not append(
+                    AutoDiveRouteSegment(
+                        route_points=(source, target),
+                        route_cells=(
+                            source_node.footprint_cell,
+                            target_node.footprint_cell,
+                        ),
+                        source="prepared_global_graph",
+                        graph_keys=(source_key, target_key),
+                        details={"kind": "prepared_global_edge"},
+                    )
+                ):
+                    return None, (), (), {
+                        "reason": "fixed_route_global_segment_seam_invalid",
+                        "source_graph_key": [int(value) for value in source_key],
+                    }
+                current_key = target_key
+                visited_portal_keys.add(target_key)
+                continue
+
+            # Remember each exact rejection and rerun the indexed global A*
+            # before spending another local-tile bridge.  This is preflight
+            # composition, not runtime replanning: no movement is published
+            # until the final fixed ledger is complete.
+            blocked_global_edges.add((source_key, target_key))
+            replanned_graph_keys, replan_details = _preflight_global_graph_route(
+                graph,
+                start_key=source_key,
+                terminal_key=terminal_key,
+                preferred_direction=None,
+                forbidden_keys=tuple(visited_portal_keys),
+                blocked_edges=tuple(blocked_global_edges),
+            )
+            if (
+                replanned_graph_keys is not None
+                and len(replanned_graph_keys) > 1
+            ):
+                current_graph_keys = replanned_graph_keys
+                global_mesh_replans.append(
+                    {
+                        "source_graph_key": [
+                            int(value) for value in source_key
+                        ],
+                        "blocked_edge": [
+                            [int(value) for value in source_key],
+                            [int(value) for value in target_key],
+                        ],
+                        "blocked_edge_reason": str(
+                            getattr(direct_failure, "reason", "edge_rejected")
+                        ),
+                        "global_route_key_count": len(replanned_graph_keys),
+                        "global_route": replan_details,
+                    }
+                )
+                portal_selected = True
+                break
+
+            (
+                global_bypass,
+                bypass_key,
+                bypass_graph_keys,
+                bypass_details,
+            ) = _preflight_safe_global_bypass_for_terminal(
+                source_key=source_key,
+                terminal_key=terminal_key,
+                graph=graph,
+                graph_safety_validator=graph_safety_validator,
+                visited_portal_keys=visited_portal_keys,
+                blocked_global_edges=blocked_global_edges,
+            )
+            if (
+                global_bypass is not None
+                and bypass_key is not None
+                and bypass_graph_keys is not None
+                and append(global_bypass)
+            ):
+                handoff_count += 1
+                current_key = bypass_key
+                current_graph_keys = bypass_graph_keys
+                visited_portal_keys.add(bypass_key)
+                global_bypass_handoffs.append(dict(bypass_details))
+                portal_selected = True
+                break
+
+            (
+                bridge,
+                portal_key,
+                portal_graph_keys,
+                portal_details,
+            ) = _preflight_refined_portal_for_global_route(
+                current=source,
+                source_key=source_key,
+                terminal_key=terminal_key,
+                graph=graph,
+                cached_volume=cached_volume,
+                graph_safety_validator=graph_safety_validator,
+                mesh_guard=mesh_guard,
+                settings=settings,
+                visited_portal_keys=visited_portal_keys,
+                blocked_global_edges=blocked_global_edges,
+                prepared_context_cache=prepared_context_cache,
+            )
+            if (
+                bridge is None
+                or portal_key is None
+                or portal_graph_keys is None
+                or not append(bridge)
+            ):
+                return None, (), (), {
+                    "reason": "fixed_route_refined_portal_unrecoverable",
+                    "source_graph_key": [int(value) for value in source_key],
+                    "target_graph_key": [int(value) for value in target_key],
+                    "coarse_edge_failure": direct_failure.diagnostic_payload(),
+                    "global_bypass": bypass_details,
+                    "refinement": portal_details,
+                }
+            handoff_count += 1
+            current_key = portal_key
+            current_graph_keys = portal_graph_keys
+            visited_portal_keys.add(portal_key)
+            portal_handoffs.append(dict(portal_details))
+            portal_selected = True
+            break
+
+        if portal_selected:
+            continue
+        if current_key != terminal_key:
+            return None, (), (), {
+                "reason": "fixed_route_global_path_ended_before_terminal",
+                "current_graph_key": [int(value) for value in current_key],
+                "terminal_graph_key": [int(value) for value in terminal_key],
+            }
+        break
+
+    route_points = _dedupe_consecutive_points(tuple(merged_points))
+    route_cells = _dedupe_consecutive_cells(tuple(merged_cells))
+    if len(route_points) < 2:
+        return None, (), (), {"reason": "fixed_route_has_no_travel_distance"}
+    if len(route_points) > int(settings.max_keyframes):
+        return None, (), (), {
+            "reason": "fixed_route_exceeds_keyframe_budget",
+            "route_point_count": len(route_points),
+            "max_keyframes": int(settings.max_keyframes),
+        }
+    refined_segment_count = sum(
+        segment.source.startswith("refined_fine_") for segment in segments
+    )
+    return tuple(segments), route_points, route_cells, {
+        "reason": "composed_fixed_route_ready",
+        "route_geometry_source": "prepared_global_graph_with_refined_2m_portals",
+        "segment_count": len(segments),
+        "prepared_global_segment_count": len(segments) - refined_segment_count,
+        "refined_segment_count": refined_segment_count,
+        "repair_handoff_count": int(handoff_count),
+        "global_bypass_count": len(global_bypass_handoffs),
+        "global_bypasses": global_bypass_handoffs[:8],
+        "global_mesh_replan_count": len(global_mesh_replans),
+        "global_mesh_replans": global_mesh_replans[:8],
+        "blocked_global_edge_count": len(blocked_global_edges),
+        "portal_handoff_count": len(portal_handoffs),
+        "portal_handoffs": portal_handoffs[:8],
+        "route_point_count": len(route_points),
+        "route_length_m": float(path_length(route_points)),
+        "refined_grid_size_m": [
+            float(value) for value in AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M
+        ],
+    }
 
 
 def _preflight_route_geometry(
@@ -3582,6 +6866,11 @@ def _validate_auto_dive_settings(settings: AutoDiveSettings) -> None:
     if not math.isfinite(lookahead) or lookahead < 0.0:
         raise NavigationConfigurationError(
             "Guided Dive look-ahead distance cannot be negative"
+        )
+    if settings.route_goal not in AUTO_DIVE_ROUTE_GOAL_POLICIES:
+        raise NavigationConfigurationError(
+            "Guided Dive route goal must be one of: "
+            + ", ".join(sorted(AUTO_DIVE_ROUTE_GOAL_POLICIES))
         )
     voxel_size = float(settings.voxel_size_m)
     if not math.isfinite(voxel_size) or voxel_size <= 0.0:
@@ -5747,11 +9036,19 @@ def _make_auto_dive_local_frontier_voxel_builder(
     current: np.ndarray,
     forward: Sequence[float] | None,
     mesh_guard: CachedChunkMeshCollisionGuard | None,
+    cached_volume: NavigationVoxelAtlas | None = None,
     settings: AutoDiveSettings,
     diagnostics: AutoDiveDiagnosticSink | None,
     planning_budget: _AutoDivePlanningBudget | None = None,
 ) -> Callable[[], LocalVoxelVolume | None] | None:
     """Return a bounded 1 m field for local 3D frontier recovery."""
+    effective_max_cells = max(
+        4_096,
+        min(
+            int(settings.voxel_local_refinement_max_cells),
+            DEFAULT_AUTO_DIVE_LOCAL_REFINEMENT_RUNTIME_MAX_CELLS,
+        ),
+    )
     common_payload = {
         "method": "local_frontier_surface_voxels_v1",
         "voxel_size_m": 1.0,
@@ -5760,7 +9057,7 @@ def _make_auto_dive_local_frontier_voxel_builder(
         "forward_distance_m": float(
             settings.voxel_local_refinement_forward_m
         ),
-        "max_cells": int(settings.voxel_local_refinement_max_cells),
+        "max_cells": int(effective_max_cells),
     }
     if not bool(settings.voxel_analysis_enabled) or not bool(
         settings.voxel_local_refinement_enabled
@@ -5808,6 +9105,45 @@ def _make_auto_dive_local_frontier_voxel_builder(
         direction_values = (0.0, 0.0, 1.0)
         direction_norm = 1.0
     direction = tuple(value / direction_norm for value in direction_values)
+    cached_fine_tile = (
+        cached_volume.fine_tile_for_point(current_point)
+        if isinstance(cached_volume, NavigationVoxelAtlas)
+        else None
+    )
+    if cached_fine_tile is not None:
+        # Prefer the bounded fine tile already persisted with the prepared
+        # cache.  Re-rasterizing the same render chunks at every frontier can
+        # consume the entire replan handoff budget; the exact mesh guard below
+        # still validates the published route, so this is an evidence reuse,
+        # not a relaxation of collision safety.
+        def build_cached() -> LocalVoxelVolume:
+            _record_auto_dive_diagnostic(
+                diagnostics,
+                "voxel_local_refinement",
+                {
+                    **common_payload,
+                    "built": True,
+                    "outcome": VOXEL_ANALYSIS_OUTCOME_BUILT,
+                    "source": "prepared_fine_tile",
+                    "actual_voxel_size_m": float(
+                        cached_fine_tile.voxel_size_m
+                    ),
+                    "voxel_count": int(cached_fine_tile.voxel_count),
+                    "surface_cell_count": int(
+                        len(cached_fine_tile.surface_cells)
+                    ),
+                    "triangle_count": int(cached_fine_tile.triangle_count),
+                    "surface_sample_count": int(
+                        cached_fine_tile.surface_sample_count
+                    ),
+                    "sampling_truncated": bool(
+                        cached_fine_tile.sampling_truncated
+                    ),
+                },
+            )
+            return cached_fine_tile
+
+        return build_cached
     radius = max(4.0, float(settings.voxel_local_refinement_radius_m))
     forward_distance = max(
         radius,
@@ -5857,13 +9193,7 @@ def _make_auto_dive_local_frontier_voxel_builder(
                     "local_frontier_mesh_sampling",
                     diagnostics=diagnostics,
                 )
-            max_cells = max(
-                4_096,
-                min(
-                    int(settings.voxel_local_refinement_max_cells),
-                    131_072,
-                ),
-            )
+            max_cells = effective_max_cells
             volume = build_surface_voxel_volume(
                 meshes,
                 bounds_min=bounds_min,

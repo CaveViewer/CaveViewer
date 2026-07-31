@@ -51,6 +51,9 @@ def test_fine_local_route_preserves_downward_and_lateral_connectivity():
 
     assert route is not None
     assert route.forward_progress_m > 0.0
+    assert len(route.indices) >= 2
+    first_departure = volume.voxel_center(route.indices[1])
+    assert float(first_departure[0] - 0.0) >= 0.0
     assert any(point[1] < -1.0 for point in route.points)
     assert any(point[2] > 0.0 for point in route.points)
     assert route.target_connectivity > 0
