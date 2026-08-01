@@ -184,6 +184,27 @@ shell from graph evidence, and fails if the requested capacity would coarsen
 the voxels or truncate surface sampling. `graph_voxel_capacity` is the usable
 bounded region; `raster_voxel_capacity` includes the temporary shell.
 
+Run the same exact-resolution check sequentially across every recursively
+discovered `_cache` below a local map library with:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv-dev/bin/python \
+  scripts/dev/navigation_cubic_graph_suite.py \
+  --maps-root /path/to/Maps \
+  --voxel-size 1.0 \
+  --json
+```
+
+The suite runs maps in separate child processes so one cave's graph and search
+state are released before the next cave starts. `PASSED` means a route was
+proved and exact-mesh checked. `INCOMPATIBLE_RESOLUTION` means V10 coarsened at
+least one source tile, while `MISSING_ARTIFACT` means the render cache has no
+usable navigation sidecar. Those outcomes are cache limitations, not geometry
+failures. The command exits nonzero unless every discovered map passes.
+Map labels are paths relative to `--maps-root`, so nested libraries and maps
+with duplicate directory names remain unambiguous. No map data or local result
+files are written or committed by the suite.
+
 GUI startup coverage must exercise a Guided Dive click while asynchronous
 graph-entrance placement is pending. The click is retained, placement finishes
 without blocking the render thread, and preflight starts from that pose; a
