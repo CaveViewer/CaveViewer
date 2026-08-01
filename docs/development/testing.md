@@ -145,6 +145,45 @@ Large-map regression fixtures must also prove that whole-map and average-chunk
 triangle thresholds disable only optional speculative recovery. They must not
 make the lazy exact collision guard unavailable or cause a render-only cache to
 be published solely because a map exceeds those thresholds.
+
+### Isotropic cubic graph experiment
+
+Before changing the navigation cache format, use the read-only cubic graph
+experiment to measure whether existing one-metre atlas evidence supports a
+complete exact-safe route:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv-dev/bin/python \
+  scripts/dev/navigation_cubic_graph_experiment.py \
+  --cache-dir /path/to/map/_cache \
+  --mode atlas \
+  --voxel-size 1.0 \
+  --minimum-clearance 0.25 \
+  --cardinal-only \
+  --json
+```
+
+Atlas mode fails rather than silently accepting source tiles coarser than the
+requested isotropic resolution. To investigate one such area without changing
+the cache, use `--mode region`, supply aligned `--bounds`, `--start`, and
+`--target` coordinates, and let the tool revoxelize only that bounded region
+from cached render-chunk triangles. The experiment stores packed free-voxel
+keys, computes adjacency implicitly, rejects unsupported diagonals, and lazily
+blocks exact-mesh-colliding route edges. It never publishes or overwrites cache
+artifacts. A passing report is diagnostic evidence for a future cache format;
+it does not make the existing cache graph authoritative.
+
+Atlas mode may read legacy V10 tiles whose surface sampling was truncated. It
+reports their count as `truncated_source_volume_count` and still requires the
+final path to pass the complete cached-mesh guard. This exception exists only
+to investigate old evidence; a production isotropic cache must not publish
+truncated source volumes.
+
+Region mode accounts for the rasterizer's extra boundary shell, excludes that
+shell from graph evidence, and fails if the requested capacity would coarsen
+the voxels or truncate surface sampling. `graph_voxel_capacity` is the usable
+bounded region; `raster_voxel_capacity` includes the temporary shell.
+
 GUI startup coverage must exercise a Guided Dive click while asynchronous
 graph-entrance placement is pending. The click is retained, placement finishes
 without blocking the render thread, and preflight starts from that pose; a

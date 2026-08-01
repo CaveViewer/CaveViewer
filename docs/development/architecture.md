@@ -46,8 +46,10 @@ local voxel fields. During cache construction, `core.navigation.voxel_cache`
 reuses the already-written chunk files to build a tiled atlas for every cell in
 each navigable cave component. Curvature-ranked regions remain diagnostic
 metadata, while the atlas also covers the approach before a bend and the
-straight sections after it. The current v10 sidecar preserves 1 m voxels for
-the whole-cave coarse atlas and bounded fine refinement tiles. It also stores
+straight sections after it. The current V10 sidecar requests 1 m voxels for
+the whole-cave atlas and bounded fine refinement tiles, but its per-tile
+capacity guard may silently increase the coarse-tile voxel size on large maps.
+It therefore does not guarantee a globally isotropic 1 m field. It also stores
 a compact 2 m mesh-derived route graph built by a seeded free-space flood:
 voxel probes nominate inside-space candidates and every accepted neighbour
 edge must pass the cached triangle-mesh guard. Only the shortest certified
