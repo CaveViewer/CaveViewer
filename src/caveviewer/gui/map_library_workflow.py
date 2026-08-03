@@ -21,6 +21,7 @@ from caveviewer.gui.map_library_panel import (
     MapLibraryRowWidgets,
 )
 from caveviewer.gui.platform import DesktopServices, DirectorySelection
+from caveviewer.gui.recorded_dive import has_recorded_dive_trace
 from caveviewer.gui.standard_library_download import (
     StandardLibraryDownloadFailed,
     StandardLibraryDownloadProgress,
@@ -121,6 +122,8 @@ class MapLibraryWorkflow:
         ] = DirectorySelection.from_path,
         inhibit_desktop: Callable[..., Any] = safe_desktop_inhibit,
         close_inhibitor: Callable[[Any], None] = close_desktop_inhibitor,
+        has_recorded_dive: Callable[[str], bool] = has_recorded_dive_trace,
+        open_recorded_dive: OpenMapCallback | None = None,
     ) -> None:
         self.root = root
         self.controller = controller
@@ -149,6 +152,8 @@ class MapLibraryWorkflow:
         self.directory_selection_factory = directory_selection_factory
         self.inhibit_desktop = inhibit_desktop
         self.close_inhibitor = close_inhibitor
+        self.has_recorded_dive = has_recorded_dive
+        self.open_recorded_dive = open_recorded_dive
         self.recent_map_paths: list[str] = []
 
     def populate_panel(self, parent, recent_map_paths: Sequence[str]) -> None:
@@ -205,12 +210,20 @@ class MapLibraryWorkflow:
         title = entry.title
 
         def menu_actions(row_widgets, path=path, title=title):
-            actions = [
+            actions = []
+            if self._recorded_dive_action_available(path):
+                actions.append(
+                    (
+                        "Play recorded dive…",
+                        lambda path=path: self.open_recorded_dive(path),
+                    )
+                )
+            actions.append(
                 (
                     "Remove from this list",
                     lambda path=path: self.remove_recent_map(path),
                 )
-            ]
+            )
             if self.has_cache(path):
                 actions.append(
                     (
@@ -244,7 +257,15 @@ class MapLibraryWorkflow:
             map_path = self.downloaded_library_map_path(library_map)
             if map_path is None:
                 return ()
-            actions = [
+            actions = []
+            if self._recorded_dive_action_available(map_path):
+                actions.append(
+                    (
+                        "Play recorded dive…",
+                        lambda map_path=map_path: self.open_recorded_dive(map_path),
+                    )
+                )
+            actions.append(
                 (
                     "Remove downloaded maps",
                     lambda map_path=map_path, library_map=library_map: (
@@ -255,7 +276,7 @@ class MapLibraryWorkflow:
                         )
                     ),
                 ),
-            ]
+            )
             if self.has_cache(map_path):
                 actions.append(
                     (
@@ -275,6 +296,13 @@ class MapLibraryWorkflow:
             row,
             action=lambda library_map=library_map: self.on_map_action(library_map),
             menu_actions_factory=menu_actions,
+        )
+
+    def _recorded_dive_action_available(self, map_path: str) -> bool:
+        """Return whether this local map can offer its trace-picker shortcut."""
+        return bool(
+            self.open_recorded_dive is not None
+            and self.has_recorded_dive(map_path)
         )
 
     def remove_map_cache(

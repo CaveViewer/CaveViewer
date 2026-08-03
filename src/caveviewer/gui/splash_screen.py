@@ -200,18 +200,16 @@ _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
 _LIBRARY_METADATA_ERROR_COLOR = DARK_THEME.error_text
 _LIBRARY_METADATA_STATUS_DURATION_MS = 2500
 _LIBRARY_METADATA_ERROR_DURATION_MS = 7000
-# In-button download progress draws on the amber action button, so use palette
-# colors that contrast with the button rather than the dark row panel.
-_LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.primary_button_hover
-_LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button_border
-_LIBRARY_ACTION_PROGRESS_RING_DIAMETER = 16
+# Match cave-loading progress: a subdued empty track fills with the amber
+# accent as work completes.
+_LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
+_LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button
+_LIBRARY_ACTION_PROGRESS_RING_DIAMETER = 22
 _LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH = 2
-_LIBRARY_ACTION_STOP_SIZE = 6
-_LIBRARY_ACTION_BUTTON_WIDTH = 8
-_LIBRARY_ACTION_BUTTON_PAD_X = 10
-_LIBRARY_ACTION_BUTTON_PAD_Y = 5
-_LIBRARY_OVERFLOW_TEXT = "⋮"
-_LIBRARY_OVERFLOW_FONT = _tk_font(14, "bold")
+_LIBRARY_ACTION_STOP_SIZE = 7
+_LIBRARY_ACTION_BUTTON_SIZE = 32
+_LIBRARY_ACTION_ICON_STROKE_WIDTH = 2
+_LIBRARY_OVERFLOW_BUTTON_SIZE = 28
 _LIBRARY_OVERFLOW_FG = "#606370"
 _LIBRARY_OVERFLOW_HOVER_FG = _INSTRUCTION_COLOR
 _LIBRARY_OVERFLOW_HOVER_BG = DARK_THEME.secondary_button
@@ -256,7 +254,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
     global _UI_FONT_FAMILY, _TK_TEXT_SCALE, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
     global _SMALL_FONT, _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
-    global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT, _LIBRARY_OVERFLOW_FONT
+    global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT
 
     default_font_points = 12.0
     try:
@@ -297,7 +295,6 @@ def _configure_runtime_tk_fonts(root) -> None:
     _FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
     _LINK_FONT = _tk_font(10, "underline")
     _BUTTON_FONT = _tk_font(13)
-    _LIBRARY_OVERFLOW_FONT = _tk_font(14, "bold")
 
 
 def _map_library_panel_style() -> MapLibraryPanelStyle:
@@ -310,11 +307,11 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         section_font=_LIBRARY_SECTION_FONT,
         small_font=_SMALL_FONT,
         metadata_font=_LIBRARY_METADATA_FONT,
-        button_bg=_BUTTON_BG,
-        button_fg=_BUTTON_FG,
-        button_hover_bg=_BUTTON_HOVER_BG,
+        button_bg=_PANEL_COLOR,
+        button_fg=_BUTTON_BG,
+        button_hover_bg=DARK_THEME.secondary_button,
         button_border_color=_BUTTON_BORDER_COLOR,
-        disabled_button_bg=DARK_THEME.secondary_button,
+        disabled_button_bg=_PANEL_COLOR,
         disabled_button_fg=DARK_THEME.placeholder_text,
         disabled_button_border=DARK_THEME.entry_border,
         empty_note_color="#5f606b",
@@ -328,11 +325,9 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         action_progress_ring_diameter=_LIBRARY_ACTION_PROGRESS_RING_DIAMETER,
         action_progress_ring_stroke_width=_LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH,
         action_stop_size=_LIBRARY_ACTION_STOP_SIZE,
-        action_button_width=_LIBRARY_ACTION_BUTTON_WIDTH,
-        action_button_pad_x=_LIBRARY_ACTION_BUTTON_PAD_X,
-        action_button_pad_y=_LIBRARY_ACTION_BUTTON_PAD_Y,
-        overflow_text=_LIBRARY_OVERFLOW_TEXT,
-        overflow_font=_LIBRARY_OVERFLOW_FONT,
+        action_button_size=_LIBRARY_ACTION_BUTTON_SIZE,
+        action_icon_stroke_width=_LIBRARY_ACTION_ICON_STROKE_WIDTH,
+        overflow_button_size=_LIBRARY_OVERFLOW_BUTTON_SIZE,
         overflow_fg=_LIBRARY_OVERFLOW_FG,
         overflow_hover_fg=_LIBRARY_OVERFLOW_HOVER_FG,
         overflow_hover_bg=_LIBRARY_OVERFLOW_HOVER_BG,
@@ -675,10 +670,10 @@ def show_splash_screen(
             _save_last_browse_dir(selection.path)
             _leave_splash()
 
-    def on_open_recorded_dive() -> None:
+    def on_open_recorded_dive(initial_dir: str | None = None) -> None:
         selection = desktop_services.choose_file(
             title="Open Recorded Dive",
-            initial_dir=_load_last_browse_dir(),
+            initial_dir=initial_dir or _load_last_browse_dir(),
             parent=root,
         )
         if not selection:
@@ -696,52 +691,10 @@ def show_splash_screen(
         _save_last_browse_dir(selection.path)
         _leave_splash()
 
-    _open_options_visible = [False]
-    open_options_frame: list[tk.Widget | None] = [None]
+    def _open_map_local_recorded_dive(map_path: str) -> None:
+        from caveviewer.gui.manual_dive_trace import MANUAL_DIVE_TRACE_DIRECTORY
 
-    def _hide_open_options() -> None:
-        _open_options_visible[0] = False
-        frame = open_options_frame[0]
-        if frame is None:
-            return
-        frame.place_forget()
-
-    def _open_map_and_close() -> None:
-        _hide_open_options()
-        on_open_map_folder()
-
-    def _open_recorded_dive_and_close() -> None:
-        _hide_open_options()
-        on_open_recorded_dive()
-
-    def on_open(event=None):
-        if _open_options_visible[0]:
-            _hide_open_options()
-            return "break"
-        if open_options_frame[0] is None:
-            return
-        root.update_idletasks()
-        options = open_options_frame[0]
-
-        left_frame_width = left_frame.winfo_width()
-        button_x = browse_button.winfo_x()
-        available_width = left_frame_width - max(0, button_x)
-        options.update_idletasks()
-        options.update()
-        panel_width = max(1, available_width)
-        content_pad = 24 * 2
-        wrap_width = max(1, panel_width - content_pad)
-        open_map_button.config(wraplength=wrap_width)
-        open_recorded_button.config(wraplength=wrap_width)
-        options.place(
-            in_=left_frame,
-            x=browse_button.winfo_x(),
-            y=browse_button.winfo_y() + browse_button.winfo_height(),
-            width=max(1, panel_width),
-        )
-        options.lift()
-        _open_options_visible[0] = True
-        return "break"
+        on_open_recorded_dive(os.path.join(map_path, MANUAL_DIVE_TRACE_DIRECTORY))
 
     def on_close(_event=None):
         _leave_splash()
@@ -759,7 +712,7 @@ def show_splash_screen(
 
     browse_button = tk.Label(
         left_frame,
-        text="Open…",
+        text="Open map…",
         font=_BUTTON_FONT,
         bg=_BUTTON_BG,
         fg=_BUTTON_FG,
@@ -771,106 +724,15 @@ def show_splash_screen(
         highlightbackground=_BUTTON_BORDER_COLOR,
         highlightcolor=_BUTTON_BORDER_COLOR,
     )
-    _bind_activation(browse_button, on_open)
+    _bind_activation(browse_button, on_open_map_folder)
     browse_button.bind("<Enter>", lambda _event: browse_button.config(bg=_BUTTON_HOVER_BG))
     browse_button.bind("<Leave>", lambda _event: browse_button.config(bg=_BUTTON_BG))
     browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
 
-    open_options_frame[0] = tk.Frame(
-        left_frame,
-        bg=_BUTTON_BG,
-        borderwidth=1,
-        relief="solid",
-    )
-    open_options_frame[0].bind(
-        "<Button-1>",
-        lambda event: None,
-    )
-    options = open_options_frame[0]
-    open_map_button = tk.Label(
-        options,
-        text="Open Cave Map",
-        font=_BUTTON_FONT,
-        bg=_BUTTON_BG,
-        fg=_BUTTON_FG,
-        padx=24,
-        pady=8,
-        cursor="hand2",
-        takefocus=True,
-        anchor="w",
-        highlightthickness=1,
-        highlightbackground=_BUTTON_BORDER_COLOR,
-        highlightcolor=_BUTTON_BORDER_COLOR,
-    )
-    open_recorded_button = tk.Label(
-        options,
-        text="Open Recorded Dive",
-        font=_BUTTON_FONT,
-        bg=_BUTTON_BG,
-        fg=_BUTTON_FG,
-        padx=24,
-        pady=8,
-        cursor="hand2",
-        takefocus=True,
-        anchor="w",
-        highlightthickness=1,
-        highlightbackground=_BUTTON_BORDER_COLOR,
-        highlightcolor=_BUTTON_BORDER_COLOR,
-    )
-    _bind_activation(open_map_button, _open_map_and_close)
-    _bind_activation(open_recorded_button, _open_recorded_dive_and_close)
-    open_map_button.bind(
-        "<Enter>",
-        lambda _event: open_map_button.config(bg=_BUTTON_HOVER_BG),
-    )
-    open_map_button.bind(
-        "<Leave>",
-        lambda _event: open_map_button.config(bg=_BUTTON_BG),
-    )
-    open_recorded_button.bind(
-        "<Enter>",
-        lambda _event: open_recorded_button.config(bg=_BUTTON_HOVER_BG),
-    )
-    open_recorded_button.bind(
-        "<Leave>",
-        lambda _event: open_recorded_button.config(bg=_BUTTON_BG),
-    )
-    open_map_button.pack(fill="x")
-    divider = tk.Frame(options, bg=_BUTTON_BORDER_COLOR, height=1)
-    divider.pack(fill="x")
-    open_recorded_button.pack(fill="x")
-    open_options_frame[0].place_forget()
-
-    def _dismiss_open_options_on_escape(event=None):
-        if _open_options_visible[0]:
-            _hide_open_options()
-            return "break"
-        on_close(event)
-        return None
-
-    def _dismiss_open_options_on_click(event=None):
-        if not _open_options_visible[0] or event is None:
-            return
-        widget = event.widget
-        if widget is None:
-            _hide_open_options()
-            return
-        if widget in (browse_button, options) or _widget_ancestor_is(widget, options):
-            return
-        _hide_open_options()
-
-    def _widget_ancestor_is(widget, candidate) -> bool:
-        current = widget
-        while current is not None:
-            if current is candidate:
-                return True
-            current = current.master
-        return False
-
     instruction_label = tk.Label(
         left_frame,
-        text="Choose a cave map folder, or open a shared Recorded Dive.\n"
-             "Maps use .glb, or .obj with matching .mtl and textures.",
+        text="Choose a cave map folder.\n"
+             "Maps use .obj files with matching .mtl and textures.",
         font=_INSTRUCTION_FONT,
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",
@@ -962,6 +824,7 @@ def show_splash_screen(
         show_feedback=_show_map_library_feedback,
         logger=_LOG,
         map_library_root_dir_provider=default_map_library_install_dir,
+        open_recorded_dive=_open_map_local_recorded_dive,
     )
     map_library_workflow_ref[0] = map_library_workflow
 
@@ -1024,9 +887,8 @@ def show_splash_screen(
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     session.schedule_after(root, 50, _refresh_update_presentation)
     session.schedule_after(root, 350, update_manager.check_for_updates)
-    root.bind("<Return>", lambda _event: on_open())
-    root.bind("<Escape>", _dismiss_open_options_on_escape)
-    root.bind("<Button-1>", _dismiss_open_options_on_click)
+    root.bind("<Return>", lambda _event: on_open_map_folder())
+    root.bind("<Escape>", on_close)
     bind_primary_shortcut(root, "w", on_close)
     root.protocol("WM_DELETE_WINDOW", on_close)
 

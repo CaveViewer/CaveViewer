@@ -270,7 +270,6 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
         "_FOOTER_FONT",
         "_LINK_FONT",
         "_BUTTON_FONT",
-        "_LIBRARY_OVERFLOW_FONT",
     )
     original_values = {name: getattr(splash_screen, name) for name in font_globals}
 
@@ -308,8 +307,13 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert 'label.bind("<space>", invoke)' in source
     assert "def _invoke_and_break(callback):" in source
     assert "def _bind_activation(widget, callback) -> None:" in source
-    assert "_bind_activation(browse_button, on_open)" in source
-    assert "def on_open(event=None):" in source
+    assert "_bind_activation(browse_button, on_open_map_folder)" in source
+    assert 'text="Open map…"' in source
+    assert "open_recorded_dive_link" not in source
+    assert 'text="Open recorded dive…"' not in source
+    assert '"Maps use .obj files with matching .mtl and textures."' in source
+    assert '"Maps use .glb, or .obj with matching .mtl and textures."' not in source
+    assert "def on_open(event=None):" not in source
     assert "_bind_activation(preferences_link, _on_preferences_click)" in source
     assert "MapLibraryWorkflow(" in source
     assert "load_initial_standard_library_catalog" in source
@@ -362,15 +366,20 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "section_font=_LIBRARY_SECTION_FONT" in style_source
     assert "metadata_color=_LIBRARY_METADATA_COLOR" in style_source
     assert "_action_button_pixel_size" in panel_source
-    assert "style.action_button_width" in panel_source
-    assert "style.action_button_pad_x" in panel_source
-    assert "style.action_button_pad_y" in panel_source
+    assert "style.action_button_size" in panel_source
+    assert "style.action_icon_stroke_width" in panel_source
+    assert "style.overflow_button_size" in panel_source
     assert "progress_bar_canvas = tk.Canvas(" not in source
     assert "reserve_progress=True" not in panel_source
     assert "_create_action_button" in panel_source
     assert "_draw_action_stop_progress" in panel_source
     assert "button.create_arc(" in panel_source
     assert "button.create_rectangle(" in panel_source
+    assert "_draw_download" in panel_source
+    download_source = inspect.getsource(map_library_panel.MapLibraryPanel._draw_download)
+    assert "create_rectangle" not in download_source
+    assert "_draw_retry" in panel_source
+    assert "_set_row_open_activation" in panel_source
     assert "stop_fill_color = style.button_fg" in panel_source
     assert "action_progress_ring_diameter=" in style_source
     assert "action_stop_size=" in style_source
@@ -382,13 +391,15 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "directory_selection_factory" in workflow_source
     assert "start_catalog_fetch" in workflow_source
     assert "poll_download_queue" not in splash_source
+    assert 'self.set_standard_row_metadata(key, "Downloading…")' in panel_source
+    assert "Downloading… %" not in panel_source
 
     style = splash_screen._map_library_panel_style()
-    assert style.progress_track_color == splash_screen.DARK_THEME.primary_button_hover
-    assert style.progress_fill_color == splash_screen.DARK_THEME.primary_button_border
+    assert style.progress_track_color == splash_screen.DARK_THEME.entry_background
+    assert style.progress_fill_color == splash_screen.DARK_THEME.primary_button
     assert style.progress_track_color != style.button_bg
     assert style.progress_fill_color != style.button_bg
-    assert style.progress_fill_color != style.button_fg
+    assert style.progress_fill_color == style.button_fg
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
@@ -406,7 +417,7 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "_create_recent_overflow_button" not in source
     assert "menu_actions_factory=" in source
     assert "leading_widget_factory=" not in source
-    assert "leading_widget=leading_widget" in source
+    assert "overflow_button=overflow_button" in source
     assert "self.remove_recent_path(path)" in workflow_source
     assert "self.has_cache(path)" in workflow_source
     assert "self.remove_cache(path)" in workflow_source
@@ -425,15 +436,42 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "self._recent_container = tk.Frame(" in panel_source
     assert "self.recent_rows" in panel_source
     assert "self._recent_empty_note = self._create_empty_note" in panel_source
-    assert "_LIBRARY_OVERFLOW_TEXT" in source
+    assert "Play recorded dive…" in source
+    assert "has_recorded_dive" in workflow_source
     assert "Open" in source
-    assert "width=1" in panel_source
-    assert 'button.pack(side="left", padx=(0, self._px(4))' in panel_source
-    assert "padx=(self._px(6), self._px(8))" in panel_source
+    assert "button.create_oval(" in panel_source
+    assert 'button.pack(side="right", padx=(0, self._px(12))' in panel_source
+    assert "padx=(0, self._px(8))" in panel_source
 
 
 def test_library_action_buttons_use_normalized_dimensions():
-    assert splash_screen._LIBRARY_ACTION_BUTTON_WIDTH == 8
-    assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_X == 10
-    assert splash_screen._LIBRARY_ACTION_BUTTON_PAD_Y == 5
+    assert splash_screen._LIBRARY_ACTION_BUTTON_SIZE == 32
+    assert splash_screen._LIBRARY_ACTION_ICON_STROKE_WIDTH == 2
+    assert splash_screen._LIBRARY_OVERFLOW_BUTTON_SIZE == 28
     assert splash_screen._LIBRARY_METADATA_FONT[1] == 9
+
+
+@pytest.mark.parametrize(
+    ("action_text", "show_stop_progress", "icon", "tooltip", "row_activates"),
+    [
+        ("Open", False, "chevron-right", "Open map", True),
+        ("Get", False, "download", "Download map", False),
+        ("Retry", False, "retry", "Retry download", False),
+        ("", True, "stop-progress", "Stop download", False),
+    ],
+)
+def test_map_library_row_actions_use_state_aware_icons(
+    action_text,
+    show_stop_progress,
+    icon,
+    tooltip,
+    row_activates,
+):
+    visual = map_library_panel.map_library_action_visual(
+        action_text,
+        show_stop_progress=show_stop_progress,
+    )
+
+    assert visual.icon == icon
+    assert visual.tooltip == tooltip
+    assert visual.row_activates is row_activates

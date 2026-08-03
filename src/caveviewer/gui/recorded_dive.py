@@ -275,6 +275,18 @@ def is_recorded_dive_path(path: str | os.PathLike[str]) -> bool:
     return Path(path).suffix.lower() == RECORDED_DIVE_FILE_SUFFIX
 
 
+def has_recorded_dive_trace(map_path: str | os.PathLike[str]) -> bool:
+    """Return whether a map-local Guided Dive trace is available for playback."""
+    try:
+        trace_dir = Path(map_path) / MANUAL_DIVE_TRACE_DIRECTORY
+        return any(
+            entry.is_file() and entry.name.lower().endswith(RECORDED_DIVE_FILE_SUFFIX)
+            for entry in trace_dir.iterdir()
+        )
+    except OSError:
+        return False
+
+
 def load_recorded_dive_trace(
     path: str | os.PathLike[str],
 ) -> RecordedDiveTrace:

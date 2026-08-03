@@ -14,6 +14,7 @@ from caveviewer.gui.recorded_dive import (
     RecordedDiveMapError,
     RecordedDivePlaybackController,
     RecordedDivePlaybackState,
+    has_recorded_dive_trace,
     load_recorded_dive_trace,
     resolve_recorded_dive_source_path,
     validate_recorded_dive_manifest,
@@ -84,6 +85,21 @@ def _write_trace(tmp_path, poses: list[dict], *, completed: bool = True):
         encoding="utf-8",
     )
     return path, source
+
+
+def test_map_local_trace_detection_requires_a_jsonl_file(tmp_path):
+    map_dir = tmp_path / "Map"
+    map_dir.mkdir()
+
+    assert not has_recorded_dive_trace(map_dir)
+
+    trace_dir = map_dir / "_guided_dive_traces"
+    trace_dir.mkdir()
+    (trace_dir / "notes.txt").write_text("not a trace", encoding="utf-8")
+    assert not has_recorded_dive_trace(map_dir)
+
+    (trace_dir / "dive.jsonl").write_text("{}\n", encoding="utf-8")
+    assert has_recorded_dive_trace(map_dir)
 
 
 def test_trace_interpolates_position_and_camera_basis(tmp_path):

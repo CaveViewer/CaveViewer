@@ -14,6 +14,11 @@ def image_path(filename: str) -> Path:
     return resource_path("images", filename)
 
 
+def ui_icon_path(filename: str) -> Path:
+    """Return a path to a scalable UI action icon source asset."""
+    return resource_path("images", "ui", filename)
+
+
 def shader_path(filename: str) -> Path:
     return resource_path("shaders", filename)
 
