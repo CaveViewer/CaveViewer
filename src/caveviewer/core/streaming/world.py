@@ -26,6 +26,12 @@ from typing import Callable, Iterable, Optional
 
 import numpy as np
 
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    CapabilitySource,
+    GpuMemoryBudget,
+    RamAvailability,
+)
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.workers.allocation import (
@@ -38,7 +44,8 @@ from caveviewer.core.workers.priority import lower_current_thread_priority
 from caveviewer.core.chunking.io import ChunkData
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.streaming.budget import (
-    calculate_residency_budget,
+    StreamingMemoryDecision,
+    decide_streaming_memory,
     estimate_chunk_bytes,
 )
 from caveviewer.core.streaming.scheduler import (
@@ -78,6 +85,13 @@ def _detect_ram_snapshot() -> system_memory.RamSnapshot | None:
     return system_memory.detect_ram_snapshot()
 
 
+def _probe_ram_availability() -> CapabilityResult[RamAvailability]:
+    """Expose one typed RAM probe while retaining the legacy test hook."""
+    return system_memory.probe_ram_availability(
+        snapshot_detector=_detect_ram_snapshot,
+    )
+
+
 def _parse_target_fraction(raw_value: str | None, conservative_default: float) -> float:
     return memory_targets.parse_target_fraction(
         raw_value, conservative_default
@@ -111,6 +125,37 @@ def _detect_total_gpu_memory_bytes(gpu_vendor: str | None = None) -> int | None:
         nvidia_detector=_detect_nvidia_gpu_memory_bytes,
         amd_detector=_detect_linux_amd_gpu_memory_bytes,
         logger=_LOG,
+    )
+
+
+def _probe_gpu_memory_budget(
+    gpu_vendor: str | None = None,
+) -> CapabilityResult[GpuMemoryBudget]:
+    """Probe one active-GPU budget through StreamingWorld's testable hooks."""
+    return gpu_memory.probe_gpu_memory_budget(
+        gpu_vendor,
+        nvidia_detector=_detect_nvidia_gpu_memory_bytes,
+        amd_detector=_detect_linux_amd_gpu_memory_bytes,
+        logger=_LOG,
+    )
+
+
+def _supplied_gpu_memory_capability(
+    total_gpu_memory_bytes: int,
+) -> CapabilityResult[GpuMemoryBudget]:
+    """Represent an explicit caller budget using the same immutable contract."""
+    try:
+        value = GpuMemoryBudget(total_gpu_memory_bytes)
+    except (OverflowError, TypeError, ValueError):
+        return CapabilityResult.unknown(
+            reason_code="gpu_memory_supplied_budget_invalid",
+            evidence={"provider": "streaming_world_argument"},
+        )
+    return CapabilityResult.available(
+        value,
+        reason_code="gpu_memory_supplied_budget",
+        source=CapabilitySource.USER_OVERRIDE,
+        evidence={"provider": "streaming_world_argument"},
     )
 
 
@@ -272,21 +317,9 @@ class StreamingWorld:
 
         target_env = os.environ.get("CAVEVIEWER_MEMORY_UTILIZATION_TARGET")
         self._memory_target_fraction = _parse_memory_target_fraction(target_env)
-        ram_snapshot = _detect_ram_snapshot()
-        if ram_snapshot is not None:
-            self._total_ram_bytes = ram_snapshot.total_bytes
-            self._available_ram_bytes = ram_snapshot.available_bytes
-        else:
-            self._total_ram_bytes = _detect_total_ram_bytes()
-            self._available_ram_bytes = self._total_ram_bytes
         self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes(sampled_chunk_keys)
         gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
         self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
-        self._total_gpu_memory_bytes = (
-            total_gpu_memory_bytes
-            if total_gpu_memory_bytes is not None
-            else _detect_total_gpu_memory_bytes(gpu_vendor)
-        )
         self._texture_gpu_budget_bytes = (
             max(0, int(texture_gpu_budget_bytes))
             if texture_gpu_budget_bytes is not None
@@ -298,6 +331,31 @@ class StreamingWorld:
             else None
         )
         self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes(sampled_chunk_keys)
+        self._ram_availability_capability = _probe_ram_availability()
+        self._gpu_memory_capability = (
+            _supplied_gpu_memory_capability(total_gpu_memory_bytes)
+            if total_gpu_memory_bytes is not None
+            else _probe_gpu_memory_budget(gpu_vendor)
+        )
+        self._streaming_memory_decision = decide_streaming_memory(
+            available_cell_count=len(self.available_cells),
+            ram_capability=self._ram_availability_capability,
+            gpu_capability=self._gpu_memory_capability,
+            ram_target_fraction=self._memory_target_fraction,
+            gpu_target_fraction=self._gpu_target_fraction,
+            estimated_chunk_ram_bytes=self._estimated_chunk_ram_bytes,
+            estimated_chunk_gpu_bytes=self._estimated_chunk_gpu_bytes,
+            gpu_budget_bytes=self._gpu_geometry_budget_bytes,
+            ready_backlog_target_chunks=_READY_BACKLOG_TARGET_CHUNKS,
+        )
+        self._total_ram_bytes = self._streaming_memory_decision.total_ram_bytes
+        self._available_ram_bytes = self._streaming_memory_decision.available_ram_bytes
+        self._total_gpu_memory_bytes = (
+            self._streaming_memory_decision.total_gpu_memory_bytes
+        )
+        self._memory_target_fraction = (
+            self._streaming_memory_decision.ram_target_fraction
+        )
         self._total_gpu_residency_budget_bytes: int | None = None
         self._texture_gpu_bytes: dict[object, int] = {}
         if estimate_texture_gpu_bytes:
@@ -504,23 +562,22 @@ class StreamingWorld:
         if self._estimated_chunk_ram_bytes <= 0:
             return
 
-        budget = calculate_residency_budget(
-            available_cell_count=len(self.available_cells),
-            total_ram_bytes=self._total_ram_bytes,
-            available_ram_bytes=self._available_ram_bytes,
-            ram_target_fraction=self._memory_target_fraction,
-            estimated_chunk_ram_bytes=self._estimated_chunk_ram_bytes,
-            total_gpu_memory_bytes=self._total_gpu_memory_bytes,
-            gpu_target_fraction=self._gpu_target_fraction,
-            estimated_chunk_gpu_bytes=self._estimated_chunk_gpu_bytes,
-            gpu_budget_bytes=self._gpu_geometry_budget_bytes,
-            ready_backlog_target_chunks=_READY_BACKLOG_TARGET_CHUNKS,
-        )
+        decision: StreamingMemoryDecision = self._streaming_memory_decision
+        budget = decision.residency_budget
 
         # Apply the memory-derived budget directly so env tuning can both
         # raise and lower residency as intended.
         self.config.max_loaded_chunks = budget.max_loaded_chunks
         self._ready_backlog_capacity = max(1, int(budget.ready_backlog_chunks))
+        if decision.uses_conservative_limits:
+            _LOG.warning(
+                "Streaming memory policy is using conservative limits: "
+                "RAM=%s (%s), GPU=%s (%s).",
+                decision.ram_reason_code,
+                decision.ram_source.value,
+                decision.gpu_reason_code,
+                decision.gpu_source.value,
+            )
         _LOG.info(
             "Memory target %.0f%% of %.1f GB currently available "
             "(%.1f GB total) => max_loaded_chunks=%d, ready_backlog=%d "
@@ -588,7 +645,8 @@ class StreamingWorld:
             ):
                 return False
 
-            snapshot = _detect_ram_snapshot()
+            ram_capability = _probe_ram_availability()
+            snapshot = ram_capability.value
             if not can_start_additional_worker(snapshot):
                 if not self._worker_admission_blocked:
                     if snapshot is None:
