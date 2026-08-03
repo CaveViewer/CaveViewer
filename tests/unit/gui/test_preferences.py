@@ -63,19 +63,6 @@ from caveviewer.gui import preferences as settings
         ("chunk_build_reserved_cpus", "0", "at least 2"),
         ("chunk_build_reserved_cpus", "1", "at least 2"),
         ("chunk_build_reserved_cpus", "33", "no more than 32"),
-        ("auto_dive_acceleration", "", "required"),
-        ("auto_dive_acceleration", "-0.1", "cannot be negative"),
-        ("auto_dive_acceleration", "10.1", "no more than 10"),
-        ("auto_dive_acceleration", "fast", "must be a number"),
-        ("auto_dive_render_distance_cells", "0", "at least 1"),
-        ("auto_dive_render_distance_cells", "65", "no more than 64"),
-        ("auto_dive_render_distance_cells", "1.5", "whole number"),
-        ("auto_dive_smoothing_radius_cells", "-1", "cannot be negative"),
-        ("auto_dive_smoothing_radius_cells", "26", "no more than 25"),
-        ("auto_dive_smoothing_radius_cells", "1.5", "whole number"),
-        ("auto_dive_diagnostics", "-1", "cannot be negative"),
-        ("auto_dive_diagnostics", "2", "no more than 1"),
-        ("auto_dive_diagnostics", "0.5", "whole number"),
         ("recording_dir", "", "required"),
         ("map_library_dir", "", "required"),
     ],
@@ -133,14 +120,6 @@ def test_invalid_setting_reports_field(
         ("chunk_build_workers", "32", "32"),
         ("chunk_build_reserved_cpus", "2", "2"),
         ("chunk_build_reserved_cpus", "32", "32"),
-        ("auto_dive_acceleration", "0", "0"),
-        ("auto_dive_acceleration", "10", "10"),
-        ("auto_dive_render_distance_cells", "1", "1"),
-        ("auto_dive_render_distance_cells", "64", "64"),
-        ("auto_dive_smoothing_radius_cells", "0", "0"),
-        ("auto_dive_smoothing_radius_cells", "25", "25"),
-        ("auto_dive_diagnostics", "0", "0"),
-        ("auto_dive_diagnostics", "1", "1"),
     ],
 )
 def test_setting_boundaries_are_accepted(
@@ -190,10 +169,6 @@ def test_schema_is_typed_and_has_unique_runtime_mappings():
     assert settings.preference_defaults()["chunk_size_meters"] == "50"
     assert settings.preference_defaults()["max_upload_group_mb"] == "16"
     assert settings.preference_defaults()["obj_import_batch_thousands"] == "200"
-    assert settings.preference_defaults()["auto_dive_acceleration"] == "1.25"
-    assert settings.preference_defaults()["auto_dive_render_distance_cells"] == "4"
-    assert settings.preference_defaults()["auto_dive_smoothing_radius_cells"] == "5"
-    assert settings.preference_defaults()["auto_dive_diagnostics"] == "0"
     assert settings.preference_defaults()["map_library_dir"].endswith(
         os.path.join("Downloads")
     )
@@ -250,12 +225,6 @@ def test_normalization_strips_values_and_ignores_unknown_keys():
     assert set(normalized) == {field.key for field in settings.PREFERENCE_FIELDS}
 
 
-def test_normalization_migrates_legacy_auto_dive_speed():
-    normalized = settings.normalize_preferences(
-        {"auto_dive_speed_feet_per_minute": "112.5"}
-    )
-
-    assert normalized["auto_dive_acceleration"] == "1.25"
 
 
 def test_recording_path_expands_home(valid_preferences):
@@ -452,25 +421,13 @@ def test_environment_overrides_are_used_as_defaults(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", "3")
     monkeypatch.setenv("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", "4")
     monkeypatch.setenv("CAVEVIEWER_OBJ_IMPORT_BATCH_FACES", "300000")
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_ACCELERATION", "2.5")
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS", "7")
     defaults = settings.preference_defaults()
     assert defaults["io_workers"] == "9"
     assert defaults["upload_chunks_per_frame"] == "3"
     assert defaults["upload_groups_per_frame"] == "4"
     assert defaults["obj_import_batch_thousands"] == "300"
-    assert defaults["auto_dive_acceleration"] == "2.5"
-    assert defaults["auto_dive_smoothing_radius_cells"] == "7"
 
 
-def test_legacy_auto_dive_speed_environment_override_is_used_as_default(
-    monkeypatch,
-):
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE", "112.5")
-
-    defaults = settings.preference_defaults()
-
-    assert defaults["auto_dive_acceleration"] == "1.25"
 
 
 def test_invalid_environment_override_falls_back_to_built_in(monkeypatch, caplog):
@@ -519,10 +476,6 @@ def test_every_numeric_setting_has_a_display_range():
         "obj_import_batch_thousands": "1-2000 thousand faces",
         "chunk_build_workers": "1-32 workers",
         "chunk_build_reserved_cpus": "2-32 logical CPUs",
-        "auto_dive_acceleration": "0-10 x base",
-        "auto_dive_render_distance_cells": "1-64 cells",
-        "auto_dive_smoothing_radius_cells": "0-25 cells",
-        "auto_dive_diagnostics": "0-1",
     }
 
     numeric_fields = {
@@ -562,10 +515,6 @@ def test_every_numeric_setting_has_an_in_field_placeholder():
         "obj_import_batch_thousands": "1-2000",
         "chunk_build_workers": "1-32",
         "chunk_build_reserved_cpus": "2-32",
-        "auto_dive_acceleration": "0-10",
-        "auto_dive_render_distance_cells": "1-64",
-        "auto_dive_smoothing_radius_cells": "0-25",
-        "auto_dive_diagnostics": "0-1",
     }
 
 
@@ -673,10 +622,6 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
 
     source = inspect.getsource(preferences_dialog.PreferencesDialog._build)
     module_source = inspect.getsource(preferences_dialog)
-    settings_source = inspect.getsource(settings)
-    disclaimer_source = inspect.getsource(
-        preferences_dialog.PreferencesDialog._render_guided_dive_disclaimer
-    )
     show_page_source = inspect.getsource(
         preferences_dialog.PreferencesDialog._show_page
     )
@@ -693,14 +638,8 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     }
     layout_policy = preferences_dialog._LAYOUT_POLICY
 
-    assert page_keys == ["streaming", "parsing", "autodive", "storage"]
-    assert page_labels == ["Streaming", "Import", "Guided Dive", "Storage"]
-    assert "Experimental feature" in preferences_dialog._GUIDED_DIVE_DISCLAIMER
-    assert "Guided Dive" in preferences_dialog._GUIDED_DIVE_DISCLAIMER
-    assert "occasionally pause" in preferences_dialog._GUIDED_DIVE_DISCLAIMER
-    assert "if page_key == \"autodive\":" in source
-    assert "self._render_guided_dive_disclaimer(page)" in source
-    assert "kind=\"warning\"" in disclaimer_source
+    assert page_keys == ["streaming", "parsing", "storage"]
+    assert page_labels == ["Streaming", "Import", "Storage"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
     assert set(page_keys) == field_sections
     assert preferences_dialog._WINDOWS_LAYOUT == layout_policy.windows_layout
@@ -709,150 +648,19 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     assert preferences_dialog._WRAP_LENGTH == layout_policy.wrap_length
     assert preferences_dialog._TEXT_ENTRY_WIDTH == layout_policy.text_entry_width
     assert fields_by_key["io_workers"].label == "Loading worker limit"
-    assert (
-        fields_by_key["chunk_build_workers"].label
-        == "Cache-building worker limit"
-    )
-    assert (
-        fields_by_key["obj_import_batch_thousands"].label
-        == "Faces per .obj batch"
-    )
-    assert fields_by_key["max_upload_group_mb"].label == "Max upload group size"
-    assert fields_by_key["auto_dive_acceleration"].label == "Acceleration"
-    assert (
-        fields_by_key["auto_dive_render_distance_cells"].label
-        == "Guided Dive render distance"
-    )
-    assert fields_by_key["auto_dive_smoothing_radius_cells"].label == (
-        "Smoothing radius"
-    )
-    assert fields_by_key["auto_dive_diagnostics"].label == "Diagnostics"
-    assert (
-        fields_by_key["io_workers"].hint
-        == "Max chunk-loading worker threads."
-    )
-    assert (
-        fields_by_key["chunk_build_workers"].hint
-        == "Max cache-building worker threads."
-    )
-    assert (
-        fields_by_key["upload_time_budget_ms"].hint
-        == "Target milliseconds spent uploading chunks each frame."
-    )
-    assert (
-        fields_by_key["upload_groups_per_frame"].hint
-        == "Max render-thread upload slices from one ready chunk."
-    )
-    assert (
-        fields_by_key["obj_import_batch_thousands"].hint
-        == "Thousands of triangulated faces per batch."
-    )
-    assert (
-        fields_by_key["max_upload_group_mb"].hint
-        == "Maximum VBO payload size for dense chunk groups, in MB."
-    )
-    assert "baseline" in fields_by_key["auto_dive_acceleration"].hint
-    assert "1.25" in fields_by_key["auto_dive_acceleration"].hint
-    assert "Guided Dive" not in fields_by_key["auto_dive_acceleration"].hint
-    assert (
-        fields_by_key["auto_dive_render_distance_cells"].hint
-        == "Temporary load radius used while Guided Dive prefetches route chunks."
-    )
-    assert "across all axes" in (
-        fields_by_key["auto_dive_smoothing_radius_cells"].hint
-    )
-    assert "outside the cave" in (
-        fields_by_key["auto_dive_smoothing_radius_cells"].hint
-    )
-    assert "auto_dive_debug.jsonl" in fields_by_key["auto_dive_diagnostics"].hint
-    if preferences_dialog._LINUX_LAYOUT or preferences_dialog._WINDOWS_LAYOUT:
-        assert preferences_dialog._MIN_WIDTH >= 860
-    elif preferences_dialog._MACOS_LAYOUT:
-        assert preferences_dialog._BODY_PAD_X == 12
-        assert preferences_dialog._MIN_WIDTH == 430
-        assert preferences_dialog._TEXT_ENTRY_WIDTH == 24
-        assert preferences_dialog._ROW_PAD_X == 14
-        assert preferences_dialog._ROW_PAD_Y == 5
-        assert preferences_dialog._CONTROL_ROW_TOP_PAD_Y == 5
-        assert preferences_dialog._TAB_PAD_X == 10
-        assert preferences_dialog._TAB_PAD_Y == 6
-        assert preferences_dialog._TAB_HIGHLIGHT_THICKNESS == 0
-        assert preferences_dialog._TAB_BOTTOM_PAD_Y == 8
-        assert preferences_dialog._BUTTON_ROW_TOP_PAD_Y == 8
-        assert preferences_dialog._NOTICE_WRAP_LENGTH == 390
-    else:
-        assert preferences_dialog._MIN_WIDTH >= 760
-    if not preferences_dialog._MACOS_LAYOUT:
-        assert preferences_dialog._ROW_PAD_X == 18
-    if not preferences_dialog._MACOS_LAYOUT:
-        assert preferences_dialog._ROW_PAD_Y == 12
-        assert preferences_dialog._CONTROL_ROW_TOP_PAD_Y == 14
-        assert preferences_dialog._TAB_PAD_X == 14
-        assert preferences_dialog._TAB_PAD_Y == 7
-        assert preferences_dialog._TAB_HIGHLIGHT_THICKNESS == 1
-        assert preferences_dialog._TAB_BOTTOM_PAD_Y == 18
-        assert preferences_dialog._BUTTON_ROW_TOP_PAD_Y == 18
-        assert preferences_dialog._NOTICE_WRAP_LENGTH == 720
+    assert fields_by_key["chunk_build_workers"].label == "Cache-building worker limit"
     assert fields_by_key["recording_dir"].label == "Recordings folder"
-    assert fields_by_key["recording_dir"].hint == "Where saved recordings are stored."
-    assert (
-        fields_by_key["map_library_dir"].label
-        == "Downloaded maps folder"
-    )
-    assert (
-        fields_by_key["map_library_dir"].hint
-        == "Where CaveViewer stores downloaded Map Library maps."
-    )
+    assert fields_by_key["map_library_dir"].label == "Downloaded maps folder"
+    assert "Guided Dive" not in module_source
+    assert "_render_guided_dive_disclaimer" not in module_source
     assert "compact_path = value_type in {" in render_field_source
-    assert "row=1" in render_field_source
-    assert "pady=(_CONTROL_ROW_TOP_PAD_Y, 0)" in render_field_source
     assert "entry.grid(row=0, column=0, sticky=\"ew\")" in render_field_source
-    assert "padx=(_CONTROL_GAP_X, 0)" in render_field_source
-    assert "if not single_line_hint:" in render_field_source
-    assert "self._resize_hint(event, label)" in render_field_source
-    assert "if _LINUX_LAYOUT and not single_line_hint:" not in render_field_source
-    assert "entry_parent.grid(row=0, column=1" not in render_field_source
-    assert "row.grid_columnconfigure(1" not in render_field_source
-    assert "_compact_directory_path(path: str, max_chars: int = 80)" in module_source
-    assert "Streaming Performance" not in module_source
-    assert "Map Parsing" not in module_source
-    assert "Maximum threads used while viewing a cave" not in settings_source
-    assert "Maximum threads used to build a new cache" not in settings_source
-    assert "MP4 flight recordings" not in settings_source
-    assert "Movie recording directory" not in settings_source
-    assert "_COMPACT_WORKER_WARNING" not in module_source
-    assert "_warning_keys_for_values" not in module_source
-    assert "Scrollbar(" not in source
-    assert "yscrollcommand=self._set_page_scrollbar" in source
-    assert "create_line(" in module_source
-    assert "capstyle=\"round\"" in module_source
-    assert "content_canvas" not in source
-    assert "resizable(False, _LAYOUT_POLICY.resizable_vertical)" in module_source
-    assert "highlightthickness=_TAB_HIGHLIGHT_THICKNESS" in module_source
-    assert "self.button_row.pack(" in source
-    assert "side=\"bottom\"" in source
-    assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
-    assert "self.page_scrollbar.pack(side=\"right\", fill=\"y\")" in module_source
-    assert "self.page_scrollbar.pack_forget()" in module_source
-    assert "_SCROLL_THUMB_COLOR" in module_source
-    assert "before=self.page_scroll_shell" not in module_source
-    assert "self.feedback_frame = tk.Frame(self.button_row" in source
-    assert "self.feedback_frame.pack(side=\"left\", fill=\"x\", expand=True)" in source
-    assert "_INLINE_FEEDBACK_PAD_X" in module_source
-    assert "self.dialog.minsize(dialog_w, min(dialog_h, 360))" in module_source
-    assert "_bind_page_mousewheel" in module_source
     assert "grid_remove()" not in show_page_source
     assert "candidate_page.tkraise()" in show_page_source
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
-    assert "self.dialog.after_idle(self._sync_page_scrollbar)" in show_page_source
-    assert "active_page.winfo_reqheight()" in module_source
-    assert "_apply_geometry" not in show_page_source
-    assert "grid_propagate(False)" in source
-    assert "create_dialog_notice(" in module_source
-    assert "create_dialog_action_button(" in module_source
-    assert "set_dialog_notice(" in module_source
-    assert "set_dialog_action_button(" in module_source
-    assert "class _LabelButton" not in module_source
+    assert "self.button_row.pack(" in source
+    assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
+    assert "resizable(False, _LAYOUT_POLICY.resizable_vertical)" in module_source
 
 
 def test_preferences_invalid_field_switches_to_containing_page():

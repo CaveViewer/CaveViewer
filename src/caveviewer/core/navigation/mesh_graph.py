@@ -28,6 +28,14 @@ import math
 import numpy as np
 
 from caveviewer.core.navigation.centerline import FootprintCell, Point
+from caveviewer.core.navigation.cubic_graph import (
+    CubicVoxelKey,
+    SparseCubicVoxelGraph,
+    build_route_ordered_cubic_path,
+)
+from caveviewer.core.navigation.fixed_voxels import (
+    segment_voxel_probe_fractions,
+)
 from caveviewer.core.navigation.voxel_graph_3d import (
     NAVIGATION_MESH_3D_GRAPH_METHOD,
     NavigationVoxel3DEdge,
@@ -151,6 +159,692 @@ class MeshNavigationGraphAnchor:
     point: Point
     footprint_cell: FootprintCell
     clearance_m: float
+
+
+def build_exact_cubic_spine_navigation_path_graph(
+    cubic_graph: SparseCubicVoxelGraph,
+    route_guide_points: Sequence[Point],
+    *,
+    start_keys: Sequence[CubicVoxelKey],
+    terminal_keys: Sequence[CubicVoxelKey],
+    waypoint_key_groups: Sequence[Sequence[CubicVoxelKey]] = (),
+    footprint_cell_size_m: float,
+    point_probe: MeshPointProbe,
+    edge_is_clear: MeshEdgeSafetyCheck,
+    horizontal_gate_radius_m: float,
+    require_waypoint_key_groups: bool = False,
+    config: MeshNavigationGraphConfig | None = None,
+) -> MeshNavigationGraphBuildResult:
+    """Extract, exact-check, and smooth one route-ordered cubic spine.
+
+    The selected packed component has already proven six-connected fixed-cell
+    reachability. This builder decomposes that proof through ordered,
+    surface-gap-derived waypoint candidates instead of flooding the whole cave
+    volume. Cubic adjacency remains proposal evidence only: every persisted
+    segment, including a smoothing shortcut, passes crossed-boundary voxel
+    probes and the exact cached-mesh guard before publication.
+    """
+    resolved = (config or MeshNavigationGraphConfig()).validated()
+    cell_size = _positive_finite(
+        footprint_cell_size_m,
+        "exact cubic spine footprint cell size",
+    )
+    entries = tuple(
+        dict.fromkeys(key for key in start_keys if cubic_graph.contains_key(key))
+    )
+    terminals = tuple(
+        dict.fromkeys(
+            key for key in terminal_keys if cubic_graph.contains_key(key)
+        )
+    )
+    base_details: dict[str, object] = {
+        "method": MESH_NAVIGATION_GRAPH_METHOD,
+        "version": MESH_NAVIGATION_GRAPH_VERSION,
+        "sampling_envelope": "selected_route_cubic_spine",
+        "inside_evidence": "cached_voxel_free_space_point_probe",
+        "edge_evidence": "exact_cached_mesh_and_voxel_sampled_edges",
+        "search_method": "route_ordered_six_connected_cubic_spine",
+        "search_heuristic": "surface_gap_waypoints_then_exact_terminal",
+        "route_guide_point_count": len(route_guide_points),
+        "entry_seed_candidate_count": len(entries),
+        "terminal_hint_count": len(terminals),
+        "lattice_spacing_m": [
+            float(value) for value in cubic_graph.cell_size_m
+        ],
+        "minimum_clearance_m": float(resolved.minimum_clearance_m),
+        "horizontal_gate_radius_m": float(horizontal_gate_radius_m),
+        "surface_gap_waypoints_required": bool(
+            require_waypoint_key_groups
+        ),
+        "component_complete": False,
+    }
+    if not entries or not terminals or len(route_guide_points) < 2:
+        return MeshNavigationGraphBuildResult(
+            graph=None,
+            details={
+                **base_details,
+                "reason": "exact_cubic_spine_inputs_missing",
+                "known_terminal_reached": False,
+                "node_limit_reached": False,
+            },
+        )
+
+    blocked_edges: set[tuple[CubicVoxelKey, CubicVoxelKey]] = set()
+    checked_edges: dict[tuple[CubicVoxelKey, CubicVoxelKey], bool] = {}
+    point_cache: dict[CubicVoxelKey, tuple[bool, float] | None] = {}
+    search_expansion_limit = int(resolved.max_nodes)
+    remaining_search_expansions = search_expansion_limit
+    exact_edge_check_limit = max(2, int(resolved.max_nodes) * 2)
+    exact_edge_check_count = 0
+    voxel_probe_count = 0
+    voxel_rejection_count = 0
+    mesh_rejection_count = 0
+    repair_pass_limit = 8
+    repair_pass_count = 0
+    route_attempt_count = 0
+    route_attempts: list[dict[str, object]] = []
+    last_route_details: Mapping[str, object] = {}
+    exact_check_limit_reached = False
+
+    def ordered_edge(
+        first: CubicVoxelKey,
+        second: CubicVoxelKey,
+    ) -> tuple[CubicVoxelKey, CubicVoxelKey]:
+        return (first, second) if first < second else (second, first)
+
+    def probe_key(
+        key: CubicVoxelKey,
+    ) -> tuple[bool, float] | None:
+        if key in point_cache:
+            return point_cache[key]
+        point = cubic_graph.voxel_center(key)
+        try:
+            probe = point_probe(point)
+        except Exception:
+            probe = None
+        if (
+            probe is None
+            or not bool(probe[0])
+            or not math.isfinite(float(probe[1]))
+            or float(probe[1]) + 1e-9
+            < float(resolved.minimum_clearance_m)
+        ):
+            point_cache[key] = None
+        else:
+            point_cache[key] = (True, max(0.0, float(probe[1])))
+        return point_cache[key]
+
+    def exact_edge_safe(
+        first_key: CubicVoxelKey,
+        second_key: CubicVoxelKey,
+    ) -> bool:
+        nonlocal exact_edge_check_count
+        nonlocal voxel_probe_count
+        nonlocal voxel_rejection_count
+        nonlocal mesh_rejection_count
+        nonlocal exact_check_limit_reached
+        edge = ordered_edge(first_key, second_key)
+        cached = checked_edges.get(edge)
+        if cached is not None:
+            return bool(cached)
+        if exact_edge_check_count >= exact_edge_check_limit:
+            exact_check_limit_reached = True
+            return False
+        exact_edge_check_count += 1
+        first = cubic_graph.voxel_center(first_key)
+        second = cubic_graph.voxel_center(second_key)
+        clear = probe_key(first_key) is not None and probe_key(second_key) is not None
+        if clear:
+            fractions = segment_voxel_probe_fractions(
+                first,
+                second,
+                lattice_spacing_m=cubic_graph.cell_size_m,
+                maximum_sample_spacing_m=max(
+                    0.125,
+                    min(cubic_graph.cell_size_m) * 0.5,
+                ),
+            )
+            for fraction in fractions:
+                sample = tuple(
+                    first[axis]
+                    + (second[axis] - first[axis]) * fraction
+                    for axis in range(3)
+                )
+                voxel_probe_count += 1
+                try:
+                    probe = point_probe(sample)  # type: ignore[arg-type]
+                except Exception:
+                    probe = None
+                if (
+                    probe is None
+                    or not bool(probe[0])
+                    or not math.isfinite(float(probe[1]))
+                    or float(probe[1]) + 1e-9
+                    < float(resolved.minimum_clearance_m)
+                ):
+                    voxel_rejection_count += 1
+                    clear = False
+                    break
+        if clear:
+            try:
+                clear = bool(edge_is_clear(first, second))
+            except Exception:
+                clear = False
+            if not clear:
+                mesh_rejection_count += 1
+        checked_edges[edge] = bool(clear)
+        return bool(clear)
+
+    def simplify_exact_leg(
+        path_keys: Sequence[CubicVoxelKey],
+    ) -> tuple[CubicVoxelKey, ...]:
+        """String-pull locally without adding an unchecked executable edge."""
+        if len(path_keys) <= 2:
+            return tuple(path_keys)
+        cumulative = [0.0]
+        for first_key, second_key in zip(
+            path_keys,
+            path_keys[1:],
+            strict=False,
+        ):
+            cumulative.append(
+                cumulative[-1]
+                + math.dist(
+                    cubic_graph.voxel_center(first_key),
+                    cubic_graph.voxel_center(second_key),
+                )
+            )
+        simplified = [path_keys[0]]
+        source_index = 0
+        candidate_limit = max(1, int(resolved.max_edge_candidates_per_node))
+        while source_index < len(path_keys) - 1:
+            source_point = cubic_graph.voxel_center(path_keys[source_index])
+            furthest_index = source_index + 1
+            cursor = source_index + 1
+            candidates: list[int] = []
+            while cursor < len(path_keys):
+                route_distance_m = cumulative[cursor] - cumulative[source_index]
+                target_point = cubic_graph.voxel_center(path_keys[cursor])
+                if route_distance_m > float(resolved.max_edge_distance_m) + 1e-9:
+                    break
+                if (
+                    abs(target_point[1] - source_point[1])
+                    <= float(resolved.max_vertical_edge_distance_m) + 1e-9
+                ):
+                    candidates.append(cursor)
+                cursor += 1
+            for candidate_index in reversed(candidates[-candidate_limit:]):
+                if exact_edge_safe(
+                    path_keys[source_index],
+                    path_keys[candidate_index],
+                ):
+                    furthest_index = candidate_index
+                    break
+            simplified.append(path_keys[furthest_index])
+            source_index = furthest_index
+        return tuple(simplified)
+
+    def ordered_gate_witness_indices(
+        path_keys: Sequence[CubicVoxelKey],
+    ) -> tuple[int, ...] | None:
+        """Return one monotonically ordered path witness for every gate."""
+        previous_index = 0
+        witnesses: list[int] = []
+        for group in waypoint_key_groups:
+            witness_index = next(
+                (
+                    index
+                    for index in range(previous_index + 1, len(path_keys))
+                    if path_keys[index] in group
+                ),
+                None,
+            )
+            if witness_index is None:
+                return None
+            witnesses.append(witness_index)
+            previous_index = witness_index
+        return tuple(witnesses)
+
+    def simplify_exact_path(
+        path_keys: Sequence[CubicVoxelKey],
+        *,
+        gate_witness_indices: Sequence[int],
+    ) -> tuple[CubicVoxelKey, ...]:
+        """String-pull each leg while retaining every ordered gate witness."""
+        if len(path_keys) <= 2:
+            return tuple(path_keys)
+        protected_indices = (
+            0,
+            *(int(index) for index in gate_witness_indices),
+            len(path_keys) - 1,
+        )
+        if any(
+            second <= first
+            for first, second in zip(
+                protected_indices,
+                protected_indices[1:],
+                strict=False,
+            )
+        ):
+            return ()
+        simplified: list[CubicVoxelKey] = []
+        for first_index, second_index in zip(
+            protected_indices,
+            protected_indices[1:],
+            strict=False,
+        ):
+            leg = simplify_exact_leg(
+                path_keys[first_index : second_index + 1]
+            )
+            if len(leg) < 2:
+                return ()
+            if simplified:
+                simplified.extend(leg[1:])
+            else:
+                simplified.extend(leg)
+        return tuple(simplified)
+
+    selected_path_keys: tuple[CubicVoxelKey, ...] | None = None
+    selected_route_details: Mapping[str, object] = {}
+    selected_entry_key: CubicVoxelKey | None = None
+    for entry_key in entries:
+        while (
+            remaining_search_expansions > 0
+            and repair_pass_count <= repair_pass_limit
+        ):
+            route_attempt_count += 1
+            route_build = build_route_ordered_cubic_path(
+                cubic_graph,
+                route_guide_points,
+                start_key=entry_key,
+                terminal_keys=terminals,
+                horizontal_gate_radius_m=horizontal_gate_radius_m,
+                max_expansions=remaining_search_expansions,
+                waypoint_key_groups=waypoint_key_groups,
+                require_waypoint_key_groups=require_waypoint_key_groups,
+                blocked_edges=blocked_edges,
+                edge_is_clear=exact_edge_safe,
+                max_blocked_edges=min(4_096, exact_edge_check_limit),
+            )
+            last_route_details = dict(route_build.details)
+            used_expansions = max(
+                0,
+                int(route_build.details.get("expanded_voxel_count", 0)),
+            )
+            remaining_search_expansions = max(
+                0,
+                remaining_search_expansions - used_expansions,
+            )
+            route_attempts.append(
+                {
+                    "entry_key": [int(value) for value in entry_key],
+                    "built": route_build.path is not None,
+                    "reason": str(route_build.details.get("reason", "")),
+                    "expanded_voxel_count": int(used_expansions),
+                    "remaining_expansion_budget": int(
+                        remaining_search_expansions
+                    ),
+                }
+            )
+            if route_build.path is None:
+                break
+            path_keys = route_build.path.keys
+            rejected = {
+                ordered_edge(first_key, second_key)
+                for first_key, second_key in zip(
+                    path_keys,
+                    path_keys[1:],
+                    strict=False,
+                )
+                if not exact_edge_safe(first_key, second_key)
+            }
+            if exact_check_limit_reached:
+                break
+            new_rejections = rejected - blocked_edges
+            if rejected:
+                blocked_edges.update(rejected)
+                repair_pass_count += 1
+                if not new_rejections:
+                    break
+                continue
+            gate_witness_indices = ordered_gate_witness_indices(path_keys)
+            if gate_witness_indices is None:
+                last_route_details = {
+                    **dict(route_build.details),
+                    "reason": "exact_cubic_spine_gate_witness_missing",
+                    "known_terminal_reached": False,
+                }
+                break
+            simplified = simplify_exact_path(
+                path_keys,
+                gate_witness_indices=gate_witness_indices,
+            )
+            if exact_check_limit_reached:
+                break
+            if (
+                len(simplified) >= 2
+                and simplified[-1] in terminals
+                and len(simplified) == len(set(simplified))
+            ):
+                selected_path_keys = simplified
+                selected_route_details = {
+                    **dict(route_build.details),
+                    "persisted_intermediate_gate_witness_count": len(
+                        gate_witness_indices
+                    ),
+                }
+                selected_entry_key = entry_key
+            break
+        if selected_path_keys is not None or exact_check_limit_reached:
+            break
+
+    retained_cubic_details = dict(
+        selected_route_details or last_route_details
+    )
+    local_exact_reroute_count = max(
+        0,
+        int(retained_cubic_details.get("exact_reroute_count", 0)),
+    )
+    local_blocked_edge_count = max(
+        0,
+        int(retained_cubic_details.get("blocked_edge_count", 0)),
+    )
+    common_details = {
+        **base_details,
+        "search_expansion_limit": int(search_expansion_limit),
+        "expanded_node_count": int(
+            search_expansion_limit - remaining_search_expansions
+        ),
+        "remaining_search_expansions": int(remaining_search_expansions),
+        "exact_edge_check_limit": int(exact_edge_check_limit),
+        "mesh_edge_check_count": int(exact_edge_check_count),
+        "mesh_rejected_edge_count": int(mesh_rejection_count),
+        "edge_voxel_probe_count": int(voxel_probe_count),
+        "edge_voxel_rejection_count": int(voxel_rejection_count),
+        "blocked_cubic_edge_count": max(
+            len(blocked_edges),
+            local_blocked_edge_count,
+        ),
+        "repair_pass_count": int(
+            repair_pass_count + local_exact_reroute_count
+        ),
+        "local_exact_reroute_count": int(local_exact_reroute_count),
+        "repair_pass_limit": int(repair_pass_limit),
+        "route_attempt_count": int(route_attempt_count),
+        "route_attempts": list(route_attempts),
+        "cubic_spine": retained_cubic_details,
+    }
+    if selected_path_keys is None or selected_entry_key is None:
+        route_limit_reached = bool(
+            last_route_details.get("node_limit_reached", False)
+            or remaining_search_expansions <= 0
+        )
+        return MeshNavigationGraphBuildResult(
+            graph=None,
+            details={
+                **common_details,
+                "reason": (
+                    "exact_cubic_spine_edge_check_limit_reached"
+                    if exact_check_limit_reached
+                    else (
+                        "exact_cubic_spine_search_limit_reached"
+                        if route_limit_reached
+                        else "exact_cubic_spine_terminal_unreachable"
+                    )
+                ),
+                "known_terminal_reached": False,
+                "node_limit_reached": bool(route_limit_reached),
+            },
+        )
+
+    candidates: dict[VoxelGraphKey, _MeshCandidate] = {}
+    for key in selected_path_keys:
+        probe = probe_key(key)
+        if probe is None:
+            return MeshNavigationGraphBuildResult(
+                graph=None,
+                details={
+                    **common_details,
+                    "reason": "exact_cubic_spine_persisted_node_rejected",
+                    "known_terminal_reached": False,
+                    "node_limit_reached": False,
+                },
+            )
+        point = cubic_graph.voxel_center(key)
+        candidates[key] = _MeshCandidate(
+            key=key,
+            point=point,
+            footprint_cell=(
+                int(math.floor(point[0] / cell_size)),
+                int(math.floor(point[2] / cell_size)),
+            ),
+            clearance_m=float(probe[1]),
+        )
+    terminal_key = selected_path_keys[-1]
+    graph = _mesh_path_graph(
+        candidates,
+        selected_path_keys,
+        grid_size_m=cubic_graph.cell_size_m,
+        terminal_key=terminal_key,
+    )
+    graph_distance_m = sum(
+        math.dist(candidates[first].point, candidates[second].point)
+        for first, second in zip(
+            selected_path_keys,
+            selected_path_keys[1:],
+            strict=False,
+        )
+    )
+    terminal_index = terminals.index(terminal_key)
+    return MeshNavigationGraphBuildResult(
+        graph=graph,
+        details={
+            **common_details,
+            "reason": "exact_cubic_spine_terminal_path_built",
+            "known_terminal_reached": True,
+            "node_limit_reached": False,
+            "seed_graph_key": [int(value) for value in selected_entry_key],
+            "seed_point": [
+                float(value)
+                for value in cubic_graph.voxel_center(selected_entry_key)
+            ],
+            "seed_hint_index": 0,
+            "terminal_graph_key": [int(value) for value in terminal_key],
+            "terminal_hint_index": int(terminal_index),
+            "selected_terminal_hint_index": int(terminal_index),
+            "terminal_hint_point": [
+                float(value)
+                for value in cubic_graph.voxel_center(terminal_key)
+            ],
+            "selected_terminal_hint_point": [
+                float(value)
+                for value in cubic_graph.voxel_center(terminal_key)
+            ],
+            "terminal_attachment_distance_m": 0.0,
+            "terminal_graph_distance_m": float(graph_distance_m),
+            "persisted_path_node_count": len(selected_path_keys),
+            "persisted_path_edge_count": max(0, len(selected_path_keys) - 1),
+            "unsimplified_path_node_count": int(
+                selected_route_details.get("path", {}).get("voxel_count", 0)
+                if isinstance(selected_route_details.get("path"), Mapping)
+                else 0
+            ),
+            "graph": graph.diagnostic_payload(),
+            "terminal_count": int(graph.terminal_count),
+            "unknown_boundary_count": int(graph.unknown_boundary_count),
+        },
+    )
+
+
+def build_validated_mesh_path_graph(
+    path_points: Sequence[Point],
+    *,
+    lattice_spacing_m: Sequence[float],
+    footprint_cell_size_m: float,
+    point_probe: MeshPointProbe,
+    edge_is_clear: MeshEdgeSafetyCheck,
+    minimum_clearance_m: float,
+) -> MeshNavigationGraphBuildResult:
+    """Publish one already ordered path after independent exact validation."""
+    resolved_diagnostics = MeshNavigationGraphConfig().validated()
+    try:
+        spacing = tuple(float(value) for value in lattice_spacing_m)
+    except (TypeError, ValueError):
+        spacing = ()
+    if (
+        len(spacing) != 3
+        or not all(math.isfinite(value) and value > 0.0 for value in spacing)
+    ):
+        return _empty_result(
+            "validated_mesh_path_spacing_invalid",
+            resolved=resolved_diagnostics,
+        )
+    cell_size = _positive_finite(
+        footprint_cell_size_m,
+        "validated mesh path footprint cell size",
+    )
+    clearance_floor = max(0.0, float(minimum_clearance_m))
+    resolved_diagnostics = MeshNavigationGraphConfig(
+        horizontal_sample_spacing_m=spacing[0],
+        vertical_sample_spacing_m=spacing[1],
+        minimum_clearance_m=clearance_floor,
+    ).validated()
+    candidates: dict[VoxelGraphKey, _MeshCandidate] = {}
+    ordered_keys: list[VoxelGraphKey] = []
+    point_probe_count = 0
+    edge_probe_count = 0
+    for raw_point in path_points:
+        try:
+            point: Point = tuple(  # type: ignore[assignment]
+                float(value) for value in raw_point
+            )
+        except (TypeError, ValueError):
+            return _empty_result(
+                "validated_mesh_path_point_invalid",
+                resolved=resolved_diagnostics,
+            )
+        if len(point) != 3 or not all(math.isfinite(value) for value in point):
+            return _empty_result(
+                "validated_mesh_path_point_invalid",
+                resolved=resolved_diagnostics,
+            )
+        key: VoxelGraphKey = tuple(  # type: ignore[assignment]
+            int(math.floor(point[axis] / spacing[axis]))
+            for axis in range(3)
+        )
+        if ordered_keys and key == ordered_keys[-1]:
+            continue
+        if key in candidates:
+            return _empty_result(
+                "validated_mesh_path_revisit_detected",
+                resolved=resolved_diagnostics,
+            )
+        point_probe_count += 1
+        try:
+            probe = point_probe(point)
+        except Exception:
+            probe = None
+        if (
+            probe is None
+            or not bool(probe[0])
+            or not math.isfinite(float(probe[1]))
+            or float(probe[1]) + 1e-9 < clearance_floor
+        ):
+            return _empty_result(
+                "validated_mesh_path_point_rejected",
+                resolved=resolved_diagnostics,
+            )
+        candidates[key] = _MeshCandidate(
+            key=key,
+            point=point,
+            footprint_cell=(
+                int(math.floor(point[0] / cell_size)),
+                int(math.floor(point[2] / cell_size)),
+            ),
+            clearance_m=max(0.0, float(probe[1])),
+        )
+        ordered_keys.append(key)
+    if len(ordered_keys) < 2:
+        return _empty_result(
+            "validated_mesh_path_has_no_travel",
+            resolved=resolved_diagnostics,
+        )
+    for first_key, second_key in zip(
+        ordered_keys,
+        ordered_keys[1:],
+        strict=False,
+    ):
+        first = candidates[first_key].point
+        second = candidates[second_key].point
+        for fraction in segment_voxel_probe_fractions(
+            first,
+            second,
+            lattice_spacing_m=spacing,
+            maximum_sample_spacing_m=max(0.125, min(spacing) * 0.5),
+        ):
+            sample = tuple(
+                first[axis] + (second[axis] - first[axis]) * fraction
+                for axis in range(3)
+            )
+            edge_probe_count += 1
+            try:
+                probe = point_probe(sample)  # type: ignore[arg-type]
+            except Exception:
+                probe = None
+            if (
+                probe is None
+                or not bool(probe[0])
+                or not math.isfinite(float(probe[1]))
+                or float(probe[1]) + 1e-9 < clearance_floor
+            ):
+                return _empty_result(
+                    "validated_mesh_path_edge_voxel_rejected",
+                    resolved=resolved_diagnostics,
+                )
+        try:
+            clear = bool(edge_is_clear(first, second))
+        except Exception:
+            clear = False
+        if not clear:
+            return _empty_result(
+                "validated_mesh_path_edge_mesh_rejected",
+                resolved=resolved_diagnostics,
+            )
+    terminal_key = ordered_keys[-1]
+    graph = _mesh_path_graph(
+        candidates,
+        ordered_keys,
+        grid_size_m=spacing,
+        terminal_key=terminal_key,
+    )
+    distance_m = sum(
+        math.dist(candidates[first].point, candidates[second].point)
+        for first, second in zip(
+            ordered_keys,
+            ordered_keys[1:],
+            strict=False,
+        )
+    )
+    return MeshNavigationGraphBuildResult(
+        graph=graph,
+        details={
+            "method": MESH_NAVIGATION_GRAPH_METHOD,
+            "version": MESH_NAVIGATION_GRAPH_VERSION,
+            "reason": "validated_ordered_mesh_path_built",
+            "known_terminal_reached": True,
+            "node_limit_reached": False,
+            "seed_graph_key": [int(value) for value in ordered_keys[0]],
+            "terminal_graph_key": [int(value) for value in terminal_key],
+            "terminal_graph_distance_m": float(distance_m),
+            "persisted_path_node_count": len(ordered_keys),
+            "persisted_path_edge_count": len(ordered_keys) - 1,
+            "point_probe_count": int(point_probe_count),
+            "edge_voxel_probe_count": int(edge_probe_count),
+            "graph": graph.diagnostic_payload(),
+            "terminal_count": int(graph.terminal_count),
+            "unknown_boundary_count": int(graph.unknown_boundary_count),
+        },
+    )
 
 
 def build_mesh_navigation_graph(
@@ -884,22 +1578,46 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
     point_probe: MeshPointProbe,
     edge_is_clear: MeshEdgeSafetyCheck,
     terminal_point: Point,
+    terminal_candidate_points: Sequence[Point] = (),
     route_guide_points: Sequence[Point] = (),
+    require_exact_terminal_point: bool = False,
     progress_callback: Callable[[Mapping[str, object]], None] | None = None,
     config: MeshNavigationGraphConfig | None = None,
 ) -> MeshNavigationGraphBuildResult:
     """Build one bounded exact path to a known terminal.
 
     This is the primary adaptive builder for one selected cave route. It first
-    runs on the configured 2 m lattice and can be retried at 1 m when the
-    coarser evidence loses a narrow passage. It searches only the caller's
+    runs on the configured lattice and can be retried at a genuinely finer
+    spacing when coarse evidence loses a narrow passage. It searches only the caller's
     route corridor and uses weighted A* so wide rooms do not require a complete
     component flood. Voxel probes establish cached inside evidence; every
     accepted edge and the final terminal attachment still pass the exact
     cached-mesh guard.
     """
     resolved = (config or MeshNavigationGraphConfig()).validated()
-    spacing = float(resolved.horizontal_sample_spacing_m)
+    horizontal_spacing = float(resolved.horizontal_sample_spacing_m)
+    vertical_spacing = float(resolved.vertical_sample_spacing_m)
+    grid_size = (
+        horizontal_spacing,
+        vertical_spacing,
+        horizontal_spacing,
+    )
+    minimum_spacing = min(grid_size)
+    cell_diagonal_m = math.sqrt(
+        sum(float(value) * float(value) for value in grid_size)
+    )
+
+    def lattice_key(point: Sequence[float]) -> VoxelGraphKey:
+        return tuple(
+            int(math.floor(float(point[axis]) / grid_size[axis]))
+            for axis in range(3)
+        )  # type: ignore[return-value]
+
+    def lattice_center(key: Sequence[int]) -> Point:
+        return tuple(
+            (float(key[axis]) + 0.5) * grid_size[axis]
+            for axis in range(3)
+        )  # type: ignore[return-value]
     cell_size = _positive_finite(
         footprint_cell_size_m,
         "goal-directed mesh graph footprint cell size",
@@ -913,12 +1631,25 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         if len(point) == 3
         and all(math.isfinite(float(value)) for value in point)
     )
-    try:
-        target: Point = tuple(  # type: ignore[assignment]
-            float(value) for value in terminal_point
-        )
-    except (TypeError, ValueError):
-        target = (math.nan, math.nan, math.nan)
+    finite_targets: list[Point] = []
+    for raw_target in (terminal_point, *terminal_candidate_points):
+        try:
+            candidate_target: Point = tuple(  # type: ignore[assignment]
+                float(value) for value in raw_target
+            )
+        except (TypeError, ValueError):
+            continue
+        if (
+            len(candidate_target) == 3
+            and all(math.isfinite(value) for value in candidate_target)
+            and candidate_target not in finite_targets
+        ):
+            finite_targets.append(candidate_target)
+    target = (
+        finite_targets[0]
+        if finite_targets
+        else (math.nan, math.nan, math.nan)
+    )
     if (
         not finite_seeds
         or not allowed_cells
@@ -939,10 +1670,7 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         nonlocal probe_count, free_probe_count, clearance_rejection_count
         if key in probe_cache:
             return probe_cache[key]
-        point: Point = tuple(
-            (float(key[axis]) + 0.5) * spacing
-            for axis in range(3)
-        )  # type: ignore[assignment]
+        point = lattice_center(key)
         footprint_cell = (
             int(math.floor(point[0] / cell_size)),
             int(math.floor(point[2] / cell_size)),
@@ -977,26 +1705,31 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         return candidate
 
     entry_candidates: dict[VoxelGraphKey, tuple[int, Point, float]] = {}
-    maximum_seed_distance_m = float(resolved.max_edge_distance_m)
-    seed_step_limit = max(
-        1,
-        int(math.ceil(maximum_seed_distance_m / spacing)),
+    # Every supplied seed is already an occupied-wins free-space sample.
+    # Attach it only to the local execution lattice; the general graph-edge
+    # budget must not become permission to relocate an entrance by 16 m.
+    maximum_seed_distance_m = min(
+        float(resolved.max_edge_distance_m),
+        float(cell_diagonal_m),
+    )
+    seed_step_limits = _orthogonal_step_limits(
+        maximum_seed_distance_m,
+        grid_size,
     )
     # Retain one exact-safe lattice entry per early route hint. A single
     # weighted search can then reject an isolated scan layer and continue from
     # another bounded entry without map-specific configuration.
     for raw_seed_index, raw_seed in enumerate(finite_seeds):
-        base_key = tuple(
-            int(math.floor(raw_seed[axis] / spacing))
-            for axis in range(3)
-        )
+        base_key = lattice_key(raw_seed)
         nearby = sorted(
             (
                 math.dist(
                     raw_seed,
-                    tuple(
-                        (float(base_key[axis] + delta[axis]) + 0.5) * spacing
-                        for axis in range(3)
+                    lattice_center(
+                        tuple(
+                            base_key[axis] + delta[axis]
+                            for axis in range(3)
+                        )
                     ),
                 ),
                 (
@@ -1007,10 +1740,19 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
             )
             for delta in (
                 (dx, dy, dz)
-                for dx in range(-seed_step_limit, seed_step_limit + 1)
-                for dy in range(-seed_step_limit, seed_step_limit + 1)
-                for dz in range(-seed_step_limit, seed_step_limit + 1)
+                for dx in range(-seed_step_limits[0], seed_step_limits[0] + 1)
+                for dy in range(-seed_step_limits[1], seed_step_limits[1] + 1)
+                for dz in range(-seed_step_limits[2], seed_step_limits[2] + 1)
             )
+            if math.dist(
+                raw_seed,
+                lattice_center(
+                    tuple(
+                        base_key[axis] + delta[axis]
+                        for axis in range(3)
+                    )
+                ),
+            ) <= maximum_seed_distance_m + 1e-9
         )
         for distance_m, key in nearby:
             if distance_m > maximum_seed_distance_m + 1e-9:
@@ -1046,7 +1788,7 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
                 "probe_count": int(probe_count),
                 "free_probe_count": int(free_probe_count),
                 "minimum_clearance_m": float(resolved.minimum_clearance_m),
-                "lattice_spacing_m": spacing,
+                "lattice_spacing_m": [float(value) for value in grid_size],
                 "entry_seed_hint_count": len(finite_seeds),
                 "entry_seed_candidate_count": 0,
             },
@@ -1066,11 +1808,21 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         finite_guides = (first_entry[1], target)
     elif finite_guides[-1] != target:
         finite_guides = (*finite_guides, target)
+
+    def horizontal_distance(first: Point, second: Point) -> float:
+        return math.hypot(
+            float(second[0]) - float(first[0]),
+            float(second[2]) - float(first[2]),
+        )
+
     guide_remaining_m = [0.0] * len(finite_guides)
     for index in range(len(finite_guides) - 2, -1, -1):
         guide_remaining_m[index] = (
             guide_remaining_m[index + 1]
-            + math.dist(finite_guides[index], finite_guides[index + 1])
+            + horizontal_distance(
+                finite_guides[index],
+                finite_guides[index + 1],
+            )
         )
     guide_indices_by_cell: dict[FootprintCell, list[int]] = {}
     for index, point in enumerate(finite_guides):
@@ -1091,11 +1843,11 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         guide_index = min(
             indices,
             key=lambda index: (
-                math.dist(candidate.point, finite_guides[index]),
+                horizontal_distance(candidate.point, finite_guides[index]),
                 -int(index),
             ),
         )
-        lateral_distance_m = math.dist(
+        lateral_distance_m = horizontal_distance(
             candidate.point,
             finite_guides[guide_index],
         )
@@ -1166,17 +1918,61 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
     guided_portal_voxel_probe_count = 0
     guided_portal_voxel_rejection_count = 0
     guided_portal_accepted_count = 0
+    non_improving_edge_skip_count = 0
+    guided_portal_edge_candidate_limit = 4
     terminal_key: VoxelGraphKey | None = None
     selected_seed_key: VoxelGraphKey | None = None
+    selected_terminal_hint_index: int | None = None
+    selected_terminal_hint_point: Point | None = None
     terminal_attachment_distance_m = math.inf
     node_limit_reached = False
     # The target may lie between lattice points.  A short exact connector is
     # sufficient, but a 16 m attachment would incorrectly turn a route prefix
     # into a terminal. Keep the attachment local to the fine lattice.
-    terminal_attachment_limit_m = min(
-        float(resolved.max_edge_distance_m),
-        spacing * math.sqrt(3.0),
+    terminal_attachment_limit_m = (
+        1e-9
+        if require_exact_terminal_point
+        else min(
+            float(resolved.max_edge_distance_m),
+            cell_diagonal_m,
+        )
     )
+    target_key_radii = tuple(
+        max(
+            1,
+            int(math.ceil(terminal_attachment_limit_m / axis_size)) + 1,
+        )
+        for axis_size in grid_size
+    )
+    targets_by_search_key: dict[
+        VoxelGraphKey,
+        tuple[tuple[int, Point], ...],
+    ] = {}
+    mutable_targets_by_key: dict[
+        VoxelGraphKey,
+        list[tuple[int, Point]],
+    ] = {}
+    for target_index, candidate_target in enumerate(finite_targets):
+        base_key = lattice_key(candidate_target)
+        for delta_x in range(-target_key_radii[0], target_key_radii[0] + 1):
+            for delta_y in range(-target_key_radii[1], target_key_radii[1] + 1):
+                for delta_z in range(
+                    -target_key_radii[2],
+                    target_key_radii[2] + 1,
+                ):
+                    search_key = (
+                        base_key[0] + delta_x,
+                        base_key[1] + delta_y,
+                        base_key[2] + delta_z,
+                    )
+                    mutable_targets_by_key.setdefault(
+                        search_key,
+                        [],
+                    ).append((target_index, candidate_target))
+    targets_by_search_key = {
+        key: tuple(values)
+        for key, values in mutable_targets_by_key.items()
+    }
     while queue:
         _priority, _negative_guide_index, distance_m, key = heapq.heappop(
             queue
@@ -1210,16 +2006,34 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
             except Exception:
                 # Diagnostics must never change cache topology or authority.
                 pass
-        attachment_distance_m = math.dist(candidate.point, target)
-        if attachment_distance_m <= terminal_attachment_limit_m + 1e-9:
+        # A snapped endpoint may coincide with one of the bounded ingress
+        # seeds on a very short route. Accepting it here would create a
+        # zero-edge "path" and prematurely stop the search before another
+        # real terminal can be reached. A certified dive must contain travel.
+        terminal_targets = (
+            ()
+            if key == source_entries[key]
+            else targets_by_search_key.get(key, ())
+        )
+        for target_index, candidate_target in terminal_targets:
+            attachment_distance_m = math.dist(
+                candidate.point,
+                candidate_target,
+            )
+            if attachment_distance_m > terminal_attachment_limit_m + 1e-9:
+                continue
             if attachment_distance_m <= 1e-9 or edge_is_clear(
                 candidate.point,
-                target,
+                candidate_target,
             ):
                 terminal_key = key
                 selected_seed_key = source_entries[key]
+                selected_terminal_hint_index = int(target_index)
+                selected_terminal_hint_point = candidate_target
                 terminal_attachment_distance_m = float(attachment_distance_m)
                 break
+        if terminal_key is not None:
+            break
 
         neighbor_candidates: dict[
             VoxelGraphKey,
@@ -1280,10 +2094,7 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
             if route_distance_m > maximum_portal_route_distance_m + 1e-9:
                 break
             guide = finite_guides[guide_index]
-            base_key = tuple(
-                int(math.floor(guide[axis] / spacing))
-                for axis in range(3)
-            )
+            base_key = lattice_key(guide)
             for delta_x in range(-portal_key_radius, portal_key_radius + 1):
                 for delta_y in range(-portal_key_radius, portal_key_radius + 1):
                     for delta_z in range(
@@ -1320,7 +2131,6 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         local_edge_candidate_limit = int(
             resolved.max_edge_candidates_per_node
         )
-        guided_portal_edge_candidate_limit = 4
         selected_neighbor_candidates = (
             [
                 item
@@ -1350,6 +2160,18 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
                     node_limit_reached = True
                     break
                 candidates[neighbor_key] = neighbor
+            candidate_distance_m = distance_m + edge_distance_m
+            existing_distance_m = distances.get(neighbor_key)
+            if (
+                existing_distance_m is not None
+                and candidate_distance_m >= existing_distance_m - 1e-12
+            ):
+                # Every existing distance entered the queue only through an
+                # already voxel- and mesh-safe edge. A non-improving edge can
+                # never enter the persisted shortest path, so do not spend an
+                # exact collision query merely to discard it afterward.
+                non_improving_edge_skip_count += 1
+                continue
             ordered = (
                 (key, neighbor_key)
                 if key < neighbor_key
@@ -1364,23 +2186,20 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
                 # same voxel test before persisting an edge. Otherwise a path
                 # can pass cache generation and fail immediately when the
                 # serialized atlas checks an occupied midpoint.
-                sample_count = max(
-                    1,
-                    int(
-                        math.ceil(
-                            edge_distance_m / max(0.25, spacing * 0.5)
-                        )
-                    ),
+                sample_fractions = segment_voxel_probe_fractions(
+                    candidate.point,
+                    neighbor.point,
+                    lattice_spacing_m=grid_size,
+                    maximum_sample_spacing_m=max(0.125, minimum_spacing * 0.5),
                 )
-                for sample_index in range(1, sample_count):
+                for fraction in sample_fractions:
                     sample = tuple(
                         candidate.point[axis]
                         + (
                             neighbor.point[axis]
                             - candidate.point[axis]
                         )
-                        * float(sample_index)
-                        / float(sample_count)
+                        * fraction
                         for axis in range(3)
                     )
                     edge_voxel_probe_count += 1
@@ -1409,16 +2228,9 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
                 checked_edges[ordered] = clear
                 if not clear:
                     mesh_rejected_edge_count += 1
-                elif guided_portal and edge_distance_m > spacing * math.sqrt(3.0):
+                elif guided_portal and edge_distance_m > cell_diagonal_m:
                     guided_portal_accepted_count += 1
             if not clear:
-                continue
-            candidate_distance_m = distance_m + edge_distance_m
-            existing_distance_m = distances.get(neighbor_key)
-            if (
-                existing_distance_m is not None
-                and candidate_distance_m >= existing_distance_m - 1e-12
-            ):
                 continue
             distances[neighbor_key] = candidate_distance_m
             previous[neighbor_key] = key
@@ -1455,7 +2267,7 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
             "exact_cached_mesh_and_voxel_sampled_edges"
         ),
         "search_method": "weighted_a_star",
-        "search_heuristic": "ordered_route_remaining_distance",
+        "search_heuristic": "ordered_horizontal_route_remaining_distance",
         "route_guide_point_count": len(finite_guides),
         "maximum_route_guide_index_seen": int(maximum_guide_index_seen),
         "maximum_route_guide_fraction_seen": float(
@@ -1467,7 +2279,7 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         "guided_portal_edge_candidate_limit_per_node": int(
             guided_portal_edge_candidate_limit
         ),
-        "lattice_spacing_m": spacing,
+        "lattice_spacing_m": [float(value) for value in grid_size],
         "minimum_clearance_m": float(resolved.minimum_clearance_m),
         "seed_point": [float(value) for value in seed_point],
         "seed_hint_index": int(seed_hint_index),
@@ -1475,10 +2287,11 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         "entry_seed_candidate_count": len(entry_candidates),
         "seed_graph_key": [int(value) for value in diagnostic_seed_key],
         "seed_snap_distance_m": float(seed_snap_distance_m),
-        "terminal_hint_count": 1,
+        "terminal_hint_count": len(finite_targets),
         "terminal_hint_index": 0,
         "terminal_hint_point": [float(value) for value in target],
         "terminal_attachment_limit_m": float(terminal_attachment_limit_m),
+        "exact_terminal_point_required": bool(require_exact_terminal_point),
         "probe_count": int(probe_count),
         "free_probe_count": int(free_probe_count),
         "clearance_rejection_count": int(clearance_rejection_count),
@@ -1499,6 +2312,9 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
         ),
         "guided_portal_accepted_count": int(
             guided_portal_accepted_count
+        ),
+        "non_improving_edge_skip_count": int(
+            non_improving_edge_skip_count
         ),
         "mesh_safe_undirected_edge_count": int(
             sum(1 for clear in checked_edges.values() if clear)
@@ -1534,7 +2350,7 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
     graph = _mesh_path_graph(
         candidates,
         path_keys,
-        spacing_m=spacing,
+        grid_size_m=grid_size,
         terminal_key=terminal_key,
     )
     terminal_graph_distance_m = sum(
@@ -1551,6 +2367,19 @@ def build_goal_directed_seeded_mesh_navigation_path_graph(
             "terminal_attachment_distance_m": float(
                 terminal_attachment_distance_m
             ),
+            "selected_terminal_hint_index": int(
+                selected_terminal_hint_index
+                if selected_terminal_hint_index is not None
+                else 0
+            ),
+            "selected_terminal_hint_point": [
+                float(value)
+                for value in (
+                    selected_terminal_hint_point
+                    if selected_terminal_hint_point is not None
+                    else target
+                )
+            ],
             "persisted_path_node_count": len(path_keys),
             "persisted_path_edge_count": max(0, len(path_keys) - 1),
             "graph": graph.diagnostic_payload(),
@@ -1613,9 +2442,24 @@ def _mesh_path_graph(
     candidates: Mapping[VoxelGraphKey, _MeshCandidate],
     path_keys: Sequence[VoxelGraphKey],
     *,
-    spacing_m: float,
+    spacing_m: float | None = None,
+    grid_size_m: Sequence[float] | None = None,
     terminal_key: VoxelGraphKey,
 ) -> NavigationVoxel3DGraph:
+    if grid_size_m is None:
+        resolved_spacing = _positive_finite(
+            spacing_m,
+            "mesh path graph lattice spacing",
+        )
+        grid_size = (
+            resolved_spacing,
+            resolved_spacing,
+            resolved_spacing,
+        )
+    else:
+        grid_size = _orthogonal_grid_size(grid_size_m)
+    minimum_spacing = min(grid_size)
+    cell_diagonal_m = math.sqrt(sum(value * value for value in grid_size))
     path = tuple(path_keys)
     progress: dict[VoxelGraphKey, float] = {path[0]: 0.0}
     path_edge_distances: list[float] = []
@@ -1688,15 +2532,16 @@ def _mesh_path_graph(
         edges=edges,
         component_count=1,
         grid_size_m=(
-            float(spacing_m),
-            float(spacing_m),
-            float(spacing_m),
+            float(grid_size[0]),
+            float(grid_size[1]),
+            float(grid_size[2]),
         ),
         max_edge_distance_cells=max(
             2,
             int(
                 math.ceil(
-                    max(path_edge_distances, default=spacing_m) / spacing_m
+                    max(path_edge_distances, default=minimum_spacing)
+                    / minimum_spacing
                 )
             ),
         ),
@@ -1704,11 +2549,11 @@ def _mesh_path_graph(
         max_edge_distance_m=float(
             max(
                 path_edge_distances,
-                default=spacing_m * math.sqrt(3.0),
+                default=cell_diagonal_m,
             )
         ),
         max_vertical_edge_distance_m=float(
-            max(path_vertical_distances, default=spacing_m)
+            max(path_vertical_distances, default=grid_size[1])
         ),
         method=MESH_NAVIGATION_GRAPH_METHOD,
     )
@@ -2255,6 +3100,56 @@ def _hinted_terminal_keys(
         if distance_squared <= maximum_squared + 1e-9:
             selected.add(nearest_key)
     return frozenset(selected)
+
+
+def _orthogonal_grid_size(value: Sequence[float]) -> tuple[float, float, float]:
+    """Validate one X/Y/Z lattice size tuple."""
+    if len(value) != 3:
+        raise ValueError("mesh graph grid size must contain three axes")
+    return tuple(
+        _positive_finite(item, "mesh graph grid axis size")
+        for item in value
+    )  # type: ignore[return-value]
+
+
+def _orthogonal_lattice_key(
+    point: Sequence[float],
+    grid_size_m: Sequence[float],
+) -> VoxelGraphKey:
+    """Map one world point to an orthogonal navigation lattice."""
+    sizes = _orthogonal_grid_size(grid_size_m)
+    return tuple(
+        int(math.floor(float(point[axis]) / sizes[axis]))
+        for axis in range(3)
+    )  # type: ignore[return-value]
+
+
+def _orthogonal_lattice_center(
+    key: Sequence[int],
+    grid_size_m: Sequence[float],
+) -> Point:
+    """Return the physical center of one orthogonal lattice cell."""
+    sizes = _orthogonal_grid_size(grid_size_m)
+    return tuple(
+        (float(key[axis]) + 0.5) * sizes[axis]
+        for axis in range(3)
+    )  # type: ignore[return-value]
+
+
+def _orthogonal_step_limits(
+    maximum_distance_m: float,
+    grid_size_m: Sequence[float],
+) -> tuple[int, int, int]:
+    """Return per-axis key radii covering a physical search distance."""
+    maximum = _positive_finite(
+        maximum_distance_m,
+        "mesh graph lattice search distance",
+    )
+    sizes = _orthogonal_grid_size(grid_size_m)
+    return tuple(
+        max(1, int(math.ceil(maximum / sizes[axis])))
+        for axis in range(3)
+    )  # type: ignore[return-value]
 
 
 def _candidate_key(

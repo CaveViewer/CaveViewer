@@ -10,9 +10,17 @@ from caveviewer.core.navigation.cache_metadata import (
     NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS,
     NAVIGATION_METADATA_VERSION,
     NAVIGATION_RECOVERY_HOTSPOT_METHOD,
+    NAVIGATION_SURFACE_Y_HISTOGRAM_BINS,
+    _SurfaceColumnProfile,
+    _SurfaceProfileIndex,
+    _surface_component_vertical_gap_seeds_for_path,
+    _surface_component_y_ranges_for_path,
+    _surface_route_points_for_path,
+    _surface_vertical_profiles,
     build_navigation_metadata,
     cached_centerline_path,
 )
+from caveviewer.core.navigation.centerline import CenterlinePath
 
 
 def test_navigation_metadata_stores_component_centerline_routes():
@@ -93,6 +101,11 @@ def test_navigation_metadata_uses_surface_cells_and_stores_3d_gap_points():
     assert all(0.5 < point[2] < 4.5 for point in points)
     assert len(metadata["routes"][0]["clearance_margins"]) == len(cells)
     assert min(metadata["routes"][0]["clearance_margins"]) > 0.0
+    interval_payload = metadata["routes"][0][
+        "component_vertical_gap_intervals"
+    ]
+    assert len(interval_payload) % 4 == 0
+    assert len(interval_payload) >= len(component_cells) * 4
 
     cached_path = cached_centerline_path({**manifest, "navigation": metadata})
 
@@ -132,6 +145,146 @@ def test_navigation_metadata_centers_surface_route_points_across_x_passage_axis(
     assert points
     assert all(point[0] == pytest.approx(2.5) for point in points)
     assert all(0.5 < point[0] < 4.5 for point in points)
+
+
+def test_navigation_metadata_keeps_3d_points_across_widest_supported_passage():
+    positions = np.array(
+        [
+            [float(x) + 0.5, float(y), float(z) + 0.5]
+            for x in range(7)
+            for z in (0, 32)
+            for y in (0, 4)
+        ],
+        dtype=np.float32,
+    )
+    manifest = {
+        "chunk_size": 1.0,
+        "footprint_cell_size": 1.0,
+        "footprint_cells": [
+            value
+            for x in range(7)
+            for z in (0, 32)
+            for value in (x, z)
+        ],
+    }
+
+    metadata = build_navigation_metadata(manifest, surface_positions=positions)
+
+    assert metadata is not None
+    route = metadata["routes"][0]
+    points = _flat_points(route["points"])
+    route_cells = _flat_pairs(route["cells"])
+    component_cells = _flat_pairs(route["component_cells"])
+    component_y_ranges = _flat_y_ranges(route["component_y_ranges"])
+    assert len(points) == len(route_cells)
+    assert len(component_y_ranges) == len(component_cells)
+    assert any(cell[1] == 16 for cell in route_cells)
+    assert all(point[1] == pytest.approx(2.0) for point in points)
+
+
+def test_component_bounds_never_use_interpolated_route_y():
+    route_cells = ((0, 0), (17, 0), (34, 0))
+    profiles = _SurfaceProfileIndex(
+        global_low_y=0.0,
+        global_high_y=14.0,
+        columns={
+            (0, 0): _SurfaceColumnProfile(
+                low_y=0.0,
+                high_y=4.0,
+                occupied_y_bins={0, 27},
+            ),
+            (34, 0): _SurfaceColumnProfile(
+                low_y=10.0,
+                high_y=14.0,
+                occupied_y_bins={68, 95},
+            ),
+        },
+    )
+    path = CenterlinePath(
+        source="test",
+        footprint_cell_size=1.0,
+        footprint_cell_count=len(route_cells),
+        component_size=len(route_cells),
+        component_cells=frozenset(route_cells),
+        cells=route_cells,
+        centers={cell: (cell[0] + 0.5, cell[1] + 0.5) for cell in route_cells},
+        clearance_scores={cell: 1 for cell in route_cells},
+        endpoint_percentile=90.0,
+        endpoint_threshold_clearance_cells=1,
+        length_m=34.0,
+    )
+
+    points, route_y_ranges, _margins, interpolated_count = (
+        _surface_route_points_for_path(
+            path,
+            surface_profiles=profiles,
+        )
+    )
+    component_y_ranges, component_interpolated_count = (
+        _surface_component_y_ranges_for_path(
+            path,
+            component_cells=route_cells,
+            surface_profiles=profiles,
+            route_y_ranges=route_y_ranges,
+        )
+    )
+
+    assert interpolated_count == 1
+    assert [point[1] for point in points] == pytest.approx(
+        [2.0416666667, 7.0, 11.9583333333]
+    )
+    assert route_y_ranges[1] == pytest.approx(
+        (5.1041666667, 8.8958333333)
+    )
+    assert component_interpolated_count == 1
+    assert component_y_ranges[1] == pytest.approx((0.0, 14.0))
+
+
+def test_component_vertical_gap_seeds_preserve_stacked_surface_gaps():
+    route_cells = ((0, 0),)
+    profiles = _SurfaceProfileIndex(
+        global_low_y=0.0,
+        global_high_y=20.0,
+        vertical_bin_count=80,
+        columns={
+            (0, 0): _SurfaceColumnProfile(
+                low_y=0.0,
+                high_y=11.25,
+                occupied_y_bins={0, 2, 40, 45},
+            )
+        },
+    )
+
+    seeds = _surface_component_vertical_gap_seeds_for_path(
+        component_cells=route_cells,
+        surface_profiles=profiles,
+    )
+
+    assert [cell for cell, _y in seeds] == [(0, 0)] * 3
+    assert [y for _cell, y in seeds] == pytest.approx(
+        [0.375, 5.375, 10.75]
+    )
+
+
+def test_surface_profile_bins_are_sparse_and_quarter_metre_or_finer():
+    positions = np.asarray(
+        [
+            [0.5, -50.0, 0.5],
+            [0.5, 50.0, 0.5],
+        ],
+        dtype=np.float64,
+    )
+
+    profiles = _surface_vertical_profiles(positions, cell_size=1.0)
+
+    assert profiles is not None
+    assert profiles.vertical_bin_count >= 400
+    assert (
+        (profiles.global_high_y - profiles.global_low_y)
+        / profiles.vertical_bin_count
+        <= 0.25
+    )
+    assert isinstance(profiles.columns[(0, 0)].occupied_y_bins, set)
 
 
 def test_navigation_metadata_samples_y_from_centered_xz_column():
@@ -240,7 +393,7 @@ def test_navigation_metadata_orients_recommended_route_from_navigation_start():
     route = metadata["routes"][0]
     cells = _flat_pairs(route["cells"])
     assert route["selection_method"] == "navigation_start_to_farthest_endpoint_v1"
-    assert route["candidate_count"] >= 2
+    assert route["candidate_count"] >= 1
     assert route["starts_at_navigation_start"] is True
     assert route["navigation_start_distance_m"] < 1.0
     assert cells[0][0] >= 8
@@ -250,6 +403,144 @@ def test_navigation_metadata_orients_recommended_route_from_navigation_start():
 
     assert cached_path is not None
     assert cached_path.cells[0][0] >= 8
+
+
+def test_navigation_start_emits_both_geometry_derived_diameter_directions():
+    metadata = build_navigation_metadata(
+        _line_manifest(length=11),
+        navigation_start={"position": [5.5, 1.0, 0.5]},
+    )
+
+    assert metadata is not None
+    assert metadata["route_count"] == 2
+    cells = [_flat_pairs(route["cells"]) for route in metadata["routes"]]
+    assert {route_cells[0] for route_cells in cells} == {(5, 0)}
+    assert {route_cells[-1] for route_cells in cells} == {(0, 0), (10, 0)}
+    assert all(route["closed_loop"] is False for route in metadata["routes"])
+    assert all(
+        route["starts_at_navigation_start"] is True
+        for route in metadata["routes"]
+    )
+
+
+def test_obj_start_anchor_preserves_first_cell_center_and_vertical_profile():
+    positions = np.array(
+        [
+            [float(x) + 0.5, float(y), float(z) + 0.5]
+            for z in range(9)
+            for x in (0, 4)
+            for y in ((10, 14) if (x, z) == (0, 8) else (0, 4))
+        ],
+        dtype=np.float32,
+    )
+    manifest = {
+        "chunk_size": 1.0,
+        "footprint_cell_size": 1.0,
+        "footprint_cells": [
+            value
+            for z in range(9)
+            for x in (0, 4)
+            for value in (x, z)
+        ],
+    }
+    anchor = {
+        "position": [0.5, 10.0, 8.5],
+        "kind": "obj_surface_vertex",
+        "source": "map.obj",
+        "source_vertex_index": 0,
+        "source_order": "obj_declaration_order",
+        "executable": False,
+        "attachment_required": True,
+        "attachment_coordinate_space": "xyz",
+    }
+
+    metadata = build_navigation_metadata(
+        manifest,
+        surface_positions=positions,
+        navigation_start_anchor=anchor,
+    )
+
+    assert metadata is not None
+    assert metadata["navigation_start_anchor"] == anchor
+    assert "navigation_start" not in metadata
+    route = metadata["routes"][0]
+    cells = _flat_pairs(route["cells"])
+    points = _flat_points(route["points"])
+    assert route["selection_method"] == (
+        "obj_source_anchor_to_farthest_endpoint_v1"
+    )
+    assert "starts_at_navigation_start" not in route
+    assert route["starts_at_navigation_start_anchor"] is True
+    assert route["navigation_start_anchor_distance_m"] >= 0.0
+    assert cells[0] == (0, 8)
+    assert (points[0][0], points[0][2]) == pytest.approx((0.5, 8.5))
+    assert [
+        (point[0], point[2]) for point in points
+    ] == pytest.approx(
+        [path_center for path_center in ((x + 0.5, z + 0.5) for x, z in cells)]
+    )
+    assert 10.0 < points[0][1] < 14.0
+
+
+def test_valid_authored_start_overrides_obj_order_anchor():
+    manifest = _line_manifest(length=6)
+    authored_start = {"position": [5.5, 1.0, 0.5], "source": "navigation.json"}
+    anchor = {
+        "position": [0.5, 1.0, 0.5],
+        "kind": "obj_surface_vertex",
+        "source": "map.obj",
+        "source_vertex_index": 0,
+        "source_order": "obj_declaration_order",
+        "executable": False,
+        "attachment_required": True,
+        "attachment_coordinate_space": "xyz",
+    }
+
+    metadata = build_navigation_metadata(
+        manifest,
+        navigation_start=authored_start,
+        navigation_start_anchor=anchor,
+    )
+
+    assert metadata is not None
+    assert metadata["navigation_start"] == authored_start
+    assert "navigation_start_anchor" not in metadata
+    assert metadata["routes"][0]["starts_at_navigation_start"] is True
+    assert metadata["routes"][0]["selection_method"] == (
+        "navigation_start_to_farthest_endpoint_v1"
+    )
+
+
+def test_obj_start_anchor_emits_both_geometry_derived_diameter_directions():
+    metadata = build_navigation_metadata(
+        _line_manifest(length=11),
+        navigation_start_anchor={
+            "position": [5.5, 1.0, 0.5],
+            "kind": "obj_surface_vertex",
+            "source": "map.obj",
+            "source_vertex_index": 0,
+            "source_order": "obj_declaration_order",
+            "executable": False,
+            "attachment_required": True,
+            "attachment_coordinate_space": "xyz",
+        },
+    )
+
+    assert metadata is not None
+    assert metadata["route_count"] == 2
+    routes = metadata["routes"]
+    cells = [_flat_pairs(route["cells"]) for route in routes]
+    assert {route_cells[0] for route_cells in cells} == {(5, 0)}
+    assert {route_cells[-1] for route_cells in cells} == {(0, 0), (10, 0)}
+    assert all(route["closed_loop"] is False for route in routes)
+
+
+def test_obj_start_anchor_reserved_schema_fails_closed_during_metadata_build():
+    with pytest.raises(ValueError, match="OBJ navigation start anchor"):
+        build_navigation_metadata(
+            _line_manifest(length=3),
+            navigation_start_anchor={"kind": "obj_surface_vertex"},
+        )
 
 
 def test_cached_centerline_path_ignores_missing_or_unsupported_metadata():

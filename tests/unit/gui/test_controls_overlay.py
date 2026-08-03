@@ -131,6 +131,8 @@ def test_recording_help_copy_is_format_neutral():
 
     assert rows["REC button"] == "Start recording countdown"
     assert "MP4" not in rows["REC button"]
+    assert rows["Shift + T"] == "Start/stop manual route trace"
+    assert rows["Space"] == "Pause/resume a recorded dive"
 
 
 def _control_rows_for_adapter(adapter) -> dict[str, str]:
@@ -171,7 +173,7 @@ def test_control_help_copy_uses_adapter_for_control_shortcuts():
     assert "Right click + mouse" not in rows
     assert rows["Ctrl + 0"] == "Reset view (level horizon)"
     assert rows["Ctrl + 1..9"] == "Save camera bookmark slot"
-    assert rows["Ctrl + A"] == "Start/stop guided dive"
+    assert "Ctrl + A" not in rows
     assert rows["Ctrl + O"] == "Switch to a different map"
     assert rows["Ctrl + W"] == "Close window"
 

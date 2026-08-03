@@ -25,6 +25,7 @@ dist/*
 update_log.txt
 .cache/
 _cache/
+_guided_dive_traces/
 .caveviewer_cache/
 *.private.pem
 release_signing_private_key.pem

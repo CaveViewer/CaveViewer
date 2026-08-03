@@ -124,12 +124,6 @@ def test_environment_default_helpers_cover_static_callable_and_failure(monkeypat
     assert app._effective_env_default("CAVEVIEWER_MAX_UPLOAD_GROUP_MB") == "16"
     assert app._effective_env_default("CAVEVIEWER_UI_TEXT_SCALE") == "1.28"
     assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"
-    assert (
-        app._effective_env_default(
-            "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS"
-        )
-        == "5"
-    )
     assert app._effective_env_default("NOT_CONFIGURED") is None
 
     def fail_default():
@@ -153,14 +147,6 @@ def test_environment_diagnostics_report_set_discovered_and_effective_values(
     output = "\n".join(recorder.info_messages)
     assert "CAVEVIEWER_UI_TEXT_SCALE=2.0" in output
     assert "CAVEVIEWER_CUSTOM_SETTING=enabled" in output
-    assert (
-        "CAVEVIEWER_AUTO_DIVE_ACCELERATION=<unset> "
-        "(effective: 1.25)"
-    ) in output
-    assert (
-        "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS=<unset> "
-        "(effective: 5)"
-    ) in output
     assert "CAVEVIEWER_IO_WORKERS=<unset> (effective: 2)" in output
     assert "CAVEVIEWER_EMPTY_SETTING" not in output
 

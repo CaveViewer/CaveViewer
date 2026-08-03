@@ -39,20 +39,26 @@ from caveviewer.core.navigation.route import NavigationConfigurationError
 NAVIGATION_METADATA_VERSION = 1
 NAVIGATION_METADATA_METHOD = "footprint_centerline_paths_v1"
 NAVIGATION_METADATA_KEY = "navigation"
-NAVIGATION_SURFACE_Y_SEARCH_RADIUS_CELLS = 4
 NAVIGATION_SURFACE_Y_HISTOGRAM_BINS = 96
+NAVIGATION_SURFACE_VERTICAL_BIN_SIZE_M = 0.25
 # The navigation footprint is inferred from surface vertices.  The voxel
 # builder later normalizes this candidate component to the mesh-backed cells
 # it can actually sample, so retain the established span cap here while
 # keeping that evidence-driven normalization explicit at cache build time.
 NAVIGATION_SURFACE_SPAN_FILL_MAX_CELLS = 32
 NAVIGATION_SURFACE_SPAN_SUPPORT_MAX_CELLS = 32
+# A centerline cell may lie halfway across the widest span synthesized above.
+# Search far enough to reach the surface evidence that justified that cell;
+# otherwise one wide-but-valid passage drops every 3D route point because the
+# route metadata is intentionally all-or-nothing.
+NAVIGATION_SURFACE_Y_SEARCH_RADIUS_CELLS = (
+    NAVIGATION_SURFACE_SPAN_FILL_MAX_CELLS // 2
+)
 # Suggested runtime Guided Dive Y smoothing radius for viewers that expose a
 # preference. Metadata stores raw route samples; smoothing is applied by the
 # route planner so the radius can be tuned without rebuilding cache.
 NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS = 5
 NAVIGATION_ENDPOINT_CENTERING_RADIUS_CELLS = 5
-NAVIGATION_START_CENTERING_RADIUS_CELLS = 2
 _NAVIGATION_SURFACE_BLOCK_VERTICES = 250_000
 NAVIGATION_RECOVERY_HOTSPOT_METHOD = "component_recovery_hotspots_v1"
 NAVIGATION_RECOVERY_HOTSPOT_LIMIT = 256
@@ -63,7 +69,7 @@ NAVIGATION_RECOVERY_HOTSPOT_MAX_RUN_CELLS = 64
 class _SurfaceColumnProfile:
     low_y: float
     high_y: float
-    occupied_y_bins: np.ndarray
+    occupied_y_bins: set[int] | np.ndarray
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,7 @@ class _SurfaceProfileIndex:
     global_low_y: float
     global_high_y: float
     columns: Mapping[FootprintCell, _SurfaceColumnProfile]
+    vertical_bin_count: int = NAVIGATION_SURFACE_Y_HISTOGRAM_BINS
 
 
 @dataclass(frozen=True)
@@ -88,12 +95,20 @@ class _NavigationStart:
 
 
 @dataclass(frozen=True)
+class _NavigationStartAnchor:
+    position: Point
+    source: str
+
+
+@dataclass(frozen=True)
 class _NavigationRouteCandidate:
     path: CenterlinePath
     selection_method: str
     candidate_count: int
     starts_at_navigation_start: bool = False
     navigation_start_distance_m: float | None = None
+    starts_at_navigation_start_anchor: bool = False
+    navigation_start_anchor_distance_m: float | None = None
 
 
 def build_navigation_metadata(
@@ -101,6 +116,7 @@ def build_navigation_metadata(
     *,
     surface_positions: np.ndarray | None = None,
     navigation_start: Mapping[str, Any] | Sequence[object] | None = None,
+    navigation_start_anchor: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return optional navigation metadata derived from an import manifest.
 
@@ -112,6 +128,16 @@ def build_navigation_metadata(
         if navigation_start is not None
         else manifest.get("navigation_start")
     )
+    parsed_navigation_start_anchor = _parse_navigation_start_anchor(
+        navigation_start_anchor
+        if navigation_start_anchor is not None
+        else manifest.get("navigation_start_anchor")
+    )
+    if parsed_navigation_start is not None:
+        # A valid authored sidecar is an explicit override. The caller may
+        # still provide the OBJ-order anchor so an invalid sidecar can fall
+        # back safely, but only one ingress policy is published.
+        parsed_navigation_start_anchor = None
     source_manifest = _navigation_manifest_from_surface_positions(
         manifest,
         surface_positions=surface_positions,
@@ -125,20 +151,43 @@ def build_navigation_metadata(
         candidate_limit=DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT,
         endpoint_percentile=DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE,
     )
-    selected_candidates = [
-        _select_navigation_route_candidate(
-            path,
-            navigation_start=parsed_navigation_start,
+    eligible_paths = tuple(path for path in paths if len(path.cells) >= 2)
+    anchored_path = _navigation_start_anchor_path(
+        eligible_paths,
+        navigation_start_anchor=parsed_navigation_start_anchor,
+    )
+    selected_candidates: list[_NavigationRouteCandidate] = []
+    for path in eligible_paths:
+        if parsed_navigation_start_anchor is not None and path is anchored_path:
+            selected_candidates.extend(
+                _navigation_start_anchor_route_candidates(
+                    path,
+                    navigation_start_anchor=parsed_navigation_start_anchor,
+                )
+            )
+            continue
+        if parsed_navigation_start is not None:
+            selected_candidates.extend(
+                _navigation_start_route_candidates(
+                    path,
+                    navigation_start=parsed_navigation_start,
+                )
+            )
+            continue
+        selected_candidates.append(
+            _select_navigation_route_candidate(
+                path,
+                navigation_start=parsed_navigation_start,
+                navigation_start_anchor=None,
+            )
         )
-        for path in paths
-        if len(path.cells) >= 2
-    ]
     selected_candidates = tuple(
         sorted(
             selected_candidates,
             key=lambda candidate: _navigation_route_sort_key(
                 candidate,
                 navigation_start=parsed_navigation_start,
+                navigation_start_anchor=parsed_navigation_start_anchor,
             ),
             reverse=True,
         )
@@ -152,6 +201,16 @@ def build_navigation_metadata(
             candidate_count=candidate.candidate_count,
             starts_at_navigation_start=candidate.starts_at_navigation_start,
             navigation_start_distance_m=candidate.navigation_start_distance_m,
+            starts_at_navigation_start_anchor=(
+                candidate.starts_at_navigation_start_anchor
+            ),
+            navigation_start_anchor_distance_m=(
+                candidate.navigation_start_anchor_distance_m
+            ),
+            preserve_anchored_start_cell=(
+                candidate.starts_at_navigation_start_anchor
+                or candidate.starts_at_navigation_start
+            ),
             voxel_sampling_cells=_parse_flat_cells(
                 source_manifest.get("_voxel_sampling_cells")
             ),
@@ -178,6 +237,10 @@ def build_navigation_metadata(
     if parsed_navigation_start is not None:
         metadata["navigation_start"] = _navigation_start_payload(
             parsed_navigation_start
+        )
+    if parsed_navigation_start_anchor is not None:
+        metadata["navigation_start_anchor"] = (
+            _navigation_start_anchor_payload(parsed_navigation_start_anchor)
         )
     surface_cell_count = source_manifest.get("surface_footprint_cell_count")
     if surface_cell_count is not None:
@@ -228,6 +291,7 @@ def _select_navigation_route_candidate(
     path: CenterlinePath,
     *,
     navigation_start: _NavigationStart | None,
+    navigation_start_anchor: _NavigationStartAnchor | None,
 ) -> _NavigationRouteCandidate:
     candidates: list[_NavigationRouteCandidate] = [
         _NavigationRouteCandidate(
@@ -239,7 +303,14 @@ def _select_navigation_route_candidate(
     diameter_candidate = _physical_diameter_route_candidate(path)
     if diameter_candidate is not None:
         candidates.append(diameter_candidate)
-    if navigation_start is not None:
+    if navigation_start_anchor is not None:
+        anchor_candidate = _navigation_start_anchor_route_candidate(
+            path,
+            navigation_start_anchor=navigation_start_anchor,
+        )
+        if anchor_candidate is not None:
+            candidates.append(anchor_candidate)
+    elif navigation_start is not None:
         start_candidate = _navigation_start_route_candidate(
             path,
             navigation_start=navigation_start,
@@ -258,12 +329,14 @@ def _select_navigation_route_candidate(
     deduped = _dedupe_navigation_route_candidates(
         candidates,
         navigation_start=navigation_start,
+        navigation_start_anchor=navigation_start_anchor,
     )
     best = max(
         deduped,
         key=lambda candidate: _navigation_route_sort_key(
             candidate,
             navigation_start=navigation_start,
+            navigation_start_anchor=navigation_start_anchor,
         ),
     )
     return _navigation_route_candidate_with_count(best, candidate_count)
@@ -273,7 +346,21 @@ def _navigation_route_sort_key(
     candidate: _NavigationRouteCandidate,
     *,
     navigation_start: _NavigationStart | None,
+    navigation_start_anchor: _NavigationStartAnchor | None,
 ) -> tuple[object, ...]:
+    if navigation_start_anchor is not None:
+        start_distance = (
+            candidate.navigation_start_anchor_distance_m
+            if candidate.navigation_start_anchor_distance_m is not None
+            else math.inf
+        )
+        return (
+            bool(candidate.starts_at_navigation_start_anchor),
+            -float(start_distance),
+            float(candidate.path.length_m),
+            len(candidate.path.cells),
+            int(candidate.path.component_size),
+        )
     if navigation_start is not None:
         start_distance = (
             candidate.navigation_start_distance_m
@@ -347,11 +434,6 @@ def _navigation_start_route_candidate(
         path,
         navigation_start.position,
     )
-    start_cell = _centered_component_cell(
-        path,
-        start_cell,
-        search_radius_cells=NAVIGATION_START_CENTERING_RADIUS_CELLS,
-    )
     end_cell = _furthest_component_cell(
         component,
         start_cell,
@@ -375,6 +457,201 @@ def _navigation_start_route_candidate(
             navigation_start.position,
             candidate_path.cells[0],
         ),
+    )
+
+
+def _navigation_start_route_candidates(
+    path: CenterlinePath,
+    *,
+    navigation_start: _NavigationStart,
+) -> tuple[_NavigationRouteCandidate, ...]:
+    """Return terminal alternatives from one executable map start."""
+    primary = _select_navigation_route_candidate(
+        path,
+        navigation_start=navigation_start,
+        navigation_start_anchor=None,
+    )
+    candidates = [primary]
+    diameter = _physical_diameter_route_candidate(path)
+    if diameter is not None:
+        start_cell = primary.path.cells[0]
+        for end_cell in (diameter.path.cells[0], diameter.path.cells[-1]):
+            if end_cell == start_cell:
+                continue
+            candidate_path = _candidate_path_between_cells(
+                path,
+                start_cell,
+                end_cell,
+            )
+            if candidate_path is None:
+                continue
+            candidates.append(
+                _NavigationRouteCandidate(
+                    path=candidate_path,
+                    selection_method=(
+                        "navigation_start_to_diameter_endpoint_v1"
+                    ),
+                    candidate_count=1,
+                    starts_at_navigation_start=True,
+                    navigation_start_distance_m=(
+                        _point_to_cell_center_distance_m(
+                            path,
+                            navigation_start.position,
+                            candidate_path.cells[0],
+                        )
+                    ),
+                )
+            )
+    deduped = _dedupe_navigation_route_candidates(
+        candidates,
+        navigation_start=navigation_start,
+        navigation_start_anchor=None,
+    )
+    count = len(deduped)
+    return tuple(
+        _navigation_route_candidate_with_count(candidate, count)
+        for candidate in sorted(
+            deduped,
+            key=lambda candidate: _navigation_route_sort_key(
+                candidate,
+                navigation_start=navigation_start,
+                navigation_start_anchor=None,
+            ),
+            reverse=True,
+        )
+    )
+
+
+def _navigation_start_anchor_path(
+    paths: Sequence[CenterlinePath],
+    *,
+    navigation_start_anchor: _NavigationStartAnchor | None,
+) -> CenterlinePath | None:
+    if navigation_start_anchor is None or not paths:
+        return None
+    return min(
+        paths,
+        key=lambda path: (
+            min(
+                _point_to_cell_center_distance_m(
+                    path,
+                    navigation_start_anchor.position,
+                    cell,
+                )
+                for cell in path.component_cells
+            ),
+            -float(path.length_m),
+            path.cells,
+        ),
+    )
+
+
+def _navigation_start_anchor_route_candidate(
+    path: CenterlinePath,
+    *,
+    navigation_start_anchor: _NavigationStartAnchor,
+) -> _NavigationRouteCandidate | None:
+    component = path.component_cells
+    if len(component) < 2:
+        return None
+    # Keep the first discrete cell attached to OBJ vertex zero. The 3D route
+    # sample is centered inside that cell later without advancing along the
+    # cave merely to gain more 2D clearance.
+    start_cell = _nearest_component_cell_for_point(
+        path,
+        navigation_start_anchor.position,
+    )
+    end_cell = _furthest_component_cell(
+        component,
+        start_cell,
+        cell_size=path.footprint_cell_size,
+    )
+    end_cell = _centered_component_cell(
+        path,
+        end_cell,
+        search_radius_cells=NAVIGATION_ENDPOINT_CENTERING_RADIUS_CELLS,
+    )
+    candidate_path = _candidate_path_between_cells(path, start_cell, end_cell)
+    if candidate_path is None:
+        return None
+    return _NavigationRouteCandidate(
+        path=candidate_path,
+        selection_method="obj_source_anchor_to_farthest_endpoint_v1",
+        candidate_count=1,
+        starts_at_navigation_start_anchor=True,
+        navigation_start_anchor_distance_m=_point_to_cell_center_distance_m(
+            path,
+            navigation_start_anchor.position,
+            candidate_path.cells[0],
+        ),
+    )
+
+
+def _navigation_start_anchor_route_candidates(
+    path: CenterlinePath,
+    *,
+    navigation_start_anchor: _NavigationStartAnchor,
+) -> tuple[_NavigationRouteCandidate, ...]:
+    """Return geometry-derived terminal alternatives from the OBJ entrance.
+
+    A 2D footprint can merge stacked passages, so its single farthest endpoint
+    is only a candidate. Include both independently derived diameter endpoints;
+    cache-time 3D voxel and exact mesh certification will reject disconnected
+    choices, then select the longest surviving non-circular route.
+    """
+    primary = _select_navigation_route_candidate(
+        path,
+        navigation_start=None,
+        navigation_start_anchor=navigation_start_anchor,
+    )
+    candidates = [primary]
+    diameter = _physical_diameter_route_candidate(path)
+    if diameter is not None:
+        start_cell = primary.path.cells[0]
+        for end_cell in (diameter.path.cells[0], diameter.path.cells[-1]):
+            if end_cell == start_cell:
+                continue
+            candidate_path = _candidate_path_between_cells(
+                path,
+                start_cell,
+                end_cell,
+            )
+            if candidate_path is None:
+                continue
+            candidates.append(
+                _NavigationRouteCandidate(
+                    path=candidate_path,
+                    selection_method=(
+                        "obj_source_anchor_to_diameter_endpoint_v1"
+                    ),
+                    candidate_count=1,
+                    starts_at_navigation_start_anchor=True,
+                    navigation_start_anchor_distance_m=(
+                        _point_to_cell_center_distance_m(
+                            path,
+                            navigation_start_anchor.position,
+                            candidate_path.cells[0],
+                        )
+                    ),
+                )
+            )
+    deduped = _dedupe_navigation_route_candidates(
+        candidates,
+        navigation_start=None,
+        navigation_start_anchor=navigation_start_anchor,
+    )
+    count = len(deduped)
+    return tuple(
+        _navigation_route_candidate_with_count(candidate, count)
+        for candidate in sorted(
+            deduped,
+            key=lambda candidate: _navigation_route_sort_key(
+                candidate,
+                navigation_start=None,
+                navigation_start_anchor=navigation_start_anchor,
+            ),
+            reverse=True,
+        )
     )
 
 
@@ -433,6 +710,7 @@ def _dedupe_navigation_route_candidates(
     candidates: Sequence[_NavigationRouteCandidate],
     *,
     navigation_start: _NavigationStart | None,
+    navigation_start_anchor: _NavigationStartAnchor | None,
 ) -> tuple[_NavigationRouteCandidate, ...]:
     best_by_cells: dict[tuple[FootprintCell, ...], _NavigationRouteCandidate] = {}
     for candidate in candidates:
@@ -442,7 +720,12 @@ def _dedupe_navigation_route_candidates(
         if previous is None or _navigation_route_sort_key(
             candidate,
             navigation_start=navigation_start,
-        ) > _navigation_route_sort_key(previous, navigation_start=navigation_start):
+            navigation_start_anchor=navigation_start_anchor,
+        ) > _navigation_route_sort_key(
+            previous,
+            navigation_start=navigation_start,
+            navigation_start_anchor=navigation_start_anchor,
+        ):
             best_by_cells[canonical] = candidate
             continue
     return tuple(best_by_cells.values())
@@ -458,6 +741,12 @@ def _navigation_route_candidate_with_count(
         candidate_count=max(1, int(candidate_count)),
         starts_at_navigation_start=candidate.starts_at_navigation_start,
         navigation_start_distance_m=candidate.navigation_start_distance_m,
+        starts_at_navigation_start_anchor=(
+            candidate.starts_at_navigation_start_anchor
+        ),
+        navigation_start_anchor_distance_m=(
+            candidate.navigation_start_anchor_distance_m
+        ),
     )
 
 
@@ -645,6 +934,65 @@ def _navigation_start_payload(navigation_start: _NavigationStart) -> dict[str, A
     return payload
 
 
+def _parse_navigation_start_anchor(value: object) -> _NavigationStartAnchor | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("OBJ navigation start anchor must be an object")
+    expected_fields = {
+        "position",
+        "kind",
+        "source",
+        "source_vertex_index",
+        "source_order",
+        "executable",
+        "attachment_required",
+        "attachment_coordinate_space",
+    }
+    if set(value) != expected_fields:
+        raise ValueError("OBJ navigation start anchor schema is malformed")
+    position_value = value["position"]
+    source = value["source"]
+    source_vertex_index = value["source_vertex_index"]
+    if (
+        type(position_value) is not list
+        or len(position_value) != 3
+        or any(
+            type(coordinate) not in (int, float)
+            for coordinate in position_value
+        )
+        or type(source) is not str
+        or not source.strip()
+        or type(source_vertex_index) is not int
+        or source_vertex_index != 0
+        or value["kind"] != "obj_surface_vertex"
+        or value["source_order"] != "obj_declaration_order"
+        or value["executable"] is not False
+        or value["attachment_required"] is not True
+        or value["attachment_coordinate_space"] != "xyz"
+    ):
+        raise ValueError("OBJ navigation start anchor policy is malformed")
+    position = tuple(float(coordinate) for coordinate in position_value)
+    if not all(math.isfinite(coordinate) for coordinate in position):
+        raise ValueError("OBJ navigation start anchor position is malformed")
+    return _NavigationStartAnchor(position=position, source=source)
+
+
+def _navigation_start_anchor_payload(
+    anchor: _NavigationStartAnchor,
+) -> dict[str, Any]:
+    return {
+        "position": [float(value) for value in anchor.position],
+        "kind": "obj_surface_vertex",
+        "source": anchor.source,
+        "source_vertex_index": 0,
+        "source_order": "obj_declaration_order",
+        "executable": False,
+        "attachment_required": True,
+        "attachment_coordinate_space": "xyz",
+    }
+
+
 def _metadata_route_for_centerline_path(
     path: CenterlinePath,
     *,
@@ -654,6 +1002,9 @@ def _metadata_route_for_centerline_path(
     candidate_count: int = 1,
     starts_at_navigation_start: bool = False,
     navigation_start_distance_m: float | None = None,
+    starts_at_navigation_start_anchor: bool = False,
+    navigation_start_anchor_distance_m: float | None = None,
+    preserve_anchored_start_cell: bool = False,
     voxel_sampling_cells: Sequence[FootprintCell] = (),
 ) -> dict[str, Any]:
     route_id = f"centerline-{index}"
@@ -686,15 +1037,36 @@ def _metadata_route_for_centerline_path(
             0.0,
             float(navigation_start_distance_m),
         )
-    route_points, route_y_ranges, route_clearance_margins = (
-        _surface_route_points_for_path(
-            path,
-            surface_profiles=surface_profiles,
+    if starts_at_navigation_start_anchor:
+        route["starts_at_navigation_start_anchor"] = True
+    if navigation_start_anchor_distance_m is not None:
+        route["navigation_start_anchor_distance_m"] = max(
+            0.0,
+            float(navigation_start_anchor_distance_m),
         )
+    (
+        route_points,
+        route_y_ranges,
+        route_clearance_margins,
+        interpolated_route_point_count,
+    ) = _surface_route_points_for_path(
+        path,
+        surface_profiles=surface_profiles,
+        preserve_anchored_start_cell=preserve_anchored_start_cell,
     )
     if route_points:
         route["points"] = _flat_points(route_points)
-        route["point_source"] = "surface_vertical_gap_raw"
+        route["point_source"] = (
+            "surface_vertical_gap_interpolated_v2"
+            if interpolated_route_point_count
+            else "surface_vertical_gap_raw"
+        )
+        route["surface_route_raw_point_count"] = (
+            len(route_points) - interpolated_route_point_count
+        )
+        route["surface_route_interpolated_point_count"] = int(
+            interpolated_route_point_count
+        )
         route["y_ranges"] = _flat_y_ranges(route_y_ranges)
         route["clearance_margins"] = [
             float(margin)
@@ -704,13 +1076,56 @@ def _metadata_route_for_centerline_path(
         route["recommended_smoothing_radius_cells"] = (
             NAVIGATION_ROUTE_Y_SMOOTHING_RADIUS_CELLS
         )
-    component_y_ranges = _surface_component_y_ranges_for_path(
-        path,
-        component_cells=component_cells,
-        surface_profiles=surface_profiles,
+    component_y_ranges, missing_component_y_range_count = (
+        _surface_component_y_ranges_for_path(
+            path,
+            component_cells=component_cells,
+            surface_profiles=surface_profiles,
+            route_y_ranges=route_y_ranges,
+        )
     )
     if component_y_ranges:
         route["component_y_ranges"] = _flat_y_ranges(component_y_ranges)
+        route["surface_component_missing_y_range_count"] = int(
+            missing_component_y_range_count
+        )
+    component_vertical_gap_intervals = (
+        _surface_component_vertical_gap_intervals_for_path(
+            component_cells=component_cells,
+            surface_profiles=surface_profiles,
+        )
+    )
+    component_vertical_gap_seeds = tuple(
+        (cell, (float(low_y) + float(high_y)) * 0.5)
+        for cell, low_y, high_y in component_vertical_gap_intervals
+    )
+    if component_vertical_gap_seeds:
+        route["component_vertical_gap_seeds"] = [
+            coordinate
+            for cell, y in component_vertical_gap_seeds
+            for coordinate in (int(cell[0]), int(cell[1]), float(y))
+        ]
+        route["component_vertical_gap_intervals"] = [
+            coordinate
+            for cell, low_y, high_y in component_vertical_gap_intervals
+            for coordinate in (
+                int(cell[0]),
+                int(cell[1]),
+                float(low_y),
+                float(high_y),
+            )
+        ]
+        route["surface_component_vertical_gap_seed_count"] = len(
+            component_vertical_gap_seeds
+        )
+        if surface_profiles is not None:
+            route["surface_vertical_bin_size_m"] = float(
+                (
+                    surface_profiles.global_high_y
+                    - surface_profiles.global_low_y
+                )
+                / max(1, int(surface_profiles.vertical_bin_count))
+            )
     recovery_hotspots = _recovery_hotspots_for_path(
         path,
         component_cells=component_cells,
@@ -1388,6 +1803,14 @@ def _surface_vertical_profiles(
     global_span_y = global_high_y - global_low_y
     if not np.isfinite(global_span_y) or global_span_y <= 1e-9:
         return None
+    vertical_bin_count = max(
+        NAVIGATION_SURFACE_Y_HISTOGRAM_BINS,
+        int(
+            math.ceil(
+                global_span_y / NAVIGATION_SURFACE_VERTICAL_BIN_SIZE_M
+            )
+        ),
+    )
 
     columns: dict[FootprintCell, _SurfaceColumnProfile] = {}
     for start in range(0, len(positions), _NAVIGATION_SURFACE_BLOCK_VERTICES):
@@ -1399,12 +1822,12 @@ def _surface_vertical_profiles(
         block_y_bins = np.floor(
             (block_y - global_low_y)
             / global_span_y
-            * NAVIGATION_SURFACE_Y_HISTOGRAM_BINS
+            * vertical_bin_count
         ).astype(np.int64, copy=False)
         np.clip(
             block_y_bins,
             0,
-            NAVIGATION_SURFACE_Y_HISTOGRAM_BINS - 1,
+            vertical_bin_count - 1,
             out=block_y_bins,
         )
         if len(block_cx) == 0:
@@ -1428,11 +1851,12 @@ def _surface_vertical_profiles(
             high_y = float(sorted_y[run_start:run_end].max())
             existing = columns.get(cell)
             if existing is None:
-                occupied = np.zeros(
-                    NAVIGATION_SURFACE_Y_HISTOGRAM_BINS,
-                    dtype=np.bool_,
+                occupied = set(
+                    int(value)
+                    for value in np.unique(
+                        sorted_y_bins[run_start:run_end]
+                    ).tolist()
                 )
-                occupied[sorted_y_bins[run_start:run_end]] = True
                 columns[cell] = _SurfaceColumnProfile(
                     low_y=low_y,
                     high_y=high_y,
@@ -1441,13 +1865,20 @@ def _surface_vertical_profiles(
             else:
                 existing.low_y = min(existing.low_y, low_y)
                 existing.high_y = max(existing.high_y, high_y)
-                existing.occupied_y_bins[sorted_y_bins[run_start:run_end]] = True
+                assert isinstance(existing.occupied_y_bins, set)
+                existing.occupied_y_bins.update(
+                    int(value)
+                    for value in np.unique(
+                        sorted_y_bins[run_start:run_end]
+                    ).tolist()
+                )
     if not columns:
         return None
     return _SurfaceProfileIndex(
         global_low_y=global_low_y,
         global_high_y=global_high_y,
         columns=columns,
+        vertical_bin_count=vertical_bin_count,
     )
 
 
@@ -1455,22 +1886,49 @@ def _surface_route_points_for_path(
     path: CenterlinePath,
     *,
     surface_profiles: _SurfaceProfileIndex | None,
-) -> tuple[tuple[Point, ...], tuple[tuple[float, float], ...], tuple[float, ...]]:
+    preserve_anchored_start_cell: bool = False,
+) -> tuple[
+    tuple[Point, ...],
+    tuple[tuple[float, float], ...],
+    tuple[float, ...],
+    int,
+]:
     if surface_profiles is None:
-        return (), (), ()
+        return (), (), (), 0
     point_xz: list[PointXZ] = []
-    y_samples: list[_SurfaceRouteYSample] = []
-    clearance_margins: list[float] = []
+    medial_cells: list[FootprintCell] = []
+    raw_y_samples: list[_SurfaceRouteYSample | None] = []
     for index, cell in enumerate(path.cells):
-        xz = _surface_medial_xz_for_path_cell(path, index=index)
+        # Exact-ingress routes must retain the ordered footprint topology.
+        # Generic
+        # transverse medial centering can jump across a very wide synthesized
+        # surface span (Devil's Eye moved the second point by >200 m), severing
+        # an otherwise adjacent entrance path before exact 3D certification.
+        xz = (
+            path.centers[cell]
+            if preserve_anchored_start_cell
+            else _surface_medial_xz_for_path_cell(path, index=index)
+        )
         medial_cell = _footprint_cell_for_xz(xz, path.footprint_cell_size)
         if medial_cell not in path.component_cells:
             medial_cell = cell
-        y_sample = _surface_medial_y_for_cell(medial_cell, surface_profiles)
-        if y_sample is None:
-            return (), (), ()
         point_xz.append(xz)
-        y_samples.append(y_sample)
+        medial_cells.append(medial_cell)
+        raw_y_samples.append(
+            _surface_medial_y_for_cell(medial_cell, surface_profiles)
+        )
+    y_samples = _interpolate_missing_surface_route_y_samples(
+        point_xz,
+        raw_y_samples,
+    )
+    if not y_samples:
+        return (), (), (), 0
+    clearance_margins: list[float] = []
+    for medial_cell, y_sample in zip(
+        medial_cells,
+        y_samples,
+        strict=True,
+    ):
         clearance_margins.append(
             _route_clearance_margin_m(
                 path,
@@ -1485,6 +1943,7 @@ def _surface_route_points_for_path(
         ),
         tuple((sample.low_y, sample.high_y) for sample in y_samples),
         tuple(clearance_margins),
+        sum(sample is None for sample in raw_y_samples),
     )
 
 
@@ -1493,16 +1952,160 @@ def _surface_component_y_ranges_for_path(
     *,
     component_cells: tuple[FootprintCell, ...],
     surface_profiles: _SurfaceProfileIndex | None,
-) -> tuple[tuple[float, float], ...]:
+    route_y_ranges: Sequence[tuple[float, float]] = (),
+) -> tuple[tuple[tuple[float, float], ...], int]:
+    if surface_profiles is None:
+        return (), 0
+    del path, route_y_ranges
+    y_ranges: list[tuple[float, float]] = []
+    missing_profile_count = 0
+    for cell in component_cells:
+        profile = _merged_surface_profile_for_cell(cell, surface_profiles)
+        if profile is None:
+            y_ranges.append(
+                tuple(
+                    sorted(
+                        (
+                            float(surface_profiles.global_low_y),
+                            float(surface_profiles.global_high_y),
+                        )
+                    )
+                )
+            )
+            missing_profile_count += 1
+            continue
+        y_ranges.append(
+            tuple(sorted((float(profile.low_y), float(profile.high_y))))
+        )
+    return tuple(y_ranges), missing_profile_count
+
+
+def _surface_component_vertical_gap_seeds_for_path(
+    *,
+    component_cells: Sequence[FootprintCell],
+    surface_profiles: _SurfaceProfileIndex | None,
+) -> tuple[tuple[FootprintCell, float], ...]:
+    """Persist every bounded vertical passage candidate from surface evidence."""
+    return tuple(
+        (cell, (float(low_y) + float(high_y)) * 0.5)
+        for cell, low_y, high_y in (
+            _surface_component_vertical_gap_intervals_for_path(
+                component_cells=component_cells,
+                surface_profiles=surface_profiles,
+            )
+        )
+    )
+
+
+def _surface_component_vertical_gap_intervals_for_path(
+    *,
+    component_cells: Sequence[FootprintCell],
+    surface_profiles: _SurfaceProfileIndex | None,
+) -> tuple[tuple[FootprintCell, float, float], ...]:
+    """Persist bounded vertical intervals as candidate layer evidence.
+
+    Raw OBJ vertex bins are not watertight ray crossings, so their parity
+    cannot establish solid versus cave air. Retain every bounded interval and
+    let the OBJ-anchored continuity selector choose one proposal. Fixed voxels,
+    global component connectivity, and exact cached-mesh checks still decide
+    whether that proposal can become executable.
+    """
     if surface_profiles is None:
         return ()
-    y_ranges: list[tuple[float, float]] = []
+    intervals: list[tuple[FootprintCell, float, float]] = []
     for cell in component_cells:
-        y_sample = _surface_medial_y_for_cell(cell, surface_profiles)
-        if y_sample is None:
-            return ()
-        y_ranges.append((y_sample.low_y, y_sample.high_y))
-    return tuple(y_ranges)
+        profile = _merged_surface_profile_for_cell(cell, surface_profiles)
+        if profile is None:
+            continue
+        intervals.extend(
+            (cell, float(sample.low_y), float(sample.high_y))
+            for sample in _surface_vertical_gap_samples(
+                profile,
+                surface_profiles,
+            )
+        )
+    return tuple(dict.fromkeys(intervals))
+
+
+def _interpolate_missing_surface_route_y_samples(
+    points_xz: Sequence[PointXZ],
+    samples: Sequence[_SurfaceRouteYSample | None],
+) -> tuple[_SurfaceRouteYSample, ...]:
+    """Fill sparse vertical-profile gaps along one metadata route.
+
+    Surface-span footprint filling can place a valid centerline cell farther
+    from raw vertices than the bounded column lookup. Interpolate only between
+    real samples on that ordered route (or extend the nearest endpoint sample)
+    so V12 receives a complete 3D hint without inventing free-space authority.
+    Fixed voxels and exact mesh checks still decide whether a route is usable.
+    """
+    if len(points_xz) != len(samples) or not samples:
+        return ()
+    known_indices = tuple(
+        index for index, sample in enumerate(samples) if sample is not None
+    )
+    if not known_indices:
+        return ()
+    cumulative_distance_m = [0.0]
+    for first, second in zip(points_xz, points_xz[1:], strict=False):
+        cumulative_distance_m.append(
+            cumulative_distance_m[-1] + math.dist(first, second)
+        )
+    resolved: list[_SurfaceRouteYSample] = []
+    for index, raw_sample in enumerate(samples):
+        if raw_sample is not None:
+            resolved.append(raw_sample)
+            continue
+        previous_indices = tuple(
+            candidate for candidate in known_indices if candidate < index
+        )
+        following_indices = tuple(
+            candidate for candidate in known_indices if candidate > index
+        )
+        if not previous_indices:
+            nearest = samples[following_indices[0]]
+            assert nearest is not None
+            resolved.append(nearest)
+            continue
+        if not following_indices:
+            nearest = samples[previous_indices[-1]]
+            assert nearest is not None
+            resolved.append(nearest)
+            continue
+        previous_index = previous_indices[-1]
+        following_index = following_indices[0]
+        previous = samples[previous_index]
+        following = samples[following_index]
+        assert previous is not None and following is not None
+        span_m = (
+            cumulative_distance_m[following_index]
+            - cumulative_distance_m[previous_index]
+        )
+        fraction = (
+            0.0
+            if span_m <= 1e-9
+            else (
+                cumulative_distance_m[index]
+                - cumulative_distance_m[previous_index]
+            )
+            / span_m
+        )
+        low_y = previous.low_y + (
+            following.low_y - previous.low_y
+        ) * fraction
+        high_y = previous.high_y + (
+            following.high_y - previous.high_y
+        ) * fraction
+        low_y, high_y = sorted((float(low_y), float(high_y)))
+        y = previous.y + (following.y - previous.y) * fraction
+        resolved.append(
+            _SurfaceRouteYSample(
+                y=min(high_y, max(low_y, float(y))),
+                low_y=low_y,
+                high_y=high_y,
+            )
+        )
+    return tuple(resolved)
 
 
 def _surface_medial_xz_for_path_cell(
@@ -1646,44 +2249,106 @@ def _surface_medial_y_for_cell(
     profile = _merged_surface_profile_for_cell(cell, surface_profiles)
     if profile is None:
         return None
-    occupied_indices = np.flatnonzero(profile.occupied_y_bins)
-    if len(occupied_indices) >= 2:
-        gaps = [
-            (int(next_index - previous_index), int(previous_index), int(next_index))
-            for previous_index, next_index in zip(
-                occupied_indices,
-                occupied_indices[1:],
-                strict=False,
-            )
-            if next_index - previous_index > 1
-        ]
-        if gaps:
-            _gap, previous_index, next_index = max(
-                gaps,
-                key=lambda item: (item[0], -abs(item[1] + item[2])),
-            )
-            bin_center = (previous_index + next_index + 1.0) * 0.5
-            fraction = bin_center / NAVIGATION_SURFACE_Y_HISTOGRAM_BINS
-            y = (
-                surface_profiles.global_low_y
-                + (surface_profiles.global_high_y - surface_profiles.global_low_y)
-                * fraction
-            )
-            gap_low_y = _surface_bin_boundary_y(
-                surface_profiles,
-                previous_index + 1,
-            )
-            gap_high_y = _surface_bin_boundary_y(surface_profiles, next_index)
-            return _SurfaceRouteYSample(
-                y=y,
-                low_y=min(gap_low_y, gap_high_y),
-                high_y=max(gap_low_y, gap_high_y),
-            )
-    return _SurfaceRouteYSample(
-        y=(profile.low_y + profile.high_y) * 0.5,
-        low_y=min(profile.low_y, profile.high_y),
-        high_y=max(profile.low_y, profile.high_y),
+    samples = _surface_vertical_gap_samples(profile, surface_profiles)
+    if not samples:
+        return None
+    return max(
+        samples,
+        key=lambda sample: (
+            float(sample.high_y - sample.low_y),
+            -abs(float(sample.y)),
+        ),
     )
+
+
+def _surface_occupied_bin_indices(
+    profile: _SurfaceColumnProfile,
+) -> tuple[int, ...]:
+    value = profile.occupied_y_bins
+    if isinstance(value, np.ndarray):
+        return tuple(int(index) for index in np.flatnonzero(value).tolist())
+    return tuple(sorted(int(index) for index in value))
+
+
+def _surface_vertical_gap_samples(
+    profile: _SurfaceColumnProfile,
+    surface_profiles: _SurfaceProfileIndex,
+) -> tuple[_SurfaceRouteYSample, ...]:
+    """Return every bounded surface gap at 0.25 m-or-finer resolution.
+
+    Adjacent occupied bins belong to one surface band. Raw OBJ vertex bins are
+    not complete ray crossings, so parity would be unsafe here; every interval
+    between neighboring bands remains a proposal for the later entrance-
+    connected layer selector. Unbounded space is never proposed.
+    """
+    occupied_runs = _surface_occupied_bin_runs(profile)
+    samples: list[_SurfaceRouteYSample] = []
+    for lower_run, upper_run in zip(
+        occupied_runs,
+        occupied_runs[1:],
+        strict=False,
+    ):
+        gap_start_index = int(lower_run[1]) + 1
+        gap_stop_index = int(upper_run[0])
+        if gap_stop_index <= gap_start_index:
+            continue
+        gap_low_y = _surface_bin_boundary_y(
+            surface_profiles,
+            gap_start_index,
+        )
+        gap_high_y = _surface_bin_boundary_y(
+            surface_profiles,
+            gap_stop_index,
+        )
+        low_y, high_y = sorted((float(gap_low_y), float(gap_high_y)))
+        samples.append(
+            _SurfaceRouteYSample(
+                y=(low_y + high_y) * 0.5,
+                low_y=low_y,
+                high_y=high_y,
+            )
+        )
+    if samples:
+        return tuple(samples)
+    # A half-metre passage can place its two surfaces in one contiguous run
+    # at quarter-metre binning, especially on a slope. The observed per-cell
+    # surface span is still bounded evidence, so retain it when it is wide
+    # enough to contain at least one vertical evidence cell. A zero/thin span
+    # remains ambiguous and fails closed.
+    low_y, high_y = sorted((float(profile.low_y), float(profile.high_y)))
+    bin_size_m = (
+        float(surface_profiles.global_high_y)
+        - float(surface_profiles.global_low_y)
+    ) / max(1, int(surface_profiles.vertical_bin_count))
+    if high_y - low_y + 1e-9 < max(1e-9, float(bin_size_m)):
+        return ()
+    return (
+        _SurfaceRouteYSample(
+            y=(low_y + high_y) * 0.5,
+            low_y=low_y,
+            high_y=high_y,
+        ),
+    )
+
+
+def _surface_occupied_bin_runs(
+    profile: _SurfaceColumnProfile,
+) -> tuple[tuple[int, int], ...]:
+    """Collapse contiguous occupied bins into vertical crossing bands."""
+    indices = _surface_occupied_bin_indices(profile)
+    if not indices:
+        return ()
+    runs: list[tuple[int, int]] = []
+    start = previous = int(indices[0])
+    for raw_index in indices[1:]:
+        index = int(raw_index)
+        if index <= previous + 1:
+            previous = index
+            continue
+        runs.append((start, previous))
+        start = previous = index
+    runs.append((start, previous))
+    return tuple(runs)
 
 
 def _surface_bin_boundary_y(
@@ -1692,9 +2357,12 @@ def _surface_bin_boundary_y(
 ) -> float:
     clamped_index = max(
         0,
-        min(NAVIGATION_SURFACE_Y_HISTOGRAM_BINS, int(bin_index)),
+        min(int(surface_profiles.vertical_bin_count), int(bin_index)),
     )
-    fraction = clamped_index / NAVIGATION_SURFACE_Y_HISTOGRAM_BINS
+    fraction = clamped_index / max(
+        1,
+        int(surface_profiles.vertical_bin_count),
+    )
     return surface_profiles.global_low_y + (
         surface_profiles.global_high_y - surface_profiles.global_low_y
     ) * fraction
@@ -1713,11 +2381,11 @@ def _merged_surface_profile_for_cell(
         ]
         if not profiles:
             continue
-        occupied = np.zeros(NAVIGATION_SURFACE_Y_HISTOGRAM_BINS, dtype=np.bool_)
+        occupied: set[int] = set()
         low_y = min(profile.low_y for profile in profiles)
         high_y = max(profile.high_y for profile in profiles)
         for profile in profiles:
-            occupied |= profile.occupied_y_bins
+            occupied.update(_surface_occupied_bin_indices(profile))
         return _SurfaceColumnProfile(
             low_y=low_y,
             high_y=high_y,

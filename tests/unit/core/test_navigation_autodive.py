@@ -1,4 +1,4 @@
-"""Tests for user-facing centerline Guided Dive planning."""
+"""Tests for user-facing certified Guided Dive planning."""
 
 from __future__ import annotations
 
@@ -43,6 +43,8 @@ from caveviewer.core.navigation.autodive import (
     build_auto_dive_initial_camera_pose,
     build_centerline_auto_dive_plan,
     build_voxel_graph_auto_dive_plan,
+    certified_auto_dive_start_position,
+    certified_auto_dive_local_start_position,
 )
 from caveviewer.core.navigation.centerline import (
     DEFAULT_CENTERLINE_ROUTE_SPEED_M_PER_SECOND,
@@ -56,7 +58,12 @@ from caveviewer.core.navigation.cache_metadata import (
     cached_centerline_path,
 )
 from caveviewer.core.navigation.voxel_volume import LocalVoxelVolume
-from caveviewer.core.navigation.voxel_cache import NavigationVoxelAtlas
+from caveviewer.core.navigation.voxel_cache import (
+    NAVIGATION_VOXEL_CACHE_METHOD,
+    NAVIGATION_VOXEL_CACHE_NAME,
+    NAVIGATION_VOXEL_CACHE_VERSION,
+    NavigationVoxelAtlas,
+)
 from caveviewer.core.navigation.voxel_graph_3d import (
     NAVIGATION_MESH_3D_GRAPH_METHOD,
     NavigationVoxel3DMetric,
@@ -318,11 +325,44 @@ def test_auto_dive_preflight_validates_graph_terminal_policy(
     long_route = copy.deepcopy(manifest["navigation"]["routes"][0])
     long_route["id"] = "long"
     long_route["length_m"] = 2.0
-    manifest["navigation"]["recommended_route_id"] = "short"
+    manifest["navigation"]["recommended_route_id"] = "long"
+    manifest["navigation"]["route_selection_method"] = (
+        "longest_safe_non_circular_certified_route_v1"
+    )
     manifest["navigation"]["routes"] = [short_route, long_route]
     manifest["navigation"]["navigation_start"] = {
         "position": [0.5, 1.0, 0.5],
     }
+    for route in manifest["navigation"]["routes"]:
+        route["starts_at_navigation_start"] = True
+        route["closed_loop"] = False
+        route["voxel_corridor"] = {
+            "built": True,
+            "source_route_point_count": 3,
+            "certified_ingress_hint_index": 0,
+            "certified_terminal_hint_index": 2,
+            "selected_source_hint_start_index": 0,
+            "selected_source_hint_end_index": 2,
+            "complete_ingress_route": True,
+            "route_length_m": float(route["length_m"]),
+            "prepared_mesh_graph": {
+                "source_ingress_required": True,
+                "source_ingress_connector_required": True,
+                "source_ingress_attachment_mode": (
+                    "executable_authored_start_connector"
+                ),
+                "source_ingress_connector_mesh_clear": True,
+                "source_ingress_point": [0.5, 1.0, 0.5],
+                "source_ingress_coordinate_space": "xyz",
+                "source_ingress_attachment_point": [0.5, 1.0, 0.5],
+                "source_ingress_attachment_distance_m": 0.0,
+                "source_ingress_snap_limit_m": 24.0,
+                "known_terminal_reached": True,
+                "terminal_count": 1,
+                "unknown_boundary_count": 0,
+            },
+        }
+        route["certified_start_position"] = [0.5, 1.0, 0.5]
 
     centerline_path = cached_centerline_path(manifest, route_id="long")
     assert centerline_path is not None
@@ -395,15 +435,16 @@ def test_auto_dive_preflight_validates_graph_terminal_policy(
     assert result.start_graph_key == (0, 0, 0)
     assert result.terminal_graph_key == (2, 0, 0)
     assert result.terminal_point == pytest.approx((2.5, 1.0, 0.5))
-    expected_easiest = route_goal is None
+    expected_default = route_goal is None
+    expected_fixed = route_goal is None
     assert result.details["route_goal"] == (
         autodive.DEFAULT_AUTO_DIVE_ROUTE_GOAL
-        if expected_easiest
+        if expected_default
         else route_goal
     )
     assert result.details["terminal_rule"] == (
-        "easiest_reachable_true_3d_graph_terminal"
-        if expected_easiest
+        "farthest_known_terminal_by_shortest_physical_graph_distance"
+        if expected_default
         else "farthest_reachable_true_3d_graph_terminal"
     )
     assert result.details["terminal_selection_source"] == "graph_terminal"
@@ -412,20 +453,355 @@ def test_auto_dive_preflight_validates_graph_terminal_policy(
     assert result.plan is not None
     assert result.plan.preflight_validated is True
     assert result.plan.selection_reason == (
-        "preflight_easiest_mesh_safe_graph_terminal"
-        if expected_easiest
+        "preflight_longest_certified_mesh_safe_graph_terminal"
+        if expected_default
         else "preflight_farthest_graph_terminal_true_3d"
     )
     assert result.reason == (
-        "validated_easiest_mesh_safe_graph_terminal_route"
-        if expected_easiest
+        "validated_longest_certified_mesh_safe_graph_terminal_route"
+        if expected_default
         else "validated_farthest_graph_terminal_route"
     )
-    assert result.plan.fixed_route is expected_easiest
+    assert result.plan.fixed_route is expected_fixed
     assert result.plan.route_points[-1] == pytest.approx((2.5, 1.0, 0.5))
     assert all(
         keyframe.roll_deg == pytest.approx(0.0)
         for keyframe in result.plan.route.keyframes
+    )
+
+
+def test_guided_dive_resets_a_moved_camera_to_certified_entrance(
+    monkeypatch,
+):
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0), (2, 0)),
+        route_cells=((0, 0), (1, 0), (2, 0)),
+        route_points=(
+            (0.5, 0.5, 0.5),
+            (1.5, 0.5, 0.5),
+            (2.5, 0.5, 0.5),
+        ),
+    )
+    navigation = manifest["navigation"]
+    navigation["navigation_start"] = {
+        "position": [0.0, 0.0, 0.0],
+    }
+    navigation["route_selection_method"] = (
+        "longest_safe_non_circular_certified_route_v1"
+    )
+    route = navigation["routes"][0]
+    route["starts_at_navigation_start"] = True
+    route["voxel_corridor"]["prepared_mesh_graph"].update(
+        {
+            "source_ingress_required": True,
+            "source_ingress_point": [0.0, 0.0, 0.0],
+            "source_ingress_coordinate_space": "xyz",
+            "source_ingress_connector_required": True,
+            "source_ingress_attachment_mode": (
+                "executable_authored_start_connector"
+            ),
+            "source_ingress_connector_mesh_clear": True,
+            "source_ingress_attachment_point": [0.5, 0.5, 0.5],
+            "source_ingress_attachment_distance_m": math.sqrt(0.75),
+            "source_ingress_snap_limit_m": 24.0,
+        }
+    )
+    metrics = {
+        (x, 0, 0): NavigationVoxel3DMetric(
+            center=(float(x) + 0.5, 0.5, 0.5),
+            footprint_cell=(x, 0),
+            available_volume_m3=2.0,
+            free_voxel_count=2,
+            min_clearance_m=1.0,
+            mean_clearance_m=1.0,
+            progress_m=float(x),
+        )
+        for x in range(3)
+    }
+    graph = build_navigation_voxel_3d_graph(
+        metrics,
+        grid_size_m=(1.0, 1.0, 1.0),
+        max_edge_distance_cells=1,
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda *_args, **_kwargs: (atlas, {"route_id": "cached-main"}),
+    )
+
+    class NoHitMeshGuard:
+        def segment_collision(self, first, second):
+            del first, second
+            return None
+
+    monkeypatch.setattr(
+        autodive.CachedChunkMeshCollisionGuard,
+        "from_manifest",
+        classmethod(lambda cls, *_args, **_kwargs: NoHitMeshGuard()),
+    )
+
+    result = build_auto_dive_preflight_plan(
+        manifest,
+        current_position=(99.0, 99.0, 99.0),
+        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        cache_dir="/cache/devils-eye",
+    )
+
+    assert result.status == AUTO_DIVE_PREFLIGHT_READY
+    assert result.plan is not None
+    assert result.plan.route_points[0] == (0.5, 0.5, 0.5)
+    assert result.details["entrance_reset"] is True
+    assert result.details["requested_camera_position"] == [99.0, 99.0, 99.0]
+
+
+def test_guided_dive_route_id_prefers_exact_certified_recommendation():
+    safe_route = {
+        "id": "safe",
+        "selection_method": "longest_safe_non_circular_certified_route_v1",
+        "length_m": 80.0,
+        "closed_loop": False,
+        "starts_at_navigation_start_anchor": True,
+        "certified_start_position": [0.5, 2.0, 0.5],
+            "voxel_corridor": {
+                "built": True,
+                "source_route_point_count": 2,
+                "certified_ingress_hint_index": 0,
+                "certified_terminal_hint_index": 1,
+                "selected_source_hint_start_index": 0,
+                "selected_source_hint_end_index": 1,
+                "complete_ingress_route": True,
+                "route_length_m": 80.0,
+                "prepared_mesh_graph": {
+                    "known_terminal_reached": True,
+                "terminal_count": 1,
+                    "unknown_boundary_count": 0,
+                    "source_ingress_required": True,
+                    "source_ingress_connector_required": False,
+                    "source_ingress_attachment_mode": (
+                        "non_executable_obj_surface_anchor_snap"
+                    ),
+                    "source_ingress_point": [0.5, 2.0, 0.5],
+                    "source_ingress_coordinate_space": "xyz",
+                    "source_ingress_attachment_point": [0.5, 2.0, 0.5],
+                    "source_ingress_attachment_distance_m": 0.0,
+                    "source_ingress_snap_limit_m": 24.0,
+            },
+        },
+    }
+    manifest = {
+        "navigation": {
+            "recommended_route_id": "safe",
+            "navigation_start_anchor": {
+                "position": [0.5, 2.0, 0.5],
+                "kind": "obj_surface_vertex",
+                "source": "test.obj",
+                "source_vertex_index": 0,
+                "source_order": "obj_declaration_order",
+                "executable": False,
+                "attachment_required": True,
+                "attachment_coordinate_space": "xyz",
+            },
+            "route_selection_method": (
+                "longest_safe_non_circular_certified_route_v1"
+            ),
+            "routes": [
+                {"id": "unsafe-longer", "length_m": 100.0},
+                safe_route,
+            ],
+        }
+    }
+
+    assert autodive._longest_navigation_route_id(manifest) == "safe"
+
+    stale_short_recommendation = copy.deepcopy(manifest)
+    longer_complete = copy.deepcopy(safe_route)
+    longer_complete["id"] = "longer-safe"
+    longer_complete["length_m"] = 120.0
+    longer_complete["voxel_corridor"]["route_length_m"] = 120.0
+    longer_complete["selection_method"] = (
+        "obj_source_anchor_to_diameter_endpoint_v1"
+    )
+    stale_short_recommendation["navigation"]["routes"] = [
+        safe_route,
+        longer_complete,
+    ]
+    assert (
+        autodive._longest_navigation_route_id(stale_short_recommendation)
+        is None
+    )
+    assert (
+        certified_auto_dive_start_position(stale_short_recommendation)
+        is None
+    )
+
+    malformed_anchor = copy.deepcopy(manifest)
+    malformed_anchor["navigation"]["navigation_start_anchor"][
+        "source_vertex_index"
+    ] = 1
+    assert autodive._longest_navigation_route_id(malformed_anchor) is None
+
+    mismatched_attachment = copy.deepcopy(manifest)
+    mismatched_attachment["navigation"]["routes"][1]["voxel_corridor"][
+        "prepared_mesh_graph"
+    ]["source_ingress_attachment_point"] = [1.5, 2.0, 0.5]
+    assert autodive._longest_navigation_route_id(mismatched_attachment) is None
+
+    excessive_snap = copy.deepcopy(manifest)
+    excessive_snap["navigation"]["routes"][1]["voxel_corridor"][
+        "prepared_mesh_graph"
+    ]["source_ingress_snap_limit_m"] = 25.0
+    assert autodive._longest_navigation_route_id(excessive_snap) is None
+
+
+def test_guided_dive_route_id_prefers_certified_navigation_start_route():
+    safe_route = {
+        "id": "safe",
+        "selection_method": "longest_safe_non_circular_certified_route_v1",
+        "length_m": 80.0,
+        "closed_loop": False,
+        "starts_at_navigation_start": True,
+        "certified_start_position": [0.5, 2.0, 0.5],
+            "voxel_corridor": {
+                "built": True,
+                "source_route_point_count": 2,
+                "certified_ingress_hint_index": 0,
+                "certified_terminal_hint_index": 1,
+                "selected_source_hint_start_index": 0,
+                "selected_source_hint_end_index": 1,
+                "complete_ingress_route": True,
+                "route_length_m": 80.0,
+                    "prepared_mesh_graph": {
+                        "source_ingress_required": True,
+                        "source_ingress_connector_required": True,
+                        "source_ingress_attachment_mode": (
+                            "executable_authored_start_connector"
+                        ),
+                        "source_ingress_connector_mesh_clear": True,
+                        "source_ingress_point": [0.5, 2.0, 0.5],
+                        "source_ingress_coordinate_space": "xyz",
+                        "source_ingress_attachment_point": [0.5, 2.0, 0.5],
+                        "source_ingress_attachment_distance_m": 0.0,
+                        "source_ingress_snap_limit_m": 24.0,
+                    "known_terminal_reached": True,
+                "terminal_count": 1,
+                "unknown_boundary_count": 0,
+            },
+        },
+    }
+    manifest = {
+        "navigation": {
+            "recommended_route_id": "safe",
+            "navigation_start": {"position": [0.5, 2.0, 0.5]},
+            "route_selection_method": (
+                "longest_safe_non_circular_certified_route_v1"
+            ),
+            "routes": [
+                {"id": "uncertified-longer", "length_m": 100.0},
+                safe_route,
+            ],
+        }
+    }
+
+    assert autodive._longest_navigation_route_id(manifest) == "safe"
+
+
+def test_guided_dive_route_id_rejects_long_but_incomplete_recommendation():
+    source_anchor = [0.0, 0.25, 0.5]
+    certified_start = [0.5, 0.375, 0.5]
+    manifest = {
+        "navigation": {
+            "recommended_route_id": "incomplete",
+            "navigation_start_anchor": {
+                "position": source_anchor,
+                "kind": "obj_surface_vertex",
+                "source": "test.obj",
+                "source_vertex_index": 0,
+                "source_order": "obj_declaration_order",
+                "executable": False,
+                "attachment_required": True,
+                "attachment_coordinate_space": "xyz",
+            },
+            "route_selection_method": (
+                "longest_safe_non_circular_certified_route_v1"
+            ),
+            "routes": [
+                {
+                    "id": "incomplete",
+                    "selection_method": (
+                        "longest_safe_non_circular_certified_route_v1"
+                    ),
+                    "length_m": 2400.0,
+                    "closed_loop": False,
+                    "certified_start_position": certified_start,
+                    "voxel_corridor": {
+                        "built": True,
+                        "source_route_point_count": 202,
+                        "certified_ingress_hint_index": 0,
+                        "certified_terminal_hint_index": 120,
+                        "selected_source_hint_start_index": 0,
+                        "selected_source_hint_end_index": 120,
+                        "complete_ingress_route": False,
+                        "route_length_m": 1200.0,
+                        "prepared_mesh_graph": {
+                            "known_terminal_reached": True,
+                            "terminal_count": 1,
+                            "unknown_boundary_count": 0,
+                            "source_ingress_required": True,
+                            "source_ingress_connector_required": False,
+                            "source_ingress_attachment_mode": (
+                                "non_executable_obj_surface_anchor_snap"
+                            ),
+                            "source_ingress_point": source_anchor,
+                            "source_ingress_coordinate_space": "xyz",
+                            "source_ingress_attachment_point": certified_start,
+                            "source_ingress_attachment_distance_m": math.dist(
+                                source_anchor,
+                                certified_start,
+                            ),
+                            "source_ingress_snap_limit_m": 24.0,
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    assert autodive._longest_navigation_route_id(manifest) is None
+
+
+def test_preflight_camera_spline_revalidates_every_published_segment():
+    raw_points = tuple(
+        (float(index), float(index % 2), float(index))
+        for index in range(11)
+    )
+
+    class RecordingValidator:
+        def __init__(self):
+            self.kinds = []
+
+        def segment_clearance_failure(self, _first, _second, **kwargs):
+            self.kinds.append(kwargs.get("kind"))
+            return None
+
+    validator = RecordingValidator()
+    smoothed, details = autodive._preflight_smoothed_route_geometry(
+        raw_points,
+        settings=AutoDiveSettings(
+            smoothing_radius_cells=3,
+            max_keyframes=128,
+        ),
+        graph_safety_validator=validator,
+    )
+
+    assert details["method"] == "mesh_safe_cardinal_spline_v1"
+    assert details["curve_collision_segment_count"] == 0
+    assert details["curve_fallback_segment_count"] == 0
+    assert smoothed[0] == raw_points[0]
+    assert smoothed[-1] == pytest.approx(raw_points[-1])
+    assert len(smoothed) <= 128
+    assert validator.kinds.count("preflight_smoothed_route") == (
+        len(smoothed) - 1
     )
 
 
@@ -548,6 +924,21 @@ def test_easiest_terminal_policy_prefers_shortest_mesh_safe_known_terminal():
     )
     assert selected == short_terminal_key
     assert details["terminal_graph_distance_m"] == pytest.approx(1.0)
+
+    longest, longest_details = autodive._preflight_select_graph_terminal(
+        graph,
+        start_key=start_key,
+        component_id=0,
+        selection_policy=(
+            autodive.AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE
+        ),
+    )
+    assert longest == long_terminal_key
+    assert longest_details["terminal_graph_distance_m"] == pytest.approx(2.0)
+    assert longest_details["terminal_unknown_boundary"] is False
+    assert longest_details["terminal_rule"] == (
+        "farthest_known_terminal_by_shortest_physical_graph_distance"
+    )
 
     class SelectiveGraphSafety:
         def edge_clearance_failure(self, source, target):
@@ -784,7 +1175,10 @@ def test_easiest_preflight_fails_closed_without_a_refined_portal(monkeypatch):
     result = build_auto_dive_preflight_plan(
         manifest,
         current_position=(0.5, 0.5, 0.5),
-        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        settings=AutoDiveSettings(
+            smoothing_radius_cells=0,
+            route_goal=autodive.AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL,
+        ),
         cache_dir="/cache/devils-eye",
     )
 
@@ -876,7 +1270,10 @@ def test_easiest_preflight_publishes_only_a_composed_fixed_terminal_route(
     result = build_auto_dive_preflight_plan(
         manifest,
         current_position=(0.5, 0.5, 0.5),
-        settings=AutoDiveSettings(smoothing_radius_cells=0),
+        settings=AutoDiveSettings(
+            smoothing_radius_cells=0,
+            route_goal=autodive.AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL,
+        ),
         cache_dir="/cache/devils-eye",
     )
 
@@ -934,7 +1331,7 @@ def test_refined_portal_uses_persisted_1m_fallback_after_2m_fails(
     filled_cells = {volume.voxel_index(current): 1.0}
     calls = []
 
-    def fake_prepare(*, grid_size_m=(2.0, 1.0, 2.0), **_kwargs):
+    def fake_prepare(*, grid_size_m=(2.0, 0.25, 2.0), **_kwargs):
         grid_size = tuple(float(value) for value in grid_size_m)
         calls.append(grid_size)
         return SimpleNamespace(
@@ -944,7 +1341,7 @@ def test_refined_portal_uses_persisted_1m_fallback_after_2m_fails(
         ), {"reason": "refined_tile_graph_ready"}
 
     def fake_bridge_candidates(*, prepared_context, candidates, **_kwargs):
-        if prepared_context.grid_size == (2.0, 1.0, 2.0):
+        if prepared_context.grid_size == (2.0, 0.25, 2.0):
             return None, None, None, {
                 "reason": "refined_portal_bridge_candidates_exhausted",
                 "portal_candidate_count": len(candidates),
@@ -960,7 +1357,7 @@ def test_refined_portal_uses_persisted_1m_fallback_after_2m_fails(
         )
         return segment, portal_key, (portal_key, (2, 0, 0)), {
             "reason": "refined_portal_selected",
-            "refinement_grid_size_m": [1.0, 1.0, 1.0],
+            "refinement_grid_size_m": [1.0, 0.25, 1.0],
         }
 
     monkeypatch.setattr(
@@ -991,7 +1388,7 @@ def test_refined_portal_uses_persisted_1m_fallback_after_2m_fails(
     assert segment is not None
     assert portal_key == (1, 0, 0)
     assert portal_path == ((1, 0, 0), (2, 0, 0))
-    assert calls == [(2.0, 1.0, 2.0), (1.0, 1.0, 1.0)]
+    assert calls == [(2.0, 0.25, 2.0), (1.0, 0.25, 1.0)]
     assert details["refinement_strategy"] == "persisted_fine_1m_fallback"
     assert details["primary_2m_failure"]["reason"] == (
         "refined_portal_bridge_candidates_exhausted"
@@ -1662,6 +2059,66 @@ def test_graph_native_runtime_plan_fails_closed_without_mesh_guard(monkeypatch):
     )
 
 
+def test_graph_authority_rejects_malformed_anchor_before_loading_cache():
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0)),
+        route_cells=((0, 0), (1, 0)),
+        route_points=((0.5, 1.0, 0.5), (1.5, 1.0, 0.5)),
+    )
+    navigation = manifest["navigation"]
+    navigation["voxel_cache"] = {
+        "version": NAVIGATION_VOXEL_CACHE_VERSION,
+        "method": NAVIGATION_VOXEL_CACHE_METHOD,
+        "path": NAVIGATION_VOXEL_CACHE_NAME,
+    }
+    navigation.pop("navigation_start")
+    navigation["navigation_start_anchor"] = {
+        "position": [99.0, 1.0, 99.0],
+        "kind": "obj_surface_vertex",
+    }
+
+    with pytest.raises(NavigationVoxelGraphAuthorityError) as error:
+        autodive._authoritative_graph_navigation_context(
+            manifest,
+            cache_dir="/cache/devils-eye",
+            settings=AutoDiveSettings(),
+            diagnostics=None,
+        )
+
+    assert error.value.reason == "navigation_route_contract_stale"
+    assert error.value.status["route_contract_rebuild_reason"] == (
+        "navigation_start_anchor_malformed"
+    )
+
+
+def test_graph_authority_rejects_explicit_nonrecommended_route():
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0)),
+        route_cells=((0, 0), (1, 0)),
+        route_points=((0.5, 1.0, 0.5), (1.5, 1.0, 0.5)),
+    )
+    navigation = manifest["navigation"]
+    navigation["voxel_cache"] = {
+        "version": NAVIGATION_VOXEL_CACHE_VERSION,
+        "method": NAVIGATION_VOXEL_CACHE_METHOD,
+        "path": NAVIGATION_VOXEL_CACHE_NAME,
+    }
+    alternate = copy.deepcopy(navigation["routes"][0])
+    alternate["id"] = "alternate"
+    navigation["routes"].append(alternate)
+
+    with pytest.raises(NavigationVoxelGraphAuthorityError) as error:
+        autodive._authoritative_graph_navigation_context(
+            manifest,
+            cache_dir="/cache/devils-eye",
+            settings=AutoDiveSettings(),
+            diagnostics=None,
+            route_id="alternate",
+        )
+
+    assert error.value.reason == "navigation_route_not_recommended"
+
+
 def test_user_resume_expansion_precedes_prepared_graph_search(monkeypatch):
     manifest = _manifest_with_cached_route(
         component_cells=((0, 0), (1, 0), (2, 0)),
@@ -1836,7 +2293,211 @@ def test_graph_initial_camera_uses_route_start_when_sidecar_start_is_missing():
     )
 
 
-def test_graph_initial_camera_pose_uses_route_start_fallback(monkeypatch):
+def _complete_certified_route_corridor():
+    return {
+        "built": True,
+        "source_route_point_count": 2,
+        "certified_ingress_hint_index": 0,
+        "certified_terminal_hint_index": 1,
+        "selected_source_hint_start_index": 0,
+        "selected_source_hint_end_index": 1,
+        "complete_ingress_route": True,
+        "route_length_m": 1.0,
+        "prepared_mesh_graph": {
+            "known_terminal_reached": True,
+            "terminal_count": 1,
+            "unknown_boundary_count": 0,
+        },
+    }
+
+
+def test_certified_auto_dive_start_requires_recommended_complete_route():
+    certified_start = [1.5, 2.5, 3.5]
+    manifest = {
+        "navigation": {
+            "navigation_start": {"position": certified_start},
+            "recommended_route_id": "route-safe",
+            "route_selection_method": (
+                "longest_safe_non_circular_certified_route_v1"
+            ),
+            "routes": [
+                {
+                    "id": "route-other",
+                    "selection_method": (
+                        "longest_safe_non_circular_certified_route_v1"
+                    ),
+                    "closed_loop": False,
+                    "certified_start_position": [90.0, 91.0, 92.0],
+                    "voxel_corridor": _complete_certified_route_corridor(),
+                },
+                {
+                    "id": "route-safe",
+                    "selection_method": (
+                        "longest_safe_non_circular_certified_route_v1"
+                    ),
+                    "closed_loop": False,
+                    "starts_at_navigation_start": True,
+                    "certified_start_position": [1.5, 2.5, 3.5],
+                    "voxel_corridor": {
+                        **_complete_certified_route_corridor(),
+                        "prepared_mesh_graph": {
+                            "known_terminal_reached": True,
+                            "terminal_count": 1,
+                            "unknown_boundary_count": 0,
+                            "source_ingress_required": True,
+                            "source_ingress_point": certified_start,
+                            "source_ingress_coordinate_space": "xyz",
+                            "source_ingress_connector_required": True,
+                            "source_ingress_attachment_mode": (
+                                "executable_authored_start_connector"
+                            ),
+                            "source_ingress_connector_mesh_clear": True,
+                            "source_ingress_attachment_point": certified_start,
+                            "source_ingress_attachment_distance_m": 0.0,
+                            "source_ingress_snap_limit_m": 24.0,
+                        },
+                    },
+                },
+            ],
+        }
+    }
+
+    assert certified_auto_dive_start_position(manifest) == (1.5, 2.5, 3.5)
+
+    manifest["navigation"]["routes"][1]["voxel_corridor"]["built"] = False
+    assert certified_auto_dive_start_position(manifest) is None
+
+
+def test_certified_local_start_requires_bounded_exact_ingress_attachment():
+    manifest = {
+        "navigation": {
+            "navigation_start": {"position": [1.0, 2.0, 3.0]},
+            "recommended_route_id": "route-safe",
+            "route_selection_method": (
+                "longest_safe_non_circular_certified_route_v1"
+            ),
+            "routes": [
+                {
+                    "id": "route-safe",
+                    "selection_method": (
+                        "longest_safe_non_circular_certified_route_v1"
+                    ),
+                    "closed_loop": False,
+                    "starts_at_navigation_start": True,
+                    "certified_start_position": [1.5, 2.5, 3.5],
+                    "voxel_corridor": {
+                        **_complete_certified_route_corridor(),
+                        "prepared_mesh_graph": {
+                            "known_terminal_reached": True,
+                            "terminal_count": 1,
+                            "unknown_boundary_count": 0,
+                                "source_ingress_required": True,
+                                "source_ingress_connector_required": True,
+                                "source_ingress_attachment_mode": (
+                                    "executable_authored_start_connector"
+                                ),
+                                "source_ingress_connector_mesh_clear": True,
+                            "source_ingress_point": [1.0, 2.0, 3.0],
+                            "source_ingress_coordinate_space": "xyz",
+                            "source_ingress_attachment_point": [1.5, 2.5, 3.5],
+                            "source_ingress_attachment_distance_m": (
+                                math.sqrt(0.75)
+                            ),
+                            "source_ingress_snap_limit_m": 24.0,
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    assert certified_auto_dive_local_start_position(
+        manifest,
+        expected_start=(1.0, 2.0, 3.0),
+    ) == (1.5, 2.5, 3.5)
+
+    manifest["navigation"]["routes"][0]["voxel_corridor"][
+        "prepared_mesh_graph"
+    ]["source_ingress_snap_limit_m"] = 25.0
+    assert certified_auto_dive_local_start_position(
+        manifest,
+        expected_start=(1.0, 2.0, 3.0),
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        [1.0, 2.0],
+        [1.0, 2.0, float("nan")],
+        [1.0, 2.0, float("inf")],
+        [1.0, 2.0, True],
+        [1.0, 2.0, "3.0"],
+    ),
+)
+def test_certified_auto_dive_start_rejects_malformed_position(value):
+    manifest = {
+        "navigation": {
+            "recommended_route_id": "route-safe",
+            "routes": [
+                {
+                    "id": "route-safe",
+                    "closed_loop": False,
+                    "certified_start_position": value,
+                    "voxel_corridor": _complete_certified_route_corridor(),
+                }
+            ],
+        }
+    }
+
+    assert certified_auto_dive_start_position(manifest) is None
+
+
+def test_graph_initial_camera_prefers_certified_start_over_route_points():
+    certified_start = [0.5, 4.0, 0.5]
+    navigation = {
+        "navigation_start": {"position": certified_start},
+        "recommended_route_id": "route-main",
+        "route_selection_method": (
+            "longest_safe_non_circular_certified_route_v1"
+        ),
+        "routes": [
+            {
+                "id": "route-main",
+                "selection_method": (
+                    "longest_safe_non_circular_certified_route_v1"
+                ),
+                "closed_loop": False,
+                "starts_at_navigation_start": True,
+                "certified_start_position": certified_start,
+                "points": [10.5, 4.0, 0.5, 11.5, 4.0, 0.5],
+                "voxel_corridor": {
+                    **_complete_certified_route_corridor(),
+                    "prepared_mesh_graph": {
+                        "known_terminal_reached": True,
+                        "terminal_count": 1,
+                        "unknown_boundary_count": 0,
+                        "source_ingress_required": True,
+                        "source_ingress_point": certified_start,
+                        "source_ingress_coordinate_space": "xyz",
+                        "source_ingress_connector_required": True,
+                        "source_ingress_attachment_mode": (
+                            "executable_authored_start_connector"
+                        ),
+                        "source_ingress_connector_mesh_clear": True,
+                        "source_ingress_attachment_point": certified_start,
+                        "source_ingress_attachment_distance_m": 0.0,
+                        "source_ingress_snap_limit_m": 24.0,
+                    },
+                },
+            }
+        ],
+    }
+
+    assert autodive._navigation_start_point(navigation) == (0.5, 4.0, 0.5)
+
+
+def test_graph_initial_camera_pose_rejects_uncertified_route_start(monkeypatch):
     metrics = {
         (x, 0, 0): NavigationVoxel3DMetric(
             center=(float(x) + 0.5, 4.0, 0.5),
@@ -1882,18 +2543,76 @@ def test_graph_initial_camera_pose_uses_route_start_fallback(monkeypatch):
         ),
     )
 
-    pose = build_auto_dive_initial_camera_pose(
-        manifest,
-        settings=AutoDiveSettings(smoothing_radius_cells=0),
-        cache_dir="/cache/devils-eye",
-        require_voxel_graph=True,
+    with pytest.raises(
+        NavigationConfigurationError,
+        match="no complete certified entrance route",
+    ):
+        build_auto_dive_initial_camera_pose(
+            manifest,
+            settings=AutoDiveSettings(smoothing_radius_cells=0),
+            cache_dir="/cache/devils-eye",
+            require_voxel_graph=True,
+        )
+
+
+def test_graph_initial_camera_pose_rejects_graph_that_starts_mid_cave(
+    monkeypatch,
+):
+    manifest = _manifest_with_cached_route(
+        component_cells=((0, 0), (1, 0), (2, 0)),
+        route_cells=((0, 0), (1, 0), (2, 0)),
+        route_points=(
+            (0.5, 1.0, 0.5),
+            (1.5, 1.0, 0.5),
+            (2.5, 1.0, 0.5),
+        ),
+    )
+    graph = build_navigation_voxel_3d_graph(
+        {
+            (10, 0, 0): NavigationVoxel3DMetric(
+                center=(10.5, 1.0, 0.5),
+                footprint_cell=(10, 0),
+                available_volume_m3=2.0,
+                free_voxel_count=2,
+                min_clearance_m=1.0,
+                mean_clearance_m=1.0,
+                progress_m=0.0,
+            ),
+            (11, 0, 0): NavigationVoxel3DMetric(
+                center=(11.5, 1.0, 0.5),
+                footprint_cell=(11, 0),
+                available_volume_m3=2.0,
+                free_voxel_count=2,
+                min_clearance_m=1.0,
+                mean_clearance_m=1.0,
+                progress_m=1.0,
+            ),
+        },
+        grid_size_m=(1.0, 1.0, 1.0),
+    )
+    atlas = NavigationVoxelAtlas(tiles=(), prepared_3d_graph=graph)
+    monkeypatch.setattr(
+        autodive,
+        "_authoritative_graph_navigation_context",
+        lambda *_args, **_kwargs: (
+            atlas,
+            {"route_id": "cached-main"},
+        ),
     )
 
-    assert pose.position == (0.5, 4.0, 0.5)
-    assert pose.yaw_deg == pytest.approx(0.0)
+    with pytest.raises(
+        NavigationConfigurationError,
+        match="does not match the prepared graph start",
+    ):
+        build_auto_dive_initial_camera_pose(
+            manifest,
+            settings=AutoDiveSettings(smoothing_radius_cells=0),
+            cache_dir="/cache/devils-eye",
+            require_voxel_graph=True,
+        )
 
 
-def test_auto_dive_initial_camera_pose_prefers_clear_endpoint():
+def test_auto_dive_initial_camera_pose_prefers_certified_route_start():
     component_cells = [
         (x, z)
         for x in range(10)
@@ -1929,12 +2648,10 @@ def test_auto_dive_initial_camera_pose_prefers_clear_endpoint():
         ),
     )
 
-    assert pose.position != (0.5, 1.0, 0.5)
-    assert pose.position[0] <= 2.5 or pose.position[0] >= 7.5
-    assert pose.position[2] >= 1.5
+    assert pose.position == (0.5, 1.0, 0.5)
 
 
-def test_auto_dive_initial_camera_pose_uses_physical_end_not_cached_midroute():
+def test_auto_dive_initial_camera_pose_keeps_certified_cached_start():
     manifest = _manifest_with_cached_midroute_in_long_component()
 
     pose = build_auto_dive_initial_camera_pose(
@@ -1945,8 +2662,7 @@ def test_auto_dive_initial_camera_pose_uses_physical_end_not_cached_midroute():
         ),
     )
 
-    assert not 8.0 <= pose.position[0] <= 13.0
-    assert pose.position[0] <= 4.5 or pose.position[0] >= 16.5
+    assert pose.position == (8.5, 1.0, 2.5)
 
 
 def test_auto_dive_replan_inside_current_cell_targets_next_cell_not_same_center():
@@ -2674,6 +3390,41 @@ def test_auto_dive_enables_recovery_when_dense_triangles_are_chunked(tmp_path):
 
     assert guard is not None
     assert guard.mesh_recovery_enabled is True
+
+
+def test_auto_dive_mesh_guard_spatial_index_prunes_distant_chunks(tmp_path):
+    manifest = _split_manifest()
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
+        manifest,
+        cache_dir=str(tmp_path / "cache"),
+    )
+
+    assert guard is not None
+    candidates = guard._candidate_chunks(
+        np.asarray((0.1, 0.1, 0.1), dtype=np.float64),
+        np.asarray((1.0, 1.0, 1.0), dtype=np.float64),
+    )
+
+    assert tuple(chunk.cell for chunk in candidates) == ((0, 0, 0),)
+    assert len(candidates) < len(manifest["chunks"])
+
+
+def test_auto_dive_mesh_guard_spatial_index_keeps_boundary_chunks(tmp_path):
+    guard = CachedChunkMeshCollisionGuard.from_manifest(
+        _split_manifest(),
+        cache_dir=str(tmp_path / "cache"),
+    )
+
+    assert guard is not None
+    candidates = guard._candidate_chunks(
+        np.asarray((2.0, 0.1, 0.1), dtype=np.float64),
+        np.asarray((2.0, 1.0, 1.0), dtype=np.float64),
+    )
+
+    assert {chunk.cell for chunk in candidates} == {
+        (0, 0, 0),
+        (1, 0, 0),
+    }
 
 
 def test_auto_dive_mesh_guard_bounds_decoded_triangle_residency(monkeypatch, tmp_path):
@@ -3762,6 +4513,7 @@ def _l_bend_manifest():
 
 
 def _manifest_with_cached_navigation_route():
+    certified_start = [20.5, 1.5, 0.5]
     chunks = {
         f"{x}_0_0": {
             "bounds_min": [float(x), 0.0, 0.0],
@@ -3777,14 +4529,21 @@ def _manifest_with_cached_navigation_route():
         "navigation": {
             "version": NAVIGATION_METADATA_VERSION,
             "method": NAVIGATION_METADATA_METHOD,
+            "navigation_start": {"position": certified_start},
             "recommended_route_id": "cached-main",
+            "route_selection_method": (
+                "longest_safe_non_circular_certified_route_v1"
+            ),
             "routes": [
                 {
                     "id": "cached-main",
                     "kind": "centerline",
                     "source": "test",
-                    "selection_method": "physical_endpoint_diameter_v1",
+                    "selection_method": (
+                        "longest_safe_non_circular_certified_route_v1"
+                    ),
                     "closed_loop": False,
+                    "starts_at_navigation_start": True,
                     "length_m": 2.0,
                     "footprint_cell_size": 1.0,
                     "footprint_cell_count": 3,
@@ -3805,6 +4564,33 @@ def _manifest_with_cached_navigation_route():
                     "point_source": "surface_vertical_gap",
                     "endpoint_percentile": 70.0,
                     "endpoint_threshold_clearance_cells": 1,
+                    "certified_start_position": [20.5, 1.5, 0.5],
+                    "voxel_corridor": {
+                        "built": True,
+                        "source_route_point_count": 3,
+                        "certified_ingress_hint_index": 0,
+                        "certified_terminal_hint_index": 2,
+                        "selected_source_hint_start_index": 0,
+                        "selected_source_hint_end_index": 2,
+                        "complete_ingress_route": True,
+                        "route_length_m": 2.0,
+                        "prepared_mesh_graph": {
+                            "known_terminal_reached": True,
+                            "terminal_count": 1,
+                            "unknown_boundary_count": 0,
+                            "source_ingress_required": True,
+                            "source_ingress_point": certified_start,
+                            "source_ingress_coordinate_space": "xyz",
+                            "source_ingress_connector_required": True,
+                            "source_ingress_attachment_mode": (
+                                "executable_authored_start_connector"
+                            ),
+                            "source_ingress_connector_mesh_clear": True,
+                            "source_ingress_attachment_point": certified_start,
+                            "source_ingress_attachment_distance_m": 0.0,
+                            "source_ingress_snap_limit_m": 24.0,
+                        },
+                    },
                 }
             ],
         },
@@ -3867,11 +4653,17 @@ def _manifest_with_duplicate_cached_navigation_points():
             "version": NAVIGATION_METADATA_VERSION,
             "method": NAVIGATION_METADATA_METHOD,
             "recommended_route_id": "cached-main",
+            "route_selection_method": (
+                "longest_safe_non_circular_certified_route_v1"
+            ),
             "routes": [
                 {
                     "id": "cached-main",
                     "kind": "centerline",
                     "source": "test",
+                    "selection_method": (
+                        "longest_safe_non_circular_certified_route_v1"
+                    ),
                     "closed_loop": False,
                     "length_m": 2.0,
                     "footprint_cell_size": 1.0,
@@ -3893,6 +4685,18 @@ def _manifest_with_duplicate_cached_navigation_points():
                     "point_source": "surface_vertical_gap",
                     "endpoint_percentile": 70.0,
                     "endpoint_threshold_clearance_cells": 1,
+                    "certified_start_position": [20.5, 1.5, 0.5],
+                    "voxel_corridor": {
+                        "built": True,
+                        "source_route_point_count": 3,
+                        "certified_terminal_hint_index": 2,
+                        "route_length_m": 2.0,
+                        "prepared_mesh_graph": {
+                            "known_terminal_reached": True,
+                            "terminal_count": 1,
+                            "unknown_boundary_count": 0,
+                        },
+                    },
                 }
             ],
         },
@@ -3954,6 +4758,20 @@ def _manifest_with_cached_topography_route():
                     "point_source": "surface_vertical_gap_raw",
                     "endpoint_percentile": 70.0,
                     "endpoint_threshold_clearance_cells": 1,
+                    "certified_start_position": [
+                        float(value) for value in points[:3]
+                    ],
+                    "voxel_corridor": {
+                        "built": True,
+                        "source_route_point_count": len(cells),
+                        "certified_terminal_hint_index": len(cells) - 1,
+                        "route_length_m": float(len(cells) - 1),
+                        "prepared_mesh_graph": {
+                            "known_terminal_reached": True,
+                            "terminal_count": 1,
+                            "unknown_boundary_count": 0,
+                        },
+                    },
                 }
             ],
         },
@@ -4122,6 +4940,9 @@ def _manifest_with_cached_route(
     route_cells,
     route_points,
 ):
+    certified_start = [float(value) for value in route_points[0]]
+    route_point_count = len(route_points)
+    route_length_m = float(len(route_cells) - 1)
     return {
         "chunk_size": 1.0,
         "footprint_cell_size": 1.0,
@@ -4140,13 +4961,21 @@ def _manifest_with_cached_route(
         "navigation": {
             "version": NAVIGATION_METADATA_VERSION,
             "method": NAVIGATION_METADATA_METHOD,
+            "navigation_start": {"position": certified_start},
             "recommended_route_id": "cached-main",
+            "route_selection_method": (
+                "longest_safe_non_circular_certified_route_v1"
+            ),
             "routes": [
                 {
                     "id": "cached-main",
                     "kind": "centerline",
                     "source": "test",
+                    "selection_method": (
+                        "longest_safe_non_circular_certified_route_v1"
+                    ),
                     "closed_loop": False,
+                    "starts_at_navigation_start": True,
                     "length_m": float(len(route_cells) - 1),
                     "footprint_cell_size": 1.0,
                     "footprint_cell_count": len(component_cells),
@@ -4169,6 +4998,33 @@ def _manifest_with_cached_route(
                     "point_source": "surface_vertical_gap_raw",
                     "endpoint_percentile": 70.0,
                     "endpoint_threshold_clearance_cells": 1,
+                    "certified_start_position": certified_start,
+                    "voxel_corridor": {
+                        "built": True,
+                        "source_route_point_count": route_point_count,
+                        "certified_ingress_hint_index": 0,
+                        "certified_terminal_hint_index": route_point_count - 1,
+                        "selected_source_hint_start_index": 0,
+                        "selected_source_hint_end_index": route_point_count - 1,
+                        "complete_ingress_route": True,
+                        "route_length_m": route_length_m,
+                        "prepared_mesh_graph": {
+                            "known_terminal_reached": True,
+                            "terminal_count": 1,
+                            "unknown_boundary_count": 0,
+                            "source_ingress_required": True,
+                            "source_ingress_point": certified_start,
+                            "source_ingress_coordinate_space": "xyz",
+                            "source_ingress_connector_required": True,
+                            "source_ingress_attachment_mode": (
+                                "executable_authored_start_connector"
+                            ),
+                            "source_ingress_connector_mesh_clear": True,
+                            "source_ingress_attachment_point": certified_start,
+                            "source_ingress_attachment_distance_m": 0.0,
+                            "source_ingress_snap_limit_m": 24.0,
+                        },
+                    },
                 }
             ],
         },

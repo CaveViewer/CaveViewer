@@ -1277,7 +1277,7 @@ section { position: relative; }
           <li class="step">
             <div>
               <h4>Launch CaveViewer</h4>
-              <p>You'll land on the splash screen. Click Open Map Folder… — or use the Map Library if you don't have a scan of your own yet and want to try it first.</p>
+              <p>You'll land on the splash screen. Click Open Map Folder… — or Open Recorded Dive… to replay a shared route. You can also use the Map Library if you don't have a scan of your own yet.</p>
             </div>
           </li>
           <li class="step">
@@ -1286,13 +1286,19 @@ section { position: relative; }
               <p>Choose the folder with your <code>.obj</code> (+ <code>.mtl</code> + textures) or <code>.glb</code> file. The first time you open a new map it imports and caches it once — every open after that is instant.</p>
             </div>
           </li>
+          <li class="step">
+            <div>
+              <h4>Replay a shared route</h4>
+              <p>Choose Open Recorded Dive… and select a completed <code>.jsonl</code> trace. Keep it in the map's <code>_guided_dive_traces</code> folder (or open that map once so it is in Recent Maps). CaveViewer checks the matching map cache, loads the route ahead, and reproduces the recorded camera path. Space pauses or resumes; moving takes manual control.</p>
+            </div>
+          </li>
         </ol>
         <div class="shot-pair">
           <div>
             <div class="shot">
               <a class="shot-link" href="images/screenshot-splash.png" target="_blank" rel="noopener"><img src="images/screenshot-splash.png" alt="CaveViewer's splash screen with the logo, version number, Open Map Folder button, Preferences link, and Map Library panel"></a>
             </div>
-            <p class="shot-caption">What you see on launch — click Open Map Folder… or try a standard library map.</p>
+            <p class="shot-caption">What you see on launch — open a map folder, a Recorded Dive, or a standard library map.</p>
           </div>
           <div>
             <div class="shot">

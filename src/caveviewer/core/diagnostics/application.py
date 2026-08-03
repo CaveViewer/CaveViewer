@@ -1,8 +1,8 @@
 """Process lifecycle and exception diagnostics for CaveViewer.
 
-The application diagnostic writer is deliberately independent of the GUI.  It
-can therefore record failures from the main thread and from worker threads,
-while the GUI and Guided Dive blackbox share the same append-only JSONL file.
+The application diagnostic writer is deliberately independent of the GUI. It
+can therefore record failures from the main thread and from worker threads
+when an optional diagnostic consumer binds an append-only JSONL file.
 """
 
 from __future__ import annotations
@@ -55,10 +55,9 @@ def append_jsonl_record(
 ) -> bool:
     """Append one safe JSON record using the per-path diagnostic lock.
 
-    Both the application lifecycle writer and the Guided Dive blackbox use
-    this function.  Sharing the lock prevents their records from interleaving
-    when a worker exception arrives while the render thread is writing a
-    navigation event.
+    Application lifecycle writers and optional diagnostic consumers use this
+    function. Sharing the lock prevents records from interleaving when a
+    worker exception arrives while another thread is writing diagnostics.
     """
     normalized = os.path.abspath(os.fspath(path))
     try:
@@ -100,10 +99,9 @@ def get_active_application_diagnostics() -> "ApplicationDiagnostics | None":
 class ApplicationDiagnostics:
     """Best-effort process lifecycle and exception recorder.
 
-    The sink has no output path until a Guided Dive blackbox binds the active
-    map cache.  This keeps application diagnostics opt-in with the existing
-    ``CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS`` preference while still allowing the
-    process hooks to be installed before the viewer starts.
+    The sink has no output path until an optional diagnostics consumer binds
+    one. This allows process hooks to be installed before a viewer session
+    without creating map-cache files during ordinary viewing.
     """
 
     def __init__(
@@ -141,7 +139,7 @@ class ApplicationDiagnostics:
             return self._path
 
     def bind_path(self, path: str | os.PathLike[str], **context: Any) -> None:
-        """Bind application events to the active Guided Dive JSONL path."""
+        """Bind application events to an optional JSONL diagnostic path."""
         normalized = os.path.abspath(os.fspath(path))
         with self._lock:
             if self._closed:

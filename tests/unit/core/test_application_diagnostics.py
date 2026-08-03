@@ -18,7 +18,7 @@ def _records(path):
 
 
 def test_application_diagnostics_records_lifecycle(tmp_path):
-    path = tmp_path / "auto_dive_debug.jsonl"
+    path = tmp_path / "application_diagnostics.jsonl"
     diagnostics = ApplicationDiagnostics(
         clock=lambda: "2026-07-27T19:00:00.000+00:00",
         monotonic=lambda: 10.0,

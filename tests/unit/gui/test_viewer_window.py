@@ -14,6 +14,7 @@ import pytest
 
 from caveviewer.core.map import cache_paths
 from caveviewer.gui import recording, viewer_window
+from caveviewer.gui.manual_dive_trace import ManualDivePose
 from caveviewer.gui.platform.app_identity import tk_root_options
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
@@ -79,16 +80,6 @@ class FakeLogger:
         self.debug_messages.append(self._format(message, args))
 
 
-class FakeAutoDiveBlackbox:
-    def __init__(self):
-        self.events = []
-        self.closed = False
-
-    def record(self, event, **payload):
-        self.events.append((event, payload))
-
-    def close(self):
-        self.closed = True
 
 
 class FakeFuture:
@@ -269,6 +260,207 @@ def _active_recording_session(
     )
 
 
+def _manual_trace_camera(position=(1.0, 2.0, 3.0)):
+    return SimpleNamespace(
+        position=np.asarray(position, dtype=np.float64),
+        forward=lambda: np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        up=lambda: np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        right=lambda: np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        yaw=0.0,
+        pitch=0.0,
+        roll=0.0,
+        move_speed=4.0,
+    )
+
+
+class FakeManualDiveTrace:
+    def __init__(self):
+        self.writer_failed = False
+        self.output_path = "/maps/cave/_guided_dive_traces/trace.jsonl"
+        self.observed = []
+        self.stopped = []
+        self.discontinuities = []
+        self.result = None
+
+    def observe(self, pose):
+        self.observed.append(pose)
+
+    def stop(self, pose, *, reason):
+        self.stopped.append((pose, reason))
+        return self.output_path
+
+    def mark_discontinuity(self, before, after, *, reason):
+        self.discontinuities.append((before, after, reason))
+
+    def poll_result(self):
+        return self.result
+
+
+def test_manual_trace_hotkey_toggles_only_for_shift_t():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(T=84))
+    window._shift_is_down = lambda _modifiers: True
+    calls = []
+    window._toggle_manual_dive_trace = lambda: calls.append("toggle") or True
+
+    assert window._handle_manual_dive_trace_hotkey(84, None) is True
+    assert calls == ["toggle"]
+    assert window._handle_manual_dive_trace_hotkey(85, None) is False
+
+    window._shift_is_down = lambda _modifiers: False
+    assert window._handle_manual_dive_trace_hotkey(84, None) is False
+    assert calls == ["toggle"]
+
+
+def test_recorded_dive_space_hotkey_toggles_pause_only_while_active():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(SPACE=32))
+    window._recorded_dive_controller = SimpleNamespace(active=True)
+    calls = []
+    window._toggle_recorded_dive_pause = lambda: calls.append("toggle") or True
+
+    assert window._handle_recorded_dive_hotkey(32, None) is True
+    assert calls == ["toggle"]
+    assert window._handle_recorded_dive_hotkey(31, None) is False
+
+    window._recorded_dive_controller.active = False
+    assert window._handle_recorded_dive_hotkey(32, None) is False
+
+
+def test_recorded_dive_readiness_requires_next_pose_chunks_on_gpu():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = True
+    pose = SimpleNamespace(position=(51.0, 2.0, 3.0))
+    window._recorded_dive_controller = SimpleNamespace(
+        candidate_elapsed=lambda **_kwargs: 1.0,
+        trace=SimpleNamespace(pose_at=lambda _elapsed: pose),
+    )
+    world = SimpleNamespace(
+        config=SimpleNamespace(load_radius_cells=3),
+        cell_for_position=lambda _position: (1, 0, 0),
+        available_cells_in_radius=lambda _center, _radius: frozenset({(1, 0, 0)}),
+        loaded_cells={(1, 0, 0)},
+        _failed_cells={},
+        _lock=None,
+    )
+    window.world = world
+
+    assert window._recorded_dive_chunks_ready(now=10.0) is True
+
+    world.loaded_cells.clear()
+    assert window._recorded_dive_chunks_ready(now=10.0) is False
+
+
+def test_recorded_dive_progress_reports_trace_time_and_loading_state():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._recorded_dive_controller = SimpleNamespace(
+        active=True,
+        state=viewer_window.recorded_dive.RecordedDivePlaybackState.BUFFERING,
+        elapsed_s=65.0,
+        trace=SimpleNamespace(duration_s=125.0),
+    )
+    calls = []
+    window._render_dive_status_prompt = (
+        lambda window_size, **kwargs: calls.append((window_size, kwargs))
+    )
+
+    assert window._render_recorded_dive_progress((800, 600)) is True
+    assert calls == [
+        (
+            (800, 600),
+            {
+                "title": "Recorded Dive",
+                "note": "Loading nearby cave chunks… 1:05 / 2:05",
+            },
+        )
+    ]
+
+
+def test_manual_trace_samples_the_current_camera_pose():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.camera = _manual_trace_camera()
+    recorder = FakeManualDiveTrace()
+    window._manual_dive_trace = recorder
+    window._manual_dive_trace_writers = []
+
+    window._update_manual_dive_trace()
+    window.camera.position[:] = (4.0, 5.0, 6.0)
+    window._update_manual_dive_trace()
+
+    assert [pose.position for pose in recorder.observed] == [
+        (1.0, 2.0, 3.0),
+        (4.0, 5.0, 6.0),
+    ]
+
+
+def test_manual_trace_stop_is_nonblocking_and_keeps_writer_for_polling():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.camera = _manual_trace_camera()
+    recorder = FakeManualDiveTrace()
+    window._manual_dive_trace = recorder
+    window._manual_dive_trace_writers = []
+
+    assert window._stop_manual_dive_trace(reason="map_changed") is True
+
+    assert window._manual_dive_trace is None
+    assert window._manual_dive_trace_writers == [recorder]
+    assert recorder.stopped == [
+        (
+            ManualDivePose.from_camera(window.camera),
+            "map_changed",
+        )
+    ]
+
+
+def test_manual_trace_marks_bookmark_recall_as_discontinuity():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+    window.camera = _manual_trace_camera()
+    window._bookmarks = {
+        1: {
+            "position": [10.0, 20.0, 30.0],
+            "yaw": 0.5,
+            "pitch": 0.25,
+        }
+    }
+    window._navigation_position_is_allowed = lambda _position: True
+    window.controls_overlay = SimpleNamespace(show_panel=lambda: None)
+    recorder = FakeManualDiveTrace()
+    window._manual_dive_trace = recorder
+
+    assert window._recall_bookmark_slot(1) is True
+
+    before, after, reason = recorder.discontinuities[0]
+    assert before.position == (1.0, 2.0, 3.0)
+    assert after.position == (10.0, 20.0, 30.0)
+    assert reason == "bookmark_recall"
+
+
+def test_manual_trace_active_renders_persistent_save_prompt():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._manual_dive_trace = FakeManualDiveTrace()
+    calls = []
+    window._render_dive_status_prompt = (
+        lambda window_size, **kwargs: calls.append((window_size, kwargs))
+    )
+
+    window._render_dive_status((800, 600))
+
+    assert calls == [
+        (
+            (800, 600),
+            {
+                "title": "Manual route trace active",
+                "note": (
+                    "Fly the reference route, then press Shift + T to save."
+                ),
+            },
+        )
+    ]
+
+
 def test_desktop_relative_window_size_uses_eighty_percent_per_axis(monkeypatch):
     class FakeRoot:
         def __init__(self):
@@ -426,651 +618,91 @@ def test_optional_ms_formatter_reports_disabled_timer():
     assert viewer_window.CaveViewerWindow._format_optional_ms(9.34) == "9.3ms"
 
 
-def test_auto_dive_settings_are_built_from_runtime_preferences():
-    settings = viewer_window._auto_dive_settings_from_mapping(
-        {
-            "auto_dive_acceleration": "1.4",
-            "auto_dive_render_distance_cells": "14",
-            "auto_dive_smoothing_radius_cells": "4",
-        }
-    )
-
-    assert settings.render_distance_cells == 14
-    assert settings.speed_m_per_second == pytest.approx(
-        viewer_window._auto_dive_speed_from_acceleration(1.4)
-    )
-    assert settings.smoothing_radius_cells == 4
 
 
-def test_auto_dive_settings_allow_explicit_environment_overrides(monkeypatch):
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_ACCELERATION", "2.0")
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS", "18")
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS", "7")
-
-    settings = viewer_window._auto_dive_settings_with_env_overrides(
-        viewer_window.AutoDiveSettings(
-            render_distance_cells=10,
-            speed_m_per_second=120.0 * 0.3048 / 60.0,
-            smoothing_radius_cells=4,
-        )
-    )
-
-    assert settings.render_distance_cells == 18
-    assert settings.speed_m_per_second == pytest.approx(
-        viewer_window._auto_dive_speed_from_acceleration(2.0)
-    )
-    assert settings.smoothing_radius_cells == 7
 
 
-def test_auto_dive_settings_preserve_legacy_speed_overrides(monkeypatch):
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE", "150")
-
-    settings = viewer_window._auto_dive_settings_with_env_overrides(
-        viewer_window.AutoDiveSettings(
-            render_distance_cells=10,
-            speed_m_per_second=120.0 * 0.3048 / 60.0,
-            smoothing_radius_cells=4,
-        )
-    )
-
-    assert settings.speed_m_per_second == pytest.approx(150.0 * 0.3048 / 60.0)
 
 
-def test_auto_dive_diagnostics_can_be_enabled_from_preferences(monkeypatch):
-    monkeypatch.delenv("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS", raising=False)
-    monkeypatch.setattr(
-        viewer_window,
-        "load_preferences",
-        lambda: {"auto_dive_diagnostics": "1"},
-    )
-
-    assert viewer_window._auto_dive_diagnostics_enabled_from_preferences() is True
 
 
-def test_auto_dive_diagnostics_environment_override_wins(monkeypatch):
-    monkeypatch.setenv("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS", "0")
-    monkeypatch.setattr(
-        viewer_window,
-        "load_preferences",
-        lambda: {"auto_dive_diagnostics": "1"},
-    )
-
-    assert viewer_window._auto_dive_diagnostics_enabled_from_preferences() is False
 
 
-def test_auto_dive_navigation_context_contains_bounded_cache_and_algorithm_metadata():
-    settings = viewer_window.AutoDiveSettings(voxel_max_cells=321)
+
+
+def test_map_initial_camera_ignores_navigation_start_metadata():
     manifest = {
-        "version": 7,
-        "source_obj": "devils_eye.obj",
-        "chunk_size": 8.0,
-        "footprint_cell_size": 1.5,
-        "triangle_count": 12,
         "chunks": {
-            "0,0,0": {
-                "bounds_min": [-1.0, -2.0, -3.0],
-                "bounds_max": [4.0, 5.0, 6.0],
-            },
-            "1,0,0": {
-                "bounds_min": [4.0, 0.0, -2.0],
-                "bounds_max": [10.0, 6.0, 8.0],
-            },
+            "first": {
+                "bounds_min": [-10.0, -4.0, 2.0],
+                "bounds_max": [10.0, 4.0, 6.0],
+            }
         },
         "navigation": {
-            "version": 1,
-            "method": "footprint_centerline_paths_v1",
-            "route_count": 2,
-            "recommended_route_id": "route-0",
-            "surface_driven": True,
-            "navigation_footprint_source": "manifest_footprint",
+            "routes": [{"certified_start_position": [100.5, 20.5, -30.5]}]
         },
     }
 
-    context = viewer_window._auto_dive_navigation_context(
-        manifest,
-        "/cache/devils-eye",
-        settings,
-    )
+    position = viewer_window._map_initial_camera_position(manifest)
 
-    assert context["chunk_count"] == 2
-    assert context["triangle_count"] == 12
-    assert context["map_bounds_min"] == [-1.0, -2.0, -3.0]
-    assert context["map_bounds_max"] == [10.0, 6.0, 8.0]
-    assert context["navigation_metadata"]["recommended_route_id"] == "route-0"
-    assert context["algorithm_versions"]["curvature"] == "rolling_turn_density_v1"
-    assert context["settings"]["voxel_max_cells"] == 321
+    assert np.allclose(position, [0.0, 0.0, 4.0])
 
 
-def test_auto_dive_initial_camera_pose_uses_runtime_preferences(monkeypatch):
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window.manifest = {"chunks": {}}
-    settings = viewer_window.AutoDiveSettings(smoothing_radius_cells=3)
-    pose = SimpleNamespace(position=(1.0, 2.0, 3.0), yaw_deg=45.0, pitch_deg=5.0)
-    calls = []
-
-    monkeypatch.setattr(
-        viewer_window,
-        "_auto_dive_settings_from_preferences",
-        lambda: settings,
-    )
-    monkeypatch.setattr(
-        viewer_window,
-        "build_auto_dive_initial_camera_pose",
-        lambda manifest, *, settings, require_voxel_graph: calls.append(
-            (manifest, settings, require_voxel_graph)
-        ) or pose,
-    )
-
-    assert window._auto_dive_initial_camera_pose() is pose
-    assert calls == [(window.manifest, settings, True)]
 
 
-def _initial_auto_dive_pose_window():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window.manifest = {"source_obj": "/maps/devils_eye.obj"}
-    window.cache_dir = "/cache/devils-eye"
-    window.camera = viewer_window.FlyCamera(
-        position=(1.0, 2.0, 3.0),
-        yaw_deg=-90.0,
-        pitch_deg=0.0,
-    )
-    window.world = SimpleNamespace()
-    window._has_map_loaded = True
-    window._benchmark_controller = None
-    window._auto_dive_controller = None
-    window._auto_dive_start_future = None
-    window._initial_auto_dive_pose_executor = None
-    window._initial_auto_dive_pose_future = None
-    window._initial_auto_dive_pose_manifest = None
-    window._initial_auto_dive_pose_cache_dir = None
-    window._initial_auto_dive_pose_start_position = None
-    window._initial_auto_dive_pose_start_yaw = None
-    window._initial_auto_dive_pose_start_pitch = None
-    window._initial_auto_dive_pose_start_roll = None
-    window._auto_dive_start_after_initial_pose = False
-    window._initial_chunks_loaded = True
-    window._initial_visual_ready = True
-    window._initial_visual_ready_logged = True
-    window._chunk_prep_progress = 1.0
-    window._chunk_prep_complete_until = 10.0
-    window._chunk_prep_completion_armed = True
-    reset_calls = []
-    window.import_progress_panel = SimpleNamespace(
-        reset_progress=lambda: reset_calls.append("reset")
-    )
-    window._reset_calls = reset_calls
-    return window
-
-
-def test_initial_auto_dive_pose_queues_without_blocking(monkeypatch):
-    window = _initial_auto_dive_pose_window()
-    settings = viewer_window.AutoDiveSettings(smoothing_radius_cells=3)
-    future = FakeFuture(done=False)
-    executor = FakeExecutor(future)
-
-    monkeypatch.setattr(
-        viewer_window,
-        "_auto_dive_settings_from_preferences",
-        lambda: settings,
-    )
-    monkeypatch.setattr(
-        viewer_window,
-        "ThreadPoolExecutor",
-        lambda **_kwargs: executor,
-    )
-
-    assert window._start_initial_auto_dive_pose(window.camera.position) is True
-
-    assert window._initial_auto_dive_pose_future is future
-    assert len(executor.submit_calls) == 1
-    fn, args, kwargs = executor.submit_calls[0]
-    assert fn is viewer_window.build_auto_dive_initial_camera_pose
-    assert args == (window.manifest,)
-    assert kwargs["settings"] is settings
-    assert kwargs["require_voxel_graph"] is True
-    assert np.allclose(
-        window._initial_auto_dive_pose_start_position,
-        [1.0, 2.0, 3.0],
-    )
-    assert window._initial_auto_dive_pose_start_yaw == pytest.approx(
-        np.deg2rad(-90.0)
-    )
-
-
-def test_initial_auto_dive_pose_applies_if_camera_unchanged(monkeypatch):
-    window = _initial_auto_dive_pose_window()
-    pose = SimpleNamespace(position=(10.0, 20.0, 30.0), yaw_deg=45.0, pitch_deg=8.0)
-    future = FakeFuture(pose)
-    executor = FakeExecutor(future)
-
-    monkeypatch.setattr(
-        viewer_window,
-        "ThreadPoolExecutor",
-        lambda **_kwargs: executor,
-    )
-
-    assert window._start_initial_auto_dive_pose(window.camera.position) is True
-    window._update_initial_auto_dive_pose()
-
-    assert np.allclose(window.camera.position, [10.0, 20.0, 30.0])
-    assert np.degrees(window.camera.yaw) == pytest.approx(45.0)
-    assert np.degrees(window.camera.pitch) == pytest.approx(8.0)
-    assert window._initial_auto_dive_pose_future is None
-    assert executor.shutdown_calls == [
-        {"wait": False, "cancel_futures": True}
-    ]
-    assert window._initial_chunks_loaded is False
-    assert window._initial_visual_ready is False
-    assert window._chunk_prep_progress == 0.0
-    assert window._reset_calls == ["reset"]
-
-
-def test_initial_auto_dive_pose_does_not_snap_after_camera_input(monkeypatch):
-    window = _initial_auto_dive_pose_window()
-    original_camera = window.camera
-    pose = SimpleNamespace(position=(10.0, 20.0, 30.0), yaw_deg=45.0, pitch_deg=8.0)
-    future = FakeFuture(pose)
-    executor = FakeExecutor(future)
-
-    monkeypatch.setattr(
-        viewer_window,
-        "ThreadPoolExecutor",
-        lambda **_kwargs: executor,
-    )
-
-    assert window._start_initial_auto_dive_pose(window.camera.position) is True
-    window.camera.yaw = window.camera.yaw + np.deg2rad(1.0)
-    window._update_initial_auto_dive_pose()
-
-    assert window.camera is original_camera
-    assert np.allclose(window.camera.position, [1.0, 2.0, 3.0])
-    assert window._initial_auto_dive_pose_future is None
-    assert executor.shutdown_calls == [
-        {"wait": False, "cancel_futures": True}
-    ]
-    assert window._reset_calls == []
-
-
-def test_initial_auto_dive_pose_cancel_shuts_down_executor():
-    window = _initial_auto_dive_pose_window()
-    future = FakeFuture(done=False)
-    executor = FakeExecutor(future)
-    window._initial_auto_dive_pose_executor = executor
-    window._initial_auto_dive_pose_future = future
-    window._initial_auto_dive_pose_start_position = window.camera.position.copy()
-
-    assert window._cancel_initial_auto_dive_pose() is True
-
-    assert future.cancelled is True
-    assert executor.shutdown_calls == [
-        {"wait": False, "cancel_futures": True}
-    ]
-    assert window._initial_auto_dive_pose_future is None
-
-
-def test_auto_dive_start_waits_for_initial_graph_pose():
-    window = _initial_auto_dive_pose_window()
-    pose = SimpleNamespace(
-        position=(10.0, 20.0, 30.0),
-        yaw_deg=45.0,
-        pitch_deg=8.0,
-    )
-    future = FakeFuture(pose, done=False)
-    executor = FakeExecutor(future)
-    window._initial_auto_dive_pose_future = future
-    window._initial_auto_dive_pose_executor = executor
-    window._initial_auto_dive_pose_manifest = window.manifest
-    window._initial_auto_dive_pose_cache_dir = window.cache_dir
-    window._initial_auto_dive_pose_start_position = window.camera.position.copy()
-    window._initial_auto_dive_pose_start_yaw = window.camera.yaw
-    window._initial_auto_dive_pose_start_pitch = window.camera.pitch
-    window._initial_auto_dive_pose_start_roll = window.camera.roll
-
-    assert window._start_auto_dive() is True
-    assert window._auto_dive_start_after_initial_pose is True
-    assert window._auto_dive_start_future is None
-
-    resumed = []
-    window._start_auto_dive = (
-        lambda: resumed.append(tuple(window.camera.position)) or True
-    )
-    future._done = True
-    window._update_initial_auto_dive_pose()
-
-    assert resumed == [(10.0, 20.0, 30.0)]
-    assert window._auto_dive_start_after_initial_pose is False
-
-
-def _auto_dive_start_window():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window.manifest = {"source_obj": "/maps/devils_eye.obj"}
-    window.cache_dir = "/cache/devils-eye"
-    window.camera = SimpleNamespace(
-        position=np.array([1.0, 2.0, 3.0], dtype=np.float64),
-        yaw=0.25,
-        pitch=-0.1,
-    )
-    window.world = SimpleNamespace(config=SimpleNamespace(load_radius_cells=3))
-    window._has_map_loaded = True
-    window._benchmark_controller = None
-    window._navigation_guard_enabled = False
-    window._auto_dive_controller = None
-    window._auto_dive_previous_render_distance = None
-    window._auto_dive_start_executor = None
-    window._auto_dive_start_future = None
-    window._auto_dive_start_settings = None
-    window._auto_dive_start_blackbox = None
-    window._auto_dive_start_manifest = None
-    window._auto_dive_start_cache_dir = None
-    window._auto_dive_start_position = None
-    window._auto_dive_start_after_initial_pose = False
-    window.render_distance_stepper = SimpleNamespace(
-        value=3,
-        min_value=1,
-        max_value=10,
-    )
-    window.minimap = SimpleNamespace(route_points=(), set_active_route_points_xz=lambda points: setattr(window.minimap, "route_points", points))
-    window.controls_overlay = SimpleNamespace(
-        is_waiting_for_begin=True,
-        dismissed=False,
-        dismiss_begin_screen=lambda: setattr(window.controls_overlay, "dismissed", True),
-    )
-    return window
-
-
-def test_auto_dive_start_queues_initial_plan_without_blocking(monkeypatch):
-    window = _auto_dive_start_window()
-    settings = viewer_window.AutoDiveSettings(smoothing_radius_cells=3)
-    blackbox = FakeAutoDiveBlackbox()
-    future = FakeFuture(done=False)
-    executor = FakeExecutor(future)
-
-    monkeypatch.setattr(
-        viewer_window,
-        "_auto_dive_settings_from_preferences",
-        lambda: settings,
-    )
-    monkeypatch.setattr(
-        viewer_window.CaveViewerWindow,
-        "_auto_dive_blackbox",
-        lambda _self: blackbox,
-    )
-    monkeypatch.setattr(
-        viewer_window,
-        "ThreadPoolExecutor",
-        lambda **_kwargs: executor,
-    )
-
-    assert window._start_auto_dive() is True
-
-    assert window._auto_dive_start_future is future
-    assert window._auto_dive_start_settings is settings
-    assert window._auto_dive_start_blackbox is blackbox
-    assert len(executor.submit_calls) == 1
-    fn, args, kwargs = executor.submit_calls[0]
-    assert fn is viewer_window.build_auto_dive_preflight_plan
-    assert args == (window.manifest,)
-    assert kwargs["current_position"] == (1.0, 2.0, 3.0)
-    assert kwargs["current_yaw"] == pytest.approx(0.25)
-    assert kwargs["current_pitch"] == pytest.approx(-0.1)
-    assert "current_roll" not in kwargs
-    assert "current_travel_yaw" not in kwargs
-    assert "current_travel_pitch" not in kwargs
-    assert kwargs["settings"] is settings
-    assert kwargs["cache_dir"] == "/cache/devils-eye"
-    assert callable(kwargs["diagnostics"])
-    assert [event for event, _payload in blackbox.events] == [
-        "session_started",
-        "auto_dive_plan_requested",
-    ]
-
-
-def test_auto_dive_start_does_not_clamp_graph_preflight_position(monkeypatch):
-    window = _auto_dive_start_window()
-    window._navigation_guard_enabled = True
-    window._navigation_guard_bounds = (
-        np.array([0.0, 0.0, 0.0], dtype=np.float64),
-        np.array([10.0, 10.0, 10.0], dtype=np.float64),
-    )
-    window._navigation_guard_chunk_size = 10.0
-    window._navigation_guard_vertical_columns = {
-        (0, 0): ((0.0, 10.0),),
+def test_map_initial_camera_uses_first_manifest_chunk_bounds_center():
+    manifest = {
+        "chunks": {
+            "first": {
+                "bounds_min": [-10.0, -4.0, 2.0],
+                "bounds_max": [10.0, 4.0, 6.0],
+            }
+        }
     }
-    window.camera.position = np.array([1.0, 20.0, 3.0], dtype=np.float64)
-    future = FakeFuture(done=False)
-    executor = FakeExecutor(future)
 
-    monkeypatch.setattr(
-        viewer_window,
-        "_auto_dive_settings_from_preferences",
-        lambda: viewer_window.AutoDiveSettings(),
-    )
-    monkeypatch.setattr(
-        viewer_window.CaveViewerWindow,
-        "_auto_dive_blackbox",
-        lambda _self: None,
-    )
-    monkeypatch.setattr(
-        viewer_window,
-        "ThreadPoolExecutor",
-        lambda **_kwargs: executor,
-    )
+    position = viewer_window._map_initial_camera_position(manifest)
 
-    assert window._start_auto_dive() is True
-    _fn, _args, kwargs = executor.submit_calls[0]
-
-    assert kwargs["current_position"] == (1.0, 20.0, 3.0)
+    assert np.allclose(position, [0.0, 0.0, 4.0])
 
 
-def test_auto_dive_pending_start_renders_planning_indicator():
-    window = _auto_dive_start_window()
-    rendered = []
-
-    class FakeImportProgressPanel:
-        def render(self, window_size, map_name, stage, fraction, *, title, note):
-            rendered.append((window_size, map_name, stage, fraction, title, note))
-
-    window.import_progress_panel = FakeImportProgressPanel()
-    window._auto_dive_start_future = FakeFuture(done=False)
-
-    window._render_auto_dive_progress((800, 600))
-
-    assert rendered == [
-        (
-            (800, 600),
-            "devils_eye.obj",
-            "planning guided dive",
-            None,
-            "",
-            "Validating the cave route…",
-        )
-    ]
 
 
-def test_auto_dive_start_completion_activates_controller(monkeypatch):
-    window = _auto_dive_start_window()
-    settings = viewer_window.AutoDiveSettings(smoothing_radius_cells=3)
-    blackbox = FakeAutoDiveBlackbox()
-    plan = SimpleNamespace(
-        render_distance_cells=8,
-        centerline_path=SimpleNamespace(footprint_cell_size=2.5),
-        route_points_xz=((1.0, 3.0), (4.0, 6.0)),
-        route_length_m=30.0,
-        duration_s=12.0,
-        circular_arc=False,
-    )
-    future = FakeFuture(plan)
-    executor = FakeExecutor(future)
-    created = {}
-
-    class FakeReplanner:
-        def __init__(
-            self,
-            manifest,
-            replanner_settings,
-            *,
-            plan_builder,
-            cache_dir,
-            blackbox,
-        ):
-            created["replanner"] = (
-                manifest,
-                replanner_settings,
-                plan_builder,
-                cache_dir,
-                blackbox,
-            )
-
-    class FakeController:
-        active = True
-
-        def __init__(
-            self,
-            controller_plan,
-            *,
-            perf_counter,
-            replanner,
-            replan_distance_m,
-            blackbox,
-        ):
-            created["controller"] = (
-                controller_plan,
-                perf_counter,
-                replanner,
-                replan_distance_m,
-                blackbox,
-            )
-            self.plan = controller_plan
-            self.started = []
-
-        def start(self, camera, world, *, now):
-            self.started.append((camera, world, now))
-
-    monkeypatch.setattr(viewer_window, "AutoDiveReplanner", FakeReplanner)
-    monkeypatch.setattr(viewer_window, "AutoDiveController", FakeController)
-    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 100.0)
-
-    window._auto_dive_start_executor = executor
-    window._auto_dive_start_future = future
-    window._auto_dive_start_settings = settings
-    window._auto_dive_start_blackbox = blackbox
-    window._auto_dive_start_manifest = window.manifest
-    window._auto_dive_start_cache_dir = window.cache_dir
-    window._auto_dive_start_position = window.camera.position.copy()
-
-    window._update_auto_dive_start()
-
-    controller = window._auto_dive_controller
-    assert isinstance(controller, FakeController)
-    assert controller.started == [(window.camera, window.world, 100.0)]
-    assert window._auto_dive_start_future is None
-    assert executor.shutdown_calls == [
-        {"wait": False, "cancel_futures": True}
-    ]
-    assert window._auto_dive_previous_render_distance == 3
-    assert window.render_distance_stepper.value == 8
-    assert window.world.config.load_radius_cells == 8
-    assert window.minimap.route_points == ((1.0, 3.0), (4.0, 6.0))
-    assert window.controls_overlay.dismissed is True
-    assert created["replanner"] == (
-        window.manifest,
-        settings,
-        viewer_window.build_voxel_graph_auto_dive_plan,
-        window.cache_dir,
-        blackbox,
-    )
-    assert created["controller"][0] is plan
-    assert created["controller"][3] == 2.5
 
 
-def test_auto_dive_preflight_failure_does_not_activate_controller():
-    window = _auto_dive_start_window()
-    blackbox = FakeAutoDiveBlackbox()
-    result = viewer_window.AutoDivePreflightResult(
-        status="INDETERMINATE",
-        reason="mesh_collision_guard_unavailable",
-    )
-    executor = FakeExecutor(FakeFuture(result))
-    window._auto_dive_start_executor = executor
-    window._auto_dive_start_future = executor.future
-    window._auto_dive_start_blackbox = blackbox
-    window._auto_dive_start_manifest = window.manifest
-    window._auto_dive_start_cache_dir = window.cache_dir
-    window._auto_dive_start_position = window.camera.position.copy()
-    window._auto_dive_start_settings = viewer_window.AutoDiveSettings()
-
-    window._update_auto_dive_start()
-
-    assert getattr(window, "_auto_dive_controller", None) is None
-    assert blackbox.closed is True
-    assert any(
-        event == "auto_dive_preflight_failed"
-        and payload["status"] == "INDETERMINATE"
-        for event, payload in blackbox.events
-    )
 
 
-def test_auto_dive_stop_cancels_pending_initial_plan():
-    window = _auto_dive_start_window()
-    blackbox = FakeAutoDiveBlackbox()
-    future = FakeFuture(done=False)
-    executor = FakeExecutor(future)
-    window._auto_dive_start_executor = executor
-    window._auto_dive_start_future = future
-    window._auto_dive_start_blackbox = blackbox
-    window._auto_dive_start_position = window.camera.position.copy()
-
-    window._stop_auto_dive()
-
-    assert future.cancelled is True
-    assert executor.shutdown_calls == [
-        {"wait": False, "cancel_futures": True}
-    ]
-    assert blackbox.closed is True
-    assert [event for event, _payload in blackbox.events] == [
-        "auto_dive_plan_cancelled"
-    ]
-    assert window._auto_dive_start_future is None
 
 
-def test_auto_dive_toggle_resumes_from_user_assist(monkeypatch):
-    window = _auto_dive_start_window()
-    calls = []
-    controller = SimpleNamespace(
-        state=viewer_window.AutoDiveState.WAITING_FOR_USER,
-        active=False,
-        resume_from_user_assist=lambda camera, world, now: calls.append(
-            ("resume", camera, world, now)
-        )
-        or True,
-    )
-    window._auto_dive_controller = controller
-    window._auto_dive_previous_render_distance = None
-    window._auto_dive_start_future = None
-    window._stop_auto_dive = lambda: calls.append("stop_auto_dive")
-    window._start_auto_dive = lambda: calls.append("start_auto_dive") or True
-
-    assert window._toggle_auto_dive() is True
-
-    assert len(calls) == 1
-    assert calls[0][:3] == ("resume", window.camera, window.world)
-    assert isinstance(calls[0][3], float)
 
 
-def test_auto_dive_waiting_for_user_renders_assist_prompt():
-    window = _auto_dive_start_window()
-    calls = []
-    window._auto_dive_controller = SimpleNamespace(
-        state=viewer_window.AutoDiveState.WAITING_FOR_USER,
-        active=False,
-    )
-    window._render_auto_dive_user_assist_prompt = (
-        lambda window_size: calls.append(window_size)
-    )
 
-    window._render_auto_dive_progress((800, 600))
 
-    assert calls == [(800, 600)]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_recording_countdown_hides_picker_and_manual_help(monkeypatch):
@@ -1749,17 +1381,25 @@ def test_window_shortcut_opens_map_only_when_loaded():
     assert calls == ["open"]
 
 
-def test_window_shortcut_toggles_auto_dive_on_control_a():
+def test_window_shortcut_leaves_control_a_unhandled():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._platform_adapter = DefaultSplashPlatformAdapter()
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79, A=65))
     window._keys_down = set()
     window._key_resolve_cache = {}
-    calls = []
-    window._toggle_auto_dive = lambda: calls.append("auto") or True
 
-    assert window._handle_window_shortcut(65, SimpleNamespace(ctrl=True)) is True
-    assert calls == ["auto"]
+    assert window._handle_window_shortcut(65, SimpleNamespace(ctrl=True)) is False
+
+
+def test_window_shortcut_leaves_command_a_unhandled_on_macos():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = MacOSSplashPlatformAdapter()
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79, A=65))
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    window._raw_command_modifier_down = lambda: False
+
+    assert window._handle_window_shortcut(65, SimpleNamespace(command=True)) is False
 
 
 def test_window_shortcut_uses_command_modifier_on_macos():
@@ -1777,17 +1417,6 @@ def test_window_shortcut_uses_command_modifier_on_macos():
     assert closed == ["closed"]
 
 
-def test_target_streaming_load_radius_uses_auto_dive_distance():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window.render_distance_stepper = SimpleNamespace(value=5)
-    window._initial_visual_ready = True
-    window.controls_overlay = SimpleNamespace(is_waiting_for_begin=False)
-    window._auto_dive_controller = SimpleNamespace(
-        active=True,
-        plan=SimpleNamespace(render_distance_cells=10),
-    )
-
-    assert window._target_streaming_load_radius() == 10
 
 
 def test_minimap_centerline_overlay_uses_cached_navigation_by_default(monkeypatch):
@@ -1840,52 +1469,8 @@ def test_minimap_generated_centerline_overlay_remains_opt_in(monkeypatch):
     assert calls == [viewer_window.CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH]
 
 
-def test_auto_dive_progress_loader_hides_surrounding_text():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window.manifest = {"source_obj": "/maps/devils_eye.obj"}
-    window._auto_dive_controller = SimpleNamespace(
-        state=viewer_window.AutoDiveState.LOADING,
-        progress=0.5,
-        status_note="Loading next passage (3/9 cells)",
-    )
-    renders = []
-
-    class FakeImportProgressPanel:
-        def render(self, window_size, map_name, stage, fraction, *, title, note):
-            renders.append((window_size, map_name, stage, fraction, title, note))
-
-    window.import_progress_panel = FakeImportProgressPanel()
-
-    window._render_auto_dive_progress((800, 600))
-
-    assert renders == [((800, 600), "devils_eye.obj", "", 0.5, "", "")]
 
 
-def test_continuous_input_detects_navigation_intent_for_auto_dive_cancel():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window.wnd = SimpleNamespace(
-        keys=SimpleNamespace(
-            W=87,
-            S=83,
-            A=65,
-            D=68,
-            E=69,
-            Q=81,
-            LEFT_SHIFT=340,
-            LEFT=263,
-            RIGHT=262,
-            UP=265,
-            DOWN=264,
-        )
-    )
-    window._keys_down = {87}
-    window._KEY_LOOK_PIXELS_PER_SECOND = 120.0
-
-    assert window._continuous_input_has_navigation_intent(1.0 / 60.0) is True
-
-    window._keys_down = set()
-
-    assert window._continuous_input_has_navigation_intent(1.0 / 60.0) is False
 
 
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
@@ -2231,6 +1816,44 @@ def test_initial_chunk_readiness_counts_failed_wanted_chunks():
     ) is True
 
 
+def test_map_load_reset_restores_initial_chunk_readiness_state():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._initial_chunks_loaded = True
+    window._initial_visual_ready = True
+    window._initial_visual_ready_frames = 3
+    window._initial_visual_ready_visible_chunks = 6
+    window._initial_visual_ready_required_textures = 8
+    window._initial_visual_ready_resident_textures = 8
+    window._initial_visual_ready_visible_textures = 7
+    window._initial_visual_ready_missing_textures = 1
+    window._initial_visual_ready_expected_chunks = 9
+    window._initial_visual_ready_covered_chunks = 8
+    window._initial_visual_ready_missing_chunks = 1
+    window._initial_visual_ready_coverage_pct = 88.0
+    window._initial_visual_ready_logged = True
+    window._chunk_prep_progress = 1.0
+    window._chunk_prep_complete_until = 12.0
+    window._chunk_prep_completion_armed = True
+    calls = []
+    window.import_progress_panel = SimpleNamespace(
+        reset_progress=lambda: calls.append("reset")
+    )
+
+    window._reset_initial_chunk_loading_state()
+
+    assert window._initial_chunks_loaded is False
+    assert window._initial_visual_ready is False
+    assert window._initial_visual_ready_frames == 0
+    assert window._initial_visual_ready_expected_chunks == 0
+    assert window._initial_visual_ready_covered_chunks == 0
+    assert window._initial_visual_ready_coverage_pct == 100.0
+    assert window._initial_visual_ready_logged is False
+    assert window._chunk_prep_progress == 0.0
+    assert window._chunk_prep_complete_until is None
+    assert window._chunk_prep_completion_armed is False
+    assert calls == ["reset"]
+
+
 class _FakeMoveCamera:
     def __init__(self, position, moved_position):
         self.position = np.array(position, dtype=np.float64)
@@ -2247,17 +1870,6 @@ class _FakeMoveCamera:
         self.position = self._moved_position.copy()
 
 
-class _FakeAutoDiveController:
-    state = viewer_window.AutoDiveState.DIVING
-
-    def __init__(self, pose_position):
-        self.pose_position = np.array(pose_position, dtype=np.float64)
-        self.update_calls = []
-
-    def update(self, camera, world, *, now):
-        self.update_calls.append((camera, world, now))
-        camera.position = self.pose_position.copy()
-        return self.state
 
 
 def test_navigation_guard_rejects_position_above_local_vertical_span():
@@ -2327,53 +1939,8 @@ def test_navigation_guard_preserves_position_inside_upper_vertical_span():
     ]
 
 
-def test_auto_dive_update_clamps_route_pose_to_local_vertical_span():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window._navigation_guard_enabled = True
-    window._navigation_guard_bounds = (
-        np.array([0.0, 0.0, 0.0], dtype=np.float64),
-        np.array([10.0, 10.0, 10.0], dtype=np.float64),
-    )
-    window._navigation_guard_chunk_size = 10.0
-    window._navigation_guard_vertical_columns = {
-        (0, 0): ((0.0, 10.0),),
-    }
-    window.camera = SimpleNamespace(
-        position=np.array([5.0, 5.0, 5.0], dtype=np.float64),
-    )
-    window.world = SimpleNamespace()
-    controller = _FakeAutoDiveController([5.0, 25.0, 5.0])
-    window._auto_dive_controller = controller
-
-    window._update_auto_dive(123.0)
-
-    assert controller.update_calls == [(window.camera, window.world, 123.0)]
-    assert window.camera.position.tolist() == [5.0, 10.0, 5.0]
 
 
-def test_auto_dive_update_does_not_clamp_graph_native_route_pose():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window._navigation_guard_enabled = True
-    window._navigation_guard_bounds = (
-        np.array([0.0, 0.0, 0.0], dtype=np.float64),
-        np.array([10.0, 10.0, 10.0], dtype=np.float64),
-    )
-    window._navigation_guard_chunk_size = 10.0
-    window._navigation_guard_vertical_columns = {
-        (0, 0): ((0.0, 10.0),),
-    }
-    window.camera = SimpleNamespace(
-        position=np.array([5.0, 5.0, 5.0], dtype=np.float64),
-    )
-    window.world = SimpleNamespace()
-    controller = _FakeAutoDiveController([5.0, 25.0, 5.0])
-    controller.plan = SimpleNamespace(navigation_graph=object())
-    window._auto_dive_controller = controller
-
-    window._update_auto_dive(123.0)
-
-    assert controller.update_calls == [(window.camera, window.world, 123.0)]
-    assert window.camera.position.tolist() == [5.0, 25.0, 5.0]
 
 
 def test_initial_visual_readiness_waits_for_settled_scene_frames():

@@ -104,10 +104,6 @@ def _route_moderngl_window_logging() -> None:
 
 _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_APP_ICON",
-    "CAVEVIEWER_AUTO_DIVE_ACCELERATION",
-    "CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS",
-    "CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS",
-    "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS",
     "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
     "CAVEVIEWER_CHUNK_BUILD_WORKERS",
     "CAVEVIEWER_CHUNK_SIZE_METERS",
@@ -198,10 +194,6 @@ def _default_text_aa_mode() -> str:
 
 
 _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
-    "CAVEVIEWER_AUTO_DIVE_ACCELERATION": "1.25",
-    "CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS": "0",
-    "CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS": "10",
-    "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS": "5",
     "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS": "2",
     "CAVEVIEWER_CHUNK_BUILD_WORKERS": _default_chunk_build_workers,
     "CAVEVIEWER_CHUNK_SIZE_METERS": "50",
@@ -451,9 +443,42 @@ def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> No
         )
 
 
+def _resolve_recorded_dive_selection(selected_path: str):
+    """Resolve a selected JSONL trace to its local source map and trace model."""
+    from caveviewer.gui.recorded_dive import (
+        is_recorded_dive_path,
+        load_recorded_dive_trace,
+        resolve_recorded_dive_source_path,
+    )
+
+    if not is_recorded_dive_path(selected_path):
+        return selected_path, None
+
+    trace = load_recorded_dive_trace(selected_path)
+    from caveviewer.gui.map_history import load_recent_map_paths
+
+    source_path = resolve_recorded_dive_source_path(
+        trace,
+        search_directories=load_recent_map_paths(),
+    )
+    _LOG.info("Opening Recorded Dive: %s", trace.path)
+    _LOG.info("Recorded Dive source map: %s", source_path)
+    return os.fspath(source_path), trace
+
+
 def _run_map_session(folder: str) -> None:
     """Load and view one cave map. Returns when the viewer window closes."""
-    selected_path = os.path.abspath(folder)
+    from caveviewer.gui.recorded_dive import RecordedDiveError
+
+    original_selection = os.path.abspath(folder)
+    try:
+        selected_path, recorded_dive_trace = _resolve_recorded_dive_selection(
+            original_selection
+        )
+    except RecordedDiveError as exc:
+        _LOG.error("Could not open Recorded Dive: %s", exc)
+        sys.exit(1)
+    selected_path = os.path.abspath(selected_path)
     selected_is_file = os.path.isfile(selected_path)
     folder = os.path.dirname(selected_path) if selected_is_file else selected_path
     _LOG.info(f"Selected map path: {selected_path}")
@@ -527,7 +552,18 @@ def _run_map_session(folder: str) -> None:
         _log_cache_chunk_size(cache_dir, context="Existing chunk cache")
         from caveviewer.gui.viewer_window import run_viewer
         try:
-            run_viewer(cache_dir, textures_dir=cache_textures_dir)
+            viewer_kwargs = {"textures_dir": cache_textures_dir}
+            if recorded_dive_trace is not None:
+                from caveviewer.gui.recorded_dive import (
+                    validate_recorded_dive_manifest,
+                )
+
+                validate_recorded_dive_manifest(
+                    recorded_dive_trace,
+                    chunker.load_manifest(cache_dir),
+                )
+                viewer_kwargs["recorded_dive_trace"] = recorded_dive_trace
+            run_viewer(cache_dir, **viewer_kwargs)
             _record_application_event(
                 "viewer_session_returned",
                 outcome="window_closed",
@@ -557,7 +593,10 @@ def _run_map_session(folder: str) -> None:
         # progress bar).
         from caveviewer.gui.viewer_window import run_viewer_with_pending_import
         try:
-            run_viewer_with_pending_import(model_descriptor, textures_dir=folder)
+            viewer_kwargs = {"textures_dir": folder}
+            if recorded_dive_trace is not None:
+                viewer_kwargs["recorded_dive_trace"] = recorded_dive_trace
+            run_viewer_with_pending_import(model_descriptor, **viewer_kwargs)
             _record_application_event(
                 "viewer_session_returned",
                 outcome="window_closed",
