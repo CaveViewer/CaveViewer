@@ -12,6 +12,7 @@ platform/
 ├── desktop_services.py      # Desktop file, URI, notification, and inhibit services
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── probes/updates.py        # Static signed-update configuration and target probe
+├── probes/recording.py      # On-demand encoder and output-directory preflight
 ├── portal.py                # Linux XDG Desktop Portal transport and states
 ├── windowing.py             # Linux GLFW Wayland/X11 selection and fallback
 ├── factory.py               # Platform detection and adapter instantiation
@@ -63,11 +64,20 @@ accepting both folders and those direct files.
 ## Runtime composition and feature gates
 
 `caveviewer.app` creates one `PlatformRuntime` after command-line overrides
-have been applied. It owns a stable `PlatformProfile`, one broad compatibility
-adapter, one `DesktopServices` instance, immutable capability results, and
-feature-gate decisions. It is not a global singleton: callers receive it by
-injection, which keeps test setup deterministic and prevents unrelated GUI
-surfaces from repeatedly constructing portal-backed services.
+have been applied for every interactive viewer path, including a direct CLI map
+launch. It owns a stable `PlatformProfile`, one broad compatibility adapter,
+one `DesktopServices` instance, immutable capability results, and feature-gate
+decisions. It is not a global singleton: callers receive it by injection, which
+keeps test setup deterministic and prevents unrelated GUI surfaces from
+repeatedly constructing portal-backed services.
+
+`feature_gates` is deliberately limited to process-stable decisions. An update
+target is safe to evaluate once at composition time, so it appears in that
+registry. A mutable action prerequisite is different: an on-demand probe
+returns a fresh `CapabilityResult`, its pure policy returns a
+`FeatureDecision`, and the feature service uses that paired preflight result
+only for the current action. `UNKNOWN` is interpreted by the feature policy;
+it is not silently converted into either enabled or disabled behavior.
 
 The first migrated feature is automatic update checking and downloading:
 
@@ -86,12 +96,12 @@ download; a disabled gate never starts network work. Offline failures remain
 ordinary transient check results, not a platform capability failure.
 
 Video recording is the first on-demand gate. When the user starts recording,
-the viewer asks the runtime's narrow recording probe for an ffmpeg path and a
-writable output directory, then applies the pure video-recording policy. The
-same gate is checked again immediately before ffmpeg starts, so a changed drive
-or folder permission cannot begin a recording that has nowhere reliable to go.
-No encoder lookup or output-directory write check happens during application
-startup.
+the viewer asks the runtime for a `VideoRecordingPreflight`: one narrow probe
+for an ffmpeg path and writable output directory paired with the pure
+video-recording decision from that exact snapshot. The same preflight is
+requested again immediately before ffmpeg starts, so a changed drive or folder
+permission cannot begin a recording that has nowhere reliable to go. No encoder
+lookup or output-directory write check happens during application startup.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
 unmigrated platform actions. New features should add a narrow probe, a pure
@@ -116,7 +126,10 @@ class SplashPlatformAdapter(Protocol):
     # ... other methods for update metadata, package reveal, UI fonts, etc.
 ```
 
-**When to modify**: Add new methods when introducing platform-specific behavior elsewhere in the codebase.
+**When to modify**: Only for an existing compatibility concern that has not
+yet been split. New platform-dependent features use a narrow edge probe, pure
+policy, and injected action adapter or service instead of expanding this broad
+protocol.
 
 ### `factory.py` – Platform Detection
 
@@ -148,9 +161,11 @@ creates immutable update capability and feature-decision values. It must not
 perform network checks, D-Bus calls, GPU probes, or other expensive on-demand
 work while it is being composed.
 
-Inject `PlatformRuntime` into a feature service when migrating it. Existing
-callers of `get_platform_adapter()` and `get_desktop_services()` remain valid
-until their concerns are split out of `SplashPlatformAdapter`.
+Inject `PlatformRuntime` into a feature service when migrating it. The service
+must use the runtime's adapter and `DesktopServices`, rather than construct a
+second one. Existing callers of `get_platform_adapter()` and
+`get_desktop_services()` remain valid only as compatibility paths until their
+concerns are split out of `SplashPlatformAdapter`.
 
 ### `macos.py` – macOS Implementations
 
@@ -205,76 +220,41 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
 ### In application code (e.g., `viewer_window.py`):
 
 ```python
-from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform.runtime import PlatformRuntime
 
-adapter = get_platform_adapter()
+def configure_viewer(runtime: PlatformRuntime) -> None:
+    adapter = runtime.platform_adapter
 
-# Get platform-specific behavior
-if adapter.mouse_look_button_name() == "right":
-    # macOS: show "Right click + mouse"
-else:
-    # Windows/Linux: show "Left click + mouse"
+    # Get platform-specific presentation behavior from the process-owned adapter.
+    if adapter.mouse_look_button_name() == "right":
+        # macOS: show "Right click + mouse"
+        pass
 
-modifier = adapter.bookmark_save_modifier()  # "command" or "control"
-font = adapter.ui_font_family()  # Platform-specific UI font
+    modifier = adapter.bookmark_save_modifier()  # "command" or "control"
+    font = adapter.ui_font_family()  # Platform-specific UI font
 ```
 
-No need for `if sys.platform == ...` checks anywhere in the main code!
+No feature code needs `if sys.platform == ...` checks or its own platform
+factory call.
 
 ## How to Add Platform-Specific Functionality
 
-### Step 1: Add Method to Protocol (`base.py`)
-
-Define the method contract with documentation:
-
-```python
-def my_new_feature(self) -> str:
-    """Return platform-specific value for my_new_feature.
-
-    macOS example: 'value_for_mac'
-    Windows/Linux example: 'value_for_others'
-    """
-    ...
-```
-
-### Step 2: Implement the Default and Required Overrides
-
-Add shared behavior to `default.py`, then override only the platforms that
-need different behavior. The protocol records the complete structural
-contract.
-
-**`macos.py`:**
-```python
-def my_new_feature(self) -> str:
-    return "value_for_mac"
-```
-
-**`windows.py` (only when Windows differs from the default):**
-```python
-def my_new_feature(self) -> str:
-    return "value_for_windows"
-```
-
-**`linux.py` (only when Linux differs from the default):**
-```python
-def my_new_feature(self) -> str:
-    return "value_for_linux"
-```
-
-**`default.py`:**
-```python
-def my_new_feature(self) -> str:
-    return "fallback_value"  # Safe default
-```
-
-### Step 3: Use in Application Code
-
-```python
-adapter = get_platform_adapter()
-my_value = adapter.my_new_feature()
-```
-
-That's it! The platform-specific behavior is now centralized and accessible from anywhere in the codebase.
+1. Classify the work before adding a gate: process-stable capability,
+   on-demand action preflight, resource-policy input, or ordinary workflow
+   error handling. Do not turn every behavior into a feature gate.
+2. For a new platform-dependent feature, add a narrow edge probe that returns
+   `CapabilityResult`, a side-effect-free policy in `caveviewer.gui.features`,
+   and a focused injected action adapter or service. The policy returns a
+   `FeatureDecision` with a stable reason code, user-safe explanation, and
+   route.
+3. Put only process-stable decisions in `PlatformRuntime.feature_gates`.
+   Action-time facts such as a selected path, portal availability, or an
+   encoder executable remain on-demand and are checked again before execution.
+4. Use `SplashPlatformAdapter` only when migrating an existing compatibility
+   method. Do not add unrelated new methods to it; split focused adapters as
+   consumers move.
+5. Test four boundaries: pure policy table, fake probe/adapter, runtime
+   composition and injection, and consumer enforcement/recheck.
 
 ## Example: Keyboard Shortcuts
 
@@ -325,8 +305,9 @@ class MockAdapter:
 **When**: User-facing text that varies by platform (e.g., "Cmd+1" vs "Ctrl+1")
 
 **How**:
-1. Add method to protocol that returns the variable part (e.g., `bookmark_save_modifier()`)
-2. In UI code, query adapter and build the full string dynamically
+1. For an existing presentation concern, query the injected runtime adapter
+   for the variable part (for example, `bookmark_save_modifier()`).
+2. Build the full string in UI code without adding platform checks.
 
 ### Update Packages & Distribution Channels
 **When**: Different distribution formats (DMG for macOS, ZIP for Windows, AppImage for Linux)
@@ -367,11 +348,13 @@ intact if the file manager cannot be launched.
 
 ## Best Practices
 
-1. **Centralize, don't scatter**: Always use the adapter, never add platform checks directly in feature code
+1. **Centralize, don't scatter**: Use injected runtime adapters/services for
+   migrated features; never add platform checks directly in feature code.
 2. **Default to safe**: The `DefaultSplashPlatformAdapter` should provide the most conservative, widely-compatible behavior
 3. **Document why**: When platform implementations differ, document the reason in comments
 4. **Test both paths**: Verify behavior on at least macOS and Windows/Linux if possible
-5. **Keep it simple**: Protocol methods should do one thing; don't create god-adapters with 50 unrelated methods
+5. **Keep it simple**: Keep compatibility protocol methods focused and split
+   new native actions into narrow adapters rather than creating a god-adapter.
 
 ## Related Files
 

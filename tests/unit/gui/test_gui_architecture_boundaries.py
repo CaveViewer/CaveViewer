@@ -175,6 +175,32 @@ def test_feature_policies_do_not_import_platform_or_side_effect_modules():
     assert not violations, _format_violations(violations)
 
 
+def test_viewer_does_not_construct_platform_services_at_module_import():
+    """Keep process-owned platform construction out of viewer module import."""
+    viewer_module = _parse_module(GUI_ROOT / "viewer_window.py")
+    factory_names = {"get_platform_adapter", "get_desktop_services"}
+    violations: list[Violation] = []
+
+    for node in viewer_module.body:
+        if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.FunctionDef)):
+            continue
+        for descendant in ast.walk(node):
+            if (
+                isinstance(descendant, ast.Call)
+                and isinstance(descendant.func, ast.Name)
+                and descendant.func.id in factory_names
+            ):
+                violations.append(
+                    Violation(
+                        GUI_ROOT / "viewer_window.py",
+                        descendant.lineno,
+                        f"constructs {descendant.func.id} during module import",
+                    )
+                )
+
+    assert not violations, _format_violations(violations)
+
+
 def test_gui_modules_have_ownership_docstrings():
     violations: list[Violation] = []
 

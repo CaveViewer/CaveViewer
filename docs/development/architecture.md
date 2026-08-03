@@ -371,6 +371,45 @@ model modules. `caveviewer.gui.platform` contains OS-specific focus, update,
 and system integration behavior. Unsupported platforms use the default
 adapter.
 
+### Capability, policy, and feature-gating contract
+
+Platform-dependent feature work follows one direction:
+
+```text
+edge probe -> immutable CapabilityResult -> pure policy -> FeatureDecision
+          -> injected adapter or service -> feature execution
+```
+
+Probes report facts and diagnostics-safe evidence; they do not choose product
+behavior. Policies receive only those facts and return an immutable decision
+with a stable `reason_code`, concise user-safe `explanation`, and selected
+`route`. Adapters and `DesktopServices` perform the chosen native action but
+do not decide whether the product feature is available.
+
+`PlatformRuntime.feature_gates` contains only process-stable decisions, such
+as automatic-update compatibility. It is composed once after command-line
+overrides, then injected into every interactive viewer path, including a direct
+CLI map launch. A mutable action prerequisite, such as an ffmpeg path or a
+writable recording folder, uses an on-demand preflight instead of a cached
+startup gate. The preflight pairs one fresh capability result with the policy
+decision derived from that same snapshot.
+
+Feature-state semantics are fixed:
+
+| State | Presentation | Execution |
+| --- | --- | --- |
+| `enabled` | Normal feature affordance | The selected normal route may run. |
+| `degraded` | Available with its fallback explained | The selected safe fallback route may run. |
+| `disabled` | May show a concise explanation | No route may run. |
+| `hidden` | Do not present the feature | No route may run. |
+
+`UNKNOWN` is a capability fact, not a feature state. Each policy explicitly
+chooses whether it can use a conservative fallback or must fail closed. A UI
+button state is never the enforcement boundary: services re-evaluate mutable
+preconditions immediately before irreversible work. Development overrides may
+disable behavior for testing but never bypass a hard safety or compatibility
+requirement.
+
 GUI architecture guardrails are executable. The test file
 `tests/unit/gui/test_gui_architecture_boundaries.py` checks that GUI modules do
 not import upward into `caveviewer.app`, that direct platform checks stay

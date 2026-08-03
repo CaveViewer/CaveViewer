@@ -6,12 +6,57 @@ import pytest
 
 from caveviewer.core.capabilities import CapabilityResult, CapabilitySource
 from caveviewer.gui.features import (
+    FeatureDecision,
     FeatureGateRegistry,
     FeatureId,
     FeatureState,
     decide_automatic_update,
     decide_video_recording,
 )
+
+
+@pytest.mark.parametrize(
+    ("state", "route", "allows_execution", "is_visible"),
+    [
+        (FeatureState.ENABLED, "normal", True, True),
+        (FeatureState.DEGRADED, "safe_fallback", True, True),
+        (FeatureState.DISABLED, None, False, True),
+        (FeatureState.HIDDEN, None, False, False),
+    ],
+)
+def test_feature_decision_state_contract(
+    state, route, allows_execution, is_visible
+):
+    decision = FeatureDecision(
+        feature=FeatureId.AUTOMATIC_UPDATE,
+        state=state,
+        reason_code="test_state",
+        explanation="A concise user-facing explanation.",
+        route=route,
+    )
+
+    assert decision.allows_execution is allows_execution
+    assert decision.is_visible is is_visible
+
+
+@pytest.mark.parametrize(
+    ("state", "route"),
+    [
+        (FeatureState.ENABLED, None),
+        (FeatureState.DEGRADED, None),
+        (FeatureState.DISABLED, "normal"),
+        (FeatureState.HIDDEN, "normal"),
+    ],
+)
+def test_feature_decision_rejects_routes_that_conflict_with_its_state(state, route):
+    with pytest.raises(ValueError):
+        FeatureDecision(
+            feature=FeatureId.AUTOMATIC_UPDATE,
+            state=state,
+            reason_code="test_state",
+            explanation="A concise user-facing explanation.",
+            route=route,
+        )
 
 
 @pytest.mark.parametrize(

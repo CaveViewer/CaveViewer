@@ -7,7 +7,7 @@ from caveviewer.core.capabilities import (
     CapabilitySource,
     CapabilityStatus,
 )
-from caveviewer.gui.features import FeatureState
+from caveviewer.gui.features import FeatureId, FeatureState
 from caveviewer.gui.platform import runtime
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.linux import LinuxSplashPlatformAdapter
@@ -65,6 +65,11 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.update_configuration.source is CapabilitySource.USER_OVERRIDE
     assert runtime.automatic_update_capability.status is CapabilityStatus.AVAILABLE
     assert runtime.automatic_update_decision.state is FeatureState.ENABLED
+    assert (
+        runtime.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
+        is runtime.automatic_update_decision
+    )
+    assert FeatureId.VIDEO_RECORDING not in runtime.feature_gates.decisions
 
 
 def test_runtime_disables_unsupported_update_targets_before_network_work():
@@ -116,14 +121,18 @@ def test_runtime_keeps_video_recording_probe_on_demand(monkeypatch):
     )
 
     assert calls == []
-    decision = platform_runtime.video_recording_decision(
+    preflight = platform_runtime.video_recording_preflight(
         "/recordings",
         ffmpeg_resolver=lambda: "/usr/bin/ffmpeg",
     )
 
     assert calls[0][0] == "/recordings"
-    assert decision.state is FeatureState.ENABLED
-    assert decision.route == "ffmpeg"
+    assert len(calls) == 1
+    assert preflight.capability.value == VideoRecordingTarget(
+        "/usr/bin/ffmpeg", "/recordings"
+    )
+    assert preflight.decision.state is FeatureState.ENABLED
+    assert preflight.decision.route == "ffmpeg"
 
 
 def test_linux_factory_shares_an_injected_desktop_service_with_its_adapter():

@@ -39,6 +39,24 @@ class PlatformProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class VideoRecordingPreflight:
+    """One on-demand recording probe paired with its policy decision.
+
+    The capability and decision are derived from the same probe snapshot, so a
+    caller can use the confirmed ffmpeg target without probing a mutable output
+    directory twice. The caller must request a fresh preflight before starting
+    irreversible work.
+    """
+
+    capability: CapabilityResult[VideoRecordingTarget]
+    decision: FeatureDecision
+
+    def __post_init__(self) -> None:
+        if self.decision.feature is not FeatureId.VIDEO_RECORDING:
+            raise ValueError("recording preflight must contain a video-recording decision")
+
+
+@dataclass(frozen=True, slots=True)
 class PlatformRuntime:
     """One process-owned set of adapters, static gates, and lazy capability probes.
 
@@ -55,10 +73,18 @@ class PlatformRuntime:
     automatic_update_capability: CapabilityResult[UpdateTarget]
     feature_gates: FeatureGateRegistry
 
+    def static_feature_decision(self, feature: FeatureId) -> FeatureDecision:
+        """Return a process-stable decision composed into ``feature_gates``.
+
+        Mutable action prerequisites deliberately do not appear here. Use the
+        feature's on-demand preflight method instead.
+        """
+        return self.feature_gates.decision_for(feature)
+
     @property
     def automatic_update_decision(self) -> FeatureDecision:
         """Return the gate used before checking or downloading an update."""
-        return self.feature_gates.decision_for(FeatureId.AUTOMATIC_UPDATE)
+        return self.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
 
     def video_recording_capability(
         self,
@@ -79,11 +105,25 @@ class PlatformRuntime:
         ffmpeg_resolver: Callable[[], str | None] | None = None,
     ) -> FeatureDecision:
         """Return the on-demand gate that controls the ffmpeg recording route."""
-        return decide_video_recording(
-            self.video_recording_capability(
-                output_directory,
-                ffmpeg_resolver=ffmpeg_resolver,
-            )
+        return self.video_recording_preflight(
+            output_directory,
+            ffmpeg_resolver=ffmpeg_resolver,
+        ).decision
+
+    def video_recording_preflight(
+        self,
+        output_directory: str,
+        *,
+        ffmpeg_resolver: Callable[[], str | None] | None = None,
+    ) -> VideoRecordingPreflight:
+        """Evaluate recording from one fresh capability probe and pure policy."""
+        capability = self.video_recording_capability(
+            output_directory,
+            ffmpeg_resolver=ffmpeg_resolver,
+        )
+        return VideoRecordingPreflight(
+            capability=capability,
+            decision=decide_video_recording(capability),
         )
 
 

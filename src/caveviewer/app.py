@@ -661,16 +661,23 @@ def main():
     if _force_update:
         sys.argv = [a for a in sys.argv if a != "--force-update"]
 
+    # Every interactive viewer path receives one process-owned runtime.  CLI
+    # launches skip splash/update presentation, but still need the same
+    # capability probes, policy decisions, and platform adapters as GUI mode.
+    from caveviewer.gui.platform.runtime import create_platform_runtime
+
     # CLI argument: open that path and exit when the viewer closes.
     if len(sys.argv) > 1 and sys.argv[1].strip():
         selected_path = sys.argv.pop(1).strip()
-        _run_map_session(selected_path)
+        _run_map_session(
+            selected_path,
+            platform_runtime=create_platform_runtime(),
+        )
         return
 
     # GUI mode: show the splash screen, run the viewer, then show the
     # splash screen again so the user can open another map or exit.
     _splash_version = "0.0.0" if _force_update else __version__
-    from caveviewer.gui.platform.runtime import create_platform_runtime
     from caveviewer.gui.splash_screen import show_splash_screen
     from caveviewer.gui.update_manager import UpdateManager
 
