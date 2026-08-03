@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from caveviewer.core.capabilities import CapabilitySource, CapabilityStatus
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    CapabilitySource,
+    CapabilityStatus,
+)
 from caveviewer.gui.features import FeatureState
+from caveviewer.gui.platform import runtime
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.linux import LinuxSplashPlatformAdapter
+from caveviewer.gui.platform.probes.recording import VideoRecordingTarget
 from caveviewer.gui.platform.runtime import create_platform_runtime
 
 
@@ -89,6 +95,35 @@ def test_runtime_fails_closed_when_static_update_configuration_cannot_be_probed(
         == "automatic_update_configuration_probe_failed"
     )
     assert runtime.automatic_update_decision.state is FeatureState.DISABLED
+
+
+def test_runtime_keeps_video_recording_probe_on_demand(monkeypatch):
+    calls = []
+
+    def probe(output_directory, *, ffmpeg_resolver=None):
+        calls.append((output_directory, ffmpeg_resolver))
+        return CapabilityResult.available(
+            VideoRecordingTarget("/usr/bin/ffmpeg", output_directory),
+            reason_code="video_recording_target_available",
+        )
+
+    monkeypatch.setattr(runtime, "probe_video_recording", probe)
+
+    platform_runtime = create_platform_runtime(
+        platform_adapter=FakeUpdateAdapter(),
+        desktop_services=object(),
+        environment={},
+    )
+
+    assert calls == []
+    decision = platform_runtime.video_recording_decision(
+        "/recordings",
+        ffmpeg_resolver=lambda: "/usr/bin/ffmpeg",
+    )
+
+    assert calls[0][0] == "/recordings"
+    assert decision.state is FeatureState.ENABLED
+    assert decision.route == "ffmpeg"
 
 
 def test_linux_factory_shares_an_injected_desktop_service_with_its_adapter():

@@ -24,6 +24,15 @@ _AUTOMATIC_UPDATE_EXPLANATIONS = {
     ),
 }
 
+_VIDEO_RECORDING_EXPLANATIONS = {
+    "video_recording_encoder_unavailable": (
+        "Video recording requires ffmpeg. Install it or set CAVEVIEWER_FFMPEG."
+    ),
+    "video_recording_output_directory_unavailable": (
+        "Video recording cannot save to the selected folder."
+    ),
+}
+
 
 def decide_automatic_update(
     capability: CapabilityResult[CapabilityValue],
@@ -59,4 +68,42 @@ def decide_automatic_update(
         state=FeatureState.DISABLED,
         reason_code="automatic_update_capability_unknown",
         explanation="Automatic update availability could not be determined.",
+    )
+
+
+def decide_video_recording(
+    capability: CapabilityResult[CapabilityValue],
+) -> FeatureDecision:
+    """Choose whether video recording may start from an injected capability fact.
+
+    Recording is only enabled when the encoder and the configured output folder
+    were both confirmed on demand. An uncertain preflight fails closed because
+    starting capture without a usable destination would discard the user's
+    recording.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.VIDEO_RECORDING,
+            state=FeatureState.ENABLED,
+            reason_code="video_recording_available",
+            explanation="Video recording is available.",
+            route="ffmpeg",
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.VIDEO_RECORDING,
+            state=FeatureState.DISABLED,
+            reason_code=capability.reason_code,
+            explanation=_VIDEO_RECORDING_EXPLANATIONS.get(
+                capability.reason_code,
+                "Video recording is unavailable in this environment.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.VIDEO_RECORDING,
+        state=FeatureState.DISABLED,
+        reason_code="video_recording_capability_unknown",
+        explanation="Video recording availability could not be determined.",
     )
