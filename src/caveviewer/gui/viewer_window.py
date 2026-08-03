@@ -24,7 +24,7 @@ import queue
 import sys
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import moderngl
@@ -32,6 +32,7 @@ import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.capabilities import CapabilityResult
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
@@ -63,11 +64,19 @@ from caveviewer.gui import view_culling
 from caveviewer.gui import viewer_input
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
+from caveviewer.gui.features import decide_video_recording
 from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform.probes.recording import (
+    VideoRecordingTarget,
+    probe_video_recording,
+)
 from caveviewer.gui.platform import tk_root_options
 from caveviewer.gui.platform.windowing import run_window_config
 from caveviewer.resources import image_path, resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
+
+if TYPE_CHECKING:
+    from caveviewer.gui.platform.runtime import PlatformRuntime
 
 _LOG = get_logger("CaveViewer")
 
@@ -493,6 +502,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     cave_manifest: dict = None
     cave_benchmark_config: dict | None = None
     cave_recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
+    cave_platform_runtime: PlatformRuntime | None = None
 
     # Alternative to the three attributes above: set THIS instead when the
     # map needs first-time import/chunking (no cache built yet) -- a dict
@@ -571,6 +581,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         super().__init__(**kwargs)
         self._window_setup_complete = False
         self._platform_adapter = get_platform_adapter()
+        self._platform_runtime = CaveViewerWindow.cave_platform_runtime
         self._set_runtime_window_icon()
 
         force_focus_env = os.getenv(self.FORCE_STARTUP_FOCUS_ENV, "").strip().lower()
@@ -1912,8 +1923,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _start_recording_countdown(self) -> None:
         if not self._has_map_loaded:
             return
-        if self._resolve_ffmpeg_path() is None:
-            self._recording_unavailable("ffmpeg was not found. Install dependencies or set CAVEVIEWER_FFMPEG.")
+        if self._recording_target_if_available() is None:
             return
 
         self.color_picker.hide()
@@ -1928,6 +1938,28 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _resolve_ffmpeg_path(self) -> str | None:
         return recording.resolve_ffmpeg_path()
+
+    def _recording_capability(self) -> CapabilityResult[VideoRecordingTarget]:
+        """Probe recording prerequisites through the injected runtime when present."""
+        runtime = getattr(self, "_platform_runtime", None)
+        if runtime is not None:
+            return runtime.video_recording_capability(
+                self._recording_output_dir,
+                ffmpeg_resolver=self._resolve_ffmpeg_path,
+            )
+        return probe_video_recording(
+            self._recording_output_dir,
+            ffmpeg_resolver=self._resolve_ffmpeg_path,
+        )
+
+    def _recording_target_if_available(self) -> VideoRecordingTarget | None:
+        """Return a freshly-probed ffmpeg target or show the policy explanation."""
+        capability = self._recording_capability()
+        decision = decide_video_recording(capability)
+        if not decision.allows_execution or capability.value is None:
+            self._recording_unavailable(decision.explanation)
+            return None
+        return capability.value
 
     def _recording_unavailable(self, reason: str) -> None:
         message = f"Cannot start recording: {reason}"
@@ -1999,9 +2031,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._sync_recording_capture_state_from_manager()
 
     def _start_recording_encoder(self) -> bool:
-        ffmpeg_path = self._resolve_ffmpeg_path()
-        if ffmpeg_path is None:
-            self._recording_unavailable("ffmpeg was not found. Install dependencies or set CAVEVIEWER_FFMPEG.")
+        recording_target = self._recording_target_if_available()
+        if recording_target is None:
             self._ensure_recording_controller().clear_countdown()
             return False
 
@@ -2011,21 +2042,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._ensure_recording_controller().clear_countdown()
             return False
 
-        try:
-            os.makedirs(self._recording_output_dir, exist_ok=True)
-        except OSError as exc:
-            _LOG.warning(f"Cannot start recording: failed to create output directory: {exc}")
-            self._ensure_recording_controller().clear_countdown()
-            self._show_recording_status(
-                "Recording unavailable",
-                f"Cannot save to {self._recording_display_path(self._recording_output_dir)}",
-                kind="error",
-                duration=3.4,
-            )
-            return False
-
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        output_path = os.path.join(self._recording_output_dir, f"CaveViewerDive-{timestamp}.mp4")
+        output_path = os.path.join(
+            recording_target.output_directory,
+            f"CaveViewerDive-{timestamp}.mp4",
+        )
         output_width, output_height = self._recording_output_size(width, height)
         output_size = (output_width, output_height)
         try:
@@ -2047,9 +2068,24 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             return False
 
+        # Recheck the on-demand gate immediately before launching ffmpeg. The
+        # countdown and framebuffer setup can take long enough for a removable
+        # drive or folder permission to change underneath the viewer.
+        recording_target = self._recording_target_if_available()
+        if recording_target is None:
+            self._release_recording_readback_framebuffer()
+            self._release_recording_readback_buffers()
+            self._ensure_recording_controller().clear_countdown()
+            return False
+
+        output_path = os.path.join(
+            recording_target.output_directory,
+            f"CaveViewerDive-{timestamp}.mp4",
+        )
+
         try:
             session = recording.start_encoder_session(
-                ffmpeg_path=ffmpeg_path,
+                ffmpeg_path=recording_target.ffmpeg_path,
                 output_path=output_path,
                 output_size=output_size,
                 viewport=viewport,
@@ -6386,6 +6422,7 @@ def run_viewer(
     cache_dir: str,
     textures_dir: str,
     recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None,
+    platform_runtime: PlatformRuntime | None = None,
 ):
     manifest = chunker.load_manifest(cache_dir)
 
@@ -6399,8 +6436,12 @@ def run_viewer(
     CaveViewerWindow.cave_pending_import = None
     CaveViewerWindow.cave_benchmark_config = None
     CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace
+    CaveViewerWindow.cave_platform_runtime = platform_runtime
 
-    _launch_viewer_window()
+    try:
+        _launch_viewer_window()
+    finally:
+        CaveViewerWindow.cave_platform_runtime = None
 
 
 def _cache_manifest_sha256(cache_dir: str) -> str:
@@ -6468,6 +6509,7 @@ def run_viewer_benchmark(
         },
     }
     CaveViewerWindow.cave_recorded_dive_trace = None
+    CaveViewerWindow.cave_platform_runtime = None
 
     try:
         _launch_viewer_window()
@@ -6480,6 +6522,7 @@ def run_viewer_with_pending_import(
     model_descriptor: dict,
     textures_dir: str,
     recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None,
+    platform_runtime: PlatformRuntime | None = None,
 ):
     """
     Launches the viewer window for a map that needs FIRST-TIME import
@@ -6506,6 +6549,7 @@ def run_viewer_with_pending_import(
     CaveViewerWindow.cave_manifest = None
     CaveViewerWindow.cave_benchmark_config = None
     CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace
+    CaveViewerWindow.cave_platform_runtime = platform_runtime
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,
@@ -6523,3 +6567,5 @@ def run_viewer_with_pending_import(
             _LOG.info("Viewer exited without a preloaded map.")
             return
         raise
+    finally:
+        CaveViewerWindow.cave_platform_runtime = None

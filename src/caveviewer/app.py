@@ -467,7 +467,7 @@ def _resolve_recorded_dive_selection(selected_path: str):
     return os.fspath(source_path), trace
 
 
-def _run_map_session(folder: str) -> None:
+def _run_map_session(folder: str, *, platform_runtime=None) -> None:
     """Load and view one cave map. Returns when the viewer window closes."""
     from caveviewer.gui.recorded_dive import RecordedDiveError
 
@@ -504,7 +504,10 @@ def _run_map_session(folder: str) -> None:
             _print_viewer_controls()
             from caveviewer.gui.viewer_window import run_viewer
             try:
-                run_viewer(_prebuilt_cache, textures_dir=_textures_dir)
+                viewer_kwargs = {"textures_dir": _textures_dir}
+                if platform_runtime is not None:
+                    viewer_kwargs["platform_runtime"] = platform_runtime
+                run_viewer(_prebuilt_cache, **viewer_kwargs)
                 _record_application_event(
                     "viewer_session_returned",
                     outcome="window_closed",
@@ -554,6 +557,8 @@ def _run_map_session(folder: str) -> None:
         from caveviewer.gui.viewer_window import run_viewer
         try:
             viewer_kwargs = {"textures_dir": cache_textures_dir}
+            if platform_runtime is not None:
+                viewer_kwargs["platform_runtime"] = platform_runtime
             if recorded_dive_trace is not None:
                 from caveviewer.gui.recorded_dive import (
                     validate_recorded_dive_manifest,
@@ -595,6 +600,8 @@ def _run_map_session(folder: str) -> None:
         from caveviewer.gui.viewer_window import run_viewer_with_pending_import
         try:
             viewer_kwargs = {"textures_dir": folder}
+            if platform_runtime is not None:
+                viewer_kwargs["platform_runtime"] = platform_runtime
             if recorded_dive_trace is not None:
                 viewer_kwargs["recorded_dive_trace"] = recorded_dive_trace
             run_viewer_with_pending_import(model_descriptor, **viewer_kwargs)
@@ -685,7 +692,7 @@ def main():
                 _LOG.info("No folder selected. Exiting.")
                 return
 
-            _run_map_session(folder)
+            _run_map_session(folder, platform_runtime=platform_runtime)
             # Viewer closed -- loop back to a new splash backed by the same
             # process-owned update state and any in-progress download.
     finally:

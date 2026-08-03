@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -13,6 +14,7 @@ from caveviewer.gui.features import (
     FeatureGateRegistry,
     FeatureId,
     decide_automatic_update,
+    decide_video_recording,
 )
 
 from .base import SplashPlatformAdapter
@@ -24,6 +26,7 @@ from .probes.updates import (
     build_update_configuration,
     probe_automatic_update,
 )
+from .probes.recording import VideoRecordingTarget, probe_video_recording
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,11 +40,12 @@ class PlatformProfile:
 
 @dataclass(frozen=True, slots=True)
 class PlatformRuntime:
-    """One process-owned set of platform adapters and static feature decisions.
+    """One process-owned set of adapters, static gates, and lazy capability probes.
 
     The runtime is composed by ``caveviewer.app`` after command-line overrides
     are applied.  It intentionally does not probe D-Bus, the GPU, or network
-    state while being created.
+    state while being created. Action-specific methods run their probes only
+    when the corresponding feature requests them.
     """
 
     profile: PlatformProfile
@@ -55,6 +59,32 @@ class PlatformRuntime:
     def automatic_update_decision(self) -> FeatureDecision:
         """Return the gate used before checking or downloading an update."""
         return self.feature_gates.decision_for(FeatureId.AUTOMATIC_UPDATE)
+
+    def video_recording_capability(
+        self,
+        output_directory: str,
+        *,
+        ffmpeg_resolver: Callable[[], str | None] | None = None,
+    ) -> CapabilityResult[VideoRecordingTarget]:
+        """Probe video-recording prerequisites only when recording is requested."""
+        return probe_video_recording(
+            output_directory,
+            ffmpeg_resolver=ffmpeg_resolver,
+        )
+
+    def video_recording_decision(
+        self,
+        output_directory: str,
+        *,
+        ffmpeg_resolver: Callable[[], str | None] | None = None,
+    ) -> FeatureDecision:
+        """Return the on-demand gate that controls the ffmpeg recording route."""
+        return decide_video_recording(
+            self.video_recording_capability(
+                output_directory,
+                ffmpeg_resolver=ffmpeg_resolver,
+            )
+        )
 
 
 def create_platform_runtime(

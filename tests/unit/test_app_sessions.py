@@ -89,6 +89,27 @@ def test_map_session_opens_selected_prebuilt_cache_folder(tmp_path, monkeypatch)
     assert opened == [((str(tmp_path),), {"textures_dir": str(tmp_path)})]
 
 
+def test_map_session_forwards_an_injected_runtime_to_the_viewer(tmp_path, monkeypatch):
+    (tmp_path / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
+    opened = []
+    runtime = object()
+    _install_viewer_module(
+        monkeypatch,
+        run_viewer=lambda *args, **kwargs: opened.append((args, kwargs)),
+    )
+    monkeypatch.setattr(chunker, "cache_chunk_size", lambda _path: 8.0)
+    monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
+
+    app._run_map_session(str(tmp_path), platform_runtime=runtime)
+
+    assert opened == [
+        (
+            (str(tmp_path),),
+            {"textures_dir": str(tmp_path), "platform_runtime": runtime},
+        )
+    ]
+
+
 def test_map_session_ignores_old_adjacent_prebuilt_cache_layouts(
     tmp_path, monkeypatch
 ):
@@ -497,7 +518,11 @@ def test_main_reopens_splash_after_a_map_session(monkeypatch):
     opened = []
     managers = _install_update_manager_module(monkeypatch)
     monkeypatch.setattr(app.sys, "argv", ["caveviewer", " "])
-    monkeypatch.setattr(app, "_run_map_session", opened.append)
+    monkeypatch.setattr(
+        app,
+        "_run_map_session",
+        lambda folder, **kwargs: opened.append((folder, kwargs)),
+    )
     _install_splash_module(
         monkeypatch,
         lambda **kwargs: (
@@ -509,7 +534,12 @@ def test_main_reopens_splash_after_a_map_session(monkeypatch):
 
     app.main()
 
-    assert opened == ["/maps/first"]
+    assert opened == [
+        (
+            "/maps/first",
+            {"platform_runtime": managers[0].platform_runtime},
+        )
+    ]
     assert versions == [app.__version__, app.__version__]
     assert managers == [seen_managers[0]]
     assert seen_managers == [managers[0], managers[0]]

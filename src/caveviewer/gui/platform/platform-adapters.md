@@ -85,6 +85,14 @@ manager rechecks the gate before it starts a check and before it starts a
 download; a disabled gate never starts network work. Offline failures remain
 ordinary transient check results, not a platform capability failure.
 
+Video recording is the first on-demand gate. When the user starts recording,
+the viewer asks the runtime's narrow recording probe for an ffmpeg path and a
+writable output directory, then applies the pure video-recording policy. The
+same gate is checked again immediately before ffmpeg starts, so a changed drive
+or folder permission cannot begin a recording that has nowhere reliable to go.
+No encoder lookup or output-directory write check happens during application
+startup.
+
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
 unmigrated platform actions. New features should add a narrow probe, a pure
 policy in `caveviewer.gui.features`, and an injected action adapter rather than

@@ -214,6 +214,8 @@ def _queued_import_messages(window):
 def _recording_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._platform_adapter = DefaultSplashPlatformAdapter()
+    window._platform_runtime = None
+    window._recording_output_dir = "/tmp"
     window._recording_countdown_started_at = None
     window._recording_countdown_until = None
     window._recording_session = None
@@ -705,11 +707,12 @@ def test_map_initial_camera_uses_first_manifest_chunk_bounds_center():
 
 
 
-def test_recording_countdown_hides_picker_and_manual_help(monkeypatch):
+def test_recording_countdown_hides_picker_and_manual_help(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 40.0)
     window = _recording_window()
     window._has_map_loaded = True
+    window._recording_output_dir = str(tmp_path)
     window._resolve_ffmpeg_path = lambda: "/usr/bin/ffmpeg"
     window.color_picker = SimpleNamespace(hide=lambda: calls.append("hide_picker"))
     window.controls_overlay = SimpleNamespace(
@@ -722,6 +725,27 @@ def test_recording_countdown_hides_picker_and_manual_help(monkeypatch):
     assert calls == ["hide_picker", "hide_help"]
     assert window._recording_countdown_started_at == 40.0
     assert window._recording_countdown_until == 44.0
+
+
+def test_recording_countdown_reports_missing_encoder_before_hiding_ui(monkeypatch):
+    calls = []
+    window = _recording_window()
+    window._has_map_loaded = True
+    window._resolve_ffmpeg_path = lambda: None
+    window.color_picker = SimpleNamespace(hide=lambda: calls.append("hide_picker"))
+    window.controls_overlay = SimpleNamespace(
+        is_manual_mode=True,
+        hide_help=lambda: calls.append("hide_help"),
+    )
+
+    window._start_recording_countdown()
+
+    assert calls == []
+    assert window._recording_countdown_until is None
+    assert window._recording_status_message == "Recording unavailable"
+    assert window._recording_status_detail == (
+        "Video recording requires ffmpeg. Install it or set CAVEVIEWER_FFMPEG."
+    )
 
 
 def test_recording_toggle_cancels_existing_countdown(monkeypatch):
@@ -921,6 +945,47 @@ def test_start_recording_encoder_allocates_output_sized_readback_framebuffer(
     assert window._recording_readback_framebuffer is ctx.framebuffer
     assert len(window._recording_readback_slots) == 3
     assert window._recording_readback_byte_count == 2000 * 1000 * 3
+
+
+def test_start_recording_encoder_rechecks_gate_before_starting_ffmpeg(monkeypatch):
+    class FakeBuffer:
+        def release(self):
+            pass
+
+    class FakeCtx:
+        viewport = (0, 0, 1280, 720)
+        screen = SimpleNamespace(viewport=(0, 0, 1280, 720), size=(1280, 720))
+
+        def buffer(self, *, reserve):
+            return FakeBuffer()
+
+    available = viewer_window.CapabilityResult.available(
+        viewer_window.VideoRecordingTarget("/usr/bin/ffmpeg", "/recordings"),
+        reason_code="video_recording_target_available",
+    )
+    unavailable = viewer_window.CapabilityResult.unavailable(
+        reason_code="video_recording_output_directory_unavailable",
+    )
+    capabilities = iter((available, unavailable))
+    window = _recording_window()
+    window.ctx = FakeCtx()
+    window._recording_max_height = 1080
+    window._recording_fps = 30
+    window._recording_crf = 23
+    window._recording_capability = lambda: next(capabilities)
+    monkeypatch.setattr(
+        recording,
+        "start_encoder_session",
+        lambda **_kwargs: pytest.fail("ffmpeg must not start after a failed recheck"),
+    )
+
+    assert window._start_recording_encoder() is False
+
+    assert window._recording_status_message == "Recording unavailable"
+    assert window._recording_status_detail == (
+        "Video recording cannot save to the selected folder."
+    )
+    assert window._recording_readback_slots == []
 
 
 def test_recording_skips_framebuffer_read_when_writer_queue_is_full(monkeypatch):

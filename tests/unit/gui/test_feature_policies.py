@@ -10,6 +10,7 @@ from caveviewer.gui.features import (
     FeatureId,
     FeatureState,
     decide_automatic_update,
+    decide_video_recording,
 )
 
 
@@ -50,6 +51,57 @@ def test_automatic_update_policy_is_a_pure_capability_table(
     decision = decide_automatic_update(capability)
 
     assert decision.feature is FeatureId.AUTOMATIC_UPDATE
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (state is FeatureState.ENABLED)
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                "target",
+                reason_code="video_recording_target_available",
+            ),
+            FeatureState.ENABLED,
+            "video_recording_available",
+            "ffmpeg",
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="video_recording_encoder_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "video_recording_encoder_unavailable",
+            None,
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="video_recording_output_directory_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "video_recording_output_directory_unavailable",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="video_recording_encoder_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "video_recording_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_video_recording_policy_is_a_pure_capability_table(
+    capability, state, reason_code, route
+):
+    decision = decide_video_recording(capability)
+
+    assert decision.feature is FeatureId.VIDEO_RECORDING
     assert decision.state is state
     assert decision.reason_code == reason_code
     assert decision.route == route
