@@ -134,7 +134,7 @@ def _get_platform_control_sections(
     navigation.extend([
         ("1..9", "Recall camera bookmark slot"),
         ("Del + 1..9", "Delete bookmark slot"),
-        (f"{primary_shortcut_label} + A", "Start/stop guided dive"),
+        ("Space", "Pause/resume a recorded dive"),
         ("Minimap click", "Jump to that spot"),
         (f"{primary_shortcut_label} + O", "Switch to a different map"),
         ("Open button", "Switch to a different map"),
@@ -145,6 +145,7 @@ def _get_platform_control_sections(
     recording = [
         ("REC button", "Start recording countdown"),
         ("Shift + R", "Stop or cancel recording"),
+        ("Shift + T", "Start/stop manual route trace"),
     ]
 
     return [

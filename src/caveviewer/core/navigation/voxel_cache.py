@@ -37,6 +37,19 @@ from caveviewer.core.navigation.curvature import (
     analyze_polyline_curvature,
     select_curvature_regions,
 )
+from caveviewer.core.navigation.cubic_graph import (
+    CUBIC_VOXEL_GRAPH_METHOD,
+    CubicVoxelGraphBuildResult,
+    CubicVoxelKey,
+    CubicVoxelLimitExceededError,
+    SparseCubicVoxelGraph,
+    build_cubic_graph_from_local_volumes,
+)
+from caveviewer.core.navigation.fixed_voxels import (
+    FIXED_ORTHOGONAL_VOXEL_METHOD,
+    FixedVoxelRegion,
+    build_fixed_orthogonal_voxel_tiles,
+)
 from caveviewer.core.navigation.voxel_volume import (
     DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD,
     DEFAULT_VOXEL_MAX_CELLS,
@@ -86,7 +99,9 @@ from caveviewer.core.navigation.mesh_graph import (
     MeshNavigationGraphAnchor,
     MeshNavigationGraphBuildResult,
     MeshNavigationGraphConfig,
+    build_exact_cubic_spine_navigation_path_graph,
     build_goal_directed_seeded_mesh_navigation_path_graph,
+    build_validated_mesh_path_graph,
 )
 from caveviewer.core.navigation.voxel_store import (
     DEFAULT_NAVIGATION_VOXEL_CHUNK_MAX_BYTES,
@@ -100,14 +115,18 @@ from caveviewer.core.navigation.voxel_store import (
 )
 
 
-NAVIGATION_VOXEL_CACHE_VERSION = 10
-NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v10"
-# Version 10 adds a compact mesh-derived roadmap alongside the existing voxel
-# graph.  The voxel atlas remains available for probes and bounded local
-# recovery, but Guided Dive treats the direct-mesh roadmap as its production
-# route authority after a rebuild.
-_PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION = 9
-_PREVIOUS_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v9"
+NAVIGATION_VOXEL_CACHE_VERSION = 12
+NAVIGATION_VOXEL_CACHE_METHOD = "fixed_orthogonal_route_atlas_v12"
+# Version 12 preserves the bounded 1 m horizontal field while sampling Y at
+# 0.25 m. A half-metre-high passage therefore retains an interior layer
+# without the 64x cost of 0.25 m isotropic cells. Exact cached-mesh checks
+# remain runtime authority for every executable segment.
+_PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION = 11
+_PREVIOUS_NAVIGATION_VOXEL_CACHE_METHOD = "fixed_isotropic_route_atlas_v11"
+_V10_NAVIGATION_VOXEL_CACHE_VERSION = 10
+_V10_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v10"
+_V9_NAVIGATION_VOXEL_CACHE_VERSION = 9
+_V9_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v9"
 _OLDER_NAVIGATION_VOXEL_CACHE_VERSION = 8
 _OLDER_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v8"
 _ANCIENT_NAVIGATION_VOXEL_CACHE_VERSION = 7
@@ -120,8 +139,11 @@ _LEGACY_NAVIGATION_VOXEL_CACHE_VERSION = 1
 _LEGACY_NAVIGATION_VOXEL_CACHE_METHOD = "curvature_corridor_voxels_v1"
 NAVIGATION_VOXEL_CACHE_NAME = "navigation_voxels.json"
 NAVIGATION_VOXEL_CACHE_MAX_BYTES = 256 * 1024 * 1024
-NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v10"
-_PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v9"
+NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v12"
+MeshPointSupportCheck = Callable[[Point, float, float], bool]
+_PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v11"
+_V10_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v10"
+_V9_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v9"
 _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v8"
 _ANCIENT_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v7"
 _HISTORIC_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v6"
@@ -146,24 +168,76 @@ _runtime_voxel_model_cache: OrderedDict[
 # still stays bounded, but the offline cache is allowed to preserve much more
 # of the sparse 1 m navigation field.
 DEFAULT_CACHE_VOXEL_SIZE_M = DEFAULT_VOXEL_SIZE_M
+DEFAULT_CACHE_VERTICAL_VOXEL_SIZE_M = 0.25
 DEFAULT_CACHE_VOXEL_RANK_THRESHOLD = DEFAULT_VOXEL_CURVATURE_RANK_THRESHOLD
 DEFAULT_CACHE_VOXEL_MAX_REGIONS = DEFAULT_VOXEL_MAX_REGIONS
 DEFAULT_CACHE_VOXEL_MAX_CELLS = 65_536
 DEFAULT_CACHE_VOXEL_MAX_SURFACE_SAMPLES = 250_000
 DEFAULT_CACHE_VOXEL_MAX_ROUTES = 4
 DEFAULT_CACHE_VOXEL_WINDOW_POINTS = 3
-DEFAULT_CACHE_VOXEL_TILE_SIZE_M = 64.0
-DEFAULT_CACHE_VOXEL_MAX_TILES = 256
-# The mesh roadmap is intentionally a single easiest-terminal experiment.
+NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR = (
+    "longest_safe_non_circular_certified_route_v1"
+)
+DEFAULT_CACHE_VOXEL_TILE_SIZE_M = 32.0
+DEFAULT_CACHE_VOXEL_MAX_TILES = 4_096
+DEFAULT_CACHE_VOXEL_ROUTE_CORRIDOR_RADIUS_M = 16.0
+DEFAULT_CACHE_CUBIC_MAX_VOXELS = 8_388_608
+# Long routes can exceed the packed graph budget even though one terminal path
+# needs only a narrow tube. V12 automatically narrows that search tube under
+# capacity pressure; it never changes the requested orthogonal resolution.
+# The offline accuracy tier permits up to eight million packed keys so a
+# 0.25 m vertical field can retain at least the horizontal uncertainty of a
+# coarse surface-footprint cell on long caves.
+MIN_CACHE_VOXEL_ROUTE_CORRIDOR_RADIUS_M = 4.0
+MAX_MESH_GRAPH_FINE_RETRY_TUBE_RADIUS_M = 8.0
+MIN_CACHE_VOXEL_MEANINGFUL_ROUTE_LENGTH_M = 32.0
+DEFAULT_CUBIC_TERMINAL_CANDIDATE_LIMIT = 64
+DEFAULT_CUBIC_INGRESS_CANDIDATE_LIMIT = 128
+# A candidate may be collision-free because it lies in the unbounded void
+# outside an open scan. Probe far enough to span large rooms while keeping
+# cache-time mesh queries local and deterministic.
+DEFAULT_MESH_OPPOSING_SUPPORT_DISTANCE_M = 128.0
+# Guided Dive certifies exactly the requested source-zero-to-final route.
+# Retrying later source ranges recreated the historical short-dive bug.
+DEFAULT_MESH_TERMINAL_ROUTE_ATTEMPT_LIMIT = 1
+# A broad metadata-to-voxel snap may be necessary when the authored endpoint
+# sits outside sampled free space. Executable alternatives must still remain
+# local to that selected endpoint: one 26-neighbor cubic shell is enough to
+# escape a blocked center connector without turning an earlier route prefix
+# into another terminal.
+DEFAULT_CUBIC_TERMINAL_NEIGHBOR_RADIUS_VOXELS = math.sqrt(3.0)
+MAX_CACHE_FIXED_VOXEL_SIZE_M = 1.0
+MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M = 0.25
+# The mesh roadmap is intentionally one complete selected-terminal path.
 # Keep only a short metadata ingress to connect the user-visible route start
 # to the selected voxel spine; the rest of the centerline is not topology.
 DEFAULT_MESH_GRAPH_ENTRY_SEED_CELLS = 12
 DEFAULT_MESH_GRAPH_ENTRY_SEED_POINTS = 8
+# A half-metre execution lattice is the one universal bounded retry when a
+# valid fixed voxel component is disconnected only by horizontal lattice
+# alignment. It starts in a 4 m horizontal envelope and may widen once to 8 m
+# after an exhaustive non-capacity failure. The source evidence remains fixed
+# at 1 m-or-finer X/Z
+# and 0.25 m-or-finer Y cells,
+# and exact voxel membership plus cached-mesh checks still authorize every
+# retry node and edge.
+DEFAULT_MESH_GRAPH_FINE_RETRY_SPACING_M = 0.5
 # The metadata route begins near the normal camera entry but its first voxel
 # spine node need not be the one that has a mesh-clear connector from that
 # pose. Preserve a small, bounded true-3D neighborhood as mesh-roadmap anchor
 # candidates so preflight can choose the first exact-safe handoff.
-DEFAULT_MESH_GRAPH_ENTRY_ANCHOR_RADIUS_M = 24.0
+# Imported OBJ vertices are surface evidence, never executable positions. A
+# configuration may retain a broader runtime camera-to-roadmap search, but the
+# source-derived ingress locator must never authorize a farther relocation.
+MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M = 24.0
+# A 10 m surface-footprint step can represent a steep shaft whose bounded
+# free-space intervals move by more than one mesh-roadmap edge.  This is only
+# a proposal limit between two specific surface-derived intervals: the packed
+# free component and cached-mesh checks must still prove every 0.25 m step.
+MAX_SURFACE_GAP_VERTICAL_TRANSITION_M = 24.0
+DEFAULT_MESH_GRAPH_ENTRY_ANCHOR_RADIUS_M = (
+    MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M
+)
 # A bounded second pass repairs footprint cells missed by the distributed
 # surface-sampling budget. It is deliberately separate from the main budget:
 # one missed component cell should not force the whole cave to use a much
@@ -172,8 +246,9 @@ DEFAULT_CACHE_VOXEL_COVERAGE_REPAIR_SAMPLE_BUDGET = 262_144
 DEFAULT_CACHE_VOXEL_MAX_TILE_CELLS = 65_536
 DEFAULT_CACHE_VOXEL_MAX_CELL_METRICS = 65_536
 DEFAULT_CACHE_FINE_VOXEL_SIZE_M = 1.0
+DEFAULT_CACHE_FINE_VERTICAL_VOXEL_SIZE_M = 0.25
 DEFAULT_CACHE_FINE_TILE_RADIUS_M = 16.0
-# Fine tiles form a contiguous corridor along the prepared easiest-terminal
+# Fine tiles form a contiguous corridor along the prepared selected-terminal
 # graph spine, rather than a sparse collection of bend/frontier samples or an
 # unrelated imported centerline. The budget covers roughly 1.1 km at the
 # default 16 m radius and 12 m spacing; it remains bounded and fails closed
@@ -234,6 +309,7 @@ class NavigationVoxelCacheConfig:
     """Accuracy-tier cache-time voxel and graph construction settings."""
 
     voxel_size_m: float = DEFAULT_CACHE_VOXEL_SIZE_M
+    vertical_voxel_size_m: float = DEFAULT_CACHE_VERTICAL_VOXEL_SIZE_M
     curvature_rank_threshold: int = DEFAULT_CACHE_VOXEL_RANK_THRESHOLD
     max_regions: int = DEFAULT_CACHE_VOXEL_MAX_REGIONS
     max_cells: int = DEFAULT_CACHE_VOXEL_MAX_CELLS
@@ -246,6 +322,9 @@ class NavigationVoxelCacheConfig:
         DEFAULT_CACHE_VOXEL_COVERAGE_REPAIR_SAMPLE_BUDGET
     )
     fine_voxel_size_m: float = DEFAULT_CACHE_FINE_VOXEL_SIZE_M
+    fine_vertical_voxel_size_m: float = (
+        DEFAULT_CACHE_FINE_VERTICAL_VOXEL_SIZE_M
+    )
     fine_tile_radius_m: float = DEFAULT_CACHE_FINE_TILE_RADIUS_M
     max_fine_tiles: int = DEFAULT_CACHE_FINE_MAX_TILES
     max_fine_tile_cells: int = DEFAULT_CACHE_FINE_MAX_TILE_CELLS
@@ -256,12 +335,12 @@ class NavigationVoxelCacheConfig:
     graph_max_edges_per_node: int = DEFAULT_CACHE_GRAPH_MAX_EDGES_PER_NODE
     mesh_graph_enabled: bool = True
     # These are roadmap waypoint spacings, not source-voxel resolution. The
-    # seeded component uses a uniform 2 m execution lattice and accepts
-    # topology only through exact cached-mesh neighbor checks.
-    mesh_graph_horizontal_sample_spacing_m: float = 2.0
-    mesh_graph_vertical_sample_spacing_m: float = 2.0
+    # authoritative path uses the same orthogonal 1 m x 0.25 m x 1 m lattice
+    # by default and accepts topology only through exact cached-mesh checks.
+    mesh_graph_horizontal_sample_spacing_m: float = 1.0
+    mesh_graph_vertical_sample_spacing_m: float = 0.25
     mesh_graph_minimum_clearance_m: float = 0.25
-    mesh_graph_max_nodes: int = 96_000
+    mesh_graph_max_nodes: int = 262_144
     mesh_graph_max_edges_per_node: int = 16
     mesh_graph_max_edge_candidates_per_node: int = 32
     mesh_graph_max_edge_candidates_per_direction: int = 2
@@ -270,11 +349,20 @@ class NavigationVoxelCacheConfig:
     mesh_graph_entry_anchor_radius_m: float = (
         DEFAULT_MESH_GRAPH_ENTRY_ANCHOR_RADIUS_M
     )
+    route_corridor_radius_m: float = DEFAULT_CACHE_VOXEL_ROUTE_CORRIDOR_RADIUS_M
+    cubic_component_max_voxels: int = DEFAULT_CACHE_CUBIC_MAX_VOXELS
 
     def validated(self) -> "NavigationVoxelCacheConfig":
         size = float(self.voxel_size_m)
         if not math.isfinite(size) or size <= 0.0:
             raise ValueError("cache voxel size must be positive and finite")
+        if size > MAX_CACHE_FIXED_VOXEL_SIZE_M + 1e-9:
+            raise ValueError("V12 horizontal cache voxels must be 1 m or finer")
+        vertical_size = float(self.vertical_voxel_size_m)
+        if not math.isfinite(vertical_size) or vertical_size <= 0.0:
+            raise ValueError("vertical cache voxel size must be positive and finite")
+        if vertical_size > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9:
+            raise ValueError("V12 vertical cache voxels must be 0.25 m or finer")
         rank = max(0, min(100, int(self.curvature_rank_threshold)))
         max_regions = max(0, int(self.max_regions))
         max_cells = max(1, int(self.max_cells))
@@ -292,6 +380,15 @@ class NavigationVoxelCacheConfig:
         fine_size = float(self.fine_voxel_size_m)
         if not math.isfinite(fine_size) or fine_size <= 0.0:
             raise ValueError("fine voxel size must be positive and finite")
+        fine_vertical_size = float(self.fine_vertical_voxel_size_m)
+        if not math.isfinite(fine_vertical_size) or fine_vertical_size <= 0.0:
+            raise ValueError(
+                "fine vertical voxel size must be positive and finite"
+            )
+        if fine_vertical_size > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9:
+            raise ValueError(
+                "V12 fine vertical cache voxels must be 0.25 m or finer"
+            )
         fine_radius = float(self.fine_tile_radius_m)
         if not math.isfinite(fine_radius) or fine_radius <= 0.0:
             raise ValueError("fine voxel tile radius must be positive and finite")
@@ -323,11 +420,29 @@ class NavigationVoxelCacheConfig:
             max_edge_distance_m=self.mesh_graph_max_edge_distance_m,
             max_vertical_edge_distance_m=self.mesh_graph_max_vertical_edge_distance_m,
         ).validated()
+        if (
+            mesh_graph_config.vertical_sample_spacing_m
+            > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+        ):
+            raise ValueError(
+                "V12 authoritative mesh graph Y spacing must be 0.25 m or finer"
+            )
         entry_anchor_radius = float(self.mesh_graph_entry_anchor_radius_m)
         if not math.isfinite(entry_anchor_radius) or entry_anchor_radius <= 0.0:
             raise ValueError("mesh graph entry anchor radius must be positive")
+        route_corridor_radius = float(self.route_corridor_radius_m)
+        if (
+            not math.isfinite(route_corridor_radius)
+            or route_corridor_radius <= 0.0
+        ):
+            raise ValueError("route corridor radius must be positive")
+        cubic_component_max_voxels = max(
+            2,
+            int(self.cubic_component_max_voxels),
+        )
         return NavigationVoxelCacheConfig(
             voxel_size_m=size,
+            vertical_voxel_size_m=vertical_size,
             curvature_rank_threshold=rank,
             max_regions=max_regions,
             max_cells=max_cells,
@@ -338,6 +453,7 @@ class NavigationVoxelCacheConfig:
             max_tiles=max_tiles,
             coverage_repair_sample_budget=coverage_repair_sample_budget,
             fine_voxel_size_m=fine_size,
+            fine_vertical_voxel_size_m=fine_vertical_size,
             fine_tile_radius_m=fine_radius,
             max_fine_tiles=max_fine_tiles,
             max_fine_tile_cells=max_fine_cells,
@@ -373,6 +489,8 @@ class NavigationVoxelCacheConfig:
                 mesh_graph_config.max_vertical_edge_distance_m
             ),
             mesh_graph_entry_anchor_radius_m=entry_anchor_radius,
+            route_corridor_radius_m=route_corridor_radius,
+            cubic_component_max_voxels=cubic_component_max_voxels,
         )
 
     def mesh_navigation_graph_config(self) -> MeshNavigationGraphConfig:
@@ -769,6 +887,12 @@ class NavigationVoxelAtlas:
     # validation; persisting this build policy prevents runtime behavior from
     # depending on per-map environment variables.
     mesh_graph_entry_anchor_radius_m: float = 0.0
+    # ``fixed_isotropic_voxel_size_m`` is retained as the horizontal X/Z
+    # compatibility field for older callers. V12 pairs it with an explicit
+    # vertical size and never treats the two as interchangeable.
+    fixed_isotropic_voxel_size_m: float = 0.0
+    fixed_vertical_voxel_size_m: float = 0.0
+    surface_overlap_occupied_wins: bool = False
     fine_tiles: tuple[LocalVoxelVolume, ...] = ()
     chunk_store: NavigationVoxelChunkStore | None = None
     _probe_tile_bucket_size_m: float = field(
@@ -797,6 +921,23 @@ class NavigationVoxelAtlas:
 
     def __post_init__(self) -> None:
         """Build a small immutable spatial dispatch table for point probes."""
+        fixed_size = float(self.fixed_isotropic_voxel_size_m)
+        if not math.isfinite(fixed_size) or fixed_size < 0.0:
+            raise ValueError("fixed isotropic voxel size is invalid")
+        vertical_size = float(self.fixed_vertical_voxel_size_m)
+        if not math.isfinite(vertical_size) or vertical_size < 0.0:
+            raise ValueError("fixed vertical voxel size is invalid")
+        if (fixed_size > 0.0) != (vertical_size > 0.0):
+            # Legacy V11 callers set only the scalar field. Normalize that
+            # representation to cubic cells without weakening V12 checks.
+            if fixed_size > 0.0 and vertical_size == 0.0:
+                object.__setattr__(
+                    self,
+                    "fixed_vertical_voxel_size_m",
+                    fixed_size,
+                )
+            else:
+                raise ValueError("fixed navigation voxel sizes are incomplete")
         probe_tiles = tuple(self.fine_tiles) + tuple(self.tiles)
         object.__setattr__(self, "_probe_tiles", probe_tiles)
         object.__setattr__(self, "_probe_result_cache", {})
@@ -904,9 +1045,47 @@ class NavigationVoxelAtlas:
         return float(min(tile.voxel_size_m for tile in all_tiles))
 
     @property
+    def vertical_voxel_size_m(self) -> float:
+        """Return the finest persisted vertical resolution."""
+        all_tiles = tuple(self.tiles) + tuple(self.fine_tiles)
+        if all_tiles:
+            return float(
+                min(
+                    getattr(tile, "vertical_voxel_size_m", tile.voxel_size_m)
+                    for tile in all_tiles
+                )
+            )
+        if self.chunk_store is not None:
+            return min(
+                (
+                    float(
+                        getattr(
+                            descriptor,
+                            "vertical_voxel_size_m",
+                            descriptor.voxel_size_m,
+                        )
+                    )
+                    for descriptor in self.chunk_store.descriptors()
+                ),
+                default=0.0,
+            )
+        return float(self.fixed_vertical_voxel_size_m)
+
+    @property
+    def fixed_voxel_cell_size_m(self) -> tuple[float, float, float]:
+        """Return the current fixed X/Y/Z cache resolution."""
+        horizontal = float(self.fixed_isotropic_voxel_size_m)
+        vertical = float(self.fixed_vertical_voxel_size_m)
+        if horizontal <= 0.0 or vertical <= 0.0:
+            return (0.0, 0.0, 0.0)
+        return (horizontal, vertical, horizontal)
+
+    @property
     def fine_voxel_size_m(self) -> float:
         """Return the finest persisted local refinement resolution."""
         if not self.fine_tiles:
+            if self.fixed_isotropic_voxel_size_m > 0.0:
+                return float(self.fixed_isotropic_voxel_size_m)
             if self.chunk_store is None:
                 return 0.0
             return min(
@@ -994,7 +1173,7 @@ class NavigationVoxelAtlas:
     def authoritative_graph(self) -> NavigationVoxel3DGraph | None:
         """Return the preferred graph without discarding voxel evidence.
 
-        Version-10 caches use the direct-mesh roadmap for production routing.
+        Current caches use the direct-mesh path for production routing.
         Older readable sidecars retain their voxel graph for compatibility
         callers only; authority checks decide whether that fallback is legal.
         """
@@ -1178,6 +1357,10 @@ class NavigationVoxelAtlas:
                 else:
                     occupied = True
             if free_clearances:
+                if self.surface_overlap_occupied_wins and (
+                    occupied or fine_occupied
+                ):
+                    return False, 0.0
                 return True, max(free_clearances)
             if occupied:
                 return False, 0.0
@@ -1216,6 +1399,10 @@ class NavigationVoxelAtlas:
             else:
                 occupied = True
         if free_clearances:
+            if self.surface_overlap_occupied_wins and (
+                occupied or fine_occupied
+            ):
+                return False, 0.0
             return True, max(free_clearances)
         if occupied:
             return False, 0.0
@@ -1228,10 +1415,14 @@ class NavigationVoxelAtlas:
         point: Sequence[float],
     ) -> LocalVoxelVolume | None:
         """Return the persisted fine tile covering a world point, if any."""
+        fixed_tiles_are_fine = bool(
+            not self.fine_tiles
+            and self.fixed_isotropic_voxel_size_m > 0.0
+        )
         if self.chunk_store is not None and not self.fine_tiles:
             for chunk_id in self.chunk_store.chunk_ids_for_point(
                 point,
-                fine_only=True,
+                fine_only=None if fixed_tiles_are_fine else True,
             ):
                 tile = self.chunk_store.get_chunk(chunk_id)
                 if tile is not None and tile.contains_point(point):
@@ -1249,9 +1440,12 @@ class NavigationVoxelAtlas:
         except (IndexError, TypeError, ValueError, ZeroDivisionError):
             return None
         for tile_index in self._probe_tile_index.get(bucket, ()):
-            if tile_index >= len(self.fine_tiles):
-                continue
-            tile = self.fine_tiles[tile_index]
+            if fixed_tiles_are_fine:
+                tile = self._probe_tiles[tile_index]
+            else:
+                if tile_index >= len(self.fine_tiles):
+                    continue
+                tile = self.fine_tiles[tile_index]
             if tile.contains_point(point):
                 return tile
         return None
@@ -1280,13 +1474,17 @@ class NavigationVoxelAtlas:
             normalized.append(candidate)  # type: ignore[arg-type]
         if not normalized:
             return ()
+        fixed_tiles_are_fine = bool(
+            not self.fine_tiles
+            and self.fixed_isotropic_voxel_size_m > 0.0
+        )
         if self.chunk_store is not None and not self.fine_tiles:
             candidate_ids: set[str] | None = None
             for point in normalized:
                 point_ids = set(
                     self.chunk_store.chunk_ids_for_point(
                         point,
-                        fine_only=True,
+                        fine_only=None if fixed_tiles_are_fine else True,
                     )
                 )
                 candidate_ids = (
@@ -1302,9 +1500,10 @@ class NavigationVoxelAtlas:
                 if (tile := self.chunk_store.get_chunk(chunk_id)) is not None
                 and all(tile.contains_point(point) for point in normalized)
             )
+        candidate_tiles = self.tiles if fixed_tiles_are_fine else self.fine_tiles
         return tuple(
             tile
-            for tile in self.fine_tiles
+            for tile in candidate_tiles
             if all(tile.contains_point(point) for point in normalized)
         )
 
@@ -1315,6 +1514,36 @@ class NavigationVoxelAtlas:
         include_clearance: bool = True,
     ) -> tuple[bool, float] | None:
         """Query only persisted fine frontier tiles."""
+        if not self.fine_tiles and self.fixed_isotropic_voxel_size_m > 0.0:
+            if self.chunk_store is not None and not self.tiles:
+                fixed_tiles = tuple(
+                    tile
+                    for chunk_id in self.chunk_store.chunk_ids_for_point(
+                        point,
+                        fine_only=None,
+                    )
+                    if (tile := self.chunk_store.get_chunk(chunk_id)) is not None
+                )
+            else:
+                fixed_tiles = self.tiles
+            free_clearances: list[float] = []
+            occupied = False
+            for tile in fixed_tiles:
+                result = tile.probe_point(
+                    point,
+                    include_clearance=include_clearance,
+                )
+                if result is None:
+                    continue
+                if result[0]:
+                    free_clearances.append(float(result[1]))
+                else:
+                    occupied = True
+            if occupied:
+                return False, 0.0
+            if free_clearances:
+                return True, max(free_clearances)
+            return None
         if self.chunk_store is not None and not self.fine_tiles:
             free_clearances: list[float] = []
             occupied = False
@@ -2616,26 +2845,62 @@ class NavigationVoxelAtlas:
                     )
                 ]
         surface_occupied_volume_m3 = sum(
-            len(tile.surface_cells) * tile.voxel_size_m ** 3
+            len(tile.surface_cells)
+            * float(getattr(tile, "cell_volume_m3", tile.voxel_size_m ** 3))
             for tile in self.tiles
         )
         if self.chunk_store is not None and not self.tiles:
             surface_occupied_volume_m3 = sum(
-                descriptor.surface_cell_count * descriptor.voxel_size_m ** 3
+                descriptor.surface_cell_count
+                * float(
+                    getattr(
+                        descriptor,
+                        "cell_volume_m3",
+                        descriptor.voxel_size_m ** 3,
+                    )
+                )
                 for descriptor in self.chunk_store.descriptors(
                     fine_only=False,
                 )
             )
         return {
             "model_kind": NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
-            "cache_quality_profile": "mesh_roadmap_graph_native_v1",
+            "cache_quality_profile": "fixed_orthogonal_terminal_route_v1",
             "coverage_scope": self.coverage_scope,
             "tile_count": int(self.tile_count),
             "fine_tile_count": int(self.fine_tile_count),
             "voxel_size_m": float(self.voxel_size_m),
+            "vertical_voxel_size_m": float(self.vertical_voxel_size_m),
             "voxel_size_max_m": max(tile_sizes, default=0.0),
-            "fine_voxel_size_m": min(fine_tile_sizes, default=0.0),
-            "fine_voxel_size_max_m": max(fine_tile_sizes, default=0.0),
+            "fine_voxel_size_m": float(self.fine_voxel_size_m),
+            "fine_voxel_size_max_m": max(
+                fine_tile_sizes,
+                default=float(self.fixed_isotropic_voxel_size_m),
+            ),
+            "fixed_voxel_method": (
+                FIXED_ORTHOGONAL_VOXEL_METHOD
+                if self.fixed_isotropic_voxel_size_m > 0.0
+                else None
+            ),
+            "fixed_isotropic_voxel_size_m": float(
+                self.fixed_isotropic_voxel_size_m
+            ),
+            "fixed_vertical_voxel_size_m": float(
+                self.fixed_vertical_voxel_size_m
+            ),
+            "fixed_voxel_cell_size_m": [
+                float(value) for value in self.fixed_voxel_cell_size_m
+            ],
+            "cubic_graph_method": (
+                CUBIC_VOXEL_GRAPH_METHOD
+                if self.fixed_isotropic_voxel_size_m > 0.0
+                else None
+            ),
+            "surface_overlap_policy": (
+                "occupied_wins"
+                if self.surface_overlap_occupied_wins
+                else "legacy_free_preferred"
+            ),
             "bounds_min": [float(value) for value in self.bounds_min],
             "bounds_max": [float(value) for value in self.bounds_max],
             "voxel_count": int(self.voxel_count),
@@ -4513,6 +4778,7 @@ def build_navigation_voxel_cache(
     *,
     triangle_provider: TriangleProvider,
     mesh_edge_is_clear: MeshEdgeSafetyCheck | None = None,
+    mesh_point_has_opposing_support: MeshPointSupportCheck | None = None,
     config: NavigationVoxelCacheConfig | None = None,
 ) -> NavigationVoxelCacheBuildResult:
     """Build bounded voxel models and volume summaries for cached routes.
@@ -4523,6 +4789,12 @@ def build_navigation_voxel_cache(
     exists, and an explicit navigation-start route remains authoritative.
     """
     resolved = (config or NavigationVoxelCacheConfig()).validated()
+    imported_ingress_anchor = _imported_navigation_start_anchor(
+        navigation_metadata
+    )
+    navigation_start_ingress = _navigation_start_position(
+        navigation_metadata
+    )
     routes = navigation_metadata.get("routes")
     if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
         return NavigationVoxelCacheBuildResult(
@@ -4552,10 +4824,39 @@ def build_navigation_voxel_cache(
             route_id=route_id,
             triangle_provider=triangle_provider,
             mesh_edge_is_clear=mesh_edge_is_clear,
+            mesh_point_has_opposing_support=(
+                mesh_point_has_opposing_support
+            ),
             config=resolved,
+            source_ingress_anchor=(
+                imported_ingress_anchor
+                if (
+                    imported_ingress_anchor is not None
+                    and route_value.get(
+                        "starts_at_navigation_start_anchor"
+                    )
+                    is True
+                )
+                else (
+                    navigation_start_ingress
+                    if route_value.get("starts_at_navigation_start") is True
+                    else None
+                )
+            ),
+            source_ingress_is_obj_surface_anchor=(
+                imported_ingress_anchor is not None
+                and route_value.get(
+                    "starts_at_navigation_start_anchor"
+                )
+                is True
+            ),
         )
         certified_component_cells = summary.pop(
             "_certified_component_cells",
+            None,
+        )
+        certified_route_points = summary.pop(
+            "_certified_route_points",
             None,
         )
         if (
@@ -4609,6 +4910,14 @@ def build_navigation_voxel_cache(
                         ]
                     else:
                         route_value.pop("component_y_ranges", None)
+        if bool(summary.get("built")):
+            _publish_certified_complete_route(
+                route_value,
+                certified_route_points,
+                source_point_offset=int(
+                    summary["certified_ingress_hint_index"]
+                ),
+            )
         route_value["voxel_corridor"] = summary
         route_summaries[route_id] = summary
         if not bool(summary.get("built")):
@@ -4641,15 +4950,29 @@ def build_navigation_voxel_cache(
         navigation_metadata,
         route_summaries,
     )
+    selection_method = NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR
+    # A stale centerline recommendation must never survive when no complete
+    # non-circular route can be certified, regardless of ingress source.
+    navigation_metadata.pop("recommended_route_id", None)
+    navigation_metadata["route_selection_method"] = selection_method
     if recommended_route_id is not None:
         navigation_metadata["recommended_route_id"] = recommended_route_id
-        navigation_metadata["route_selection_method"] = (
-            "largest_cached_cave_volume_v2"
+        navigation_metadata["route_selection_method"] = selection_method
+        _publish_selected_route_method(
+            navigation_metadata,
+            route_id=recommended_route_id,
+            selection_method=selection_method,
         )
     payload: dict[str, object] = {
         "version": NAVIGATION_VOXEL_CACHE_VERSION,
         "method": NAVIGATION_VOXEL_CACHE_METHOD,
         "voxel_size_m": float(resolved.voxel_size_m),
+        "vertical_voxel_size_m": float(resolved.vertical_voxel_size_m),
+        "voxel_cell_size_m": [
+            float(resolved.voxel_size_m),
+            float(resolved.vertical_voxel_size_m),
+            float(resolved.voxel_size_m),
+        ],
         "curvature_method": CURVATURE_PROFILE_METHOD,
         "curvature_rank_threshold": int(resolved.curvature_rank_threshold),
         "max_regions": int(resolved.max_regions),
@@ -4661,6 +4984,9 @@ def build_navigation_voxel_cache(
             resolved.coverage_repair_sample_budget
         ),
         "fine_voxel_size_m": float(resolved.fine_voxel_size_m),
+        "fine_vertical_voxel_size_m": float(
+            resolved.fine_vertical_voxel_size_m
+        ),
         "fine_tile_radius_m": float(resolved.fine_tile_radius_m),
         "max_fine_tiles": int(resolved.max_fine_tiles),
         "max_fine_tile_cells": int(resolved.max_fine_tile_cells),
@@ -4701,8 +5027,25 @@ def build_navigation_voxel_cache(
             resolved.mesh_graph_entry_anchor_radius_m
         ),
         "graph_routing_authority": "prepared_mesh_free_space_graph",
-        "cache_quality_profile": "mesh_roadmap_graph_native_v1",
-        "coverage_scope": "entire_cave_component",
+        "cache_quality_profile": "fixed_orthogonal_terminal_route_v1",
+        "coverage_scope": "certified_terminal_route",
+        "fixed_voxel_method": FIXED_ORTHOGONAL_VOXEL_METHOD,
+        "fixed_isotropic_voxel_size_m": float(resolved.voxel_size_m),
+        "fixed_vertical_voxel_size_m": float(
+            resolved.vertical_voxel_size_m
+        ),
+        "fixed_voxel_cell_size_m": [
+            float(resolved.voxel_size_m),
+            float(resolved.vertical_voxel_size_m),
+            float(resolved.voxel_size_m),
+        ],
+        "route_corridor_radius_m": float(resolved.route_corridor_radius_m),
+        "cubic_component_max_voxels": int(
+            resolved.cubic_component_max_voxels
+        ),
+        "cubic_graph_method": CUBIC_VOXEL_GRAPH_METHOD,
+        "surface_overlap_policy": "occupied_wins",
+        "sampling_complete_required": True,
         "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
         "mesh_navigation_graph_method": MESH_NAVIGATION_GRAPH_METHOD,
         "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
@@ -4715,7 +5058,24 @@ def build_navigation_voxel_cache(
             "path": NAVIGATION_VOXEL_CACHE_NAME,
             "route_count": len(model_routes),
             "built_route_count": len(built_route_ids),
-            "coverage_scope": "entire_cave_component",
+            "coverage_scope": "certified_terminal_route",
+            "fixed_voxel_method": FIXED_ORTHOGONAL_VOXEL_METHOD,
+            "fixed_isotropic_voxel_size_m": float(resolved.voxel_size_m),
+            "fixed_vertical_voxel_size_m": float(
+                resolved.vertical_voxel_size_m
+            ),
+            "fixed_voxel_cell_size_m": [
+                float(resolved.voxel_size_m),
+                float(resolved.vertical_voxel_size_m),
+                float(resolved.voxel_size_m),
+            ],
+            "route_corridor_radius_m": float(resolved.route_corridor_radius_m),
+            "cubic_component_max_voxels": int(
+                resolved.cubic_component_max_voxels
+            ),
+            "cubic_graph_method": CUBIC_VOXEL_GRAPH_METHOD,
+            "surface_overlap_policy": "occupied_wins",
+            "sampling_complete_required": True,
             "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
             "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
             "tile_size_m": float(resolved.tile_size_m),
@@ -4724,6 +5084,9 @@ def build_navigation_voxel_cache(
                 resolved.coverage_repair_sample_budget
             ),
             "fine_voxel_size_m": float(resolved.fine_voxel_size_m),
+            "fine_vertical_voxel_size_m": float(
+                resolved.fine_vertical_voxel_size_m
+            ),
             "fine_tile_radius_m": float(resolved.fine_tile_radius_m),
             "max_fine_tiles": int(resolved.max_fine_tiles),
             "max_fine_tile_cells": int(resolved.max_fine_tile_cells),
@@ -4765,7 +5128,7 @@ def build_navigation_voxel_cache(
             ),
             "graph_routing_authority": "prepared_mesh_free_space_graph",
             "mesh_navigation_graph_method": MESH_NAVIGATION_GRAPH_METHOD,
-            "cache_quality_profile": "mesh_roadmap_graph_native_v1",
+            "cache_quality_profile": "fixed_orthogonal_terminal_route_v1",
             "storage_method": NAVIGATION_VOXEL_CHUNK_STORAGE_METHOD,
             "chunk_directory": "navigation_voxel_chunks",
             "chunk_count": int(len(chunk_payloads)),
@@ -4925,6 +5288,63 @@ def _navigation_voxel_chunk_store_from_model(
         NavigationVoxelChunkDescriptor.from_payload(raw_chunk)
         for raw_chunk in raw_chunks
     )
+    fixed_size_m: float | None = None
+    fixed_vertical_size_m: float | None = None
+    if (
+        model.get("version") == NAVIGATION_VOXEL_CACHE_VERSION
+        and model.get("method") == NAVIGATION_VOXEL_ATLAS_MODEL_METHOD
+    ):
+        fixed_cell_size = _point(
+            model.get("fixed_voxel_cell_size_m"),
+            "fixed navigation voxel cell size",
+        )
+        fixed_size_m = float(fixed_cell_size[0])
+        fixed_vertical_size_m = float(fixed_cell_size[1])
+        try:
+            declared_fixed_vertical_size_m = float(
+                model["fixed_vertical_voxel_size_m"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "cached fixed navigation vertical voxel size is malformed"
+            ) from exc
+        if (
+            not math.isclose(
+                fixed_cell_size[0],
+                fixed_cell_size[2],
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            or fixed_size_m > MAX_CACHE_FIXED_VOXEL_SIZE_M + 1e-9
+            or fixed_vertical_size_m
+            > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+            or not math.isfinite(declared_fixed_vertical_size_m)
+            or declared_fixed_vertical_size_m <= 0.0
+            or declared_fixed_vertical_size_m
+            > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+            or not math.isclose(
+                declared_fixed_vertical_size_m,
+                fixed_vertical_size_m,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            or model.get("sampling_complete") is not True
+            or model.get("surface_overlap_policy") != "occupied_wins"
+        ):
+            raise ValueError("cached fixed navigation chunk policy is invalid")
+        if any(
+            not all(
+                math.isclose(
+                    descriptor.cell_size_m[axis],
+                    fixed_cell_size[axis],
+                    rel_tol=0.0,
+                    abs_tol=1e-7,
+                )
+                for axis in range(3)
+            )
+            for descriptor in descriptors
+        ):
+            raise ValueError("cached fixed navigation chunk size is inconsistent")
     try:
         declared_chunk_count = int(
             raw_store.get("chunk_count", len(descriptors))
@@ -4975,10 +5395,34 @@ def _navigation_voxel_chunk_store_from_model(
         or max_chunk_bytes <= 0
     ):
         raise ValueError("cached navigation voxel chunk index is inconsistent")
+    def decode_chunk(payload: Mapping[str, object]) -> LocalVoxelVolume:
+        volume = deserialize_local_voxel_volume(payload)
+        if not isinstance(volume, LocalVoxelVolume):
+            raise ValueError("cached navigation voxel chunk is not local")
+        if fixed_size_m is not None and fixed_vertical_size_m is not None and (
+            volume.sampling_truncated
+            or not math.isclose(
+                float(volume.voxel_size_m),
+                fixed_size_m,
+                rel_tol=0.0,
+                abs_tol=1e-7,
+            )
+            or not math.isclose(
+                float(
+                    getattr(volume, "vertical_voxel_size_m", volume.voxel_size_m)
+                ),
+                fixed_vertical_size_m,
+                rel_tol=0.0,
+                abs_tol=1e-7,
+            )
+        ):
+            raise ValueError("cached fixed navigation chunk is incomplete")
+        return volume
+
     return DiskNavigationVoxelChunkStore(
         cache_dir,
         descriptors,
-        decoder=deserialize_local_voxel_volume,
+        decoder=decode_chunk,
         max_resident_chunks=max_resident,
         max_chunk_bytes=max_chunk_bytes,
     )
@@ -4992,10 +5436,18 @@ def serialize_local_voxel_volume(volume: LocalVoxelVolume) -> dict[str, object]:
     else:
         cells = cells.reshape(-1, 3)
     compressed = zlib.compress(cells.tobytes(order="C"), level=6)
+    vertical_size = float(
+        getattr(volume, "vertical_voxel_size_m", volume.voxel_size_m)
+    )
     return {
-        "version": 1,
-        "method": "sparse_surface_voxels_zlib_int32_v1",
+        "version": 2,
+        "method": "sparse_surface_voxels_zlib_int32_v2",
         "voxel_size_m": float(volume.voxel_size_m),
+        "cell_size_m": [
+            float(volume.voxel_size_m),
+            vertical_size,
+            float(volume.voxel_size_m),
+        ],
         "origin": [float(value) for value in volume.origin],
         "shape": [int(value) for value in volume.shape],
         "surface_cell_count": int(len(cells)),
@@ -5013,11 +5465,93 @@ def serialize_navigation_voxel_volume(
 ) -> dict[str, object]:
     """Serialize either a legacy local field or the whole-cave atlas."""
     if isinstance(volume, NavigationVoxelAtlas):
+        all_tiles = tuple(volume.tiles) + tuple(volume.fine_tiles)
+        fixed_size_m = float(volume.fixed_isotropic_voxel_size_m)
+        fixed_vertical_size_m = float(volume.fixed_vertical_voxel_size_m)
+        if fixed_size_m <= 0.0:
+            sizes = {float(tile.voxel_size_m) for tile in all_tiles}
+            if len(sizes) != 1:
+                raise ValueError(
+                    "V12 navigation atlas requires one horizontal voxel size"
+                )
+            fixed_size_m = sizes.pop()
+        if fixed_vertical_size_m <= 0.0:
+            vertical_sizes = {
+                float(
+                    getattr(tile, "vertical_voxel_size_m", tile.voxel_size_m)
+                )
+                for tile in all_tiles
+            }
+            if len(vertical_sizes) != 1:
+                raise ValueError(
+                    "V12 navigation atlas requires one vertical voxel size"
+                )
+            fixed_vertical_size_m = vertical_sizes.pop()
+        if (
+            not math.isfinite(fixed_size_m)
+            or fixed_size_m <= 0.0
+            or fixed_size_m > MAX_CACHE_FIXED_VOXEL_SIZE_M + 1e-9
+        ):
+            raise ValueError("V12 horizontal navigation voxels are too coarse")
+        if (
+            not math.isfinite(fixed_vertical_size_m)
+            or fixed_vertical_size_m <= 0.0
+            or fixed_vertical_size_m
+            > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+        ):
+            raise ValueError("V12 vertical navigation voxels are too coarse")
+        if any(
+            tile.sampling_truncated
+            or not math.isclose(
+                float(tile.voxel_size_m),
+                fixed_size_m,
+                rel_tol=0.0,
+                abs_tol=1e-7,
+            )
+            or not math.isclose(
+                float(
+                    getattr(tile, "vertical_voxel_size_m", tile.voxel_size_m)
+                ),
+                fixed_vertical_size_m,
+                rel_tol=0.0,
+                abs_tol=1e-7,
+            )
+            for tile in all_tiles
+        ):
+            raise ValueError("V12 navigation atlas tiles are incomplete")
+        if not volume.surface_overlap_occupied_wins:
+            raise ValueError("V12 navigation atlas requires occupied-wins overlap")
+        if volume.coverage_scope != "certified_terminal_route":
+            raise ValueError("V12 navigation atlas coverage scope is invalid")
+        mesh_graph = volume.prepared_mesh_graph
+        if (
+            mesh_graph is None
+            or mesh_graph.method != MESH_NAVIGATION_GRAPH_METHOD
+            or not mesh_graph.nodes
+            or mesh_graph.terminal_count <= 0
+            or mesh_graph.unknown_boundary_count > 0
+            or float(mesh_graph.grid_size_m[1])
+            > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+        ):
+            raise ValueError("V12 navigation atlas has no certified terminal path")
         return {
             "version": NAVIGATION_VOXEL_CACHE_VERSION,
             "method": NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
-            "cache_quality_profile": "mesh_roadmap_graph_native_v1",
+            "cache_quality_profile": "fixed_orthogonal_terminal_route_v1",
             "coverage_scope": volume.coverage_scope,
+            "fixed_voxel_method": FIXED_ORTHOGONAL_VOXEL_METHOD,
+            "fixed_isotropic_voxel_size_m": float(
+                fixed_size_m
+            ),
+            "fixed_vertical_voxel_size_m": float(fixed_vertical_size_m),
+            "fixed_voxel_cell_size_m": [
+                float(fixed_size_m),
+                float(fixed_vertical_size_m),
+                float(fixed_size_m),
+            ],
+            "sampling_complete": True,
+            "surface_overlap_policy": "occupied_wins",
+            "cubic_graph_method": CUBIC_VOXEL_GRAPH_METHOD,
             "tile_count": len(volume.tiles),
             "fine_tile_count": len(volume.fine_tiles),
             "tiles": [serialize_local_voxel_volume(tile) for tile in volume.tiles],
@@ -5113,6 +5647,8 @@ def deserialize_navigation_voxel_volume(
     if atlas_method in {
         NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _V10_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _V9_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _ANCIENT_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _HISTORIC_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
@@ -5120,11 +5656,27 @@ def deserialize_navigation_voxel_volume(
     }:
         expected_versions = {
             NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: NAVIGATION_VOXEL_CACHE_VERSION,
-            _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION,
-            _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _OLDER_NAVIGATION_VOXEL_CACHE_VERSION,
-            _ANCIENT_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _ANCIENT_NAVIGATION_VOXEL_CACHE_VERSION,
-            _HISTORIC_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _HISTORIC_NAVIGATION_VOXEL_CACHE_VERSION,
-            _LEGACY_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: _LEGACY_PREPARED_NAVIGATION_VOXEL_CACHE_VERSION,
+            _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: (
+                _PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION
+            ),
+            _V10_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: (
+                _V10_NAVIGATION_VOXEL_CACHE_VERSION
+            ),
+            _V9_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: (
+                _V9_NAVIGATION_VOXEL_CACHE_VERSION
+            ),
+            _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: (
+                _OLDER_NAVIGATION_VOXEL_CACHE_VERSION
+            ),
+            _ANCIENT_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: (
+                _ANCIENT_NAVIGATION_VOXEL_CACHE_VERSION
+            ),
+            _HISTORIC_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: (
+                _HISTORIC_NAVIGATION_VOXEL_CACHE_VERSION
+            ),
+            _LEGACY_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD: (
+                _LEGACY_PREPARED_NAVIGATION_VOXEL_CACHE_VERSION
+            ),
         }
         expected_version = expected_versions[atlas_method]
         if payload.get("version") != expected_version:
@@ -5193,6 +5745,8 @@ def deserialize_navigation_voxel_volume(
         if atlas_method in {
             NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
             _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            _V10_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            _V9_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         }:
             graph_3d_payload = payload.get("prepared_3d_graph")
             if graph_3d_payload is not None:
@@ -5201,7 +5755,11 @@ def deserialize_navigation_voxel_volume(
                     max_nodes=DEFAULT_3D_GRAPH_MAX_NODES,
                     max_edges=DEFAULT_3D_GRAPH_MAX_EDGES,
                 )
-        if atlas_method == NAVIGATION_VOXEL_ATLAS_MODEL_METHOD:
+        if atlas_method in {
+            NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            _V10_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        }:
             mesh_graph_payload = payload.get("prepared_mesh_graph")
             if mesh_graph_payload is not None:
                 prepared_mesh_graph = deserialize_navigation_voxel_3d_graph(
@@ -5217,6 +5775,8 @@ def deserialize_navigation_voxel_volume(
         if atlas_method in {
             NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
             _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            _V10_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+            _V9_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         }:
             graph_payload = payload.get("prepared_graph")
             if graph_payload is not None:
@@ -5239,6 +5799,108 @@ def deserialize_navigation_voxel_volume(
             raise ValueError(
                 "cached mesh graph entry anchor radius is invalid"
             )
+        if atlas_method == NAVIGATION_VOXEL_ATLAS_MODEL_METHOD:
+            if payload.get("fixed_voxel_method") != FIXED_ORTHOGONAL_VOXEL_METHOD:
+                raise ValueError("cached fixed navigation voxel method is invalid")
+            fixed_cell_size = _point(
+                payload.get("fixed_voxel_cell_size_m"),
+                "fixed navigation voxel cell size",
+            )
+            fixed_size_m = float(fixed_cell_size[0])
+            fixed_vertical_size_m = float(fixed_cell_size[1])
+            try:
+                declared_fixed_vertical_size_m = float(
+                    payload["fixed_vertical_voxel_size_m"]
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "cached fixed navigation vertical voxel size is malformed"
+                ) from exc
+            if (
+                not math.isclose(
+                    fixed_cell_size[0],
+                    fixed_cell_size[2],
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                )
+                or fixed_size_m > MAX_CACHE_FIXED_VOXEL_SIZE_M + 1e-9
+                or fixed_vertical_size_m
+                > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+                or not math.isfinite(declared_fixed_vertical_size_m)
+                or declared_fixed_vertical_size_m <= 0.0
+                or declared_fixed_vertical_size_m
+                > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+                or not math.isclose(
+                    declared_fixed_vertical_size_m,
+                    fixed_vertical_size_m,
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                )
+            ):
+                raise ValueError("cached fixed navigation voxels are too coarse")
+            if payload.get("sampling_complete") is not True:
+                raise ValueError("cached fixed navigation sampling is incomplete")
+            if payload.get("surface_overlap_policy") != "occupied_wins":
+                raise ValueError("cached fixed navigation overlap policy is invalid")
+            if payload.get("cubic_graph_method") != CUBIC_VOXEL_GRAPH_METHOD:
+                raise ValueError(
+                    "cached fixed navigation cubic graph method is invalid"
+                )
+            if payload.get("coverage_scope") != "certified_terminal_route":
+                raise ValueError("cached fixed navigation coverage scope is invalid")
+            if any(
+                tile.sampling_truncated
+                or not math.isclose(
+                    float(tile.voxel_size_m),
+                    fixed_size_m,
+                    rel_tol=0.0,
+                    abs_tol=1e-7,
+                )
+                or not math.isclose(
+                    float(
+                        getattr(
+                            tile,
+                            "vertical_voxel_size_m",
+                            tile.voxel_size_m,
+                        )
+                    ),
+                    fixed_vertical_size_m,
+                    rel_tol=0.0,
+                    abs_tol=1e-7,
+                )
+                for tile in tuple(tiles) + tuple(fine_tiles)
+            ):
+                raise ValueError("cached fixed navigation tiles are inconsistent")
+            if chunk_store is not None and any(
+                not all(
+                    math.isclose(
+                        descriptor.cell_size_m[axis],
+                        fixed_cell_size[axis],
+                        rel_tol=0.0,
+                        abs_tol=1e-7,
+                    )
+                    for axis in range(3)
+                )
+                for descriptor in chunk_store.descriptors()
+            ):
+                raise ValueError("cached fixed navigation chunk index is inconsistent")
+            if (
+                prepared_mesh_graph is None
+                or prepared_mesh_graph.method != MESH_NAVIGATION_GRAPH_METHOD
+                or not prepared_mesh_graph.nodes
+                or prepared_mesh_graph.terminal_count <= 0
+                or prepared_mesh_graph.unknown_boundary_count > 0
+                or float(prepared_mesh_graph.grid_size_m[1])
+                > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+            ):
+                raise ValueError(
+                    "cached fixed navigation terminal path is invalid"
+                )
+            occupied_wins = True
+        else:
+            fixed_size_m = 0.0
+            fixed_vertical_size_m = 0.0
+            occupied_wins = False
         return NavigationVoxelAtlas(
             tiles=tuple(tiles),
             coverage_scope=str(
@@ -5249,6 +5911,9 @@ def deserialize_navigation_voxel_volume(
             prepared_3d_graph=prepared_3d_graph,
             prepared_mesh_graph=prepared_mesh_graph,
             mesh_graph_entry_anchor_radius_m=mesh_entry_radius_m,
+            fixed_isotropic_voxel_size_m=fixed_size_m,
+            fixed_vertical_voxel_size_m=fixed_vertical_size_m,
+            surface_overlap_occupied_wins=occupied_wins,
             fine_tiles=tuple(fine_tiles),
             chunk_store=resolved_chunk_store,
         )
@@ -5344,16 +6009,31 @@ def deserialize_local_voxel_volume(
     if payload.get("method") in {
         NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _PREVIOUS_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _V10_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
+        _V9_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _OLDER_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _ANCIENT_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
         _HISTORIC_NAVIGATION_VOXEL_ATLAS_MODEL_METHOD,
     }:
         return deserialize_navigation_voxel_volume(payload)
-    if payload.get("version") != 1:
-        raise ValueError("unsupported navigation voxel model version")
-    if payload.get("method") != "sparse_surface_voxels_zlib_int32_v1":
+    local_identity = (payload.get("version"), payload.get("method"))
+    if local_identity not in {
+        (1, "sparse_surface_voxels_zlib_int32_v1"),
+        (2, "sparse_surface_voxels_zlib_int32_v2"),
+    }:
         raise ValueError("unsupported navigation voxel model method")
     size = _positive_float(payload.get("voxel_size_m"), "voxel size")
+    if local_identity[0] == 2:
+        cell_size = _point(payload.get("cell_size_m"), "voxel cell size")
+        if (
+            not math.isclose(cell_size[0], size, rel_tol=0.0, abs_tol=1e-9)
+            or not math.isclose(cell_size[2], size, rel_tol=0.0, abs_tol=1e-9)
+            or cell_size[1] <= 0.0
+        ):
+            raise ValueError("cached navigation voxel cell size is invalid")
+        vertical_size = float(cell_size[1])
+    else:
+        vertical_size = float(size)
     origin = _point(payload.get("origin"), "voxel origin")
     shape_values = _integer_sequence(payload.get("shape"), 3, "voxel shape")
     if any(value <= 0 for value in shape_values):
@@ -5395,6 +6075,7 @@ def deserialize_local_voxel_volume(
         cells.add(index)
     return LocalVoxelVolume(
         voxel_size_m=size,
+        vertical_voxel_size_m=vertical_size,
         origin=origin,
         shape=shape,  # type: ignore[arg-type]
         surface_cells=frozenset(cells),
@@ -5416,13 +6097,22 @@ def _analyze_route(
     route_id: str,
     triangle_provider: TriangleProvider,
     mesh_edge_is_clear: MeshEdgeSafetyCheck | None,
+    mesh_point_has_opposing_support: MeshPointSupportCheck | None = None,
     config: NavigationVoxelCacheConfig,
+    source_ingress_anchor: Point | None = None,
+    source_ingress_is_obj_surface_anchor: bool = False,
 ) -> dict[str, object]:
     common: dict[str, object] = {
         "version": NAVIGATION_VOXEL_CACHE_VERSION,
         "method": NAVIGATION_VOXEL_CACHE_METHOD,
         "curvature_method": CURVATURE_PROFILE_METHOD,
         "voxel_size_m": float(config.voxel_size_m),
+        "vertical_voxel_size_m": float(config.vertical_voxel_size_m),
+        "voxel_cell_size_m": [
+            float(config.voxel_size_m),
+            float(config.vertical_voxel_size_m),
+            float(config.voxel_size_m),
+        ],
         "curvature_rank_threshold": int(config.curvature_rank_threshold),
         "max_regions": int(config.max_regions),
         "max_cells": int(config.max_cells),
@@ -5433,6 +6123,9 @@ def _analyze_route(
             config.coverage_repair_sample_budget
         ),
         "fine_voxel_size_m": float(config.fine_voxel_size_m),
+        "fine_vertical_voxel_size_m": float(
+            config.fine_vertical_voxel_size_m
+        ),
         "fine_tile_radius_m": float(config.fine_tile_radius_m),
         "max_fine_tiles": int(config.max_fine_tiles),
         "max_fine_tile_cells": int(config.max_fine_tile_cells),
@@ -5444,8 +6137,23 @@ def _analyze_route(
         ),
         "graph_max_edges_per_node": int(config.graph_max_edges_per_node),
         "graph_routing_authority": "prepared_mesh_free_space_graph",
-        "cache_quality_profile": "mesh_roadmap_graph_native_v1",
-        "coverage_scope": "entire_cave_component",
+        "cache_quality_profile": "fixed_orthogonal_terminal_route_v1",
+        "coverage_scope": "certified_terminal_route",
+        "fixed_voxel_method": FIXED_ORTHOGONAL_VOXEL_METHOD,
+        "fixed_isotropic_voxel_size_m": float(config.voxel_size_m),
+        "fixed_vertical_voxel_size_m": float(config.vertical_voxel_size_m),
+        "fixed_voxel_cell_size_m": [
+            float(config.voxel_size_m),
+            float(config.vertical_voxel_size_m),
+            float(config.voxel_size_m),
+        ],
+        "route_corridor_radius_m": float(config.route_corridor_radius_m),
+        "cubic_component_max_voxels": int(
+            config.cubic_component_max_voxels
+        ),
+        "cubic_graph_method": CUBIC_VOXEL_GRAPH_METHOD,
+        "surface_overlap_policy": "occupied_wins",
+        "sampling_complete_required": True,
         "coverage_includes_preceding_curvature": True,
         "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
         "mesh_navigation_graph_method": MESH_NAVIGATION_GRAPH_METHOD,
@@ -5467,15 +6175,112 @@ def _analyze_route(
             max_regions=config.max_regions,
             max_start_distance_m=None,
         )
-        atlas, metrics, atlas_details = _build_route_voxel_atlas(
-            manifest,
-            route,
-            points,
-            triangle_provider=triangle_provider,
-            mesh_edge_is_clear=mesh_edge_is_clear,
-            config=config,
-            selected_regions=selected_regions,
-        )
+        attempt_route: Mapping[str, object] = route
+        attempt_points = points
+        attempt_source_offset = 0
+        terminal_route_attempts: list[dict[str, object]] = []
+        atlas: NavigationVoxelAtlas | None = None
+        metrics: dict[str, float | int | bool] = {}
+        atlas_details: dict[str, object] = {}
+        for _attempt_index in range(
+            DEFAULT_MESH_TERMINAL_ROUTE_ATTEMPT_LIMIT
+        ):
+            atlas, metrics, atlas_details = _build_route_voxel_atlas(
+                manifest,
+                attempt_route,
+                attempt_points,
+                triangle_provider=triangle_provider,
+                mesh_edge_is_clear=mesh_edge_is_clear,
+                mesh_point_has_opposing_support=(
+                    mesh_point_has_opposing_support
+                ),
+                config=config,
+                source_ingress_anchor=source_ingress_anchor,
+                source_ingress_is_obj_surface_anchor=(
+                    source_ingress_is_obj_surface_anchor
+                ),
+            )
+            cubic_component = atlas_details.get("cubic_component")
+            cubic_details = (
+                cubic_component
+                if isinstance(cubic_component, Mapping)
+                else {}
+            )
+            mesh_graph = atlas_details.get("prepared_mesh_graph")
+            mesh_details = (
+                mesh_graph if isinstance(mesh_graph, Mapping) else {}
+            )
+            terminal_route_attempts.append(
+                {
+                    "source_hint_start_index": int(attempt_source_offset),
+                    "source_hint_end_index": int(
+                        attempt_source_offset + len(attempt_points) - 1
+                    ),
+                    "source_hint_point_count": len(attempt_points),
+                    "built": bool(
+                        atlas is not None
+                        and atlas.has_prepared_mesh_graph
+                    ),
+                    "reason": str(mesh_details.get("reason", "")),
+                    "ingress_hint_index": cubic_details.get(
+                        "ingress_hint_index"
+                    ),
+                    "terminal_hint_index": cubic_details.get(
+                        "terminal_hint_index"
+                    ),
+                    "contiguous_route_length_m": float(
+                        cubic_details.get("contiguous_route_length_m", 0.0)
+                    ),
+                    "selected_component_voxel_count": int(
+                        cubic_details.get(
+                            "selected_component_voxel_count",
+                            0,
+                        )
+                    ),
+                }
+            )
+            if atlas is not None and atlas.has_prepared_mesh_graph:
+                break
+            # Guided Dive is one complete route. A connected later range is
+            # useful diagnostic evidence, but rebuilding it as an executable
+            # suffix would recreate the historical short-dive failure.
+            break
+        if terminal_route_attempts:
+            atlas_details["mesh_terminal_route_attempt_count"] = len(
+                terminal_route_attempts
+            )
+            atlas_details["mesh_terminal_route_attempts"] = list(
+                terminal_route_attempts
+            )
+            atlas_details["selected_source_route_point_count"] = len(
+                attempt_points
+            )
+            atlas_details["source_route_point_count"] = len(points)
+            for field_name in (
+                "certified_ingress_hint_index",
+                "certified_terminal_hint_index",
+            ):
+                value = atlas_details.get(field_name)
+                if isinstance(value, int):
+                    atlas_details[field_name] = (
+                        int(value) + attempt_source_offset
+                    )
+            certified_start = atlas_details.get(
+                "certified_ingress_hint_index"
+            )
+            certified_end = atlas_details.get(
+                "certified_terminal_hint_index"
+            )
+            atlas_details["selected_source_hint_start_index"] = int(
+                certified_start
+                if isinstance(certified_start, int)
+                else attempt_source_offset
+            )
+            atlas_details["selected_source_hint_end_index"] = int(
+                certified_end
+                if isinstance(certified_end, int)
+                else attempt_source_offset + len(attempt_points) - 1
+            )
     except Exception as exc:
         common.update(
             {
@@ -5487,10 +6292,40 @@ def _analyze_route(
         )
         return common
 
+    try:
+        full_ingress_route = bool(
+            attempt_source_offset == 0
+            and int(atlas_details["certified_ingress_hint_index"]) == 0
+            and int(atlas_details["certified_terminal_hint_index"])
+            == len(points) - 1
+            and int(atlas_details["selected_source_hint_start_index"])
+            == 0
+            and int(atlas_details["selected_source_hint_end_index"])
+            == len(points) - 1
+        )
+    except (KeyError, TypeError, ValueError):
+        full_ingress_route = False
+    authoritative_route_built = bool(
+        atlas is not None
+        and atlas.has_prepared_mesh_graph
+        and full_ingress_route
+    )
+    route_evidence_built = bool(
+        atlas is not None
+        or int(atlas_details.get("surface_sample_count", 0)) > 0
+        or isinstance(atlas_details.get("cubic_graph"), Mapping)
+    )
     common.update(
         {
-            "outcome": "built" if atlas is not None else "no_surface_samples",
-            "built": atlas is not None,
+            "outcome": (
+                "built"
+                if authoritative_route_built
+                else "known_terminal_unreachable"
+                if route_evidence_built
+                else "no_surface_samples"
+            ),
+            "built": authoritative_route_built,
+            "complete_ingress_route": bool(full_ingress_route),
             "curvature_sample_count": len(profile.samples),
             "curvature_region_count": len(profile.regions),
             "selected_region_count": len(selected_regions),
@@ -5510,10 +6345,13 @@ def _analyze_route(
             **atlas_details,
         }
     )
-    if atlas is None:
+    if atlas is None or not authoritative_route_built:
         return common
 
-    route_length = _route_length(route, points, manifest)
+    try:
+        route_length = float(atlas_details["certified_route_length_m"])
+    except (KeyError, TypeError, ValueError):
+        route_length = _route_length(route, points, manifest)
     available_volume = float(metrics.get("available_volume_m3", 0.0))
     common.update(
         {
@@ -5543,6 +6381,7 @@ def _cache_graph_base_grid_size(
     filled_cell_count: int,
     *,
     base_voxel_size: float,
+    base_vertical_voxel_size: float | None = None,
     max_nodes: int,
 ) -> tuple[float, float, float]:
     """Choose bounded horizontal graph buckets before metric materialization.
@@ -5555,6 +6394,14 @@ def _cache_graph_base_grid_size(
     vertical resolution for stacked passages.
     """
     base = max(1e-6, float(base_voxel_size))
+    vertical = max(
+        1e-6,
+        float(
+            base
+            if base_vertical_voxel_size is None
+            else base_vertical_voxel_size
+        ),
+    )
     target_nodes = max(1_024, int(max_nodes) // 4)
     horizontal_factor = 1
     while (
@@ -5563,7 +6410,7 @@ def _cache_graph_base_grid_size(
     ):
         horizontal_factor *= 2
     horizontal_size = base * horizontal_factor
-    return horizontal_size, base, horizontal_size
+    return horizontal_size, vertical, horizontal_size
 
 
 def _build_route_voxel_atlas(
@@ -5573,20 +6420,18 @@ def _build_route_voxel_atlas(
     *,
     triangle_provider: TriangleProvider,
     mesh_edge_is_clear: MeshEdgeSafetyCheck | None,
+    mesh_point_has_opposing_support: MeshPointSupportCheck | None = None,
     config: NavigationVoxelCacheConfig,
-    selected_regions: Sequence[object] = (),
+    source_ingress_anchor: Point | None = None,
+    source_ingress_is_obj_surface_anchor: bool = False,
 ) -> tuple[
     NavigationVoxelAtlas | None,
     dict[str, float | int | bool],
     dict[str, object],
 ]:
-    """Build bounded voxel tiles for every cell in one cave component."""
+    """Build fixed voxel evidence and one exact terminal path."""
     component_cells = _flat_cells(route.get("component_cells"))
-    coverage_scope = (
-        "entire_cave_component"
-        if component_cells
-        else "route_cells_fallback"
-    )
+    coverage_scope = "certified_terminal_route"
     if not component_cells:
         component_cells = _flat_cells(route.get("cells"))
     if not component_cells:
@@ -5601,35 +6446,149 @@ def _build_route_voxel_atlas(
         }
 
     cell_size = _route_cell_size(route, manifest)
-    sampling_cells = _flat_cells(route.get("voxel_sampling_cells"))
-    if not sampling_cells:
-        sampling_cells = component_cells
-    y_ranges = _route_y_ranges(route.get("component_y_ranges"), component_cells)
-    fallback_y_range = _fallback_y_range(manifest, points)
+    route_cells = _consecutive_route_cells(_flat_cells(route.get("cells")))
+    if len(set(route_cells)) != len(route_cells):
+        return None, {}, {
+            "coverage_cell_count": 0,
+            "tile_count": 0,
+            "coverage_scope": coverage_scope,
+            "coverage_includes_preceding_curvature": False,
+            "triangle_count": 0,
+            "surface_sample_count": 0,
+            "sampling_truncated": False,
+            "reason": "non_circular_route_revisits_footprint_cell",
+        }
+    route_cell_horizontal_guides = _route_cell_horizontal_guide_points(
+        route_cells,
+        cell_size=cell_size,
+    )
+    horizontal_guides = route_cell_horizontal_guides or points
+    corridor_points = (
+        tuple(dict.fromkeys((source_ingress_anchor, *horizontal_guides)))
+        if source_ingress_anchor is not None
+        else horizontal_guides
+    )
+    corridor_cells = tuple(route_cells or component_cells)
+    if source_ingress_anchor is not None:
+        source_cell = (
+            math.floor(source_ingress_anchor[0] / cell_size),
+            math.floor(source_ingress_anchor[2] / cell_size),
+        )
+        corridor_cells = tuple(dict.fromkeys((source_cell, *corridor_cells)))
+    sampling_cells = _fixed_route_corridor_cells(
+        corridor_cells,
+        component_cells,
+        cell_size=cell_size,
+        radius_m=config.route_corridor_radius_m,
+    )
     component_cell_set = set(component_cells)
     requested_component_cell_set = set(component_cell_set)
-    tile_size = _tile_size_for_component(
-        sampling_cells,
+    y_ranges = _route_y_ranges(route.get("component_y_ranges"), component_cells)
+    component_vertical_gap_seeds = _component_vertical_gap_seed_points(
+        route.get("component_vertical_gap_seeds"),
+        component_cells=component_cell_set,
         cell_size=cell_size,
-        requested_tile_size=config.tile_size_m,
-        max_tiles=config.max_tiles,
     )
+    component_vertical_gap_intervals = _component_vertical_gap_intervals(
+        route.get("component_vertical_gap_intervals"),
+        component_cells=component_cell_set,
+    )
+    required_route_vertical_gap_intervals = component_vertical_gap_intervals
+    selected_layer_y_ranges: dict[
+        FootprintCell,
+        tuple[float, float],
+    ] = {}
+    if source_ingress_anchor is not None:
+        (
+            component_vertical_gap_seeds,
+            selected_layer_y_ranges,
+        ) = _source_connected_vertical_gap_layer(
+            component_vertical_gap_intervals,
+            route_cells=route_cells,
+            eligible_cells=set(sampling_cells),
+            source_ingress_anchor=source_ingress_anchor,
+            cell_size=cell_size,
+            max_attachment_distance_m=min(
+                float(config.mesh_graph_entry_anchor_radius_m),
+                MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M,
+            ),
+            # One footprint cell spans many execution voxels. Permit a
+            # proposal to climb through a steep shaft, but only between the
+            # one entrance-connected pair of bounded intervals chosen for
+            # consecutive cells. Global voxel connectivity still has to
+            # prove the climb rather than treating this rank as authority.
+            max_vertical_transition_m=max(
+                float(MAX_SURFACE_GAP_VERTICAL_TRANSITION_M),
+                float(cell_size) * math.sqrt(2.0),
+            ),
+        )
+        if not component_vertical_gap_seeds or not selected_layer_y_ranges:
+            return None, {}, {
+                "coverage_cell_count": 0,
+                "sampling_support_cell_count": len(sampling_cells),
+                "tile_count": 0,
+                "coverage_scope": coverage_scope,
+                "coverage_includes_preceding_curvature": False,
+                "triangle_count": 0,
+                "surface_sample_count": 0,
+                "sampling_truncated": False,
+                "reason": "source_connected_vertical_gap_layer_missing",
+                "surface_gap_interval_count": sum(
+                    len(value)
+                    for value in component_vertical_gap_intervals.values()
+                ),
+            }
+        required_route_vertical_gap_intervals = {
+            cell: (selected_layer_y_ranges[cell],)
+            for cell in route_cells
+            if cell in selected_layer_y_ranges
+        }
+        if len(required_route_vertical_gap_intervals) != len(
+            route_cells
+        ):
+            return None, {}, {
+                "coverage_cell_count": 0,
+                "sampling_support_cell_count": len(sampling_cells),
+                "tile_count": 0,
+                "coverage_scope": coverage_scope,
+                "coverage_includes_preceding_curvature": False,
+                "triangle_count": 0,
+                "surface_sample_count": 0,
+                "sampling_truncated": False,
+                "reason": "surface_gap_route_interval_chain_missing",
+            }
+        transition_y_ranges = _route_transition_sampling_y_ranges(
+            selected_layer_y_ranges,
+            route_cells=route_cells,
+        )
+        if not transition_y_ranges:
+            return None, {}, {
+                "coverage_cell_count": 0,
+                "sampling_support_cell_count": len(sampling_cells),
+                "tile_count": 0,
+                "coverage_scope": coverage_scope,
+                "coverage_includes_preceding_curvature": False,
+                "triangle_count": 0,
+                "surface_sample_count": 0,
+                "sampling_truncated": False,
+                "reason": "surface_gap_transition_envelope_missing",
+            }
+        y_ranges = transition_y_ranges
+        component_cell_set = set(selected_layer_y_ranges)
+        component_cells = tuple(sorted(component_cell_set))
+        sampling_cells = tuple(
+            cell for cell in sampling_cells if cell in component_cell_set
+        )
+    fallback_y_range = _fallback_y_range(manifest)
+    tile_size = max(float(config.tile_size_m), float(config.voxel_size_m))
     groups = _component_tile_groups(
         sampling_cells,
         cell_size=cell_size,
         tile_size=tile_size,
     )
     padding = max(config.voxel_size_m * 2.0, cell_size * 0.25)
-    progress_distances = _component_progress_distances(
-        component_cell_set,
-        route,
-        cell_size=cell_size,
-    )
     tiles: list[LocalVoxelVolume] = []
     tile_seed_points: list[tuple[Point, ...]] = []
-    total_metrics: list[dict[str, float | int | bool]] = []
-    cell_accumulators: dict[FootprintCell, list[float]] = {}
-    true_3d_accumulator: dict[VoxelGraphKey, list[float]] = {}
     true_3d_base_voxel_size = max(
         1e-6,
         min(
@@ -5637,11 +6596,17 @@ def _build_route_voxel_atlas(
             float(config.fine_voxel_size_m),
         ),
     )
+    true_3d_base_vertical_voxel_size = max(
+        1e-6,
+        min(
+            float(config.vertical_voxel_size_m),
+            float(config.fine_vertical_voxel_size_m),
+        ),
+    )
     total_samples = 0
     total_triangles = 0
     sampling_truncated = False
     skipped_tiles = 0
-    total_filled_cell_count = 0
 
     def retain_tile(
         tile: LocalVoxelVolume,
@@ -5652,58 +6617,24 @@ def _build_route_voxel_atlas(
         nonlocal total_triangles
         nonlocal sampling_truncated
         nonlocal skipped_tiles
-        nonlocal total_filled_cell_count
 
         total_triangles += int(tile.triangle_count)
         total_samples += int(tile.surface_sample_count)
         sampling_truncated = sampling_truncated or bool(tile.sampling_truncated)
-        if tile.triangle_count <= 0 or tile.surface_sample_count <= 0:
+        if tile.triangle_count <= 0 and not tile_points:
             skipped_tiles += 1
             return False
         tiles.append(tile)
         tile_seed_points.append(tuple(tile_points))
-        filled_cells = tile.filled_free_cell_clearance_m(tile_points)
-        total_filled_cell_count += len(filled_cells)
-        total_metrics.append(
-            _metrics_for_filled_cells(tile, tile_points, filled_cells)
-        )
-        for voxel_index, clearance_m in filled_cells.items():
-            center = tile.voxel_center(voxel_index)
-            cell = (
-                math.floor(center[0] / cell_size),
-                math.floor(center[2] / cell_size),
-            )
-            if cell not in component_cell_set:
-                continue
-            low_y, high_y = _cell_y_range(
-                cell,
-                y_ranges,
-                fallback_y_range,
-            )
-            if center[1] < low_y or center[1] > high_y:
-                continue
-            accumulator = cell_accumulators.setdefault(
-                cell,
-                [0.0, 0.0, float("inf"), 0.0, 0.0],
-            )
-            accumulator[0] += 1.0
-            accumulator[1] += float(clearance_m)
-            accumulator[2] = min(accumulator[2], float(clearance_m))
-            accumulator[3] += float(tile.voxel_size_m ** 3)
-            accumulator[4] += float(center[1])
         return True
 
-    for group_index, cells in enumerate(groups):
+    fixed_regions: list[FixedVoxelRegion] = []
+    for cells in groups:
         target_cells = tuple(
             cell for cell in cells if cell in component_cell_set
         )
         if not target_cells:
             continue
-        remaining_groups = max(1, len(groups) - group_index)
-        remaining_samples = max(0, config.max_surface_samples - total_samples)
-        if remaining_samples <= 0:
-            sampling_truncated = True
-            break
         bounds_min, bounds_max = _component_tile_bounds(
             cells,
             cell_size=cell_size,
@@ -5716,125 +6647,42 @@ def _build_route_voxel_atlas(
             cell_size=cell_size,
             y_ranges=y_ranges,
             fallback_y_range=fallback_y_range,
+            vertical_gap_seeds=component_vertical_gap_seeds,
         )
-        tile_sample_budget = max(
-            1,
-            min(
-                remaining_samples,
-                max(128, math.ceil(remaining_samples / remaining_groups)),
-            ),
-        )
-        tile = build_surface_voxel_volume(
-            triangle_provider(bounds_min, bounds_max),
-            bounds_min=bounds_min,
-            bounds_max=bounds_max,
-            config=VoxelVolumeConfig(
-                voxel_size_m=config.voxel_size_m,
-                max_voxels=min(
-                    config.max_cells,
-                    DEFAULT_CACHE_VOXEL_MAX_TILE_CELLS,
-                ),
-                max_surface_samples=tile_sample_budget,
-            ),
-        )
-        retain_tile(tile, tile_points)
-
-    sampled_footprints = set(cell_accumulators)
-    missing_cells_before_repair = sorted(
-        component_cell_set - sampled_footprints
-    )
-    repair_tile_capacity = max(0, int(config.max_tiles) - len(tiles))
-    repair_groups = _component_tile_groups(
-        missing_cells_before_repair,
-        cell_size=cell_size,
-        tile_size=tile_size,
-    )[:repair_tile_capacity]
-    sampling_cells_by_tile: dict[tuple[int, int], list[FootprintCell]] = {}
-    for cell in sampling_cells:
-        x, z = footprint_world_center(cell, cell_size)
-        key = (math.floor(x / tile_size), math.floor(z / tile_size))
-        sampling_cells_by_tile.setdefault(key, []).append(cell)
-    repair_sample_budget_remaining = max(
-        0,
-        int(config.coverage_repair_sample_budget),
-    )
-    repair_attempted = 0
-    repair_built = 0
-    for index, repair_cells in enumerate(repair_groups):
-        if repair_sample_budget_remaining <= 0:
-            break
-        repair_attempted += len(repair_cells)
-        remaining_groups = max(1, len(repair_groups) - index)
-        repair_sample_budget = min(
-            16_384,
-            max(
-                1_024,
-                math.ceil(repair_sample_budget_remaining / remaining_groups),
-            ),
-        )
-        first_x, first_z = footprint_world_center(
-            repair_cells[0],
-            cell_size,
-        )
-        repair_tile_key = (
-            math.floor(first_x / tile_size),
-            math.floor(first_z / tile_size),
-        )
-        bounds_cells = tuple(
-            sampling_cells_by_tile.get(repair_tile_key, list(repair_cells))
-        )
-        bounds_min, bounds_max = _component_tile_bounds(
-            bounds_cells,
-            cell_size=cell_size,
-            y_ranges=y_ranges,
-            fallback_y_range=fallback_y_range,
-            padding=padding,
-        )
-        tile_points = _tile_seed_points(
-            repair_cells,
-            cell_size=cell_size,
-            y_ranges=y_ranges,
-            fallback_y_range=fallback_y_range,
-        )
-        try:
-            repair_tile = build_surface_voxel_volume(
-                triangle_provider(bounds_min, bounds_max),
+        fixed_regions.append(
+            FixedVoxelRegion(
                 bounds_min=bounds_min,
                 bounds_max=bounds_max,
-                config=VoxelVolumeConfig(
-                    voxel_size_m=config.voxel_size_m,
-                    max_voxels=min(
-                        config.max_cells,
-                        DEFAULT_CACHE_VOXEL_MAX_TILE_CELLS,
-                    ),
-                    max_surface_samples=repair_sample_budget,
-                ),
+                # OBJ vertex zero is immutable surface evidence, not an
+                # executable/free-space seed. Only the selected bounded
+                # surface-gap points may initiate fixed-volume flood fill.
+                seed_points=tuple(dict.fromkeys(tile_points)),
             )
-        except Exception:
-            repair_sample_budget_remaining -= repair_sample_budget
-            continue
-        repair_sample_budget_remaining -= repair_sample_budget
-        if retain_tile(repair_tile, tile_points):
-            repair_built += 1
-
-    missing_cells_after_repair = sorted(
-        component_cell_set - set(cell_accumulators)
+        )
+    fixed_build = build_fixed_orthogonal_voxel_tiles(
+        tuple(fixed_regions),
+        triangle_provider=triangle_provider,
+        voxel_size_m=config.voxel_size_m,
+        vertical_voxel_size_m=config.vertical_voxel_size_m,
+        chunk_edge_m=tile_size + 2.0 * padding,
+        max_chunks=config.max_tiles,
+        max_voxels_per_chunk=min(
+            config.max_cells,
+            DEFAULT_CACHE_VOXEL_MAX_TILE_CELLS,
+        ),
+        max_surface_samples_per_chunk=config.max_surface_samples,
+        surface_inflation_cells=0,
     )
-    certified_component_cell_set = set(cell_accumulators)
-    excluded_component_cell_set = (
-        requested_component_cell_set - certified_component_cell_set
-    )
-    # The surface-derived component is a candidate scope.  A cell only
-    # becomes part of the certified component after the bounded mesh-backed
-    # voxel pass produces free-space evidence for it.  This prevents inferred
-    # 2-D span bridges with no sampled geometry from becoming graph boundary
-    # frontiers, while preserving the original candidate count in diagnostics.
-    component_cell_set = certified_component_cell_set
-    component_cells = tuple(sorted(component_cell_set))
+    for tile, tile_points in zip(
+        fixed_build.tiles,
+        fixed_build.tile_seed_points,
+        strict=True,
+    ):
+        retain_tile(tile, tile_points)
 
     if not tiles:
         return None, {}, {
-            "coverage_cell_count": len(component_cells),
+            "coverage_cell_count": 0,
             "sampling_support_cell_count": len(sampling_cells),
             "tile_count": 0,
             "coverage_scope": coverage_scope,
@@ -5845,52 +6693,641 @@ def _build_route_voxel_atlas(
             "triangle_count": int(total_triangles),
             "surface_sample_count": int(total_samples),
             "sampling_truncated": bool(sampling_truncated),
-            "coverage_repair_attempted_cell_count": int(repair_attempted),
-            "coverage_repair_built_tile_count": int(repair_built),
-            "coverage_repair_remaining_cell_count": len(
-                missing_cells_after_repair
-            ),
+            "fixed_voxel_build": dict(fixed_build.details),
             "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
             "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
             "navigation_cell_count": 0,
         }
 
-    true_3d_base_grid_size = _cache_graph_base_grid_size(
-        total_filled_cell_count,
-        base_voxel_size=true_3d_base_voxel_size,
-        max_nodes=config.graph_max_nodes,
-    )
-    # The first pass above already produced the bounded per-footprint metrics.
-    # Revisit each retained tile only for the graph samples, now that the
-    # measured filled-cell count lets us choose a coarse horizontal bucket.
-    # This avoids retaining millions of 1 m Python dictionary entries before
-    # the graph coarsening pass while keeping the vertical bucket at 1 m when
-    # the configured voxel size permits it.
-    for tile, tile_points in zip(tiles, tile_seed_points):
-        filled_cells = tile.filled_free_cell_clearance_m(tile_points)
-        for voxel_index, clearance_m in filled_cells.items():
-            center = tile.voxel_center(voxel_index)
-            cell = (
-                math.floor(center[0] / cell_size),
-                math.floor(center[2] / cell_size),
+    cubic_build: CubicVoxelGraphBuildResult | None = None
+    cubic_corridor_attempts: list[dict[str, object]] = []
+    selected_corridor_radius_m = float(config.route_corridor_radius_m)
+    for candidate_radius_m in _cubic_corridor_radius_candidates(
+        config.route_corridor_radius_m,
+        voxel_size_m=config.voxel_size_m,
+        minimum_radius_m=(
+            float(cell_size) * math.sqrt(2.0) * 0.5
+            if source_ingress_is_obj_surface_anchor
+            else None
+        ),
+    ):
+        candidate_corridor_cells = set(
+            _fixed_route_corridor_cells(
+                corridor_cells,
+                component_cells,
+                cell_size=cell_size,
+                radius_m=candidate_radius_m,
             )
-            if cell not in component_cell_set:
-                continue
+        )
+        route_tube_contains = _horizontal_route_tube_point_filter(
+            corridor_points,
+            radius_m=candidate_radius_m,
+            voxel_size_m=config.voxel_size_m,
+        )
+
+        def point_in_candidate_corridor(
+            point: Point,
+            *,
+            allowed_cells: set[FootprintCell] = candidate_corridor_cells,
+        ) -> bool:
+            cell = (
+                math.floor(float(point[0]) / cell_size),
+                math.floor(float(point[2]) / cell_size),
+            )
             low_y, high_y = _cell_y_range(
                 cell,
                 y_ranges,
                 fallback_y_range,
             )
-            if center[1] < low_y or center[1] > high_y:
-                continue
-            accumulate_navigation_voxel_3d_sample(
-                true_3d_accumulator,
-                center,
-                grid_size_m=true_3d_base_grid_size,
-                clearance_m=float(clearance_m),
-                volume_m3=float(tile.voxel_size_m ** 3),
-                progress_m=float(progress_distances.get(cell, 0.0)),
+            vertical_quantization_margin_m = (
+                float(config.vertical_voxel_size_m) * 0.5 + 1e-9
             )
+            return bool(
+                cell in allowed_cells
+                and low_y - vertical_quantization_margin_m
+                <= float(point[1])
+                <= high_y + vertical_quantization_margin_m
+                and route_tube_contains(point)
+            )
+
+        try:
+            candidate_build = build_cubic_graph_from_local_volumes(
+                tuple(zip(tiles, tile_seed_points, strict=True)),
+                voxel_size_m=config.voxel_size_m,
+                vertical_voxel_size_m=config.vertical_voxel_size_m,
+                minimum_clearance_m=config.mesh_graph_minimum_clearance_m,
+                point_filter=point_in_candidate_corridor,
+                # Local seed fills are tile-construction diagnostics, not
+                # global connectivity authority.  Merge every bounded
+                # non-surface cell first so an imperfect seed or tile seam
+                # cannot erase a real passage; occupied observations still
+                # win globally, and the single source-to-terminal component
+                # plus exact mesh checks remain the execution proof.
+                include_all_filtered_free_cells=True,
+                max_free_voxels=config.cubic_component_max_voxels,
+            )
+        except CubicVoxelLimitExceededError:
+            cubic_corridor_attempts.append(
+                {
+                    "radius_m": float(candidate_radius_m),
+                    "outcome": "free_voxel_limit_exceeded",
+                    "max_free_voxels": int(
+                        config.cubic_component_max_voxels
+                    ),
+                }
+            )
+            continue
+        selected_corridor_radius_m = float(candidate_radius_m)
+        cubic_corridor_attempts.append(
+            {
+                "radius_m": float(candidate_radius_m),
+                "outcome": "built",
+                "free_voxel_count": int(
+                    candidate_build.graph.free_voxel_count
+                ),
+            }
+        )
+        cubic_build = CubicVoxelGraphBuildResult(
+            graph=candidate_build.graph,
+            details={
+                **candidate_build.details,
+                "point_filter_method": "horizontal_polyline_envelope_v1",
+                "selected_route_corridor_radius_m": float(
+                    selected_corridor_radius_m
+                ),
+                "route_corridor_attempts": list(cubic_corridor_attempts),
+            },
+        )
+        break
+    if cubic_build is None:
+        raise CubicVoxelLimitExceededError(
+            config.cubic_component_max_voxels
+        )
+    cubic_graph_details = dict(cubic_build.details)
+    selected_cubic_graph, cubic_component_details = (
+        _select_terminal_cubic_component(
+            cubic_build.graph,
+            points,
+            terminal_snap_distance_m=float(
+                config.mesh_graph_max_edge_distance_m
+            ),
+            ingress_snap_distance_m=float(
+                config.mesh_graph_max_edge_distance_m
+            ),
+            max_component_voxels=config.cubic_component_max_voxels,
+            require_original_ingress=bool(
+                route.get("starts_at_navigation_start")
+                or source_ingress_anchor is not None
+            ),
+            source_ingress_point=source_ingress_anchor,
+            source_ingress_snap_distance_m=min(
+                float(config.mesh_graph_entry_anchor_radius_m),
+                MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M,
+            ),
+            source_ingress_gap_y_ranges=(
+                selected_layer_y_ranges
+                if source_ingress_anchor is not None
+                else None
+            ),
+            source_ingress_footprint_cell_size_m=(
+                cell_size if source_ingress_anchor is not None else None
+            ),
+            required_route_cells=route_cells,
+            required_vertical_gap_intervals=(
+                required_route_vertical_gap_intervals
+            ),
+            required_footprint_cell_size_m=cell_size,
+        )
+    )
+    # The selected component owns its packed-key set. Drop the much larger
+    # preselection graph before the later metrics/path passes so a long cave
+    # does not retain both resident sets for the rest of cache construction.
+    cubic_build = None
+    candidate_build = None
+    if selected_cubic_graph is None:
+        return None, {}, {
+            "coverage_cell_count": 0,
+            "sampling_support_cell_count": len(sampling_cells),
+            "tile_count": len(tiles),
+            "coverage_scope": coverage_scope,
+            "coverage_includes_preceding_curvature": False,
+            "tile_size_m": float(tile_size),
+            "tiles_skipped": int(skipped_tiles),
+            "triangle_count": int(total_triangles),
+            "surface_sample_count": int(total_samples),
+            "sampling_truncated": bool(sampling_truncated),
+            "fixed_voxel_build": dict(fixed_build.details),
+            "cubic_graph": dict(cubic_graph_details),
+            "cubic_component": cubic_component_details,
+            "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
+            "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
+            "navigation_cell_count": 0,
+        }
+
+    selected_surface_gap_route_key_groups = cubic_component_details.pop(
+        "_surface_gap_route_key_groups",
+        None,
+    )
+    if (
+        not isinstance(selected_surface_gap_route_key_groups, Sequence)
+        or isinstance(
+            selected_surface_gap_route_key_groups,
+            (str, bytes),
+        )
+        or len(selected_surface_gap_route_key_groups)
+        != len(route_cells)
+    ):
+        return None, {}, {
+            "coverage_cell_count": 0,
+            "sampling_support_cell_count": len(sampling_cells),
+            "tile_count": len(tiles),
+            "coverage_scope": coverage_scope,
+            "coverage_includes_preceding_curvature": False,
+            "tile_size_m": float(tile_size),
+            "tiles_skipped": int(skipped_tiles),
+            "triangle_count": int(total_triangles),
+            "surface_sample_count": int(total_samples),
+            "sampling_truncated": bool(sampling_truncated),
+            "fixed_voxel_build": dict(fixed_build.details),
+            "cubic_graph": dict(cubic_graph_details),
+            "cubic_component": cubic_component_details,
+            "reason": "surface_gap_route_component_evidence_missing",
+            "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
+            "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
+            "navigation_cell_count": 0,
+        }
+    selected_surface_gap_route_key_groups = tuple(
+        tuple(
+            (int(key[0]), int(key[1]), int(key[2]))
+            for key in group
+        )
+        for group in selected_surface_gap_route_key_groups
+    )
+    selected_route_gap_intervals: list[tuple[float, float]] = []
+    for cell, group in zip(
+        route_cells,
+        selected_surface_gap_route_key_groups,
+        strict=True,
+    ):
+        intervals = tuple(
+            required_route_vertical_gap_intervals.get(cell, ())
+        )
+        if not intervals or not group:
+            return None, {}, {
+                "coverage_cell_count": 0,
+                "sampling_support_cell_count": len(sampling_cells),
+                "tile_count": len(tiles),
+                "coverage_scope": coverage_scope,
+                "coverage_includes_preceding_curvature": False,
+                "tile_size_m": float(tile_size),
+                "tiles_skipped": int(skipped_tiles),
+                "triangle_count": int(total_triangles),
+                "surface_sample_count": int(total_samples),
+                "sampling_truncated": bool(sampling_truncated),
+                "fixed_voxel_build": dict(fixed_build.details),
+                "cubic_graph": dict(cubic_graph_details),
+                "cubic_component": cubic_component_details,
+                "reason": "surface_gap_selected_interval_evidence_missing",
+                "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
+                "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
+                "navigation_cell_count": 0,
+            }
+        key_center_y = float(
+            selected_cubic_graph.voxel_center(group[0])[1]
+        )
+        selected_route_gap_intervals.append(
+            min(
+                (
+                    (float(interval[0]), float(interval[1]))
+                    for interval in intervals
+                ),
+                key=lambda interval: (
+                    0.0
+                    if interval[0] <= key_center_y <= interval[1]
+                    else min(
+                        abs(key_center_y - interval[0]),
+                        abs(key_center_y - interval[1]),
+                    ),
+                    interval,
+                ),
+            )
+        )
+    cubic_component_details.update(
+        {
+            "surface_gap_route_cells": [
+                int(value) for cell in route_cells for value in cell
+            ],
+            "surface_gap_selected_route_intervals": [
+                float(value)
+                for interval in selected_route_gap_intervals
+                for value in interval
+            ],
+            "surface_gap_selected_route_interval_count": len(
+                selected_route_gap_intervals
+            ),
+        }
+    )
+
+    raw_ingress_hint_index = cubic_component_details.get(
+        "ingress_hint_index"
+    )
+    raw_terminal_hint_index = cubic_component_details.get(
+        "terminal_hint_index"
+    )
+    if (
+        type(raw_ingress_hint_index) is not int
+        or type(raw_terminal_hint_index) is not int
+        or raw_ingress_hint_index != 0
+        or raw_terminal_hint_index != len(points) - 1
+    ):
+        return None, {}, {
+            "coverage_cell_count": 0,
+            "sampling_support_cell_count": len(sampling_cells),
+            "tile_count": len(tiles),
+            "coverage_scope": coverage_scope,
+            "coverage_includes_preceding_curvature": False,
+            "tile_size_m": float(tile_size),
+            "tiles_skipped": int(skipped_tiles),
+            "triangle_count": int(total_triangles),
+            "surface_sample_count": int(total_samples),
+            "sampling_truncated": bool(sampling_truncated),
+            "fixed_voxel_build": dict(fixed_build.details),
+            "cubic_graph": dict(cubic_graph_details),
+            "cubic_component": cubic_component_details,
+            "reason": "cubic_component_full_route_hint_span_missing",
+            "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
+            "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
+            "navigation_cell_count": 0,
+        }
+    certified_ingress_hint_index = raw_ingress_hint_index
+    certified_terminal_hint_index = raw_terminal_hint_index
+    terminal_graph_key_payload = cubic_component_details.get(
+        "terminal_graph_key"
+    )
+    if (
+        not isinstance(terminal_graph_key_payload, Sequence)
+        or isinstance(terminal_graph_key_payload, (str, bytes))
+        or len(terminal_graph_key_payload) != 3
+    ):
+        raise ValueError("selected cubic terminal key is malformed")
+    terminal_graph_key = tuple(
+        int(value) for value in terminal_graph_key_payload
+    )
+    certified_terminal_point = selected_cubic_graph.voxel_center(
+        terminal_graph_key  # type: ignore[arg-type]
+    )
+    certified_terminal_candidate_points: list[Point] = [
+        certified_terminal_point
+    ]
+    terminal_candidate_limit_m = min(
+        float(config.mesh_graph_max_edge_distance_m),
+        max(
+            float(selected_cubic_graph.cell_diagonal_m),
+            float(
+                cubic_component_details.get(
+                    "terminal_snap_limit_m",
+                    config.mesh_graph_max_edge_distance_m,
+                )
+            ),
+        ),
+    )
+    raw_terminal_candidate_keys = cubic_component_details.get(
+        "terminal_graph_key_candidates"
+    )
+    if (
+        isinstance(raw_terminal_candidate_keys, Sequence)
+        and not isinstance(raw_terminal_candidate_keys, (str, bytes))
+    ):
+        for raw_candidate_key in raw_terminal_candidate_keys:
+            if (
+                not isinstance(raw_candidate_key, Sequence)
+                or isinstance(raw_candidate_key, (str, bytes))
+                or len(raw_candidate_key) != 3
+            ):
+                continue
+            try:
+                candidate_key = tuple(
+                    int(value) for value in raw_candidate_key
+                )
+            except (TypeError, ValueError):
+                continue
+            if not selected_cubic_graph.contains_key(
+                candidate_key  # type: ignore[arg-type]
+            ):
+                continue
+            candidate_point = selected_cubic_graph.voxel_center(
+                candidate_key  # type: ignore[arg-type]
+            )
+            if (
+                _horizontal_point_distance_m(
+                    points[certified_terminal_hint_index],
+                    candidate_point,
+                )
+                > terminal_candidate_limit_m + 1e-9
+            ):
+                continue
+            if candidate_point not in certified_terminal_candidate_points:
+                certified_terminal_candidate_points.append(candidate_point)
+    ingress_graph_key_payload = cubic_component_details.get(
+        "ingress_graph_key"
+    )
+    if (
+        not isinstance(ingress_graph_key_payload, Sequence)
+        or isinstance(ingress_graph_key_payload, (str, bytes))
+        or len(ingress_graph_key_payload) != 3
+    ):
+        raise ValueError("selected cubic ingress key is malformed")
+    ingress_graph_key = tuple(int(value) for value in ingress_graph_key_payload)
+    certified_ingress_point = selected_cubic_graph.voxel_center(
+        ingress_graph_key  # type: ignore[arg-type]
+    )
+    certified_ingress_candidate_points: list[Point] = [
+        certified_ingress_point
+    ]
+    raw_ingress_candidate_keys = cubic_component_details.get(
+        "ingress_graph_key_candidates"
+    )
+    if (
+        isinstance(raw_ingress_candidate_keys, Sequence)
+        and not isinstance(raw_ingress_candidate_keys, (str, bytes))
+    ):
+        source_attachment_limit_m = min(
+            float(config.mesh_graph_entry_anchor_radius_m),
+            MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M,
+        )
+        for raw_candidate_key in raw_ingress_candidate_keys:
+            if (
+                not isinstance(raw_candidate_key, Sequence)
+                or isinstance(raw_candidate_key, (str, bytes))
+                or len(raw_candidate_key) != 3
+            ):
+                continue
+            try:
+                candidate_key = tuple(
+                    int(value) for value in raw_candidate_key
+                )
+            except (TypeError, ValueError):
+                continue
+            if not selected_cubic_graph.contains_key(
+                candidate_key  # type: ignore[arg-type]
+            ):
+                continue
+            candidate_point = selected_cubic_graph.voxel_center(
+                candidate_key  # type: ignore[arg-type]
+            )
+            if (
+                source_ingress_anchor is not None
+                and math.dist(source_ingress_anchor, candidate_point)
+                > source_attachment_limit_m + 1e-9
+            ):
+                continue
+            if candidate_point not in certified_ingress_candidate_points:
+                certified_ingress_candidate_points.append(candidate_point)
+
+    terminal_candidate_count_before_mesh_support = len(
+        certified_terminal_candidate_points
+    )
+    ingress_candidate_count_before_mesh_support = len(
+        certified_ingress_candidate_points
+    )
+    certified_terminal_candidate_points = list(
+        _mesh_supported_candidate_points(
+            certified_terminal_candidate_points,
+            mesh_point_has_opposing_support=(
+                mesh_point_has_opposing_support
+            ),
+            max_distance_m=DEFAULT_MESH_OPPOSING_SUPPORT_DISTANCE_M,
+            minimum_clearance_m=float(
+                config.mesh_graph_minimum_clearance_m
+            ),
+        )
+    )
+    certified_ingress_candidate_points = list(
+        _mesh_supported_candidate_points(
+            certified_ingress_candidate_points,
+            mesh_point_has_opposing_support=(
+                mesh_point_has_opposing_support
+            ),
+            max_distance_m=DEFAULT_MESH_OPPOSING_SUPPORT_DISTANCE_M,
+            minimum_clearance_m=float(
+                config.mesh_graph_minimum_clearance_m
+            ),
+        )
+    )
+    if certified_terminal_candidate_points:
+        certified_terminal_point = certified_terminal_candidate_points[0]
+        terminal_graph_key = selected_cubic_graph.world_key(
+            certified_terminal_point
+        )
+        cubic_component_details["terminal_graph_key"] = [
+            int(value) for value in terminal_graph_key
+        ]
+    if certified_ingress_candidate_points:
+        certified_ingress_point = certified_ingress_candidate_points[0]
+        ingress_graph_key = selected_cubic_graph.world_key(
+            certified_ingress_point
+        )
+        cubic_component_details["ingress_graph_key"] = [
+            int(value) for value in ingress_graph_key
+        ]
+    certified_route_points = (
+        certified_ingress_point,
+        *points[
+            certified_ingress_hint_index + 1 : certified_terminal_hint_index
+        ],
+        certified_terminal_point,
+    )
+    cubic_component_details.update(
+        {
+            "requested_terminal_point": _point_payload(
+                points[certified_terminal_hint_index]
+            ),
+            "certified_terminal_point": _point_payload(
+                certified_terminal_point
+            ),
+            "certified_terminal_candidate_count": len(
+                certified_terminal_candidate_points
+            ),
+            "certified_terminal_candidate_count_before_mesh_support": (
+                terminal_candidate_count_before_mesh_support
+            ),
+            "certified_terminal_candidate_policy": (
+                "bounded_endpoint_opposing_mesh_support_v1"
+                if mesh_point_has_opposing_support is not None
+                else "bounded_endpoint_free_voxel_candidates_v2"
+            ),
+            "certified_ingress_candidate_count": len(
+                certified_ingress_candidate_points
+            ),
+            "certified_ingress_candidate_count_before_mesh_support": (
+                ingress_candidate_count_before_mesh_support
+            ),
+            "opposing_mesh_support_required": bool(
+                mesh_point_has_opposing_support is not None
+            ),
+            "opposing_mesh_support_distance_m": (
+                float(DEFAULT_MESH_OPPOSING_SUPPORT_DISTANCE_M)
+                if mesh_point_has_opposing_support is not None
+                else None
+            ),
+            "certified_ingress_candidate_policy": (
+                "bounded_obj_attachment_opposing_mesh_support_v1"
+                if (
+                    source_ingress_is_obj_surface_anchor
+                    and mesh_point_has_opposing_support is not None
+                )
+                else (
+                    "bounded_obj_attachment_free_voxels_v1"
+                    if source_ingress_is_obj_surface_anchor
+                    else (
+                        "bounded_navigation_start_surface_interval_voxels_v2"
+                        if source_ingress_anchor is not None
+                        else "selected_component_ingress_v1"
+                    )
+                )
+            ),
+            "certified_ingress_point": _point_payload(
+                certified_ingress_point
+            ),
+            "terminal_selection": (
+                "ranked_contiguous_route_component_v2"
+                if cubic_component_details.get("ingress_selection")
+                == "ranked_contiguous_route_component_v2"
+                else "bounded_true_3d_free_voxel_snap_v1"
+            ),
+        }
+    )
+
+    def selected_component_probe(
+        point: Point,
+    ) -> tuple[bool, float] | None:
+        try:
+            key = selected_cubic_graph.world_key(point)
+        except (TypeError, ValueError):
+            return None
+        if not selected_cubic_graph.contains_key(key):
+            return None
+        # The packed graph contains only globally occupied-wins free keys that
+        # already met this clearance threshold during the complete tile merge.
+        # Returning the conservative threshold avoids recomputing an expensive
+        # local surface-distance search for every cache-time A* sample. Exact
+        # cached-mesh checks still gate every edge, and the certificate probes
+        # the persisted voxel chunks again before runtime authorization.
+        return (
+            True,
+            float(config.mesh_graph_minimum_clearance_m),
+        )
+
+    component_cell_set: set[FootprintCell] = set()
+    for key in selected_cubic_graph.iter_keys():
+        center = selected_cubic_graph.voxel_center(key)
+        component_cell_set.add(
+            (
+                math.floor(center[0] / cell_size),
+                math.floor(center[2] / cell_size),
+            )
+        )
+    component_cell_set.intersection_update(requested_component_cell_set)
+    component_cells = tuple(sorted(component_cell_set))
+    excluded_component_cell_set = (
+        requested_component_cell_set - component_cell_set
+    )
+    missing_cells_after_repair = tuple(sorted(excluded_component_cell_set))
+    repair_attempted = 0
+    repair_built = 0
+    progress_distances = _component_progress_distances(
+        component_cell_set,
+        route,
+        cell_size=cell_size,
+    )
+    cell_accumulators: dict[FootprintCell, list[float]] = {}
+    true_3d_accumulator: dict[VoxelGraphKey, list[float]] = {}
+    true_3d_base_grid_size = _cache_graph_base_grid_size(
+        selected_cubic_graph.free_voxel_count,
+        base_voxel_size=true_3d_base_voxel_size,
+        base_vertical_voxel_size=true_3d_base_vertical_voxel_size,
+        max_nodes=config.graph_max_nodes,
+    )
+    clearance_sum = 0.0
+    clearance_min = math.inf
+    clearance_count = 0
+    for key in selected_cubic_graph.iter_keys():
+        center = selected_cubic_graph.voxel_center(key)
+        cell = (
+            math.floor(center[0] / cell_size),
+            math.floor(center[2] / cell_size),
+        )
+        if cell not in component_cell_set:
+            continue
+        probe = selected_component_probe(center)
+        if probe is None or not bool(probe[0]):
+            continue
+        clearance_m = max(0.0, float(probe[1]))
+        clearance_sum += clearance_m
+        clearance_min = min(clearance_min, clearance_m)
+        clearance_count += 1
+        accumulator = cell_accumulators.setdefault(
+            cell,
+            [0.0, 0.0, float("inf"), 0.0, 0.0],
+        )
+        accumulator[0] += 1.0
+        accumulator[1] += clearance_m
+        accumulator[2] = min(accumulator[2], clearance_m)
+        voxel_volume_m3 = float(
+            config.voxel_size_m
+            * config.vertical_voxel_size_m
+            * config.voxel_size_m
+        )
+        accumulator[3] += voxel_volume_m3
+        accumulator[4] += float(center[1])
+        accumulate_navigation_voxel_3d_sample(
+            true_3d_accumulator,
+            center,
+            grid_size_m=true_3d_base_grid_size,
+            clearance_m=clearance_m,
+            volume_m3=voxel_volume_m3,
+            progress_m=float(progress_distances.get(cell, 0.0)),
+        )
 
     cell_metrics = {
         cell: NavigationVoxelCellMetric(
@@ -5898,11 +7335,11 @@ def _build_route_voxel_atlas(
             free_cell_count=int(accumulator[0]),
             min_clearance_m=float(accumulator[2]),
             mean_clearance_m=float(accumulator[1] / max(1.0, accumulator[0])),
-            progress_m=float(progress_distances[cell]),
+            progress_m=float(progress_distances.get(cell, 0.0)),
             center_y_m=float(accumulator[4] / max(1.0, accumulator[0])),
         )
         for cell, accumulator in cell_accumulators.items()
-        if cell in progress_distances and accumulator[0] > 0.0
+        if accumulator[0] > 0.0
     }
     true_3d_metrics, true_3d_grid_size = finalize_navigation_voxel_3d_metrics(
         true_3d_accumulator,
@@ -5917,34 +7354,335 @@ def _build_route_voxel_atlas(
         covered_footprint_cells=component_cell_set,
         sampling_truncated=sampling_truncated,
     )
+    # V12 persists this explicit graph for compatibility diagnostics only;
+    # production motion follows ``prepared_mesh_graph`` below.  Restrict the
+    # compatibility graph to immediate cubic neighbors so cache generation
+    # does not spend quadratic-ish work discovering longer LOS shortcuts that
+    # can never become routing authority.
+    compatibility_graph_edge_distance_cells = 1
     prepared_3d_graph = build_navigation_voxel_3d_graph(
         true_3d_metrics,
         grid_size_m=true_3d_grid_size,
-        max_edge_distance_cells=config.graph_max_edge_distance_cells,
+        max_edge_distance_cells=compatibility_graph_edge_distance_cells,
         max_edges_per_node=config.graph_max_edges_per_node,
         max_total_edges=config.graph_max_edges,
         unknown_boundary=true_3d_unknown_boundary,
     )
     if bool(config.mesh_graph_enabled) and mesh_edge_is_clear is not None:
-        provisional_atlas = NavigationVoxelAtlas(
-            tuple(tiles),
-            coverage_scope=coverage_scope,
-            cell_metrics=cell_metrics,
-            prepared_3d_graph=prepared_3d_graph,
-        )
         mesh_config = config.mesh_navigation_graph_config()
-        mesh_build = _build_adaptive_seeded_mesh_navigation_path(
-            points,
-            footprint_cell_size_m=cell_size,
-            component_cells=requested_component_cell_set,
-            point_probe=lambda point: provisional_atlas.probe_point(
-                point,
-                include_clearance=True,
-            ),
-            edge_is_clear=mesh_edge_is_clear,
-            coarse_config=mesh_config,
-            fine_spacing_m=float(config.fine_voxel_size_m),
+        direct_entry_keys = tuple(
+            dict.fromkeys(
+                selected_cubic_graph.world_key(point)
+                for point in certified_ingress_candidate_points
+                if selected_cubic_graph.contains_key(
+                    selected_cubic_graph.world_key(point)
+                )
+            )
         )
+        connector_required = bool(
+            source_ingress_anchor is not None
+            and route.get("starts_at_navigation_start") is True
+        )
+        if connector_required:
+            connector_safe_entry_keys: list[CubicVoxelKey] = []
+            for entry_key in direct_entry_keys:
+                entry_point = selected_cubic_graph.voxel_center(entry_key)
+                if (
+                    source_ingress_anchor is None
+                    or math.dist(source_ingress_anchor, entry_point)
+                    > min(
+                        float(config.mesh_graph_entry_anchor_radius_m),
+                        MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M,
+                    )
+                    + 1e-9
+                ):
+                    continue
+                try:
+                    connector_clear = bool(
+                        mesh_edge_is_clear(source_ingress_anchor, entry_point)
+                    )
+                except Exception:
+                    connector_clear = False
+                if connector_clear:
+                    connector_safe_entry_keys.append(entry_key)
+            direct_entry_keys = tuple(connector_safe_entry_keys)
+        direct_terminal_keys = tuple(
+            dict.fromkeys(
+                selected_cubic_graph.world_key(point)
+                for point in certified_terminal_candidate_points
+                if selected_cubic_graph.contains_key(
+                    selected_cubic_graph.world_key(point)
+                )
+            )
+        )
+        selected_route_cells = route_cells
+        selected_route_gap_key_groups = (
+            selected_surface_gap_route_key_groups
+        )
+        expected_intermediate_gate_count = max(
+            0,
+            len(selected_route_cells) - 2,
+        )
+        direct_waypoint_groups = tuple(
+            tuple(group) for group in selected_route_gap_key_groups[1:-1]
+        )
+        direct_waypoint_point_groups = tuple(
+            tuple(
+                selected_cubic_graph.voxel_center(key)
+                for key in group
+            )
+            for group in direct_waypoint_groups
+        )
+        ordered_route_guide_points = (
+            (
+                certified_ingress_point,
+                *(
+                    selected_cubic_graph.voxel_center(group[0])
+                    for group in direct_waypoint_groups
+                    if group
+                ),
+                certified_terminal_point,
+            )
+            if len(selected_route_cells) >= 2
+            else (certified_ingress_point, certified_terminal_point)
+        )
+        opposing_support_failure = None
+        if (
+            mesh_point_has_opposing_support is not None
+            and not certified_ingress_candidate_points
+        ):
+            opposing_support_failure = (
+                "exact_cubic_spine_ingress_opposing_mesh_support_missing"
+            )
+        elif (
+            mesh_point_has_opposing_support is not None
+            and not certified_terminal_candidate_points
+        ):
+            opposing_support_failure = (
+                "exact_cubic_spine_terminal_opposing_mesh_support_missing"
+            )
+        if opposing_support_failure is not None:
+            direct_waypoint_point_groups = None
+            direct_mesh_build = MeshNavigationGraphBuildResult(
+                graph=None,
+                details={
+                    "method": MESH_NAVIGATION_GRAPH_METHOD,
+                    "reason": opposing_support_failure,
+                    "known_terminal_reached": False,
+                    "node_limit_reached": False,
+                    "opposing_mesh_support_required": True,
+                    "opposing_mesh_support_distance_m": float(
+                        DEFAULT_MESH_OPPOSING_SUPPORT_DISTANCE_M
+                    ),
+                },
+            )
+        elif (
+            len(selected_route_gap_key_groups) != len(selected_route_cells)
+            or any(not group for group in selected_route_gap_key_groups)
+            or len(direct_waypoint_groups)
+            != expected_intermediate_gate_count
+            or len(ordered_route_guide_points)
+            != expected_intermediate_gate_count + 2
+        ):
+            direct_mesh_build = MeshNavigationGraphBuildResult(
+                graph=None,
+                details={
+                    "method": MESH_NAVIGATION_GRAPH_METHOD,
+                    "reason": (
+                        "exact_cubic_spine_surface_gap_component_gates_missing"
+                    ),
+                    "known_terminal_reached": False,
+                    "node_limit_reached": False,
+                    "surface_gap_waypoints_required": True,
+                    "surface_gap_gate_source": (
+                        "bounded_surface_intervals_v1"
+                    ),
+                },
+            )
+        else:
+            direct_mesh_build = build_exact_cubic_spine_navigation_path_graph(
+                selected_cubic_graph,
+                ordered_route_guide_points,
+                start_keys=direct_entry_keys,
+                terminal_keys=direct_terminal_keys,
+                waypoint_key_groups=direct_waypoint_groups,
+                footprint_cell_size_m=cell_size,
+                point_probe=selected_component_probe,
+                edge_is_clear=mesh_edge_is_clear,
+                horizontal_gate_radius_m=min(
+                    float(selected_corridor_radius_m),
+                    float(MIN_CACHE_VOXEL_ROUTE_CORRIDOR_RADIUS_M),
+                ),
+                require_waypoint_key_groups=True,
+                config=mesh_config,
+            )
+        mesh_build = direct_mesh_build
+        direct_reason = str(direct_mesh_build.details.get("reason", ""))
+        direct_capacity_limited = bool(
+            direct_mesh_build.details.get("node_limit_reached", False)
+            or "limit_reached" in direct_reason
+            or "capacity" in direct_reason
+        )
+        if (
+            direct_mesh_build.graph is None
+            and not direct_capacity_limited
+            and direct_waypoint_point_groups is not None
+        ):
+            direct_used_nodes = max(
+                0,
+                int(
+                    direct_mesh_build.details.get(
+                        "expanded_node_count",
+                        direct_mesh_build.details.get(
+                            "expanded_voxel_count",
+                            0,
+                        ),
+                    )
+                ),
+            )
+            remaining_fine_nodes = max(
+                0,
+                int(mesh_config.max_nodes) - direct_used_nodes,
+            )
+            fine_config = MeshNavigationGraphConfig(
+                horizontal_sample_spacing_m=min(
+                    float(config.fine_voxel_size_m),
+                    float(DEFAULT_MESH_GRAPH_FINE_RETRY_SPACING_M),
+                ),
+                vertical_sample_spacing_m=min(
+                    float(config.fine_vertical_voxel_size_m),
+                    0.25,
+                ),
+                minimum_clearance_m=mesh_config.minimum_clearance_m,
+                max_nodes=max(2, remaining_fine_nodes),
+                max_edges_per_node=mesh_config.max_edges_per_node,
+                max_edge_candidates_per_node=(
+                    mesh_config.max_edge_candidates_per_node
+                ),
+                max_edge_candidates_per_direction=(
+                    mesh_config.max_edge_candidates_per_direction
+                ),
+                max_edge_distance_m=mesh_config.max_edge_distance_m,
+                max_vertical_edge_distance_m=(
+                    mesh_config.max_vertical_edge_distance_m
+                ),
+                max_interval_points_per_column=(
+                    mesh_config.max_interval_points_per_column
+                ),
+                ray_merge_epsilon_m=mesh_config.ray_merge_epsilon_m,
+            ).validated()
+            fine_attempts: list[dict[str, object]] = []
+            fine_build: MeshNavigationGraphBuildResult | None = None
+            fine_radii = tuple(
+                dict.fromkeys(
+                    (
+                        float(MIN_CACHE_VOXEL_ROUTE_CORRIDOR_RADIUS_M),
+                        float(MAX_MESH_GRAPH_FINE_RETRY_TUBE_RADIUS_M),
+                    )
+                )
+            )
+            for fine_radius_m in fine_radii:
+                if remaining_fine_nodes < 2:
+                    break
+                fine_build = _build_route_ordered_fine_mesh_navigation_path(
+                    ordered_route_guide_points,
+                    waypoint_point_groups=direct_waypoint_point_groups,
+                    entry_candidate_points=tuple(
+                        selected_cubic_graph.voxel_center(key)
+                        for key in direct_entry_keys
+                    ),
+                    terminal_candidate_points=tuple(
+                        selected_cubic_graph.voxel_center(key)
+                        for key in direct_terminal_keys
+                    ),
+                    footprint_cell_size_m=cell_size,
+                    component_cells=component_cell_set,
+                    point_probe=selected_component_probe,
+                    edge_is_clear=mesh_edge_is_clear,
+                    config=fine_config,
+                    route_tube_radius_m=fine_radius_m,
+                    max_total_nodes=remaining_fine_nodes,
+                )
+                remaining_fine_nodes = max(
+                    0,
+                    int(
+                        fine_build.details.get(
+                            "remaining_search_nodes",
+                            remaining_fine_nodes,
+                        )
+                    ),
+                )
+                fine_attempts.append(
+                    {
+                        "route_tube_radius_m": float(fine_radius_m),
+                        "built": fine_build.graph is not None,
+                        "reason": str(fine_build.details.get("reason", "")),
+                        "node_limit_reached": bool(
+                            fine_build.details.get("node_limit_reached", False)
+                        ),
+                        "remaining_search_nodes": int(
+                            remaining_fine_nodes
+                        ),
+                    }
+                )
+                if fine_build.graph is not None or bool(
+                    fine_build.details.get("node_limit_reached", False)
+                ):
+                    break
+            pending_fine_radius = len(fine_attempts) < len(fine_radii)
+            if (
+                remaining_fine_nodes < 2
+                and pending_fine_radius
+                and (
+                    fine_build is None
+                    or fine_build.graph is None
+                    and fine_build.details.get("node_limit_reached") is not True
+                )
+            ):
+                fine_build = MeshNavigationGraphBuildResult(
+                    graph=None,
+                    details={
+                        **(
+                            {}
+                            if fine_build is None
+                            else dict(fine_build.details)
+                        ),
+                        "method": MESH_NAVIGATION_GRAPH_METHOD,
+                        "reason": "route_ordered_fine_mesh_node_limit_reached",
+                        "known_terminal_reached": False,
+                        "node_limit_reached": True,
+                        "remaining_search_nodes": int(
+                            remaining_fine_nodes
+                        ),
+                    },
+                )
+                fine_attempts.append(
+                    {
+                        "route_tube_radius_m": float(
+                            fine_radii[len(fine_attempts)]
+                        ),
+                        "built": False,
+                        "reason": (
+                            "route_ordered_fine_mesh_node_limit_reached"
+                        ),
+                        "node_limit_reached": True,
+                        "remaining_search_nodes": int(
+                            remaining_fine_nodes
+                        ),
+                        "attempted": False,
+                    }
+                )
+            if fine_build is not None:
+                mesh_build = MeshNavigationGraphBuildResult(
+                    graph=fine_build.graph,
+                    details={
+                        **dict(fine_build.details),
+                        "exact_cubic_spine_attempt": dict(
+                            direct_mesh_build.details
+                        ),
+                        "route_ordered_fine_attempts": list(fine_attempts),
+                    },
+                )
         prepared_mesh_graph = mesh_build.graph
         mesh_graph_details = dict(mesh_build.details)
     elif not bool(config.mesh_graph_enabled):
@@ -5959,36 +7697,136 @@ def _build_route_voxel_atlas(
             "method": MESH_NAVIGATION_GRAPH_METHOD,
             "reason": "mesh_edge_guard_unavailable",
         }
-    fine_seed_points, fine_seed_details = _fine_prepared_graph_seed_points(
-        prepared_mesh_graph or prepared_3d_graph,
-        route_points=points,
-        selected_regions=selected_regions,
-        max_tiles=config.max_fine_tiles,
-        fine_tile_radius_m=config.fine_tile_radius_m,
-    )
-    fine_tiles = _build_fine_frontier_tiles(
-        fine_seed_points,
-        triangle_provider=triangle_provider,
-        config=config,
-    )
-    fine_tile_coverage = _fine_seed_tile_coverage_details(
-        fine_seed_points,
-        fine_tiles,
-    )
-    if bool(fine_seed_details.get("fine_graph_spine_available", False)):
-        built_coverage_complete = bool(
-            fine_tile_coverage["fine_built_tile_seed_coverage_complete"]
-        )
-        fine_tile_coverage = {
-            **fine_tile_coverage,
-            "fine_graph_spine_built_tile_coverage_complete": (
-                built_coverage_complete
+    mesh_graph_details.update(
+        {
+            "surface_gap_waypoints_required": True,
+            "surface_gap_gate_source": cubic_component_details.get(
+                "surface_gap_gate_source"
             ),
-            "fine_graph_spine_coverage_complete": bool(
-                fine_seed_details.get("fine_graph_spine_coverage_complete", False)
-                and built_coverage_complete
+            "surface_gap_route_cell_count": len(route_cells),
+            "surface_gap_route_cells": list(
+                cubic_component_details.get(
+                    "surface_gap_route_cells",
+                    (),
+                )
+            ),
+            "surface_gap_selected_route_intervals": list(
+                cubic_component_details.get(
+                    "surface_gap_selected_route_intervals",
+                    (),
+                )
+            ),
+            "surface_gap_transition_fallback_indices": list(
+                cubic_component_details.get(
+                    "surface_gap_transition_fallback_indices",
+                    (),
+                )
+            ),
+            "requested_terminal_point": _point_payload(points[-1]),
+            "terminal_snap_limit_m": float(
+                cubic_component_details.get(
+                    "terminal_snap_limit_m",
+                    config.mesh_graph_max_edge_distance_m,
+                )
             ),
         }
+    )
+    if source_ingress_anchor is not None:
+        source_snap_limit_m = min(
+            float(config.mesh_graph_entry_anchor_radius_m),
+            MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M,
+        )
+        connector_required = bool(
+            route.get("starts_at_navigation_start") is True
+        )
+        mesh_graph_details.update(
+            {
+                "source_ingress_required": True,
+                "source_ingress_point": _point_payload(
+                    source_ingress_anchor
+                ),
+                "source_ingress_coordinate_space": "xyz",
+                "source_ingress_snap_limit_m": source_snap_limit_m,
+                "source_ingress_connector_required": connector_required,
+                "source_ingress_attachment_mode": (
+                    "executable_authored_start_connector"
+                    if connector_required
+                    else "non_executable_obj_surface_anchor_snap"
+                ),
+            }
+        )
+        strict_route_points = _prepared_mesh_graph_route_points(
+            prepared_mesh_graph,
+            mesh_graph_details,
+        )
+        if strict_route_points:
+            actual_distance_m = math.dist(
+                source_ingress_anchor,
+                strict_route_points[0],
+            )
+            if connector_required:
+                try:
+                    connector_mesh_clear = bool(
+                        mesh_edge_is_clear is not None
+                        and mesh_edge_is_clear(
+                            source_ingress_anchor,
+                            strict_route_points[0],
+                        )
+                    )
+                except Exception:
+                    connector_mesh_clear = False
+            else:
+                connector_mesh_clear = None
+            mesh_graph_details.update(
+                {
+                    "source_ingress_attachment_point": _point_payload(
+                        strict_route_points[0]
+                    ),
+                    "source_ingress_attachment_distance_m": float(
+                        actual_distance_m
+                    ),
+                    "source_ingress_connector_mesh_clear": (
+                        None
+                        if connector_mesh_clear is None
+                        else bool(connector_mesh_clear)
+                    ),
+                }
+            )
+            if actual_distance_m > source_snap_limit_m + 1e-9:
+                prepared_mesh_graph = None
+                mesh_graph_details.update(
+                    {
+                        "reason": "source_ingress_attachment_too_far",
+                        "known_terminal_reached": False,
+                    }
+                )
+            elif connector_required and connector_mesh_clear is not True:
+                prepared_mesh_graph = None
+                mesh_graph_details.update(
+                    {
+                        "reason": "source_ingress_connector_mesh_blocked",
+                        "known_terminal_reached": False,
+                    }
+                )
+    prepared_mesh_route_points = _prepared_mesh_graph_route_points(
+        prepared_mesh_graph,
+        mesh_graph_details,
+    )
+    published_route_points = (
+        prepared_mesh_route_points or certified_route_points
+    )
+    fine_tiles: tuple[LocalVoxelVolume, ...] = ()
+    fine_seed_points: tuple[Point, ...] = ()
+    fine_seed_details = {
+        "fine_route_seed_method": "v12_fixed_orthogonal_tiles",
+        "fine_graph_spine_available": prepared_mesh_graph is not None,
+        "fine_graph_spine_coverage_complete": prepared_mesh_graph is not None,
+    }
+    fine_tile_coverage = {
+        "fine_built_tile_seed_coverage_complete": True,
+        "fine_built_tile_uncovered_seed_count": 0,
+        "fine_built_tile_uncovered_seed_examples": [],
+    }
     atlas = NavigationVoxelAtlas(
         tuple(tiles),
         coverage_scope=coverage_scope,
@@ -5998,21 +7836,109 @@ def _build_route_voxel_atlas(
         mesh_graph_entry_anchor_radius_m=float(
             config.mesh_graph_entry_anchor_radius_m
         ),
-        fine_tiles=tuple(fine_tiles),
+        fixed_isotropic_voxel_size_m=float(config.voxel_size_m),
+        fixed_vertical_voxel_size_m=float(config.vertical_voxel_size_m),
+        surface_overlap_occupied_wins=True,
+        fine_tiles=fine_tiles,
     )
-    metrics = _aggregate_tile_metrics(total_metrics, atlas)
+    metrics: dict[str, float | int | bool] = {
+        "seed_count": sum(
+            1
+            for point in certified_route_points
+            if selected_cubic_graph.contains_key(
+                selected_cubic_graph.world_key(point)
+            )
+        ),
+        "free_cell_count": int(clearance_count),
+        "available_volume_m3": float(
+            clearance_count
+            * config.voxel_size_m
+            * config.vertical_voxel_size_m
+            * config.voxel_size_m
+        ),
+        "surface_fraction": float(
+            sum(len(tile.surface_cells) for tile in tiles)
+            / max(1, sum(tile.voxel_count for tile in tiles))
+        ),
+        "min_clearance_m": float(
+            0.0 if clearance_count <= 0 else clearance_min
+        ),
+        "mean_clearance_m": float(
+            clearance_sum / max(1, clearance_count)
+        ),
+        "clearance_sample_count": int(clearance_count),
+        "flood_fill_truncated": False,
+    }
     details = {
         "bounds_min": _point_payload(atlas.bounds_min),
         "bounds_max": _point_payload(atlas.bounds_max),
         "tile_size_m": float(tile_size),
         "tile_count": len(tiles),
         "fine_tile_count": len(fine_tiles),
+        "fixed_voxel_build": dict(fixed_build.details),
+        "fixed_voxel_method": FIXED_ORTHOGONAL_VOXEL_METHOD,
+        "fixed_isotropic_voxel_size_m": float(config.voxel_size_m),
+        "fixed_vertical_voxel_size_m": float(config.vertical_voxel_size_m),
+        "fixed_voxel_cell_size_m": [
+            float(config.voxel_size_m),
+            float(config.vertical_voxel_size_m),
+            float(config.voxel_size_m),
+        ],
+        "selected_route_corridor_radius_m": float(
+            selected_corridor_radius_m
+        ),
+        "surface_overlap_policy": "occupied_wins",
+        "sampling_complete": True,
+        "cubic_graph": dict(cubic_graph_details),
+        "cubic_component": cubic_component_details,
+        "cubic_component_probe_method": (
+            "packed_free_key_minimum_clearance_v1"
+        ),
+        "cubic_component_max_voxels": int(
+            config.cubic_component_max_voxels
+        ),
+        "cubic_graph_method": CUBIC_VOXEL_GRAPH_METHOD,
+        "cubic_component_voxel_count": int(
+            selected_cubic_graph.free_voxel_count
+        ),
+        "source_route_point_count": len(points),
+        "source_route_cell_count": len(route_cells),
+        "source_route_cells": [
+            int(value) for cell in route_cells for value in cell
+        ],
+        "source_route_points": [
+            float(value) for point in points for value in point
+        ],
+        "source_route_start_point": _point_payload(points[0]),
+        "source_route_terminal_point": _point_payload(points[-1]),
+        "source_route_footprint_cell_size_m": float(cell_size),
+        "point_count": len(published_route_points),
+        "certified_ingress_hint_index": int(
+            certified_ingress_hint_index
+        ),
+        "certified_terminal_hint_index": int(
+            certified_terminal_hint_index
+        ),
+        "certified_route_length_m": float(
+            sum(
+                math.dist(first, second)
+                for first, second in zip(
+                    published_route_points,
+                    published_route_points[1:],
+                    strict=False,
+                )
+            )
+        ),
+        "certified_route_source": (
+            "prepared_mesh_graph_path_v1"
+            if prepared_mesh_route_points
+            else "terminal_component_metadata_suffix_v1"
+        ),
+        "_certified_route_points": published_route_points,
         **fine_seed_details,
         **fine_tile_coverage,
         "fine_route_seed_count": len(fine_seed_points),
-        "fine_route_seed_spacing_m": float(
-            max(4.0, float(config.fine_tile_radius_m) * 0.75)
-        ),
+        "fine_route_seed_spacing_m": 0.0,
         "fine_voxel_size_m": float(atlas.fine_voxel_size_m),
         "fine_voxel_size_max_m": max(
             (float(tile.voxel_size_m) for tile in fine_tiles),
@@ -6045,6 +7971,7 @@ def _build_route_voxel_atlas(
         "progress_max_m": float(atlas.max_progress_m),
         "prepared_graph": None,
         "prepared_3d_graph": prepared_3d_graph.diagnostic_payload(),
+        "prepared_3d_graph_role": "compatibility_immediate_neighbors_only",
         "prepared_mesh_graph": mesh_graph_details,
         "navigation_3d_cell_count": int(len(prepared_3d_graph.nodes)),
         "mesh_navigation_cell_count": int(atlas.mesh_navigation_cell_count),
@@ -6056,12 +7983,311 @@ def _build_route_voxel_atlas(
             float(value) for value in true_3d_base_grid_size
         ],
         "graph_native_routing": True,
-        "fine_sampling_truncated": any(
-            bool(tile.sampling_truncated) for tile in fine_tiles
-        ),
-        "_certified_component_cells": tuple(sorted(component_cell_set)),
+        "fine_sampling_truncated": False,
     }
     return atlas, metrics, details
+
+
+def _build_route_ordered_fine_mesh_navigation_path(
+    route_points: Sequence[Point],
+    *,
+    waypoint_point_groups: Sequence[Sequence[Point]],
+    entry_candidate_points: Sequence[Point],
+    terminal_candidate_points: Sequence[Point],
+    footprint_cell_size_m: float,
+    component_cells: set[FootprintCell],
+    point_probe: Callable[[Point], tuple[bool, float] | None],
+    edge_is_clear: MeshEdgeSafetyCheck,
+    config: MeshNavigationGraphConfig,
+    route_tube_radius_m: float,
+    max_total_nodes: int,
+) -> MeshNavigationGraphBuildResult:
+    """Build a finer exact path through every ordered surface-gap gate."""
+    points = tuple(route_points)
+    entries = tuple(dict.fromkeys(entry_candidate_points))
+    raw_terminals = tuple(dict.fromkeys(terminal_candidate_points))
+    raw_groups = tuple(
+        tuple(dict.fromkeys(group)) for group in waypoint_point_groups
+    )
+    expected_intermediate_gate_count = max(0, len(points) - 2)
+    base_details: dict[str, object] = {
+        "method": MESH_NAVIGATION_GRAPH_METHOD,
+        "search_method": "route_ordered_segmented_fine_mesh_v1",
+        "route_guide_point_count": len(points),
+        "intermediate_gate_count": len(raw_groups),
+        "expected_intermediate_gate_count": int(
+            expected_intermediate_gate_count
+        ),
+        "intermediate_gate_source": "surface_gap_free_voxel_candidates",
+        "raw_route_y_used": False,
+        "route_tube_radius_m": float(route_tube_radius_m),
+        "search_node_limit": max(1, int(max_total_nodes)),
+    }
+    if (
+        len(points) < 2
+        or not entries
+        or not raw_terminals
+        or len(raw_groups) != expected_intermediate_gate_count
+        or any(not group for group in raw_groups)
+    ):
+        return MeshNavigationGraphBuildResult(
+            graph=None,
+            details={
+                **base_details,
+                "reason": "route_ordered_fine_mesh_inputs_missing",
+                "known_terminal_reached": False,
+                "node_limit_reached": False,
+            },
+        )
+    spacing = (
+        float(config.horizontal_sample_spacing_m),
+        float(config.vertical_sample_spacing_m),
+        float(config.horizontal_sample_spacing_m),
+    )
+
+    def lattice_key(point: Sequence[float]) -> VoxelGraphKey:
+        return tuple(  # type: ignore[return-value]
+            int(math.floor(float(point[axis]) / spacing[axis]))
+            for axis in range(3)
+        )
+
+    def lattice_center(key: Sequence[int]) -> Point:
+        return tuple(  # type: ignore[return-value]
+            (float(key[axis]) + 0.5) * spacing[axis]
+            for axis in range(3)
+        )
+
+    route_tube_contains = _horizontal_route_tube_point_filter(
+        points,
+        radius_m=float(route_tube_radius_m),
+        voxel_size_m=float(config.horizontal_sample_spacing_m),
+    )
+
+    def exact_lattice_targets(values: Sequence[Point]) -> tuple[Point, ...]:
+        targets: list[Point] = []
+        for value in values:
+            try:
+                target = lattice_center(lattice_key(value))
+            except (IndexError, TypeError, ValueError, OverflowError):
+                continue
+            footprint_cell = (
+                int(math.floor(target[0] / footprint_cell_size_m)),
+                int(math.floor(target[2] / footprint_cell_size_m)),
+            )
+            if (
+                footprint_cell not in component_cells
+                or not route_tube_contains(target)
+            ):
+                continue
+            if target not in targets:
+                targets.append(target)
+        return tuple(targets)
+
+    groups = tuple(exact_lattice_targets(group) for group in raw_groups)
+    terminals = exact_lattice_targets(raw_terminals)
+    if not terminals or any(not group for group in groups):
+        return MeshNavigationGraphBuildResult(
+            graph=None,
+            details={
+                **base_details,
+                "reason": "route_ordered_fine_mesh_inputs_missing",
+                "known_terminal_reached": False,
+                "node_limit_reached": False,
+                "exact_lattice_gate_count": sum(bool(group) for group in groups),
+            },
+        )
+    remaining_nodes = max(1, int(max_total_nodes))
+    retained_points: list[Point] = []
+    retained_keys: set[VoxelGraphKey] = set()
+    reached_gate_count = 0
+    leg_details: list[dict[str, object]] = []
+    current_entries = entries
+    target_groups = (*groups, terminals)
+    final_leg_details: Mapping[str, object] = {}
+    for gate_index, target_group in enumerate(target_groups, start=1):
+        if remaining_nodes < 2:
+            return MeshNavigationGraphBuildResult(
+                graph=None,
+                details={
+                    **base_details,
+                    "reason": "route_ordered_fine_mesh_node_limit_reached",
+                    "known_terminal_reached": False,
+                    "node_limit_reached": True,
+                    "reached_intermediate_gate_count": int(reached_gate_count),
+                    "remaining_search_nodes": int(remaining_nodes),
+                    "leg_attempts": list(leg_details),
+                },
+            )
+        current_key = (
+            lattice_key(current_entries[0])
+            if len(current_entries) == 1
+            else None
+        )
+        blocked_keys = (
+            retained_keys - ({current_key} if current_key is not None else set())
+        )
+
+        def gated_point_probe(
+            point: Point,
+            *,
+            blocked: set[VoxelGraphKey] = blocked_keys,
+        ) -> tuple[bool, float] | None:
+            if not route_tube_contains(point):
+                return None
+            if lattice_key(point) in blocked:
+                return None
+            return point_probe(point)
+
+        leg_config = MeshNavigationGraphConfig(
+            horizontal_sample_spacing_m=config.horizontal_sample_spacing_m,
+            vertical_sample_spacing_m=config.vertical_sample_spacing_m,
+            minimum_clearance_m=config.minimum_clearance_m,
+            max_nodes=remaining_nodes,
+            max_edges_per_node=config.max_edges_per_node,
+            max_edge_candidates_per_node=config.max_edge_candidates_per_node,
+            max_edge_candidates_per_direction=(
+                config.max_edge_candidates_per_direction
+            ),
+            max_edge_distance_m=config.max_edge_distance_m,
+            max_vertical_edge_distance_m=(
+                config.max_vertical_edge_distance_m
+            ),
+            max_interval_points_per_column=(
+                config.max_interval_points_per_column
+            ),
+            ray_merge_epsilon_m=config.ray_merge_epsilon_m,
+        ).validated()
+        leg = build_goal_directed_seeded_mesh_navigation_path_graph(
+            current_entries,
+            footprint_cell_size_m=footprint_cell_size_m,
+            component_cells=component_cells,
+            point_probe=gated_point_probe,
+            edge_is_clear=edge_is_clear,
+            terminal_point=target_group[0],
+            terminal_candidate_points=target_group[1:],
+            route_guide_points=(current_entries[0], target_group[0]),
+            require_exact_terminal_point=True,
+            config=leg_config,
+        )
+        final_leg_details = dict(leg.details)
+        used_nodes = max(
+            1,
+            int(leg.details.get("discovered_node_count", 0)),
+            int(leg.details.get("expanded_node_count", 0)),
+        )
+        remaining_nodes = max(0, remaining_nodes - used_nodes)
+        leg_details.append(
+            {
+                "gate_index": int(gate_index),
+                "built": leg.graph is not None,
+                "reason": str(leg.details.get("reason", "")),
+                "used_node_budget": int(used_nodes),
+                "remaining_search_nodes": int(remaining_nodes),
+                "node_limit_reached": bool(
+                    leg.details.get("node_limit_reached", False)
+                ),
+            }
+        )
+        if leg.graph is None:
+            return MeshNavigationGraphBuildResult(
+                graph=None,
+                details={
+                    **base_details,
+                    "reason": (
+                        "route_ordered_fine_mesh_node_limit_reached"
+                        if leg.details.get("node_limit_reached") is True
+                        else "route_ordered_fine_mesh_gate_unreachable"
+                    ),
+                    "known_terminal_reached": False,
+                    "node_limit_reached": bool(
+                        leg.details.get("node_limit_reached", False)
+                    ),
+                    "failed_gate_index": int(gate_index),
+                    "reached_intermediate_gate_count": int(reached_gate_count),
+                    "remaining_search_nodes": int(remaining_nodes),
+                    "leg_attempts": list(leg_details),
+                },
+            )
+        leg_points = _prepared_mesh_graph_route_points(
+            leg.graph,
+            leg.details,
+        )
+        if len(leg_points) < 2:
+            return MeshNavigationGraphBuildResult(
+                graph=None,
+                details={
+                    **base_details,
+                    "reason": "route_ordered_fine_mesh_leg_path_missing",
+                    "known_terminal_reached": False,
+                    "node_limit_reached": False,
+                    "failed_gate_index": int(gate_index),
+                    "remaining_search_nodes": int(remaining_nodes),
+                    "leg_attempts": list(leg_details),
+                },
+            )
+        append_points = leg_points if not retained_points else leg_points[1:]
+        for point in append_points:
+            key = lattice_key(point)
+            if key in retained_keys:
+                return MeshNavigationGraphBuildResult(
+                    graph=None,
+                    details={
+                        **base_details,
+                        "reason": "route_ordered_fine_mesh_revisit_detected",
+                        "known_terminal_reached": False,
+                        "node_limit_reached": False,
+                        "failed_gate_index": int(gate_index),
+                        "remaining_search_nodes": int(remaining_nodes),
+                        "leg_attempts": list(leg_details),
+                    },
+                )
+            retained_keys.add(key)
+            retained_points.append(point)
+        current_entries = (retained_points[-1],)
+        if gate_index <= len(groups):
+            reached_gate_count += 1
+    validated = build_validated_mesh_path_graph(
+        retained_points,
+        lattice_spacing_m=spacing,
+        footprint_cell_size_m=footprint_cell_size_m,
+        point_probe=point_probe,
+        edge_is_clear=edge_is_clear,
+        minimum_clearance_m=config.minimum_clearance_m,
+    )
+    if validated.graph is None:
+        return MeshNavigationGraphBuildResult(
+            graph=None,
+            details={
+                **base_details,
+                "reason": str(validated.details.get("reason", "")),
+                "known_terminal_reached": False,
+                "node_limit_reached": False,
+                "reached_intermediate_gate_count": int(reached_gate_count),
+                "remaining_search_nodes": int(remaining_nodes),
+                "leg_attempts": list(leg_details),
+            },
+        )
+    return MeshNavigationGraphBuildResult(
+        graph=validated.graph,
+        details={
+            **dict(validated.details),
+            **base_details,
+            "reason": "route_ordered_fine_mesh_terminal_path_built",
+            "known_terminal_reached": True,
+            "node_limit_reached": False,
+            "reached_intermediate_gate_count": int(reached_gate_count),
+            "exact_lattice_gate_count": len(groups),
+            "remaining_search_nodes": int(remaining_nodes),
+            "selected_terminal_hint_index": int(
+                final_leg_details.get("selected_terminal_hint_index", 0)
+            ),
+            "selected_terminal_hint_point": final_leg_details.get(
+                "selected_terminal_hint_point"
+            ),
+            "terminal_hint_count": len(terminals),
+            "leg_attempts": list(leg_details),
+        },
+    )
 
 
 def _build_adaptive_seeded_mesh_navigation_path(
@@ -6073,14 +8299,19 @@ def _build_adaptive_seeded_mesh_navigation_path(
     edge_is_clear: MeshEdgeSafetyCheck,
     coarse_config: MeshNavigationGraphConfig,
     fine_spacing_m: float,
+    terminal_candidate_points: Sequence[Point] = (),
+    entry_candidate_points: Sequence[Point] = (),
+    strict_ingress: bool = False,
 ) -> MeshNavigationGraphBuildResult:
-    """Build one fixed path, refining only when 2 m loses the terminal.
+    """Build one fixed path, refining only at a genuinely finer spacing.
 
     Intermediate metadata points are breadcrumbs, not known cave terminals.
     A coarse goal-directed search is accepted only when it reaches the final
-    route hint. Otherwise a fine search gets one bounded route-corridor retry.
-    Failure publishes no mesh graph instead of mislabeling a short disconnected
-    prefix as a successful terminal route.
+    route hint. Otherwise a fine search gets a bounded 4 m horizontal route
+    envelope, widening
+    once to 8 m only when the first search exhausts without reaching its node
+    cap. Failure publishes no mesh graph instead of mislabeling a short
+    disconnected prefix as a successful terminal route.
     """
     points = tuple(route_points)
     if len(points) < 2:
@@ -6095,6 +8326,20 @@ def _build_adaptive_seeded_mesh_navigation_path(
         points,
         footprint_cell_size_m=footprint_cell_size_m,
         component_cells=component_cells,
+    )
+    entry_seed_points = (
+        tuple(dict.fromkeys(entry_candidate_points))
+        if strict_ingress and entry_candidate_points
+        else points[
+            : (
+                1
+                if strict_ingress
+                else min(
+                    DEFAULT_MESH_GRAPH_ENTRY_SEED_POINTS,
+                    len(points) - 1,
+                )
+            )
+        ]
     )
     coarse_goal_config = MeshNavigationGraphConfig(
         horizontal_sample_spacing_m=(
@@ -6121,12 +8366,13 @@ def _build_adaptive_seeded_mesh_navigation_path(
         ray_merge_epsilon_m=coarse_config.ray_merge_epsilon_m,
     ).validated()
     coarse = build_goal_directed_seeded_mesh_navigation_path_graph(
-        points[:DEFAULT_MESH_GRAPH_ENTRY_SEED_POINTS],
+        entry_seed_points,
         footprint_cell_size_m=footprint_cell_size_m,
         component_cells=corridor_cells,
         point_probe=point_probe,
         edge_is_clear=edge_is_clear,
         terminal_point=points[-1],
+        terminal_candidate_points=terminal_candidate_points,
         route_guide_points=points,
         config=coarse_goal_config,
     )
@@ -6142,6 +8388,9 @@ def _build_adaptive_seeded_mesh_navigation_path(
                 "adaptive_coarse_spacing_m": float(
                     coarse_goal_config.horizontal_sample_spacing_m
                 ),
+                "adaptive_coarse_vertical_spacing_m": float(
+                    coarse_goal_config.vertical_sample_spacing_m
+                ),
             },
         )
 
@@ -6149,9 +8398,48 @@ def _build_adaptive_seeded_mesh_navigation_path(
         float(coarse_config.horizontal_sample_spacing_m),
         max(0.25, float(fine_spacing_m)),
     )
+    fine_vertical_spacing = min(
+        float(coarse_config.vertical_sample_spacing_m),
+        0.25,
+    )
+    if (
+        math.isclose(
+            fine_spacing,
+            float(coarse_config.horizontal_sample_spacing_m),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+        and math.isclose(
+            fine_vertical_spacing,
+            float(coarse_config.vertical_sample_spacing_m),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+    ):
+        return MeshNavigationGraphBuildResult(
+            graph=None,
+            details={
+                **coarse_details,
+                "reason": "adaptive_mesh_known_terminal_unreachable",
+                "adaptive_reason": str(coarse_details.get("reason", "")),
+                "adaptive_retry_used": False,
+                "known_terminal_reached": False,
+                "adaptive_corridor_cell_count": len(corridor_cells),
+                "adaptive_coarse_spacing_m": float(
+                    coarse_goal_config.horizontal_sample_spacing_m
+                ),
+                "adaptive_coarse_vertical_spacing_m": float(
+                    coarse_goal_config.vertical_sample_spacing_m
+                ),
+                "adaptive_fine_spacing_m": float(fine_spacing),
+                "adaptive_fine_vertical_spacing_m": float(
+                    fine_vertical_spacing
+                ),
+            },
+        )
     fine_config = MeshNavigationGraphConfig(
         horizontal_sample_spacing_m=fine_spacing,
-        vertical_sample_spacing_m=fine_spacing,
+        vertical_sample_spacing_m=fine_vertical_spacing,
         minimum_clearance_m=coarse_config.minimum_clearance_m,
         max_nodes=coarse_config.max_nodes,
         max_edges_per_node=coarse_config.max_edges_per_node,
@@ -6171,16 +8459,78 @@ def _build_adaptive_seeded_mesh_navigation_path(
         ),
         ray_merge_epsilon_m=coarse_config.ray_merge_epsilon_m,
     ).validated()
-    fine = build_goal_directed_seeded_mesh_navigation_path_graph(
-        points[:DEFAULT_MESH_GRAPH_ENTRY_SEED_POINTS],
-        footprint_cell_size_m=footprint_cell_size_m,
-        component_cells=corridor_cells,
-        point_probe=point_probe,
-        edge_is_clear=edge_is_clear,
-        terminal_point=points[-1],
-        route_guide_points=points,
-        config=fine_config,
+    minimum_fine_tube_radius_m = float(
+        MIN_CACHE_VOXEL_ROUTE_CORRIDOR_RADIUS_M
     )
+    maximum_fine_tube_radius_m = max(
+        minimum_fine_tube_radius_m,
+        float(MAX_MESH_GRAPH_FINE_RETRY_TUBE_RADIUS_M),
+    )
+    fine_tube_radii = tuple(
+        dict.fromkeys(
+            (
+                minimum_fine_tube_radius_m,
+                maximum_fine_tube_radius_m,
+            )
+        )
+    )
+    fine_attempts: list[dict[str, object]] = []
+    fine: MeshNavigationGraphBuildResult | None = None
+    fine_route_tube_radius_m = minimum_fine_tube_radius_m
+    for candidate_tube_radius_m in fine_tube_radii:
+        fine_route_tube_radius_m = float(candidate_tube_radius_m)
+        fine_route_tube_contains = _horizontal_route_tube_point_filter(
+            points,
+            radius_m=fine_route_tube_radius_m,
+            voxel_size_m=float(
+                coarse_goal_config.horizontal_sample_spacing_m
+            ),
+        )
+
+        def fine_point_probe(
+            point: Point,
+            *,
+            contains: Callable[[Point], bool] = fine_route_tube_contains,
+        ) -> tuple[bool, float] | None:
+            if not contains(point):
+                return None
+            return point_probe(point)
+
+        fine = build_goal_directed_seeded_mesh_navigation_path_graph(
+            entry_seed_points,
+            footprint_cell_size_m=footprint_cell_size_m,
+            component_cells=corridor_cells,
+            point_probe=fine_point_probe,
+            edge_is_clear=edge_is_clear,
+            terminal_point=points[-1],
+            terminal_candidate_points=terminal_candidate_points,
+            route_guide_points=points,
+            config=fine_config,
+        )
+        fine_attempts.append(
+            {
+                "route_tube_radius_m": float(fine_route_tube_radius_m),
+                "reason": str(fine.details.get("reason", "")),
+                "built": fine.graph is not None,
+                "discovered_node_count": int(
+                    fine.details.get("discovered_node_count", 0)
+                ),
+                "expanded_node_count": int(
+                    fine.details.get("expanded_node_count", 0)
+                ),
+                "maximum_route_guide_index_seen": int(
+                    fine.details.get("maximum_route_guide_index_seen", -1)
+                ),
+                "node_limit_reached": bool(
+                    fine.details.get("node_limit_reached", False)
+                ),
+            }
+        )
+        if fine.graph is not None or bool(
+            fine.details.get("node_limit_reached", False)
+        ):
+            break
+    assert fine is not None
     fine_details = dict(fine.details)
     shared_details = {
         "adaptive_retry_used": True,
@@ -6199,7 +8549,17 @@ def _build_adaptive_seeded_mesh_navigation_path(
         "adaptive_coarse_spacing_m": float(
             coarse_goal_config.horizontal_sample_spacing_m
         ),
+        "adaptive_coarse_vertical_spacing_m": float(
+            coarse_goal_config.vertical_sample_spacing_m
+        ),
         "adaptive_fine_spacing_m": float(fine_spacing),
+        "adaptive_fine_vertical_spacing_m": float(
+            fine_vertical_spacing
+        ),
+        "adaptive_fine_route_tube_radius_m": float(
+            fine_route_tube_radius_m
+        ),
+        "adaptive_fine_route_tube_attempts": list(fine_attempts),
     }
     if fine.graph is not None:
         return MeshNavigationGraphBuildResult(
@@ -6215,6 +8575,42 @@ def _build_adaptive_seeded_mesh_navigation_path(
             "adaptive_reason": str(fine_details.get("reason", "")),
         },
     )
+
+
+def _prepared_mesh_graph_route_points(
+    graph: NavigationVoxel3DGraph | None,
+    details: Mapping[str, object],
+) -> tuple[Point, ...]:
+    """Return the exact persisted mesh path from its entry to its terminal."""
+    if graph is None or not graph.nodes:
+        return ()
+
+    def parsed_key(value: object) -> VoxelGraphKey | None:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return None
+        if len(value) != 3:
+            return None
+        try:
+            key = tuple(int(coordinate) for coordinate in value)
+        except (TypeError, ValueError):
+            return None
+        return key if key in graph.nodes else None  # type: ignore[return-value]
+
+    start_key = parsed_key(details.get("seed_graph_key"))
+    terminal_key = parsed_key(details.get("terminal_graph_key"))
+    if start_key is None or terminal_key is None:
+        return ()
+    path_keys, _path_details = shortest_navigation_voxel_3d_graph_path(
+        graph,
+        start_key=start_key,
+        terminal_key=terminal_key,
+    )
+    if path_keys is None or len(path_keys) < 2:
+        return ()
+    return tuple(
+        tuple(float(value) for value in graph.nodes[key].center)
+        for key in path_keys
+    )  # type: ignore[return-value]
 
 
 def _mesh_prepared_spine_sampling_envelope(
@@ -6683,10 +9079,19 @@ def _tile_seed_points(
     cell_size: float,
     y_ranges: Mapping[FootprintCell, tuple[float, float]],
     fallback_y_range: tuple[float, float],
+    vertical_gap_seeds: Mapping[FootprintCell, Sequence[Point]] | None = None,
 ) -> tuple[Point, ...]:
-    """Return one bounded flood-fill seed for every cell in a tile."""
+    """Return surface-gap flood-fill seeds without trusting route heights."""
     points: list[Point] = []
     for cell in cells:
+        gap_points = (
+            ()
+            if vertical_gap_seeds is None
+            else vertical_gap_seeds.get(cell, ())
+        )
+        if gap_points:
+            points.extend(gap_points)
+            continue
         x, z = footprint_world_center(cell, cell_size)
         low_y, high_y = _cell_y_range(cell, y_ranges, fallback_y_range)
         points.append((x, (low_y + high_y) * 0.5, z))
@@ -6943,6 +9348,9 @@ def _build_fine_frontier_tiles(
                 bounds_max=bounds_max,
                 config=VoxelVolumeConfig(
                     voxel_size_m=float(config.fine_voxel_size_m),
+                    vertical_voxel_size_m=float(
+                        config.fine_vertical_voxel_size_m
+                    ),
                     surface_inflation_cells=(
                         DEFAULT_CACHE_FINE_SURFACE_INFLATION_CELLS
                     ),
@@ -6976,49 +9384,6 @@ def _fine_seed_tile_coverage_details(
             _point_payload(seed_points[index])
             for index in uncovered_indices[:8]
         ],
-    }
-
-
-def _metrics_for_filled_cells(
-    tile: LocalVoxelVolume,
-    seed_points: Sequence[Point],
-    filled_cells: Mapping[tuple[int, int, int], float],
-) -> dict[str, float | int | bool]:
-    """Convert one filled tile into the existing corridor metric shape."""
-    if not filled_cells:
-        return {
-            "seed_count": sum(
-                1 for point in seed_points if tile.contains_point(point)
-            ),
-            "free_cell_count": 0,
-            "available_volume_m3": 0.0,
-            "surface_fraction": float(
-                len(tile.surface_cells) / max(1, tile.voxel_count)
-            ),
-            "min_clearance_m": 0.0,
-            "mean_clearance_m": 0.0,
-            "clearance_sample_count": 0,
-            "flood_fill_truncated": False,
-        }
-    ordered = sorted(filled_cells)
-    sample_limit = 8192
-    stride = max(1, math.ceil(len(ordered) / sample_limit))
-    values = [float(filled_cells[index]) for index in ordered[::stride]]
-    return {
-        "seed_count": sum(
-            1 for point in seed_points if tile.contains_point(point)
-        ),
-        "free_cell_count": len(filled_cells),
-        "available_volume_m3": float(
-            len(filled_cells) * tile.voxel_size_m ** 3
-        ),
-        "surface_fraction": float(
-            len(tile.surface_cells) / max(1, tile.voxel_count)
-        ),
-        "min_clearance_m": min(values),
-        "mean_clearance_m": float(sum(values) / max(1, len(values))),
-        "clearance_sample_count": len(values),
-        "flood_fill_truncated": False,
     }
 
 
@@ -7056,46 +9421,6 @@ def _component_progress_distances(
     return distances
 
 
-def _aggregate_tile_metrics(
-    metrics: Sequence[Mapping[str, float | int | bool]],
-    atlas: NavigationVoxelAtlas,
-) -> dict[str, float | int | bool]:
-    if not metrics:
-        return atlas.corridor_volume_metrics(())
-    sample_count = sum(int(item.get("clearance_sample_count", 0)) for item in metrics)
-    weighted_mean = sum(
-        float(item.get("mean_clearance_m", 0.0))
-        * int(item.get("clearance_sample_count", 0))
-        for item in metrics
-    ) / max(1, sample_count)
-    return {
-        "seed_count": sum(int(item.get("seed_count", 0)) for item in metrics),
-        "free_cell_count": sum(
-            int(item.get("free_cell_count", 0)) for item in metrics
-        ),
-        "available_volume_m3": sum(
-            float(item.get("available_volume_m3", 0.0)) for item in metrics
-        ),
-        "surface_fraction": float(
-            sum(len(tile.surface_cells) for tile in atlas.tiles)
-            / max(1, sum(tile.voxel_count for tile in atlas.tiles))
-        ),
-        "min_clearance_m": min(
-            (
-                float(item.get("min_clearance_m", 0.0))
-                for item in metrics
-                if int(item.get("clearance_sample_count", 0)) > 0
-            ),
-            default=0.0,
-        ),
-        "mean_clearance_m": float(weighted_mean),
-        "clearance_sample_count": int(sample_count),
-        "flood_fill_truncated": any(
-            bool(item.get("flood_fill_truncated", False)) for item in metrics
-        ),
-    }
-
-
 def _component_tile_groups(
     cells: Sequence[FootprintCell],
     *,
@@ -7116,24 +9441,1432 @@ def _component_tile_groups(
     )
 
 
-def _tile_size_for_component(
+@dataclass(frozen=True)
+class _RouteTubeSegmentProbe:
+    """Precomputed exact-distance inputs for one indexed route segment."""
+
+    first: Point
+    delta: Point
+    inverse_length_squared: float
+    bounds_min: Point
+    bounds_max: Point
+
+
+@dataclass(frozen=True)
+class _HorizontalRouteTubeSegmentProbe:
+    """Precomputed X/Z distance inputs for one route-envelope segment."""
+
+    first_x: float
+    first_z: float
+    delta_x: float
+    delta_z: float
+    inverse_length_squared: float
+    bounds_min_x: float
+    bounds_max_x: float
+    bounds_min_z: float
+    bounds_max_z: float
+
+
+def _horizontal_route_tube_point_filter(
+    route_points: Sequence[Point],
+    *,
+    radius_m: float,
+    voxel_size_m: float,
+) -> Callable[[Point], bool]:
+    """Index an X/Z route envelope without trusting imported route heights.
+
+    OBJ-derived footprint centerlines preserve useful passage ordering in the
+    horizontal plane, but their interpolated Y samples can jump between the
+    floor, ceiling, or a stacked passage.  Those samples therefore bound only
+    X/Z work.  The 0.25 m vertical occupied-wins field and exact cached mesh
+    checks remain the sole authority for which cave layer is connected.
+    """
+    points = tuple(route_points)
+    if not points:
+        return lambda _point: False
+    radius = max(float(voxel_size_m), float(radius_m))
+    effective_radius = radius + (
+        math.sqrt(2.0) * float(voxel_size_m) * 0.5
+    )
+    bucket_size = radius
+    sample_spacing = max(float(voxel_size_m), bucket_size * 0.5)
+    bucket_padding = max(
+        1,
+        int(math.ceil(effective_radius / bucket_size + 0.25)),
+    )
+    segments = (
+        tuple(zip(points[:-1], points[1:], strict=True))
+        if len(points) >= 2
+        else ((points[0], points[0]),)
+    )
+    probes: list[_HorizontalRouteTubeSegmentProbe] = []
+    mutable_buckets: dict[tuple[int, int], set[int]] = {}
+    for segment_index, (first, second) in enumerate(segments):
+        first_x = float(first[0])
+        first_z = float(first[2])
+        delta_x = float(second[0]) - first_x
+        delta_z = float(second[2]) - first_z
+        length_squared = delta_x * delta_x + delta_z * delta_z
+        probes.append(
+            _HorizontalRouteTubeSegmentProbe(
+                first_x=first_x,
+                first_z=first_z,
+                delta_x=delta_x,
+                delta_z=delta_z,
+                inverse_length_squared=(
+                    0.0 if length_squared <= 1e-12 else 1.0 / length_squared
+                ),
+                bounds_min_x=min(first_x, float(second[0])) - effective_radius,
+                bounds_max_x=max(first_x, float(second[0])) + effective_radius,
+                bounds_min_z=min(first_z, float(second[2])) - effective_radius,
+                bounds_max_z=max(first_z, float(second[2])) + effective_radius,
+            )
+        )
+        length_m = math.sqrt(length_squared)
+        sample_count = max(1, int(math.ceil(length_m / sample_spacing)))
+        for sample_index in range(sample_count + 1):
+            fraction = float(sample_index) / float(sample_count)
+            sample_x = first_x + delta_x * fraction
+            sample_z = first_z + delta_z * fraction
+            base = (
+                math.floor(sample_x / bucket_size),
+                math.floor(sample_z / bucket_size),
+            )
+            for delta_bucket_x in range(-bucket_padding, bucket_padding + 1):
+                for delta_bucket_z in range(
+                    -bucket_padding,
+                    bucket_padding + 1,
+                ):
+                    mutable_buckets.setdefault(
+                        (
+                            base[0] + delta_bucket_x,
+                            base[1] + delta_bucket_z,
+                        ),
+                        set(),
+                    ).add(segment_index)
+    buckets = {
+        key: tuple(sorted(values)) for key, values in mutable_buckets.items()
+    }
+    distance_limit_squared = effective_radius * effective_radius
+
+    def contains(point: Point) -> bool:
+        point_x = float(point[0])
+        point_z = float(point[2])
+        bucket = (
+            math.floor(point_x / bucket_size),
+            math.floor(point_z / bucket_size),
+        )
+        for segment_index in buckets.get(bucket, ()):
+            probe = probes[segment_index]
+            if (
+                point_x < probe.bounds_min_x - 1e-9
+                or point_x > probe.bounds_max_x + 1e-9
+                or point_z < probe.bounds_min_z - 1e-9
+                or point_z > probe.bounds_max_z + 1e-9
+            ):
+                continue
+            relative_x = point_x - probe.first_x
+            relative_z = point_z - probe.first_z
+            fraction = max(
+                0.0,
+                min(
+                    1.0,
+                    (
+                        relative_x * probe.delta_x
+                        + relative_z * probe.delta_z
+                    )
+                    * probe.inverse_length_squared,
+                ),
+            )
+            distance_x = relative_x - probe.delta_x * fraction
+            distance_z = relative_z - probe.delta_z * fraction
+            if (
+                distance_x * distance_x + distance_z * distance_z
+                <= distance_limit_squared + 1e-9
+            ):
+                return True
+        return False
+
+    return contains
+
+
+def _horizontal_point_distance_m(
+    first: Sequence[float],
+    second: Sequence[float],
+) -> float:
+    """Return X/Z distance while deliberately ignoring route-derived Y."""
+    return math.hypot(
+        float(second[0]) - float(first[0]),
+        float(second[2]) - float(first[2]),
+    )
+
+
+def _mesh_supported_candidate_points(
+    points: Sequence[Point],
+    *,
+    mesh_point_has_opposing_support: MeshPointSupportCheck | None,
+    max_distance_m: float,
+    minimum_clearance_m: float,
+) -> tuple[Point, ...]:
+    """Keep candidate points bracketed by exact mesh on an opposing axis."""
+    unique_points = tuple(dict.fromkeys(points))
+    if mesh_point_has_opposing_support is None:
+        return unique_points
+    admitted: list[Point] = []
+    for point in unique_points:
+        try:
+            supported = bool(
+                mesh_point_has_opposing_support(
+                    point,
+                    float(max_distance_m),
+                    float(minimum_clearance_m),
+                )
+            )
+        except Exception:
+            supported = False
+        if supported:
+            admitted.append(point)
+    return tuple(admitted)
+
+
+def _horizontal_cubic_voxel_candidates(
+    graph: SparseCubicVoxelGraph,
+    point: Sequence[float],
+    *,
+    max_distance_m: float,
+    limit: int | None = None,
+) -> tuple[tuple[CubicVoxelKey, float], ...]:
+    """Return endpoint candidates from every Y layer near one X/Z hint.
+
+    Centerline endpoints are footprint ordering hints, so their Y coordinate
+    must not choose or reject a cave layer. A bounded result remains vertically
+    diverse; the later source-connected exact roadmap decides which candidate
+    is executable.
+    """
+    try:
+        if len(point) != 3:
+            return ()
+        target_x = float(point[0])
+        target_z = float(point[2])
+        maximum = float(max_distance_m)
+    except (TypeError, ValueError):
+        return ()
+    if (
+        not math.isfinite(target_x)
+        or not math.isfinite(target_z)
+        or not math.isfinite(maximum)
+        or maximum < 0.0
+    ):
+        return ()
+    candidates: list[tuple[CubicVoxelKey, float]] = []
+    for key in graph.iter_keys():
+        center = graph.voxel_center(key)
+        distance_m = math.hypot(center[0] - target_x, center[2] - target_z)
+        if distance_m <= maximum + 1e-9:
+            candidates.append((key, float(distance_m)))
+    ordered = tuple(sorted(candidates, key=lambda item: (item[1], item[0])))
+    if limit is None or len(ordered) <= max(1, int(limit)):
+        return ordered
+
+    result_limit = max(1, int(limit))
+    vertical_bucket_size_m = max(
+        1.0,
+        float(graph.vertical_voxel_size_m) * 4.0,
+    )
+    best_by_vertical_bucket: dict[int, tuple[CubicVoxelKey, float]] = {}
+    for candidate in ordered:
+        center_y = graph.voxel_center(candidate[0])[1]
+        bucket = math.floor(center_y / vertical_bucket_size_m)
+        best_by_vertical_bucket.setdefault(bucket, candidate)
+    bucket_candidates = [
+        best_by_vertical_bucket[bucket]
+        for bucket in sorted(best_by_vertical_bucket)
+    ]
+    if len(bucket_candidates) > result_limit:
+        if result_limit == 1:
+            bucket_candidates = [
+                bucket_candidates[len(bucket_candidates) // 2]
+            ]
+        else:
+            selected_indices = tuple(
+                round(
+                    float(index)
+                    * float(len(bucket_candidates) - 1)
+                    / float(result_limit - 1)
+                )
+                for index in range(result_limit)
+            )
+            bucket_candidates = [
+                bucket_candidates[index] for index in selected_indices
+            ]
+    selected_keys = {candidate[0] for candidate in bucket_candidates}
+    selected = list(bucket_candidates)
+    for candidate in ordered:
+        if len(selected) >= result_limit:
+            break
+        if candidate[0] in selected_keys:
+            continue
+        selected.append(candidate)
+        selected_keys.add(candidate[0])
+    return tuple(sorted(selected, key=lambda item: (item[1], item[0])))
+
+
+def _route_tube_point_filter(
+    route_points: Sequence[Point],
+    *,
+    radius_m: float,
+    voxel_size_m: float,
+) -> Callable[[Point], bool]:
+    """Index a true-3D polyline tube for bounded cubic candidate checks."""
+    points = tuple(route_points)
+    if not points:
+        return lambda _point: False
+    radius = max(float(voxel_size_m), float(radius_m))
+    # Retain a cube when its volume intersects the requested physical tube,
+    # not only when its center lies inside it.
+    effective_radius = radius + (math.sqrt(3.0) * float(voxel_size_m) * 0.5)
+    bucket_size = radius
+    sample_spacing = max(float(voxel_size_m), bucket_size * 0.5)
+    bucket_padding = max(
+        1,
+        int(math.ceil(effective_radius / bucket_size + 0.25)),
+    )
+    segments = (
+        tuple(zip(points[:-1], points[1:], strict=True))
+        if len(points) >= 2
+        else ((points[0], points[0]),)
+    )
+    segment_buckets: dict[tuple[int, int, int], set[int]] = {}
+    for segment_index, (first, second) in enumerate(segments):
+        length_m = math.dist(first, second)
+        sample_count = max(1, int(math.ceil(length_m / sample_spacing)))
+        for sample_index in range(sample_count + 1):
+            fraction = float(sample_index) / float(sample_count)
+            sample = tuple(
+                float(first[axis])
+                + (float(second[axis]) - float(first[axis])) * fraction
+                for axis in range(3)
+            )
+            base = tuple(
+                math.floor(sample[axis] / bucket_size)
+                for axis in range(3)
+            )
+            for delta_x in range(-bucket_padding, bucket_padding + 1):
+                for delta_y in range(-bucket_padding, bucket_padding + 1):
+                    for delta_z in range(-bucket_padding, bucket_padding + 1):
+                        segment_buckets.setdefault(
+                            (
+                                base[0] + delta_x,
+                                base[1] + delta_y,
+                                base[2] + delta_z,
+                            ),
+                            set(),
+                        ).add(segment_index)
+    frozen_buckets = {
+        key: tuple(sorted(values)) for key, values in segment_buckets.items()
+    }
+    distance_limit_squared = effective_radius * effective_radius
+    segment_probes = tuple(
+        _route_tube_segment_probe(
+            first,
+            second,
+            effective_radius=effective_radius,
+        )
+        for first, second in segments
+    )
+
+    def contains(point: Point) -> bool:
+        bucket = tuple(
+            math.floor(float(point[axis]) / bucket_size)
+            for axis in range(3)
+        )
+        point_x = float(point[0])
+        point_y = float(point[1])
+        point_z = float(point[2])
+        for segment_index in frozen_buckets.get(bucket, ()):
+            probe = segment_probes[segment_index]
+            lower = probe.bounds_min
+            upper = probe.bounds_max
+            if (
+                point_x < lower[0] - 1e-9
+                or point_x > upper[0] + 1e-9
+                or point_y < lower[1] - 1e-9
+                or point_y > upper[1] + 1e-9
+                or point_z < lower[2] - 1e-9
+                or point_z > upper[2] + 1e-9
+            ):
+                continue
+            first = probe.first
+            delta = probe.delta
+            relative_x = point_x - first[0]
+            relative_y = point_y - first[1]
+            relative_z = point_z - first[2]
+            fraction = max(
+                0.0,
+                min(
+                    1.0,
+                    (
+                        relative_x * delta[0]
+                        + relative_y * delta[1]
+                        + relative_z * delta[2]
+                    )
+                    * probe.inverse_length_squared,
+                ),
+            )
+            distance_x = relative_x - delta[0] * fraction
+            distance_y = relative_y - delta[1] * fraction
+            distance_z = relative_z - delta[2] * fraction
+            if (
+                distance_x * distance_x
+                + distance_y * distance_y
+                + distance_z * distance_z
+                <= distance_limit_squared + 1e-9
+            ):
+                return True
+        return False
+
+    return contains
+
+
+def _route_tube_segment_probe(
+    first: Point,
+    second: Point,
+    *,
+    effective_radius: float,
+) -> _RouteTubeSegmentProbe:
+    first_point = tuple(float(value) for value in first)
+    second_point = tuple(float(value) for value in second)
+    delta = tuple(
+        second_point[axis] - first_point[axis]
+        for axis in range(3)
+    )
+    length_squared = sum(value * value for value in delta)
+    radius = max(0.0, float(effective_radius))
+    return _RouteTubeSegmentProbe(
+        first=first_point,  # type: ignore[arg-type]
+        delta=delta,  # type: ignore[arg-type]
+        inverse_length_squared=(
+            0.0 if length_squared <= 1e-12 else 1.0 / length_squared
+        ),
+        bounds_min=tuple(
+            min(first_point[axis], second_point[axis]) - radius
+            for axis in range(3)
+        ),  # type: ignore[arg-type]
+        bounds_max=tuple(
+            max(first_point[axis], second_point[axis]) + radius
+            for axis in range(3)
+        ),  # type: ignore[arg-type]
+    )
+
+
+def _point_segment_distance_squared(
+    point: Point,
+    first: Point,
+    second: Point,
+) -> float:
+    delta = tuple(
+        float(second[axis]) - float(first[axis])
+        for axis in range(3)
+    )
+    relative = tuple(
+        float(point[axis]) - float(first[axis])
+        for axis in range(3)
+    )
+    denominator = sum(value * value for value in delta)
+    fraction = (
+        0.0
+        if denominator <= 1e-12
+        else max(
+            0.0,
+            min(
+                1.0,
+                sum(
+                    relative[axis] * delta[axis]
+                    for axis in range(3)
+                )
+                / denominator,
+            ),
+        )
+    )
+    return sum(
+        (
+            float(point[axis])
+            - (
+                float(first[axis])
+                + delta[axis] * fraction
+            )
+        )
+        ** 2
+        for axis in range(3)
+    )
+
+
+def _cubic_corridor_radius_candidates(
+    maximum_radius_m: float,
+    *,
+    voxel_size_m: float,
+    minimum_radius_m: float | None = None,
+) -> tuple[float, ...]:
+    """Return deterministic V12 radii without clipping source uncertainty."""
+    maximum = max(float(voxel_size_m), float(maximum_radius_m))
+    evidence_minimum = (
+        0.0
+        if minimum_radius_m is None
+        else max(0.0, float(minimum_radius_m))
+    )
+    minimum = min(
+        maximum,
+        max(
+            float(MIN_CACHE_VOXEL_ROUTE_CORRIDOR_RADIUS_M),
+            float(voxel_size_m) * 4.0,
+            evidence_minimum,
+        ),
+    )
+    candidates = [maximum]
+    while candidates[-1] > minimum + 1e-9:
+        next_radius = max(minimum, candidates[-1] * 0.5)
+        if math.isclose(
+            next_radius,
+            candidates[-1],
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            break
+        candidates.append(next_radius)
+    return tuple(float(value) for value in candidates)
+
+
+def _consecutive_route_cells(
+    cells: Sequence[FootprintCell],
+) -> tuple[FootprintCell, ...]:
+    """Remove only adjacent duplicate footprint samples, preserving order."""
+    ordered: list[FootprintCell] = []
+    for raw_cell in cells:
+        cell = (int(raw_cell[0]), int(raw_cell[1]))
+        if not ordered or cell != ordered[-1]:
+            ordered.append(cell)
+    return tuple(ordered)
+
+
+def _route_cell_horizontal_guide_points(
     cells: Sequence[FootprintCell],
     *,
     cell_size: float,
-    requested_tile_size: float,
-    max_tiles: int,
-) -> float:
-    tile_size = max(float(requested_tile_size), cell_size * 2.0)
-    for _ in range(32):
-        groups = _component_tile_groups(
-            cells,
-            cell_size=cell_size,
-            tile_size=tile_size,
+) -> tuple[Point, ...]:
+    """Return route-ordered X/Z guides without importing route-derived Y."""
+    return tuple(
+        (
+            float(footprint_world_center(cell, cell_size)[0]),
+            0.0,
+            float(footprint_world_center(cell, cell_size)[1]),
         )
-        if len(groups) <= max(1, int(max_tiles)):
-            return tile_size
-        tile_size *= max(1.25, math.sqrt(len(groups) / max(1, max_tiles)))
-    return tile_size
+        for cell in cells
+    )
+
+
+def _fixed_route_corridor_cells(
+    route_cells: Sequence[FootprintCell],
+    component_cells: Sequence[FootprintCell],
+    *,
+    cell_size: float,
+    radius_m: float,
+) -> tuple[FootprintCell, ...]:
+    """Return a map-independent bounded corridor around one terminal route."""
+    component = set(component_cells)
+    anchors = tuple(dict.fromkeys(route_cells))
+    if not anchors:
+        return tuple(sorted(component))
+    radius_cells = max(1, int(math.ceil(float(radius_m) / cell_size)))
+    selected: set[FootprintCell] = set()
+    for cell in anchors:
+        for delta_x in range(-radius_cells, radius_cells + 1):
+            for delta_z in range(-radius_cells, radius_cells + 1):
+                candidate = (cell[0] + delta_x, cell[1] + delta_z)
+                if not component or candidate in component:
+                    selected.add(candidate)
+    selected.update(cell for cell in anchors if not component or cell in component)
+    return tuple(sorted(selected))
+
+
+def _select_terminal_cubic_component(
+    graph: SparseCubicVoxelGraph,
+    route_points: Sequence[Point],
+    *,
+    terminal_snap_distance_m: float,
+    ingress_snap_distance_m: float,
+    max_component_voxels: int,
+    require_original_ingress: bool = False,
+    source_ingress_point: Point | None = None,
+    source_ingress_snap_distance_m: float | None = None,
+    source_ingress_gap_y_ranges: Mapping[
+        FootprintCell,
+        tuple[float, float],
+    ]
+    | None = None,
+    source_ingress_footprint_cell_size_m: float | None = None,
+    required_route_cells: Sequence[FootprintCell] = (),
+    required_vertical_gap_intervals: Mapping[
+        FootprintCell,
+        Sequence[tuple[float, float]],
+    ]
+    | None = None,
+    required_footprint_cell_size_m: float | None = None,
+) -> tuple[SparseCubicVoxelGraph | None, dict[str, object]]:
+    """Select the best endpoint component joining route evidence to the goal."""
+    component_diagnostics_complete = graph.free_voxel_count <= 131_072
+    component_sizes = (
+        graph.component_sizes() if component_diagnostics_complete else ()
+    )
+    details: dict[str, object] = {
+        "method": "terminal_anchored_cardinal_component_v1",
+        "candidate_free_voxel_count": int(graph.free_voxel_count),
+        "candidate_component_count": (
+            len(component_sizes) if component_diagnostics_complete else None
+        ),
+        "candidate_component_diagnostics_complete": bool(
+            component_diagnostics_complete
+        ),
+        "largest_candidate_component_sizes": [
+            int(value) for value in component_sizes[:8]
+        ],
+        "selected_component_voxel_count": 0,
+        "known_terminal_reached": False,
+        "ingress_reached": False,
+    }
+    if len(route_points) < 2 or graph.free_voxel_count <= 0:
+        details["reason"] = "cubic_component_route_or_voxels_missing"
+        return None, details
+    terminal_limit = max(
+        float(terminal_snap_distance_m),
+        float(graph.cell_diagonal_m),
+    )
+    minimum_meaningful_route_length_m = max(
+        float(MIN_CACHE_VOXEL_MEANINGFUL_ROUTE_LENGTH_M),
+        float(terminal_limit) * 2.0,
+    )
+    details["minimum_meaningful_route_length_m"] = float(
+        minimum_meaningful_route_length_m
+    )
+    ordered_required_cells: list[FootprintCell] = []
+    for raw_cell in required_route_cells:
+        cell = (int(raw_cell[0]), int(raw_cell[1]))
+        if not ordered_required_cells or cell != ordered_required_cells[-1]:
+            ordered_required_cells.append(cell)
+    interval_route_required = bool(ordered_required_cells)
+    interval_terminal_keys: tuple[CubicVoxelKey, ...] = ()
+    if interval_route_required:
+        try:
+            required_cell_size = float(required_footprint_cell_size_m)
+        except (TypeError, ValueError):
+            required_cell_size = 0.0
+        if required_vertical_gap_intervals is not None:
+            interval_terminal_keys = _surface_gap_interval_terminal_keys(
+                graph,
+                terminal_cell=ordered_required_cells[-1],
+                vertical_gap_intervals=required_vertical_gap_intervals,
+                footprint_cell_size_m=required_cell_size,
+                terminal_point=route_points[-1],
+                max_horizontal_distance_m=terminal_limit,
+            )
+        terminal_candidates = tuple(
+            (
+                key,
+                _horizontal_point_distance_m(
+                    route_points[-1],
+                    graph.voxel_center(key),
+                ),
+            )
+            for key in interval_terminal_keys
+        )
+        details.update(
+            {
+                "terminal_candidate_source": (
+                    "final_cell_bounded_surface_intervals_v1"
+                ),
+                "terminal_interval_candidate_count": len(
+                    interval_terminal_keys
+                ),
+                "surface_gap_route_cell_count": len(
+                    ordered_required_cells
+                ),
+            }
+        )
+    else:
+        terminal_candidates = _horizontal_cubic_voxel_candidates(
+            graph,
+            route_points[-1],
+            max_distance_m=terminal_limit,
+        )
+        details["terminal_candidate_source"] = "horizontal_endpoint_hint_v1"
+    ingress_limit = max(
+        0.0,
+        float(
+            source_ingress_snap_distance_m
+            if source_ingress_point is not None
+            and source_ingress_snap_distance_m is not None
+            else ingress_snap_distance_m
+        ),
+    )
+    if source_ingress_point is not None:
+        ingress_limit = min(
+            ingress_limit,
+            MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M,
+        )
+        details.update(
+            {
+                "source_ingress_required": True,
+                "source_ingress_point": _point_payload(
+                    source_ingress_point
+                ),
+                "source_ingress_coordinate_space": "xyz",
+                "source_ingress_snap_limit_m": float(ingress_limit),
+            }
+        )
+    if not terminal_candidates and (
+        require_original_ingress or interval_route_required
+    ):
+        details.update(
+            {
+                "reason": "cubic_component_terminal_voxel_missing",
+                "terminal_snap_limit_m": float(terminal_limit),
+            }
+        )
+        return None, details
+    pending_candidates = list(terminal_candidates)
+    viable: list[
+        tuple[
+            tuple[object, ...],
+            SparseCubicVoxelGraph,
+            dict[str, object],
+        ]
+    ] = []
+    failed_candidates: list[dict[str, object]] = []
+    candidate_summaries: list[dict[str, object]] = []
+    while pending_candidates:
+        seed_key, _seed_distance = pending_candidates[0]
+        component = graph.connected_component(
+            seed_key,
+            max_voxels=max_component_voxels,
+        )
+        component_terminal_candidates = tuple(
+            candidate
+            for candidate in pending_candidates
+            if component.contains_key(candidate[0])
+        )
+        pending_candidates = [
+            candidate
+            for candidate in pending_candidates
+            if not component.contains_key(candidate[0])
+        ]
+        terminal_key, terminal_rank_distance = min(
+            component_terminal_candidates,
+            key=lambda item: (item[1], item[0]),
+        )
+        component_gate_details: dict[str, object] = {}
+        component_route_key_groups: (
+            tuple[tuple[CubicVoxelKey, ...], ...] | None
+        ) = None
+        if interval_route_required:
+            assert required_vertical_gap_intervals is not None
+            component_route_key_groups = (
+                _surface_gap_interval_route_key_groups(
+                    component,
+                    route_cells=ordered_required_cells,
+                    vertical_gap_intervals=required_vertical_gap_intervals,
+                    footprint_cell_size_m=float(
+                        required_footprint_cell_size_m
+                    ),
+                    source_point=source_ingress_point,
+                    source_max_distance_m=ingress_limit,
+                    terminal_point=route_points[-1],
+                    terminal_max_horizontal_distance_m=terminal_limit,
+                    diagnostics=component_gate_details,
+                )
+            )
+            if component_route_key_groups is not None:
+                # Component discovery must inspect every interval-backed key
+                # in the endpoint cell. Only after selecting one component
+                # may the terminal proposals be bounded; the route-key helper
+                # has already applied that component-local cap while retaining
+                # interval diversity. Intersecting with a globally capped list
+                # can hide the only source-connected endpoint pocket.
+                local_terminal_candidates = component_route_key_groups[-1]
+                if local_terminal_candidates:
+                    terminal_key = local_terminal_candidates[0]
+                else:
+                    component_route_key_groups = None
+            else:
+                local_terminal_candidates = ()
+        else:
+            local_terminal_candidates = _cubic_terminal_neighbor_candidates(
+                component,
+                terminal_key,
+            )
+        terminal_distance = (
+            _horizontal_point_distance_m(
+                route_points[-1],
+                component.voxel_center(terminal_key),
+            )
+            if interval_route_required
+            else float(terminal_rank_distance)
+        )
+        attachment, attachment_details = _cubic_component_route_attachment(
+            component,
+            route_points,
+            ingress_snap_distance_m=ingress_limit,
+            require_original_ingress=require_original_ingress,
+            source_ingress_point=source_ingress_point,
+            source_ingress_gap_y_ranges=source_ingress_gap_y_ranges,
+            source_ingress_footprint_cell_size_m=(
+                source_ingress_footprint_cell_size_m
+            ),
+            source_ingress_candidate_keys=(
+                component_route_key_groups[0]
+                if component_route_key_groups is not None
+                else None
+            ),
+        )
+        candidate_details = {
+            "terminal_graph_key": [int(value) for value in terminal_key],
+            "terminal_snap_distance_m": float(terminal_distance),
+            "terminal_snap_limit_m": float(terminal_limit),
+            "terminal_hint_index": len(route_points) - 1,
+            "terminal_graph_key_candidate_count": len(
+                local_terminal_candidates
+            ),
+            "terminal_graph_key_candidates": [
+                [int(value) for value in candidate_key]
+                for candidate_key in local_terminal_candidates
+            ],
+            "selected_component_voxel_count": int(
+                component.free_voxel_count
+            ),
+            "known_terminal_reached": True,
+            **component_gate_details,
+            **attachment_details,
+        }
+        if component_route_key_groups is not None:
+            candidate_details["_surface_gap_route_key_groups"] = (
+                component_route_key_groups
+            )
+        summary = {
+            "terminal_graph_key": [int(value) for value in terminal_key],
+            "terminal_snap_distance_m": float(terminal_distance),
+            "component_voxel_count": int(component.free_voxel_count),
+            "ingress_reached": attachment is not None,
+            "ingress_hint_index": candidate_details.get(
+                "ingress_hint_index"
+            ),
+            "contiguous_route_length_m": candidate_details.get(
+                "contiguous_route_length_m",
+                0.0,
+            ),
+            "source_ingress_attachment_distance_m": candidate_details.get(
+                "source_ingress_attachment_distance_m"
+            ),
+            "surface_gap_gate_reason": candidate_details.get(
+                "surface_gap_gate_reason"
+            ),
+            "missing_surface_gap_gate_indices": candidate_details.get(
+                "missing_surface_gap_gate_indices",
+                [],
+            ),
+            "missing_surface_gap_gate_cells": candidate_details.get(
+                "missing_surface_gap_gate_cells",
+                [],
+            ),
+        }
+        candidate_summaries.append(summary)
+        if component_route_key_groups is None and interval_route_required:
+            failed_candidates.append(candidate_details)
+            continue
+        if attachment is None:
+            failed_candidates.append(candidate_details)
+            continue
+        ingress_index, _ingress_distance, _ingress_key = attachment
+        original_ingress = candidate_details.get("ingress_selection") in {
+            "original_route_ingress_v1",
+            "strict_obj_source_ingress_v1",
+            "strict_navigation_source_ingress_v2",
+        }
+        rank = _cubic_terminal_route_rank(
+            candidate_details,
+            original_ingress=original_ingress,
+            minimum_meaningful_route_length_m=(
+                minimum_meaningful_route_length_m
+            ),
+            component_voxel_count=component.free_voxel_count,
+            terminal_distance_m=terminal_distance,
+            ingress_index=ingress_index,
+            terminal_key=terminal_key,
+        )
+        viable.append((rank, component, candidate_details))
+
+    if not require_original_ingress and not interval_route_required:
+        route_component_candidates = _contiguous_route_component_candidates(
+            graph,
+            route_points,
+            snap_distance_m=ingress_limit,
+            max_component_voxels=max_component_voxels,
+        )
+        ranked_route_components: list[
+            tuple[
+                tuple[object, ...],
+                SparseCubicVoxelGraph,
+                dict[str, object],
+            ]
+        ] = []
+        seen_route_ranges: set[tuple[int, int]] = set()
+        for (
+            _longest_rank,
+            route_component,
+            route_component_details,
+        ) in route_component_candidates:
+            route_range = (
+                int(route_component_details["ingress_hint_index"]),
+                int(route_component_details["terminal_hint_index"]),
+            )
+            if route_range in seen_route_ranges:
+                continue
+            seen_route_ranges.add(route_range)
+            route_component_rank = _cubic_terminal_route_rank(
+                route_component_details,
+                original_ingress=False,
+                minimum_meaningful_route_length_m=(
+                    minimum_meaningful_route_length_m
+                ),
+                component_voxel_count=route_component.free_voxel_count,
+                terminal_distance_m=float(
+                    route_component_details["terminal_snap_distance_m"]
+                ),
+                ingress_index=int(
+                    route_component_details["ingress_hint_index"]
+                ),
+                terminal_key=tuple(
+                    route_component_details["terminal_graph_key"]
+                ),
+            )
+            ranked_route_components.append(
+                (
+                    route_component_rank,
+                    route_component,
+                    route_component_details,
+                )
+            )
+        ranked_route_components.sort(key=lambda item: item[0])
+        viable.extend(ranked_route_components)
+        route_component_fallbacks = [
+            {
+                "ingress_hint_index": component_details[
+                    "ingress_hint_index"
+                ],
+                "terminal_hint_index": component_details[
+                    "terminal_hint_index"
+                ],
+                "contiguous_route_length_m": component_details[
+                    "contiguous_route_length_m"
+                ],
+                "component_voxel_count": int(component.free_voxel_count),
+            }
+            for _rank, component, component_details in (
+                ranked_route_components[:16]
+            )
+        ]
+        details["route_component_fallbacks"] = route_component_fallbacks
+        if route_component_fallbacks:
+            details["route_component_fallback"] = dict(
+                route_component_fallbacks[0]
+            )
+
+    details["terminal_component_candidate_count"] = len(
+        candidate_summaries
+    )
+    details["terminal_component_candidates"] = candidate_summaries[:8]
+    if not viable:
+        if failed_candidates:
+            details.update(
+                min(
+                    failed_candidates,
+                    key=lambda candidate: (
+                        len(
+                            candidate.get(
+                                "missing_surface_gap_gate_indices",
+                                (),
+                            )
+                        ),
+                        float(candidate["terminal_snap_distance_m"]),
+                        -int(candidate["selected_component_voxel_count"]),
+                    ),
+                )
+            )
+        details.update(
+            {
+                "reason": (
+                    "cubic_component_terminal_voxel_missing"
+                    if not terminal_candidates
+                    else (
+                        "cubic_component_surface_gap_route_missing"
+                        if interval_route_required
+                        and any(
+                            candidate.get("surface_gap_gate_reason")
+                            != "complete"
+                            for candidate in failed_candidates
+                        )
+                        else "cubic_component_ingress_voxel_missing"
+                    )
+                ),
+                "terminal_snap_limit_m": float(terminal_limit),
+                "original_ingress_required": bool(
+                    require_original_ingress
+                ),
+            }
+        )
+        return None, details
+
+    _rank, selected_component, selected_details = min(
+        viable,
+        key=lambda item: item[0],
+    )
+    details.update(selected_details)
+    details.update(
+        {
+            "reason": "cubic_terminal_component_selected",
+            "ingress_reached": True,
+        }
+    )
+    return selected_component, details
+
+
+def _cubic_terminal_route_rank(
+    candidate_details: Mapping[str, object],
+    *,
+    original_ingress: bool,
+    minimum_meaningful_route_length_m: float,
+    component_voxel_count: int,
+    terminal_distance_m: float,
+    ingress_index: int,
+    terminal_key: Sequence[int],
+) -> tuple[object, ...]:
+    """Rank authored ingress by longest safe reach, then unauthored ease.
+
+    An authored entrance owns the start, so retain its longest connected
+    terminal candidate. Without one, a tiny disconnected pocket must not win
+    merely because it is short; choose the easiest meaningful component and
+    retain the longest run only when none reaches that universal floor.
+    """
+    route_length_m = max(
+        0.0,
+        float(candidate_details.get("contiguous_route_length_m", 0.0)),
+    )
+    meaningful = (
+        route_length_m + 1e-9
+        >= float(minimum_meaningful_route_length_m)
+    )
+    try:
+        ingress_attachment_distance_m = float(
+            candidate_details.get(
+                "source_ingress_attachment_distance_m",
+                candidate_details.get("ingress_snap_distance_m", math.inf),
+            )
+        )
+    except (TypeError, ValueError):
+        ingress_attachment_distance_m = math.inf
+    if not math.isfinite(ingress_attachment_distance_m):
+        ingress_attachment_distance_m = math.inf
+    return (
+        0 if original_ingress else 1,
+        0 if meaningful else 1,
+        (
+            -route_length_m
+            if original_ingress or not meaningful
+            else route_length_m
+        ),
+        (
+            ingress_attachment_distance_m
+            if original_ingress
+            else 0.0
+        ),
+        -int(candidate_details.get("reachable_route_hint_count", 0)),
+        -int(component_voxel_count),
+        float(terminal_distance_m),
+        int(ingress_index),
+        tuple(int(value) for value in terminal_key),
+    )
+
+
+def _cubic_terminal_neighbor_candidates(
+    component: SparseCubicVoxelGraph,
+    terminal_key: CubicVoxelKey,
+) -> tuple[CubicVoxelKey, ...]:
+    """Return the selected endpoint cube and its bounded local free shell."""
+    center = component.voxel_center(terminal_key)
+    nearby = component.keys_within_distance(
+        center,
+        max_distance_m=(
+            float(component.voxel_size_m)
+            * DEFAULT_CUBIC_TERMINAL_NEIGHBOR_RADIUS_VOXELS
+            + 1e-9
+        ),
+    )
+    ordered = tuple(key for key, _distance_m in nearby)
+    if terminal_key not in ordered:
+        ordered = (terminal_key, *ordered)
+    return ordered[:DEFAULT_CUBIC_TERMINAL_CANDIDATE_LIMIT]
+
+
+def _contiguous_route_component_candidates(
+    graph: SparseCubicVoxelGraph,
+    route_points: Sequence[Point],
+    *,
+    snap_distance_m: float,
+    max_component_voxels: int,
+) -> tuple[
+    tuple[
+        tuple[object, ...],
+        SparseCubicVoxelGraph,
+        dict[str, object],
+    ],
+    ...,
+]:
+    """Return every distinct component-backed consecutive route run."""
+    snap_limit = max(float(graph.voxel_size_m), float(snap_distance_m))
+    pending: list[tuple[int, float, CubicVoxelKey]] = []
+    for index, point in enumerate(route_points):
+        key, distance_m = graph.nearest_key(
+            point,
+            max_distance_m=snap_limit,
+        )
+        if key is not None:
+            pending.append((index, float(distance_m), key))
+    candidates: list[tuple[
+        tuple[object, ...],
+        SparseCubicVoxelGraph,
+        dict[str, object],
+    ]] = []
+    while pending:
+        component = graph.connected_component(
+            pending[0][2],
+            max_voxels=max_component_voxels,
+        )
+        component_hints = tuple(
+            value for value in pending if component.contains_key(value[2])
+        )
+        pending = [
+            value for value in pending if not component.contains_key(value[2])
+        ]
+        hint_by_index = {value[0]: value for value in component_hints}
+        indices = sorted(hint_by_index)
+        run_start = 0
+        for cursor in range(1, len(indices) + 1):
+            run_continues = (
+                cursor < len(indices)
+                and indices[cursor] == indices[cursor - 1] + 1
+            )
+            if run_continues:
+                continue
+            run = indices[run_start:cursor]
+            run_start = cursor
+            if len(run) < 2:
+                continue
+            first_index = int(run[0])
+            terminal_index = int(run[-1])
+            contiguous_length_m = sum(
+                math.dist(first, second)
+                for first, second in zip(
+                    route_points[first_index:terminal_index],
+                    route_points[first_index + 1 : terminal_index + 1],
+                    strict=True,
+                )
+            )
+            ingress = hint_by_index[first_index]
+            terminal = hint_by_index[terminal_index]
+            terminal_key_candidates = _cubic_terminal_neighbor_candidates(
+                component,
+                terminal[2],
+            )
+            candidate_details: dict[str, object] = {
+                "terminal_graph_key": [
+                    int(value) for value in terminal[2]
+                ],
+                "terminal_snap_distance_m": float(terminal[1]),
+                "terminal_snap_limit_m": float(snap_limit),
+                "terminal_hint_index": int(terminal_index),
+                "terminal_graph_key_candidate_count": len(
+                    terminal_key_candidates
+                ),
+                "terminal_graph_key_candidates": [
+                    [int(value) for value in candidate_key]
+                    for candidate_key in terminal_key_candidates
+                ],
+                "selected_component_voxel_count": int(
+                    component.free_voxel_count
+                ),
+                "known_terminal_reached": True,
+                "ingress_hint_index": int(first_index),
+                "ingress_graph_key": [int(value) for value in ingress[2]],
+                "ingress_snap_distance_m": float(ingress[1]),
+                "ingress_snap_limit_m": float(snap_limit),
+                "ingress_candidate_count": 1,
+                "ingress_selection": (
+                    "ranked_contiguous_route_component_v2"
+                ),
+                "reachable_route_hint_count": len(component_hints),
+                "reachable_route_hint_first_index": int(indices[0]),
+                "reachable_route_hint_last_index": int(indices[-1]),
+                "original_ingress_required": False,
+                "contiguous_route_length_m": float(contiguous_length_m),
+            }
+            rank: tuple[object, ...] = (
+                -float(contiguous_length_m),
+                -len(run),
+                -int(component.free_voxel_count),
+                int(first_index),
+                int(terminal_index),
+                terminal[2],
+            )
+            candidates.append((rank, component, candidate_details))
+    return tuple(sorted(candidates, key=lambda item: item[0]))
+
+
+def _longest_contiguous_route_component(
+    graph: SparseCubicVoxelGraph,
+    route_points: Sequence[Point],
+    *,
+    snap_distance_m: float,
+    max_component_voxels: int,
+) -> tuple[SparseCubicVoxelGraph, dict[str, object]] | None:
+    """Return the component supporting the longest consecutive route run."""
+    candidates = _contiguous_route_component_candidates(
+        graph,
+        route_points,
+        snap_distance_m=snap_distance_m,
+        max_component_voxels=max_component_voxels,
+    )
+    if not candidates:
+        return None
+    _rank, component, details = candidates[0]
+    return component, details
+
+
+def _cubic_component_route_attachment(
+    component: SparseCubicVoxelGraph,
+    route_points: Sequence[Point],
+    *,
+    ingress_snap_distance_m: float,
+    require_original_ingress: bool,
+    source_ingress_point: Point | None = None,
+    source_ingress_gap_y_ranges: Mapping[
+        FootprintCell,
+        tuple[float, float],
+    ]
+    | None = None,
+    source_ingress_footprint_cell_size_m: float | None = None,
+    source_ingress_candidate_keys: Sequence[CubicVoxelKey] | None = None,
+) -> tuple[
+    tuple[int, float, CubicVoxelKey] | None,
+    dict[str, object],
+]:
+    """Find an authored ingress or the longest contiguous endpoint suffix."""
+    ingress_limit = max(0.0, float(ingress_snap_distance_m))
+    if source_ingress_point is not None:
+        if source_ingress_candidate_keys is not None:
+            bounded_ingress_candidates: list[
+                tuple[CubicVoxelKey, float]
+            ] = []
+            for key in dict.fromkeys(source_ingress_candidate_keys):
+                if not component.contains_key(key):
+                    continue
+                center = component.voxel_center(key)
+                distance_m = math.dist(source_ingress_point, center)
+                if distance_m <= ingress_limit + 1e-9:
+                    bounded_ingress_candidates.append((key, distance_m))
+            ingress_candidates = tuple(
+                sorted(
+                    bounded_ingress_candidates,
+                    key=lambda item: (item[1], item[0]),
+                )
+            )
+        else:
+            ingress_candidates = component.keys_within_distance(
+                source_ingress_point,
+                max_distance_m=ingress_limit,
+            )
+        gap_envelope_required = source_ingress_gap_y_ranges is not None
+        if gap_envelope_required:
+            try:
+                footprint_cell_size = float(
+                    source_ingress_footprint_cell_size_m
+                )
+            except (TypeError, ValueError):
+                ingress_candidates = ()
+            else:
+                if not math.isfinite(footprint_cell_size) or footprint_cell_size <= 0.0:
+                    ingress_candidates = ()
+                else:
+                    vertical_margin_m = (
+                        float(component.vertical_voxel_size_m) * 0.5 + 1e-9
+                    )
+                    admitted: list[tuple[CubicVoxelKey, float]] = []
+                    for candidate_key, candidate_distance_m in ingress_candidates:
+                        center = component.voxel_center(candidate_key)
+                        cell = (
+                            math.floor(center[0] / footprint_cell_size),
+                            math.floor(center[2] / footprint_cell_size),
+                        )
+                        candidate_range = source_ingress_gap_y_ranges.get(cell)
+                        if candidate_range is None:
+                            continue
+                        low_y, high_y = sorted(
+                            (
+                                float(candidate_range[0]),
+                                float(candidate_range[1]),
+                            )
+                        )
+                        if (
+                            low_y - vertical_margin_m
+                            <= center[1]
+                            <= high_y + vertical_margin_m
+                        ):
+                            admitted.append(
+                                (candidate_key, float(candidate_distance_m))
+                            )
+                    ingress_candidates = tuple(admitted)
+        if not ingress_candidates:
+            return None, {
+                "source_ingress_required": True,
+                "source_ingress_point": _point_payload(
+                    source_ingress_point
+                ),
+                "source_ingress_coordinate_space": "xyz",
+                "source_ingress_snap_limit_m": float(ingress_limit),
+                "source_ingress_gap_envelope_required": bool(
+                    gap_envelope_required
+                ),
+                "original_ingress_required": True,
+            }
+        ingress_key, distance_m = ingress_candidates[0]
+        attachment_point = component.voxel_center(ingress_key)
+        return (0, float(distance_m), ingress_key), {
+            "ingress_hint_index": 0,
+            "ingress_graph_key": [int(value) for value in ingress_key],
+            "ingress_snap_distance_m": float(distance_m),
+            "ingress_snap_limit_m": float(ingress_limit),
+            "ingress_candidate_count": len(ingress_candidates),
+            "ingress_graph_key_candidates": [
+                [int(value) for value in candidate_key]
+                for candidate_key, _candidate_distance_m in ingress_candidates[
+                    :DEFAULT_CUBIC_INGRESS_CANDIDATE_LIMIT
+                ]
+            ],
+            "ingress_selection": "strict_navigation_source_ingress_v2",
+            "original_ingress_required": True,
+            "source_ingress_required": True,
+            "source_ingress_point": _point_payload(source_ingress_point),
+            "source_ingress_attachment_point": _point_payload(
+                attachment_point
+            ),
+            "source_ingress_attachment_distance_m": float(distance_m),
+            "source_ingress_coordinate_space": "xyz",
+            "source_ingress_snap_limit_m": float(ingress_limit),
+            "source_ingress_gap_envelope_required": bool(
+                gap_envelope_required
+            ),
+            "contiguous_route_length_m": float(
+                sum(
+                    math.dist(first, second)
+                    for first, second in zip(
+                        route_points[:-1],
+                        route_points[1:],
+                        strict=True,
+                    )
+                )
+            ),
+        }
+    first_point_count = min(
+        DEFAULT_MESH_GRAPH_ENTRY_SEED_POINTS,
+        len(route_points) - 1,
+    )
+    original_candidates: list[tuple[int, float, CubicVoxelKey]] = []
+    for index, point in enumerate(route_points[:first_point_count]):
+        key, distance_m = component.nearest_key(
+            point,
+            max_distance_m=ingress_limit,
+        )
+        if key is not None:
+            original_candidates.append((index, float(distance_m), key))
+    if original_candidates:
+        selected = min(original_candidates)
+        return selected, {
+            "ingress_hint_index": int(selected[0]),
+            "ingress_graph_key": [int(value) for value in selected[2]],
+            "ingress_snap_distance_m": float(selected[1]),
+            "ingress_snap_limit_m": float(ingress_limit),
+            "ingress_candidate_count": len(original_candidates),
+            "ingress_selection": "original_route_ingress_v1",
+            "original_ingress_required": bool(require_original_ingress),
+            "contiguous_route_length_m": float(
+                sum(
+                    math.dist(first, second)
+                    for first, second in zip(
+                        route_points[selected[0] : -1],
+                        route_points[selected[0] + 1 :],
+                        strict=True,
+                    )
+                )
+            ),
+        }
+
+    reachable: list[tuple[int, float, CubicVoxelKey]] = []
+    for index, point in enumerate(route_points):
+        key, distance_m = component.nearest_key(
+            point,
+            max_distance_m=ingress_limit,
+        )
+        if key is not None:
+            reachable.append((index, float(distance_m), key))
+    reachable_indices = [value[0] for value in reachable]
+    reachable_set = set(reachable_indices)
+    suffix_start = len(route_points) - 1
+    while suffix_start - 1 in reachable_set:
+        suffix_start -= 1
+    shared_details: dict[str, object] = {
+        "ingress_snap_limit_m": float(ingress_limit),
+        "reachable_route_hint_count": len(reachable_indices),
+        "reachable_route_hint_first_index": (
+            int(reachable_indices[0]) if reachable_indices else None
+        ),
+        "reachable_route_hint_last_index": (
+            int(reachable_indices[-1]) if reachable_indices else None
+        ),
+        "original_ingress_required": bool(require_original_ingress),
+    }
+    if require_original_ingress or suffix_start >= len(route_points) - 1:
+        return None, shared_details
+    suffix_candidates = [
+        value for value in reachable if value[0] == suffix_start
+    ]
+    if not suffix_candidates:
+        return None, shared_details
+    selected = min(suffix_candidates)
+    contiguous_route_length_m = sum(
+        math.dist(first, second)
+        for first, second in zip(
+            route_points[suffix_start:-1],
+            route_points[suffix_start + 1 :],
+            strict=True,
+        )
+    )
+    return selected, {
+        **shared_details,
+        "ingress_hint_index": int(selected[0]),
+        "ingress_graph_key": [int(value) for value in selected[2]],
+        "ingress_snap_distance_m": float(selected[1]),
+        "ingress_candidate_count": 1,
+        "ingress_selection": (
+            "earliest_contiguous_terminal_component_hint_v1"
+        ),
+        "contiguous_route_length_m": float(contiguous_route_length_m),
+    }
 
 
 def _component_tile_bounds(
@@ -7198,11 +10931,1078 @@ def _route_y_ranges(
     return parsed
 
 
+def _component_vertical_gap_seed_points(
+    value: object,
+    *,
+    component_cells: set[FootprintCell],
+    cell_size: float,
+) -> dict[FootprintCell, tuple[Point, ...]]:
+    """Parse surface-derived vertical gap seeds persisted with a route.
+
+    Each compact triple contains a footprint cell and one bounded surface-gap
+    midpoint. Imported/interpolated centerline Y is intentionally absent from
+    this schema.
+    """
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return {}
+    if len(value) % 3 != 0:
+        return {}
+    parsed: dict[FootprintCell, list[Point]] = {}
+    for index in range(0, len(value), 3):
+        raw_x, raw_z, raw_y = value[index : index + 3]
+        if (
+            type(raw_x) is not int
+            or type(raw_z) is not int
+            or type(raw_y) not in (int, float)
+        ):
+            return {}
+        cell = (int(raw_x), int(raw_z))
+        y = float(raw_y)
+        if cell not in component_cells or not math.isfinite(y):
+            return {}
+        x, z = footprint_world_center(cell, cell_size)
+        parsed.setdefault(cell, []).append((float(x), y, float(z)))
+    return {
+        cell: tuple(dict.fromkeys(points))
+        for cell, points in parsed.items()
+        if points
+    }
+
+
+def _surface_gap_cubic_waypoint_key_groups(
+    graph: SparseCubicVoxelGraph,
+    *,
+    route_cells: Sequence[FootprintCell],
+    vertical_gap_seeds: Mapping[FootprintCell, Sequence[Point]],
+    max_candidates_per_gate: int = DEFAULT_CUBIC_TERMINAL_CANDIDATE_LIMIT,
+) -> tuple[tuple[CubicVoxelKey, ...], ...] | None:
+    """Map ordered surface-gap evidence to bounded component waypoints.
+
+    Surface-gap Y is paired-mesh evidence, unlike imported centerline Y. A
+    seed may land on a quantization boundary, so a single local cell-diagonal
+    snap is allowed; the returned key must still belong to the already
+    selected global component. Every ordered intermediate breadcrumb is
+    mandatory: missing evidence returns ``None`` so no later planner can
+    silently skip a portion of the source route. Entrance and final cells are
+    excluded because their separately bounded keys are mandatory.
+    """
+    point_groups = _surface_gap_waypoint_point_groups(
+        route_cells=route_cells,
+        vertical_gap_seeds=vertical_gap_seeds,
+        max_candidates_per_gate=max_candidates_per_gate,
+    )
+    if point_groups is None:
+        return None
+    groups: list[tuple[CubicVoxelKey, ...]] = []
+    for point_group in point_groups:
+        keys: list[CubicVoxelKey] = []
+        for seed in point_group:
+            try:
+                key = graph.world_key(seed)
+            except (TypeError, ValueError):
+                continue
+            if not graph.contains_key(key):
+                key, _distance_m = graph.nearest_key(
+                    seed,
+                    max_distance_m=graph.cell_diagonal_m + 1e-9,
+                )
+                if key is None:
+                    continue
+            if key not in keys:
+                keys.append(key)
+        if not keys:
+            return None
+        groups.append(tuple(keys))
+    return tuple(groups)
+
+
+def _surface_gap_waypoint_point_groups(
+    *,
+    route_cells: Sequence[FootprintCell],
+    vertical_gap_seeds: Mapping[FootprintCell, Sequence[Point]],
+    max_candidates_per_gate: int = DEFAULT_CUBIC_TERMINAL_CANDIDATE_LIMIT,
+) -> tuple[tuple[Point, ...], ...] | None:
+    """Return complete ordered surface-gap candidates for intermediate cells."""
+    ordered_cells: list[FootprintCell] = []
+    for cell in route_cells:
+        normalized = (int(cell[0]), int(cell[1]))
+        if not ordered_cells or normalized != ordered_cells[-1]:
+            ordered_cells.append(normalized)
+    if len(ordered_cells) < 2:
+        return None
+    if len(ordered_cells) == 2:
+        return ()
+    if not vertical_gap_seeds:
+        return None
+    candidate_limit = max(1, int(max_candidates_per_gate))
+    groups: list[tuple[Point, ...]] = []
+    for cell in ordered_cells[1:-1]:
+        candidates = tuple(
+            dict.fromkeys(vertical_gap_seeds.get(cell, ()))
+        )[:candidate_limit]
+        if not candidates:
+            return None
+        groups.append(candidates)
+    return tuple(groups)
+
+
+def _surface_gap_interval_route_key_groups(
+    graph: SparseCubicVoxelGraph,
+    *,
+    route_cells: Sequence[FootprintCell],
+    vertical_gap_intervals: Mapping[
+        FootprintCell,
+        Sequence[tuple[float, float]],
+    ],
+    footprint_cell_size_m: float,
+    max_candidates_per_gate: int = DEFAULT_CUBIC_TERMINAL_CANDIDATE_LIMIT,
+    max_vertical_transition_m: float = (
+        MAX_SURFACE_GAP_VERTICAL_TRANSITION_M
+    ),
+    source_point: Point | None = None,
+    source_max_distance_m: float | None = None,
+    terminal_point: Point | None = None,
+    terminal_max_horizontal_distance_m: float | None = None,
+    diagnostics: dict[str, object] | None = None,
+) -> tuple[tuple[CubicVoxelKey, ...], ...] | None:
+    """Map every ordered footprint cell to interval-backed free voxels.
+
+    A persisted vertical interval is surface evidence; its midpoint is only a
+    proposal.  The executable candidate is a free key in the already selected
+    cubic component whose center remains in the exact footprint cell and in a
+    bounded interval.  Keeping candidates from each interval preserves stacked
+    passages without allowing raw route Y to choose a layer.
+    """
+    details = diagnostics if diagnostics is not None else {}
+    ordered_cells: list[FootprintCell] = []
+    for raw_cell in route_cells:
+        cell = (int(raw_cell[0]), int(raw_cell[1]))
+        if not ordered_cells or cell != ordered_cells[-1]:
+            ordered_cells.append(cell)
+    try:
+        footprint_cell_size = float(footprint_cell_size_m)
+    except (TypeError, ValueError):
+        footprint_cell_size = 0.0
+    if (
+        not ordered_cells
+        or not math.isfinite(footprint_cell_size)
+        or footprint_cell_size <= 0.0
+    ):
+        details.update(
+            {
+                "surface_gap_gate_source": "bounded_surface_intervals_v1",
+                "surface_gap_gate_reason": "route_or_cell_size_missing",
+                "surface_gap_gate_count": 0,
+            }
+        )
+        return None
+
+    requested_source = (
+        _point_tuple(source_point) if source_point is not None else None
+    )
+    requested_terminal = (
+        _point_tuple(terminal_point) if terminal_point is not None else None
+    )
+    if (
+        (source_point is not None and requested_source is None)
+        or (terminal_point is not None and requested_terminal is None)
+    ):
+        details.update(
+            {
+                "surface_gap_gate_source": "bounded_surface_intervals_v1",
+                "surface_gap_gate_reason": "endpoint_evidence_malformed",
+                "surface_gap_gate_count": len(ordered_cells),
+            }
+        )
+        return None
+
+    def optional_distance_limit(value: float | None) -> float:
+        if value is None:
+            return math.inf
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return -1.0
+        return result if math.isfinite(result) and result >= 0.0 else -1.0
+
+    source_limit_m = optional_distance_limit(source_max_distance_m)
+    terminal_limit_m = optional_distance_limit(
+        terminal_max_horizontal_distance_m
+    )
+    if source_limit_m < 0.0 or terminal_limit_m < 0.0:
+        details.update(
+            {
+                "surface_gap_gate_source": "bounded_surface_intervals_v1",
+                "surface_gap_gate_reason": "endpoint_limit_malformed",
+                "surface_gap_gate_count": len(ordered_cells),
+            }
+        )
+        return None
+
+    normalized_intervals: dict[
+        FootprintCell,
+        tuple[tuple[float, float], ...],
+    ] = {}
+    missing_interval_indices: list[int] = []
+    missing_interval_cells: list[FootprintCell] = []
+    for index, cell in enumerate(ordered_cells):
+        intervals: list[tuple[float, float]] = []
+        for raw_interval in vertical_gap_intervals.get(cell, ()):
+            if len(raw_interval) != 2:
+                continue
+            try:
+                low_y, high_y = sorted(
+                    (float(raw_interval[0]), float(raw_interval[1]))
+                )
+            except (TypeError, ValueError):
+                continue
+            if (
+                math.isfinite(low_y)
+                and math.isfinite(high_y)
+                and high_y > low_y + 1e-9
+            ):
+                intervals.append((low_y, high_y))
+        normalized = tuple(sorted(dict.fromkeys(intervals)))
+        if not normalized:
+            missing_interval_indices.append(index)
+            missing_interval_cells.append(cell)
+            continue
+        normalized_intervals[cell] = normalized
+    if missing_interval_indices:
+        details.update(
+            {
+                "surface_gap_gate_source": "bounded_surface_intervals_v1",
+                "surface_gap_gate_reason": "bounded_intervals_missing",
+                "surface_gap_gate_count": len(ordered_cells),
+                "missing_surface_gap_gate_indices": missing_interval_indices,
+                "missing_surface_gap_gate_cells": [
+                    [int(value) for value in cell]
+                    for cell in missing_interval_cells
+                ],
+            }
+        )
+        return None
+
+    candidate_limit = max(1, int(max_candidates_per_gate))
+    # Each interval retains a bounded local shortlist.  The final per-cell
+    # merge first takes one candidate per interval, then fills the remaining
+    # allowance by safety rank.  Memory is therefore independent of component
+    # voxel count while vertically distinct passages remain represented.
+    interval_heaps: dict[
+        FootprintCell,
+        list[
+            list[
+                tuple[
+                    tuple[float, float, int, int, int],
+                    tuple[float, float, CubicVoxelKey],
+                    CubicVoxelKey,
+                ]
+            ]
+        ],
+    ] = {
+        cell: [[] for _interval in intervals]
+        for cell, intervals in normalized_intervals.items()
+    }
+    try:
+        transition_limit_m = float(max_vertical_transition_m)
+    except (TypeError, ValueError):
+        transition_limit_m = 0.0
+    if not math.isfinite(transition_limit_m) or transition_limit_m < 0.0:
+        transition_limit_m = 0.0
+
+    def interval_gap_m(
+        first: tuple[float, float],
+        second: tuple[float, float],
+    ) -> float:
+        if first[1] < second[0]:
+            return float(second[0] - first[1])
+        if second[1] < first[0]:
+            return float(first[0] - second[1])
+        return 0.0
+
+    # A transition candidate is tied to one interval in the current cell and
+    # one continuity-compatible interval in one adjacent route cell.  Never
+    # collapse every stacked interval in three cells into one min/max slab:
+    # that can silently jump to an unrelated cave level.
+    transition_envelopes: dict[
+        FootprintCell,
+        tuple[tuple[float, float, float, float], ...],
+    ] = {}
+    for index, cell in enumerate(ordered_cells):
+        envelopes: set[tuple[float, float, float, float]] = set()
+        for neighbor_index in (index - 1, index + 1):
+            if not 0 <= neighbor_index < len(ordered_cells):
+                continue
+            neighbor_cell = ordered_cells[neighbor_index]
+            step_limit_m = transition_limit_m * max(
+                1.0,
+                footprint_cell_distance(cell, neighbor_cell),
+            )
+            for own_interval in normalized_intervals[cell]:
+                for neighbor_interval in normalized_intervals[neighbor_cell]:
+                    if (
+                        interval_gap_m(own_interval, neighbor_interval)
+                        > step_limit_m + 1e-9
+                    ):
+                        continue
+                    envelopes.add(
+                        (
+                            min(own_interval[0], neighbor_interval[0]),
+                            max(own_interval[1], neighbor_interval[1]),
+                            own_interval[0],
+                            own_interval[1],
+                        )
+                    )
+        transition_envelopes[cell] = tuple(sorted(envelopes))
+    fallback_heaps: dict[
+        FootprintCell,
+        list[
+            tuple[
+                tuple[float, float, int, int, int],
+                tuple[float, float, CubicVoxelKey],
+                CubicVoxelKey,
+            ]
+        ],
+    ] = {cell: [] for cell in ordered_cells}
+    admitted_counts = {cell: 0 for cell in ordered_cells}
+    transition_counts = {cell: 0 for cell in ordered_cells}
+    vertical_margin_m = float(graph.vertical_voxel_size_m) * 0.5 + 1e-9
+    route_index_by_cell = {
+        cell: index for index, cell in enumerate(ordered_cells)
+    }
+    for key in graph.iter_keys():
+        center = graph.voxel_center(key)
+        cell = (
+            math.floor(center[0] / footprint_cell_size),
+            math.floor(center[2] / footprint_cell_size),
+        )
+        intervals = normalized_intervals.get(cell)
+        if intervals is None:
+            continue
+        matched = False
+        horizontal_center = footprint_world_center(cell, footprint_cell_size)
+        horizontal_distance_squared = (
+            (float(center[0]) - float(horizontal_center[0])) ** 2
+            + (float(center[2]) - float(horizontal_center[1])) ** 2
+        )
+        for interval_index, (low_y, high_y) in enumerate(intervals):
+            if not (
+                low_y - vertical_margin_m
+                <= float(center[1])
+                <= high_y + vertical_margin_m
+            ):
+                continue
+            matched = True
+            interior_margin_m = min(
+                float(center[1]) - low_y,
+                high_y - float(center[1]),
+            )
+            route_index = route_index_by_cell[cell]
+            if route_index == 0 and requested_source is not None:
+                source_distance_m = math.dist(requested_source, center)
+                if source_distance_m > source_limit_m + 1e-9:
+                    continue
+                rank = (
+                    float(source_distance_m),
+                    -float(interior_margin_m),
+                    key,
+                )
+            elif (
+                route_index == len(ordered_cells) - 1
+                and requested_terminal is not None
+            ):
+                terminal_distance_m = _horizontal_point_distance_m(
+                    requested_terminal,
+                    center,
+                )
+                if terminal_distance_m > terminal_limit_m + 1e-9:
+                    continue
+                rank = (
+                    float(terminal_distance_m),
+                    -float(interior_margin_m),
+                    key,
+                )
+            else:
+                rank = (
+                    -float(interior_margin_m),
+                    float(horizontal_distance_squared),
+                    key,
+                )
+            # The inverse token makes heap[0] the worst retained rank.
+            inverse = (
+                -float(rank[0]),
+                -float(rank[1]),
+                -int(key[0]),
+                -int(key[1]),
+                -int(key[2]),
+            )
+            entry = (inverse, rank, key)
+            heap = interval_heaps[cell][interval_index]
+            if len(heap) < candidate_limit:
+                heapq.heappush(heap, entry)
+            elif rank < heap[0][1]:
+                heapq.heapreplace(heap, entry)
+        if matched:
+            admitted_counts[cell] += 1
+        matching_envelopes = tuple(
+            envelope
+            for envelope in transition_envelopes[cell]
+            if (
+                envelope[0] - vertical_margin_m
+                <= float(center[1])
+                <= envelope[1] + vertical_margin_m
+            )
+        )
+        if matching_envelopes:
+            vertical_evidence_distance_m = min(
+                0.0
+                if own_low_y - vertical_margin_m
+                <= float(center[1])
+                <= own_high_y + vertical_margin_m
+                else min(
+                    abs(float(center[1]) - own_low_y),
+                    abs(float(center[1]) - own_high_y),
+                )
+                for (
+                    _transition_low_y,
+                    _transition_high_y,
+                    own_low_y,
+                    own_high_y,
+                ) in matching_envelopes
+            )
+            fallback_rank = (
+                float(vertical_evidence_distance_m),
+                float(horizontal_distance_squared),
+                key,
+            )
+            fallback_inverse = (
+                -float(vertical_evidence_distance_m),
+                -float(horizontal_distance_squared),
+                -int(key[0]),
+                -int(key[1]),
+                -int(key[2]),
+            )
+            fallback_entry = (fallback_inverse, fallback_rank, key)
+            fallback_heap = fallback_heaps[cell]
+            if len(fallback_heap) < candidate_limit:
+                heapq.heappush(fallback_heap, fallback_entry)
+            elif fallback_rank < fallback_heap[0][1]:
+                heapq.heapreplace(fallback_heap, fallback_entry)
+            transition_counts[cell] += 1
+
+    groups: list[tuple[CubicVoxelKey, ...]] = []
+    missing_key_indices: list[int] = []
+    missing_key_cells: list[FootprintCell] = []
+    transition_fallback_indices: list[int] = []
+    transition_fallback_cells: list[FootprintCell] = []
+    selected_counts: list[int] = []
+    for index, cell in enumerate(ordered_cells):
+        per_interval = [
+            sorted(
+                ((entry[1], entry[2]) for entry in heap),
+                key=lambda item: item[0],
+            )
+            for heap in interval_heaps[cell]
+            if heap
+        ]
+        if not per_interval:
+            # Start and terminal must remain directly interval-backed.  An
+            # intermediate coarse footprint cell may instead use selected
+            # component voxels inside a pairwise, continuity-compatible
+            # surface transition envelope. This handles a steep passage or
+            # sparse OBJ column without opening the whole map Y range,
+            # combining stacked layers, or consulting route-derived height.
+            if 0 < index < len(ordered_cells) - 1 and fallback_heaps[cell]:
+                fallback_values = sorted(
+                    (
+                        (entry[1], entry[2])
+                        for entry in fallback_heaps[cell]
+                    ),
+                    key=lambda item: item[0],
+                )
+                group = tuple(key for _rank, key in fallback_values)
+                groups.append(group)
+                selected_counts.append(len(group))
+                transition_fallback_indices.append(index)
+                transition_fallback_cells.append(cell)
+                continue
+            missing_key_indices.append(index)
+            missing_key_cells.append(cell)
+            groups.append(())
+            selected_counts.append(0)
+            continue
+        selected: list[CubicVoxelKey] = []
+        selected_set: set[CubicVoxelKey] = set()
+        # Preserve at least one candidate from every represented interval when
+        # the configured gate allowance permits it.
+        first_candidates = sorted(
+            (values[0] for values in per_interval),
+            key=lambda item: item[0],
+        )
+        for _rank, key in first_candidates:
+            if key in selected_set:
+                continue
+            selected.append(key)
+            selected_set.add(key)
+            if len(selected) >= candidate_limit:
+                break
+        if len(selected) < candidate_limit:
+            remaining = sorted(
+                (
+                    item
+                    for values in per_interval
+                    for item in values[1:]
+                    if item[1] not in selected_set
+                ),
+                key=lambda item: item[0],
+            )
+            for _rank, key in remaining:
+                if key in selected_set:
+                    continue
+                selected.append(key)
+                selected_set.add(key)
+                if len(selected) >= candidate_limit:
+                    break
+        group = tuple(selected)
+        groups.append(group)
+        selected_counts.append(len(group))
+
+    details.update(
+        {
+            "surface_gap_gate_source": (
+                "source_layer_pairwise_surface_intervals_v3"
+            ),
+            "surface_gap_gate_reason": (
+                "component_candidates_missing"
+                if missing_key_indices
+                else "complete_with_pairwise_transition_bridge"
+                if transition_fallback_indices
+                else "complete"
+            ),
+            "surface_gap_gate_count": len(ordered_cells),
+            "surface_gap_gate_candidate_limit": int(candidate_limit),
+            "surface_gap_gate_candidate_count_min": min(
+                selected_counts,
+                default=0,
+            ),
+            "surface_gap_gate_candidate_count_max": max(
+                selected_counts,
+                default=0,
+            ),
+            "surface_gap_gate_truncated_count": sum(
+                max(
+                    int(admitted_counts[cell]),
+                    int(transition_counts[cell]),
+                )
+                > int(selected_counts[index])
+                for index, cell in enumerate(ordered_cells)
+            ),
+            "surface_gap_transition_fallback_indices": (
+                transition_fallback_indices
+            ),
+            "surface_gap_transition_fallback_cells": [
+                [int(value) for value in cell]
+                for cell in transition_fallback_cells
+            ],
+            "surface_gap_max_vertical_transition_m": float(
+                transition_limit_m
+            ),
+            "missing_surface_gap_gate_indices": missing_key_indices,
+            "missing_surface_gap_gate_cells": [
+                [int(value) for value in cell]
+                for cell in missing_key_cells
+            ],
+        }
+    )
+    if missing_key_indices:
+        return None
+    return tuple(groups)
+
+
+def _surface_gap_interval_terminal_keys(
+    graph: SparseCubicVoxelGraph,
+    *,
+    terminal_cell: FootprintCell,
+    vertical_gap_intervals: Mapping[
+        FootprintCell,
+        Sequence[tuple[float, float]],
+    ],
+    footprint_cell_size_m: float,
+    terminal_point: Point | None = None,
+    max_horizontal_distance_m: float | None = None,
+) -> tuple[CubicVoxelKey, ...]:
+    """Return every bounded interval-backed endpoint-component seed.
+
+    This list is component-discovery evidence and must not be truncated by
+    proximity before connectivity is known. Candidate bounding belongs to
+    ``_surface_gap_interval_route_key_groups`` after one source-connected
+    component has been selected.
+    """
+    try:
+        footprint_cell_size = float(footprint_cell_size_m)
+    except (TypeError, ValueError):
+        return ()
+    intervals = tuple(vertical_gap_intervals.get(terminal_cell, ()))
+    if (
+        not intervals
+        or not math.isfinite(footprint_cell_size)
+        or footprint_cell_size <= 0.0
+    ):
+        return ()
+    normalized_intervals = tuple(
+        sorted(
+            {
+                tuple(sorted((float(interval[0]), float(interval[1]))))
+                for interval in intervals
+                if len(interval) == 2
+                and all(math.isfinite(float(value)) for value in interval)
+                and abs(float(interval[1]) - float(interval[0])) > 1e-9
+            }
+        )
+    )
+    if not normalized_intervals:
+        return ()
+    requested_terminal = (
+        _point_tuple(terminal_point) if terminal_point is not None else None
+    )
+    if terminal_point is not None and requested_terminal is None:
+        return ()
+    if max_horizontal_distance_m is None:
+        horizontal_limit_m = math.inf
+    else:
+        try:
+            horizontal_limit_m = float(max_horizontal_distance_m)
+        except (TypeError, ValueError):
+            return ()
+        if not math.isfinite(horizontal_limit_m) or horizontal_limit_m < 0.0:
+            return ()
+    cell_center = footprint_world_center(terminal_cell, footprint_cell_size)
+    vertical_margin_m = float(graph.vertical_voxel_size_m) * 0.5 + 1e-9
+    ranked: list[
+        tuple[
+            tuple[float, float, float, CubicVoxelKey],
+            CubicVoxelKey,
+        ]
+    ] = []
+    for key in graph.iter_keys():
+        center = graph.voxel_center(key)
+        cell = (
+            math.floor(center[0] / footprint_cell_size),
+            math.floor(center[2] / footprint_cell_size),
+        )
+        if cell != terminal_cell:
+            continue
+        margins = tuple(
+            min(float(center[1]) - low_y, high_y - float(center[1]))
+            for low_y, high_y in normalized_intervals
+            if (
+                low_y - vertical_margin_m
+                <= float(center[1])
+                <= high_y + vertical_margin_m
+            )
+        )
+        if not margins:
+            continue
+        endpoint_distance_m = (
+            _horizontal_point_distance_m(requested_terminal, center)
+            if requested_terminal is not None
+            else 0.0
+        )
+        if endpoint_distance_m > horizontal_limit_m + 1e-9:
+            continue
+        horizontal_distance_squared = (
+            (float(center[0]) - float(cell_center[0])) ** 2
+            + (float(center[2]) - float(cell_center[1])) ** 2
+        )
+        ranked.append(
+            (
+                (
+                    float(endpoint_distance_m),
+                    -float(max(margins)),
+                    float(horizontal_distance_squared),
+                    key,
+                ),
+                key,
+            )
+        )
+    return tuple(
+        key
+        for _rank, key in sorted(ranked, key=lambda item: item[0])
+    )
+
+
+def _component_vertical_gap_intervals(
+    value: object,
+    *,
+    component_cells: set[FootprintCell],
+) -> dict[FootprintCell, tuple[tuple[float, float], ...]]:
+    """Parse bounded, surface-derived vertical-gap intervals.
+
+    Each compact quadruple contains one footprint cell followed by the lower
+    and upper Y boundaries of a bounded interval.  Any malformed entry makes
+    the complete payload unusable so strict OBJ ingress cannot silently fall
+    back to route-derived height evidence.
+    """
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return {}
+    if len(value) % 4 != 0:
+        return {}
+    parsed: dict[FootprintCell, list[tuple[float, float]]] = {}
+    for index in range(0, len(value), 4):
+        raw_x, raw_z, raw_low_y, raw_high_y = value[index : index + 4]
+        if (
+            type(raw_x) is not int
+            or type(raw_z) is not int
+            or type(raw_low_y) not in (int, float)
+            or type(raw_high_y) not in (int, float)
+        ):
+            return {}
+        cell = (int(raw_x), int(raw_z))
+        low_y, high_y = sorted((float(raw_low_y), float(raw_high_y)))
+        if (
+            cell not in component_cells
+            or not math.isfinite(low_y)
+            or not math.isfinite(high_y)
+            or high_y <= low_y + 1e-9
+        ):
+            return {}
+        parsed.setdefault(cell, []).append((low_y, high_y))
+    return {
+        cell: tuple(sorted(dict.fromkeys(intervals)))
+        for cell, intervals in parsed.items()
+        if intervals
+    }
+
+
+def _source_connected_vertical_gap_layer(
+    intervals_by_cell: Mapping[
+        FootprintCell,
+        Sequence[tuple[float, float]],
+    ],
+    *,
+    route_cells: Sequence[FootprintCell],
+    eligible_cells: set[FootprintCell],
+    source_ingress_anchor: Point,
+    cell_size: float,
+    max_attachment_distance_m: float,
+    max_vertical_transition_m: float,
+) -> tuple[
+    dict[FootprintCell, tuple[Point, ...]],
+    dict[FootprintCell, tuple[float, float]],
+]:
+    """Select a complete surface-gap chain attached to OBJ vertex zero.
+
+    Imported route points contribute only their ordered X/Z footprint cells;
+    their Y coordinates are not an input.  Dynamic programming first chooses
+    one bounded interval for every ordered route cell, starting with an
+    interval whose closest point is within the immutable OBJ attachment cap.
+    A multi-source interval-graph traversal then extends that proven layer to
+    neighboring corridor cells. Missing or discontinuous evidence is omitted,
+    never replaced by a route/global midpoint. Exact fixed-voxel and cached-
+    mesh connectivity remains the final execution authority.
+    """
+    allowed = set(eligible_cells) & set(intervals_by_cell)
+    ordered_route_cells = tuple(route_cells)
+    if not allowed or not ordered_route_cells:
+        return {}, {}
+    if any(cell not in eligible_cells for cell in ordered_route_cells):
+        return {}, {}
+    if any(cell not in intervals_by_cell for cell in ordered_route_cells):
+        return {}, {}
+
+    source_cell = (
+        math.floor(float(source_ingress_anchor[0]) / float(cell_size)),
+        math.floor(float(source_ingress_anchor[2]) / float(cell_size)),
+    )
+    if (
+        source_cell in allowed
+        and source_cell != ordered_route_cells[0]
+    ):
+        ordered_route_cells = (source_cell, *ordered_route_cells)
+
+    intervals = {
+        cell: tuple(
+            sorted(
+                {
+                    tuple(sorted((float(value[0]), float(value[1]))))
+                    for value in intervals_by_cell[cell]
+                    if len(value) == 2
+                    and all(math.isfinite(float(item)) for item in value)
+                    and abs(float(value[1]) - float(value[0])) > 1e-9
+                }
+            )
+        )
+        for cell in allowed
+    }
+    if any(not intervals.get(cell) for cell in ordered_route_cells):
+        return {}, {}
+
+    attachment_limit = max(0.0, float(max_attachment_distance_m))
+    transition_limit = max(0.0, float(max_vertical_transition_m))
+
+    def interval_gap(
+        first: tuple[float, float],
+        second: tuple[float, float],
+    ) -> float:
+        if first[1] < second[0]:
+            return float(second[0] - first[1])
+        if second[1] < first[0]:
+            return float(first[0] - second[1])
+        return 0.0
+
+    def interval_midpoint(value: tuple[float, float]) -> float:
+        return (float(value[0]) + float(value[1])) * 0.5
+
+    first_cell = ordered_route_cells[0]
+    first_x, first_z = footprint_world_center(first_cell, cell_size)
+    states: dict[
+        int,
+        tuple[tuple[float, float, float, float], tuple[int, ...]],
+    ] = {}
+    for candidate_index, candidate in enumerate(intervals[first_cell]):
+        closest_y = min(
+            max(float(source_ingress_anchor[1]), candidate[0]),
+            candidate[1],
+        )
+        attachment_distance = math.dist(
+            source_ingress_anchor,
+            (float(first_x), float(closest_y), float(first_z)),
+        )
+        if attachment_distance > attachment_limit + 1e-9:
+            continue
+        states[candidate_index] = (
+            (float(attachment_distance), 0.0, 0.0, 0.0),
+            (candidate_index,),
+        )
+    if not states:
+        return {}, {}
+
+    previous_cell = first_cell
+    for cell in ordered_route_cells[1:]:
+        next_states: dict[
+            int,
+            tuple[tuple[float, float, float, float], tuple[int, ...]],
+        ] = {}
+        step_scale = max(
+            1.0,
+            footprint_cell_distance(previous_cell, cell),
+        )
+        maximum_gap = transition_limit * step_scale
+        for candidate_index, candidate in enumerate(intervals[cell]):
+            best: tuple[
+                tuple[float, float, float, float],
+                tuple[int, ...],
+            ] | None = None
+            for previous_index, (rank, path) in states.items():
+                previous_interval = intervals[previous_cell][previous_index]
+                gap = interval_gap(previous_interval, candidate)
+                if gap > maximum_gap + 1e-9:
+                    continue
+                midpoint_change = abs(
+                    interval_midpoint(candidate)
+                    - interval_midpoint(previous_interval)
+                )
+                candidate_rank = (
+                    rank[0],
+                    max(rank[1], float(gap)),
+                    rank[2] + float(gap),
+                    rank[3] + float(midpoint_change),
+                )
+                candidate_value = (
+                    candidate_rank,
+                    (*path, candidate_index),
+                )
+                if best is None or candidate_value < best:
+                    best = candidate_value
+            if best is not None:
+                next_states[candidate_index] = best
+        if not next_states:
+            return {}, {}
+        states = next_states
+        previous_cell = cell
+
+    _rank, selected_path = min(states.values())
+    route_selected: dict[
+        FootprintCell,
+        set[tuple[float, float]],
+    ] = {}
+    for cell, candidate_index in zip(
+        ordered_route_cells,
+        selected_path,
+        strict=True,
+    ):
+        route_selected.setdefault(cell, set()).add(
+            intervals[cell][candidate_index]
+        )
+
+    # Extend only through candidate intervals connected to the chosen route
+    # chain. This prevents an independent midpoint in every component cell
+    # from seeding a stacked passage or rock layer.
+    distances: dict[
+        tuple[FootprintCell, int],
+        tuple[float, float],
+    ] = {}
+    frontier: list[
+        tuple[float, float, FootprintCell, int]
+    ] = []
+    for cell, selected_intervals in route_selected.items():
+        for selected_interval in selected_intervals:
+            candidate_index = intervals[cell].index(selected_interval)
+            key = (cell, candidate_index)
+            distances[key] = (0.0, 0.0)
+            heapq.heappush(frontier, (0.0, 0.0, cell, candidate_index))
+
+    while frontier:
+        distance_m, accumulated_gap, cell, candidate_index = heapq.heappop(
+            frontier
+        )
+        key = (cell, candidate_index)
+        if (distance_m, accumulated_gap) != distances.get(key):
+            continue
+        candidate = intervals[cell][candidate_index]
+        for neighbor in navigable_footprint_neighbors(cell, allowed):
+            horizontal_step = (
+                footprint_cell_distance(cell, neighbor) * float(cell_size)
+            )
+            maximum_gap = transition_limit * max(
+                1.0,
+                footprint_cell_distance(cell, neighbor),
+            )
+            for neighbor_index, neighbor_interval in enumerate(
+                intervals[neighbor]
+            ):
+                gap = interval_gap(candidate, neighbor_interval)
+                if gap > maximum_gap + 1e-9:
+                    continue
+                next_rank = (
+                    distance_m + horizontal_step + float(gap),
+                    accumulated_gap + float(gap),
+                )
+                neighbor_key = (neighbor, neighbor_index)
+                if next_rank >= distances.get(
+                    neighbor_key,
+                    (math.inf, math.inf),
+                ):
+                    continue
+                distances[neighbor_key] = next_rank
+                heapq.heappush(
+                    frontier,
+                    (*next_rank, neighbor, neighbor_index),
+                )
+
+    selected_intervals_by_cell: dict[
+        FootprintCell,
+        tuple[tuple[float, float], ...],
+    ] = {}
+    for cell in sorted(allowed):
+        forced = route_selected.get(cell)
+        if forced:
+            selected_intervals_by_cell[cell] = tuple(sorted(forced))
+            continue
+        candidates = tuple(
+            (distances[(cell, index)], index)
+            for index in range(len(intervals[cell]))
+            if (cell, index) in distances
+        )
+        if not candidates:
+            continue
+        _candidate_rank, candidate_index = min(candidates)
+        selected_intervals_by_cell[cell] = (
+            intervals[cell][candidate_index],
+        )
+
+    seed_points: dict[FootprintCell, tuple[Point, ...]] = {}
+    y_ranges: dict[FootprintCell, tuple[float, float]] = {}
+    for cell, selected_intervals in selected_intervals_by_cell.items():
+        x, z = footprint_world_center(cell, cell_size)
+        seed_points[cell] = tuple(
+            (float(x), interval_midpoint(value), float(z))
+            for value in selected_intervals
+        )
+        y_ranges[cell] = (
+            min(value[0] for value in selected_intervals),
+            max(value[1] for value in selected_intervals),
+        )
+    return seed_points, y_ranges
+
+
+def _route_transition_sampling_y_ranges(
+    selected_ranges: Mapping[FootprintCell, tuple[float, float]],
+    *,
+    route_cells: Sequence[FootprintCell],
+) -> dict[FootprintCell, tuple[float, float]]:
+    """Add bounded surface-derived support for steep route transitions.
+
+    ``selected_ranges`` remains the immutable gap-layer proposal used for
+    entrance attachment.  A coarse footprint step can nevertheless climb
+    farther than one 0.25 m execution voxel.  For rasterization only, widen
+    both non-entrance cells touched by the specific interval pair. A diagonal
+    footprint step also widens every available cardinal support cell so the
+    later six-connected voxel proof has physical intermediate cells.
+
+    No imported route height participates.  Surface occupancy, one global
+    source-to-terminal component, and exact cached-mesh checks still decide
+    whether any proposed transition is executable.
+    """
+    original = {
+        cell: tuple(sorted((float(value[0]), float(value[1]))))
+        for cell, value in selected_ranges.items()
+        if len(value) == 2
+        and all(math.isfinite(float(item)) for item in value)
+        and abs(float(value[1]) - float(value[0])) > 1e-9
+    }
+    ordered = tuple(route_cells)
+    if not original or not ordered or any(cell not in original for cell in ordered):
+        return {}
+    expanded = dict(original)
+    source_cell = ordered[0]
+
+    def widen(cell: FootprintCell, low_y: float, high_y: float) -> None:
+        if cell == source_cell:
+            return
+        existing = expanded[cell]
+        expanded[cell] = (
+            min(float(existing[0]), float(low_y)),
+            max(float(existing[1]), float(high_y)),
+        )
+
+    for previous, current in zip(ordered[:-1], ordered[1:], strict=True):
+        delta_x = int(current[0]) - int(previous[0])
+        delta_z = int(current[1]) - int(previous[1])
+        if delta_x == 0 and delta_z == 0:
+            continue
+        if max(abs(delta_x), abs(delta_z)) != 1:
+            return {}
+        previous_range = original[previous]
+        current_range = original[current]
+        bridge_low = min(previous_range[0], current_range[0])
+        bridge_high = max(previous_range[1], current_range[1])
+        widen(previous, bridge_low, bridge_high)
+        widen(current, bridge_low, bridge_high)
+        if delta_x == 0 or delta_z == 0:
+            continue
+        supports = tuple(
+            cell
+            for cell in (
+                (previous[0], current[1]),
+                (current[0], previous[1]),
+            )
+            if cell in original
+        )
+        if not supports:
+            return {}
+        for support in supports:
+            widen(support, bridge_low, bridge_high)
+    # A later crossing must never broaden the immutable entrance evidence.
+    expanded[source_cell] = original[source_cell]
+    return expanded
+
+
 def _fallback_y_range(
     manifest: Mapping[str, object],
-    points: Sequence[Point],
 ) -> tuple[float, float]:
-    values = [float(point[1]) for point in points]
+    """Return mesh chunk Y bounds without consulting imported route Y."""
+    values: list[float] = []
     chunks = manifest.get("chunks")
     if isinstance(chunks, Mapping):
         for info in chunks.values():
@@ -7286,26 +12086,544 @@ def _select_recommended_route_id(
         for route in routes
         if isinstance(route, Mapping) and route.get("id") is not None
     } if isinstance(routes, Sequence) and not isinstance(routes, (str, bytes)) else {}
-    navigation_start = navigation_metadata.get("navigation_start")
-    if navigation_start is not None:
-        start_built = [
+    if _uses_imported_navigation_start_anchor(navigation_metadata):
+        source_anchor = _imported_navigation_start_anchor(
+            navigation_metadata
+        )
+        assert source_anchor is not None
+        certified_non_circular = [
             item
             for item in built
-            if bool(route_by_id.get(item[0], {}).get("starts_at_navigation_start"))
+            if _is_exact_source_anchor_route(
+                route_by_id.get(item[0]),
+                item[1],
+                source_anchor=source_anchor,
+            )
         ]
-        if start_built:
-            built = start_built
-        else:
+        if not certified_non_circular:
             return None
-    return max(
-        built,
-        key=lambda item: (
-            float(item[1].get("available_volume_m3", 0.0)),
-            float(item[1].get("volume_per_route_m", 0.0)),
-            float(route_by_id.get(item[0], {}).get("length_m", 0.0)),
-            item[0],
+        selected = min(
+            certified_non_circular,
+            key=_longest_safe_route_rank,
+        )[0]
+        return (
+            None
+            if _longer_unresolved_route_reason(
+                navigation_metadata,
+                summaries,
+                selected_route_id=selected,
+                require_navigation_start=False,
+                require_source_anchor=True,
+            ) is not None
+            else selected
+        )
+    if _uses_navigation_start(navigation_metadata):
+        navigation_start = _navigation_start_position(navigation_metadata)
+        assert navigation_start is not None
+        certified_non_circular = [
+            item
+            for item in built
+            if _is_exact_navigation_start_route(
+                route_by_id.get(item[0]),
+                item[1],
+                source_start=navigation_start,
+            )
+        ]
+        if not certified_non_circular:
+            return None
+        selected = min(
+            certified_non_circular,
+            key=_longest_safe_route_rank,
+        )[0]
+        return (
+            None
+            if _longer_unresolved_route_reason(
+                navigation_metadata,
+                summaries,
+                selected_route_id=selected,
+                require_navigation_start=True,
+                require_source_anchor=False,
+            ) is not None
+            else selected
+        )
+    certified_non_circular = [
+        item
+        for item in built
+        if route_by_id.get(item[0], {}).get("closed_loop") is False
+    ]
+    if not certified_non_circular:
+        return None
+    selected = min(certified_non_circular, key=_longest_safe_route_rank)[0]
+    return (
+        None
+        if _longer_unresolved_route_reason(
+            navigation_metadata,
+            summaries,
+            selected_route_id=selected,
+            require_navigation_start=False,
+            require_source_anchor=False,
+        ) is not None
+        else selected
+    )
+
+
+def _longer_unresolved_route_reason(
+    navigation_metadata: Mapping[str, object],
+    summaries: Mapping[str, Mapping[str, object]],
+    *,
+    selected_route_id: str,
+    require_navigation_start: bool,
+    require_source_anchor: bool,
+) -> str | None:
+    """Explain why a longer candidate prevents a short recommendation.
+
+    Exhausting a bounded exact-search budget is not evidence that a route is
+    unsafe. Treating it as such recreated the historical short-dive failure:
+    a 143 m route displaced a source-connected multi-kilometre candidate whose
+    roadmap merely hit its node cap. Missing ordered surface-gap evidence is
+    likewise an unresolved cache proof. A conclusively rejected mesh route
+    may still yield to the longest route that did certify.
+    """
+    routes = navigation_metadata.get("routes")
+    if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
+        return None
+    route_by_id = {
+        str(route.get("id")): route
+        for route in routes
+        if isinstance(route, Mapping) and route.get("id") is not None
+    }
+    selected_route = route_by_id.get(str(selected_route_id))
+    selected_summary = summaries.get(str(selected_route_id), {})
+    selected_length_m = _route_candidate_length_m(
+        selected_route,
+        selected_summary,
+    )
+    for route_id, summary in summaries.items():
+        if str(route_id) == str(selected_route_id):
+            continue
+        route = route_by_id.get(str(route_id))
+        if route is None or route.get("closed_loop") is not False:
+            continue
+        if (
+            require_navigation_start
+            and route.get("starts_at_navigation_start") is not True
+        ):
+            continue
+        if (
+            require_source_anchor
+            and route.get("starts_at_navigation_start_anchor") is not True
+        ):
+            continue
+        candidate_length_m = _route_candidate_length_m(route, summary)
+        if candidate_length_m <= selected_length_m + 1e-6:
+            continue
+        if _route_exact_search_capacity_limited(summary):
+            return "longer_route_search_capacity_limited"
+        if _route_exact_search_evidence_missing(summary):
+            return "longer_route_ordering_evidence_missing"
+    return None
+
+
+def _route_candidate_length_m(
+    route: Mapping[str, object] | None,
+    summary: Mapping[str, object],
+) -> float:
+    """Return a finite source-span estimate for unresolved-route ordering."""
+    candidates: list[float] = []
+    for source, field_name in (
+        (route, "length_m"),
+        (summary, "certified_route_length_m"),
+        (summary, "route_length_m"),
+    ):
+        if source is None:
+            continue
+        try:
+            value = float(source.get(field_name, 0.0))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and value > 0.0:
+            candidates.append(value)
+    return max(candidates, default=0.0)
+
+
+def _route_exact_search_capacity_limited(
+    summary: Mapping[str, object],
+) -> bool:
+    """Return whether the authoritative exact route search was unresolved."""
+    mesh_details = summary.get("prepared_mesh_graph")
+    if not isinstance(mesh_details, Mapping):
+        return False
+    if mesh_details.get("node_limit_reached") is True:
+        return True
+    reason = str(mesh_details.get("reason", "")).lower()
+    if "limit_reached" in reason or "capacity" in reason:
+        return True
+    direct_attempt = mesh_details.get("exact_cubic_spine_attempt")
+    if isinstance(direct_attempt, Mapping):
+        return _route_exact_search_capacity_limited(
+            {"prepared_mesh_graph": direct_attempt}
+        )
+    return False
+
+
+def _route_exact_search_evidence_missing(
+    summary: Mapping[str, object],
+) -> bool:
+    """Return whether a route failed because its ordered proof was absent."""
+    mesh_details = summary.get("prepared_mesh_graph")
+    if not isinstance(mesh_details, Mapping):
+        return True
+    reason = str(mesh_details.get("reason", "")).lower()
+    if any(
+        token in reason
+        for token in (
+            "surface_gap_waypoints_missing",
+            "waypoint_evidence_missing",
+            "spine_inputs_missing",
+        )
+    ):
+        return True
+    direct_attempt = mesh_details.get("exact_cubic_spine_attempt")
+    if isinstance(direct_attempt, Mapping):
+        return _route_exact_search_evidence_missing(
+            {"prepared_mesh_graph": direct_attempt}
+        )
+    return False
+
+
+def first_manifest_chunk_center_for_route_contract(
+    manifest_chunks: object,
+) -> Point | None:
+    """Return the minimum spatial chunk center without importing the builder."""
+    if not isinstance(manifest_chunks, Mapping) or not manifest_chunks:
+        return None
+    numeric_chunks: list[tuple[tuple[int, int, int], str, object]] = []
+    for raw_key, info in manifest_chunks.items():
+        parts = str(raw_key).replace(",", "_").split("_")
+        if len(parts) != 3:
+            continue
+        try:
+            cell = tuple(int(part) for part in parts)
+        except ValueError:
+            continue
+        numeric_chunks.append((cell, str(raw_key), info))
+    if numeric_chunks:
+        _cell, _key, info = min(
+            numeric_chunks,
+            key=lambda item: (item[0], item[1]),
+        )
+    else:
+        info = next(iter(manifest_chunks.values()))
+    if not isinstance(info, Mapping):
+        return None
+    minimum = _point_tuple(info.get("bounds_min"))
+    maximum = _point_tuple(info.get("bounds_max"))
+    if (
+        minimum is None
+        or maximum is None
+        or any(maximum[axis] < minimum[axis] for axis in range(3))
+    ):
+        return None
+    return tuple(
+        (minimum[axis] + maximum[axis]) * 0.5
+        for axis in range(3)
+    )  # type: ignore[return-value]
+
+
+def navigation_route_contract_rebuild_reason(
+    navigation_metadata: Mapping[str, object],
+    *,
+    manifest_chunks: object = None,
+) -> str | None:
+    """Return a cheap manifest-aware reason that route metadata is stale.
+
+    This does not replace full artifact certification. It prevents the viewer
+    from executing known-invalid V12 states before a user explicitly runs the
+    verifier: an unbound/mismatched entrance, malformed OBJ-order provenance,
+    a missing recommendation, or a short recommendation chosen while a longer
+    source-connected route's exact search was capacity-limited.
+    """
+    raw_start_present = "navigation_start" in navigation_metadata
+    declared_start = _navigation_start_position(navigation_metadata)
+    raw_anchor = navigation_metadata.get("navigation_start_anchor")
+    has_anchor = raw_anchor is not None
+    if raw_start_present and declared_start is None:
+        return "navigation_start_malformed"
+    if has_anchor and declared_start is not None:
+        return "navigation_start_policy_ambiguous"
+    inferred_start = first_manifest_chunk_center_for_route_contract(
+        manifest_chunks
+    )
+    if has_anchor:
+        try:
+            parsed_anchor = _imported_navigation_start_anchor(
+                navigation_metadata
+            )
+        except (TypeError, ValueError):
+            parsed_anchor = None
+        if parsed_anchor is None:
+            return "navigation_start_anchor_malformed"
+    elif declared_start is None:
+        return "navigation_start_missing"
+    else:
+        raw_start = navigation_metadata.get("navigation_start")
+        start_source = (
+            raw_start.get("source")
+            if isinstance(raw_start, Mapping)
+            else None
+        )
+        if start_source == "first_manifest_chunk_center_v1":
+            if inferred_start is None:
+                return "navigation_inferred_start_unavailable"
+            if any(
+                abs(declared_start[axis] - inferred_start[axis]) > 1e-6
+                for axis in range(3)
+            ):
+                return "navigation_inferred_start_mismatch"
+
+    if (
+        navigation_metadata.get("route_selection_method")
+        != NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR
+    ):
+        return "navigation_route_selection_method_invalid"
+    selected_route_id = navigation_metadata.get("recommended_route_id")
+    if not isinstance(selected_route_id, str) or not selected_route_id:
+        return "recommended_route_missing"
+    routes = navigation_metadata.get("routes")
+    if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
+        return "navigation_routes_missing"
+    summaries = {
+        str(route.get("id")): route["voxel_corridor"]
+        for route in routes
+        if isinstance(route, Mapping)
+        and route.get("id") is not None
+        and isinstance(route.get("voxel_corridor"), Mapping)
+    }
+    if selected_route_id not in summaries:
+        return "recommended_route_invalid"
+    unresolved_reason = _longer_unresolved_route_reason(
+        navigation_metadata,
+        summaries,
+        selected_route_id=selected_route_id,
+        require_navigation_start=_uses_navigation_start(navigation_metadata),
+        require_source_anchor=_uses_imported_navigation_start_anchor(
+            navigation_metadata
         ),
-    )[0]
+    )
+    if unresolved_reason is not None:
+        return unresolved_reason
+    return None
+
+
+def _uses_imported_navigation_start_anchor(
+    navigation_metadata: Mapping[str, object],
+) -> bool:
+    """Return whether strict OBJ-order route selection is requested."""
+    return _imported_navigation_start_anchor(navigation_metadata) is not None
+
+
+def _uses_navigation_start(
+    navigation_metadata: Mapping[str, object],
+) -> bool:
+    """Return whether a finite executable map start is requested."""
+    return _navigation_start_position(navigation_metadata) is not None
+
+
+def _is_exact_navigation_start_route(
+    route: Mapping[str, object] | None,
+    summary: Mapping[str, object],
+    *,
+    source_start: Point,
+) -> bool:
+    """Require an exact-safe non-circular route from the map start."""
+    return bool(
+        route is not None
+        and route.get("starts_at_navigation_start") is True
+        and isinstance(summary.get("prepared_mesh_graph"), Mapping)
+        and summary["prepared_mesh_graph"].get(
+            "source_ingress_connector_mesh_clear"
+        )
+        is True
+        and summary["prepared_mesh_graph"].get(
+            "source_ingress_connector_required"
+        )
+        is True
+        and summary["prepared_mesh_graph"].get(
+            "source_ingress_attachment_mode"
+        )
+        == "executable_authored_start_connector"
+        and _exact_ingress_attachment_matches(
+            route,
+            summary["prepared_mesh_graph"],
+            source_point=source_start,
+        )
+        and _is_exact_ingress_route(route, summary)
+    )
+
+
+def _is_exact_source_anchor_route(
+    route: Mapping[str, object] | None,
+    summary: Mapping[str, object],
+    *,
+    source_anchor: Point,
+) -> bool:
+    """Require a bounded exact ingress attachment and a non-circular path."""
+    if route is None:
+        return False
+    graph_details = summary.get("prepared_mesh_graph")
+    return bool(
+        isinstance(graph_details, Mapping)
+        and route.get("starts_at_navigation_start_anchor") is True
+        and graph_details.get("source_ingress_connector_required") is False
+        and graph_details.get("source_ingress_attachment_mode")
+        == "non_executable_obj_surface_anchor_snap"
+        and _exact_ingress_attachment_matches(
+            route,
+            graph_details,
+            source_point=source_anchor,
+        )
+        and _is_exact_ingress_route(route, summary)
+    )
+
+
+def _exact_ingress_attachment_matches(
+    route: Mapping[str, object],
+    graph_details: Mapping[str, object],
+    *,
+    source_point: Point,
+) -> bool:
+    """Match certified route start to its bounded source attachment proof."""
+    recorded_source = _point_tuple(graph_details.get("source_ingress_point"))
+    attachment = _point_tuple(
+        graph_details.get("source_ingress_attachment_point")
+    )
+    certified_start = _point_tuple(route.get("certified_start_position"))
+    try:
+        recorded_distance_m = float(
+            graph_details["source_ingress_attachment_distance_m"]
+        )
+        snap_limit_m = float(graph_details["source_ingress_snap_limit_m"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if (
+        graph_details.get("source_ingress_coordinate_space") != "xyz"
+        or recorded_source is None
+        or attachment is None
+        or certified_start is None
+    ):
+        return False
+    actual_distance_m = math.dist(source_point, attachment)
+    return bool(
+        np.allclose(recorded_source, source_point, rtol=0.0, atol=1e-6)
+        and np.allclose(attachment, certified_start, rtol=0.0, atol=1e-6)
+        and math.isfinite(recorded_distance_m)
+        and recorded_distance_m >= 0.0
+        and math.isfinite(snap_limit_m)
+        and snap_limit_m > 0.0
+        and snap_limit_m <= MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M + 1e-9
+        and actual_distance_m <= snap_limit_m + 1e-9
+        and abs(actual_distance_m - recorded_distance_m) <= 1e-6
+    )
+
+
+def _is_exact_ingress_route(
+    route: Mapping[str, object],
+    summary: Mapping[str, object],
+) -> bool:
+    """Return whether one open route has a bounded certified ingress."""
+    if route.get("closed_loop") is not False:
+        return False
+    graph_details = summary.get("prepared_mesh_graph")
+    if not isinstance(graph_details, Mapping):
+        return False
+    if graph_details.get("source_ingress_required") is not True:
+        return False
+    if _point_tuple(graph_details.get("source_ingress_attachment_point")) is None:
+        return False
+    try:
+        attachment_distance_m = float(
+            graph_details["source_ingress_attachment_distance_m"]
+        )
+        attachment_limit_m = float(
+            graph_details["source_ingress_snap_limit_m"]
+        )
+        route_length_m = float(summary["route_length_m"])
+        terminal_graph_distance_m = float(
+            graph_details["terminal_graph_distance_m"]
+        )
+        source_route_point_count = int(summary["source_route_point_count"])
+        certified_ingress_hint_index = int(
+            summary["certified_ingress_hint_index"]
+        )
+        certified_terminal_hint_index = int(
+            summary["certified_terminal_hint_index"]
+        )
+        selected_source_hint_start_index = int(
+            summary["selected_source_hint_start_index"]
+        )
+        selected_source_hint_end_index = int(
+            summary["selected_source_hint_end_index"]
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (
+        math.isfinite(attachment_distance_m)
+        and attachment_distance_m >= 0.0
+        and math.isfinite(attachment_limit_m)
+        and attachment_limit_m > 0.0
+        and attachment_limit_m
+        <= MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M + 1e-9
+        and attachment_distance_m <= attachment_limit_m + 1e-9
+        and math.isfinite(route_length_m)
+        and route_length_m > 0.0
+        and math.isfinite(terminal_graph_distance_m)
+        and terminal_graph_distance_m > 0.0
+        and source_route_point_count >= 2
+        and certified_ingress_hint_index == 0
+        and certified_terminal_hint_index == source_route_point_count - 1
+        and selected_source_hint_start_index == 0
+        and selected_source_hint_end_index == source_route_point_count - 1
+        and summary.get("complete_ingress_route") is True
+    )
+
+
+def _longest_safe_route_rank(
+    item: tuple[str, Mapping[str, object]],
+) -> tuple[float, float, float, float, float, str]:
+    """Rank exact-safe routes by length, then conservative comfort evidence."""
+    route_id, summary = item
+
+    def finite_metric(field_name: str) -> float:
+        try:
+            value = float(summary.get(field_name, 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, value) if math.isfinite(value) else 0.0
+
+    return (
+        -finite_metric("route_length_m"),
+        -finite_metric("min_clearance_m"),
+        -finite_metric("mean_clearance_m"),
+        -finite_metric("volume_per_route_m"),
+        -finite_metric("available_volume_m3"),
+        route_id,
+    )
+
+
+def _publish_selected_route_method(
+    navigation_metadata: Mapping[str, object],
+    *,
+    route_id: str,
+    selection_method: str,
+) -> None:
+    """Label only the route selected after exact certification."""
+    routes = navigation_metadata.get("routes")
+    if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
+        return
+    for route in routes:
+        if isinstance(route, dict) and str(route.get("id")) == route_id:
+            route["selection_method"] = selection_method
+            return
 
 
 def _supported_cache_identity(version: object, method: object) -> bool:
@@ -7315,6 +12633,14 @@ def _supported_cache_identity(version: object, method: object) -> bool:
         (
             _PREVIOUS_NAVIGATION_VOXEL_CACHE_VERSION,
             _PREVIOUS_NAVIGATION_VOXEL_CACHE_METHOD,
+        ),
+        (
+            _V10_NAVIGATION_VOXEL_CACHE_VERSION,
+            _V10_NAVIGATION_VOXEL_CACHE_METHOD,
+        ),
+        (
+            _V9_NAVIGATION_VOXEL_CACHE_VERSION,
+            _V9_NAVIGATION_VOXEL_CACHE_METHOD,
         ),
         (
             _OLDER_NAVIGATION_VOXEL_CACHE_VERSION,
@@ -7352,10 +12678,19 @@ def _empty_payload(config: NavigationVoxelCacheConfig) -> dict[str, object]:
         "version": NAVIGATION_VOXEL_CACHE_VERSION,
         "method": NAVIGATION_VOXEL_CACHE_METHOD,
         "voxel_size_m": float(config.voxel_size_m),
+        "vertical_voxel_size_m": float(config.vertical_voxel_size_m),
+        "voxel_cell_size_m": [
+            float(config.voxel_size_m),
+            float(config.vertical_voxel_size_m),
+            float(config.voxel_size_m),
+        ],
         "curvature_method": CURVATURE_PROFILE_METHOD,
         "tile_size_m": float(config.tile_size_m),
         "max_tiles": int(config.max_tiles),
         "fine_voxel_size_m": float(config.fine_voxel_size_m),
+        "fine_vertical_voxel_size_m": float(
+            config.fine_vertical_voxel_size_m
+        ),
         "fine_tile_radius_m": float(config.fine_tile_radius_m),
         "max_fine_tiles": int(config.max_fine_tiles),
         "max_fine_tile_cells": int(config.max_fine_tile_cells),
@@ -7386,10 +12721,24 @@ def _empty_payload(config: NavigationVoxelCacheConfig) -> dict[str, object]:
         "mesh_graph_entry_anchor_radius_m": float(
             config.mesh_graph_entry_anchor_radius_m
         ),
+        "route_corridor_radius_m": float(config.route_corridor_radius_m),
+        "cubic_component_max_voxels": int(
+            config.cubic_component_max_voxels
+        ),
         "mesh_navigation_graph_method": MESH_NAVIGATION_GRAPH_METHOD,
         "graph_routing_authority": "prepared_mesh_free_space_graph",
-        "cache_quality_profile": "mesh_roadmap_graph_native_v1",
-        "coverage_scope": "entire_cave_component",
+        "cache_quality_profile": "fixed_orthogonal_terminal_route_v1",
+        "coverage_scope": "certified_terminal_route",
+        "fixed_voxel_method": FIXED_ORTHOGONAL_VOXEL_METHOD,
+        "fixed_isotropic_voxel_size_m": float(config.voxel_size_m),
+        "fixed_vertical_voxel_size_m": float(config.vertical_voxel_size_m),
+        "fixed_voxel_cell_size_m": [
+            float(config.voxel_size_m),
+            float(config.vertical_voxel_size_m),
+            float(config.voxel_size_m),
+        ],
+        "surface_overlap_policy": "occupied_wins",
+        "sampling_complete_required": True,
         "navigation_graph_method": NAVIGATION_VOXEL_GRAPH_METHOD,
         "branch_lookahead_method": NAVIGATION_VOXEL_BRANCH_LOOKAHEAD_METHOD,
         "routes": {},
@@ -7399,6 +12748,76 @@ def _empty_payload(config: NavigationVoxelCacheConfig) -> dict[str, object]:
 def _route_id(route: Mapping[str, object], index: int) -> str:
     value = route.get("id")
     return str(value) if value is not None else f"centerline-{index}"
+
+
+def _imported_navigation_start_anchor(
+    navigation_metadata: Mapping[str, object],
+) -> Point | None:
+    """Return the non-executable OBJ ingress anchor for prototype caches."""
+    field_name = "navigation_start_anchor"
+    if field_name not in navigation_metadata:
+        return None
+    value = navigation_metadata[field_name]
+    if not isinstance(value, Mapping):
+        raise ValueError("OBJ navigation start anchor must be an object")
+    expected_fields = {
+        "position",
+        "kind",
+        "source",
+        "source_vertex_index",
+        "source_order",
+        "executable",
+        "attachment_required",
+        "attachment_coordinate_space",
+    }
+    if set(value) != expected_fields:
+        raise ValueError("OBJ navigation start anchor schema is malformed")
+    expected_strings = {
+        "kind": "obj_surface_vertex",
+        "source_order": "obj_declaration_order",
+        "attachment_coordinate_space": "xyz",
+    }
+    string_policy_valid = all(
+        type(value[field]) is str and value[field] == expected
+        for field, expected in expected_strings.items()
+    )
+    if (
+        not string_policy_valid
+        or value["executable"] is not False
+        or value["attachment_required"] is not True
+    ):
+        raise ValueError("OBJ navigation start anchor policy is malformed")
+    source = value["source"]
+    source_vertex_index = value["source_vertex_index"]
+    if (
+        type(source) is not str
+        or not source.strip()
+        or type(source_vertex_index) is not int
+    ):
+        raise ValueError("OBJ navigation start anchor provenance is malformed")
+    if source_vertex_index != 0:
+        raise ValueError("OBJ navigation start anchor is not the first vertex")
+    position = value["position"]
+    if (
+        type(position) is not list
+        or len(position) != 3
+        or any(type(coordinate) not in (int, float) for coordinate in position)
+    ):
+        raise ValueError("OBJ navigation start anchor position is malformed")
+    point = tuple(float(coordinate) for coordinate in position)
+    if not all(math.isfinite(coordinate) for coordinate in point):
+        raise ValueError("OBJ navigation start anchor position is malformed")
+    return point  # type: ignore[return-value]
+
+
+def _navigation_start_position(
+    navigation_metadata: Mapping[str, object],
+) -> Point | None:
+    """Return a finite regular navigation-start position, if present."""
+    value = navigation_metadata.get("navigation_start")
+    if isinstance(value, Mapping):
+        value = value.get("position")
+    return _point_tuple(value)
 
 
 def _route_points(route: Mapping[str, object]) -> tuple[Point, ...]:
@@ -7417,6 +12836,68 @@ def _route_points(route: Mapping[str, object]) -> tuple[Point, ...]:
             return ()
         points.append(point)
     return tuple(points)
+
+
+def _publish_certified_complete_route(
+    route: dict[str, object],
+    value: object,
+    *,
+    source_point_offset: int,
+) -> None:
+    """Publish only an exact route that begins at source hint zero."""
+    if int(source_point_offset) != 0:
+        return
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return
+    points: list[Point] = []
+    for item in value:
+        if not isinstance(item, Sequence) or isinstance(item, (str, bytes)):
+            return
+        if len(item) != 3:
+            return
+        try:
+            point = tuple(float(coordinate) for coordinate in item)
+        except (TypeError, ValueError):
+            return
+        if not all(math.isfinite(coordinate) for coordinate in point):
+            return
+        points.append(point)  # type: ignore[arg-type]
+    if len(points) < 2:
+        return
+
+    original_points = _route_points(route)
+    offset = max(0, int(source_point_offset))
+    if not original_points or offset >= len(original_points):
+        return
+    cell_size = _positive_float(
+        route.get("footprint_cell_size"),
+        "route footprint cell size",
+    )
+    certified_cells = tuple(
+        (
+            math.floor(point[0] / cell_size),
+            math.floor(point[2] / cell_size),
+        )
+        for point in points
+    )
+
+    route["points"] = [coordinate for point in points for coordinate in point]
+    route["cells"] = [coordinate for cell in certified_cells for coordinate in cell]
+    route["length_m"] = float(
+        sum(
+            math.dist(first, second)
+            for first, second in zip(points, points[1:], strict=False)
+        )
+    )
+    route["certified_ingress_hint_index"] = int(offset)
+    route["source_route_point_count"] = len(original_points)
+    route["point_source"] = "prepared_mesh_graph_path_v1"
+    route["certified_start_position"] = [
+        float(coordinate) for coordinate in points[0]
+    ]
+
+    route.pop("y_ranges", None)
+    route.pop("clearance_margins", None)
 
 
 def _route_cell_size(route: Mapping[str, object], manifest: Mapping[str, object]) -> float:

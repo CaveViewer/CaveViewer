@@ -18,6 +18,10 @@ from caveviewer.core.chunking import capacity as chunk_capacity
 from caveviewer.core.chunking import staging as chunk_staging
 from caveviewer.core.chunking import upload
 from caveviewer.core.hardware import system_memory
+from caveviewer.core.navigation.voxel_cache import (
+    NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR,
+    NAVIGATION_VOXEL_CACHE_METHOD,
+)
 from caveviewer.core.workers.allocation import WorkerAllocation
 
 
@@ -160,12 +164,24 @@ def _curved_navigation_mesh() -> obj_parser.RawMesh:
         base = len(positions)
         positions.extend(
             [
-                [x + 0.2, 0.0, z + 0.2],
-                [x + 0.8, 4.0, z + 0.2],
-                [x + 0.2, 0.0, z + 0.8],
+                [x, 0.0, z],
+                [x + 1.0, 0.0, z],
+                [x + 1.0, 0.0, z + 1.0],
+                [x, 0.0, z + 1.0],
+                [x, 4.0, z],
+                [x + 1.0, 4.0, z],
+                [x + 1.0, 4.0, z + 1.0],
+                [x, 4.0, z + 1.0],
             ]
         )
-        faces.append([base, base + 1, base + 2])
+        faces.extend(
+            [
+                [base, base + 1, base + 2],
+                [base, base + 2, base + 3],
+                [base + 4, base + 6, base + 5],
+                [base + 4, base + 7, base + 6],
+            ]
+        )
     positions_array = np.asarray(positions, dtype=np.float32)
     faces_array = np.asarray(faces, dtype=np.int32)
     return obj_parser.RawMesh(
@@ -604,10 +620,30 @@ def test_build_cache_attaches_optional_navigation_metadata(tmp_path):
     manifest = chunker.load_manifest(str(cache_dir))
     navigation = manifest["navigation"]
     assert navigation["method"] == "footprint_centerline_paths_v1"
-    assert navigation["route_count"] == 1
-    assert navigation["recommended_route_id"] == "centerline-0"
-    assert navigation["routes"][0]["closed_loop"] is False
-    assert navigation["routes"][0]["cells"] == [0, 0, 1, 0, 2, 0, 3, 0]
+    assert navigation["route_count"] >= 1
+    assert navigation["navigation_start_anchor"] == {
+        "position": list(_navigation_mesh().positions[0]),
+        "kind": "obj_surface_vertex",
+        "source": "map.obj",
+        "source_vertex_index": 0,
+        "source_order": "obj_declaration_order",
+        "executable": False,
+        "attachment_required": True,
+        "attachment_coordinate_space": "xyz",
+    }
+    assert "navigation_start" not in navigation
+    assert "recommended_route_id" not in navigation
+    assert all(
+        route["closed_loop"] is False
+        for route in navigation["routes"]
+    )
+    assert navigation["routes"][0]["selection_method"] == (
+        "obj_source_anchor_to_farthest_endpoint_v1"
+    )
+    assert all(
+        route["starts_at_navigation_start_anchor"] is True
+        for route in navigation["routes"]
+    )
 
 
 def test_build_cache_writes_bounded_whole_cave_voxel_sidecar(tmp_path):
@@ -625,11 +661,11 @@ def test_build_cache_writes_bounded_whole_cave_voxel_sidecar(tmp_path):
 
     manifest = chunker.load_manifest(str(cache_dir))
     navigation = manifest["navigation"]
-    assert navigation["voxel_cache"]["method"] == (
-        "whole_cave_voxel_atlas_v10"
-    )
+    assert navigation["voxel_cache"]["method"] == NAVIGATION_VOXEL_CACHE_METHOD
+    assert navigation["voxel_cache"]["fixed_isotropic_voxel_size_m"] == 1.0
+    assert navigation["voxel_cache"]["surface_overlap_policy"] == "occupied_wins"
     assert navigation["route_selection_method"] == (
-        "largest_cached_cave_volume_v2"
+        NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR
     )
     summary = navigation["routes"][0]["voxel_corridor"]
     assert summary["built"] is True
@@ -639,7 +675,7 @@ def test_build_cache_writes_bounded_whole_cave_voxel_sidecar(tmp_path):
     assert sidecar.stat().st_size < 64 * 1024 * 1024
 
 
-def test_build_cache_orients_navigation_metadata_from_model_sidecar(tmp_path):
+def test_build_cache_prefers_authored_sidecar_over_derived_map_start(tmp_path):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small source map")
     (tmp_path / "map.navigation.json").write_text(
@@ -670,9 +706,119 @@ def test_build_cache_orients_navigation_metadata_from_model_sidecar(tmp_path):
         "label": "entrance",
         "source": "map.navigation.json",
     }
+    assert "navigation_start_anchor" not in navigation
     route = navigation["routes"][0]
+    assert route["selection_method"] == (
+        "navigation_start_to_farthest_endpoint_v1"
+    )
     assert route["starts_at_navigation_start"] is True
-    assert route["cells"] == [3, 0, 2, 0, 1, 0, 0, 0]
+
+
+def test_first_manifest_chunk_center_uses_minimum_numeric_cell():
+    chunks = {
+        "10_0_0": {
+            "bounds_min": [100.0, 0.0, 0.0],
+            "bounds_max": [110.0, 10.0, 10.0],
+        },
+        "-2_1_-3": {
+            "bounds_min": [-19.0, 2.0, -27.0],
+            "bounds_max": [-11.0, 8.0, -21.0],
+        },
+        "2_0_0": {
+            "bounds_min": [20.0, 0.0, 0.0],
+            "bounds_max": [30.0, 10.0, 10.0],
+        },
+    }
+
+    assert chunker.first_manifest_chunk_center(chunks) == (
+        -15.0,
+        5.0,
+        -24.0,
+    )
+
+
+def test_obj_vertex_zero_is_authoritative_over_manifest_chunk_order(tmp_path):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small source map")
+    chunks = {
+        "19_0_-16": {
+            "bounds_min": [950.0, -25.0, -800.0],
+            "bounds_max": [1000.0, 25.0, -750.0],
+        },
+        "-3_-1_0": {
+            "bounds_min": [-140.0, -10.0, 0.0],
+            "bounds_max": [-100.0, 0.0, 50.0],
+        },
+    }
+
+    navigation_start, navigation_start_anchor = (
+        chunker._navigation_start_metadata_for_source(
+            str(source),
+            np.asarray(((987.0, -16.0, -816.0),), dtype=np.float32),
+            manifest_chunks=chunks,
+        )
+    )
+
+    assert navigation_start is None
+    assert navigation_start_anchor == {
+        "position": [987.0, -16.0, -816.0],
+        "kind": "obj_surface_vertex",
+        "source": "map.obj",
+        "source_vertex_index": 0,
+        "source_order": "obj_declaration_order",
+        "executable": False,
+        "attachment_required": True,
+        "attachment_coordinate_space": "xyz",
+    }
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        {},
+        {"0_0_0": {"bounds_min": [0.0, 0.0], "bounds_max": [1.0, 1.0]}},
+        {
+            "0_0_0": {
+                "bounds_min": [2.0, 0.0, 0.0],
+                "bounds_max": [1.0, 1.0, 1.0],
+            }
+        },
+    ],
+)
+def test_first_manifest_chunk_center_rejects_invalid_chunks(chunks):
+    assert chunker.first_manifest_chunk_center(chunks) is None
+
+
+def test_navigation_start_sidecar_remains_non_obj_compatibility_fallback(tmp_path):
+    source = tmp_path / "map.glb"
+    source.write_bytes(b"small source map")
+    (tmp_path / "map.navigation.json").write_text(
+        json.dumps(
+            {
+                "navigation_start": {
+                    "position": [7.0, 0.0, 0.0],
+                    "label": "entrance",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    navigation_start, navigation_start_anchor = (
+        chunker._navigation_start_metadata_for_source(
+            str(source),
+            _navigation_mesh().positions,
+        )
+    )
+
+    assert navigation_start == {
+        "navigation_start": {
+            "position": [7.0, 0.0, 0.0],
+            "label": "entrance",
+        },
+        "source": "map.navigation.json",
+    }
+    assert navigation_start_anchor is None
 
 
 def test_build_cache_omits_navigation_metadata_when_generation_fails(
@@ -1246,6 +1392,11 @@ def test_cache_build_stays_at_one_worker_when_ram_is_at_limit(
         chunker.system_memory, "detect_ram_snapshot", probe_ram
     )
     monkeypatch.setattr(chunker, "_write_chunk_file", write_cell)
+    monkeypatch.setattr(
+        chunker,
+        "_attach_navigation_metadata",
+        lambda *_args, **_kwargs: None,
+    )
 
     with caplog.at_level(logging.INFO, logger="caveviewer"):
         chunker._build_cache_in_directory(

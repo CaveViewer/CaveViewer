@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import traceback
 from pathlib import Path
@@ -200,6 +201,99 @@ def test_map_session_opens_uncached_direct_glb_file_with_parent_texture_dir(
     assert opened == [((descriptor,), {"textures_dir": str(tmp_path)})]
 
 
+@pytest.mark.parametrize("cache_valid", [True, False])
+def test_map_session_opens_recorded_dive_against_its_map_local_cache(
+    tmp_path,
+    monkeypatch,
+    cache_valid,
+):
+    map_dir = tmp_path / "Devils Eye"
+    trace_dir = map_dir / "_guided_dive_traces"
+    cache_dir = map_dir / "_cache"
+    trace_dir.mkdir(parents=True)
+    cache_dir.mkdir()
+    source = map_dir / "cave.obj"
+    source.write_text("v 0 0 0\n", encoding="utf-8")
+    trace_path = trace_dir / "favorite.jsonl"
+    records = [
+        {
+            "record": "trace_started",
+            "schema_version": 1,
+            "session_id": "shared-dive",
+            "map": {
+                "source_obj": "cave.obj",
+                "manifest_version": 1,
+                "chunk_size_m": 50.0,
+                "triangle_count": 12,
+                "coordinate_space": "manifest_xyz",
+                "distance_unit": "meter",
+                "orientation_unit": "radian",
+            },
+        },
+        {
+            "record": "sample",
+            "schema_version": 1,
+            "session_id": "shared-dive",
+            "sample_index": 0,
+            "elapsed_s": 0.0,
+            "position": [1.0, 2.0, 3.0],
+            "forward": [1.0, 0.0, 0.0],
+            "up": [0.0, 1.0, 0.0],
+            "right": [0.0, 0.0, 1.0],
+            "yaw": 0.0,
+            "pitch": 0.0,
+            "roll": 0.0,
+            "move_speed_m_per_second": 4.0,
+        },
+        {
+            "record": "trace_completed",
+            "schema_version": 1,
+            "session_id": "shared-dive",
+            "duration_s": 0.0,
+        },
+    ]
+    trace_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    descriptor = {
+        "format": "obj",
+        "obj_path": str(source),
+        "mtl_path": str(map_dir / "cave.mtl"),
+    }
+    manifest = {
+        "version": 1,
+        "source_obj": "cave.obj",
+        "chunk_size": 50.0,
+        "triangle_count": 12,
+    }
+    opened = []
+    monkeypatch.setattr(app, "find_model_file", lambda path: descriptor)
+    monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: cache_valid)
+    monkeypatch.setattr(chunker, "get_cache_dir", lambda _path: str(cache_dir))
+    monkeypatch.setattr(chunker, "load_manifest", lambda _path: manifest)
+    monkeypatch.setattr(chunker, "cache_chunk_size", lambda _path: 50.0)
+    monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 50.0)
+    _install_viewer_module(
+        monkeypatch,
+        run_viewer=lambda *args, **kwargs: opened.append((args, kwargs)),
+        run_pending=lambda *args, **kwargs: opened.append((args, kwargs)),
+    )
+
+    app._run_map_session(str(trace_path))
+
+    assert len(opened) == 1
+    args, kwargs = opened[0]
+    if cache_valid:
+        assert args == (str(cache_dir),)
+        assert kwargs["textures_dir"] == str(cache_dir)
+    else:
+        assert args == (descriptor,)
+        assert kwargs["textures_dir"] == str(map_dir)
+    assert kwargs["recorded_dive_trace"].path == trace_path.resolve()
+    assert kwargs["recorded_dive_trace"].initial_pose.position == (1.0, 2.0, 3.0)
+
+
 def test_map_session_rejects_direct_unsupported_file(tmp_path, monkeypatch):
     payload = tmp_path / "notes.txt"
     payload.write_text("not a cave map", encoding="utf-8")
@@ -211,6 +305,30 @@ def test_map_session_rejects_direct_unsupported_file(tmp_path, monkeypatch):
 
     assert raised.value.code == 1
     assert "No supported model file" in recorder.error_messages[-1]
+
+
+def test_map_session_reports_an_incomplete_recorded_dive(tmp_path, monkeypatch):
+    trace_path = tmp_path / "broken.jsonl"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "record": "trace_started",
+                "schema_version": 1,
+                "session_id": "broken",
+                "map": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    recorder = _LogRecorder()
+    monkeypatch.setattr(app, "_LOG", recorder)
+
+    with pytest.raises(SystemExit) as raised:
+        app._run_map_session(str(trace_path))
+
+    assert raised.value.code == 1
+    assert "trace_completed" in recorder.error_messages[-1]
 
 
 @pytest.mark.parametrize("cache_is_valid", [True, False])

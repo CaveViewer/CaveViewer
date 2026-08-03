@@ -115,6 +115,38 @@ def test_surface_voxel_volume_is_bounded_and_reports_surface_clearance():
     assert volume.diagnostic_payload()["voxel_count"] == volume.voxel_count
 
 
+def test_surface_voxel_volume_vector_filter_preserves_only_bounded_triangles():
+    mesh = np.asarray(
+        [
+            [
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [0.0, 0.0, 2.0],
+            ],
+            [
+                [100.0, 100.0, 100.0],
+                [102.0, 100.0, 100.0],
+                [100.0, 100.0, 102.0],
+            ],
+        ],
+        dtype=np.float64,
+    )
+
+    volume = build_surface_voxel_volume(
+        [mesh],
+        bounds_min=(-1.0, -1.0, -1.0),
+        bounds_max=(3.0, 2.0, 3.0),
+        config=VoxelVolumeConfig(
+            voxel_size_m=1.0,
+            surface_inflation_cells=0,
+        ),
+    )
+
+    assert volume.triangle_count == 1
+    assert volume.surface_sample_count > 0
+    assert volume.surface_cells
+
+
 def test_curvature_guidance_skips_mesh_provider_for_straight_route():
     calls: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
 

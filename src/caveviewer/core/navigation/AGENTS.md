@@ -12,10 +12,10 @@ git diff --check
 ```
 
 These instructions define the navigation-specific architecture contract. The
-canonical broader component boundaries remain in
-`docs/development/architecture.md`; the local Guided Dive handoff and current
-preflight design are in `docs/development/.agents/auto-dive-context.md` and
-`docs/development/.agents/easiest-terminal-fixed-route.md`.
+canonical broader component boundaries and the current offline
+navigation-certificate contract remain in `docs/development/architecture.md`. Files below
+`docs/development/.agents/` are historical design notes, not current
+production authority.
 
 ## Architecture outline
 
@@ -28,26 +28,118 @@ cache builder/import
 versioned navigation sidecar
         |
         v
-NavigationVoxelAtlas + prepared V10 mesh graph
+NavigationVoxelAtlas + prepared V12 exact mesh path
         |
-        +--> bounded local route selection/recovery
-        +--> startup preflight global reachability
+        +--> complete longest-route selection
+        +--> startup preflight reachability
         +--> graph node/edge + voxel/mesh safety validation
         |
         v
 immutable route/preflight result
         |
         v
-GUI controller owns activation, streaming, camera poses, and workers
+offline certificate and verification tooling consumes the result
+        |
+        v
+viewer remains manual (or uses a Recorded Dive trace)
 ```
 
-The prepared V10 mesh-derived graph is the production route authority. Graph
+The prepared V12 mesh-derived path is the certificate route authority. Graph
 native plans carry the atlas and graph directly; they do not load a centerline
 or consult centerline clearance scores. The coarse true-3D voxel graph and
 chunked atlas remain occupancy, clearance, coverage, and compatibility
 evidence. The centerline remains a compatibility planner and a cache-generation
-hint only. Production navigation must not silently fall back to either one
-when the mesh graph is missing, stale, unsafe, or unable to provide a route.
+X/Z ordering hint only. Certificate operations must not silently fall back to
+either one when the mesh graph is missing, stale, unsafe, or unable to provide
+a route.
+
+V12 voxel evidence is fixed and orthogonal: X/Z are no coarser than 1 m and Y
+is no coarser than 0.25 m. Capacity
+pressure subdivides chunks and surface-sampling truncation fails closed.
+Overlapping chunks use occupied-wins surface semantics. Normally, one packed
+six-connected component joining bounded ingress evidence to the selected known
+terminal feeds the exact path build. Merge all bounded corridor-filtered
+non-surface cells before component selection; a local seed must not erase seam
+evidence. Disconnected surface-gap-seeded fragments are never combined as a
+certificate route. If the source-connected fixed component does not reach the
+real final endpoint, the route fails closed before exact-roadmap publication.
+Extract the certificate path through ordered surface-gap waypoint candidates
+with six-connected searches and one cumulative expansion ledger. Check every
+candidate edge against partition-invariant voxel samples and the exact cached
+mesh before retaining it; block a rejection and reroute only that bounded leg.
+A route-cell candidate must be a selected-component free-voxel center in that
+exact footprint cell. Entrance and final candidates must be inside the one
+source-connected bounded vertical interval selected for their cells, with at
+most half a vertical voxel of Y quantization tolerance. An intermediate cell
+may use a free key inside the hull of one specific continuity-compatible
+adjacent interval pair when its selected interval has no lattice key. Never
+merge every stacked interval in neighboring cells into a broad Y slab.
+Midpoints rank proposals but are not required executable positions.
+Before ranking a terminal component, prove it has at least one such candidate
+for every ordered route cell; cap candidates only within that selected
+component, preserving interval diversity. The inferred start locator may
+attach only to the first group, and terminal candidates come only from the
+final group--a local neighbor shell must not reintroduce another layer.
+A smoothing shortcut is executable only after those same checks. Intermediate
+waypoints are never terminals, and capacity exhaustion must publish neither a
+prefix nor a shorter competing recommendation while the longer route remains
+unresolved.
+
+A valid explicit entrance sidecar overrides automatic inference. Otherwise an
+OBJ uses declaration-order vertex zero as its immutable entrance anchor. The
+surface vertex itself is non-executable and requires a bounded attachment to a
+free voxel in the selected surface-gap layer; only that certified interior
+attachment becomes executable. Never replace this source-order provenance with
+a numeric or lexical manifest-chunk sort. The selected route must begin at source hint
+zero and end at the final source hint; never retry or publish a suffix. The
+exact persisted path's first node is the published certificate route start. V11
+and older supported sidecars remain readable, but only V12 may authorize
+certificate workflows.
+
+OBJ-derived centerline Y values are hints, not topology: use the polyline only
+for horizontal ordering and a bounded X/Z envelope. The 0.25 m vertical field
+and exact mesh connectivity choose the cave layer. Persist every bounded
+surface-gap seed using sparse 0.25 m-or-finer vertical bins; never substitute
+route Y for missing surface evidence. If exact traversal fails on
+the 1 m waypoint lattice, one bounded 0.5 m X/Z by 0.25 m Y retry starts in a
+4 m horizontal envelope over the same admitted evidence and may widen once to
+8 m after exhaustive non-capacity failure. It must not create free evidence:
+retain point membership, crossed-boundary sampling, and exact cached-mesh
+checks on every edge. It must traverse the same ordered surface-gap gates,
+consume only the coarse attempt's remaining node ledger, and reject retained
+key revisits. The legacy raw-guide adaptive builder is not a V12 publication
+fallback.
+For a steep surface-gap transition, widen both non-entrance cells touched by
+the specific selected interval pair and available cardinal support cells;
+keep the entrance interval immutable. This merely proposes evidence and must
+not join components or authorize motion.
+It is safe to skip voxel/mesh collision work for a relaxation that cannot
+improve an existing route cost, because that existing cost was admitted only
+through an already-safe edge. Never apply that shortcut to an improving edge.
+When a long route exceeds the packed-key budget, narrow its horizontal
+envelope deterministically, but never below the X/Z uncertainty of an OBJ
+footprint cell. Never solve capacity by coarsening cubes, using a per-map
+override, or weakening exact edge checks.
+The envelope deliberately retains vertical candidates. A raw endpoint may snap
+only to a bounded free cube inside it. Up to 64 bounded free endpoint centers
+may be exact-tested as terminal candidates; persist only the
+candidate actually reached by the mesh-safe path. Never accept an ingress seed
+as a zero-edge terminal. The chosen center must pass the same runtime
+certification as every other terminal.
+Legacy metadata may still contain interpolated route Y values for compatibility
+rendering and diagnostics. Strict OBJ V12 construction must not use them to
+choose, fill, or filter a cave layer. Missing surface-gap evidence fails closed;
+it is never inherited from a nearby route sample.
+Selected packed evidence may provide the already-admitted minimum clearance
+for cache-time A* probes. This optimization must not replace exact mesh checks
+on edges or persisted voxel-chunk probes during certification and runtime.
+Cached render-chunk bounds may be indexed into a fixed spatial bucket map so
+an edge checks only nearby chunks. Keep the final exact chunk-AABB and triangle
+intersection tests authoritative, include boundary-touching chunks, and fall
+back to the full chunk list for malformed or pathologically large queries.
+Voxel rasterization may vectorize the per-mesh local-AABB prefilter, but it
+must preserve triangle order, bounded surface sampling, occupied-cell results,
+and fail-closed truncation behavior.
 
 The cache and graph layers own topology, components, line-of-sight edges,
 clearance/volume metrics, terminal labels, unknown-boundary labels, and bounded
@@ -58,6 +150,10 @@ on the render thread.
 The exact collision seam remains authoritative after graph selection: graph
 node/edge clearance, voxel occupancy and clearance samples, segment sampling,
 and the cached chunk mesh guard must be preserved for every executable route.
+A cache-time and runtime edge probe must include every crossed voxel-lattice
+boundary plus an interior sample between consecutive crossings, not only
+evenly spaced samples. This keeps the safety result invariant when runtime
+splits a preflight segment into checkpoints.
 A graph edge is evidence, not permission to move by itself. The
 camera-to-start connector is validated as an explicit segment rather than
 teleporting to the nearest graph node. Production graph-native planning fails
@@ -65,175 +161,33 @@ closed before publishing a route when the cached mesh guard is unavailable;
 the lower-level validator may remain mesh-optional only for isolated graph or
 voxel fixtures that cannot execute a camera route.
 
-## Guided Dive lifecycle contract
+## Offline navigation certificate contract
 
-Startup must follow this order:
+The viewer no longer has an autonomous camera controller. Cmd/Ctrl+A is
+unhandled, ordinary map opening uses the render-cache start position, and no
+module in `caveviewer.gui` may import or execute an auto-dive planner. Preserve
+`Shift+T` manual tracing and Recorded Dive separately; neither is a navigation
+certificate consumer.
 
-```text
-request
-  -> graph-wide preflight in a bounded startup worker
-  -> READY: activate the exact validated route
-  -> continuous local scan/recovery while active
-```
+`autodive.py` and its `AutoDive*` names remain a compatibility-oriented core
+implementation detail for offline certificate construction, verification, and
+core tests. `certificate.py` may call `build_auto_dive_preflight_plan` and
+`build_voxel_graph_auto_dive_plan` to validate a cached route. Their results
+are non-executable diagnostics: they must never create a camera worker, alter
+`StreamingWorld`, change the normal viewer start position, or write to the
+render cache.
 
-`INDETERMINATE` and `FAILED` preflight results must not activate the camera
-controller. `INDETERMINATE` is appropriate when no graph terminal/frontier can
-be selected or an exact safety check is unavailable. Under the default
-`easiest_terminal` goal, an incomplete mesh-safe prefix is not a valid startup
-route; preflight must find a known terminal or fail closed. An
-`unknown_boundary` label selected by the explicit farthest/frontier policy is
-expected evidence and does not claim that the cave ends there; diagnostics must
-still report incomplete cache coverage.
+Cache construction chooses and certifies the longest complete exact-safe
+non-circular route from its requested entrance. The graph/voxel/mesh safety
+seam, bounded storage, exact edge checks, route goals, and compatibility rules
+remain authoritative for the certificate. A missing or stale optional sidecar
+may make a certificate unresolved, but it must never prevent ordinary render
+cache viewing or trigger a viewer-side cache rebuild.
 
-`build_auto_dive_preflight_plan` returns the explicit preflight result. The
-longest metadata route is used only to identify the route-specific prepared
-cache; it does not define the terminal and does not load a centerline
-descriptor. `build_voxel_graph_auto_dive_plan` is the production runtime
-planner and is also used by continuous scans.
-Preflight snaps the camera to the starting graph component, enumerates that
-component's known `terminal` nodes and `unknown_boundary` frontiers, and applies
-the configured route goal. The default `easiest_terminal` goal excludes
-unknown boundaries and selects the shortest reachable known terminal, using
-clearance and available volume as deterministic comfort tie-breaks. It then
-uses the same shortest-physical prepared-graph path to that terminal. The
-explicit `farthest_terminal` goal retains the historical heading-aware
-longest-passage and frontier behavior. The selected graph node's center is the
-terminal target. Preflight prefetches route chunks and validates the executable
-points with graph node/edge clearance, voxel probes, the camera connector, and
-the cached-mesh seam. A `READY` result
-carries the same immutable `AutoDivePlan` that the GUI activates. Startup
-cancellation may cancel a queued worker or discard a completed result after the
-map changes; both graph searches remain bounded by prepared graph state and
-expansion limits.
-
-If an edge on the easiest graph-terminal route is blocked by the cached mesh,
-preflight keeps that known terminal and attempts a bounded spine repair: a
-persisted 1 m fine tile is aggregated to a local 2 m x/z, 1 m y graph, with a
-native 1 m fallback. An exact-safe local path may rejoin only a later node of
-the already selected physical graph spine; it must not globally replan or enter
-another branch. The immutable published ledger contains both the prepared and
-refined segments. If the complete ledger cannot be proven, easiest mode returns
-a non-READY result; it never publishes an incomplete prefix as a terminal
-route. The explicit
-farthest-terminal policy may instead select the farthest exact-safe frontier.
-That route is still `READY` only after exact validation, but it is marked
-`coverage_incomplete`, `replan_at_end`, and not `terminal_reached`; the
-controller must continue with its continuous scan at that frontier. A
-mesh-safe frontier is a temporary safe boundary, never a replacement terminal
-claim and never permission to ignore the blocked edge. If no terminal or
-unknown-boundary candidate is reachable but a safe graph prefix exists,
-farthest mode may publish the farthest such prefix under the same
-incomplete/replan contract; this is a bounded handoff point, not an endpoint.
-
-The initial plan returned by preflight must be the route that is executed. Do
-not preflight one path and then call an independent local planner that can
-replace it before activation.
-
-Initial graph camera placement uses an explicit `navigation_start` when the
-cache provides one. For older manifests without that sidecar, the first point
-of the selected route metadata is only a startup-position hint; it is not a
-terminal, route authority, or safety descriptor. The GUI's coarse chunk
-navigation guard may continue to constrain ordinary manual movement, but it
-must not rewrite a graph-native startup pose or an active graph-native route.
-Those positions are validated by the graph/voxel/mesh safety seam instead.
-
-Continuous scanning is speculative runtime adaptation. It may run one full
-forward-hemisphere scan at a time and hand results to its owner, but every
-result must pass source-sequence, start-distance, current-forward-progress,
-and collision checks before acceptance. A late result is discarded. The
-controller must hold the last safe frontier while a replacement is pending.
-When a request is made from a moving camera and the handoff window is short,
-the owner pins the route at the request pose so a valid result remains
-attachable; stale results may be re-anchored from the actual camera only a
-bounded number of times.
-
-A mesh-safe scan is still speculative. If it is materially shorter than the
-remaining validated route, retain the validated prefix and defer another scan
-until the two horizons are comparable; record the result as
-`shorter_than_validated_prefix`. When local mesh validation finds a collision,
-trim at the first failed segment and reuse the existing ranked local voxel
-route while rebuilding the smaller graph. Do not rerun the bounded voxel
-search for every mesh retry, and bound near-duplicate handoffs by the local
-route/voxel scale instead of using coarse graph cadence as a fixed minimum
-executable step.
-
-Every scan has a cooperative deadline. The owner computes the remaining time
-to the current safe frontier, reserves 1.0 seconds for handoff and exact
-validation, and caps the scan budget at 6.0 seconds. A full scan starts only
-when at least 7.0 seconds remain at the safe frontier (the 6.0-second budget
-plus the handoff reserve); a budget below 0.75 seconds is not useful for a
-full scan. Otherwise the owner keeps the validated route and uses the single
-authoritative fallback. The worker passes the remaining budget into the core
-graph/local-voxel planner; graph expansion, local mesh sampling, voxel search,
-and route publication check it cooperatively. A deadline miss is typed
-`DEADLINE_EXCEEDED`, produces no partial route, and is recorded with the scan
-generation and source plan.
-
-After a deadline miss, continue only on the already validated route until its
-safe frontier, then hold the camera and attempt exactly one bounded,
-authoritative prepared-graph replan with exact graph/voxel/mesh validation.
-If that fallback cannot produce a fresh safe route within the normal replan
-handoff budget, enter user assistance. Do not restart the same continuous
-scan indefinitely and do not execute a route returned after its deadline.
-
-If a scan reaches an `unknown_boundary` with no bounded frontier or onward
-exit, classify the result as `FRONTIER_EXHAUSTED` rather than treating a short
-route as progress. The initial frontier-ended result is held as diagnostic
-evidence and is not activated. The owner may request one bounded local
-expansion from the cached mesh. That expansion must be converted into a temporary
-`NavigationVoxel3DGraph`, retain `coverage_incomplete`, and pass the same
-graph-node, graph-edge, voxel, connector, and cached-mesh safety validator
-before it can be executed. A stable `(cache/graph snapshot, start key, target
-key, route prefix)` identity is used to detect no-progress; once the bounded
-expansion is also rejected at the same camera position, stop requesting the
-same scan and enter user assistance. This is a lifecycle guard, not a
-terminal-node claim.
-
-If mesh evidence disappears after startup, the runtime graph planner raises a
-typed `mesh_collision_guard_unavailable` authority failure. The continuous
-worker records that reason; after its bounded failure allowance the GUI holds
-the last validated route and enters user assistance. It must not accept a
-graph/voxel-only continuation.
-
-Probe roll is not camera roll. Recovery may use roll to inspect virtual probe
-orientations, but that value must not be copied into executed route keyframes.
-Normal navigation routes use zero roll unless an explicit, separately tested
-camera-roll feature is introduced.
-
-## Terminal goal rule
-
-Preflight determines the terminal node from the prepared V10 mesh graph:
-
-1. Use the longest metadata route only to select the route-specific prepared
-   voxel cache. Do not use its endpoint or centerline clearance as the
-   navigation goal or a safety gate.
-2. Snap the camera to the nearest valid starting graph node within the
-   prepared graph's explicit start tolerance.
-3. Apply `settings.route_goal`. For `easiest_terminal`, consider only known
-   nodes marked `terminal`; for `farthest_terminal`, also consider prepared
-   `unknown_boundary` frontiers. A known `terminal` is a topological end of
-   prepared free space; an `unknown_boundary` is a prepared evidence frontier
-   and is not proof that the cave ends there.
-4. Run bounded Dijkstra over valid directed graph edges using accumulated edge
-   distance. The easiest policy selects the shortest reachable known terminal,
-   with clearance, available-volume, and key tie-breaks, then executes the
-   same shortest-physical path. The farthest policy selects the longest
-   reachable terminal/frontier with deterministic topology and key tie-breaks.
-   Do not use Cartesian distance, `progress_m`, or a centerline endpoint.
-5. Use the selected graph node's center as the terminal target and run exact
-   collision validation to that same node. If a coarse edge is mesh-blocked,
-   easiest mode may only repair it through a bounded persisted-fine-tile bridge
-   that rejoins a later node of the fixed spine. Farthest mode may use a safe
-   frontier or prefix, but must not call it a terminal.
-
-The centerline is not the production route, terminal authority, or graph-mode
-safety descriptor. If the selected node or executable path contains
-`unknown_boundary`, preserve the goal and record `coverage_incomplete`; do not
-claim that the cave has no geometry beyond that endpoint. If the starting
-component has no reachable terminal/frontier candidate, return `INDETERMINATE`
-rather than falling back to centerline geometry. Do not hardcode a cave ID,
-route ID, endpoint coordinate, or route length; use the loaded graph and
-metadata for every cave.
+When changing this area, do not reintroduce a GUI runtime through a callback or
+background worker. Keep any recovery, prefetch, or simulation work behind the
+offline certificate boundary, bounded and read-only with respect to the
+published cache.
 
 ## Required architecture validation after every code change
 
@@ -244,12 +198,12 @@ handoff or review note:
 | Condition | Status (`full`/`partial`/`none`) | Evidence |
 | --- | --- | --- |
 | Core has no GUI/Tk/OpenGL dependency |  | imports and core tests |
-| Prepared V10 mesh graph remains route authority |  | route source and authority diagnostics |
+| Prepared V12 exact mesh path remains route authority |  | route source and authority diagnostics |
 | Exact graph/voxel/mesh safety remains in the path |  | graph safety tests and failure case |
-| Startup preflight gates controller activation |  | ready/indeterminate/failed tests |
-| Route-goal policy defines the preflight goal |  | easiest/farthest selection, endpoint-snap, and wrong-component tests |
-| Worker ownership is bounded by cooperative deadlines, cancellable, and nonblocking |  | lifecycle/timeout/stale-result tests |
-| Continuous scanning remains speculative, deadline-bounded, and freshness-checked |  | sequence/frontier/timeout/rejection tests |
+| Viewer has no autonomous controller or planner import |  | GUI import/shortcut tests |
+| Route-goal policy defines the offline certificate goal |  | longest/easiest/farthest selection and wrong-component tests |
+| Certificate analysis stays bounded and read-only |  | certificate timeout and failure tests |
+| No certificate result can activate or steer a viewer camera |  | GUI regression tests |
 | Executed camera roll is independent of probe roll |  | route keyframe roll assertions |
 | Cache compatibility and rebuild behavior are preserved |  | cache version/load tests |
 

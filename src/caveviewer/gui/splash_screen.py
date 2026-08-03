@@ -658,7 +658,7 @@ def show_splash_screen(
             font=_BODY_FONT,
         )
 
-    def on_open_map_folder():
+    def on_open_map_folder() -> None:
         last_dir = _load_last_browse_dir()
         selection = desktop_services.choose_directory(
             title="Open Map Folder",
@@ -674,6 +674,74 @@ def show_splash_screen(
             session.select_folder(selection.path)
             _save_last_browse_dir(selection.path)
             _leave_splash()
+
+    def on_open_recorded_dive() -> None:
+        selection = desktop_services.choose_file(
+            title="Open Recorded Dive",
+            initial_dir=_load_last_browse_dir(),
+            parent=root,
+        )
+        if not selection:
+            return
+        if not selection.path.lower().endswith(".jsonl"):
+            show_feedback(
+                root,
+                "Unable to open this file: Recorded Dives use the .jsonl extension.",
+                kind="error",
+                duration_ms=9000,
+                font=_BODY_FONT,
+            )
+            return
+        session.select_folder(selection.path)
+        _save_last_browse_dir(selection.path)
+        _leave_splash()
+
+    _open_options_visible = [False]
+    open_options_frame: list[tk.Widget | None] = [None]
+
+    def _hide_open_options() -> None:
+        _open_options_visible[0] = False
+        frame = open_options_frame[0]
+        if frame is None:
+            return
+        frame.place_forget()
+
+    def _open_map_and_close() -> None:
+        _hide_open_options()
+        on_open_map_folder()
+
+    def _open_recorded_dive_and_close() -> None:
+        _hide_open_options()
+        on_open_recorded_dive()
+
+    def on_open(event=None):
+        if _open_options_visible[0]:
+            _hide_open_options()
+            return "break"
+        if open_options_frame[0] is None:
+            return
+        root.update_idletasks()
+        options = open_options_frame[0]
+
+        left_frame_width = left_frame.winfo_width()
+        button_x = browse_button.winfo_x()
+        available_width = left_frame_width - max(0, button_x)
+        options.update_idletasks()
+        options.update()
+        panel_width = max(1, available_width)
+        content_pad = 24 * 2
+        wrap_width = max(1, panel_width - content_pad)
+        open_map_button.config(wraplength=wrap_width)
+        open_recorded_button.config(wraplength=wrap_width)
+        options.place(
+            in_=left_frame,
+            x=browse_button.winfo_x(),
+            y=browse_button.winfo_y() + browse_button.winfo_height(),
+            width=max(1, panel_width),
+        )
+        options.lift()
+        _open_options_visible[0] = True
+        return "break"
 
     def on_close(_event=None):
         _leave_splash()
@@ -691,7 +759,7 @@ def show_splash_screen(
 
     browse_button = tk.Label(
         left_frame,
-        text="Open Map Folder…",
+        text="Open…",
         font=_BUTTON_FONT,
         bg=_BUTTON_BG,
         fg=_BUTTON_FG,
@@ -703,15 +771,106 @@ def show_splash_screen(
         highlightbackground=_BUTTON_BORDER_COLOR,
         highlightcolor=_BUTTON_BORDER_COLOR,
     )
-    _bind_activation(browse_button, on_open_map_folder)
+    _bind_activation(browse_button, on_open)
     browse_button.bind("<Enter>", lambda _event: browse_button.config(bg=_BUTTON_HOVER_BG))
     browse_button.bind("<Leave>", lambda _event: browse_button.config(bg=_BUTTON_BG))
     browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
 
+    open_options_frame[0] = tk.Frame(
+        left_frame,
+        bg=_BUTTON_BG,
+        borderwidth=1,
+        relief="solid",
+    )
+    open_options_frame[0].bind(
+        "<Button-1>",
+        lambda event: None,
+    )
+    options = open_options_frame[0]
+    open_map_button = tk.Label(
+        options,
+        text="Open Cave Map",
+        font=_BUTTON_FONT,
+        bg=_BUTTON_BG,
+        fg=_BUTTON_FG,
+        padx=24,
+        pady=8,
+        cursor="hand2",
+        takefocus=True,
+        anchor="w",
+        highlightthickness=1,
+        highlightbackground=_BUTTON_BORDER_COLOR,
+        highlightcolor=_BUTTON_BORDER_COLOR,
+    )
+    open_recorded_button = tk.Label(
+        options,
+        text="Open Recorded Dive",
+        font=_BUTTON_FONT,
+        bg=_BUTTON_BG,
+        fg=_BUTTON_FG,
+        padx=24,
+        pady=8,
+        cursor="hand2",
+        takefocus=True,
+        anchor="w",
+        highlightthickness=1,
+        highlightbackground=_BUTTON_BORDER_COLOR,
+        highlightcolor=_BUTTON_BORDER_COLOR,
+    )
+    _bind_activation(open_map_button, _open_map_and_close)
+    _bind_activation(open_recorded_button, _open_recorded_dive_and_close)
+    open_map_button.bind(
+        "<Enter>",
+        lambda _event: open_map_button.config(bg=_BUTTON_HOVER_BG),
+    )
+    open_map_button.bind(
+        "<Leave>",
+        lambda _event: open_map_button.config(bg=_BUTTON_BG),
+    )
+    open_recorded_button.bind(
+        "<Enter>",
+        lambda _event: open_recorded_button.config(bg=_BUTTON_HOVER_BG),
+    )
+    open_recorded_button.bind(
+        "<Leave>",
+        lambda _event: open_recorded_button.config(bg=_BUTTON_BG),
+    )
+    open_map_button.pack(fill="x")
+    divider = tk.Frame(options, bg=_BUTTON_BORDER_COLOR, height=1)
+    divider.pack(fill="x")
+    open_recorded_button.pack(fill="x")
+    open_options_frame[0].place_forget()
+
+    def _dismiss_open_options_on_escape(event=None):
+        if _open_options_visible[0]:
+            _hide_open_options()
+            return "break"
+        on_close(event)
+        return None
+
+    def _dismiss_open_options_on_click(event=None):
+        if not _open_options_visible[0] or event is None:
+            return
+        widget = event.widget
+        if widget is None:
+            _hide_open_options()
+            return
+        if widget in (browse_button, options) or _widget_ancestor_is(widget, options):
+            return
+        _hide_open_options()
+
+    def _widget_ancestor_is(widget, candidate) -> bool:
+        current = widget
+        while current is not None:
+            if current is candidate:
+                return True
+            current = current.master
+        return False
+
     instruction_label = tk.Label(
         left_frame,
-        text="Choose the folder that contains your cave map files:\n"
-             ".glb, or .obj with its matching .mtl and textures.",
+        text="Choose a cave map folder, or open a shared Recorded Dive.\n"
+             "Maps use .glb, or .obj with matching .mtl and textures.",
         font=_INSTRUCTION_FONT,
         fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
         justify="center",
@@ -865,8 +1024,9 @@ def show_splash_screen(
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     session.schedule_after(root, 50, _refresh_update_presentation)
     session.schedule_after(root, 350, update_manager.check_for_updates)
-    root.bind("<Return>", lambda _event: on_open_map_folder())
-    root.bind("<Escape>", on_close)
+    root.bind("<Return>", lambda _event: on_open())
+    root.bind("<Escape>", _dismiss_open_options_on_escape)
+    root.bind("<Button-1>", _dismiss_open_options_on_click)
     bind_primary_shortcut(root, "w", on_close)
     root.protocol("WM_DELETE_WINDOW", on_close)
 

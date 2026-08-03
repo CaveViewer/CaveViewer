@@ -1,4 +1,4 @@
-"""User-facing centerline Guided Dive route planning."""
+"""User-facing certified Guided Dive route planning."""
 
 from __future__ import annotations
 
@@ -76,14 +76,19 @@ from caveviewer.core.navigation.voxel_volume import (
     build_surface_voxel_volume,
 )
 from caveviewer.core.navigation.voxel_cache import (
+    MAX_CACHE_FIXED_VOXEL_SIZE_M,
+    MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M,
+    MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M,
     NAVIGATION_VOXEL_CACHE_METHOD,
     NAVIGATION_VOXEL_CACHE_NAME,
     NAVIGATION_VOXEL_CACHE_VERSION,
     NAVIGATION_VOXEL_GRAPH_METHOD,
+    NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR,
     NavigationVoxelAtlas,
     NavigationVoxelRoutePlan,
     NavigationVoxelScoringPolicy,
     load_cached_navigation_voxel_volume,
+    navigation_route_contract_rebuild_reason,
 )
 from caveviewer.core.navigation.mesh_graph import MESH_NAVIGATION_GRAPH_METHOD
 from caveviewer.core.navigation.voxel_graph_3d import (
@@ -114,28 +119,39 @@ DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS = (
 DEFAULT_AUTO_DIVE_LOOKAHEAD_DISTANCE_M = 8.0
 DEFAULT_AUTO_DIVE_LOCAL_REFINEMENT_ENABLED = True
 AUTO_DIVE_PREFLIGHT_MAX_START_CONNECTOR_CANDIDATES = 64
-# Startup Guided Dive can either select the shortest certified known terminal
-# or retain the historical farthest-terminal behavior.  The former is the
-# production default while fixed-route execution is being validated; the
-# latter remains useful for compatibility and diagnostics.
+# Production Guided Dive follows the complete farthest known terminal on the
+# cache-selected longest certified route. The explicit easiest and historical
+# frontier-capable farthest modes remain available for diagnostics.
+AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE = "longest_certified_route"
 AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL = "easiest_terminal"
 AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL = "farthest_terminal"
 AUTO_DIVE_ROUTE_GOAL_POLICIES = frozenset(
     {
+        AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE,
         AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL,
         AUTO_DIVE_ROUTE_GOAL_FARTHEST_TERMINAL,
     }
 )
-DEFAULT_AUTO_DIVE_ROUTE_GOAL = AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+DEFAULT_AUTO_DIVE_ROUTE_GOAL = AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE
+
+
+def _fixed_terminal_route_goal(route_goal: str) -> bool:
+    """Return whether a goal must reach one known terminal or fail closed."""
+    return route_goal in {
+        AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE,
+        AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL,
+    }
+
+
 # Runtime frontier expansion must leave time for graph construction, route
 # validation, and owner-thread handoff. The exact cached mesh remains the hard
 # safety gate, so a bounded 32k-cell local field is preferable to spending the
 # entire replan budget on a denser speculative rasterization.
 DEFAULT_AUTO_DIVE_LOCAL_REFINEMENT_RUNTIME_MAX_CELLS = 32_768
-# Full-route refinement uses only persisted 1 m tiles and normally aggregates
-# them to an anisotropic 2 m x/z, 1 m y graph. It is deliberately local to one
+# Full-route refinement uses only persisted fixed tiles and normally aggregates
+# them to an anisotropic 2 m x/z, 0.25 m y graph. It is deliberately local to one
 # bridge so startup never retains a whole-cave fine graph in memory.
-AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M = (2.0, 1.0, 2.0)
+AUTO_DIVE_FIXED_ROUTE_REFINED_GRID_SIZE_M = (2.0, 0.25, 2.0)
 AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_NODES = 32_768
 # The 2 m graph intentionally uses only its immediate 26-neighbour topology.
 # Longer shortcuts make graph construction quadratic enough to erase the
@@ -150,7 +166,7 @@ AUTO_DIVE_FIXED_ROUTE_REFINED_MAX_CONNECTOR_PROBES = 32
 # When that happens, materialize the already-persisted 1 m evidence for just
 # that tile as a bounded preflight fallback. This is never a whole-cave graph
 # and is discarded after the portal handoff has been prepared.
-AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_GRID_SIZE_M = (1.0, 1.0, 1.0)
+AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_GRID_SIZE_M = (1.0, 0.25, 1.0)
 AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_NODES = 65_536
 AUTO_DIVE_FIXED_ROUTE_FINE_FALLBACK_MAX_EDGES_PER_NODE = 26
 # Native 1 m paths normally validate on their first mesh pass. Keep this
@@ -254,7 +270,7 @@ AutoDiveDiagnosticSink = Callable[[str, Mapping[str, Any]], None]
 
 @dataclass(frozen=True)
 class AutoDiveSettings:
-    """Configuration for user-facing centerline Guided Dive planning."""
+    """Configuration for user-facing Guided Dive planning."""
 
     render_distance_cells: int = DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS
     speed_m_per_second: float = DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND
@@ -295,8 +311,9 @@ class AutoDiveSettings:
     voxel_scoring_policy: NavigationVoxelScoringPolicy = field(
         default_factory=NavigationVoxelScoringPolicy
     )
-    # Startup route goal.  Easiest-terminal plans are immutable, exact-safe
-    # routes; farthest-terminal retains the older frontier-capable behavior.
+    # Startup route goal. Longest-certified and easiest-terminal plans are
+    # immutable exact-safe routes; farthest-terminal retains diagnostic
+    # frontier-capable behavior.
     route_goal: str = DEFAULT_AUTO_DIVE_ROUTE_GOAL
 
 
@@ -800,6 +817,10 @@ class AutoDivePlan:
     # certificate and diagnostics use this to validate the same graph path
     # that the runtime planner handed to the controller.
     navigation_graph_keys: tuple[VoxelGraphKey, ...] = ()
+    # The deterministic viewer start may share a quantized occupied voxel
+    # with scan noise. This flag records the narrowly authorized case where
+    # cache generation proved an exact-mesh connector to the first graph node.
+    mesh_only_start_connector: bool = False
     # A fixed route can combine exact-safe prepared graph segments with small
     # 2 m graphs constructed from persisted 1 m tiles. The controller follows
     # ``route_points`` only; this lightweight ledger lets certification prove
@@ -878,24 +899,20 @@ def _authoritative_navigation_voxel_context(
         if isinstance(navigation, Mapping)
         else None
     )
+    recommended_route_id = (
+        navigation.get("recommended_route_id")
+        if isinstance(navigation, Mapping)
+        else None
+    )
     selected_route_id: str | None = None
     if isinstance(route_id, str) and route_id:
         selected_route_id = route_id
-    if selected_route_id is None and isinstance(navigation, Mapping):
-        candidate = navigation.get("recommended_route_id")
-        if isinstance(candidate, str) and candidate:
-            selected_route_id = candidate
-    if selected_route_id is None and isinstance(routes, Sequence) and not isinstance(
-        routes,
-        (str, bytes),
+    if (
+        selected_route_id is None
+        and isinstance(recommended_route_id, str)
+        and recommended_route_id
     ):
-        for route in routes:
-            if not isinstance(route, Mapping):
-                continue
-            candidate = route.get("id")
-            if isinstance(candidate, str) and candidate:
-                selected_route_id = candidate
-                break
+        selected_route_id = recommended_route_id
 
     status: dict[str, Any] = {
         "authority": "prepared_true_3d_voxel_graph",
@@ -971,10 +988,51 @@ def _authoritative_navigation_voxel_context(
             "voxel_cache_path_invalid",
             "Guided Dive navigation voxel cache path is invalid; rebuild the cache",
         )
+    route_contract_reason = navigation_route_contract_rebuild_reason(
+        navigation,
+        manifest_chunks=manifest.get("chunks"),
+    )
+    if route_contract_reason is not None:
+        status["route_contract_rebuild_reason"] = route_contract_reason
+        reject(
+            "navigation_route_contract_stale",
+            "Guided Dive route metadata is stale or unresolved; rebuild the "
+            "navigation cache",
+        )
     if selected_route_id is None:
         reject(
             "navigation_route_missing",
             "Guided Dive requires a selected cached navigation route",
+        )
+    if selected_route_id != recommended_route_id:
+        reject(
+            "navigation_route_not_recommended",
+            "Guided Dive may execute only the cache-selected complete route",
+        )
+    selected_route = (
+        next(
+            (
+                item
+                for item in routes
+                if isinstance(item, Mapping)
+                and item.get("id") == selected_route_id
+            ),
+            None,
+        )
+        if isinstance(routes, Sequence)
+        and not isinstance(routes, (str, bytes))
+        else None
+    )
+    if (
+        not isinstance(selected_route, Mapping)
+        or not _complete_certified_navigation_route(
+            navigation,
+            selected_route,
+        )
+    ):
+        reject(
+            "navigation_route_contract_invalid",
+            "Guided Dive requires a complete certified entrance-to-terminal route",
         )
 
     centerline_path = cached_centerline_path(
@@ -1077,23 +1135,20 @@ def _authoritative_graph_navigation_context(
         if isinstance(navigation, Mapping)
         else None
     )
+    recommended_route_id = (
+        navigation.get("recommended_route_id")
+        if isinstance(navigation, Mapping)
+        else None
+    )
     selected_route_id: str | None = (
         str(route_id) if isinstance(route_id, str) and route_id else None
     )
-    if selected_route_id is None and isinstance(navigation, Mapping):
-        candidate = navigation.get("recommended_route_id")
-        if isinstance(candidate, str) and candidate:
-            selected_route_id = candidate
-    if selected_route_id is None:
-        routes = navigation.get("routes") if isinstance(navigation, Mapping) else None
-        if isinstance(routes, Sequence) and not isinstance(routes, (str, bytes)):
-            for route in routes:
-                if not isinstance(route, Mapping):
-                    continue
-                candidate = route.get("id")
-                if isinstance(candidate, str) and candidate:
-                    selected_route_id = candidate
-                    break
+    if (
+        selected_route_id is None
+        and isinstance(recommended_route_id, str)
+        and recommended_route_id
+    ):
+        selected_route_id = recommended_route_id
 
     status: dict[str, Any] = {
         "authority": "prepared_mesh_free_space_graph",
@@ -1152,10 +1207,52 @@ def _authoritative_graph_navigation_context(
             "voxel_cache_path_invalid",
             "Guided Dive navigation voxel cache path is invalid; rebuild the cache",
         )
+    route_contract_reason = navigation_route_contract_rebuild_reason(
+        navigation,
+        manifest_chunks=manifest.get("chunks"),
+    )
+    if route_contract_reason is not None:
+        status["route_contract_rebuild_reason"] = route_contract_reason
+        reject(
+            "navigation_route_contract_stale",
+            "Guided Dive route metadata is stale or unresolved; rebuild the "
+            "navigation cache",
+        )
     if selected_route_id is None:
         reject(
             "navigation_route_missing",
             "Guided Dive requires a selected cached navigation route",
+        )
+    if selected_route_id != recommended_route_id:
+        reject(
+            "navigation_route_not_recommended",
+            "Guided Dive may execute only the cache-selected complete route",
+        )
+    routes = navigation.get("routes")
+    selected_route = (
+        next(
+            (
+                item
+                for item in routes
+                if isinstance(item, Mapping)
+                and item.get("id") == selected_route_id
+            ),
+            None,
+        )
+        if isinstance(routes, Sequence)
+        and not isinstance(routes, (str, bytes))
+        else None
+    )
+    if (
+        not isinstance(selected_route, Mapping)
+        or not _complete_certified_navigation_route(
+            navigation,
+            selected_route,
+        )
+    ):
+        reject(
+            "navigation_route_contract_invalid",
+            "Guided Dive requires a complete certified entrance-to-terminal route",
         )
 
     cached_volume = load_cached_navigation_voxel_volume(
@@ -1167,6 +1264,40 @@ def _authoritative_graph_navigation_context(
         reject(
             "voxel_graph_model_missing",
             "Guided Dive could not load the prepared voxel graph; rebuild the cache",
+        )
+    status.update(
+        {
+            "coverage_scope": str(cached_volume.coverage_scope),
+            "fixed_isotropic_voxel_size_m": float(
+                cached_volume.fixed_isotropic_voxel_size_m
+            ),
+            "fixed_vertical_voxel_size_m": float(
+                cached_volume.fixed_vertical_voxel_size_m
+            ),
+            "fixed_voxel_cell_size_m": [
+                float(value)
+                for value in cached_volume.fixed_voxel_cell_size_m
+            ],
+            "surface_overlap_policy": (
+                "occupied_wins"
+                if cached_volume.surface_overlap_occupied_wins
+                else "legacy_free_preferred"
+            ),
+        }
+    )
+    if (
+        cached_volume.fixed_isotropic_voxel_size_m <= 0.0
+        or cached_volume.fixed_isotropic_voxel_size_m
+        > MAX_CACHE_FIXED_VOXEL_SIZE_M + 1e-9
+        or cached_volume.fixed_vertical_voxel_size_m <= 0.0
+        or cached_volume.fixed_vertical_voxel_size_m
+        > MAX_CACHE_FIXED_VERTICAL_VOXEL_SIZE_M + 1e-9
+        or not cached_volume.surface_overlap_occupied_wins
+        or cached_volume.coverage_scope != "certified_terminal_route"
+    ):
+        reject(
+            "fixed_navigation_policy_invalid",
+            "Guided Dive cache does not satisfy the fixed-orthogonal V12 policy",
         )
     graph = cached_volume.prepared_mesh_graph
     if not cached_volume.has_prepared_mesh_graph or graph is None:
@@ -1279,6 +1410,214 @@ def build_auto_dive_initial_camera_pose(
     )
 
 
+def certified_auto_dive_start_position(
+    manifest: Mapping[str, Any],
+) -> Point | None:
+    """Return the selected built route's executable certified start, if any."""
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    if not isinstance(navigation, Mapping):
+        return None
+    if navigation_route_contract_rebuild_reason(
+        navigation,
+        manifest_chunks=manifest.get("chunks"),
+    ) is not None:
+        return None
+    if _longest_navigation_route_id(manifest) is None:
+        return None
+    return _certified_navigation_route_start(navigation)
+
+
+def certified_auto_dive_local_start_position(
+    manifest: Mapping[str, Any],
+    *,
+    expected_start: Sequence[float],
+) -> Point | None:
+    """Return a cache-certified local correction of the viewer map start."""
+    try:
+        expected = tuple(float(value) for value in expected_start)
+    except (TypeError, ValueError):
+        return None
+    if len(expected) != 3 or not all(math.isfinite(value) for value in expected):
+        return None
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    if (
+        not isinstance(navigation, Mapping)
+        or "navigation_start" not in navigation
+        or navigation_route_contract_rebuild_reason(
+            navigation,
+            manifest_chunks=manifest.get("chunks"),
+        )
+        is not None
+    ):
+        return None
+    authored_start = _declared_navigation_start_point(navigation)
+    if authored_start is None or not np.allclose(
+        authored_start,
+        expected,
+        rtol=0.0,
+        atol=1e-6,
+    ):
+        return None
+    route = _selected_cached_route_metadata(manifest)
+    if route is None or route.get("starts_at_navigation_start") is not True:
+        return None
+    certified_start = _certified_navigation_route_start(navigation)
+    corridor = route.get("voxel_corridor")
+    if certified_start is None or not isinstance(corridor, Mapping):
+        return None
+    graph_details = corridor.get("prepared_mesh_graph")
+    if not isinstance(graph_details, Mapping):
+        return None
+    source_point = _finite_auto_dive_point(
+        graph_details.get("source_ingress_point")
+    )
+    attachment_point = _finite_auto_dive_point(
+        graph_details.get("source_ingress_attachment_point")
+    )
+    try:
+        attachment_distance_m = float(
+            graph_details["source_ingress_attachment_distance_m"]
+        )
+        snap_limit_m = float(graph_details["source_ingress_snap_limit_m"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    actual_distance_m = math.dist(expected, certified_start)
+    if (
+        graph_details.get("source_ingress_required") is not True
+        or graph_details.get("source_ingress_connector_mesh_clear") is not True
+        or source_point is None
+        or attachment_point is None
+        or not np.allclose(source_point, expected, rtol=0.0, atol=1e-6)
+        or not np.allclose(
+            attachment_point,
+            certified_start,
+            rtol=0.0,
+            atol=1e-6,
+        )
+        or not math.isfinite(attachment_distance_m)
+        or not math.isfinite(snap_limit_m)
+        or attachment_distance_m < 0.0
+        or snap_limit_m <= 0.0
+        or snap_limit_m > MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M + 1e-9
+        or actual_distance_m > snap_limit_m + 1e-9
+        or abs(actual_distance_m - attachment_distance_m) > 1e-6
+    ):
+        return None
+    return certified_start
+
+
+def _mesh_only_navigation_start_connector_allowed(
+    manifest: Mapping[str, Any],
+    *,
+    route_id: str,
+    current: Point,
+) -> bool:
+    """Return whether cache proof authorizes one exact map-start connector."""
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    if not isinstance(navigation, Mapping):
+        return False
+    navigation_start = _declared_navigation_start_point(navigation)
+    if navigation_start is None or not np.allclose(
+        navigation_start,
+        current,
+        rtol=0.0,
+        atol=1e-6,
+    ):
+        return False
+    routes = navigation.get("routes")
+    if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
+        return False
+    route = next(
+        (
+            value
+            for value in routes
+            if isinstance(value, Mapping) and value.get("id") == route_id
+        ),
+        None,
+    )
+    if not isinstance(route, Mapping):
+        return False
+    if route.get("starts_at_navigation_start") is not True:
+        return False
+    corridor = route.get("voxel_corridor")
+    if not isinstance(corridor, Mapping) or corridor.get("built") is not True:
+        return False
+    graph_details = corridor.get("prepared_mesh_graph")
+    if not isinstance(graph_details, Mapping):
+        return False
+    source_point = _finite_auto_dive_point(
+        graph_details.get("source_ingress_point")
+    )
+    attachment_point = _finite_auto_dive_point(
+        graph_details.get("source_ingress_attachment_point")
+    )
+    return bool(
+        graph_details.get("source_ingress_required") is True
+        and graph_details.get("source_ingress_connector_mesh_clear") is True
+        and source_point is not None
+        and attachment_point is not None
+        and np.allclose(source_point, current, rtol=0.0, atol=1e-6)
+    )
+
+
+def _finite_auto_dive_point(value: object) -> Point | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    if len(value) != 3:
+        return None
+    try:
+        point = tuple(float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(item) for item in point):
+        return None
+    return point  # type: ignore[return-value]
+
+
+def _obj_navigation_start_anchor_point(navigation: object) -> Point | None:
+    """Return only a complete, immutable OBJ vertex-zero anchor record."""
+    if not isinstance(navigation, Mapping):
+        return None
+    value = navigation.get("navigation_start_anchor")
+    if not isinstance(value, Mapping):
+        return None
+    expected_fields = {
+        "position",
+        "kind",
+        "source",
+        "source_vertex_index",
+        "source_order",
+        "executable",
+        "attachment_required",
+        "attachment_coordinate_space",
+    }
+    if set(value) != expected_fields:
+        return None
+    if (
+        value.get("kind") != "obj_surface_vertex"
+        or value.get("source_order") != "obj_declaration_order"
+        or value.get("source_vertex_index") != 0
+        or type(value.get("source_vertex_index")) is not int
+        or value.get("executable") is not False
+        or value.get("attachment_required") is not True
+        or value.get("attachment_coordinate_space") != "xyz"
+        or type(value.get("source")) is not str
+        or not str(value.get("source")).strip()
+    ):
+        return None
+    position = value.get("position")
+    if (
+        type(position) is not list
+        or len(position) != 3
+        or any(type(coordinate) not in (int, float) for coordinate in position)
+    ):
+        return None
+    point = tuple(float(coordinate) for coordinate in position)
+    if not all(math.isfinite(coordinate) for coordinate in point):
+        return None
+    return point  # type: ignore[return-value]
+
+
 def _build_graph_initial_camera_pose(
     manifest: Mapping[str, Any],
     *,
@@ -1286,35 +1625,41 @@ def _build_graph_initial_camera_pose(
     cache_dir: str | os.PathLike[str] | None,
 ) -> RouteKeyframe:
     """Choose the initial pose from the graph entrance, not a centerline end."""
+    route_id = _longest_navigation_route_id(manifest)
+    if route_id is None:
+        raise NavigationConfigurationError(
+            "Guided Dive has no complete certified entrance route"
+        )
     atlas, _authority_status = _authoritative_graph_navigation_context(
         manifest,
         cache_dir=cache_dir,
         settings=settings,
         diagnostics=None,
+        route_id=route_id,
     )
     graph = atlas.authoritative_graph
     if graph is None:
         raise NavigationConfigurationError("Guided Dive prepared graph is unavailable")
     navigation = manifest.get(NAVIGATION_METADATA_KEY)
-    start_point = _navigation_start_point(navigation)
+    start_point = _certified_navigation_route_start(navigation)
     if start_point is None:
-        start_key = min(
-            graph.nodes,
-            key=lambda key: (
-                float(graph.nodes[key].progress_m),
-                key,
-            ),
+        raise NavigationConfigurationError(
+            "Guided Dive certified entrance attachment is unavailable"
         )
-    else:
-        start_key, _distance_m = _preflight_nearest_graph_key(
-            graph,
-            start_point,
-            routable_only=True,
+    start_key, distance_m = _preflight_nearest_graph_key(
+        graph,
+        start_point,
+        routable_only=True,
+    )
+    if (
+        start_key is None
+        or distance_m is None
+        or not math.isfinite(float(distance_m))
+        or float(distance_m) > 1e-6
+    ):
+        raise NavigationConfigurationError(
+            "Guided Dive certified entrance does not match the prepared graph start"
         )
-        if start_key is None:
-            raise NavigationConfigurationError(
-                "Guided Dive graph has no routable entrance node"
-            )
     start_node = graph.nodes[start_key]
     target_edge = max(
         (
@@ -1348,8 +1693,14 @@ def _build_graph_initial_camera_pose(
 def _navigation_start_point(navigation: object) -> Point | None:
     if not isinstance(navigation, Mapping):
         return None
-    value = navigation.get("navigation_start")
-    if value is None:
+    certified_start = _certified_navigation_route_start(navigation)
+    if certified_start is not None:
+        return certified_start
+    declared_start = _declared_navigation_start_point(navigation)
+    if declared_start is not None:
+        return declared_start
+    value = None
+    if "navigation_start" not in navigation:
         # Older manifests may not have the explicit navigation sidecar.  The
         # first point of the selected route is still a valid map-start hint
         # for initial camera placement; it is never used as the terminal or
@@ -1392,11 +1743,50 @@ def _navigation_start_point(navigation: object) -> Point | None:
                             (str, bytes),
                         ):
                             value = first_point
+    return _finite_auto_dive_point(value)
+
+
+def _declared_navigation_start_point(navigation: object) -> Point | None:
+    """Return only the explicit source entrance, never its safe attachment."""
+    if not isinstance(navigation, Mapping):
+        return None
+    value = navigation.get("navigation_start")
     if isinstance(value, Mapping):
         value = value.get("position", value.get("point"))
+    return _finite_auto_dive_point(value)
+
+
+def _certified_navigation_route_start(navigation: object) -> Point | None:
+    """Parse the recommended built route's exact executable start point."""
+    if not isinstance(navigation, Mapping):
+        return None
+    recommended_id = navigation.get("recommended_route_id")
+    if not isinstance(recommended_id, str) or not recommended_id:
+        return None
+    routes = navigation.get("routes")
+    if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
+        return None
+    selected_route = next(
+        (
+            route
+            for route in routes
+            if isinstance(route, Mapping) and route.get("id") == recommended_id
+        ),
+        None,
+    )
+    if not isinstance(selected_route, Mapping):
+        return None
+    if not _complete_certified_navigation_route(navigation, selected_route):
+        return None
+    value = selected_route.get("certified_start_position")
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return None
     if len(value) != 3:
+        return None
+    if not all(
+        isinstance(item, (int, float)) and not isinstance(item, bool)
+        for item in value
+    ):
         return None
     try:
         point = tuple(float(item) for item in value)
@@ -2002,6 +2392,13 @@ def build_voxel_graph_auto_dive_plan(
             minimum_clearance_m=float(settings.minimum_graph_clearance_m),
         ),
     )
+    mesh_only_start_connector = (
+        _mesh_only_navigation_start_connector_allowed(
+            manifest,
+            route_id=route_id,
+            current=current,
+        )
+    )
     edge_safety_cache: dict[tuple[VoxelGraphKey, VoxelGraphKey], bool] = {}
 
     def runtime_edge_is_safe(
@@ -2329,7 +2726,7 @@ def build_voxel_graph_auto_dive_plan(
         navigation_graph_keys=tuple(voxel_route_plan.graph_keys),
         fixed_route=bool(
             voxel_route_plan.terminal_reached
-            and settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            and _fixed_terminal_route_goal(settings.route_goal)
         ),
     )
 
@@ -2829,9 +3226,10 @@ def build_auto_dive_preflight_plan(
     """Validate one complete cave route before Guided Dive activation.
 
     Startup preflight deliberately differs from receding-horizon replanning:
-    the default easiest-terminal policy searches the prepared true-3D graph
-    for the shortest known terminal in the starting component. The explicit
-    farthest-terminal policy retains the historical terminal/frontier search.
+    the default longest-certified policy searches the prepared true-3D graph
+    for the farthest known terminal in the starting component. The explicit
+    easiest-terminal policy selects the nearest known terminal, while the
+    farthest-terminal diagnostic policy retains historical frontier search.
     The returned plan is the same graph path that the controller receives, so
     activation cannot succeed on a route that was not the route validated
     here.
@@ -2844,6 +3242,7 @@ def build_auto_dive_preflight_plan(
             "Guided Dive preflight requires a finite 3D camera position"
         )
     current: Point = tuple(float(value) for value in current_array)
+    requested_current = current
 
     route_id = _longest_navigation_route_id(manifest)
     if route_id is None:
@@ -2853,6 +3252,30 @@ def build_auto_dive_preflight_plan(
             reason="longest_passage_metadata_missing",
             details={"route_selection": "prepared_graph_cache_identity"},
         )
+
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    entrance_reset = bool(
+        _fixed_terminal_route_goal(settings.route_goal)
+        and isinstance(navigation, Mapping)
+        and (
+            _obj_navigation_start_anchor_point(navigation) is not None
+            or _declared_navigation_start_point(navigation) is not None
+        )
+    )
+    if entrance_reset:
+        certified_start = _certified_navigation_route_start(navigation)
+        if certified_start is None:
+            return _auto_dive_preflight_result(
+                diagnostics,
+                status=AUTO_DIVE_PREFLIGHT_INDETERMINATE,
+                reason="certified_entrance_start_missing",
+                navigation_route_id=route_id,
+            )
+        # Guided Dive is a named whole-route capability, not "continue from
+        # wherever the free camera happens to be."  The controller applies
+        # the first keyframe immediately on activation, so construct and
+        # validate the fixed route from its certified entrance attachment.
+        current = certified_start
 
     try:
         cached_volume, _authority_status = _authoritative_graph_navigation_context(
@@ -2873,6 +3296,9 @@ def build_auto_dive_preflight_plan(
                 "stale_or_unsupported_cache",
                 "voxel_cache_path_invalid",
                 "navigation_route_missing",
+                "navigation_route_contract_stale",
+                "navigation_route_not_recommended",
+                "navigation_route_contract_invalid",
                 "navigation_route_metadata_invalid",
                 "voxel_graph_model_missing",
                 "mesh_graph_missing",
@@ -2914,6 +3340,13 @@ def build_auto_dive_preflight_plan(
         policy=GraphRouteSafetyPolicy(
             minimum_clearance_m=float(settings.minimum_graph_clearance_m),
         ),
+    )
+    mesh_only_start_connector = (
+        _mesh_only_navigation_start_connector_allowed(
+            manifest,
+            route_id=route_id,
+            current=current,
+        )
     )
 
     snap_tolerance_m = _preflight_graph_snap_tolerance_m(
@@ -2959,6 +3392,7 @@ def build_auto_dive_preflight_plan(
         current,
         maximum_distance_m=snap_tolerance_m,
         graph_safety_validator=graph_safety_validator,
+        allow_mesh_only_start_connector=mesh_only_start_connector,
     )
     if start_key is None:
         return _auto_dive_preflight_result(
@@ -3021,7 +3455,7 @@ def build_auto_dive_preflight_plan(
         terminal_details.get("terminal_unknown_boundary", False)
     )
 
-    if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL:
+    if _fixed_terminal_route_goal(settings.route_goal):
         # The terminal itself is selected by physical graph distance.  Use
         # that same deterministic shortest path for the fixed preflight
         # spine, instead of allowing heading preferences to choose a longer
@@ -3087,6 +3521,7 @@ def build_auto_dive_preflight_plan(
     full_failure = graph_safety_validator.route_clearance_failure(
         full_route_points,
         graph_keys,
+        allow_mesh_only_start_connector=mesh_only_start_connector,
     )
     mesh_safe_frontier = False
     mesh_safe_route_fallback = False
@@ -3104,7 +3539,7 @@ def build_auto_dive_preflight_plan(
         # exact-safe route or it is not published.  Repair its *original*
         # coarse route before considering any mesh-safe graph frontier.  This
         # prevents a short prefix from masking a failed full-cave traversal.
-        if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL:
+        if _fixed_terminal_route_goal(settings.route_goal):
             (
                 refined_segments,
                 refined_points,
@@ -3139,7 +3574,7 @@ def build_auto_dive_preflight_plan(
                 }
         # A safe frontier remains an explicit farthest/frontier-policy
         # fallback only.  It is useful diagnostic behaviour, but it is never
-        # a substitute for the one complete easiest-terminal route.
+        # a substitute for one complete fixed known-terminal route.
         elif full_failure.reason == "mesh_intersection":
             (
                 safe_graph_keys,
@@ -3178,8 +3613,7 @@ def build_auto_dive_preflight_plan(
                     ],
                 }
                 safe_terminal_route = bool(
-                    settings.route_goal
-                    == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+                    _fixed_terminal_route_goal(settings.route_goal)
                     and safe_details.get("terminal_candidate", False)
                     and not safe_details.get("terminal_unknown_boundary", False)
                 )
@@ -3192,6 +3626,9 @@ def build_auto_dive_preflight_plan(
                 full_failure = graph_safety_validator.route_clearance_failure(
                     full_route_points,
                     graph_keys,
+                    allow_mesh_only_start_connector=(
+                        mesh_only_start_connector
+                    ),
                 )
                 if full_failure is None:
                     mesh_safe_frontier = not safe_terminal_route
@@ -3285,6 +3722,7 @@ def build_auto_dive_preflight_plan(
         bounded_failure = graph_safety_validator.route_clearance_failure(
             route_points,
             graph_keys,
+            allow_mesh_only_start_connector=mesh_only_start_connector,
         )
     if bounded_failure is not None:
         return _auto_dive_preflight_result(
@@ -3305,6 +3743,25 @@ def build_auto_dive_preflight_plan(
             coverage_incomplete=coverage_incomplete,
         )
 
+    smoothing_details: dict[str, object] = {
+        "method": "fixed_route_ledger_preserved"
+        if route_segments
+        else "disabled",
+        "raw_point_count": len(route_points),
+        "smoothed_point_count": len(route_points),
+    }
+    if not route_segments:
+        route_points, smoothing_details = (
+            _preflight_smoothed_route_geometry(
+                route_points,
+                settings=settings,
+                graph_safety_validator=graph_safety_validator,
+                preserve_mesh_only_start_connector=(
+                    mesh_only_start_connector
+                ),
+            )
+        )
+
     prefetched_chunk_ids = cached_volume.prefetch_for_points(route_points)
     route_length_m = path_length(route_points)
     duration_s = route_length_m / float(settings.speed_m_per_second)
@@ -3321,6 +3778,11 @@ def build_auto_dive_preflight_plan(
         RouteKeyframe.from_mapping(payload, index=index)
         for index, payload in enumerate(keyframe_payloads)
     ]
+    fixed_goal_label = (
+        "longest_certified"
+        if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE
+        else "easiest"
+    )
     plan = AutoDivePlan(
         route=CameraRoute.from_keyframes(keyframes),
         centerline_path=None,
@@ -3333,10 +3795,10 @@ def build_auto_dive_preflight_plan(
         selection_reason=(
             "preflight_mesh_safe_graph_frontier"
             if mesh_safe_frontier
-            else "preflight_refined_easiest_mesh_safe_graph_terminal"
+            else f"preflight_refined_{fixed_goal_label}_mesh_safe_graph_terminal"
             if refined_fixed_route
-            else "preflight_easiest_mesh_safe_graph_terminal"
-            if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else f"preflight_{fixed_goal_label}_mesh_safe_graph_terminal"
+            if _fixed_terminal_route_goal(settings.route_goal)
             else "preflight_farthest_graph_terminal_true_3d"
         ),
         replan_at_end=mesh_safe_frontier,
@@ -3346,7 +3808,7 @@ def build_auto_dive_preflight_plan(
                 "preflight_physical_true_3d_graph_spine_with_fine_portals"
                 if refined_fixed_route
                 else "preflight_physical_true_3d_graph"
-                if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+                if _fixed_terminal_route_goal(settings.route_goal)
                 else "preflight_global_true_3d_graph"
             ),
             "route_goal": str(settings.route_goal),
@@ -3373,6 +3835,7 @@ def build_auto_dive_preflight_plan(
             "refined_fixed_route": refined_fixed_route,
             "route_segment_count": len(route_segments),
             "refined_route": refined_route_details,
+            "camera_path_smoothing": dict(smoothing_details),
         },
         terminal_reached=not mesh_safe_frontier,
         navigation_route_id=route_id,
@@ -3380,8 +3843,9 @@ def build_auto_dive_preflight_plan(
         navigation_atlas=cached_volume,
         navigation_graph=graph,
         navigation_graph_keys=tuple(graph_keys),
+        mesh_only_start_connector=mesh_only_start_connector,
         fixed_route=bool(
-            settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            _fixed_terminal_route_goal(settings.route_goal)
             and not mesh_safe_frontier
         ),
         route_segments=route_segments,
@@ -3392,10 +3856,10 @@ def build_auto_dive_preflight_plan(
         reason=(
             "validated_mesh_safe_graph_frontier_route"
             if mesh_safe_frontier
-            else "validated_refined_easiest_mesh_safe_graph_terminal_route"
+            else f"validated_refined_{fixed_goal_label}_mesh_safe_graph_terminal_route"
             if refined_fixed_route
-            else "validated_easiest_mesh_safe_graph_terminal_route"
-            if settings.route_goal == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else f"validated_{fixed_goal_label}_mesh_safe_graph_terminal_route"
+            if _fixed_terminal_route_goal(settings.route_goal)
             else "validated_farthest_graph_terminal_route"
         ),
         plan=plan,
@@ -3416,6 +3880,14 @@ def build_auto_dive_preflight_plan(
             "refined_fixed_route": refined_fixed_route,
             "route_segment_count": len(route_segments),
             "refined_route": refined_route_details,
+            "camera_path_smoothing": dict(smoothing_details),
+            "entrance_reset": entrance_reset,
+            "requested_camera_position": [
+                float(value) for value in requested_current
+            ],
+            "certified_route_start_position": [
+                float(value) for value in current
+            ],
         },
     )
 
@@ -3455,30 +3927,250 @@ def _auto_dive_preflight_result(
 
 
 def _longest_navigation_route_id(manifest: Mapping[str, Any]) -> str | None:
+    """Return only the cache-selected complete certified open route.
+
+    Raw metadata length is never runtime authority. Cache construction has
+    already compared candidates and published exactly one recommendation;
+    accepting another route here can select an unbuilt 2D candidate or an
+    incomplete prefix.
+    """
     navigation = manifest.get(NAVIGATION_METADATA_KEY)
-    routes = navigation.get("routes") if isinstance(navigation, Mapping) else None
+    if not isinstance(navigation, Mapping):
+        return None
+    if navigation_route_contract_rebuild_reason(
+        navigation,
+        manifest_chunks=manifest.get("chunks"),
+    ) is not None:
+        return None
+    routes = navigation.get("routes")
     if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
         return None
-    candidates: list[tuple[float, str]] = []
-    for route in routes:
-        if not isinstance(route, Mapping):
-            continue
-        route_id = route.get("id")
-        try:
-            length_m = float(route.get("length_m"))
-        except (TypeError, ValueError):
-            continue
-        if (
-            not isinstance(route_id, str)
-            or not route_id
-            or not math.isfinite(length_m)
-            or length_m <= 0.0
-        ):
-            continue
-        candidates.append((length_m, route_id))
-    if not candidates:
+    recommended = navigation.get("recommended_route_id")
+    if not isinstance(recommended, str) or not recommended:
         return None
-    return max(candidates, key=lambda candidate: (candidate[0], candidate[1]))[1]
+    complete_routes = tuple(
+        route
+        for route in routes
+        if isinstance(route, Mapping)
+        and isinstance(route.get("id"), str)
+        and bool(route.get("id"))
+        and _complete_certified_navigation_route(
+            navigation,
+            route,
+            require_selected_route_label=False,
+        )
+    )
+    selected_routes = tuple(
+        route for route in complete_routes if route.get("id") == recommended
+    )
+    if (
+        len(selected_routes) != 1
+        or not _complete_certified_navigation_route(
+            navigation,
+            selected_routes[0],
+        )
+    ):
+        return None
+
+    def authoritative_length_m(route: Mapping[str, Any]) -> float | None:
+        corridor = route.get("voxel_corridor")
+        if not isinstance(corridor, Mapping):
+            return None
+        raw_length = corridor.get("route_length_m")
+        if type(raw_length) not in (int, float):
+            return None
+        length_m = float(raw_length)
+        return length_m if math.isfinite(length_m) and length_m > 0.0 else None
+
+    selected_length_m = authoritative_length_m(selected_routes[0])
+    if selected_length_m is None:
+        return None
+    for route in complete_routes:
+        if route is selected_routes[0]:
+            continue
+        route_length_m = authoritative_length_m(route)
+        if route_length_m is None:
+            return None
+        if route_length_m > selected_length_m + 1e-6:
+            return None
+    return recommended
+
+
+def _complete_certified_navigation_route(
+    navigation: Mapping[str, Any],
+    route: Mapping[str, Any],
+    *,
+    require_selected_route_label: bool = True,
+) -> bool:
+    """Require an open exact-safe route through its authored endpoint.
+
+    Only the cache-selected winner carries the global route-selection label.
+    Other built candidates must remain comparable by their exact completion
+    evidence so a stale shorter recommendation cannot hide a longer route.
+    """
+    if route.get("closed_loop") is not False:
+        return False
+    corridor = route.get("voxel_corridor")
+    if not isinstance(corridor, Mapping) or corridor.get("built") is not True:
+        return False
+    graph_details = corridor.get("prepared_mesh_graph")
+    if (
+        not isinstance(graph_details, Mapping)
+        or graph_details.get("known_terminal_reached") is not True
+    ):
+        return False
+    try:
+        source_count = int(corridor["source_route_point_count"])
+        ingress_index = int(corridor["certified_ingress_hint_index"])
+        terminal_index = int(corridor["certified_terminal_hint_index"])
+        selected_source_start = int(
+            corridor["selected_source_hint_start_index"]
+        )
+        selected_source_end = int(
+            corridor["selected_source_hint_end_index"]
+        )
+        route_length_m = float(corridor["route_length_m"])
+        terminal_count = int(graph_details["terminal_count"])
+        unknown_boundary_count = int(graph_details["unknown_boundary_count"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    certified_start = _finite_auto_dive_point(
+        route.get("certified_start_position")
+    )
+    if (
+        source_count < 2
+        or ingress_index != 0
+        or terminal_index != source_count - 1
+        or selected_source_start != 0
+        or selected_source_end != source_count - 1
+        or corridor.get("complete_ingress_route") is not True
+        or not math.isfinite(route_length_m)
+        or route_length_m <= 0.0
+        or terminal_count < 1
+        or unknown_boundary_count != 0
+        or certified_start is None
+        or navigation.get("route_selection_method")
+        != NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR
+        or (
+            require_selected_route_label
+            and route.get("selection_method")
+            != NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR
+        )
+    ):
+        return False
+
+    raw_obj_anchor = navigation.get("navigation_start_anchor")
+    obj_anchor = _obj_navigation_start_anchor_point(navigation)
+    if raw_obj_anchor is not None and obj_anchor is None:
+        return False
+    authored_start = _declared_navigation_start_point(navigation)
+    if "navigation_start" in navigation and authored_start is None:
+        return False
+    has_obj_anchor = obj_anchor is not None
+    has_authored_start = authored_start is not None
+    if has_obj_anchor == has_authored_start:
+        return False
+    if has_obj_anchor:
+        source_point = _finite_auto_dive_point(
+            graph_details.get("source_ingress_point")
+        )
+        attachment_point = _finite_auto_dive_point(
+            graph_details.get("source_ingress_attachment_point")
+        )
+        try:
+            attachment_distance_m = float(
+                graph_details["source_ingress_attachment_distance_m"]
+            )
+            snap_limit_m = float(
+                graph_details["source_ingress_snap_limit_m"]
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        actual_distance_m = (
+            math.inf
+            if attachment_point is None or obj_anchor is None
+            else math.dist(obj_anchor, attachment_point)
+        )
+        if (
+            route.get("starts_at_navigation_start_anchor") is not True
+            or graph_details.get("source_ingress_required") is not True
+            or graph_details.get("source_ingress_connector_required") is not False
+            or graph_details.get("source_ingress_attachment_mode")
+            != "non_executable_obj_surface_anchor_snap"
+            or graph_details.get("source_ingress_coordinate_space") != "xyz"
+            or source_point is None
+            or attachment_point is None
+            or not np.allclose(source_point, obj_anchor, rtol=0.0, atol=1e-6)
+            or not np.allclose(
+                attachment_point,
+                certified_start,
+                rtol=0.0,
+                atol=1e-6,
+            )
+            or not math.isfinite(attachment_distance_m)
+            or attachment_distance_m < 0.0
+            or not math.isfinite(snap_limit_m)
+            or snap_limit_m <= 0.0
+            or snap_limit_m
+            > MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M + 1e-9
+            or actual_distance_m > snap_limit_m + 1e-9
+            or abs(actual_distance_m - attachment_distance_m) > 1e-6
+        ):
+            return False
+    if has_authored_start:
+        source_point = _finite_auto_dive_point(
+            graph_details.get("source_ingress_point")
+        )
+        attachment_point = _finite_auto_dive_point(
+            graph_details.get("source_ingress_attachment_point")
+        )
+        try:
+            attachment_distance_m = float(
+                graph_details["source_ingress_attachment_distance_m"]
+            )
+            snap_limit_m = float(
+                graph_details["source_ingress_snap_limit_m"]
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        actual_distance_m = (
+            math.inf
+            if attachment_point is None or authored_start is None
+            else math.dist(authored_start, attachment_point)
+        )
+        if (
+            route.get("starts_at_navigation_start") is not True
+            or graph_details.get("source_ingress_required") is not True
+            or graph_details.get("source_ingress_connector_required") is not True
+            or graph_details.get("source_ingress_attachment_mode")
+            != "executable_authored_start_connector"
+            or graph_details.get("source_ingress_connector_mesh_clear") is not True
+            or graph_details.get("source_ingress_coordinate_space") != "xyz"
+            or source_point is None
+            or attachment_point is None
+            or not np.allclose(
+                source_point,
+                authored_start,
+                rtol=0.0,
+                atol=1e-6,
+            )
+            or not np.allclose(
+                attachment_point,
+                certified_start,
+                rtol=0.0,
+                atol=1e-6,
+            )
+            or not math.isfinite(attachment_distance_m)
+            or attachment_distance_m < 0.0
+            or not math.isfinite(snap_limit_m)
+            or snap_limit_m <= 0.0
+            or snap_limit_m
+            > MAX_OBJ_SOURCE_INGRESS_SNAP_DISTANCE_M + 1e-9
+            or actual_distance_m > snap_limit_m + 1e-9
+            or abs(actual_distance_m - attachment_distance_m) > 1e-6
+        ):
+            return False
+    return True
 
 
 def _preflight_select_graph_terminal(
@@ -3495,9 +4187,10 @@ def _preflight_select_graph_terminal(
     the prepared evidence, not proof that the cave ends there. Both are
     evaluated by accumulated directed graph distance from the starting node,
     so a centerline endpoint or a Cartesian coordinate cannot choose the
-    startup destination.  The easiest-terminal policy excludes unknown
-    boundaries and selects the shortest known terminal; the farthest policy
-    retains the historical longest-passage behavior.
+    startup destination. Fixed policies exclude unknown boundaries: easiest
+    selects the shortest known terminal, while production longest-certified
+    selects the farthest known terminal by shortest physical graph distance.
+    The explicit farthest policy retains frontier-capable exploration.
     """
     if selection_policy not in AUTO_DIVE_ROUTE_GOAL_POLICIES:
         raise NavigationConfigurationError(
@@ -3508,6 +4201,7 @@ def _preflight_select_graph_terminal(
         int(component_id),
         (),
     )
+    fixed_terminal_goal = _fixed_terminal_route_goal(selection_policy)
     candidates = (
         tuple(
             key
@@ -3516,7 +4210,7 @@ def _preflight_select_graph_terminal(
             and not bool(graph.nodes[key].unknown_boundary)
             and key != start_key
         )
-        if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+        if fixed_terminal_goal
         else tuple(all_candidates)
     )
     terminal_candidate_count = sum(
@@ -3604,6 +4298,16 @@ def _preflight_select_graph_terminal(
                 key,
             ),
         )
+    elif selection_policy == AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE:
+        selected = max(
+            reachable_candidates,
+            key=lambda key: (
+                distances[key],
+                float(graph.nodes[key].min_clearance_m),
+                float(graph.nodes[key].available_volume_m3),
+                key,
+            ),
+        )
     else:
         selected = max(
             reachable_candidates,
@@ -3623,11 +4327,15 @@ def _preflight_select_graph_terminal(
         "reason": (
             "easiest_reachable_graph_terminal_selected"
             if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else "longest_certified_graph_terminal_selected"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE
             else "farthest_reachable_graph_terminal_selected"
         ),
         "terminal_rule": (
             "easiest_reachable_true_3d_graph_terminal"
             if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else "farthest_known_terminal_by_shortest_physical_graph_distance"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE
             else (
                 "farthest_reachable_true_3d_graph_frontier"
                 if selected_is_unknown
@@ -3636,7 +4344,7 @@ def _preflight_select_graph_terminal(
         ),
         "terminal_selection_source": (
             "graph_terminal"
-            if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            if fixed_terminal_goal
             else (
                 "unknown_boundary_frontier"
                 if selected_is_unknown
@@ -3736,6 +4444,7 @@ def _preflight_mesh_safe_start_key(
     *,
     maximum_distance_m: float,
     graph_safety_validator: GraphRouteSafetyValidator,
+    allow_mesh_only_start_connector: bool = False,
 ) -> tuple[VoxelGraphKey | None, float, dict[str, Any]]:
     """Choose the nearest graph node with an exact-safe camera connector.
 
@@ -3784,6 +4493,9 @@ def _preflight_mesh_safe_start_key(
             (current, center),
             (key,),
             start_graph_key=key,
+            allow_mesh_only_start_connector=(
+                allow_mesh_only_start_connector
+            ),
         )
         # ``route_clearance_failure`` intentionally rejects zero-length route
         # segments. Here that segment merely represents an exact camera/node
@@ -4152,9 +4864,9 @@ def _preflight_mesh_safe_graph_frontier(
     The graph terminal search deliberately reasons about prepared topology,
     but a cached mesh can invalidate one or more graph edges.  When the
     requested route is mesh-blocked, the farthest policy may authorize only a
-    mesh-safe frontier.  The easiest-terminal policy instead searches for the
-    shortest known terminal reachable through exact mesh-safe edges and never
-    publishes an incomplete prefix as a fixed route.
+    mesh-safe frontier. Fixed known-terminal policies instead search for their
+    selected known terminal through exact mesh-safe edges and never publish an
+    incomplete prefix as a fixed route.
     """
     if selection_policy not in AUTO_DIVE_ROUTE_GOAL_POLICIES:
         raise NavigationConfigurationError(
@@ -4169,6 +4881,7 @@ def _preflight_mesh_safe_graph_frontier(
         )
         if key != start_key
     )
+    fixed_terminal_goal = _fixed_terminal_route_goal(selection_policy)
     candidates = (
         tuple(
             key
@@ -4176,7 +4889,7 @@ def _preflight_mesh_safe_graph_frontier(
             if bool(graph.nodes[key].terminal)
             and not bool(graph.nodes[key].unknown_boundary)
         )
-        if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+        if fixed_terminal_goal
         else all_candidates
     )
     base_details = {
@@ -4285,7 +4998,7 @@ def _preflight_mesh_safe_graph_frontier(
             **base_details,
             "mesh_safe_frontier_reason": (
                 "no_mesh_safe_graph_terminal_reachable"
-                if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+                if fixed_terminal_goal
                 else "no_mesh_safe_graph_frontier_reachable"
             ),
             "expanded_mesh_safe_frontier_count": expanded_count,
@@ -4309,9 +5022,14 @@ def _preflight_mesh_safe_graph_frontier(
             selection_candidates,
             key=lambda key: (
                 distances[key],
-                bool(
-                    graph.nodes[key].terminal
-                    and not graph.nodes[key].unknown_boundary
+                (
+                    float(graph.nodes[key].min_clearance_m)
+                    if selection_policy
+                    == AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE
+                    else bool(
+                        graph.nodes[key].terminal
+                        and not graph.nodes[key].unknown_boundary
+                    )
                 ),
                 key,
             ),
@@ -4340,11 +5058,15 @@ def _preflight_mesh_safe_graph_frontier(
         "reason": (
             "easiest_mesh_safe_graph_terminal_selected"
             if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else "longest_certified_mesh_safe_graph_terminal_selected"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE
             else "mesh_safe_graph_frontier_selected"
         ),
         "terminal_rule": (
             "easiest_mesh_safe_true_3d_graph_terminal"
             if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            else "farthest_mesh_safe_known_terminal_by_physical_graph_distance"
+            if selection_policy == AUTO_DIVE_ROUTE_GOAL_LONGEST_CERTIFIED_ROUTE
             else (
                 "farthest_mesh_safe_true_3d_graph_frontier"
                 if selected_is_unknown
@@ -4355,7 +5077,7 @@ def _preflight_mesh_safe_graph_frontier(
         ),
         "terminal_selection_source": (
             "mesh_safe_graph_terminal"
-            if selection_policy == AUTO_DIVE_ROUTE_GOAL_EASIEST_TERMINAL
+            if fixed_terminal_goal
             else (
                 "mesh_safe_unknown_boundary_frontier"
                 if selected_is_unknown
@@ -5456,7 +6178,7 @@ def _preflight_refined_portal_for_global_route(
 
         # The aggregate is only a performance preference.  If it cannot
         # prove a route through the exact mesh, retry this one persisted tile
-        # at its native 1 m evidence before considering another tile or
+        # at its native 1 m X/Z by 0.25 m Y evidence before considering another tile or
         # failing the fixed route.
         fallback_context, fallback_preparation = _preflight_cached_refined_tile_context(
             volume=volume,
@@ -6245,7 +6967,7 @@ def _preflight_refined_spine_portal(
         )
         if segment is not None and target_index is not None:
             return segment, target_index, details
-        # The native 1 m fallback can be substantially larger than the 2 m
+        # The native 1 m X/Z fallback can be substantially larger than the 2 m X/Z
         # aggregate.  Do not retain both local graphs for this tile while the
         # fallback is materialized; the fixed spine will never revisit the
         # rejected aggregate for this handoff.
@@ -6814,6 +7536,208 @@ def _preflight_bounded_route_geometry(
         if index > 0 and index - 1 < len(cells)
     )
     return bounded_points, bounded_cells
+
+
+def _preflight_smoothed_route_geometry(
+    points: tuple[Point, ...],
+    *,
+    settings: AutoDiveSettings,
+    graph_safety_validator: GraphRouteSafetyValidator,
+    preserve_mesh_only_start_connector: bool = False,
+) -> tuple[tuple[Point, ...], dict[str, object]]:
+    """Turn a safe voxel spine into a smooth, revalidated camera trajectory."""
+    radius = max(0, int(settings.smoothing_radius_cells))
+    if radius <= 0 or len(points) < 4:
+        return points, {
+            "method": "disabled",
+            "raw_point_count": len(points),
+            "smoothed_point_count": len(points),
+        }
+
+    connector_prefix: tuple[Point, ...] = ()
+    working = points
+    if preserve_mesh_only_start_connector and len(points) >= 3:
+        connector_prefix = (points[0],)
+        working = points[1:]
+    if len(working) < 3:
+        return points, {
+            "method": "insufficient_graph_spine",
+            "raw_point_count": len(points),
+            "smoothed_point_count": len(points),
+        }
+
+    max_skip = max(2, radius)
+    relaxed: list[Point] = [working[0]]
+    current_index = 0
+    last_index = len(working) - 1
+    while current_index < last_index:
+        selected_index = current_index + 1
+        search_limit = min(last_index, current_index + max_skip)
+        for candidate_index in range(search_limit, current_index, -1):
+            failure = graph_safety_validator.segment_clearance_failure(
+                working[current_index],
+                working[candidate_index],
+                kind="preflight_visibility_relaxation",
+                uncovered_reason="preflight_visibility_relaxation_uncovered",
+            )
+            if failure is None:
+                selected_index = candidate_index
+                break
+        relaxed.append(working[selected_index])
+        current_index = selected_index
+
+    relaxed_points = tuple(relaxed)
+    segment_count = len(relaxed_points) - 1
+    maximum_curve_points = max(
+        2,
+        int(settings.max_keyframes) - len(connector_prefix),
+    )
+    samples_per_segment = min(
+        max(2, radius),
+        max(1, (maximum_curve_points - 1) // max(1, segment_count)),
+    )
+    if samples_per_segment < 2:
+        result = (*connector_prefix, *relaxed_points)
+        return _dedupe_consecutive_points(result), {
+            "method": "mesh_safe_visibility_relaxation_v1",
+            "raw_point_count": len(points),
+            "relaxed_point_count": len(relaxed_points),
+            "smoothed_point_count": len(result),
+            "curve_fallback_segment_count": 0,
+        }
+
+    curve_samples: list[tuple[Point, ...]] = []
+    curve_segment_safe: list[bool] = []
+    for index in range(segment_count):
+        p0 = relaxed_points[max(0, index - 1)]
+        p1 = relaxed_points[index]
+        p2 = relaxed_points[index + 1]
+        p3 = relaxed_points[min(len(relaxed_points) - 1, index + 2)]
+        samples = tuple(
+            _cardinal_spline_auto_dive_point(
+                p0,
+                p1,
+                p2,
+                p3,
+                float(sample_index) / float(samples_per_segment),
+            )
+            for sample_index in range(1, samples_per_segment + 1)
+        )
+        curve_samples.append(samples)
+        trial = (p1, *samples)
+        curve_segment_safe.append(all(
+            graph_safety_validator.segment_clearance_failure(
+                first,
+                second,
+                kind="preflight_smoothed_segment",
+                uncovered_reason="preflight_smoothed_segment_uncovered",
+            )
+            is None
+            for first, second in zip(trial, trial[1:], strict=False)
+        ))
+
+    # A straight fallback beside a curved neighbor can create a worse camera
+    # turn than the original relaxed spine. Flatten the immediately adjacent
+    # curve segments too, so a collision-constrained bend remains a short,
+    # predictable polyline instead of an overshooting spline/line seam.
+    unsafe_curve_segments = {
+        index
+        for index, safe in enumerate(curve_segment_safe)
+        if not safe
+    }
+    fallback_curve_segments = {
+        neighbor
+        for index in unsafe_curve_segments
+        for neighbor in (index - 1, index, index + 1)
+        if 0 <= neighbor < segment_count
+    }
+    curve: list[Point] = [relaxed_points[0]]
+    for index, samples in enumerate(curve_samples):
+        if index in fallback_curve_segments:
+            p2 = relaxed_points[index + 1]
+            curve.append(p2)
+        else:
+            curve.extend(samples)
+
+    result = _dedupe_consecutive_points(
+        (*connector_prefix, *tuple(curve))
+    )
+    if len(result) > int(settings.max_keyframes):
+        return points, {
+            "method": "raw_graph_budget_fallback",
+            "raw_point_count": len(points),
+            "relaxed_point_count": len(relaxed_points),
+            "smoothed_point_count": len(points),
+            "curve_collision_segment_count": len(unsafe_curve_segments),
+            "curve_fallback_segment_count": len(fallback_curve_segments),
+        }
+    first_route_segment = 1 if connector_prefix else 0
+    for segment_index, (first, second) in enumerate(
+        zip(result, result[1:], strict=False)
+    ):
+        if segment_index < first_route_segment:
+            continue
+        failure = graph_safety_validator.segment_clearance_failure(
+            first,
+            second,
+            segment_index=segment_index,
+            kind="preflight_smoothed_route",
+            uncovered_reason="preflight_smoothed_route_uncovered",
+        )
+        if failure is not None:
+            return points, {
+                "method": "raw_graph_safety_fallback",
+                "raw_point_count": len(points),
+                "relaxed_point_count": len(relaxed_points),
+                "smoothed_point_count": len(points),
+                "curve_collision_segment_count": len(
+                    unsafe_curve_segments
+                ),
+                "curve_fallback_segment_count": len(
+                    fallback_curve_segments
+                ),
+                "failure": _preflight_clearance_failure_payload(failure),
+            }
+    return result, {
+        "method": "mesh_safe_cardinal_spline_v1",
+        "raw_point_count": len(points),
+        "relaxed_point_count": len(relaxed_points),
+        "smoothed_point_count": len(result),
+        "samples_per_segment": int(samples_per_segment),
+        "curve_collision_segment_count": len(unsafe_curve_segments),
+        "curve_fallback_segment_count": len(fallback_curve_segments),
+    }
+
+
+def _cardinal_spline_auto_dive_point(
+    p0: Point,
+    p1: Point,
+    p2: Point,
+    p3: Point,
+    fraction: float,
+) -> Point:
+    """Return a tensioned interpolating point for one camera-path segment.
+
+    A half-tension cardinal spline retains continuous tangents while staying
+    closer to the validated visibility spine than uniform Catmull-Rom. That
+    reduced overshoot is important in tight bends where the scan wall lies
+    close to an otherwise safe straight segment.
+    """
+    t = max(0.0, min(1.0, float(fraction)))
+    t2 = t * t
+    t3 = t2 * t
+    h00 = 2.0 * t3 - 3.0 * t2 + 1.0
+    h10 = t3 - 2.0 * t2 + t
+    h01 = -2.0 * t3 + 3.0 * t2
+    h11 = t3 - t2
+    tangent_scale = 0.25  # 0.5 * (1.0 - cardinal tension 0.5)
+    return tuple(
+        h00 * p1[axis]
+        + h10 * tangent_scale * (p2[axis] - p0[axis])
+        + h01 * p2[axis]
+        + h11 * tangent_scale * (p3[axis] - p1[axis])
+        for axis in range(3)
+    )  # type: ignore[return-value]
 
 
 def _preflight_clearance_failure_payload(
@@ -7750,6 +8674,9 @@ def _auto_dive_cached_route_start_position(
         return None
     if not centerline_path.cells:
         return None
+    certified_start = certified_auto_dive_start_position(manifest)
+    if certified_start is not None:
+        return certified_start
     first_cell = centerline_path.cells[0]
     cached_points = getattr(centerline_path, "cached_points", None) or {}
     cached_point = cached_points.get(first_cell)
@@ -7781,28 +8708,37 @@ def _should_prefer_cached_route_start(
 def _selected_cached_route_defines_start_direction(
     manifest: Mapping[str, Any],
 ) -> bool:
-    navigation = manifest.get(NAVIGATION_METADATA_KEY)
-    if not isinstance(navigation, Mapping):
-        return False
-    routes = navigation.get("routes")
-    if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
-        return False
-    selected_route_id = navigation.get("recommended_route_id")
-    selected_route = None
-    for route in routes:
-        if not isinstance(route, Mapping):
-            continue
-        if selected_route_id is None or route.get("id") == selected_route_id:
-            selected_route = route
-            break
-    if not isinstance(selected_route, Mapping):
+    selected_route = _selected_cached_route_metadata(manifest)
+    if selected_route is None:
         return False
     if selected_route.get("starts_at_navigation_start"):
         return True
     return selected_route.get("selection_method") in (
+        NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR,
         "navigation_start_to_farthest_endpoint_v1",
         "physical_endpoint_diameter_v1",
+        "easiest_reachable_known_terminal_v1",
     )
+
+
+def _selected_cached_route_metadata(
+    manifest: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    navigation = manifest.get(NAVIGATION_METADATA_KEY)
+    if not isinstance(navigation, Mapping):
+        return None
+    routes = navigation.get("routes")
+    if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
+        return None
+    selected_route_id = navigation.get("recommended_route_id")
+    if not isinstance(selected_route_id, str) or not selected_route_id:
+        return None
+    for route in routes:
+        if not isinstance(route, Mapping):
+            continue
+        if route.get("id") == selected_route_id:
+            return route
+    return None
 
 
 def _auto_dive_endpoint_positions(
@@ -9207,6 +10143,7 @@ def _make_auto_dive_local_frontier_voxel_builder(
                 bounds_max=bounds_max,
                 config=VoxelVolumeConfig(
                     voxel_size_m=1.0,
+                    vertical_voxel_size_m=0.25,
                     surface_inflation_cells=2,
                     max_voxels=max_cells,
                     max_surface_samples=max(

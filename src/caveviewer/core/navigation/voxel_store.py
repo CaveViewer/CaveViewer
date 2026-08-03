@@ -71,8 +71,24 @@ class NavigationVoxelChunkDescriptor:
     voxel_size_m: float
     voxel_count: int
     surface_cell_count: int
+    vertical_voxel_size_m: float | None = None
     relative_path: str | None = None
     available_volume_m3: float = 0.0
+
+    @property
+    def cell_size_m(self) -> tuple[float, float, float]:
+        horizontal = float(self.voxel_size_m)
+        vertical = float(
+            horizontal
+            if self.vertical_voxel_size_m is None
+            else self.vertical_voxel_size_m
+        )
+        return (horizontal, vertical, horizontal)
+
+    @property
+    def cell_volume_m3(self) -> float:
+        x_size, y_size, z_size = self.cell_size_m
+        return float(x_size * y_size * z_size)
 
     def contains_point(self, point: Sequence[float]) -> bool:
         """Return whether the descriptor can contain a world-space point."""
@@ -96,6 +112,7 @@ class NavigationVoxelChunkDescriptor:
             "bounds_min": [float(value) for value in self.bounds_min],
             "bounds_max": [float(value) for value in self.bounds_max],
             "voxel_size_m": float(self.voxel_size_m),
+            "cell_size_m": [float(value) for value in self.cell_size_m],
             "voxel_count": int(self.voxel_count),
             "surface_cell_count": int(self.surface_cell_count),
             "relative_path": self.relative_path,
@@ -113,6 +130,26 @@ class NavigationVoxelChunkDescriptor:
             bounds_min = _point(value["bounds_min"], "bounds_min")
             bounds_max = _point(value["bounds_max"], "bounds_max")
             voxel_size = float(value["voxel_size_m"])
+            raw_cell_size = value.get("cell_size_m")
+            if raw_cell_size is None:
+                vertical_voxel_size = voxel_size
+            else:
+                cell_size = _point(raw_cell_size, "cell_size_m")
+                if not math.isclose(
+                    cell_size[0],
+                    cell_size[2],
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                ) or not math.isclose(
+                    cell_size[0],
+                    voxel_size,
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                ):
+                    raise ValueError(
+                        "navigation voxel chunk cell size is inconsistent"
+                    )
+                vertical_voxel_size = float(cell_size[1])
             voxel_count = int(value["voxel_count"])
             surface_cell_count = int(value["surface_cell_count"])
             available_volume = float(value.get("available_volume_m3", 0.0))
@@ -128,6 +165,8 @@ class NavigationVoxelChunkDescriptor:
             or kind not in {"coarse", "fine"}
             or not math.isfinite(voxel_size)
             or voxel_size <= 0.0
+            or not math.isfinite(vertical_voxel_size)
+            or vertical_voxel_size <= 0.0
             or voxel_count < 0
             or surface_cell_count < 0
             or not math.isfinite(available_volume)
@@ -150,6 +189,7 @@ class NavigationVoxelChunkDescriptor:
             voxel_size_m=voxel_size,
             voxel_count=voxel_count,
             surface_cell_count=surface_cell_count,
+            vertical_voxel_size_m=vertical_voxel_size,
             relative_path=relative_path,
             available_volume_m3=available_volume,
         )
@@ -173,6 +213,9 @@ class NavigationVoxelChunkDescriptor:
             voxel_size_m=float(volume.voxel_size_m),
             voxel_count=int(volume.voxel_count),
             surface_cell_count=len(volume.surface_cells),
+            vertical_voxel_size_m=float(
+                getattr(volume, "vertical_voxel_size_m", volume.voxel_size_m)
+            ),
             relative_path=relative_path,
             available_volume_m3=max(0.0, float(available_volume_m3)),
         )

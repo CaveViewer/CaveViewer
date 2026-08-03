@@ -152,6 +152,7 @@ from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGu
 from caveviewer.core.navigation.voxel_cache import (
     NAVIGATION_VOXEL_CACHE_NAME,
     build_navigation_voxel_cache,
+    first_manifest_chunk_center_for_route_contract,
 )
 from caveviewer.core.workers.allocation import (
     MAX_WORKER_RAM_UTILIZATION,
@@ -172,6 +173,10 @@ from caveviewer.core.map.cache_paths import (
 )
 
 _LOG = get_logger("chunker")
+
+NAVIGATION_START_SOURCE_FIRST_MANIFEST_CHUNK = (
+    "first_manifest_chunk_center_v1"
+)
 
 
 def _resolve_max_upload_group_mb(value: float | None) -> float:
@@ -635,10 +640,18 @@ def _build_incremental_obj_cache_in_directory(
         "triangle_count": int(bucketed_faces),
         "import_mode": "incremental_obj",
     }
+    navigation_start, navigation_start_anchor = (
+        _navigation_start_metadata_for_source(
+            obj_path,
+            vertex_data.positions,
+            manifest_chunks=manifest_chunks,
+        )
+    )
     _attach_navigation_metadata(
         manifest,
         surface_positions=vertex_data.positions,
-        navigation_start=_navigation_start_sidecar_for_obj(obj_path),
+        navigation_start=navigation_start,
+        navigation_start_anchor=navigation_start_anchor,
         cache_dir=cache_dir,
     )
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
@@ -911,10 +924,18 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         "footprint_cells": footprint_flat,
         "triangle_count": int(n_faces),
     }
+    navigation_start, navigation_start_anchor = (
+        _navigation_start_metadata_for_source(
+            obj_path,
+            mesh.positions,
+            manifest_chunks=manifest_chunks,
+        )
+    )
     _attach_navigation_metadata(
         manifest,
         surface_positions=mesh.positions,
-        navigation_start=_navigation_start_sidecar_for_obj(obj_path),
+        navigation_start=navigation_start,
+        navigation_start_anchor=navigation_start_anchor,
         cache_dir=cache_dir,
     )
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
@@ -928,6 +949,7 @@ def _attach_navigation_metadata(
     *,
     surface_positions: np.ndarray | None,
     navigation_start: dict | None = None,
+    navigation_start_anchor: dict | None = None,
     cache_dir: str | None = None,
 ) -> None:
     """Attach optional navigation metadata without affecting cache validity."""
@@ -936,6 +958,7 @@ def _attach_navigation_metadata(
             manifest,
             surface_positions=surface_positions,
             navigation_start=navigation_start,
+            navigation_start_anchor=navigation_start_anchor,
         )
     except Exception as exc:
         _LOG.warning(
@@ -964,6 +987,15 @@ def _attach_navigation_metadata(
                     triangle_provider=mesh_guard.triangle_meshes_for_bounds,
                     mesh_edge_is_clear=lambda first, second: (
                         mesh_guard.segment_collision(first, second) is None
+                    ),
+                    mesh_point_has_opposing_support=(
+                        lambda point, max_distance_m, minimum_clearance_m: bool(
+                            mesh_guard.opposing_axis_support(
+                                point,
+                                max_distance_m=max_distance_m,
+                                minimum_clearance_m=minimum_clearance_m,
+                            )
+                        )
                     ),
                 )
                 if voxel_result.built_route_count:
@@ -1001,6 +1033,78 @@ def _attach_navigation_metadata(
                     "cache remains usable without it: %s",
                     exc,
                 )
+
+
+def _navigation_start_metadata_for_source(
+    source_path: str,
+    surface_positions: np.ndarray | None,
+    *,
+    manifest_chunks: dict | None = None,
+) -> tuple[dict | None, dict | None]:
+    """Return the authored or source-order cave entrance.
+
+    A valid sidecar remains authoritative.  Otherwise an OBJ starts at its
+    first declared vertex: that is the only source-order signal retained by
+    the importer and is the map contract for Guided Dive.  Because an OBJ
+    vertex lies on the cave surface, it is published as a non-executable
+    anchor; cache construction must attach it to nearby certified free space
+    before either the camera or Guided Dive may use it.
+
+    The first manifest chunk is only a compatibility fallback for non-OBJ
+    callers that do not provide an ordered source anchor.
+    """
+    anchor = _obj_navigation_start_anchor(source_path, surface_positions)
+    sidecar = _navigation_start_sidecar_for_obj(source_path)
+    if sidecar is not None:
+        # Passing both lets metadata validation fall back to the OBJ anchor if
+        # the optional sidecar exists but is malformed.
+        return sidecar, anchor
+    if anchor is not None:
+        return None, anchor
+    position = first_manifest_chunk_center(manifest_chunks)
+    if position is not None:
+        return {
+            "position": [float(value) for value in position],
+            "label": "Cave start",
+            "source": NAVIGATION_START_SOURCE_FIRST_MANIFEST_CHUNK,
+        }, None
+    return None, None
+
+
+def first_manifest_chunk_center(
+    manifest_chunks: dict | None,
+) -> tuple[float, float, float] | None:
+    """Return the original viewer start using the minimum spatial chunk."""
+    return first_manifest_chunk_center_for_route_contract(manifest_chunks)
+
+
+def _obj_navigation_start_anchor(
+    source_path: str,
+    surface_positions: np.ndarray | None,
+) -> dict | None:
+    if os.path.splitext(source_path)[1].casefold() != ".obj":
+        return None
+    if surface_positions is None:
+        return None
+    try:
+        positions = np.asarray(surface_positions)
+        if positions.ndim != 2 or positions.shape[1] != 3 or not len(positions):
+            return None
+        position = [float(value) for value in positions[0]]
+    except (TypeError, ValueError):
+        return None
+    if not bool(np.isfinite(position).all()):
+        return None
+    return {
+        "position": position,
+        "kind": "obj_surface_vertex",
+        "source": os.path.basename(source_path),
+        "source_vertex_index": 0,
+        "source_order": "obj_declaration_order",
+        "executable": False,
+        "attachment_required": True,
+        "attachment_coordinate_space": "xyz",
+    }
 
 
 def _navigation_start_sidecar_for_obj(obj_path: str) -> dict | None:

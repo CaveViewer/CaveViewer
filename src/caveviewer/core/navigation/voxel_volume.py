@@ -9,9 +9,10 @@ that can be removed or replaced without changing centerline policy.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from collections import deque
 from dataclasses import dataclass, field
+import heapq
 import math
 import time
 
@@ -75,6 +76,10 @@ class VoxelVolumeConfig:
     """Bounded local voxel construction parameters."""
 
     voxel_size_m: float = DEFAULT_VOXEL_SIZE_M
+    # X and Z retain ``voxel_size_m`` for compatibility.  A separate Y size
+    # lets cache generation preserve sub-metre-high passages without paying
+    # the cubic cost of shrinking every axis.
+    vertical_voxel_size_m: float | None = None
     surface_inflation_cells: int = DEFAULT_VOXEL_SURFACE_INFLATION_CELLS
     max_voxels: int = DEFAULT_VOXEL_MAX_CELLS
     max_surface_samples: int = DEFAULT_VOXEL_MAX_SURFACE_SAMPLES
@@ -86,6 +91,15 @@ class VoxelVolumeConfig:
         size = float(self.voxel_size_m)
         if not math.isfinite(size) or size <= 0.0:
             raise ValueError("voxel size must be a positive finite number")
+        vertical_size = float(
+            size
+            if self.vertical_voxel_size_m is None
+            else self.vertical_voxel_size_m
+        )
+        if not math.isfinite(vertical_size) or vertical_size <= 0.0:
+            raise ValueError(
+                "vertical voxel size must be a positive finite number"
+            )
         if int(self.surface_inflation_cells) < 0:
             raise ValueError("voxel surface inflation cannot be negative")
         if int(self.max_voxels) <= 0:
@@ -96,6 +110,7 @@ class VoxelVolumeConfig:
             raise ValueError("voxel clearance search cannot be negative")
         return VoxelVolumeConfig(
             voxel_size_m=size,
+            vertical_voxel_size_m=vertical_size,
             surface_inflation_cells=int(self.surface_inflation_cells),
             max_voxels=int(self.max_voxels),
             max_surface_samples=int(self.max_surface_samples),
@@ -159,6 +174,7 @@ class LocalVoxelVolume:
     surface_sample_count: int
     sampling_truncated: bool
     max_clearance_search_cells: int
+    vertical_voxel_size_m: float | None = None
     _runtime_clearance_cache: dict[VoxelIndex, float] = field(
         init=False,
         repr=False,
@@ -167,7 +183,42 @@ class LocalVoxelVolume:
 
     def __post_init__(self) -> None:
         """Create a bounded runtime cache for repeated probe samples."""
+        horizontal_size = float(self.voxel_size_m)
+        vertical_size = float(
+            horizontal_size
+            if self.vertical_voxel_size_m is None
+            else self.vertical_voxel_size_m
+        )
+        if (
+            not math.isfinite(horizontal_size)
+            or horizontal_size <= 0.0
+            or not math.isfinite(vertical_size)
+            or vertical_size <= 0.0
+        ):
+            raise ValueError("voxel cell sizes must be positive and finite")
+        object.__setattr__(self, "voxel_size_m", horizontal_size)
+        object.__setattr__(self, "vertical_voxel_size_m", vertical_size)
         object.__setattr__(self, "_runtime_clearance_cache", {})
+
+    @property
+    def cell_size_m(self) -> tuple[float, float, float]:
+        """Return the physical X/Y/Z size of one orthogonal cell."""
+        return (
+            float(self.voxel_size_m),
+            float(self.vertical_voxel_size_m),
+            float(self.voxel_size_m),
+        )
+
+    @property
+    def cell_volume_m3(self) -> float:
+        """Return the physical volume represented by one cell."""
+        x_size, y_size, z_size = self.cell_size_m
+        return float(x_size * y_size * z_size)
+
+    @property
+    def cell_diagonal_m(self) -> float:
+        """Return the physical diagonal of one cell."""
+        return float(math.sqrt(sum(size * size for size in self.cell_size_m)))
 
     @property
     def voxel_count(self) -> int:
@@ -183,7 +234,7 @@ class LocalVoxelVolume:
     def bounds_max(self) -> Point:
         """Return the exclusive world-space upper bound."""
         return tuple(
-            self.origin[index] + self.shape[index] * self.voxel_size_m
+            self.origin[index] + self.shape[index] * self.cell_size_m[index]
             for index in range(3)
         )  # type: ignore[return-value]
 
@@ -207,11 +258,9 @@ class LocalVoxelVolume:
         if len(point) != 3:
             raise ValueError("voxel points must be three-dimensional")
         return tuple(
-            int(
-                math.floor(
-                    (float(point[axis]) - self.origin[axis])
-                    / self.voxel_size_m
-                )
+            _stable_floor_grid_coordinate(
+                (float(point[axis]) - self.origin[axis])
+                / self.cell_size_m[axis]
             )
             for axis in range(3)
         )  # type: ignore[return-value]
@@ -219,7 +268,8 @@ class LocalVoxelVolume:
     def voxel_center(self, index: VoxelIndex) -> Point:
         """Return the world-space center of a voxel."""
         return tuple(
-            self.origin[axis] + (int(index[axis]) + 0.5) * self.voxel_size_m
+            self.origin[axis]
+            + (int(index[axis]) + 0.5) * self.cell_size_m[axis]
             for axis in range(3)
         )  # type: ignore[return-value]
 
@@ -538,24 +588,30 @@ class LocalVoxelVolume:
         if not self.surface_cells:
             clearance = float(
                 self.max_clearance_search_cells + 1
-            ) * self.voxel_size_m
+            ) * min(self.cell_size_m)
             self._cache_clearance(index, clearance)
             return clearance
+        best_clearance = math.inf
         for radius in range(self.max_clearance_search_cells + 1):
             for candidate in _shell_indices(index, radius):
                 if self.contains_index(candidate) and candidate in self.surface_cells:
-                    distance_cells = math.sqrt(
+                    distance_m = math.sqrt(
                         sum(
-                            (candidate[axis] - index[axis]) ** 2
+                            (
+                                (candidate[axis] - index[axis])
+                                * self.cell_size_m[axis]
+                            )
+                            ** 2
                             for axis in range(3)
                         )
                     )
-                    clearance = distance_cells * self.voxel_size_m
-                    self._cache_clearance(index, clearance)
-                    return clearance
-        clearance = float(
-            self.max_clearance_search_cells + 1
-        ) * self.voxel_size_m
+                    best_clearance = min(best_clearance, distance_m)
+        clearance = (
+            best_clearance
+            if math.isfinite(best_clearance)
+            else float(self.max_clearance_search_cells + 1)
+            * min(self.cell_size_m)
+        )
         self._cache_clearance(index, clearance)
         return clearance
 
@@ -677,7 +733,7 @@ class LocalVoxelVolume:
             "seed_count": int(len(seed_indices)),
             "free_cell_count": int(len(clearance_by_cell)),
             "available_volume_m3": float(
-                len(clearance_by_cell) * self.voxel_size_m ** 3
+                len(clearance_by_cell) * self.cell_volume_m3
             ),
             "surface_fraction": self._surface_fraction(),
             "min_clearance_m": float(min(clearance_values)),
@@ -702,6 +758,33 @@ class LocalVoxelVolume:
         seed_indices = self._free_seed_indices(points)
         return self._filled_free_cell_clearance_from_seeds(seed_indices)
 
+    def iter_all_free_cell_clearance_m(
+        self,
+    ) -> Iterator[tuple[VoxelIndex, float]]:
+        """Yield every non-surface cell in this bounded local field.
+
+        Fixed V12 chunks are merged before their terminal component is
+        selected.  Iterating the bounded dense field prevents a locally
+        imperfect seed from deleting valid seam evidence; sampled surface
+        cells remain hard barriers and overlapping occupancy still wins in
+        the global merge.
+        """
+        clearance_map = self._surface_clearance_distance_map()
+        fallback_distance_m = (
+            float(self.max_clearance_search_cells + 1)
+            * min(self.cell_size_m)
+        )
+        for x_index in range(self.shape[0]):
+            for y_index in range(self.shape[1]):
+                for z_index in range(self.shape[2]):
+                    index = (x_index, y_index, z_index)
+                    if index in self.surface_cells:
+                        continue
+                    yield (
+                        index,
+                        float(clearance_map.get(index, fallback_distance_m)),
+                    )
+
     def _filled_free_cell_clearance_from_seeds(
         self,
         seed_indices: Sequence[VoxelIndex],
@@ -710,10 +793,12 @@ class LocalVoxelVolume:
         if not free_cells:
             return {}
         clearance_map = self._surface_clearance_distance_map()
-        fallback_distance = self.max_clearance_search_cells + 1
+        fallback_distance_m = (
+            float(self.max_clearance_search_cells + 1)
+            * min(self.cell_size_m)
+        )
         return {
-            index: float(clearance_map.get(index, fallback_distance))
-            * self.voxel_size_m
+            index: float(clearance_map.get(index, fallback_distance_m))
             for index in free_cells
         }
 
@@ -721,6 +806,8 @@ class LocalVoxelVolume:
         """Return bounded diagnostics suitable for the Guided Dive blackbox."""
         return {
             "voxel_size_m": float(self.voxel_size_m),
+            "vertical_voxel_size_m": float(self.vertical_voxel_size_m),
+            "cell_size_m": [float(value) for value in self.cell_size_m],
             "origin": [float(value) for value in self.origin],
             "bounds_min": [float(value) for value in self.bounds_min],
             "bounds_max": [float(value) for value in self.bounds_max],
@@ -728,7 +815,7 @@ class LocalVoxelVolume:
             "voxel_count": int(self.voxel_count),
             "surface_cells": len(self.surface_cells),
             "surface_occupied_volume_m3": float(
-                len(self.surface_cells) * self.voxel_size_m ** 3
+                len(self.surface_cells) * self.cell_volume_m3
             ),
             "triangle_count": int(self.triangle_count),
             "surface_sample_count": int(self.surface_sample_count),
@@ -744,11 +831,21 @@ class LocalVoxelVolume:
     ) -> tuple[int, ...]:
         first = max(
             0,
-            int(math.floor((float(lower) - self.origin[axis]) / self.voxel_size_m)),
+            int(
+                math.floor(
+                    (float(lower) - self.origin[axis])
+                    / self.cell_size_m[axis]
+                )
+            ),
         )
         last = min(
             self.shape[axis] - 1,
-            int(math.floor((float(upper) - self.origin[axis]) / self.voxel_size_m)),
+            int(
+                math.floor(
+                    (float(upper) - self.origin[axis])
+                    / self.cell_size_m[axis]
+                )
+            ),
         )
         if last < first:
             return ()
@@ -807,25 +904,42 @@ class LocalVoxelVolume:
     def _surface_fraction(self) -> float:
         return float(len(self.surface_cells) / max(1, self.voxel_count))
 
-    def _surface_clearance_distance_map(self) -> dict[VoxelIndex, int]:
-        """Return a bounded six-connected distance map from surface cells."""
+    def _surface_clearance_distance_map(self) -> dict[VoxelIndex, float]:
+        """Return a bounded physical-distance map from surface cells."""
         if not self.surface_cells:
             return {}
-        distances = {index: 0 for index in self.surface_cells}
-        queue = deque(self.surface_cells)
+        distances = {index: 0.0 for index in self.surface_cells}
+        steps = {index: 0 for index in self.surface_cells}
+        queue: list[tuple[float, VoxelIndex]] = [
+            (0.0, index) for index in self.surface_cells
+        ]
+        heapq.heapify(queue)
         while queue:
-            current = queue.popleft()
-            current_distance = distances[current]
-            if current_distance >= self.max_clearance_search_cells:
+            current_distance, current = heapq.heappop(queue)
+            if current_distance > distances.get(current, math.inf) + 1e-12:
                 continue
-            next_distance = current_distance + 1
-            for neighbor in _six_neighbor_indices(current):
+            current_steps = steps[current]
+            if current_steps >= self.max_clearance_search_cells:
+                continue
+            for offset in _LOCAL_26_NEIGHBOR_OFFSETS:
+                neighbor = tuple(
+                    current[axis] + offset[axis] for axis in range(3)
+                )
                 if not self.contains_index(neighbor):
                     continue
-                if neighbor in distances:
+                edge_distance = math.sqrt(
+                    sum(
+                        (offset[axis] * self.cell_size_m[axis]) ** 2
+                        for axis in range(3)
+                    )
+                )
+                next_distance = current_distance + edge_distance
+                existing = distances.get(neighbor)
+                if existing is not None and next_distance >= existing - 1e-12:
                     continue
                 distances[neighbor] = next_distance
-                queue.append(neighbor)
+                steps[neighbor] = current_steps + 1
+                heapq.heappush(queue, (next_distance, neighbor))
         return distances
 
 
@@ -1016,31 +1130,38 @@ def build_surface_voxel_volume(
     upper = _point(bounds_max)
     if any(upper[index] <= lower[index] for index in range(3)):
         raise ValueError("voxel bounds must have positive extent")
-    voxel_size, origin, shape = _fit_volume_geometry(lower, upper, resolved)
+    voxel_size, vertical_voxel_size, origin, shape = _fit_volume_geometry(
+        lower,
+        upper,
+        resolved,
+    )
+    cell_size = (voxel_size, vertical_voxel_size, voxel_size)
     blocked: set[VoxelIndex] = set()
     triangle_count = 0
     sample_count = 0
     sampling_truncated = False
+    lower_array = np.asarray(lower, dtype=np.float64)
+    upper_array = np.asarray(upper, dtype=np.float64)
     for mesh in triangle_meshes:
         if deadline_check is not None:
             deadline_check()
         triangles = _normalise_triangles(mesh)
         if triangles is None:
             continue
-        for triangle in triangles:
+        triangle_lower = triangles.min(axis=1)
+        triangle_upper = triangles.max(axis=1)
+        intersecting = np.all(
+            triangle_upper >= lower_array,
+            axis=1,
+        ) & np.all(
+            upper_array >= triangle_lower,
+            axis=1,
+        )
+        for triangle in triangles[intersecting]:
             if deadline_check is not None:
                 deadline_check()
-            triangle_lower = triangle.min(axis=0)
-            triangle_upper = triangle.max(axis=0)
-            if not _aabb_intersects(
-                triangle_lower,
-                triangle_upper,
-                np.asarray(lower, dtype=np.float64),
-                np.asarray(upper, dtype=np.float64),
-            ):
-                continue
             triangle_count += 1
-            steps = _triangle_steps(triangle, voxel_size)
+            steps = _triangle_steps(triangle, min(cell_size))
             for sample in _triangle_samples(triangle, steps):
                 if (
                     deadline_check is not None
@@ -1050,7 +1171,7 @@ def build_surface_voxel_volume(
                 if sample_count >= resolved.max_surface_samples:
                     sampling_truncated = True
                     break
-                index = _voxel_index(sample, origin, voxel_size)
+                index = _voxel_index(sample, origin, cell_size)
                 if not _contains_index(index, shape):
                     continue
                 sample_count += 1
@@ -1066,6 +1187,7 @@ def build_surface_voxel_volume(
             break
     return LocalVoxelVolume(
         voxel_size_m=voxel_size,
+        vertical_voxel_size_m=vertical_voxel_size,
         origin=origin,
         shape=shape,
         surface_cells=frozenset(blocked),
@@ -1123,24 +1245,39 @@ def _fit_volume_geometry(
     bounds_min: Point,
     bounds_max: Point,
     config: VoxelVolumeConfig,
-) -> tuple[float, Point, tuple[int, int, int]]:
-    size = float(config.voxel_size_m)
+) -> tuple[float, float, Point, tuple[int, int, int]]:
+    horizontal_size = float(config.voxel_size_m)
+    vertical_size = float(config.vertical_voxel_size_m)
     while True:
+        cell_size = (horizontal_size, vertical_size, horizontal_size)
         origin = tuple(
-            math.floor(bounds_min[axis] / size) * size
+            math.floor(bounds_min[axis] / cell_size[axis]) * cell_size[axis]
             for axis in range(3)
         )  # type: ignore[assignment]
         shape = tuple(
             max(
                 1,
-                int(math.ceil((bounds_max[axis] - origin[axis]) / size)) + 1,
+                int(
+                    math.ceil(
+                        (bounds_max[axis] - origin[axis])
+                        / cell_size[axis]
+                    )
+                )
+                + 1,
             )
             for axis in range(3)
         )
         count = shape[0] * shape[1] * shape[2]
         if count <= config.max_voxels:
-            return size, origin, shape  # type: ignore[return-value]
-        size *= max(1.05, (count / config.max_voxels) ** (1.0 / 3.0))
+            return (  # type: ignore[return-value]
+                horizontal_size,
+                vertical_size,
+                origin,
+                shape,
+            )
+        scale = max(1.05, (count / config.max_voxels) ** (1.0 / 3.0))
+        horizontal_size *= scale
+        vertical_size *= scale
 
 
 def _normalise_triangles(mesh: np.ndarray) -> np.ndarray | None:
@@ -1161,7 +1298,7 @@ def _triangle_steps(triangle: np.ndarray, voxel_size: float) -> int:
         float(np.linalg.norm(triangle[(index + 1) % 3] - triangle[index]))
         for index in range(3)
     ]
-    return max(1, min(64, int(math.ceil(max(edge_lengths) / voxel_size))))
+    return max(1, min(256, int(math.ceil(max(edge_lengths) / voxel_size))))
 
 
 def _triangle_samples(triangle: np.ndarray, steps: int) -> Iterable[np.ndarray]:
@@ -1177,11 +1314,25 @@ def _triangle_samples(triangle: np.ndarray, steps: int) -> Iterable[np.ndarray]:
             )
 
 
-def _voxel_index(point: Sequence[float], origin: Point, size: float) -> VoxelIndex:
+def _voxel_index(
+    point: Sequence[float],
+    origin: Point,
+    cell_size: Sequence[float],
+) -> VoxelIndex:
     return tuple(
-        int(math.floor((float(point[axis]) - origin[axis]) / size))
+        _stable_floor_grid_coordinate(
+            (float(point[axis]) - origin[axis]) / float(cell_size[axis])
+        )
         for axis in range(3)
     )  # type: ignore[return-value]
+
+
+def _stable_floor_grid_coordinate(value: float) -> int:
+    """Floor a grid coordinate without smearing exact boundary samples."""
+    nearest = round(float(value))
+    if math.isclose(float(value), nearest, rel_tol=0.0, abs_tol=1e-9):
+        return int(nearest)
+    return int(math.floor(float(value)))
 
 
 def _contains_index(index: VoxelIndex, shape: tuple[int, int, int]) -> bool:

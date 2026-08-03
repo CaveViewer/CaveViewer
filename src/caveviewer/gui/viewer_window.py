@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import asdict, replace
 import hashlib
 import json
 import logging
@@ -35,18 +34,6 @@ from moderngl_window.context.base import KeyModifiers
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.core.navigation.autodive import (
-    AUTO_DIVE_RUNTIME_METHOD,
-    AutoDivePreflightResult,
-    AutoDiveSettings,
-    DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS,
-    DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS,
-    DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND,
-    auto_dive_plan_navigation_cell_size,
-    build_auto_dive_preflight_plan,
-    build_auto_dive_initial_camera_pose,
-    build_voxel_graph_auto_dive_plan,
-)
 from caveviewer.core.navigation.cache_metadata import cached_centerline_path
 from caveviewer.core.navigation.centerline import (
     CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
@@ -56,16 +43,6 @@ from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
 from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
 from caveviewer.core.navigation.voxel_volume import VOXEL_VOLUME_METHOD
-from caveviewer.gui.autodive_blackbox import (
-    AutoDiveBlackbox,
-    auto_dive_blackbox_path,
-)
-from caveviewer.gui.autodive_controller import (
-    AutoDiveController,
-    AutoDiveReplanner,
-    AutoDiveState,
-    auto_dive_plan_summary,
-)
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
 from caveviewer.gui.texture_manager import TextureManager
@@ -83,9 +60,10 @@ from caveviewer.gui.import_process import (
 )
 from caveviewer.gui.import_controller import MapImportController
 from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_folder
-from caveviewer.gui.preferences import load_preferences
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
+from caveviewer.gui import manual_dive_trace
+from caveviewer.gui import recorded_dive
 from caveviewer.gui import render_upload
 from caveviewer.gui import view_culling
 from caveviewer.gui import viewer_input
@@ -105,11 +83,6 @@ _VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
 _UI_TEXT_SCALE_ENV = "CAVEVIEWER_UI_TEXT_SCALE"
 _VIEWER_UI_SCALE_ENV = "CAVEVIEWER_VIEWER_UI_SCALE"
 _VIEWER_UI_SCALE_MAX = 1.45
-_FEET_PER_MINUTE_TO_METERS_PER_SECOND = 0.3048 / 60.0
-_DEFAULT_AUTO_DIVE_ACCELERATION = 1.25
-_AUTO_DIVE_BASE_SPEED_M_PER_SECOND = (
-    DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND / (1.0 + _DEFAULT_AUTO_DIVE_ACCELERATION)
-)
 _TEXTURE_RESIDENT_CACHE_MB_ENV = "CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB"
 _GPU_RESIDENCY_SAFETY_SHARE = 0.05
 _RENDER_UPLOAD_INITIAL_SLICE_BYTES = render_upload.RENDER_UPLOAD_INITIAL_SLICE_BYTES
@@ -124,8 +97,9 @@ _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
 _MAIN_THREAD_STALL_LOG_THRESHOLD_S = 0.5
 _MAIN_THREAD_STALL_LOG_MIN_INTERVAL_S = 2.0
-_INITIAL_AUTO_DIVE_POSE_POSITION_TOLERANCE_M = 1e-3
-_INITIAL_AUTO_DIVE_POSE_ANGLE_TOLERANCE_RAD = math.radians(0.1)
+_RECORDED_DIVE_LOOKAHEAD_SECONDS = 10.0
+_RECORDED_DIVE_PREFETCH_RADIUS_CELLS = 1
+_RECORDED_DIVE_PREFETCH_CELL_CAP = 256
 _BENCHMARK_STREAMING_ENV_FIELDS = (
     ("system_ram_target_percent", "CAVEVIEWER_MEMORY_UTILIZATION_TARGET"),
     ("gpu_memory_target_percent", "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET"),
@@ -456,315 +430,12 @@ def _env_optional_mebibytes(name: str) -> int | None:
     return max(1, int(value * 1024 ** 2))
 
 
-def _auto_dive_settings_from_preferences() -> AutoDiveSettings:
-    """Resolve runtime Guided Dive settings from saved Preferences."""
-    return _auto_dive_settings_with_env_overrides(
-        _auto_dive_settings_from_mapping(load_preferences())
-    )
-
-
-def _auto_dive_diagnostics_enabled_from_preferences() -> bool:
-    preferences = load_preferences()
-    enabled = bool(
-        _preference_int(
-            preferences,
-            "auto_dive_diagnostics",
-            default=0,
-        )
-    )
-    return _env_bool("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS", enabled)
-
-
-def _auto_dive_settings_from_mapping(preferences: Mapping[str, str]) -> AutoDiveSettings:
-    """Convert validated preference values into route-planner settings."""
-    acceleration = _auto_dive_acceleration_from_preferences(preferences)
-    return AutoDiveSettings(
-        render_distance_cells=_preference_int(
-            preferences,
-            "auto_dive_render_distance_cells",
-            default=DEFAULT_AUTO_DIVE_RENDER_DISTANCE_CELLS,
-        ),
-        speed_m_per_second=_auto_dive_speed_from_acceleration(acceleration),
-        smoothing_radius_cells=_preference_int(
-            preferences,
-            "auto_dive_smoothing_radius_cells",
-            default=DEFAULT_AUTO_DIVE_SMOOTHING_RADIUS_CELLS,
-        ),
-    )
-
-
-def _preference_int(
-    preferences: Mapping[str, str],
-    key: str,
-    *,
-    default: int,
-) -> int:
-    try:
-        return int(preferences[key])
-    except Exception:
-        return int(default)
-
-
-def _preference_float(
-    preferences: Mapping[str, str],
-    key: str,
-    *,
-    default: float,
-) -> float:
-    try:
-        return float(preferences[key])
-    except Exception:
-        return float(default)
-
-
-def _auto_dive_acceleration_from_preferences(
-    preferences: Mapping[str, str],
-) -> float:
-    if str(preferences.get("auto_dive_acceleration", "")).strip():
-        return _preference_float(
-            preferences,
-            "auto_dive_acceleration",
-            default=_DEFAULT_AUTO_DIVE_ACCELERATION,
-        )
-    if str(preferences.get("auto_dive_speed_feet_per_minute", "")).strip():
-        legacy_speed_feet_per_minute = _preference_float(
-            preferences,
-            "auto_dive_speed_feet_per_minute",
-            default=(
-                DEFAULT_AUTO_DIVE_SPEED_M_PER_SECOND
-                / _FEET_PER_MINUTE_TO_METERS_PER_SECOND
-            ),
-        )
-        return _auto_dive_acceleration_from_speed_m_per_second(
-            legacy_speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
-        )
-    return _DEFAULT_AUTO_DIVE_ACCELERATION
-
-
-def _auto_dive_speed_from_acceleration(acceleration: float) -> float:
-    clamped = max(0.0, min(10.0, float(acceleration)))
-    return _AUTO_DIVE_BASE_SPEED_M_PER_SECOND * (1.0 + clamped)
-
-
-def _auto_dive_acceleration_from_speed_m_per_second(speed_m_per_second: float) -> float:
-    acceleration = (
-        float(speed_m_per_second) / max(1e-9, _AUTO_DIVE_BASE_SPEED_M_PER_SECOND)
-    ) - 1.0
-    return max(0.0, min(10.0, acceleration))
-
-
-def _auto_dive_settings_with_env_overrides(settings: AutoDiveSettings) -> AutoDiveSettings:
-    acceleration = _auto_dive_acceleration_from_speed_m_per_second(
-        settings.speed_m_per_second
-    )
-    if os.getenv("CAVEVIEWER_AUTO_DIVE_ACCELERATION", "").strip():
-        acceleration = _env_float(
-            "CAVEVIEWER_AUTO_DIVE_ACCELERATION",
-            acceleration,
-            0.0,
-            10.0,
-        )
-    elif os.getenv("CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE", "").strip():
-        legacy_speed_feet_per_minute = _env_float(
-            "CAVEVIEWER_AUTO_DIVE_SPEED_FEET_PER_MINUTE",
-            settings.speed_m_per_second / _FEET_PER_MINUTE_TO_METERS_PER_SECOND,
-            10.0,
-            500.0,
-        )
-        acceleration = _auto_dive_acceleration_from_speed_m_per_second(
-            legacy_speed_feet_per_minute * _FEET_PER_MINUTE_TO_METERS_PER_SECOND
-        )
-    return replace(
-        settings,
-        render_distance_cells=_env_int(
-            "CAVEVIEWER_AUTO_DIVE_RENDER_DISTANCE_CELLS",
-            int(settings.render_distance_cells),
-            1,
-            64,
-        ),
-        speed_m_per_second=_auto_dive_speed_from_acceleration(acceleration),
-        smoothing_radius_cells=_env_int(
-            "CAVEVIEWER_AUTO_DIVE_SMOOTHING_RADIUS_CELLS",
-            int(settings.smoothing_radius_cells),
-            0,
-            25,
-        ),
-    )
-
-
-def _auto_dive_settings_payload(settings: AutoDiveSettings) -> dict[str, Any]:
-    """Return every effective planner setting for a session record."""
-    try:
-        return dict(asdict(settings))
-    except Exception:
-        return {
-            "render_distance_cells": int(settings.render_distance_cells),
-            "speed_m_per_second": float(settings.speed_m_per_second),
-            "smoothing_radius_cells": int(settings.smoothing_radius_cells),
-            "lookahead_distance_m": float(settings.lookahead_distance_m),
-        }
-
-
-def _auto_dive_navigation_context(
-    manifest: Mapping[str, Any],
-    cache_dir: str | None,
-    settings: AutoDiveSettings,
-) -> dict[str, Any]:
-    """Build bounded cache, algorithm, and coordinate context for diagnostics."""
-    chunks = manifest.get("chunks", {})
-    chunks = chunks if isinstance(chunks, Mapping) else {}
-    map_bounds_min_array: np.ndarray | None = None
-    map_bounds_max_array: np.ndarray | None = None
-    chunk_triangle_count = 0
-    has_chunk_triangle_count = False
-    for info in chunks.values():
-        if not isinstance(info, Mapping):
-            continue
-        try:
-            minimum = np.asarray(info["bounds_min"], dtype=np.float64).reshape(3)
-            maximum = np.asarray(info["bounds_max"], dtype=np.float64).reshape(3)
-            if np.all(np.isfinite(minimum)) and np.all(np.isfinite(maximum)):
-                map_bounds_min_array = (
-                    minimum.copy()
-                    if map_bounds_min_array is None
-                    else np.minimum(map_bounds_min_array, minimum)
-                )
-                map_bounds_max_array = (
-                    maximum.copy()
-                    if map_bounds_max_array is None
-                    else np.maximum(map_bounds_max_array, maximum)
-                )
-        except Exception:
-            pass
-        try:
-            if "triangle_count" in info:
-                chunk_triangle_count += max(0, int(info["triangle_count"]))
-                has_chunk_triangle_count = True
-        except Exception:
-            pass
-
-    navigation = manifest.get("navigation", {})
-    navigation = navigation if isinstance(navigation, Mapping) else {}
-    selected_route_id = navigation.get("recommended_route_id")
-    selected_route = next(
-        (
-            route
-            for route in navigation.get("routes", ())
-            if isinstance(route, Mapping)
-            and (
-                selected_route_id is None
-                or route.get("id") == selected_route_id
-            )
-        ),
-        None,
-    ) if isinstance(navigation.get("routes"), Sequence) else None
-    selected_voxel_summary = (
-        selected_route.get("voxel_corridor")
-        if isinstance(selected_route, Mapping)
-        else None
-    )
-    triangle_count = manifest.get("triangle_count")
-    try:
-        triangle_count = int(triangle_count)
-    except Exception:
-        triangle_count = chunk_triangle_count if has_chunk_triangle_count else None
-
-    cache_manifest_sha256 = None
-    if cache_dir:
-        try:
-            cache_manifest_sha256 = _cache_manifest_sha256(cache_dir)
-        except Exception:
-            cache_manifest_sha256 = None
-
-    def _finite_float(value: Any) -> float | None:
-        try:
-            value = float(value)
-        except Exception:
-            return None
-        return value if math.isfinite(value) else None
-
-    map_bounds_min = (
-        None
-        if map_bounds_min_array is None
-        else [float(value) for value in map_bounds_min_array]
-    )
-    map_bounds_max = (
-        None
-        if map_bounds_max_array is None
-        else [float(value) for value in map_bounds_max_array]
-    )
-    return {
-        "app_version": APP_VERSION,
-        "cache_dir": None if cache_dir is None else os.path.abspath(cache_dir),
-        "cache_manifest_sha256": cache_manifest_sha256,
-        "source_obj": manifest.get("source_obj"),
-        "cache_manifest_version": manifest.get("version"),
-        "chunk_count": len(chunks),
-        "triangle_count": triangle_count,
-        "chunk_size_m": _finite_float(manifest.get("chunk_size")),
-        "footprint_cell_size_m": _finite_float(
-            manifest.get("footprint_cell_size")
-            or navigation.get("footprint_cell_size")
-        ),
-        "map_bounds_min": map_bounds_min,
-        "map_bounds_max": map_bounds_max,
-        "coordinate_frame": {
-            "units": "m",
-            "vertical_axis": "y",
-            "horizontal_axes": ["x", "z"],
-        },
-        "navigation_metadata": {
-            "version": navigation.get("version"),
-            "method": navigation.get("method"),
-            "route_count": navigation.get("route_count"),
-            "recommended_route_id": navigation.get("recommended_route_id"),
-            "surface_driven": navigation.get("surface_driven"),
-            "footprint_source": navigation.get("navigation_footprint_source"),
-            "route_selection_method": navigation.get("route_selection_method"),
-            "voxel_cache": navigation.get("voxel_cache"),
-            "recommended_route_voxel": selected_voxel_summary,
-        },
-        "algorithm_versions": {
-            "runtime": AUTO_DIVE_RUNTIME_METHOD,
-            "centerline": navigation.get("method"),
-            "curvature": CURVATURE_PROFILE_METHOD,
-            "voxel": VOXEL_VOLUME_METHOD,
-            "voxel_branch_lookahead": (
-                selected_voxel_summary.get("branch_lookahead_method")
-                if isinstance(selected_voxel_summary, Mapping)
-                else None
-            ),
-            "voxel_cache": (
-                navigation.get("voxel_cache", {}).get("method")
-                if isinstance(navigation.get("voxel_cache"), Mapping)
-                else None
-            ),
-        },
-        "settings": _auto_dive_settings_payload(settings),
-    }
-
-
-def _auto_dive_diagnostic_sink(
-    blackbox: AutoDiveBlackbox | None,
-    *,
-    phase: str | None = None,
-    position: Sequence[float] | None = None,
-):
-    if blackbox is None:
-        return None
-
-    def record(event: str, payload: Mapping[str, Any]) -> None:
-        enriched = dict(payload)
-        if phase is not None:
-            enriched.setdefault("phase", phase)
-        if position is not None:
-            enriched.setdefault(
-                "position",
-                [float(value) for value in position],
-            )
-        blackbox.record(event, **enriched)
-
-    return record
+def _map_initial_camera_position(manifest: Mapping[str, Any]) -> np.ndarray:
+    """Return the ordinary render-cache starting position for a map."""
+    position = chunker.first_manifest_chunk_center(manifest.get("chunks"))
+    if position is None:
+        raise ValueError("map manifest does not contain a valid starting chunk")
+    return np.asarray(position, dtype=np.float64)
 
 
 SHADER_DIR = str(resource_path("shaders"))
@@ -827,6 +498,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     cave_textures_dir: str = None
     cave_manifest: dict = None
     cave_benchmark_config: dict | None = None
+    cave_recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
 
     # Alternative to the three attributes above: set THIS instead when the
     # map needs first-time import/chunking (no cache built yet) -- a dict
@@ -1016,6 +688,23 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._navigation_guard_radius_cells = _env_int("CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS", 2, 0, 12)
         self._bookmarks_path: str | None = None
         self._bookmarks: viewer_bookmarks.BookmarkSlots = {}
+        self._manual_dive_trace: (
+            manual_dive_trace.ManualDiveTraceRecorder | None
+        ) = None
+        self._manual_dive_trace_writers: list[
+            manual_dive_trace.ManualDiveTraceRecorder
+        ] = []
+        self._pending_recorded_dive_trace = (
+            CaveViewerWindow.cave_recorded_dive_trace
+        )
+        self._recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
+        self._recorded_dive_controller: (
+            recorded_dive.RecordedDivePlaybackController | None
+        ) = None
+        self._recorded_dive_prefetch_cell_set: frozenset[
+            tuple[int, int, int]
+        ] = frozenset()
+        self._recorded_dive_background_paused = False
         self._recording_fps = _env_int("CAVEVIEWER_RECORDING_FPS", 30, 1, 60)
         self._recording_max_height = _env_int(
             recording.RECORDING_MAX_HEIGHT_ENV_VAR,
@@ -1220,25 +909,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             tuple[int, int],
             tuple[tuple[float, float], ...],
         ] = {}
-        self._auto_dive_controller: AutoDiveController | None = None
-        self._auto_dive_previous_render_distance: int | None = None
-        self._auto_dive_start_executor: ThreadPoolExecutor | None = None
-        self._auto_dive_start_future: Future | None = None
-        self._auto_dive_start_settings: AutoDiveSettings | None = None
-        self._auto_dive_start_blackbox: AutoDiveBlackbox | None = None
-        self._auto_dive_start_manifest: dict | None = None
-        self._auto_dive_start_cache_dir: str | None = None
-        self._auto_dive_start_position: np.ndarray | None = None
-        self._auto_dive_start_requested_at: float | None = None
-        self._initial_auto_dive_pose_executor: ThreadPoolExecutor | None = None
-        self._initial_auto_dive_pose_future: Future | None = None
-        self._initial_auto_dive_pose_manifest: dict | None = None
-        self._initial_auto_dive_pose_cache_dir: str | None = None
-        self._initial_auto_dive_pose_start_position: np.ndarray | None = None
-        self._initial_auto_dive_pose_start_yaw: float | None = None
-        self._initial_auto_dive_pose_start_pitch: float | None = None
-        self._initial_auto_dive_pose_start_roll: float | None = None
-        self._auto_dive_start_after_initial_pose = False
         self._texture_validation_executor: ThreadPoolExecutor | None = None
         self._texture_validation_future: Future | None = None
         self._texture_validation_manager: TextureManager | None = None
@@ -1527,6 +1197,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.cache_dir = cache_dir
         self.textures_dir = textures_dir
         self.manifest = manifest
+        pending_recorded_dive = getattr(
+            self,
+            "_pending_recorded_dive_trace",
+            None,
+        )
+        if pending_recorded_dive is not None:
+            recorded_dive.validate_recorded_dive_manifest(
+                pending_recorded_dive,
+                manifest,
+            )
         self._initial_compilation_started_at = time.perf_counter()
         self._initial_compilation_logged = False
 
@@ -1676,19 +1356,30 @@ class CaveViewerWindow(mglw.WindowConfig):
             chunks=len(self.manifest.get("chunks", {})),
         )
 
-        # Fallback starting position: center of the first available chunk, so
-        # older caches without navigation metadata still open somewhere sane.
-        first_cell_str = next(iter(self.manifest["chunks"]))
-        first_info = self.manifest["chunks"][first_cell_str]
-        start_pos = (np.array(first_info["bounds_min"]) + np.array(first_info["bounds_max"])) / 2.0
+        # A Recorded Dive owns its exact first camera pose. Ordinary map opens
+        # start at the render-cache position and remain under manual control.
+        if pending_recorded_dive is not None:
+            start_pos = np.asarray(
+                pending_recorded_dive.initial_pose.position,
+                dtype=np.float64,
+            )
+        else:
+            start_pos = _map_initial_camera_position(self.manifest)
         self.camera = FlyCamera(position=tuple(start_pos))
-        if benchmark_controller is None:
-            self._start_initial_auto_dive_pose(start_pos)
         self._benchmark_route_prefetch_cells = frozenset()
         if benchmark_controller is not None:
             benchmark_controller.set_position_origin(start_pos)
             benchmark_controller.apply_initial_camera(self.camera)
             self._configure_benchmark_route_prefetch(start_pos)
+        elif pending_recorded_dive is not None:
+            controller = recorded_dive.RecordedDivePlaybackController(
+                pending_recorded_dive
+            )
+            controller.start(self.camera, now=time.perf_counter())
+            self._recorded_dive_trace = pending_recorded_dive
+            self._recorded_dive_controller = controller
+            self._pending_recorded_dive_trace = None
+            self._refresh_recorded_dive_prefetch()
         self._bookmarks_path = os.path.join(self.cache_dir, "camera_bookmarks.json")
         self._load_bookmarks()
 
@@ -1760,10 +1451,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         if hasattr(self, "render_distance_stepper"):
             self.world.config.load_radius_cells = self.render_distance_stepper.value
 
-        self._auto_dive_controller = None
-        self._auto_dive_previous_render_distance = None
-        if self.minimap is not None:
-            self.minimap.set_active_route_points_xz(())
         self.controls_overlay.show_fullscreen()
         # Reset on each map load; set True when the initial view has enough
         # uploaded chunks to be usable, not merely when the first chunk arrives.
@@ -2746,830 +2433,232 @@ class CaveViewerWindow(mglw.WindowConfig):
             _LOG.debug("Minimap centerline unavailable: %s", exc)
             return ()
 
-    def _auto_dive_initial_camera_pose(self):
-        """Return the preferred map-load pose for interactive Guided Dive startup."""
-        if self.manifest is None:
-            return None
-        try:
-            settings = _auto_dive_settings_from_preferences()
-            cache_dir = getattr(self, "cache_dir", None)
-            if cache_dir is None:
-                return build_auto_dive_initial_camera_pose(
-                    self.manifest,
-                    settings=settings,
-                    require_voxel_graph=True,
-                )
-            return build_auto_dive_initial_camera_pose(
-                self.manifest,
-                settings=settings,
-                cache_dir=cache_dir,
-                require_voxel_graph=True,
-            )
-        except NavigationConfigurationError as exc:
-            _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
-            return None
-
-    def _start_initial_auto_dive_pose(self, fallback_position: np.ndarray) -> bool:
-        """Queue the preferred map-load pose without blocking the render thread."""
-        if self.manifest is None:
-            return False
-        self._cancel_initial_auto_dive_pose()
-
-        executor: ThreadPoolExecutor | None = None
-        try:
-            settings = _auto_dive_settings_from_preferences()
-            executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="CaveViewer-InitialAutoDivePose",
-            )
-            future = executor.submit(
-                build_auto_dive_initial_camera_pose,
-                self.manifest,
-                settings=settings,
-                cache_dir=self.cache_dir,
-                require_voxel_graph=True,
-            )
-        except Exception as exc:
-            if executor is not None:
-                executor.shutdown(wait=False, cancel_futures=True)
-            _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
-            return False
-
-        self._initial_auto_dive_pose_executor = executor
-        self._initial_auto_dive_pose_future = future
-        self._initial_auto_dive_pose_manifest = self.manifest
-        self._initial_auto_dive_pose_cache_dir = self.cache_dir
-        self._initial_auto_dive_pose_start_position = np.asarray(
-            fallback_position,
-            dtype=np.float64,
-        ).copy()
-        self._initial_auto_dive_pose_start_yaw = self._camera_angle("yaw")
-        self._initial_auto_dive_pose_start_pitch = self._camera_angle("pitch")
-        self._initial_auto_dive_pose_start_roll = self._camera_angle("roll")
-        _LOG.info("Guided Dive initial camera planning started.")
-        return True
-
-    def _update_initial_auto_dive_pose(self) -> None:
-        future = getattr(self, "_initial_auto_dive_pose_future", None)
-        if future is None or not future.done():
-            return
-
-        start_after_pose = bool(
-            getattr(self, "_auto_dive_start_after_initial_pose", False)
-        )
-        self._auto_dive_start_after_initial_pose = False
-        executor = getattr(self, "_initial_auto_dive_pose_executor", None)
-        requested_manifest = getattr(self, "_initial_auto_dive_pose_manifest", None)
-        requested_cache_dir = getattr(self, "_initial_auto_dive_pose_cache_dir", None)
-
-        def resume_start_if_current() -> None:
-            if (
-                start_after_pose
-                and self.manifest is requested_manifest
-                and self.cache_dir == requested_cache_dir
-                and self.camera is not None
-                and self.world is not None
-                and self._has_map_loaded
-            ):
-                self._start_auto_dive()
-
-        start_position = getattr(
-            self,
-            "_initial_auto_dive_pose_start_position",
-            None,
-        )
-        start_yaw = getattr(self, "_initial_auto_dive_pose_start_yaw", None)
-        start_pitch = getattr(self, "_initial_auto_dive_pose_start_pitch", None)
-        start_roll = getattr(self, "_initial_auto_dive_pose_start_roll", None)
-        self._clear_initial_auto_dive_pose_state(shutdown_executor=False)
-
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-
-        try:
-            initial_pose = future.result()
-        except NavigationConfigurationError as exc:
-            _LOG.debug("Guided Dive initial camera unavailable: %s", exc)
-            resume_start_if_current()
-            return
-        except Exception:
-            _LOG.exception("Guided Dive initial camera planning failed.")
-            resume_start_if_current()
-            return
-
-        if initial_pose is None:
-            resume_start_if_current()
-            return
-        if (
-            self.manifest is not requested_manifest
-            or self.cache_dir != requested_cache_dir
-            or self.camera is None
-            or self.world is None
-            or not self._has_map_loaded
-        ):
-            _LOG.debug("Discarded stale Guided Dive initial camera after map changed.")
-            return
-        if self._auto_dive_is_active() or getattr(
-            self,
-            "_auto_dive_start_future",
-            None,
-        ) is not None:
-            _LOG.debug(
-                "Discarded Guided Dive initial camera because Guided Dive is active."
-            )
-            return
-        if not self._initial_auto_dive_camera_is_unchanged(
-            start_position,
-            start_yaw,
-            start_pitch,
-            start_roll,
-        ):
-            _LOG.info(
-                "Skipped Guided Dive initial camera because the camera changed "
-                "before planning finished."
-            )
-            resume_start_if_current()
-            return
-
-        previous_camera = self.camera
-        self.camera = FlyCamera(
-            position=initial_pose.position,
-            yaw_deg=initial_pose.yaw_deg,
-            pitch_deg=initial_pose.pitch_deg,
-            move_speed=float(getattr(previous_camera, "move_speed", 4.0)),
-            mouse_sensitivity=float(
-                getattr(previous_camera, "mouse_sensitivity", 0.12)
-            ),
-        )
-        self.camera.roll = math.radians(
-            float(getattr(initial_pose, "roll_deg", 0.0))
-        )
-        self._reset_initial_chunk_loading_state()
-        _LOG.info(
-            "Initial camera placed at Guided Dive graph entrance: "
-            "position=(%.2f, %.2f, %.2f).",
-            float(initial_pose.position[0]),
-            float(initial_pose.position[1]),
-            float(initial_pose.position[2]),
-        )
-        resume_start_if_current()
-
-    def _camera_angle(self, attribute_name: str) -> float | None:
-        camera = getattr(self, "camera", None)
-        if camera is None:
-            return None
-        try:
-            return float(getattr(camera, attribute_name))
-        except Exception:
-            return None
-
-    @staticmethod
-    def _angle_delta_rad(current: float | None, expected: float | None) -> float:
-        if current is None or expected is None:
-            return 0.0
-        return abs((current - expected + math.pi) % (2.0 * math.pi) - math.pi)
-
-    def _initial_auto_dive_camera_is_unchanged(
-        self,
-        start_position: np.ndarray | None,
-        start_yaw: float | None,
-        start_pitch: float | None,
-        start_roll: float | None,
-    ) -> bool:
-        camera = getattr(self, "camera", None)
-        if camera is None or start_position is None:
-            return False
-        current_position = np.asarray(camera.position, dtype=np.float64)
-        if not np.allclose(
-            current_position,
-            start_position,
-            rtol=0.0,
-            atol=_INITIAL_AUTO_DIVE_POSE_POSITION_TOLERANCE_M,
-        ):
-            return False
-        return (
-            self._angle_delta_rad(self._camera_angle("yaw"), start_yaw)
-            <= _INITIAL_AUTO_DIVE_POSE_ANGLE_TOLERANCE_RAD
-            and self._angle_delta_rad(self._camera_angle("pitch"), start_pitch)
-            <= _INITIAL_AUTO_DIVE_POSE_ANGLE_TOLERANCE_RAD
-            and self._angle_delta_rad(self._camera_angle("roll"), start_roll)
-            <= _INITIAL_AUTO_DIVE_POSE_ANGLE_TOLERANCE_RAD
-        )
-
-    def _reset_initial_chunk_loading_state(self) -> None:
-        self._initial_chunks_loaded = False
-        self._initial_visual_ready = False
-        self._initial_visual_ready_frames = 0
-        self._initial_visual_ready_visible_chunks = 0
-        self._initial_visual_ready_required_textures = 0
-        self._initial_visual_ready_resident_textures = 0
-        self._initial_visual_ready_visible_textures = 0
-        self._initial_visual_ready_missing_textures = 0
-        self._initial_visual_ready_expected_chunks = 0
-        self._initial_visual_ready_covered_chunks = 0
-        self._initial_visual_ready_missing_chunks = 0
-        self._initial_visual_ready_coverage_pct = 100.0
-        self._initial_visual_ready_logged = False
-        self._chunk_prep_progress = 0.0
-        self._chunk_prep_complete_until = None
-        self._chunk_prep_completion_armed = False
-        panel = getattr(self, "import_progress_panel", None)
-        if panel is not None:
-            panel.reset_progress()
-
-    def _clear_initial_auto_dive_pose_state(self, *, shutdown_executor: bool) -> None:
-        executor = getattr(self, "_initial_auto_dive_pose_executor", None)
-        if shutdown_executor and executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-        self._initial_auto_dive_pose_executor = None
-        self._initial_auto_dive_pose_future = None
-        self._initial_auto_dive_pose_manifest = None
-        self._initial_auto_dive_pose_cache_dir = None
-        self._initial_auto_dive_pose_start_position = None
-        self._initial_auto_dive_pose_start_yaw = None
-        self._initial_auto_dive_pose_start_pitch = None
-        self._initial_auto_dive_pose_start_roll = None
-
-    def _cancel_initial_auto_dive_pose(self) -> bool:
-        future = getattr(self, "_initial_auto_dive_pose_future", None)
-        if future is None:
-            return False
-        future.cancel()
-        self._auto_dive_start_after_initial_pose = False
-        self._clear_initial_auto_dive_pose_state(shutdown_executor=True)
-        _LOG.info("Guided Dive initial camera planning cancelled.")
-        return True
-
-    def _auto_dive_is_active(self) -> bool:
-        controller = getattr(self, "_auto_dive_controller", None)
+    def _recorded_dive_is_active(self) -> bool:
+        controller = getattr(self, "_recorded_dive_controller", None)
         return controller is not None and controller.active
 
-    def _auto_dive_waiting_for_user_input(self) -> bool:
-        controller = getattr(self, "_auto_dive_controller", None)
-        return bool(
-            controller is not None
-            and getattr(controller, "state", None) is AutoDiveState.WAITING_FOR_USER
-        )
+    def _recorded_dive_prefetch_cells(self) -> frozenset[tuple[int, int, int]]:
+        """Build a bounded, chronological chunk tube ahead of trace time."""
+        controller = getattr(self, "_recorded_dive_controller", None)
+        world = getattr(self, "world", None)
+        if controller is None or world is None or not controller.active:
+            return frozenset()
 
-    def _auto_dive_start_is_pending(self) -> bool:
-        return bool(
-            getattr(self, "_auto_dive_start_future", None) is not None
-            or getattr(self, "_auto_dive_start_after_initial_pose", False)
-        )
-
-    def _toggle_auto_dive(self) -> bool:
-        if not self._has_map_loaded or self.camera is None or self.world is None:
-            return False
-        if self._auto_dive_waiting_for_user_input():
-            controller = getattr(self, "_auto_dive_controller", None)
-            resume = getattr(controller, "resume_from_user_assist", None)
-            if callable(resume):
-                return bool(
-                    resume(
-                        self.camera,
-                        self.world,
-                        now=time.perf_counter(),
-                    )
-                )
-            self._stop_auto_dive()
-            return self._start_auto_dive()
-        if self._auto_dive_is_active() or self._auto_dive_start_is_pending():
-            self._stop_auto_dive()
-            return True
-        return self._start_auto_dive()
-
-    def _start_auto_dive(self) -> bool:
-        """Queue user-facing centerline Guided Dive planning without blocking rendering."""
-        if self.manifest is None or self.camera is None or self.world is None:
-            return False
-        if self._auto_dive_start_is_pending():
-            return True
-        benchmark_controller = getattr(self, "_benchmark_controller", None)
-        if benchmark_controller is not None and not benchmark_controller.finished:
-            return False
-        initial_pose_future = getattr(
-            self,
-            "_initial_auto_dive_pose_future",
-            None,
-        )
-        if initial_pose_future is not None:
-            # Map load starts a bounded worker that resolves the certified
-            # mesh-graph entrance. Starting preflight from the temporary first
-            # render-chunk center races that worker and can fail a valid map.
-            # Preserve one click and continue automatically once placement has
-            # either applied or been skipped because the user moved manually.
-            self._auto_dive_start_after_initial_pose = True
-            if initial_pose_future.done():
-                self._update_initial_auto_dive_pose()
-            return True
-        # The graph/voxel preflight validates the exact camera position. The
-        # legacy chunk guard only knows coarse mesh bounds and can move a
-        # graph-native start into an occupied voxel before preflight sees it.
-        # Leave the pose untouched here; invalid manual positions must fail
-        # preflight rather than being silently rewritten.
-        blackbox = self._auto_dive_blackbox()
-        executor: ThreadPoolExecutor | None = None
-        try:
-            auto_dive_settings = _auto_dive_settings_from_preferences()
-            start_position = np.asarray(self.camera.position, dtype=np.float64).copy()
-            requested_at = time.perf_counter()
-            self._auto_dive_start_requested_at = requested_at
-            if blackbox is not None:
-                blackbox.record(
-                    "session_started",
-                    cache_dir=self.cache_dir,
-                    source_obj=self.manifest.get("source_obj"),
-                    settings=_auto_dive_settings_payload(auto_dive_settings),
-                    navigation_context=_auto_dive_navigation_context(
-                        self.manifest,
-                        self.cache_dir,
-                        auto_dive_settings,
-                    ),
-                    camera={
-                        "position": [
-                            float(value)
-                            for value in np.asarray(
-                                self.camera.position,
-                                dtype=np.float64,
-                            )
-                        ],
-                        "yaw_deg": math.degrees(float(self.camera.yaw)),
-                        "pitch_deg": math.degrees(float(self.camera.pitch)),
-                        "roll_deg": math.degrees(float(getattr(self.camera, "roll", 0.0))),
-                    },
-                )
-            executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="CaveViewer-AutoDiveStart",
+        poses = controller.lookahead_poses(_RECORDED_DIVE_LOOKAHEAD_SECONDS)
+        if not poses:
+            return frozenset()
+        chunk_size = max(1e-6, float(world.config.chunk_size))
+        sample_step_m = max(0.25, chunk_size * 0.5)
+        centers: list[tuple[int, int, int]] = []
+        previous_pose = poses[0]
+        centers.append(
+            world.cell_for_position(
+                np.asarray(previous_pose.position, dtype=np.float32)
             )
-            future = executor.submit(
-                build_auto_dive_preflight_plan,
-                self.manifest,
-                current_position=tuple(float(value) for value in start_position),
-                current_yaw=float(self.camera.yaw),
-                current_pitch=float(self.camera.pitch),
-                settings=auto_dive_settings,
-                cache_dir=self.cache_dir,
-                diagnostics=_auto_dive_diagnostic_sink(
-                    blackbox,
-                    phase="initial_preflight",
-                    position=start_position,
+        )
+        for pose in poses[1:]:
+            start = np.asarray(previous_pose.position, dtype=np.float64)
+            end = np.asarray(pose.position, dtype=np.float64)
+            segment = end - start
+            distance = float(np.linalg.norm(segment))
+            steps = 1
+            if pose.record_kind != "discontinuity":
+                steps = max(1, int(math.ceil(distance / sample_step_m)))
+            for step in range(1, steps + 1):
+                position = end if steps == 1 else start + segment * (step / steps)
+                center = world.cell_for_position(
+                    np.asarray(position, dtype=np.float32)
+                )
+                if not centers or center != centers[-1]:
+                    centers.append(center)
+            previous_pose = pose
+
+        wanted: set[tuple[int, int, int]] = set()
+        for center in centers:
+            nearby = sorted(
+                world.available_cells_in_radius(
+                    center,
+                    _RECORDED_DIVE_PREFETCH_RADIUS_CELLS,
+                ),
+                key=lambda cell: (
+                    (cell[0] - center[0]) ** 2
+                    + (cell[1] - center[1]) ** 2
+                    + (cell[2] - center[2]) ** 2,
+                    cell,
                 ),
             )
-        except Exception as exc:
-            if executor is not None:
-                executor.shutdown(wait=False, cancel_futures=True)
-            if blackbox is not None:
-                blackbox.record(
-                    "auto_dive_unavailable",
-                    reason=str(exc),
-                    error_type=type(exc).__name__,
-                    plan_phase="initial_preflight",
-                    planning_duration_ms=max(
-                        0.0,
-                        (time.perf_counter() - requested_at) * 1000.0,
-                    )
-                    if "requested_at" in locals()
-                    else None,
-                )
-                blackbox.close()
-            _LOG.info("Guided Dive unavailable: %s", exc)
-            return True
+            for cell in nearby:
+                wanted.add(cell)
+                if len(wanted) >= _RECORDED_DIVE_PREFETCH_CELL_CAP:
+                    return frozenset(wanted)
+        return frozenset(wanted)
 
-        self._auto_dive_start_executor = executor
-        self._auto_dive_start_future = future
-        self._auto_dive_start_settings = auto_dive_settings
-        self._auto_dive_start_blackbox = blackbox
-        self._auto_dive_start_manifest = self.manifest
-        self._auto_dive_start_cache_dir = self.cache_dir
-        self._auto_dive_start_position = start_position
-        if blackbox is not None:
-            blackbox.record(
-                "auto_dive_plan_requested",
-                position=[float(value) for value in start_position],
-                plan_id="initial",
-                plan_phase="initial_preflight",
-            )
-        _LOG.info("Guided Dive planning started.")
-        return True
-
-    def _update_auto_dive_start(self) -> None:
-        future = getattr(self, "_auto_dive_start_future", None)
-        if future is None or not future.done():
+    def _refresh_recorded_dive_prefetch(self) -> None:
+        world = getattr(self, "world", None)
+        if world is None:
             return
+        cells = self._recorded_dive_prefetch_cells()
+        if cells == getattr(self, "_recorded_dive_prefetch_cell_set", frozenset()):
+            return
+        self._recorded_dive_prefetch_cell_set = cells
+        world.set_prefetch_wanted_cells(cells)
 
-        executor = getattr(self, "_auto_dive_start_executor", None)
-        auto_dive_settings = getattr(self, "_auto_dive_start_settings", None)
-        blackbox = getattr(self, "_auto_dive_start_blackbox", None)
-        requested_manifest = getattr(self, "_auto_dive_start_manifest", None)
-        requested_cache_dir = getattr(self, "_auto_dive_start_cache_dir", None)
-        start_position = getattr(self, "_auto_dive_start_position", None)
-        requested_at = getattr(self, "_auto_dive_start_requested_at", None)
-        planning_duration_ms = (
-            None
-            if requested_at is None
-            else max(0.0, (time.perf_counter() - requested_at) * 1000.0)
+    def _recorded_dive_chunks_ready(self, *, now: float) -> bool:
+        """Require GPU-resident geometry around the next authoritative pose."""
+        controller = getattr(self, "_recorded_dive_controller", None)
+        world = getattr(self, "world", None)
+        if controller is None or world is None:
+            return False
+        if (
+            not getattr(self, "_initial_chunks_loaded", False)
+            or not getattr(self, "_initial_visual_ready", False)
+        ):
+            return False
+
+        candidate_pose = controller.trace.pose_at(
+            controller.candidate_elapsed(now=now)
         )
-        self._clear_auto_dive_start_state(shutdown_executor=False)
+        center = world.cell_for_position(
+            np.asarray(candidate_pose.position, dtype=np.float32)
+        )
+        required = set(
+            world.available_cells_in_radius(
+                center,
+                _RECORDED_DIVE_PREFETCH_RADIUS_CELLS,
+            )
+        )
+        if not required:
+            required = set(
+                world.available_cells_in_radius(
+                    center,
+                    max(1, int(world.config.load_radius_cells)),
+                )
+            )
 
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-
-        try:
-            preflight = future.result()
-        except NavigationConfigurationError as exc:
-            if blackbox is not None:
-                blackbox.record(
-                    "auto_dive_unavailable",
-                    reason=str(exc),
-                    error_type=type(exc).__name__,
-                    plan_id="initial",
-                    plan_phase="initial_preflight",
-                    planning_duration_ms=planning_duration_ms,
-                )
-                blackbox.close()
-            _LOG.info("Guided Dive unavailable: %s", exc)
-            return
-        except Exception as exc:
-            if blackbox is not None:
-                blackbox.record(
-                    "auto_dive_unavailable",
-                    reason=str(exc),
-                    error_type=type(exc).__name__,
-                    plan_id="initial",
-                    plan_phase="initial_preflight",
-                    planning_duration_ms=planning_duration_ms,
-                )
-                blackbox.close()
-            _LOG.exception("Guided Dive planning failed.")
-            return
-
-        if isinstance(preflight, AutoDivePreflightResult):
-            if not preflight.ready:
-                if blackbox is not None:
-                    blackbox.record(
-                        "auto_dive_preflight_failed",
-                        status=preflight.status,
-                        reason=preflight.reason,
-                        preflight=preflight.diagnostic_payload(),
-                        plan_id="initial",
-                        plan_phase="initial_preflight",
-                        planning_duration_ms=planning_duration_ms,
-                    )
-                    blackbox.close()
-                _LOG.info(
-                    "Guided Dive preflight did not produce a validated route: %s",
-                    preflight.reason,
-                )
-                return
-            plan = preflight.plan
-            assert plan is not None
-            if blackbox is not None:
-                blackbox.record(
-                    "auto_dive_preflight_completed",
-                    status=preflight.status,
-                    reason=preflight.reason,
-                    preflight=preflight.diagnostic_payload(),
-                    plan_id="initial",
-                    plan_phase="initial_preflight",
-                    planning_duration_ms=planning_duration_ms,
-                )
+        lock = getattr(world, "_lock", None)
+        if lock is None:
+            loaded = set(getattr(world, "loaded_cells", ()))
+            failed = set(getattr(world, "_failed_cells", {}))
         else:
-            # Keep the handoff tolerant of test doubles and older embedders
-            # while production startup always uses AutoDivePreflightResult.
-            plan = preflight
+            with lock:
+                loaded = set(getattr(world, "loaded_cells", ()))
+                failed = set(getattr(world, "_failed_cells", {}))
+        failed_required = required & failed
+        if failed_required:
+            _LOG.error(
+                "Recorded Dive stopped because %d required map chunk(s) failed to load.",
+                len(failed_required),
+            )
+            self._stop_recorded_dive(reason="chunk_load_failed")
+            return False
+        return required.issubset(loaded)
 
+    def _update_recorded_dive(self, *, now: float) -> None:
+        controller = getattr(self, "_recorded_dive_controller", None)
+        if controller is None or not controller.active:
+            return
+        self._refresh_recorded_dive_prefetch()
+        previous_state = controller.state
+        current_state = controller.update(
+            self.camera,
+            now=now,
+            chunks_ready=self._recorded_dive_chunks_ready(now=now),
+        )
+        if current_state is recorded_dive.RecordedDivePlaybackState.BUFFERING:
+            if previous_state is not current_state:
+                _LOG.info("Recorded Dive paused its clock while map chunks load.")
+            return
         if (
-            self.manifest is not requested_manifest
-            or self.cache_dir != requested_cache_dir
-            or self.camera is None
-            or self.world is None
-            or not self._has_map_loaded
+            previous_state is recorded_dive.RecordedDivePlaybackState.BUFFERING
+            and current_state is recorded_dive.RecordedDivePlaybackState.PLAYING
         ):
-            if blackbox is not None:
-                blackbox.record(
-                    "auto_dive_plan_discarded",
-                    reason="map_changed",
-                    position=(
-                        None
-                        if start_position is None
-                        else [float(value) for value in start_position]
-                    ),
-                    plan_id="initial",
-                    plan_phase="initial_preflight",
-                    planning_duration_ms=planning_duration_ms,
-                )
-                blackbox.close()
-            _LOG.info("Discarded stale Guided Dive plan after map changed.")
+            if self.controls_overlay.is_waiting_for_begin:
+                self.controls_overlay.dismiss_begin_screen()
+            _LOG.info("Recorded Dive playback started/resumed.")
+        if current_state is recorded_dive.RecordedDivePlaybackState.FINISHED:
+            if self.controls_overlay.is_waiting_for_begin:
+                self.controls_overlay.dismiss_begin_screen()
+            self._recorded_dive_prefetch_cell_set = frozenset()
+            self.world.set_prefetch_wanted_cells(())
+            _LOG.info(
+                "Recorded Dive completed: %.1f seconds, %d recorded poses.",
+                controller.trace.duration_s,
+                len(controller.trace.poses),
+            )
+
+    def _stop_recorded_dive(self, *, reason: str) -> bool:
+        controller = getattr(self, "_recorded_dive_controller", None)
+        if controller is None:
+            return False
+        was_active = controller.active
+        controller.stop()
+        world = getattr(self, "world", None)
+        if world is not None:
+            world.set_prefetch_wanted_cells(())
+        self._recorded_dive_prefetch_cell_set = frozenset()
+        if was_active:
+            _LOG.info("Recorded Dive stopped: %s.", reason)
+        return was_active
+
+    def _toggle_recorded_dive_pause(self) -> bool:
+        controller = getattr(self, "_recorded_dive_controller", None)
+        if controller is None or not controller.active:
+            return False
+        now = time.perf_counter()
+        if controller.state is recorded_dive.RecordedDivePlaybackState.PAUSED:
+            return controller.resume(now=now)
+        return controller.pause(now=now)
+
+    def _render_dive_status(self, window_size: tuple[int, int]) -> None:
+        """Render status shared by manual tracing and Recorded Dive playback."""
+        if self._render_recorded_dive_progress(window_size):
             return
-
-        if auto_dive_settings is None:
-            if blackbox is not None:
-                blackbox.record(
-                    "auto_dive_plan_discarded",
-                    reason="missing_settings",
-                    plan_id="initial",
-                    plan_phase="initial_preflight",
-                    planning_duration_ms=planning_duration_ms,
-                )
-                blackbox.close()
-            return
-
-        if blackbox is not None:
-            blackbox.record(
-                "auto_dive_plan_completed",
-                plan_id="initial",
-                plan_phase="initial_preflight",
-                planning_duration_ms=planning_duration_ms,
-                plan=auto_dive_plan_summary(plan),
-            )
-        self._activate_auto_dive_plan(plan, auto_dive_settings, blackbox)
-
-    def _clear_auto_dive_start_state(self, *, shutdown_executor: bool) -> None:
-        executor = getattr(self, "_auto_dive_start_executor", None)
-        if shutdown_executor and executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-        self._auto_dive_start_executor = None
-        self._auto_dive_start_future = None
-        self._auto_dive_start_settings = None
-        self._auto_dive_start_blackbox = None
-        self._auto_dive_start_manifest = None
-        self._auto_dive_start_cache_dir = None
-        self._auto_dive_start_position = None
-        self._auto_dive_start_requested_at = None
-
-    def _cancel_auto_dive_start(self) -> bool:
-        future = getattr(self, "_auto_dive_start_future", None)
-        blackbox = getattr(self, "_auto_dive_start_blackbox", None)
-        position = getattr(self, "_auto_dive_start_position", None)
-        requested_at = getattr(self, "_auto_dive_start_requested_at", None)
-        if future is None:
-            if not bool(
-                getattr(self, "_auto_dive_start_after_initial_pose", False)
-            ):
-                return False
-            self._auto_dive_start_after_initial_pose = False
-            _LOG.info("Queued Guided Dive start cancelled.")
-            return True
-        future.cancel()
-        if blackbox is not None:
-            blackbox.record(
-                "auto_dive_plan_cancelled",
-                position=(
-                    None if position is None else [float(value) for value in position]
-                ),
-                plan_id="initial",
-                plan_phase="initial_preflight",
-                planning_duration_ms=(
-                    None
-                    if requested_at is None
-                    else max(
-                        0.0,
-                        (time.perf_counter() - requested_at) * 1000.0,
-                    )
-                ),
-            )
-            blackbox.close()
-        self._clear_auto_dive_start_state(shutdown_executor=True)
-        _LOG.info("Guided Dive planning cancelled.")
-        return True
-
-    def _activate_auto_dive_plan(
-        self,
-        plan,
-        auto_dive_settings: AutoDiveSettings,
-        blackbox: AutoDiveBlackbox | None,
-    ) -> None:
-        if self.manifest is None or self.camera is None or self.world is None:
-            if blackbox is not None:
-                blackbox.record(
-                    "auto_dive_plan_discarded",
-                    reason="missing_viewer_state",
-                )
-                blackbox.close()
-            return
-
-        self._auto_dive_previous_render_distance = int(
-            getattr(self.render_distance_stepper, "value", 10)
-        )
-        self.render_distance_stepper.value = min(
-            int(getattr(self.render_distance_stepper, "max_value", 10)),
-            max(
-                int(getattr(self.render_distance_stepper, "min_value", 1)),
-                int(plan.render_distance_cells),
-            ),
-        )
-        self.world.config.load_radius_cells = self.render_distance_stepper.value
-        replan_distance_m = max(
-            0.5,
-            float(auto_dive_plan_navigation_cell_size(plan)),
-        )
-        replanner_kwargs = {
-            "plan_builder": build_voxel_graph_auto_dive_plan,
-            "cache_dir": self.cache_dir,
-            "blackbox": blackbox,
-        }
-        navigation_route_id = getattr(plan, "navigation_route_id", None)
-        if navigation_route_id is not None:
-            replanner_kwargs["navigation_route_id"] = navigation_route_id
-        controller = AutoDiveController(
-            plan,
-            perf_counter=lambda: time.perf_counter(),
-            replanner=AutoDiveReplanner(
-                self.manifest,
-                auto_dive_settings,
-                **replanner_kwargs,
-            ),
-            replan_distance_m=replan_distance_m,
-            blackbox=blackbox,
-        )
-        controller.start(self.camera, self.world, now=time.perf_counter())
-        self._auto_dive_controller = controller
-        if self.minimap is not None:
-            self.minimap.set_active_route_points_xz(plan.route_points_xz)
-        if self.controls_overlay.is_waiting_for_begin:
-            self.controls_overlay.dismiss_begin_screen()
-        _LOG.info(
-            "Guided Dive started: length=%.1fm duration=%.1fs "
-            "render_distance=%d circular_arc=%s.",
-            plan.route_length_m,
-            plan.duration_s,
-            plan.render_distance_cells,
-            bool(plan.circular_arc),
-        )
-
-    def _auto_dive_blackbox(self) -> AutoDiveBlackbox | None:
-        try:
-            enabled = _auto_dive_diagnostics_enabled_from_preferences()
-        except Exception:
-            enabled = _env_bool("CAVEVIEWER_AUTO_DIVE_DIAGNOSTICS", False)
-        if not enabled:
-            return None
-        path = auto_dive_blackbox_path(self.cache_dir)
-        blackbox = AutoDiveBlackbox(path)
-        _LOG.info("Guided Dive diagnostics enabled: %s", path)
-        return blackbox
-
-    def _stop_auto_dive(self, *, completed: bool = False) -> None:
-        controller = getattr(self, "_auto_dive_controller", None)
-        had_auto_dive_state = controller is not None or (
-            getattr(self, "_auto_dive_previous_render_distance", None) is not None
-        ) or (
-            getattr(self, "_auto_dive_start_future", None) is not None
-        ) or (
-            getattr(self, "_auto_dive_start_after_initial_pose", False)
-        )
-        start_cancelled = self._cancel_auto_dive_start()
-        if controller is not None:
-            controller.stop(self.world, completed=completed)
-        self._auto_dive_controller = None
-        previous_distance = getattr(
-            self,
-            "_auto_dive_previous_render_distance",
-            None,
-        )
-        if previous_distance is not None and hasattr(self, "render_distance_stepper"):
-            self.render_distance_stepper.value = int(previous_distance)
-            if self.world is not None:
-                self.world.config.load_radius_cells = int(previous_distance)
-        self._auto_dive_previous_render_distance = None
-        if self.minimap is not None:
-            self.minimap.set_active_route_points_xz(())
-        if had_auto_dive_state:
-            if start_cancelled:
-                return
-            _LOG.info("Guided Dive %s.", "completed" if completed else "stopped")
-
-    def _update_auto_dive(self, now: float) -> None:
-        controller = getattr(self, "_auto_dive_controller", None)
-        if controller is None or self.camera is None or self.world is None:
-            return
-        observe_assist_position = getattr(
-            controller,
-            "observe_user_assist_position",
-            None,
-        )
-        if callable(observe_assist_position):
-            observe_assist_position(
-                self.camera.position,
-                now=now,
-                yaw=float(getattr(self.camera, "yaw", 0.0)),
-                pitch=float(getattr(self.camera, "pitch", 0.0)),
-                roll=float(getattr(self.camera, "roll", 0.0)),
-                world=self.world,
-            )
-        state = controller.update(self.camera, self.world, now=now)
-        navigation_clamped = False
-        plan = getattr(controller, "plan", None)
-        graph_native_plan = getattr(plan, "navigation_graph", None) is not None
-        if self._navigation_guard_enabled and not graph_native_plan:
-            before_clamp = self.camera.position.copy()
-            self.camera.position = self._clamp_navigation_position_to_bounds(
-                self.camera.position,
-            )
-            navigation_clamped = not np.allclose(
-                before_clamp,
-                self.camera.position,
-                rtol=0.0,
-                atol=1e-6,
-            )
-            if navigation_clamped:
-                record_clamp = getattr(
-                    controller,
-                    "record_navigation_guard_clamp",
-                    None,
-                )
-                if callable(record_clamp):
-                    record_clamp(
-                        before=before_clamp,
-                        after=self.camera.position,
-                        vertical_band=self._navigation_vertical_band_for_position(
-                            self.camera.position,
-                        ),
-                    )
-        update_replan = getattr(controller, "update_replan", None)
-        if callable(update_replan) and update_replan(self.camera, self.world, now=now):
-            if self.minimap is not None:
-                self.minimap.set_active_route_points_xz(
-                    controller.plan.route_points_xz,
-                )
-        record_frame = getattr(controller, "record_frame", None)
-        if callable(record_frame):
-            record_frame(
-                self.camera,
-                self.world,
-                now=now,
-                navigation_clamped=navigation_clamped,
-            )
-        current_state = getattr(controller, "state", state)
-        if current_state is AutoDiveState.WAITING_FOR_USER:
-            if self.minimap is not None:
-                self.minimap.set_active_route_points_xz(())
-            return
-        if current_state is AutoDiveState.COMPLETE:
-            if bool(getattr(controller.plan, "terminal_reached", False)):
-                _LOG.info(
-                    "End of cave reached. No valid forward passage remains."
-                )
-            self._stop_auto_dive(completed=True)
-
-    def _render_auto_dive_progress(self, window_size: tuple[int, int]) -> None:
-        if self._auto_dive_start_is_pending():
-            map_name = os.path.basename(self.manifest.get("source_obj", "map"))
-            self.import_progress_panel.render(
+        if getattr(self, "_manual_dive_trace", None) is not None:
+            self._render_dive_status_prompt(
                 window_size,
-                map_name,
-                "planning guided dive",
-                None,
-                title="",
-                note="Validating the cave route…",
+                title="Manual route trace active",
+                note="Fly the reference route, then press Shift + T to save.",
             )
-            return
 
-        controller = getattr(self, "_auto_dive_controller", None)
-        if (
-            controller is not None
-            and getattr(controller, "state", None) is AutoDiveState.WAITING_FOR_USER
-        ):
-            self._render_auto_dive_user_assist_prompt(window_size)
-            return
-        if controller is None or controller.state is not AutoDiveState.LOADING:
-            return
-        show_loading_indicator = getattr(controller, "show_loading_indicator", True)
-        if not bool(show_loading_indicator):
-            return
-        map_name = os.path.basename(self.manifest.get("source_obj", "map"))
-        loading_progress = getattr(
-            controller,
-            "loading_progress_fraction",
-            controller.progress,
-        )
-        loading_stage = (
-            "looking for a path"
-            if loading_progress is None
-            else ""
-        )
-        self.import_progress_panel.render(
-            window_size,
-            map_name,
-            loading_stage,
-            loading_progress,
-            title="",
-            note="",
-        )
+    @staticmethod
+    def _recorded_dive_time_label(elapsed_s: float) -> str:
+        total_seconds = max(0, int(round(float(elapsed_s))))
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:d}:{seconds:02d}"
 
-    def _auto_dive_resume_shortcut_label(self) -> str:
-        try:
-            modifier = self._active_platform_adapter().primary_shortcut_modifier_label()
-        except Exception:
-            modifier = "Ctrl"
-        return f"{modifier} + A"
-
-    def _render_auto_dive_user_assist_prompt(
+    def _render_recorded_dive_progress(
         self,
         window_size: tuple[int, int],
+    ) -> bool:
+        controller = getattr(self, "_recorded_dive_controller", None)
+        if controller is None or not controller.active:
+            return False
+        elapsed = self._recorded_dive_time_label(controller.elapsed_s)
+        duration = self._recorded_dive_time_label(controller.trace.duration_s)
+        if controller.state is recorded_dive.RecordedDivePlaybackState.BUFFERING:
+            note = f"Loading nearby cave chunks… {elapsed} / {duration}"
+        elif controller.state is recorded_dive.RecordedDivePlaybackState.PAUSED:
+            note = f"Paused at {elapsed} / {duration}. Press Space to resume."
+        else:
+            note = f"{elapsed} / {duration}. Space pauses; movement takes control."
+        self._render_dive_status_prompt(
+            window_size,
+            title="Recorded Dive",
+            note=note,
+        )
+        return True
+
+    def _render_dive_status_prompt(
+        self,
+        window_size: tuple[int, int],
+        *,
+        title: str,
+        note: str,
     ) -> None:
-        """Draw a small prompt while manual steering is needed to resume."""
+        """Draw a small top prompt for trace or playback state."""
         w, h = window_size
         panel_w = min(max(420.0, w * 0.44), w - 48.0)
         panel_h = 104.0
@@ -3577,11 +2666,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         y0 = 30.0
         x1 = x0 + panel_w
         y1 = y0 + panel_h
-        title = "Guided Dive needs input"
-        note = (
-            "Fly toward the passage ahead, then press "
-            f"{self._auto_dive_resume_shortcut_label()} to resume."
-        )
         verts = []
 
         def px_to_ndc(x: float, y: float) -> tuple[float, float]:
@@ -3707,12 +2791,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         logs the unjoined worker instead of letting the viewer close callback
         block forever.
         """
-        self._cancel_initial_auto_dive_pose()
         self._cancel_texture_validation()
         if not self._has_map_loaded:
             return
 
-        self._stop_auto_dive()
+        self._stop_manual_dive_trace(
+            reason="viewer_closed" if final_shutdown else "map_changed"
+        )
+        self._stop_recorded_dive(
+            reason="viewer_closed" if final_shutdown else "map_changed"
+        )
         self._stop_recording()
         # Keep this callback bounded: on_close() runs inside the window/render
         # event path, and an unbounded join here can leave the viewer visually
@@ -3743,6 +2831,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._navigation_guard_chunk_size = None
         self._navigation_guard_bounds = None
         self._navigation_guard_vertical_columns = {}
+        self._recorded_dive_trace = None
+        self._recorded_dive_controller = None
 
         if hasattr(self, "texture_manager") and self.texture_manager is not None:
             self.texture_manager.shutdown()
@@ -3765,7 +2855,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         self._window_resources_released = True
 
-        self._cancel_initial_auto_dive_pose()
         self._cancel_texture_validation()
         self._stop_recording()
         self._keys_down.clear()
@@ -3830,6 +2919,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         CaveViewerWindow.cave_textures_dir = None
         CaveViewerWindow.cave_manifest = None
         CaveViewerWindow.cave_pending_import = None
+        CaveViewerWindow.cave_recorded_dive_trace = None
 
     def load_new_map(
         self,
@@ -4396,6 +3486,28 @@ class CaveViewerWindow(mglw.WindowConfig):
     _CHUNK_PREP_COMPLETE_HOLD_SECONDS = 0.85
     _STREAMING_FAILURES_PER_FRAME = 8
 
+    def _reset_initial_chunk_loading_state(self) -> None:
+        """Reset ordinary map-load readiness before streaming a new map."""
+        self._initial_chunks_loaded = False
+        self._initial_visual_ready = False
+        self._initial_visual_ready_frames = 0
+        self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_required_textures = 0
+        self._initial_visual_ready_resident_textures = 0
+        self._initial_visual_ready_visible_textures = 0
+        self._initial_visual_ready_missing_textures = 0
+        self._initial_visual_ready_expected_chunks = 0
+        self._initial_visual_ready_covered_chunks = 0
+        self._initial_visual_ready_missing_chunks = 0
+        self._initial_visual_ready_coverage_pct = 100.0
+        self._initial_visual_ready_logged = False
+        self._chunk_prep_progress = 0.0
+        self._chunk_prep_complete_until = None
+        self._chunk_prep_completion_armed = False
+        panel = getattr(self, "import_progress_panel", None)
+        if panel is not None:
+            panel.reset_progress()
+
     def _startup_visual_prefetch_is_active(self) -> bool:
         overlay = getattr(self, "controls_overlay", None)
         return (
@@ -4406,10 +3518,6 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _target_streaming_load_radius(self) -> int:
         base_radius = max(1, int(self.render_distance_stepper.value))
-        if self._auto_dive_is_active():
-            controller = getattr(self, "_auto_dive_controller", None)
-            if controller is not None:
-                return max(base_radius, int(controller.plan.render_distance_cells))
         if not self._startup_visual_prefetch_is_active():
             return base_radius
         max_radius = max(
@@ -5894,8 +5002,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             and not benchmark_controller.finished
         )
         self._update_texture_validation()
-        self._update_initial_auto_dive_pose()
-        self._update_auto_dive_start()
 
         # Sleep/wake (or a debugger stop) can yield a very large frame_time
         # and leave input/capture state stale (e.g. key-release never seen).
@@ -5908,14 +5014,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         if benchmark_active:
             if benchmark_controller.started:
                 benchmark_controller.update_camera(self.camera, time.perf_counter())
-        elif self._auto_dive_is_active():
+        elif self._recorded_dive_is_active():
             if self._continuous_input_has_navigation_intent(dt):
-                self._stop_auto_dive()
+                self._stop_recorded_dive(reason="manual_control")
                 self._handle_continuous_input(dt)
             else:
-                self._update_auto_dive(time.perf_counter())
+                self._update_recorded_dive(now=time.perf_counter())
         else:
-            self._handle_continuous_input(dt)
+            self._handle_manual_input_frame(dt, now=time.perf_counter())
+        self._update_manual_dive_trace()
         input_ms = (time.perf_counter() - t_input) * 1000.0
 
         # Apply the render-distance control's current value before the
@@ -6240,7 +5347,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             # pieces do), so it should never be obscured by them.
             self.controls_overlay.update(visual_stats)
             self.controls_overlay.render(self.wnd.size)
-            self._render_auto_dive_progress(self.wnd.size)
+            self._render_dive_status(self.wnd.size)
             self._render_recording_status_message(self.wnd.size)
             overlay_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -6464,6 +5571,110 @@ class CaveViewerWindow(mglw.WindowConfig):
             logger=_LOG,
         )
 
+    def _manual_dive_trace_pose(
+        self,
+    ) -> manual_dive_trace.ManualDivePose | None:
+        camera = getattr(self, "camera", None)
+        if camera is None:
+            return None
+        try:
+            return manual_dive_trace.ManualDivePose.from_camera(camera)
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _start_manual_dive_trace(self) -> bool:
+        if (
+            not self._has_map_loaded
+            or getattr(self, "_manual_dive_trace", None) is not None
+        ):
+            return False
+        pose = self._manual_dive_trace_pose()
+        if pose is None:
+            _LOG.warning("Manual Guided Dive trace could not read the camera pose.")
+            return False
+        recorder = manual_dive_trace.ManualDiveTraceRecorder(
+            manual_dive_trace.manual_dive_trace_directory(self.cache_dir),
+            map_context=manual_dive_trace.manual_dive_trace_map_context(
+                self.manifest
+            ),
+        )
+        try:
+            output_path = recorder.start(pose)
+        except Exception as exc:
+            _LOG.warning("Manual Guided Dive trace could not start: %s", exc)
+            return False
+        self._manual_dive_trace = recorder
+        _LOG.info(
+            "Manual Guided Dive trace started. Press Shift+T to stop and save: %s",
+            output_path,
+        )
+        return True
+
+    def _stop_manual_dive_trace(self, *, reason: str) -> bool:
+        recorder = getattr(self, "_manual_dive_trace", None)
+        if recorder is None:
+            return False
+        try:
+            output_path = recorder.stop(
+                self._manual_dive_trace_pose(),
+                reason=reason,
+            )
+        except Exception as exc:
+            _LOG.warning("Manual Guided Dive trace could not stop cleanly: %s", exc)
+            output_path = recorder.output_path
+        self._manual_dive_trace = None
+        writers = getattr(self, "_manual_dive_trace_writers", None)
+        if writers is None:
+            writers = []
+            self._manual_dive_trace_writers = writers
+        writers.append(recorder)
+        _LOG.info("Manual Guided Dive trace is saving: %s", output_path)
+        return True
+
+    def _toggle_manual_dive_trace(self) -> bool:
+        if getattr(self, "_manual_dive_trace", None) is not None:
+            return self._stop_manual_dive_trace(reason="user_stopped")
+        return self._start_manual_dive_trace()
+
+    def _update_manual_dive_trace(self) -> None:
+        recorder = getattr(self, "_manual_dive_trace", None)
+        if recorder is not None:
+            if recorder.writer_failed:
+                self._stop_manual_dive_trace(reason="writer_failed")
+            else:
+                pose = self._manual_dive_trace_pose()
+                if pose is not None:
+                    recorder.observe(pose)
+
+        pending = getattr(self, "_manual_dive_trace_writers", [])
+        for finished in tuple(pending):
+            result = finished.poll_result()
+            if result is None:
+                continue
+            pending.remove(finished)
+            if result.completed:
+                _LOG.info("Manual Guided Dive trace saved: %s", result.output_path)
+            else:
+                _LOG.warning(
+                    "Manual Guided Dive trace failed to save: %s (%s)",
+                    result.partial_path,
+                    result.error or "unknown error",
+                )
+
+    def _mark_manual_dive_trace_discontinuity(
+        self,
+        before: manual_dive_trace.ManualDivePose | None,
+        *,
+        reason: str,
+    ) -> None:
+        recorder = getattr(self, "_manual_dive_trace", None)
+        if recorder is None or before is None:
+            return
+        after = self._manual_dive_trace_pose()
+        if after is None:
+            return
+        recorder.mark_discontinuity(before, after, reason=reason)
+
     def _save_bookmark_slot(self, slot: int) -> None:
         if not self._has_map_loaded:
             return
@@ -6483,6 +5694,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             _LOG.info(f"Bookmark {slot} is empty.")
             return False
 
+        if self._recorded_dive_is_active():
+            self._stop_recorded_dive(reason="bookmark_recall")
+        trace_pose_before_recall = self._manual_dive_trace_pose()
         pos = data["position"]
         self.camera.position = np.array([float(pos[0]), float(pos[1]), float(pos[2])], dtype=np.float64)
         if not self._navigation_position_is_allowed(self.camera.position):
@@ -6497,6 +5711,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             pitch = max(-float(pitch_limit), min(float(pitch_limit), pitch))
         self.camera.pitch = pitch
         self.camera.roll = 0.0  # Reset roll when loading a bookmark
+        self._mark_manual_dive_trace_discontinuity(
+            trace_pose_before_recall,
+            reason="bookmark_recall",
+        )
 
         self.controls_overlay.show_panel()
         _LOG.info(f"Recalled camera bookmark {slot}.")
@@ -6575,11 +5793,6 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _handle_continuous_input(self, dt: float):
         intent = self._continuous_input_intent(dt)
-        if (
-            self._auto_dive_is_active()
-            and (intent.has_motion or intent.has_look or intent.has_roll)
-        ):
-            self._stop_auto_dive()
         if intent.has_motion:
             self._move_camera_guarded(
                 intent.forward_amount,
@@ -6592,6 +5805,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.camera.look(intent.yaw_delta, intent.pitch_delta)
         if intent.has_roll:
             self.camera.barrel_roll(intent.roll_delta)
+
+    def _handle_manual_input_frame(self, dt: float, *, now: float) -> None:
+        """Apply manual camera controls for the current frame."""
+        del now
+        self._handle_continuous_input(dt)
 
     def on_key_event(self, key, action, modifiers: KeyModifiers):
         # Cocoa may dispatch key callbacks before viewer controls exist or
@@ -6608,6 +5826,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         if action == keys.ACTION_PRESS:
             if self._handle_window_shortcut(key, modifiers):
                 return
+            if self._handle_recorded_dive_hotkey(key, modifiers):
+                return
             if self.controls_overlay.is_waiting_for_begin:
                 space_key = self._resolve_key_optional(keys, "SPACE", "SPACEBAR")
                 if (
@@ -6618,6 +5838,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                     self.controls_overlay.dismiss_begin_screen()
                 return
             if self._handle_bookmark_hotkey(key, modifiers):
+                return
+            if self._handle_manual_dive_trace_hotkey(key, modifiers):
                 return
             if self._handle_recording_hotkey(key, modifiers):
                 return
@@ -6660,14 +5882,40 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._handle_open_button_click()
             return True
 
-        auto_dive_key = self._resolve_key_optional(self.wnd.keys, "A")
-        if auto_dive_key is not None and key == auto_dive_key:
-            return self._toggle_auto_dive()
-
         return False
 
     def _request_import_pause(self) -> None:
         self._ensure_import_controller().request_pause()
+
+    def _handle_manual_dive_trace_hotkey(
+        self,
+        key,
+        modifiers: KeyModifiers,
+    ) -> bool:
+        """Use Shift+T to start or stop a map-local manual route trace."""
+        if not self._has_map_loaded:
+            return False
+        trace_key = self._resolve_key_optional(self.wnd.keys, "T")
+        if trace_key is None or key != trace_key:
+            return False
+        if not self._shift_is_down(modifiers):
+            return False
+        self._toggle_manual_dive_trace()
+        return True
+
+    def _handle_recorded_dive_hotkey(
+        self,
+        key,
+        modifiers: KeyModifiers,
+    ) -> bool:
+        """Use Space to pause or resume an opened Recorded Dive."""
+        del modifiers
+        if not self._recorded_dive_is_active():
+            return False
+        pause_key = self._resolve_key_optional(self.wnd.keys, "SPACE", "SPACEBAR")
+        if pause_key is None or key != pause_key:
+            return False
+        return self._toggle_recorded_dive_pause()
 
     def _handle_recording_hotkey(self, key, modifiers: KeyModifiers) -> bool:
         """Use Shift+R to cancel countdown or stop active recording."""
@@ -6695,6 +5943,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             else self._control_is_down(modifiers)
         )
         if shortcut_down:
+            if self._recorded_dive_is_active():
+                self._stop_recorded_dive(reason="view_reset")
             self.camera.reset_view()
             return True
 
@@ -6753,11 +6003,30 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._is_background_paused = self._is_iconified
         if self._is_background_paused:
             self._reset_transient_input_state(reason)
+            controller = getattr(self, "_recorded_dive_controller", None)
+            if (
+                controller is not None
+                and controller.active
+                and controller.state
+                is not recorded_dive.RecordedDivePlaybackState.PAUSED
+            ):
+                self._recorded_dive_background_paused = controller.pause(
+                    now=time.perf_counter()
+                )
             if self._has_map_loaded and hasattr(self, "world"):
                 self.world.pause()
         else:
             if self._has_map_loaded and hasattr(self, "world"):
                 self.world.resume()
+            controller = getattr(self, "_recorded_dive_controller", None)
+            if (
+                getattr(self, "_recorded_dive_background_paused", False)
+                and controller is not None
+                and controller.state
+                is recorded_dive.RecordedDivePlaybackState.PAUSED
+            ):
+                controller.resume(now=time.perf_counter())
+            self._recorded_dive_background_paused = False
 
     def on_focus_event(self, focused: bool):
         # On focus loss/gain, clear transient pressed/captured state so a
@@ -6812,6 +6081,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._last_mouse_pos = (x, y)
                 return
             self._last_mouse_pos = (x, y)
+            if self._recorded_dive_is_active():
+                self._stop_recorded_dive(reason="mouse_look")
             self.camera.look(dx, dy)
 
     def on_mouse_position_event(self, x, y, dx, dy):
@@ -6955,7 +6226,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             if self._has_map_loaded and self.minimap is not None:
                 minimap_target = self.minimap.world_xz_for_click(x, y, self.wnd.size)
             if minimap_target is not None:
+                if self._recorded_dive_is_active():
+                    self._stop_recorded_dive(reason="minimap_teleport")
                 target_x, target_z = minimap_target
+                trace_pose_before_teleport = self._manual_dive_trace_pose()
                 # Land at an actual occupied height near that X/Z, rather
                 # than blindly keeping the camera's previous Y -- a click
                 # on the (top-down, height-blind) minimap doesn't tell us
@@ -6986,6 +6260,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                     self.camera.yaw   = math.atan2(dz, dx)
                     self.camera.pitch = 0.0
                     self.camera.roll  = 0.0
+                self._mark_manual_dive_trace_discontinuity(
+                    trace_pose_before_teleport,
+                    reason="minimap_teleport",
+                )
 
                 # Show the controls panel briefly while the newly-teleported
                 # area's chunks stream in around the camera -- same content
@@ -7134,7 +6412,11 @@ def _launch_viewer_window(
     )
 
 
-def run_viewer(cache_dir: str, textures_dir: str):
+def run_viewer(
+    cache_dir: str,
+    textures_dir: str,
+    recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None,
+):
     manifest = chunker.load_manifest(cache_dir)
 
     # Set as class attributes rather than passing through run_window_config's
@@ -7146,6 +6428,7 @@ def run_viewer(cache_dir: str, textures_dir: str):
     CaveViewerWindow.cave_manifest = manifest
     CaveViewerWindow.cave_pending_import = None
     CaveViewerWindow.cave_benchmark_config = None
+    CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace
 
     _launch_viewer_window()
 
@@ -7214,6 +6497,7 @@ def run_viewer_benchmark(
             ),
         },
     }
+    CaveViewerWindow.cave_recorded_dive_trace = None
 
     try:
         _launch_viewer_window()
@@ -7222,7 +6506,11 @@ def run_viewer_benchmark(
         CaveViewerWindow.cave_benchmark_config = None
 
 
-def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
+def run_viewer_with_pending_import(
+    model_descriptor: dict,
+    textures_dir: str,
+    recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None,
+):
     """
     Launches the viewer window for a map that needs FIRST-TIME import
     (no generated cache yet) -- used by caveviewer.app's main() instead
@@ -7247,6 +6535,7 @@ def run_viewer_with_pending_import(model_descriptor: dict, textures_dir: str):
     CaveViewerWindow.cave_textures_dir = None
     CaveViewerWindow.cave_manifest = None
     CaveViewerWindow.cave_benchmark_config = None
+    CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,

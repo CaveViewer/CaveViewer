@@ -512,8 +512,6 @@ class ImportProgressPanel:
             "resume point saved": "Resume point saved",
             "loading chunks": "Opening cave…",
             "opening cave": "Opening cave…",
-            "planning guided dive": "Planning Guided Dive…",
-            "looking for a path": "Looking for a path…",
             "thinking": "Looking for a path…",
             "done": "Finishing…",
         }

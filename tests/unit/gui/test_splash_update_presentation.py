@@ -308,7 +308,8 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert 'label.bind("<space>", invoke)' in source
     assert "def _invoke_and_break(callback):" in source
     assert "def _bind_activation(widget, callback) -> None:" in source
-    assert "_bind_activation(browse_button, on_open_map_folder)" in source
+    assert "_bind_activation(browse_button, on_open)" in source
+    assert "def on_open():" in source
     assert "_bind_activation(preferences_link, _on_preferences_click)" in source
     assert "MapLibraryWorkflow(" in source
     assert "load_initial_standard_library_catalog" in source

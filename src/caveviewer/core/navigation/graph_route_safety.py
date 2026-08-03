@@ -12,6 +12,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import math
 
+from caveviewer.core.navigation.fixed_voxels import (
+    segment_voxel_probe_fractions,
+)
 from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGuard
 from caveviewer.core.navigation.voxel_cache import NavigationVoxelAtlas
 from caveviewer.core.navigation.voxel_graph_3d import (
@@ -100,15 +103,39 @@ class GraphRouteSafetyValidator:
             for value in graph.grid_size_m
             if math.isfinite(float(value)) and float(value) > 0.0
         ]
-        fallback = max(0.25, float(atlas.voxel_size_m or 0.0))
+        fallback = max(
+            0.125,
+            min(
+                float(atlas.voxel_size_m or 0.0),
+                float(atlas.vertical_voxel_size_m or 0.0),
+            ),
+        )
         self._sample_spacing_m = max(
-            0.25,
+            0.125,
             float(
                 self.policy.sample_spacing_m
                 if self.policy.sample_spacing_m is not None
                 else min(grid_sizes or [fallback]) * 0.5
             ),
         )
+        horizontal_lattice_m = float(
+            atlas.fixed_isotropic_voxel_size_m or atlas.voxel_size_m or 0.0
+        )
+        vertical_lattice_m = float(
+            atlas.fixed_vertical_voxel_size_m
+            or atlas.vertical_voxel_size_m
+            or 0.0
+        )
+        if horizontal_lattice_m > 0.0 and vertical_lattice_m > 0.0:
+            self._voxel_lattice_size_m = (
+                horizontal_lattice_m,
+                vertical_lattice_m,
+                horizontal_lattice_m,
+            )
+        else:
+            self._voxel_lattice_size_m = tuple(
+                float(value) for value in graph.grid_size_m
+            )
 
     @property
     def cell_size(self) -> float:
@@ -130,6 +157,7 @@ class GraphRouteSafetyValidator:
         graph_keys: Sequence[VoxelGraphKey],
         *,
         start_graph_key: VoxelGraphKey | None = None,
+        allow_mesh_only_start_connector: bool = False,
     ) -> GraphRouteSafetyFailure | None:
         """Return the first graph, voxel, or mesh failure for one route."""
         points = tuple(_point(point) for point in route_points)
@@ -153,12 +181,27 @@ class GraphRouteSafetyValidator:
             points[0],
             start_node.center,
         ) <= 1e-12
+        mesh_only_start_connector = bool(
+            allow_mesh_only_start_connector and not camera_matches_start
+        )
         if camera_matches_start:
             failure = self._node_failure(
                 start_key,
                 index=0,
                 kind="point",
                 point=points[0],
+            )
+        elif mesh_only_start_connector:
+            # A deterministic map start can sit in the same quantized voxel
+            # as scanned wall samples even though the exact point and its
+            # short connector are inside the cave. In that one explicitly
+            # certified case, validate the graph endpoint through the atlas
+            # and validate the connector against the exact cached mesh.
+            failure = self._node_failure(
+                start_key,
+                index=0,
+                kind="graph_start",
+                point=tuple(float(value) for value in start_node.center),
             )
         else:
             failure = self._point_failure(
@@ -171,13 +214,44 @@ class GraphRouteSafetyValidator:
             return failure
 
         if not camera_matches_start:
-            failure = self._segment_failure(
-                points[0],
-                start_node.center,
-                segment_index=0,
-                kind="camera_connector",
-                uncovered_reason="camera_to_graph_start_uncovered",
-            )
+            if mesh_only_start_connector:
+                if self.mesh_guard is None:
+                    failure = GraphRouteSafetyFailure(
+                        kind="camera_connector",
+                        reason="mesh_collision_guard_unavailable",
+                        segment_index=0,
+                        first=points[0],
+                        second=tuple(
+                            float(value) for value in start_node.center
+                        ),
+                    )
+                else:
+                    hit = self.mesh_guard.segment_collision(
+                        points[0],
+                        start_node.center,
+                    )
+                    failure = (
+                        None
+                        if hit is None
+                        else GraphRouteSafetyFailure(
+                            kind="camera_connector",
+                            reason="mesh_intersection",
+                            segment_index=0,
+                            point=tuple(float(value) for value in hit.point),
+                            first=points[0],
+                            second=tuple(
+                                float(value) for value in start_node.center
+                            ),
+                        )
+                    )
+            else:
+                failure = self._segment_failure(
+                    points[0],
+                    start_node.center,
+                    segment_index=0,
+                    kind="camera_connector",
+                    uncovered_reason="camera_to_graph_start_uncovered",
+                )
             if failure is not None:
                 return failure
 
@@ -213,6 +287,12 @@ class GraphRouteSafetyValidator:
         for segment_index, (first, second) in enumerate(
             zip(points, points[1:], strict=False)
         ):
+            if (
+                mesh_only_start_connector
+                and segment_index == 0
+                and _distance_squared(second, start_node.center) <= 1e-12
+            ):
+                continue
             failure = self._segment_failure(
                 first,
                 second,
@@ -498,9 +578,17 @@ class GraphRouteSafetyValidator:
                 first=first,
                 second=second,
             )
-        steps = max(1, int(math.ceil(distance / self._sample_spacing_m)))
-        for step in range(steps + 1):
-            fraction = float(step) / float(steps)
+        sample_fractions = (
+            0.0,
+            *segment_voxel_probe_fractions(
+                first,
+                second,
+                lattice_spacing_m=self._voxel_lattice_size_m,
+                maximum_sample_spacing_m=self._sample_spacing_m,
+            ),
+            1.0,
+        )
+        for step, fraction in enumerate(sample_fractions):
             point = tuple(
                 float(first[axis])
                 + (float(second[axis]) - float(first[axis])) * fraction

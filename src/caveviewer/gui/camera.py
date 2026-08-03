@@ -114,6 +114,19 @@ class FlyCamera:
     def up(self) -> np.ndarray:
         return self._orient[1].copy()
 
+    def set_orientation_basis(self, *, right, up, forward) -> None:
+        """Replace orientation from a recorded orthogonal camera basis.
+
+        Recorded Dive playback uses this direct render-thread seam so an
+        authoritative trace does not have to round-trip through Euler angles.
+        The Gram-Schmidt pass only removes accumulated floating-point drift.
+        """
+        candidate = np.asarray([right, up, forward], dtype=np.float64)
+        if candidate.shape != (3, 3) or not np.all(np.isfinite(candidate)):
+            raise ValueError("camera orientation basis must contain finite 3D vectors")
+        self._orient = candidate.copy()
+        self._reorthonormalize()
+
     # -- Euler-angle properties (backward-compat for bookmark save / load) --
     #
     # viewer_window reads and writes camera.yaw / .pitch / .roll directly

@@ -45,6 +45,35 @@ def test_in_memory_store_keeps_all_chunks_resident():
     assert store.stats()["resident_chunk_count"] == 2
 
 
+def test_chunk_descriptor_and_payload_round_trip_quarter_metre_vertical_cells():
+    volume = LocalVoxelVolume(
+        voxel_size_m=1.0,
+        vertical_voxel_size_m=0.25,
+        origin=(0.0, 0.0, 0.0),
+        shape=(2, 2, 2),
+        surface_cells=frozenset({(0, 0, 0)}),
+        triangle_count=1,
+        surface_sample_count=1,
+        sampling_truncated=False,
+        max_clearance_search_cells=4,
+    )
+    descriptor = NavigationVoxelChunkDescriptor.from_volume(
+        "coarse-000000",
+        "coarse",
+        volume,
+        relative_path="chunks/quarter.json",
+    )
+    restored = deserialize_local_voxel_volume(
+        serialize_local_voxel_volume(volume)
+    )
+
+    assert descriptor.cell_size_m == (1.0, 0.25, 1.0)
+    assert descriptor.cell_volume_m3 == 0.25
+    assert descriptor.bounds_max == (2.0, 0.5, 2.0)
+    assert restored.vertical_voxel_size_m == 0.25
+    assert restored.cell_size_m == (1.0, 0.25, 1.0)
+
+
 def test_disk_store_loads_chunks_lazily_and_evicts_lru(tmp_path):
     first = _volume(0.0)
     second = _volume(4.0)

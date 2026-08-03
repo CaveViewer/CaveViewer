@@ -103,7 +103,7 @@ For machine-local private or oversized benchmark maps, use
 ignored `_benchmarks/` directory by default and can be installed through the
 tracked local pre-push hook template for pushes to `main`.
 
-## Guided Dive cache certification
+## Navigation cache certification
 
 Certify a generated cache in phases. The artifact phase is fast and does not
 deserialize the navigation graph:
@@ -116,9 +116,13 @@ caveviewer-navigation-verify \
   --json
 ```
 
-The graph phase deliberately loads the authoritative prepared graph (the V10
-mesh-derived graph for current caches) and checks graph geometry, coverage,
+The graph phase deliberately loads the authoritative prepared graph (the V12
+exact mesh path for current caches) and checks graph geometry, coverage,
 navigation chunks, and mesh-collision availability. The
+artifact phase also binds an OBJ import to its declaration-order vertex-zero
+anchor (or to an explicit sidecar override) and requires source hints zero
+through final; collision safety alone
+cannot certify a midpoint-to-end route. The
 route phase additionally requires `--start X Y Z` and checks startup preflight,
 exact route safety, and execution simulation. For the default fixed full-cave
 route, the simulation follows the published ledger and must report zero replan
@@ -127,26 +131,106 @@ incomplete cache evidence is an expected temporary boundary; use the default
 `--profile full-cave` only when a known terminal and complete coverage are
 required. `--phase all` runs every phase in one process and is useful for a
 deep post-build report, but is not a cheap startup check for very large graphs.
-The default Guided Dive startup goal is `easiest_terminal`: it chooses the
-shortest known terminal and uses the same shortest-physical prepared-graph
-path before exact graph, voxel, and cached-mesh validation. It then executes
-that preflighted route without continuous or speculative replacement. A V10
-cache persists one compact, goal-directed path to the route's real endpoint
-while retaining the voxel atlas, coarse graph, and fine evidence. Its bounded
-multi-entry search must bypass an isolated early route sample automatically;
-both immediate lattice edges and longer guide portals require sampled voxel
-evidence plus an exact mesh check, and a failed coarse search gets one 1 m
-corridor retry. Every executable edge and the camera ingress are exact-validated
-again at startup; an intermediate hint or incomplete prefix is not valid.
-Rebuild V9 or older caches before this test because they do not contain the
-production mesh graph. Artifact and graph phases can still pass while full-cave
-route preflight correctly fails.
+The certificate's default route goal is `longest_certified_route`: it follows
+the cache-selected complete non-circular route to its farthest known terminal
+using the same shortest-physical prepared-graph path before exact graph, voxel,
+and cached-mesh validation. The route-phase simulation follows that preflighted
+route without continuous or speculative replacement. A V12 OBJ cache selects the longest
+exact-certified non-circular candidate derived from declaration-order vertex
+zero, unless an explicit entrance sidecar overrides it;
+a longer 2D candidate that fails 3D certification must not override the
+manifest recommendation. The inferred or authored locator is never a viewer
+camera position; tests must prove its bounded exact-safe interior attachment is
+the published certificate route start. A V12 cache
+persists one compact, route-ordered path to the route's real endpoint
+while retaining fixed 1 m X/Z by 0.25 m Y voxel chunks and a bounded compatibility
+graph. Its bounded extractor uses surface-gap-derived waypoint candidates,
+ignores imported route Y, and shares one expansion ledger across all legs.
+Rejected cardinal edges reroute only within the remaining ledger, and bounded
+smoothing shortcuts receive the same sampled voxel and exact mesh checks as
+the original edges. Cache-time voxel samples must include every
+crossed lattice boundary and every interval between crossings. Route simulation
+must apply the same partition-invariant rule so a diagonal cannot pass
+publication and fail only after checkpoint subdivision. The exact persisted
+graph start, rather than an approximate centerline hint, is published as the
+certificate route start. Every executable edge is validated by the route phase;
+an intermediate hint or incomplete prefix is not
+valid. Inferred/authored-start tests must require source hint zero, the final source hint,
+and exactly one full-route attempt—no ranked suffix retry. Selection tests must
+also keep a longer capacity-limited candidate unresolved: it must suppress a
+shorter recommendation until the longer exact search either certifies or
+reaches a conclusive non-capacity rejection.
+When the exact 1 m X/Z waypoint lattice is disconnected only by alignment, the
+builder may retry at 0.5 m X/Z while retaining 0.25 m Y in a 4 m horizontal envelope over the same fixed voxel
+evidence. An exhaustive non-capacity failure may widen once to 8 m; a node-cap
+failure must stop. Tests must prove the coarse failure, 4-to-8 m escalation,
+the finer success, every ordered surface-gap gate, one coarse-plus-fine node
+ledger, no retained-key revisit, and unchanged exact edge authority. The
+legacy raw-guide adaptive path must not become a V12 publication fallback;
+this retry is universal, not a per-map setting.
+Search-cost regressions should prove that non-improving relaxations skip exact
+collision work while every edge admitted to the shortest-path queue remains
+fully validated.
+OBJ footprint routes use X/Z ordering only: regressions must include wildly
+incorrect intermediate and endpoint Y hints, stacked surface gaps, and prove
+that the 0.25 m field plus exact mesh connectivity selects the reachable layer.
+Metadata regressions must keep sparse surface bins at 0.25 m or finer and
+persist every bounded gap seed; a missing surface column must never fall back
+to route/interpolated Y.
+Candidate regressions must bind the entrance, every intermediate gate, and the
+terminal to a free-voxel center in the exact route cell. Entrance and terminal
+keys must intersect their selected bounded interval with no more than half a
+vertical voxel of Y tolerance. An intermediate bridge may use only the hull of
+one selected adjacent interval pair. Tests must cover a midpoint that misses
+the lattice while another key in the same cell/interval succeeds, reject a
+nearer key in an adjacent cell or outside the interval, prove stacked layers
+cannot be merged into one transition slab, enforce source/terminal snap caps,
+and reject a component missing any ordered gate before it can win terminal
+ranking. The certificate must also reject a prepared terminal outside the
+final-cell interval evidence.
+Long routes that exceed the packed graph
+budget automatically retry narrower horizontal envelopes at the same voxel
+resolution; diagnostics must record every attempt and selected radius. An OBJ
+route must never retry below the half-diagonal X/Z uncertainty of its
+footprint cells. Surface-gap transition tests must prove that steep cardinal
+steps widen both sides of a specific selected interval pair, diagonal
+cardinal-support cells receive a continuous sampling envelope, the entrance
+gap is never widened, stacked intervals are never globally merged, and route Y
+is absent from the calculation.
+A noisy raw endpoint uses only vertically diverse free centers admitted by the
+final footprint cell's bounded intervals. Up to 64 selected-component endpoint
+centers may be considered, but the persisted terminal must be the candidate
+reached by the exact mesh-safe path. Tests must cover a blocked primary with a
+reachable interval-backed alternative, reject an out-of-interval neighbor
+shell, and reject a zero-edge ingress as route completion.
+Source-connectivity regressions must prove that disconnected surface-gap
+fragments are never combined. A voxel gap or mesh-blocked bridge must publish
+nothing; success requires one source-connected six-neighbour component, a
+complete exact roadmap to the final endpoint, and an entrance attachment
+inside the 24 m OBJ cap.
+Cover a missing final endpoint voxel and a missing surface-profile column: both
+must fail closed for inferred and authored starts. Legacy interpolated route Y
+may remain available to compatibility callers, but tests must prove it never
+fills, filters, or certifies a V12 source-connected layer.
+Cache-time graph search may use the packed component's conservative minimum
+clearance for constant-time candidate probes. Tests and certificates must keep
+exact mesh edge checks and persisted-chunk runtime probes in the safety path.
+The cached-mesh chunk index needs regressions that prove a local segment prunes
+distant chunks and that a segment exactly on a bucket boundary retains every
+touching chunk. These are candidate-selection tests only; exact AABB and
+triangle collision checks remain required afterward.
+Surface-rasterizer tests must also keep out-of-bounds triangles excluded after
+the vectorized local-AABB prefilter; triangle counts and sampled surface cells
+remain the behavioral contract.
+Rebuild V11 or older caches before this test because they do not contain the
+fixed-orthogonal V12 evidence contract. Render caches remain usable when that
+optional navigation rebuild is absent.
 Large-map regression fixtures must also prove that whole-map and average-chunk
 triangle thresholds disable only optional speculative recovery. They must not
 make the lazy exact collision guard unavailable or cause a render-only cache to
 be published solely because a map exceeds those thresholds.
 
-### Isotropic cubic graph experiment
+### Legacy isotropic cubic graph experiment
 
 Before changing the navigation cache format, use the read-only cubic graph
 experiment to measure whether existing one-metre atlas evidence supports a
@@ -176,8 +260,7 @@ it does not make the existing cache graph authoritative.
 Atlas mode may read legacy V10 tiles whose surface sampling was truncated. It
 reports their count as `truncated_source_volume_count` and still requires the
 final path to pass the complete cached-mesh guard. This exception exists only
-to investigate old evidence; a production isotropic cache must not publish
-truncated source volumes.
+to investigate old evidence; V12 never publishes truncated source volumes.
 
 Region mode accounts for the rasterizer's extra boundary shell, excludes that
 shell from graph evidence, and fails if the requested capacity would coarsen
@@ -195,7 +278,9 @@ PYTHONDONTWRITEBYTECODE=1 .venv-dev/bin/python \
   --json
 ```
 
-The suite runs maps in separate child processes so one cave's graph and search
+This read-only suite diagnoses legacy or current atlas evidence; it does not
+replace a V12 build plus the production navigation certificate. It runs maps in
+separate child processes so one cave's graph and search
 state are released before the next cave starts. `PASSED` means a route was
 proved and exact-mesh checked. `INCOMPATIBLE_RESOLUTION` means V10 coarsened at
 least one source tile, while `MISSING_ARTIFACT` means the render cache has no
@@ -205,26 +290,24 @@ Map labels are paths relative to `--maps-root`, so nested libraries and maps
 with duplicate directory names remain unambiguous. No map data or local result
 files are written or committed by the suite.
 
-GUI startup coverage must exercise a Guided Dive click while asynchronous
-graph-entrance placement is pending. The click is retained, placement finishes
-without blocking the render thread, and preflight starts from that pose; a
-manual camera change still prevents automatic repositioning.
+Viewer coverage must prove Cmd/Ctrl+A is unhandled and that opening a map does
+not queue a navigation planner or change the ordinary cache-derived camera
+position. The core certificate tests cover route preflight independently of
+the GUI.
+Manual route-trace coverage must exercise `Shift+T` start/stop, post-movement
+pose sampling, orientation and stationary-heartbeat thresholds, bounded-queue
+drop reporting, final-pose retention, background write failure, map-switch
+cleanup, and bookmark/minimap discontinuities. Test output belongs under
+`tmp_path`; generated `_guided_dive_traces` directories are never repository
+fixtures.
+Recorded Dive coverage must validate bounded JSONL parsing, source/cache
+association, exact first and final poses, frame-rate-independent interpolation,
+instantaneous declared discontinuities, pause/resume, GPU-chunk buffering, and
+direct camera application that bypasses the manual navigation guard.
 Use the explicit farthest/frontier profile only when testing continuation
 behavior on incomplete or mesh-blocked evidence.
-During a live Guided Dive, a `replan_pacing_hold_started` event is expected
-when an asynchronous continuation is requested; it records that the camera
-was held at the validated request pose until the replacement route could be
-checked and attached.
-If a completed continuous scan is shorter than the current validated route,
-expect `continuous_scan_prefix_preserved`; this is a deliberate diagnostic
-rejection, not a planning failure. A local mesh hit should produce
-`voxel_local_frontier_mesh_safe_prefix` without repeated
-`voxel_local_frontier_route_retry` events, and the accepted handoff should be
-allowed to use the fine local route scale even when coarse graph spacing is
-large.
-For a first interactive run, use `CAVEVIEWER_AUTO_DIVE_ACCELERATION=0` (or
-the lowest Preferences acceleration) so the camera advances at the baseline
-diver speed while the handoff behavior is observed.
+Asynchronous replan, pacing-hold, and continuous-scan diagnostics remain core
+certificate/planner unit coverage only; they are not viewer behaviors.
 
 ## Release gates
 

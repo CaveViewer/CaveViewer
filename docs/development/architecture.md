@@ -36,188 +36,158 @@ presentation or render-thread OpenGL resources. `viewer_window.py` adapts a
 `BenchmarkController` into the real render loop when the benchmark CLI launches
 the viewer.
 
-## Guided Dive centerline refinement
+## Offline navigation-cache refinement
 
-Guided Dive keeps the centerline generator and local geometric refinements
-replaceable. `core.navigation.curvature` profiles any 3D route polyline and
+Offline navigation certification keeps the centerline generator and local
+geometric refinements replaceable. `core.navigation.curvature` profiles any 3D route polyline and
 labels contiguous high-curvature regions with map-relative ranks from 0 to 100.
 `core.navigation.voxel_volume` rasterizes cached triangle surfaces into bounded
 local voxel fields. During cache construction, `core.navigation.voxel_cache`
-reuses the already-written chunk files to build a tiled atlas for every cell in
-each navigable cave component. Curvature-ranked regions remain diagnostic
-metadata, while the atlas also covers the approach before a bend and the
-straight sections after it. The current V10 sidecar requests 1 m voxels for
-the whole-cave atlas and bounded fine refinement tiles, but its per-tile
-capacity guard may silently increase the coarse-tile voxel size on large maps.
-It therefore does not guarantee a globally isotropic 1 m field. It also stores
-a compact 2 m mesh-derived route graph built by a seeded free-space flood:
-voxel probes nominate inside-space candidates and every accepted neighbour
-edge must pass the cached triangle-mesh guard. Only the shortest certified
-path to the selected reachable route hint is persisted; the complete
-cache-time flood is discarded. Fine tiles are seeded along that mesh path, so
-local evidence follows the production route rather than an unrelated
-centerline.
+reuses the already-written chunk files to build a bounded atlas around one
+selected terminal-route corridor. V12 divides that corridor into fixed
+orthogonal chunks at 1 m X/Z by 0.25 m Y. Capacity pressure subdivides chunks rather
+than coarsening them, and incomplete surface sampling fails the navigation
+build. Overlapping chunks are merged on a global orthogonal grid where any
+sampled surface observation overrides free evidence. The merge considers every
+bounded corridor-filtered non-surface cell before selecting packed free-space
+evidence, so one imperfect local seed cannot delete seam evidence.
+
+For OBJ imports without an explicit entrance sidecar, the offline
+certificate uses the first declared `v` record as the source-order entrance
+anchor. The vertex is
+surface evidence rather than an executable camera position, so the cache
+chooses a free XYZ attachment within an immutable 24 m cap; only that certified
+interior attachment is executable. A numerically sorted spatial chunk is not
+entrance provenance. The builder
+derives open candidates from that entrance toward both footprint-diameter
+directions and recommends the longest route that survives complete voxel and
+mesh certification; clearance and volume are tie-breakers.
+
+One packed six-connected component must contain both ingress and endpoint
+evidence. Surface-gap intervals propose vertical layers, but disconnected
+fragments are never combined and never defer connectivity to the roadmap.
+The manifest entrance selects one complete, source-connected interval chain
+before the route is executable. Every ordered route-cell candidate stays in
+that exact footprint cell. Entrance and final candidates must intersect their
+selected bounded intervals, allowing only half a vertical voxel of Y
+quantization tolerance. An intermediate cell may additionally use a free key
+inside the hull of one specific, continuity-compatible adjacent interval pair;
+all stacked intervals in neighboring cells are never collapsed into a shared Y
+slab. A component is eligible only when it contains candidates for the
+entrance cell, every intermediate cell, and the final cell. Candidate limits
+are applied after component selection while retaining vertically distinct
+intervals. The entrance locator may attach only to the first group, and
+terminal candidates come only from the final group and remain within the
+requested endpoint snap cap. A complete exact path to the real endpoint then promotes
+`known_terminal_reached`. The primary extractor walks ordered surface-gap
+waypoint sets with six-connected searches and one shared
+expansion budget, so a long cave does not require a whole-room roadmap flood.
+Each returned cardinal edge is voxel- and mesh-checked immediately; a rejected
+edge is blocked and only that bounded leg is rerouted. A bounded string-pull
+may smooth the resulting staircase, but every shortcut repeats the same voxel
+boundary/interior samples and cached-triangle mesh guard. Only this exact-safe
+path is persisted. Its first exact node becomes the published route/camera
+start, and cache-time search state is discarded. An OBJ or authored ingress
+never retries a later route range or publishes a suffix.
+
+OBJ-derived centerline points supply horizontal ordering and a bounded X/Z
+work envelope only. Their interpolated Y samples can land on a floor, ceiling,
+or another stacked passage and therefore never filter vertical candidates or
+establish connectivity. Consecutive selected surface-gap intervals define a
+bounded transition sampling envelope: both non-entrance cells touched by that
+specific pair and available cardinal support cells for a diagonal step are
+widened, while the original entrance gap remains unchanged. This supplies the intermediate
+0.25 m voxels needed to prove a steep transition without claiming that the
+transition is free. The occupied-wins field, one global component, and exact
+mesh roadmap remain authoritative. Capacity pressure narrows the horizontal
+envelope through deterministic radii without coarsening cells, but an OBJ
+route never narrows below the X/Z uncertainty of its source footprint cells.
+
+If the evidence cannot be traversed on the 1 m X/Z by 0.25 m Y execution
+lattice, one universal bounded retry uses 0.5 m X/Z by 0.25 m Y in a 4 m
+horizontal route envelope over the same admitted evidence. It may widen once
+to 8 m after exhaustive non-capacity failure. The retry infers no free cells:
+every point maps to admitted evidence and every edge passes sampled voxel and
+exact mesh checks. It visits the same ordered surface-gap waypoint groups and
+shares only the coarse search's remaining node ledger; the older raw-guide
+adaptive planner cannot publish a V12 production route. Up to 64 final-cell
+interval-backed candidates may be exact-tested; a local neighbor shell cannot
+reintroduce an out-of-interval layer. Only the exact-reachable candidate
+becomes the terminal, and an ingress seed cannot count as zero-edge completion.
+
+Metadata persists every bounded surface-gap interval and its midpoint needed
+to propose stacked passage layers. Its sparse vertical surface bins are 0.25 m or finer, so a
+half-metre floor-to-ceiling gap remains representable without allocating a
+dense whole-height column. It never substitutes an imported or interpolated
+centerline Y for missing vertical evidence. A failed fixed field or exact route still
+publishes no V12 sidecar. The bounded cache-time searches read the
+conservative clearance floor from selected packed evidence instead of
+recomputing surface distance for every candidate. It may skip collision work
+for a non-improving relaxation because the existing cost already came through
+a safe edge; every improving edge remains voxel- and mesh-validated.
 Per-tile limits keep memory and sampling work bounded on consumer hardware.
 Compact route volume summaries are stored in the manifest. New caches publish the complete
 navigation graph and chunk descriptors in the optional `navigation_voxels.json`
 sidecar, while dense tile occupancy is stored below
-`navigation_voxel_chunks/`. Runtime navigation keeps the graph/index resident
-and selects either the full-memory chunk backend or a bounded lazy LRU backend;
-this storage seam is independent of render `StreamingWorld`. The cache-time
-selector can
-prefer the largest reachable cave volume while preserving an explicit
-navigation-start route. The sidecar is versioned; legacy single-window models
-remain readable but do not provide fine frontier coverage.
+`navigation_voxel_chunks/`. Certificate tooling can select either the
+full-memory chunk backend or a bounded lazy LRU backend; this storage seam is
+independent of render `StreamingWorld`. For the inferred
+manifest entrance or a valid explicit entrance override, the cache-time selector chooses the longest complete
+certified non-circular path, with clearance and volume as deterministic
+tie-breakers. Exhausting a bounded exact search is unresolved, not proof that
+the candidate is unsafe; while a longer candidate is capacity-limited, the
+selector publishes no shorter recommendation. The sidecar is versioned; V11 and older supported
+models remain readable for compatibility but cannot authorize current
+certificate workflows.
 
-At runtime production Guided Dive requires the current cached model; it does
-not silently fall back to a centerline when the graph is missing, stale, or
-unsafe. This keeps replanning from rasterizing triangles on the render machine.
-Filled free voxels are aggregated into bounded navigation cells with
-independent X, Y, and Z keys; stacked passages therefore remain distinct
-instead of collapsing into one footprint representative. Cache construction
-retains that prepared true-3D heading-aware graph for voxel evidence and legacy
-frontier diagnostics. Production easiest-terminal routing uses the V10
-mesh-derived graph, whose local 26-neighbour edges were exact-checked offline
-and are checked again before execution. Legacy frontier replanning searches the
-coarse graph with
-position-and-incoming-heading states, rejects reverse edges, prunes known
-dead-end branches, and biases comparable routes toward higher connectivity.
-It evaluates each immediate forward branch to a bounded lookahead, retains a
-safe partial prefix when the consumer-hardware expansion budget expires, and
-keeps a terminal branch only when no non-dead-end forward branch remains. The
-branch scorer is request-scoped and explicit: viable candidates are ordered by
-connectivity first, then normalized smooth forward progress, then a bounded
-backtracking penalty, with logarithmic route volume as the comfort tie-breaker.
-Edge costs use the same policy for turn, connectivity, clearance, and volume
-terms, while route diagnostics expose every component and the active loop
-policy. The default loop policy avoids revisits; `allow_forward` may admit a
-non-reversing forward revisit when a caller explicitly requests it. A negative
-incoming-edge alignment remains illegal in both policies.
-centerline remains only the cache-generation entrance seed and footprint
-geometry bounds for production graph validation; current v6 route geometry comes
-from true 3D voxel centers. A separate compatibility caller may request the
-legacy centerline planner explicitly, but the viewer never uses that mode. A
-startup preflight defaults to the shortest known terminal and uses the same
-physical-distance mesh-graph path to it before applying exact voxel and mesh
-safety checks.
-When that route is accepted, the
-returned `fixed_route` plan is the immutable route executed by the controller;
-continuous scans, speculative replans, and rolling-horizon replacement are
-disabled for that dive. An explicit farthest-terminal policy remains available
-for frontier diagnostics and incomplete-cache exploration. A terminal route
-stops with an explicit end-of-cave
-event; a continuing prefix is marked for a forward boundary replan so a large
-room cannot end the dive just because it is locally deep. The exact triangle
-intersection guard still accepts or rejects the selected route. If a coarse
-graph edge intersects the mesh, easiest mode may use a bounded local 2 m
-refinement, with a native 1 m fallback, built from persisted evidence to hand
-off only to a later node on that same fixed graph spine. It cannot globally
-replan into a different branch. The resulting prepared/refined segment ledger
-is exact-checked before publication. If that complete ledger
-cannot be proven, easiest mode fails closed; farthest/frontier-mode preflight
-may publish the farthest exact-safe prefix as an incomplete handoff. It must
-replan at the frontier and is never a terminal claim. Ordinary
-event-driven replans receive a cooperative wall-clock budget; when it expires,
-the worker reports the phase
-and the owner thread hands control back to user assist instead of holding the
-camera in a long search. On capable hardware, `AutoDiveContinuousScan` is a
-separate always-on speculative worker: it runs the same authoritative graph and
-mesh checks without the handoff deadline, keeps one forward-hemisphere result
-in flight, and hands immutable results to the owner thread only after
-source-sequence, start-distance, and forward-direction checks. The accepted
-route remains active while that worker scans, and the controller holds at the
-last rolling-clearance-safe frontier until a valid result arrives. An explicit
-pacing hold also pins the route at the position used to request an
-authoritative continuation when the handoff window is short; this keeps a
-valid result attachable under the small camera-to-route tolerance. Late
-results are re-anchored from the actual camera with a bounded retry count. The
-scan remains speculative even when it is mesh-safe: a materially shorter scan
-result is kept as diagnostic evidence and does not replace a longer validated
-prefix. The next scan is deferred until the current route has a comparable
-remaining horizon. Local mesh-safe continuation planning trims the route at
-the first exact mesh failure and reuses the already-ranked local voxel route
-while rebuilding its smaller graph; it does not rerun the bounded voxel search
-for each mesh retry. Replan handoff filtering uses the local route/voxel scale
-and bounds near-duplicate filtering by that fine scale, rather than deriving a
-fixed minimum travel step from coarse graph cadence. The
-separate
-bounded `AutoDiveClearance` worker performs
-rolling forward-horizon checks and cached voxel probes before a frontier; it
-starts the authoritative replan while a safe prefix remains and holds at a
-standoff if that replan is late. Parsed voxel sidecars are signature-cached for
-the session, so repeated replans do not decode the whole atlas again. A
-separate bounded `AutoDiveVoxelPrefetch` worker samples the current best route
-horizon, materializes its navigation chunks, releases chunks outside that
-horizon, and reports partial residency without blocking camera updates or the
-route-planning worker. The replanner also exposes one bounded speculative slot
-for legacy or fallback callers:
-it evaluates the next route while the accepted route remains active, and the
-owner thread accepts it only when its source plan sequence, camera start, and
-forward-direction checks still match. A late or failed speculative result is
-discarded without putting the diver into a loading wait or user-assist state.
-Continuous-scan failures are retried on the same route and fall back to user
-assist after the bounded failure count is exhausted.
-Older
-caches without graph metrics, missing sidecars, disabled voxel analysis, and
-cache-build failures produce an explicit navigation-authority failure and ask
-for a cache rebuild. The authority event records the exact reason together
-with cache and graph counts. Both the voxel builder and the entire route source
-remain replaceable behind the navigation seam without changing GUI or
-streaming code.
+The viewer does not execute this route data. Cmd/Ctrl+A is deliberately
+unhandled, no GUI controller imports the autonomous planner, and a normal map
+open starts at the first manifest chunk center. The retained graph, voxel, and
+mesh-route helpers are offline certificate and developer-inspection tools: they
+are used by `caveviewer-navigation-verify` and core tests, not to move a
+viewer camera or adjust `StreamingWorld` policy. Recorded Dive is the only
+camera-playback path and supplies its own first pose.
 
-When a cached route cannot be entered, `core.navigation.recovery_scan`
-generates an equal-area forward 3D hemisphere rather than a narrow yaw/pitch
-grid. Runtime recovery evaluates virtual center, lateral, and vertical camera
-origins with four roll orientations, filters them against cached voxel surface
-fields and footprint/Y bounds, and exact-checks only the best bounded set with
-the chunk mesh guard. The selected probe can carry its roll into the generated
-camera route; legacy caches without a vertical model do not authorize unsafe
-up/down probes. The true-3D planner uses a small entrance-side no-return band
-derived from horizontal footprint/voxel spacing rather than the potentially
-coarsened vertical graph spacing; route progress is not monotonic, so a
-heading-valid branch may move into a shallower region.
+The navigation sidecar remains optional and additive to the render cache. Its
+prepared true-3D graph, fixed voxel chunks, clearance/volume metrics, and
+exact-mesh evidence preserve cache certification and compatibility checks
+without adding a runtime cache rebuild, cache mutation, or background decode
+to ordinary viewing.
 
-Guided Dive's opt-in JSONL blackbox records use schema version 2. Every event
-retains its existing name and session identifier, while `session_started`
-captures the cache fingerprint, map bounds, navigation metadata, effective
-settings, coordinate frame, and algorithm-method identifiers. Background
-replans use a stable `replan_id` and generation with queue, build, and total
-durations; candidate decisions report bounded timing and voxel summaries.
-Voxel events also record an explicit outcome such as cache hit, no triangles, no
-surface samples, disabled analysis, or an exception, together with coverage
-scope, tile counts, selected curvature regions, bounds, sample counts, and
-filled-graph coverage. Route-selection events record the bounded lookahead
-frontier, continuation distance, onward exits, dead-end classification, user
-direction alignment, entrance-band policy, route volume, volume/clearance goal
-metrics, and an explicit fallback reason. Rolling-clearance events record the
-worker result, voxel coverage/occupied samples, safe standoff, and whether the
-authoritative replan was triggered. Voxel-prefetch events record the predicted
-horizon, requested/resident chunk counts, bounded chunk IDs, storage backend,
-evictions/load errors, and stale-result decisions. Speculative-replan events
-record the source plan sequence, lead window, pending/accepted/discarded
-outcome, and whether the accepted route was kept active while planning.
-Runtime frame, clamp, assist, and stop events record plan sequence, readiness,
-bounded prefetch-cell samples, and actual-versus-commanded motion. While
-Guided Dive is explicitly waiting for user assistance, the controller also
-writes a bounded trace at up to four samples per second or one metre of
-movement. Each sample contains camera pose, world and footprint cells,
-displacement, speed, and readiness. The completion record summarizes distance,
-net displacement, turns, pauses, guard clamps, final resume position, and the
-cached voxel branch candidates annotated with the branch the diver moved toward.
-Manual navigation outside an active assistance handoff is not recorded by this
-blackbox.
+Certificate tooling may use bounded recovery probes and local mesh/voxel
+analysis to explain an unresolved route, but those results are non-executable
+viewer diagnostics. The former autonomous-controller JSONL blackbox and its
+cache-local writer were removed with the controller.
+
+An explicit `Shift+T` manual route trace is a separate diagnostic surface.
+It samples the render-thread camera pose after movement, sends JSONL records
+through a bounded queue to one background writer, and marks bookmark/minimap
+teleports as discontinuities instead of counting them as flown distance.
+Completed traces live under the map-local `_guided_dive_traces` directory
+beside `_cache`, so atomic cache replacement does not erase the reference
+flight. They remain optional ground truth: cache construction and offline
+certificate route selection never consume them as required map metadata.
+
+Recorded Dive is the separate trace-playback path. Opening a completed JSONL
+associates its bounded source basename, cache-manifest version, chunk size, and
+triangle count with the local map. Normal cache validation rebuilds a stale or
+missing map-local cache before viewing; playback refuses a different geometry
+or cache layout. The trace's first pose replaces ordinary cache-derived viewer placement, and every pose is applied directly on the render thread without
+navigation clamping, smoothing, collision rejection, or route planning.
+Position and orientation are interpolated by trace time; a declared
+discontinuity remains an instantaneous jump. `StreamingWorld` receives a
+bounded chronological lookahead tube, and the playback clock freezes whenever
+the next pose's local render chunks are not GPU-resident. This makes trace time
+independent of render frame rate while allowing slower hardware to buffer
+without skipping part of the recorded flight.
 
 The process boundary also installs main-thread and worker-thread exception
-hooks. When Guided Dive diagnostics are enabled, application events use the
-same append-locked JSONL file with `scope: "application"`. The process records
-the application-to-cache binding, viewer return or launch exception, explicit
-shutdown outcome, process exit, and bounded exception tracebacks. A final
-`application_process_exit` record indicates that Python reached orderly
-shutdown; its absence means the process was terminated before the diagnostic
-shutdown path completed (for example, a native crash, `SIGKILL`, or power
-loss). The application and Guided Dive writers share a per-path lock so a
-worker exception cannot corrupt a navigation record.
-Full meshes, triangle arrays, and voxel grids are never written to the log.
+hooks. `ApplicationDiagnostics` is a generic optional sink with no output path
+until an explicit consumer binds one, so ordinary viewer sessions do not create
+cache-local diagnostic files. It can record lifecycle and bounded exception
+context without changing cache construction, navigation-sidecar contents, or
+manual tracing.
+
 
 ## Startup and map import
 
@@ -278,37 +248,50 @@ into bounded horizontal buckets while retaining the configured vertical
 resolution; they do not materialize an unbounded 1 m graph metric dictionary.
 The cached-mesh collision provider also streams render-chunk triangles through
 a bounded LRU during this pass, so importer, voxel, and collision geometry do
-not all remain resident at once. Whole-map and average-chunk triangle counts
-may disable deadline-bound speculative mesh recovery, but they do not remove
-the lazy exact collision guard from cache construction, fixed-route preflight,
-or route certification. Large chunked maps therefore retain the same collision
-authority without requiring per-map environment overrides.
-For each selected V10 route, cache construction runs a bounded, goal-directed
-mesh-roadmap search inside that route's footprint corridor. Up to the first
-eight route points provide automatic ingress candidates, but only candidates
-with cached free-space evidence and an exact-safe mesh attachment enter the
-multi-source search. The primary lattice is 2 m. Local moves use its immediate
+not all remain resident at once. It pre-indexes render-chunk AABBs in spatial
+buckets and applies the existing exact AABB and triangle tests only to nearby
+chunks; bucket-boundary contacts remain inclusive, and oversized queries fall
+back to the complete chunk list. Fixed-tile rasterization applies its local
+triangle-AABB prefilter as one vectorized mask while preserving source order,
+surface sampling, occupied cells, and truncation limits. Whole-map and
+average-chunk triangle counts
+may disable optional bounded recovery analysis, but they do not remove the
+lazy exact collision guard from cache construction or route certification.
+Large chunked maps therefore retain the same collision authority without
+requiring per-map environment overrides.
+For each selected V12 route, cache construction runs a bounded, goal-directed
+mesh-roadmap search inside that route's horizontal footprint corridor. Without
+an explicit sidecar, OBJ declaration-order vertex zero is the route anchor.
+It is only a locator: it must bind within the fixed snap cap to an
+occupied-wins free attachment in the selected surface-gap layer. Only the
+certified attachment is executable; a spatial chunk sort cannot replace this
+source provenance. The primary lattice is fixed
+at 1 m X/Z by 0.25 m Y; only the bounded exact retry described above may use
+0.5 m X/Z while retaining 0.25 m Y. Local moves use its immediate
 neighbors, while longer route-guided moves provide bounded shortcuts. Every
-candidate edge samples intermediate voxel evidence at half-lattice spacing and
-then passes an exact cached-mesh segment check. If 2 m cannot reach the actual
-final route endpoint, the same bounded search retries on a 1 m lattice.
-Intermediate route points remain heuristics, never terminals, and
-an unreachable endpoint publishes no authoritative mesh graph. A successful
-build persists only the resulting branch-free path, alongside the existing
-voxel atlas, coarse graph, and separately generated fine tiles. It also
-persists the bounded startup-ingress radius; runtime still proves any camera
-connector with voxel and exact-mesh checks before movement.
-Map load resolves the certified mesh-graph entrance asynchronously. If the
-user requests Guided Dive while that bounded placement worker is still
-running, the request waits for the result and then starts preflight from the
-resolved pose. It must not race preflight from the temporary first-render-chunk
-fallback. Camera input during the wait still cancels automatic placement and
-preflight uses the user's current manual pose.
+candidate edge samples intermediate voxel evidence at half-lattice spacing,
+including every crossed lattice boundary and every interval between crossings,
+and then passes an exact cached-mesh segment check. Certificate simulations
+reuse that partition-invariant sampling rule so checkpoint subdivision cannot
+expose a voxel skipped by preflight. Intermediate route points remain horizontal heuristics, never terminals, and
+the bounded endpoint candidates may select only an exact-reachable free center. If
+none is reachable, no authoritative mesh graph is published. A successful
+build publishes the resulting branch-free path and its first exact node as the
+published route start, alongside the fixed voxel
+atlas and bounded compatibility graph. The fixed chunks also replace the old
+separate fine-tile layer for local orthogonal evidence. The cache persists the
+bounded startup-ingress radius. An inferred or authored start connector still
+requires voxel and exact-mesh proof.
+Map load does not resolve or apply a certified mesh-graph entrance. Ordinary
+viewing starts at the first manifest chunk center; an explicit certificate run
+supplies its own start position and validates it without changing viewer state.
 Navigation cache certification is deliberately split into independent phases.
 The `artifacts` phase validates the manifest, render chunks, navigation sidecar
-paths, and navigation-chunk counts without deserializing the large graph. The
-`graph` phase loads and validates the authoritative prepared graph (the V10
-mesh-derived graph for current caches) and coverage profile. The `route` phase
+paths, navigation-chunk counts, inferred/authored entrance binding, and the
+complete source-hint span without deserializing the large graph. A safe
+midpoint-to-end route therefore fails before graph loading. The
+`graph` phase loads and validates the authoritative prepared graph (the V12
+exact mesh path for current caches) and terminal-route coverage profile. The `route` phase
 adds start-position preflight, exact graph/voxel/mesh safety, and bounded
 execution simulation (with no replan requests for a fixed route); `all` runs
 the complete strict sequence. Artifact certification belongs immediately after cache publication;
