@@ -356,12 +356,14 @@ def _map_import_inhibit_reason(map_name: str) -> str:
     return f"Importing {display_name}"
 
 
-def _acquire_map_import_inhibitor(map_name: str):
+def _acquire_map_import_inhibitor(map_name: str, *, desktop_services=None):
     """Best-effort desktop idle/suspend inhibitor for long map imports."""
     try:
-        from caveviewer.gui.platform import get_desktop_services
+        if desktop_services is None:
+            from caveviewer.gui.platform import get_desktop_services
 
-        return get_desktop_services().inhibit_idle_suspend(
+            desktop_services = get_desktop_services()
+        return desktop_services.inhibit_idle_suspend(
             _map_import_inhibit_reason(map_name)
         )
     except Exception as exc:
@@ -444,16 +446,20 @@ def _map_initial_camera_position(manifest: Mapping[str, Any]) -> np.ndarray:
 SHADER_DIR = str(resource_path("shaders"))
 
 
-def _runtime_app_icon_path() -> str:
-    filenames = (get_platform_adapter().splash_layout_policy().app_icon_resource_name,)
+def _platform_adapter_for_runtime(platform_runtime: PlatformRuntime | None = None):
+    """Use the injected process adapter, with a legacy fallback for direct callers."""
+    if platform_runtime is not None:
+        return platform_runtime.platform_adapter
+    return get_platform_adapter()
+
+
+def _runtime_app_icon_path(platform_adapter) -> str:
+    filenames = (platform_adapter.splash_layout_policy().app_icon_resource_name,)
     for filename in filenames:
         path = image_path(filename)
         if path.exists():
             return str(path)
     return str(image_path(filenames[0]))
-
-
-APP_ICON_PATH = _runtime_app_icon_path()
 
 
 _UI_PANEL_VERT_SRC = """
@@ -580,8 +586,10 @@ class CaveViewerWindow(mglw.WindowConfig):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._window_setup_complete = False
-        self._platform_adapter = get_platform_adapter()
         self._platform_runtime = CaveViewerWindow.cave_platform_runtime
+        self._platform_adapter = _platform_adapter_for_runtime(
+            self._platform_runtime
+        )
         self._set_runtime_window_icon()
 
         force_focus_env = os.getenv(self.FORCE_STARTUP_FOCUS_ENV, "").strip().lower()
@@ -992,12 +1000,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._window_setup_complete = True
 
     def _active_platform_adapter(self):
-        """Return the initialized platform adapter, creating it for test shells."""
+        """Return the injected adapter, falling back only for legacy test shells."""
         adapter = getattr(self, "_platform_adapter", None)
         if adapter is None:
-            adapter = get_platform_adapter()
+            adapter = _platform_adapter_for_runtime(
+                getattr(self, "_platform_runtime", None)
+            )
             self._platform_adapter = adapter
         return adapter
+
+    def _acquire_import_inhibitor(self, map_name: str):
+        """Use the runtime's shared desktop service for a map-import action."""
+        runtime = getattr(self, "_platform_runtime", None)
+        if runtime is None:
+            return _acquire_map_import_inhibitor(map_name)
+        return _acquire_map_import_inhibitor(
+            map_name,
+            desktop_services=runtime.desktop_services,
+        )
 
     def _ensure_import_controller(self) -> MapImportController:
         controller = self.__dict__.get("_import_controller")
@@ -1008,7 +1028,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 chunker=lambda: chunker,
                 start_import_process=lambda: start_import_process,
                 terminate_import_process=lambda: terminate_import_process,
-                acquire_inhibitor=lambda: _acquire_map_import_inhibitor,
+                acquire_inhibitor=lambda: self._acquire_import_inhibitor,
                 release_inhibitor=lambda: _release_desktop_inhibitor,
                 perf_counter=lambda: time.perf_counter(),
                 monotonic=lambda: time.monotonic(),
@@ -1153,8 +1173,9 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _set_runtime_window_icon(self) -> None:
         """Set the native viewer-window icon when the backend exposes one."""
-        if not os.path.exists(APP_ICON_PATH):
-            _LOG.warning(f"viewer window icon asset not found: {APP_ICON_PATH}")
+        icon_path = _runtime_app_icon_path(self._active_platform_adapter())
+        if not os.path.exists(icon_path):
+            _LOG.warning(f"viewer window icon asset not found: {icon_path}")
             return
 
         targets = []
@@ -1171,14 +1192,14 @@ class CaveViewerWindow(mglw.WindowConfig):
                 # (and some backends) expect a filename/Path rather than a
                 # pre-loaded ImageData object and will call .is_absolute() on
                 # the argument, which fails on ImageData.
-                set_icon(APP_ICON_PATH)
+                set_icon(icon_path)
                 _LOG.info("Set viewer window icon.")
                 return
             except Exception:
                 pass
             try:
                 import pyglet
-                icon = pyglet.image.load(APP_ICON_PATH)
+                icon = pyglet.image.load(icon_path)
                 set_icon(icon)
                 _LOG.info("Set viewer window icon.")
                 return
@@ -1954,8 +1975,17 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _recording_target_if_available(self) -> VideoRecordingTarget | None:
         """Return a freshly-probed ffmpeg target or show the policy explanation."""
-        capability = self._recording_capability()
-        decision = decide_video_recording(capability)
+        runtime = getattr(self, "_platform_runtime", None)
+        if runtime is not None:
+            preflight = runtime.video_recording_preflight(
+                self._recording_output_dir,
+                ffmpeg_resolver=self._resolve_ffmpeg_path,
+            )
+            capability = preflight.capability
+            decision = preflight.decision
+        else:
+            capability = self._recording_capability()
+            decision = decide_video_recording(capability)
         if not decision.allows_execution or capability.value is None:
             self._recording_unavailable(decision.explanation)
             return None
@@ -6399,7 +6429,9 @@ def _launch_viewer_window(
         CaveViewerWindow.window_size = window_size_override
         window_size_fraction = None
         fallback_window_size = window_size_override
-    elif get_platform_adapter().viewer_uses_glfw_native_initial_size():
+    elif _platform_adapter_for_runtime(
+        CaveViewerWindow.cave_platform_runtime
+    ).viewer_uses_glfw_native_initial_size():
         # Linux GLFW sizing happens after the Wayland/X11 backend is selected,
         # using that backend's DPI-aware work-area coordinate system.
         CaveViewerWindow.window_size = _DEFAULT_WINDOW_SIZE

@@ -12,7 +12,13 @@ from .model import FeatureDecision
 
 @dataclass(frozen=True, slots=True)
 class FeatureGateRegistry:
-    """Expose feature decisions without allowing callers to mutate a runtime."""
+    """Expose process-stable feature decisions without allowing mutation.
+
+    This registry is intentionally only for facts that stay valid for the
+    runtime lifetime. Action-time inputs such as an encoder path or writable
+    output folder use an on-demand probe and direct ``FeatureDecision`` rather
+    than being cached here.
+    """
 
     decisions: Mapping[FeatureId, FeatureDecision]
 

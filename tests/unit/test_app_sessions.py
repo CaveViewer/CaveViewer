@@ -12,6 +12,7 @@ import pytest
 
 from caveviewer import app
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.gui.platform import runtime as platform_runtime_module
 from caveviewer.gui.platform.app_identity import tk_root_options
 
 
@@ -395,17 +396,27 @@ def _prepare_main(monkeypatch):
 def test_main_applies_update_branch_and_opens_cli_map(monkeypatch):
     recorder, configured = _prepare_main(monkeypatch)
     opened = []
+    runtime = object()
     monkeypatch.setattr(
         app.sys,
         "argv",
         ["caveviewer", "--update-branch", "feature/updates", "/maps/cave"],
     )
-    monkeypatch.setattr(app, "_run_map_session", opened.append)
+    monkeypatch.setattr(
+        platform_runtime_module,
+        "create_platform_runtime",
+        lambda: runtime,
+    )
+    monkeypatch.setattr(
+        app,
+        "_run_map_session",
+        lambda path, **kwargs: opened.append((path, kwargs)),
+    )
 
     app.main()
 
     assert configured == [True]
-    assert opened == ["/maps/cave"]
+    assert opened == [("/maps/cave", {"platform_runtime": runtime})]
     assert app.os.environ["CAVEVIEWER_UPDATE_BRANCH"] == "feature/updates"
     assert "Using update branch override: feature/updates" in recorder.info_messages
 
@@ -413,6 +424,7 @@ def test_main_applies_update_branch_and_opens_cli_map(monkeypatch):
 def test_main_consumes_cli_map_path_before_viewer_launch(monkeypatch):
     _recorder, _configured = _prepare_main(monkeypatch)
     opened = []
+    runtime = object()
     monkeypatch.setattr(
         app.sys,
         "argv",
@@ -421,13 +433,22 @@ def test_main_consumes_cli_map_path_before_viewer_launch(monkeypatch):
     monkeypatch.setattr(
         app,
         "_run_map_session",
-        lambda path: opened.append((path, list(app.sys.argv))),
+        lambda path, **kwargs: opened.append((path, list(app.sys.argv), kwargs)),
+    )
+    monkeypatch.setattr(
+        platform_runtime_module,
+        "create_platform_runtime",
+        lambda: runtime,
     )
 
     app.main()
 
     assert opened == [
-        ("/maps/cave", ["caveviewer", "--backend", "glfw"]),
+        (
+            "/maps/cave",
+            ["caveviewer", "--backend", "glfw"],
+            {"platform_runtime": runtime},
+        ),
     ]
 
 
@@ -458,7 +479,12 @@ def test_main_configures_windows_dpi_best_effort(monkeypatch, dpi_fails):
     monkeypatch.setitem(sys.modules, "caveviewer.gui.dpi_utils", dpi_utils)
     monkeypatch.setattr(app.os, "name", "nt")
     monkeypatch.setattr(app.sys, "argv", ["caveviewer", "/maps/cave"])
-    monkeypatch.setattr(app, "_run_map_session", lambda _folder: None)
+    monkeypatch.setattr(
+        platform_runtime_module,
+        "create_platform_runtime",
+        lambda: object(),
+    )
+    monkeypatch.setattr(app, "_run_map_session", lambda _folder, **_kwargs: None)
 
     app.main()
 

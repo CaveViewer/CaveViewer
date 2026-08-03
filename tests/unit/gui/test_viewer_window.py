@@ -241,6 +241,67 @@ def _recording_window():
     return window
 
 
+def test_viewer_uses_the_injected_runtime_adapter_before_legacy_factory(monkeypatch):
+    adapter = object()
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_runtime = SimpleNamespace(platform_adapter=adapter)
+    window._platform_adapter = None
+    monkeypatch.setattr(
+        viewer_window,
+        "get_platform_adapter",
+        lambda: pytest.fail("injected runtime adapter must be used"),
+    )
+
+    assert window._active_platform_adapter() is adapter
+
+
+def test_recording_target_uses_one_injected_runtime_preflight(monkeypatch):
+    target = viewer_window.VideoRecordingTarget("/usr/bin/ffmpeg", "/recordings")
+    capability = viewer_window.CapabilityResult.available(
+        target,
+        reason_code="video_recording_target_available",
+    )
+    preflight = SimpleNamespace(
+        capability=capability,
+        decision=viewer_window.decide_video_recording(capability),
+    )
+    calls = []
+
+    def video_recording_preflight(output_directory, *, ffmpeg_resolver=None):
+        calls.append((output_directory, ffmpeg_resolver))
+        return preflight
+
+    window = _recording_window()
+    window._platform_runtime = SimpleNamespace(
+        video_recording_preflight=video_recording_preflight
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "probe_video_recording",
+        lambda *_args, **_kwargs: pytest.fail(
+            "runtime recording preflight must replace the direct probe"
+        ),
+    )
+
+    assert window._recording_target_if_available() is target
+    assert calls[0][0] == "/tmp"
+    assert calls[0][1] is not None
+
+
+def test_map_import_inhibitor_uses_the_runtime_desktop_service():
+    calls = []
+    inhibitor = object()
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_runtime = SimpleNamespace(
+        desktop_services=SimpleNamespace(
+            inhibit_idle_suspend=lambda reason: calls.append(reason) or inhibitor
+        )
+    )
+
+    assert window._acquire_import_inhibitor("Crystal Cave") is inhibitor
+    assert calls == ["Importing Crystal Cave"]
+
+
 def _active_recording_session(
     *,
     process=None,
@@ -1509,6 +1570,33 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     assert calls[0][1]["window_size_fraction"] == 0.8
     assert calls[0][1]["fallback_window_size"] == (1600, 1000)
     assert calls[0][1]["force_resizable_window"] is True
+
+
+def test_viewer_launch_uses_injected_runtime_adapter(monkeypatch):
+    calls = []
+    adapter = SimpleNamespace(viewer_uses_glfw_native_initial_size=lambda: True)
+    previous_runtime = viewer_window.CaveViewerWindow.cave_platform_runtime
+    viewer_window.CaveViewerWindow.cave_platform_runtime = SimpleNamespace(
+        platform_adapter=adapter
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "get_platform_adapter",
+        lambda: pytest.fail("launch must use the injected runtime adapter"),
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "run_window_config",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    try:
+        viewer_window._launch_viewer_window()
+    finally:
+        viewer_window.CaveViewerWindow.cave_platform_runtime = previous_runtime
+
+    assert calls[0][1]["window_size_fraction"] == 0.8
+    assert calls[0][1]["fallback_window_size"] == (1600, 1000)
 
 
 def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monkeypatch):
