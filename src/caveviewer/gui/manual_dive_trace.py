@@ -433,7 +433,10 @@ class ManualDiveTraceRecorder:
                         break
                     _write_jsonl_record(file_obj, record)
                     file_obj.flush()
-                os.replace(self._partial_path, self._output_path)
+            # Windows cannot replace a file that this process still has open.
+            # Closing the temporary sibling before publishing preserves the
+            # atomic replacement guarantee on every supported platform.
+            os.replace(self._partial_path, self._output_path)
         except Exception as exc:
             with self._result_lock:
                 self._writer_error = f"{type(exc).__name__}: {exc}"

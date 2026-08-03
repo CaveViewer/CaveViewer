@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
+from caveviewer.gui import manual_dive_trace
 from caveviewer.gui.manual_dive_trace import (
     ManualDivePose,
     ManualDiveTraceRecorder,
@@ -122,6 +123,35 @@ def test_manual_trace_writes_start_samples_and_completion(tmp_path):
         "minimum": [0.0, 0.0, 0.0],
         "maximum": [0.5, 0.0, 0.0],
     }
+
+
+def test_trace_closes_partial_file_before_atomic_publish(tmp_path, monkeypatch):
+    recorder = _recorder(tmp_path)
+    opened_partial_files = []
+    real_open = Path.open
+    real_replace = manual_dive_trace.os.replace
+
+    def track_open(path, *args, **kwargs):
+        file_obj = real_open(path, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if mode == "x":
+            opened_partial_files.append(file_obj)
+        return file_obj
+
+    def replace_after_close(source, destination):
+        assert opened_partial_files
+        assert all(file_obj.closed for file_obj in opened_partial_files)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(Path, "open", track_open)
+    monkeypatch.setattr(manual_dive_trace.os, "replace", replace_after_close)
+
+    recorder.start(_pose(), now=0.0)
+    recorder.stop(_pose(), now=0.1)
+
+    result = recorder.wait()
+    assert result is not None
+    assert result.completed is True
 
 
 def test_orientation_threshold_and_stationary_heartbeat_are_recorded(tmp_path):

@@ -20,7 +20,6 @@ from caveviewer.core.chunking import upload
 from caveviewer.core.hardware import system_memory
 from caveviewer.core.navigation.voxel_cache import (
     NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR,
-    NAVIGATION_VOXEL_CACHE_METHOD,
 )
 from caveviewer.core.workers.allocation import WorkerAllocation
 
@@ -646,7 +645,7 @@ def test_build_cache_attaches_optional_navigation_metadata(tmp_path):
     )
 
 
-def test_build_cache_writes_bounded_whole_cave_voxel_sidecar(tmp_path):
+def test_build_cache_omits_uncertified_navigation_voxel_sidecar(tmp_path):
     source = tmp_path / "map.obj"
     source.write_bytes(b"small source map")
     cache_dir = tmp_path / "managed" / "map-key"
@@ -661,18 +660,18 @@ def test_build_cache_writes_bounded_whole_cave_voxel_sidecar(tmp_path):
 
     manifest = chunker.load_manifest(str(cache_dir))
     navigation = manifest["navigation"]
-    assert navigation["voxel_cache"]["method"] == NAVIGATION_VOXEL_CACHE_METHOD
-    assert navigation["voxel_cache"]["fixed_isotropic_voxel_size_m"] == 1.0
-    assert navigation["voxel_cache"]["surface_overlap_policy"] == "occupied_wins"
     assert navigation["route_selection_method"] == (
         NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR
     )
     summary = navigation["routes"][0]["voxel_corridor"]
-    assert summary["built"] is True
-    assert summary["available_volume_m3"] > 0.0
+    assert summary["built"] is False
+    assert summary["outcome"] == "known_terminal_unreachable"
+    assert summary["prepared_mesh_graph"]["reason"] == (
+        "exact_cubic_spine_terminal_opposing_mesh_support_missing"
+    )
+    assert "voxel_cache" not in navigation
     sidecar = cache_dir / "navigation_voxels.json"
-    assert sidecar.is_file()
-    assert sidecar.stat().st_size < 64 * 1024 * 1024
+    assert not sidecar.exists()
 
 
 def test_build_cache_prefers_authored_sidecar_over_derived_map_start(tmp_path):
