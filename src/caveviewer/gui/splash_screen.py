@@ -383,6 +383,11 @@ def _update_presentation(
     reveal_action_label: str,
 ) -> _UpdatePresentation:
     """Map manager states to the exact compact labels rendered by the splash."""
+    if (
+        snapshot.automatic_update is not None
+        and not snapshot.automatic_update.allows_execution
+    ):
+        return _UpdatePresentation(status_text=snapshot.automatic_update.explanation)
     if snapshot.state == UpdateState.AVAILABLE:
         version = _display_version(snapshot.available_version)
         return _UpdatePresentation(

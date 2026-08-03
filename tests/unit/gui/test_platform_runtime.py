@@ -1,0 +1,103 @@
+"""Test composition-time platform facts, update probes, and shared adapters."""
+
+from __future__ import annotations
+
+from caveviewer.core.capabilities import CapabilitySource, CapabilityStatus
+from caveviewer.gui.features import FeatureState
+from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform.linux import LinuxSplashPlatformAdapter
+from caveviewer.gui.platform.runtime import create_platform_runtime
+
+
+class FakeUpdateAdapter:
+    def __init__(self, *, supported: bool = True):
+        self.supported = supported
+
+    def default_update_repo(self):
+        return "CaveViewer/CaveViewer"
+
+    def default_update_manifest_url(self, repo, branch):
+        return f"https://updates.example/{repo}/{branch}/stable.json"
+
+    def install_channel(self):
+        return "test_app"
+
+    def supports_install_channel(self, channel):
+        return self.supported and channel == "test_app"
+
+
+class FailingUpdateConfigurationAdapter(FakeUpdateAdapter):
+    def default_update_repo(self):
+        raise RuntimeError("broken package metadata")
+
+
+def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
+    monkeypatch.setenv("CAVEVIEWER_UPDATE_BRANCH", "ignored-process-value")
+    adapter = FakeUpdateAdapter()
+    desktop_services = object()
+
+    runtime = create_platform_runtime(
+        platform_adapter=adapter,
+        desktop_services=desktop_services,
+        environment={
+            "CAVEVIEWER_UPDATE_BRANCH": "release-candidate",
+            "CAVEVIEWER_UPDATE_CHANNEL": "prerelease",
+        },
+        platform_name="linux",
+        machine="x86_64",
+    )
+
+    assert runtime.platform_adapter is adapter
+    assert runtime.desktop_services is desktop_services
+    assert runtime.profile.platform_name == "linux"
+    assert runtime.profile.machine == "x86_64"
+    assert runtime.update_configuration.branch == "release-candidate"
+    assert runtime.update_configuration.manifest_channel == "prerelease"
+    assert runtime.update_configuration.manifest_url.endswith(
+        "/release-candidate/prerelease.json"
+    )
+    assert runtime.update_configuration.source is CapabilitySource.USER_OVERRIDE
+    assert runtime.automatic_update_capability.status is CapabilityStatus.AVAILABLE
+    assert runtime.automatic_update_decision.state is FeatureState.ENABLED
+
+
+def test_runtime_disables_unsupported_update_targets_before_network_work():
+    runtime = create_platform_runtime(
+        platform_adapter=FakeUpdateAdapter(supported=False),
+        desktop_services=object(),
+        environment={},
+    )
+
+    assert runtime.automatic_update_capability.status is CapabilityStatus.UNAVAILABLE
+    assert (
+        runtime.automatic_update_capability.reason_code
+        == "automatic_update_target_unsupported"
+    )
+    assert runtime.automatic_update_decision.state is FeatureState.DISABLED
+
+
+def test_runtime_fails_closed_when_static_update_configuration_cannot_be_probed():
+    runtime = create_platform_runtime(
+        platform_adapter=FailingUpdateConfigurationAdapter(),
+        desktop_services=object(),
+        environment={},
+    )
+
+    assert runtime.automatic_update_capability.status is CapabilityStatus.UNKNOWN
+    assert (
+        runtime.automatic_update_capability.reason_code
+        == "automatic_update_configuration_probe_failed"
+    )
+    assert runtime.automatic_update_decision.state is FeatureState.DISABLED
+
+
+def test_linux_factory_shares_an_injected_desktop_service_with_its_adapter():
+    desktop_services = object()
+
+    adapter = get_platform_adapter(
+        platform_name="linux",
+        desktop_services=desktop_services,
+    )
+
+    assert isinstance(adapter, LinuxSplashPlatformAdapter)
+    assert adapter._desktop_services is desktop_services

@@ -11,6 +11,7 @@ from .desktop_services import (
     get_desktop_services,
 )
 from .factory import get_platform_adapter, get_splash_platform_adapter
+from .runtime import PlatformProfile, PlatformRuntime, create_platform_runtime
 from .linux import LinuxSplashPlatformAdapter
 from .macos import MacOSSplashPlatformAdapter
 from .windows import WindowsSplashPlatformAdapter
@@ -32,4 +33,7 @@ __all__ = [
     "MacOSSplashPlatformAdapter",
     "WindowsSplashPlatformAdapter",
     "LinuxSplashPlatformAdapter",
+    "PlatformProfile",
+    "PlatformRuntime",
+    "create_platform_runtime",
 ]

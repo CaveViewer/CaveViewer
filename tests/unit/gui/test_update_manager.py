@@ -9,6 +9,7 @@ import pytest
 
 from caveviewer.gui.update_checker import DownloadCancelled, UpdateCheckResult
 from caveviewer.gui import update_manager
+from caveviewer.gui.platform.runtime import create_platform_runtime
 from caveviewer.gui.update_manager import UpdateManager, UpdateState
 
 
@@ -31,6 +32,21 @@ class FakePlatformAdapter:
 
     def reveal_downloaded_payload(self, payload_path):
         self.revealed_paths.append(payload_path)
+
+
+class FakeRuntimePlatformAdapter(FakePlatformAdapter):
+    def __init__(self, downloads_dir: Path, *, supported: bool = True):
+        super().__init__(downloads_dir)
+        self.supported = supported
+
+    def default_update_repo(self):
+        return "CaveViewer/CaveViewer"
+
+    def default_update_manifest_url(self, repo, branch):
+        return f"https://updates.example/{repo}/{branch}/stable.json"
+
+    def supports_install_channel(self, channel):
+        return self.supported and channel == "test_app"
 
 
 class FakeDesktopInhibitor:
@@ -486,3 +502,80 @@ def test_non_actionable_states_reject_download_and_reveal(tmp_path):
         assert not manager.reveal_download()
     finally:
         manager.shutdown()
+
+
+def test_disabled_runtime_gate_starts_no_update_workers_or_downloads(tmp_path):
+    adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads", supported=False)
+    runtime = create_platform_runtime(
+        platform_adapter=adapter,
+        desktop_services=FakeDesktopServices(),
+        environment={},
+    )
+    checks = []
+    downloads = []
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=runtime,
+        check_for_update=lambda *_args, **_kwargs: checks.append(True),
+        download_update=lambda *_args, **_kwargs: downloads.append(True),
+        temp_root=str(tmp_path),
+    )
+    try:
+        assert not manager.check_for_updates()
+        assert checks == []
+        assert manager.snapshot().state is UpdateState.IDLE
+        assert (
+            manager.snapshot().automatic_update.reason_code
+            == "automatic_update_target_unsupported"
+        )
+
+        with manager._lock:
+            manager._state = UpdateState.AVAILABLE
+            manager._result = _available_result()
+        assert not manager.start_download()
+        assert downloads == []
+    finally:
+        manager.shutdown()
+
+
+def test_runtime_configuration_is_passed_to_the_default_update_client(
+    monkeypatch, tmp_path
+):
+    adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
+    runtime = create_platform_runtime(
+        platform_adapter=adapter,
+        desktop_services=FakeDesktopServices(),
+        environment={"CAVEVIEWER_UPDATE_BRANCH": "release-candidate"},
+    )
+    calls = []
+
+    def check_for_update(current_version, **kwargs):
+        calls.append((current_version, kwargs))
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            latest_version=current_version,
+        )
+
+    monkeypatch.setattr(update_manager.update_checker, "check_for_update", check_for_update)
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=runtime,
+        temp_root=str(tmp_path),
+    )
+    try:
+        assert manager.check_for_updates()
+        assert manager.wait_for_background_task(1)
+    finally:
+        manager.shutdown()
+
+    assert calls == [
+        (
+            "1.0.63",
+            {
+                "install_channel": "test_app",
+                "configuration": runtime.update_configuration,
+                "platform_adapter": adapter,
+            },
+        )
+    ]

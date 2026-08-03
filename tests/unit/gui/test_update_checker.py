@@ -9,8 +9,10 @@ import urllib.error
 
 import pytest
 
+from caveviewer.core.capabilities import CapabilitySource
 from caveviewer.gui import update_checker
 from caveviewer.gui.platform.windows import WindowsSplashPlatformAdapter
+from caveviewer.gui.platform.probes.updates import UpdateConfiguration
 from caveviewer.gui.update_signature import SignatureVerificationError
 
 
@@ -405,3 +407,51 @@ def test_signature_check_accepts_valid_signature(monkeypatch):
     )
     assert update_checker._verify_manifest_signature_required(b"manifest")
     assert verified == [(b"manifest", b"sig")]
+
+
+def test_explicit_runtime_configuration_bypasses_legacy_update_globals(monkeypatch):
+    adapter = FakePlatformAdapter()
+    configuration = UpdateConfiguration(
+        repository="example/CaveViewer",
+        branch="release-candidate",
+        manifest_channel="stable",
+        manifest_url="https://updates.example/runtime.json",
+        manifest_signature_url="https://updates.example/runtime.json.sig",
+        source=CapabilitySource.USER_OVERRIDE,
+    )
+    fetched = []
+    monkeypatch.setattr(update_checker, "_MANIFEST_URL", "https://wrong.example/old.json")
+    monkeypatch.setattr(
+        update_checker,
+        "_fetch_url_bytes_for_adapter",
+        lambda url, *, headers, timeout, platform_adapter: (
+            fetched.append((url, headers, timeout, platform_adapter))
+            or json.dumps(
+                {
+                    "latest_version": "1.0.0",
+                    "windows_app_url": "https://updates.example/update.zip",
+                }
+            ).encode("utf-8")
+        ),
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "_verify_manifest_signature_required_with_configuration",
+        lambda *_args, **_kwargs: True,
+    )
+
+    result = update_checker.check_for_update(
+        "1.0.0",
+        configuration=configuration,
+        platform_adapter=adapter,
+    )
+
+    assert not result.update_available
+    assert fetched == [
+        (
+            "https://updates.example/runtime.json",
+            {"Accept": "application/json", "User-Agent": "CaveViewer-Test"},
+            8,
+            adapter,
+        )
+    ]

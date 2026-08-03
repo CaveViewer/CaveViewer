@@ -18,6 +18,7 @@ src/caveviewer/benchmarking/map_runner.py     local map benchmark orchestration 
 src/caveviewer/benchmarking/results.py        benchmark scenario/results model and controller
 src/caveviewer/benchmarking/routes.py         benchmark-specific route generation
 src/caveviewer/core/                          parsing, cache, streaming, and non-UI policy
+src/caveviewer/core/capabilities/             immutable cross-layer capability values
 src/caveviewer/core/json_io.py                 bounded JSON loading for core inputs
 src/caveviewer/core/map/                      map discovery, cache, and import workflow
 src/caveviewer/core/map/cache_paths.py         map-cache location policy
@@ -57,6 +58,9 @@ src/caveviewer/core/mesh/glb.py                GLB/glTF parsing
 src/caveviewer/core/textures/                  worker-safe texture CPU policy
 src/caveviewer/core/textures/decoding.py       texture decode, inspection, and budgets
 src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
+src/caveviewer/gui/features/                  pure feature availability policies and gates
+src/caveviewer/gui/platform/runtime.py        process-owned platform composition root
+src/caveviewer/gui/platform/probes/           platform capability probes and configuration
 src/caveviewer/gui/map_library.py             recent-map row display models
 src/caveviewer/gui/map_library_controller.py  standard-library row/download state
 src/caveviewer/gui/map_library_panel.py       splash Map Library Tk panel
@@ -110,6 +114,7 @@ CaveViewer/
 │       │   ├── results.py
 │       │   └── routes.py
 │       ├── core/
+│       │   ├── capabilities/
 │       │   ├── chunking/
 │       │   ├── diagnostics/
 │       │   ├── hardware/
@@ -120,7 +125,9 @@ CaveViewer/
 │       │   ├── textures/
 │       │   └── workers/
 │       ├── gui/
+│       │   ├── features/
 │       │   └── platform/
+│       │       └── probes/
 │       └── resources/
 │           ├── shaders/
 │           ├── images/

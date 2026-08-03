@@ -10,6 +10,8 @@ platform/
 ├── app_identity.py          # Native window identity and Tk root options
 ├── base.py                  # SplashPlatformAdapter protocol definition
 ├── desktop_services.py      # Desktop file, URI, notification, and inhibit services
+├── runtime.py               # Per-process platform composition and feature gates
+├── probes/updates.py        # Static signed-update configuration and target probe
 ├── portal.py                # Linux XDG Desktop Portal transport and states
 ├── windowing.py             # Linux GLFW Wayland/X11 selection and fallback
 ├── factory.py               # Platform detection and adapter instantiation
@@ -58,6 +60,37 @@ The Linux desktop file keeps `Exec ... %f` and MIME registrations for
 direct `.glb` and `.obj` launches. The application startup path must continue
 accepting both folders and those direct files.
 
+## Runtime composition and feature gates
+
+`caveviewer.app` creates one `PlatformRuntime` after command-line overrides
+have been applied. It owns a stable `PlatformProfile`, one broad compatibility
+adapter, one `DesktopServices` instance, immutable capability results, and
+feature-gate decisions. It is not a global singleton: callers receive it by
+injection, which keeps test setup deterministic and prevents unrelated GUI
+surfaces from repeatedly constructing portal-backed services.
+
+The first migrated feature is automatic update checking and downloading:
+
+```text
+automatic update
+    -> pure FeatureDecision policy
+    -> immutable update-target capability result
+    -> update probe/configuration and existing package adapter
+```
+
+The update configuration is resolved when the runtime is composed, rather than
+when `update_checker.py` is imported. This means CLI `--update-branch` and
+other explicit configuration are seen by the process-owned manager. The
+manager rechecks the gate before it starts a check and before it starts a
+download; a disabled gate never starts network work. Offline failures remain
+ordinary transient check results, not a platform capability failure.
+
+`SplashPlatformAdapter` remains a compatibility surface for presentation and
+unmigrated platform actions. New features should add a narrow probe, a pure
+policy in `caveviewer.gui.features`, and an injected action adapter rather than
+expanding this broad protocol. Cache, chunk streaming, navigation, and map
+state are outside this runtime layer.
+
 ## Key Components
 
 ### `base.py` – Protocol Definition
@@ -91,11 +124,25 @@ def get_platform_adapter() -> SplashPlatformAdapter:
 ```
 
 **How it works**:
-- Inspects `sys.platform` whenever an adapter is requested
+- Inspects `sys.platform` by default, or an injected composition-time platform
+  fact in tests
 - Returns the appropriate adapter instance
+- Can share an injected `DesktopServices` object with the Linux adapter
 - Falls back to `DefaultSplashPlatformAdapter` for unknown platforms
 
 **When to modify**: Only if adding support for a new platform that requires different `sys.platform` detection (rare).
+
+### `runtime.py` – Process-owned platform state
+
+`create_platform_runtime()` is the application composition boundary. It reads
+the selected environment once, after app-level command-line overrides, and
+creates immutable update capability and feature-decision values. It must not
+perform network checks, D-Bus calls, GPU probes, or other expensive on-demand
+work while it is being composed.
+
+Inject `PlatformRuntime` into a feature service when migrating it. Existing
+callers of `get_platform_adapter()` and `get_desktop_services()` remain valid
+until their concerns are split out of `SplashPlatformAdapter`.
 
 ### `macos.py` – macOS Implementations
 
