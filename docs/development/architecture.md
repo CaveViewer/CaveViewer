@@ -307,14 +307,15 @@ imports write only the active cache artifacts.
 render-thread callbacks. Runtime streaming depends on focused core policy
 modules:
 
-- `caveviewer.core.hardware.system_memory`: total/current system RAM detection.
-- `caveviewer.core.hardware.gpu_memory`: active-GPU memory detection and
-  fallback budgets.
+- `caveviewer.core.hardware.system_memory`: typed total/current system-RAM
+  availability probes and legacy total-RAM fallback.
+- `caveviewer.core.hardware.gpu_memory`: typed active-GPU memory probes and
+  conservative fallback budgets.
 - `caveviewer.core.hardware.memory_targets`: RAM and GPU utilization target
   parsing.
 - `caveviewer.core.workers.allocation`: CPU caps and shared worker RAM admission.
-- `caveviewer.core.streaming.budget`: chunk-size estimation and residency
-  limits.
+- `caveviewer.core.streaming.budget`: pure typed-memory-to-residency policy,
+  chunk-size estimation, and residency limits.
 - `caveviewer.core.streaming.scheduler`: backlog, selection, and eviction.
 - `caveviewer.core.textures.decoding`: worker-safe CPU texture decode,
   inspection, and texture budget selection.
@@ -330,6 +331,13 @@ prepared chunk is resident in the bounded ready queue, so each memory sample
 includes real decode cost. Pool growth stops when system RAM utilization
 reaches 80% or availability cannot be measured and may resume if pressure
 later falls.
+
+Streaming memory probes are converted into immutable capability facts before
+the pure residency policy runs. Measured RAM and GPU budgets use their selected
+targets; unknown inputs use a deterministic 1 GB fallback envelope, and unknown
+RAM cannot raise the normal conservative utilization target. This keeps a probe
+failure from becoming an unbounded residency allowance while preserving a
+minimal streaming path.
 
 Geometry visibility is not limited by full-resolution texture residency.
 `StreamingWorld` selects chunks using spatial distance and chunk residency

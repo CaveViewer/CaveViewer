@@ -45,7 +45,7 @@ src/caveviewer/core/hardware/system_memory.py  system-RAM availability probes an
 src/caveviewer/core/streaming/                 runtime chunk streaming policy
 src/caveviewer/core/streaming/world.py         worker lifecycle and render callbacks
 src/caveviewer/core/streaming/scheduler.py     backlog, selection, and eviction policy
-src/caveviewer/core/streaming/budget.py        residency budget calculation
+src/caveviewer/core/streaming/budget.py        typed-memory policy and residency budget calculation
 src/caveviewer/core/navigation/                 centerline, curvature, and voxel route policy
 src/caveviewer/core/navigation/voxel_cache.py   cache-time voxel graph/index models and summaries
 src/caveviewer/core/navigation/voxel_store.py   in-memory and bounded-LRU navigation voxel chunks

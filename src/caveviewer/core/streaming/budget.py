@@ -4,6 +4,20 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from enum import Enum
+
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    CapabilitySource,
+    CapabilityStatus,
+    GpuMemoryBudget,
+    RamAvailability,
+)
+
+
+CONSERVATIVE_UNKNOWN_RAM_BYTES = 1 * 1024 ** 3
+CONSERVATIVE_UNKNOWN_GPU_MEMORY_BYTES = 1 * 1024 ** 3
+CONSERVATIVE_UNKNOWN_RAM_TARGET_FRACTION = 0.08
 
 
 @dataclass(frozen=True)
@@ -13,6 +27,35 @@ class ResidencyBudget:
     ready_backlog_chunks: int
     gpu_budget_chunks: int | None
     gpu_budget_bytes: int | None
+
+
+class StreamingMemoryMode(str, Enum):
+    """Whether a residency decision uses measured or safe fallback limits."""
+
+    NORMAL = "normal"
+    CONSERVATIVE = "conservative"
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingMemoryDecision:
+    """Typed inputs and bounded residency selected by the pure memory policy."""
+
+    mode: StreamingMemoryMode
+    ram_reason_code: str
+    gpu_reason_code: str
+    ram_source: CapabilitySource
+    gpu_source: CapabilitySource
+    total_ram_bytes: int
+    available_ram_bytes: int
+    total_gpu_memory_bytes: int
+    ram_target_fraction: float
+    gpu_target_fraction: float
+    residency_budget: ResidencyBudget
+
+    @property
+    def uses_conservative_limits(self) -> bool:
+        """Return whether any unmeasured input reduced the residency envelope."""
+        return self.mode is StreamingMemoryMode.CONSERVATIVE
 
 
 def estimate_chunk_bytes(
@@ -102,6 +145,97 @@ def calculate_residency_budget(
             if resolved_gpu_budget_bytes is not None
             else None
         ),
+    )
+
+
+def decide_streaming_memory(
+    *,
+    available_cell_count: int,
+    ram_capability: CapabilityResult[RamAvailability],
+    gpu_capability: CapabilityResult[GpuMemoryBudget],
+    ram_target_fraction: float,
+    gpu_target_fraction: float,
+    estimated_chunk_ram_bytes: int,
+    estimated_chunk_gpu_bytes: int,
+    gpu_budget_bytes: int | None = None,
+    ready_backlog_target_chunks: int = 16,
+) -> StreamingMemoryDecision:
+    """Select bounded streaming residency from typed hardware facts.
+
+    The function intentionally has no platform probes or environment reads.
+    A missing RAM or GPU measurement becomes a small, deterministic fallback
+    budget instead of an unbounded allowance. Unknown RAM also caps a caller's
+    requested utilization target at the normal conservative default.
+    """
+    ram_value = (
+        ram_capability.value
+        if (
+            ram_capability.status is CapabilityStatus.AVAILABLE
+            and isinstance(ram_capability.value, RamAvailability)
+        )
+        else None
+    )
+    if ram_value is None:
+        total_ram_bytes = CONSERVATIVE_UNKNOWN_RAM_BYTES
+        available_ram_bytes = CONSERVATIVE_UNKNOWN_RAM_BYTES
+        effective_ram_target_fraction = min(
+            ram_target_fraction,
+            CONSERVATIVE_UNKNOWN_RAM_TARGET_FRACTION,
+        )
+        ram_is_conservative = True
+    else:
+        total_ram_bytes = ram_value.total_bytes
+        available_ram_bytes = ram_value.available_bytes
+        effective_ram_target_fraction = ram_target_fraction
+        ram_is_conservative = (
+            ram_capability.source is CapabilitySource.CONSERVATIVE_FALLBACK
+        )
+
+    gpu_value = (
+        gpu_capability.value
+        if (
+            gpu_capability.status is CapabilityStatus.AVAILABLE
+            and isinstance(gpu_capability.value, GpuMemoryBudget)
+        )
+        else None
+    )
+    if gpu_value is None:
+        total_gpu_memory_bytes = CONSERVATIVE_UNKNOWN_GPU_MEMORY_BYTES
+        gpu_is_conservative = True
+    else:
+        total_gpu_memory_bytes = gpu_value.total_bytes
+        gpu_is_conservative = (
+            gpu_capability.source is CapabilitySource.CONSERVATIVE_FALLBACK
+        )
+
+    residency_budget = calculate_residency_budget(
+        available_cell_count=available_cell_count,
+        total_ram_bytes=total_ram_bytes,
+        available_ram_bytes=available_ram_bytes,
+        ram_target_fraction=effective_ram_target_fraction,
+        estimated_chunk_ram_bytes=estimated_chunk_ram_bytes,
+        total_gpu_memory_bytes=total_gpu_memory_bytes,
+        gpu_target_fraction=gpu_target_fraction,
+        estimated_chunk_gpu_bytes=estimated_chunk_gpu_bytes,
+        gpu_budget_bytes=gpu_budget_bytes,
+        ready_backlog_target_chunks=ready_backlog_target_chunks,
+    )
+    return StreamingMemoryDecision(
+        mode=(
+            StreamingMemoryMode.CONSERVATIVE
+            if ram_is_conservative or gpu_is_conservative
+            else StreamingMemoryMode.NORMAL
+        ),
+        ram_reason_code=ram_capability.reason_code,
+        gpu_reason_code=gpu_capability.reason_code,
+        ram_source=ram_capability.source,
+        gpu_source=gpu_capability.source,
+        total_ram_bytes=total_ram_bytes,
+        available_ram_bytes=available_ram_bytes,
+        total_gpu_memory_bytes=total_gpu_memory_bytes,
+        ram_target_fraction=effective_ram_target_fraction,
+        gpu_target_fraction=gpu_target_fraction,
+        residency_budget=residency_budget,
     )
 
 

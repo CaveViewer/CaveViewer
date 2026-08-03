@@ -11,8 +11,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from caveviewer.core.capabilities import CapabilityResult, GpuMemoryBudget, RamAvailability
 from caveviewer.core.hardware import system_memory
 from caveviewer.core.streaming import scheduler as streaming_scheduler
+from caveviewer.core.streaming.budget import StreamingMemoryMode
 from caveviewer.core.streaming import world as streaming_world
 from caveviewer.core.workers.allocation import WorkerAllocation
 
@@ -525,6 +527,40 @@ def test_streaming_residency_budget_uses_available_ram_snapshot(monkeypatch):
         assert world.config.max_loaded_chunks == 3
         assert world._ready_backlog.capacity == 1
         assert world.config.max_loaded_chunks + world._ready_backlog.capacity == 4
+    finally:
+        world.shutdown()
+
+
+def test_streaming_world_uses_typed_capabilities_for_residency_policy(monkeypatch):
+    cells = {(index, 0, 0) for index in range(20)}
+    monkeypatch.setattr(
+        streaming_world,
+        "_probe_ram_availability",
+        lambda: CapabilityResult.available(
+            RamAvailability(total_bytes=100, available_bytes=50),
+            reason_code="ram_availability_detected",
+        ),
+    )
+    monkeypatch.setattr(
+        streaming_world,
+        "_probe_gpu_memory_budget",
+        lambda _vendor=None: CapabilityResult.available(
+            GpuMemoryBudget(1),
+            reason_code="gpu_memory_detected",
+        ),
+    )
+
+    world = _streaming_world_with_cells(
+        monkeypatch,
+        cells,
+        ram_available=100,
+        workers=1,
+    )
+    try:
+        assert world._streaming_memory_decision.mode is StreamingMemoryMode.NORMAL
+        assert world._ram_availability_capability.value == RamAvailability(100, 50)
+        assert world._gpu_memory_capability.value == GpuMemoryBudget(1)
+        assert world.config.max_loaded_chunks == 1
     finally:
         world.shutdown()
 

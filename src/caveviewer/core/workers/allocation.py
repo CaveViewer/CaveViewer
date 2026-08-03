@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+from caveviewer.core.capabilities import RamAvailability
 from caveviewer.core.hardware.system_memory import RamSnapshot
 
 
@@ -25,7 +26,9 @@ class WorkerAllocation:
     effective_workers: int
 
 
-def can_start_additional_worker(snapshot: RamSnapshot | None) -> bool:
+def can_start_additional_worker(
+    snapshot: RamSnapshot | RamAvailability | None,
+) -> bool:
     """Allow pool growth only while current system RAM use is below 80%.
 
     The first worker is always admitted by each pool. If current RAM cannot be
