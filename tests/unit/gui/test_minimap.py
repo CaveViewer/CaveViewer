@@ -77,23 +77,27 @@ def test_minimap_static_geometry_is_deduplicated_to_visible_pixels():
     assert len(list(minimap._visible_footprint_pixels((800, 600)))) == 1
 
 
-def test_minimap_static_geometry_can_include_centerline_overlay():
+def test_minimap_ignores_navigation_metadata():
     manifest = {
         "chunk_size": 10.0,
         "chunks": {"0_0_0": {"bounds_min": [0, 0, 0], "bounds_max": [10, 10, 10]}},
+        "navigation": {
+            "version": 1,
+            "method": "footprint_centerline_paths_v1",
+            "routes": [{"id": "centerline-0", "points": [[0.0, 0.0, 0.0]]}],
+        },
     }
-    context = _TrackingContext()
-    minimap = Minimap(
-        context,
-        manifest,
-        centerline_points_xz=((0.0, 0.0), (10.0, 0.0), (20.0, 10.0)),
-    )
-    plain_minimap = Minimap(_TrackingContext(), manifest)
+    plain_manifest = {
+        "chunk_size": 10.0,
+        "chunks": {"0_0_0": {"bounds_min": [0, 0, 0], "bounds_max": [10, 10, 10]}},
+    }
+    minimap = Minimap(_TrackingContext(), manifest)
+    plain_minimap = Minimap(_TrackingContext(), plain_manifest)
 
-    _, centerline_vert_count = minimap._build_static_geom((800, 600))
-    _, plain_vert_count = plain_minimap._build_static_geom((800, 600))
+    navigation_geom = minimap._build_static_geom((800, 600))
+    plain_geom = plain_minimap._build_static_geom((800, 600))
 
-    assert centerline_vert_count > plain_vert_count
+    assert navigation_geom == plain_geom
 
 
 def test_minimap_active_route_overlay_invalidates_static_geometry():
@@ -101,11 +105,7 @@ def test_minimap_active_route_overlay_invalidates_static_geometry():
         "chunk_size": 10.0,
         "chunks": {"0_0_0": {"bounds_min": [0, 0, 0], "bounds_max": [10, 10, 10]}},
     }
-    minimap = Minimap(
-        _TrackingContext(),
-        manifest,
-        centerline_points_xz=((0.0, 0.0), (10.0, 0.0)),
-    )
+    minimap = Minimap(_TrackingContext(), manifest)
 
     _, baseline_vert_count = minimap._build_static_geom((800, 600))
     minimap._static_geom_window_size = (800, 600)
