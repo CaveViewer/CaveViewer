@@ -56,8 +56,9 @@ def _install_update_manager_module(monkeypatch):
     instances = []
 
     class FakeUpdateManager:
-        def __init__(self, current_version):
+        def __init__(self, current_version, *, platform_runtime=None):
             self.current_version = current_version
+            self.platform_runtime = platform_runtime
             self.shutdown_calls = 0
             instances.append(self)
 
@@ -458,12 +459,14 @@ def test_main_force_update_flag_configures_process_owned_manager(monkeypatch):
     assert len(managers) == 1
     manager = managers[0]
     assert manager.current_version == "0.0.0"
+    assert manager.platform_runtime is not None
     assert manager.shutdown_calls == 1
     assert splash_calls == [
         {
             "program_name": app.APP_NAME,
             "version": "0.0.0",
             "update_manager": manager,
+            "desktop_services": manager.platform_runtime.desktop_services,
         }
     ]
     assert "--force-update" not in app.sys.argv

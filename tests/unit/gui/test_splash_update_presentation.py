@@ -15,6 +15,7 @@ from caveviewer.gui import (
 )
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
+from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
 
@@ -113,6 +114,26 @@ def test_non_actionable_update_states_remain_quiet(state):
     )
 
     assert presentation == splash_screen._UpdatePresentation()
+
+
+def test_disabled_update_gate_shows_its_safe_explanation_without_an_action():
+    presentation = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.IDLE,
+            current_version="1.0.63",
+            automatic_update=FeatureDecision(
+                feature=FeatureId.AUTOMATIC_UPDATE,
+                state=FeatureState.DISABLED,
+                reason_code="automatic_update_target_unsupported",
+                explanation="Automatic updates are unavailable for this installation.",
+            ),
+        ),
+        "Show in Finder",
+    )
+
+    assert presentation == splash_screen._UpdatePresentation(
+        status_text="Automatic updates are unavailable for this installation."
+    )
 
 
 def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):

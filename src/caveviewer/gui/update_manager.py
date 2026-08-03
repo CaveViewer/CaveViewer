@@ -17,10 +17,16 @@ from dataclasses import dataclass
 from typing import Callable
 
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.gui.features import (
+    FeatureDecision,
+    FeatureId,
+    FeatureState,
+)
 from caveviewer.gui import update_checker
 from caveviewer.gui.platform import get_desktop_services, get_platform_adapter
 from caveviewer.gui.platform.base import SplashPlatformAdapter
 from caveviewer.gui.platform.desktop_services import DesktopInhibitor, DesktopServices
+from caveviewer.gui.platform.runtime import PlatformRuntime
 from caveviewer.gui.update_checker import (
     DownloadCancelled,
     UpdateCheckResult,
@@ -87,6 +93,7 @@ class UpdateSnapshot:
     total_bytes: int | None = None
     payload_path: str | None = None
     error: str | None = None
+    automatic_update: FeatureDecision | None = None
 
     @property
     def progress_percent(self) -> int:
@@ -108,12 +115,56 @@ class UpdateManager:
         download_update: Callable[..., None] | None = None,
         desktop_services: DesktopServices | None = None,
         temp_root: str | None = None,
+        platform_runtime: PlatformRuntime | None = None,
     ):
         self._current_version = current_version
-        self._platform_adapter = platform_adapter or get_platform_adapter()
-        self._desktop_services = desktop_services or get_desktop_services()
+        if (
+            platform_runtime is not None
+            and platform_adapter is not None
+            and platform_adapter is not platform_runtime.platform_adapter
+        ):
+            raise ValueError(
+                "platform_adapter must match the injected platform_runtime"
+            )
+        if (
+            platform_runtime is not None
+            and desktop_services is not None
+            and desktop_services is not platform_runtime.desktop_services
+        ):
+            raise ValueError(
+                "desktop_services must match the injected platform_runtime"
+            )
+
+        self._platform_runtime = platform_runtime
+        self._platform_adapter = (
+            platform_runtime.platform_adapter
+            if platform_runtime is not None
+            else platform_adapter or get_platform_adapter()
+        )
+        self._desktop_services = (
+            platform_runtime.desktop_services
+            if platform_runtime is not None
+            else desktop_services or get_desktop_services()
+        )
         self._check_for_update = check_for_update or update_checker.check_for_update
         self._download_update = download_update or update_checker.download_update
+        self._uses_runtime_check_configuration = (
+            platform_runtime is not None and check_for_update is None
+        )
+        self._uses_runtime_download_adapter = (
+            platform_runtime is not None and download_update is None
+        )
+        self._automatic_update_decision = (
+            platform_runtime.automatic_update_decision
+            if platform_runtime is not None
+            else FeatureDecision(
+                feature=FeatureId.AUTOMATIC_UPDATE,
+                state=FeatureState.ENABLED,
+                reason_code="automatic_update_legacy_runtime",
+                explanation="Automatic updates are available for this installation.",
+                route="signed_manifest",
+            )
+        )
         self._temp_root = temp_root
 
         self._lock = threading.RLock()
@@ -160,11 +211,17 @@ class UpdateManager:
                 total_bytes=self._total_bytes,
                 payload_path=self._payload_path,
                 error=self._error,
+                automatic_update=self._automatic_update_decision,
             )
 
     @property
     def reveal_action_label(self) -> str:
         return self._platform_adapter.download_reveal_action_label()
+
+    @property
+    def automatic_update_decision(self) -> FeatureDecision:
+        """Return the static gate enforced for this manager's update workflow."""
+        return self._automatic_update_decision
 
     def set_foreground_update_surface_active(self, active: bool) -> None:
         """Tell the manager whether an in-app update surface is visible.
@@ -180,6 +237,12 @@ class UpdateManager:
     def check_for_updates(self) -> bool:
         """Start the process's asynchronous check when the manager is idle."""
         with self._lock:
+            if not self._automatic_update_decision.allows_execution:
+                _LOG.info(
+                    "Automatic update check is gated: reason=%s",
+                    self._automatic_update_decision.reason_code,
+                )
+                return False
             if self._state != UpdateState.IDLE:
                 return False
             self._transition_locked(UpdateState.CHECKING)
@@ -215,10 +278,19 @@ class UpdateManager:
         result: UpdateCheckResult | None = None
         unexpected_error: Exception | None = None
         try:
-            result = self._check_for_update(
-                self._current_version,
-                install_channel=self._platform_adapter.install_channel(),
-            )
+            if self._uses_runtime_check_configuration:
+                assert self._platform_runtime is not None
+                result = self._check_for_update(
+                    self._current_version,
+                    install_channel=self._platform_adapter.install_channel(),
+                    configuration=self._platform_runtime.update_configuration,
+                    platform_adapter=self._platform_adapter,
+                )
+            else:
+                result = self._check_for_update(
+                    self._current_version,
+                    install_channel=self._platform_adapter.install_channel(),
+                )
         except Exception as exc:
             unexpected_error = exc
             _LOG.exception("Update check worker failed: %s", exc)
@@ -250,6 +322,12 @@ class UpdateManager:
     def start_download(self) -> bool:
         """Start or retry the available update without blocking the caller."""
         with self._lock:
+            if not self._automatic_update_decision.allows_execution:
+                _LOG.info(
+                    "Automatic update download is gated: reason=%s",
+                    self._automatic_update_decision.reason_code,
+                )
+                return False
             if self._state not in {UpdateState.AVAILABLE, UpdateState.FAILED}:
                 return False
             if self._result is None or not self._result.download_url:
@@ -381,14 +459,19 @@ class UpdateManager:
                 dir=self._temp_root,
             )
             payload_path = os.path.join(download_dir, "update_payload.bin")
+            download_kwargs = {
+                "expected_sha256": result.download_sha256,
+                "progress_cb": on_progress,
+                "cancel_cb": cancel_event.is_set,
+                "phase_cb": on_phase,
+            }
+            if self._uses_runtime_download_adapter:
+                download_kwargs["platform_adapter"] = self._platform_adapter
             self._download_update(
                 result.download_url,
                 result.download_size_bytes,
                 payload_path,
-                expected_sha256=result.download_sha256,
-                progress_cb=on_progress,
-                cancel_cb=cancel_event.is_set,
-                phase_cb=on_phase,
+                **download_kwargs,
             )
             if cancel_event.is_set():
                 raise DownloadCancelled("Download cancelled")

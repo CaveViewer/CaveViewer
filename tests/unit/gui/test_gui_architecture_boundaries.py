@@ -10,6 +10,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GUI_ROOT = REPO_ROOT / "src" / "caveviewer" / "gui"
 GUI_PLATFORM_ROOT = GUI_ROOT / "platform"
+GUI_FEATURES_ROOT = GUI_ROOT / "features"
 APP_MODULE = "caveviewer.app"
 
 
@@ -141,6 +142,35 @@ def test_platform_checks_stay_inside_gui_platform_adapters():
                             f"uses platform.{node.attr}",
                         )
                     )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_feature_policies_do_not_import_platform_or_side_effect_modules():
+    """Keep feature decisions as pure transforms of injected capability facts."""
+    forbidden_modules = {"os", "platform", "subprocess", "sys", "tkinter"}
+    violations: list[Violation] = []
+
+    for path in sorted(GUI_FEATURES_ROOT.rglob("*.py")):
+        for node in ast.walk(_parse_module(path)):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    module_root = alias.name.partition(".")[0]
+                    if module_root in forbidden_modules:
+                        violations.append(
+                            Violation(path, node.lineno, f"imports {alias.name}")
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module == "caveviewer.gui.platform" or module.startswith(
+                    "caveviewer.gui.platform."
+                ):
+                    violations.append(
+                        Violation(path, node.lineno, f"imports {module}")
+                    )
+                elif module.partition(".")[0] in forbidden_modules:
+                    violations.append(
+                        Violation(path, node.lineno, f"imports {module}"))
 
     assert not violations, _format_violations(violations)
 

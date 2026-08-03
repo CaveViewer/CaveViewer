@@ -253,10 +253,17 @@ class TkDesktopServices:
         return NoopDesktopInhibitor()
 
 
-def get_desktop_services() -> DesktopServices:
-    """Return the desktop integration selected for this operating system."""
+def get_desktop_services(*, platform_name: str | None = None) -> DesktopServices:
+    """Return desktop integration for an operating system selected by the caller.
+
+    ``platform_name`` is an injectable composition-time fact.  The default
+    retains the historical behavior of using the running interpreter's
+    platform, while ``PlatformRuntime`` can compose one shared service for its
+    adapter and GUI clients without a global singleton.
+    """
     fallback = TkDesktopServices()
-    if sys.platform.startswith("linux"):
+    resolved_platform_name = platform_name or sys.platform
+    if resolved_platform_name.startswith("linux"):
         # Import lazily so non-Linux bundles do not load the D-Bus transport.
         from caveviewer.gui.platform.portal import LinuxPortalDesktopServices
 

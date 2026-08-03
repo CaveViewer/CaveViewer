@@ -1,0 +1,46 @@
+"""Test immutable, GUI-independent capability snapshot values."""
+
+from __future__ import annotations
+
+import pytest
+
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    CapabilitySource,
+    CapabilityStatus,
+)
+
+
+def test_capability_result_copies_and_freezes_scalar_evidence():
+    evidence = {"install_channel": "linux_app", "attempt": 1}
+
+    result = CapabilityResult.available(
+        "signed_manifest",
+        reason_code="automatic_update_target_available",
+        source=CapabilitySource.DETECTED,
+        evidence=evidence,
+    )
+    evidence["attempt"] = 2
+
+    assert result.status is CapabilityStatus.AVAILABLE
+    assert result.value == "signed_manifest"
+    assert dict(result.evidence) == {
+        "install_channel": "linux_app",
+        "attempt": 1,
+    }
+    with pytest.raises(TypeError):
+        result.evidence["new"] = "value"  # type: ignore[index]
+
+
+@pytest.mark.parametrize("reason_code", ("", "   "))
+def test_capability_result_requires_a_stable_reason_code(reason_code):
+    with pytest.raises(ValueError, match="reason_code"):
+        CapabilityResult.unavailable(reason_code=reason_code)
+
+
+def test_capability_result_rejects_mutable_evidence_values():
+    with pytest.raises(TypeError, match="scalar diagnostics"):
+        CapabilityResult.unknown(
+            reason_code="probe_failed",
+            evidence={"details": ["mutable"]},  # type: ignore[dict-item]
+        )

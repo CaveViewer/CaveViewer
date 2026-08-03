@@ -136,6 +136,7 @@ _KNOWN_CAVEVIEWER_ENV_VARS = (
     "CAVEVIEWER_UPDATE_BRANCH",
     "CAVEVIEWER_UPDATE_CHANNEL",
     "CAVEVIEWER_UPDATE_MANIFEST_URL",
+    "CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL",
     "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
     "CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME",
     "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
@@ -662,16 +663,22 @@ def main():
     # GUI mode: show the splash screen, run the viewer, then show the
     # splash screen again so the user can open another map or exit.
     _splash_version = "0.0.0" if _force_update else __version__
+    from caveviewer.gui.platform.runtime import create_platform_runtime
     from caveviewer.gui.splash_screen import show_splash_screen
     from caveviewer.gui.update_manager import UpdateManager
 
-    update_manager = UpdateManager(current_version=_splash_version)
+    platform_runtime = create_platform_runtime()
+    update_manager = UpdateManager(
+        current_version=_splash_version,
+        platform_runtime=platform_runtime,
+    )
     try:
         while True:
             folder = show_splash_screen(
                 program_name=APP_NAME,
                 version=_splash_version,
                 update_manager=update_manager,
+                desktop_services=platform_runtime.desktop_services,
             )
 
             if not folder:
