@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import ctypes
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 import re
 import subprocess
 import sys
+
+from caveviewer.core.capabilities import CapabilityResult, RamAvailability
 
 LINUX_MEMINFO_MAX_BYTES = 1024 * 1024
 _DARWIN_VM_STAT_PAGE_SIZE_RE = re.compile(r"page size of\s+(\d+)\s+bytes")
@@ -237,6 +240,55 @@ def detect_ram_snapshot() -> RamSnapshot | None:
         if snapshot is not None:
             return snapshot
     return _sysconf_ram_snapshot()
+
+
+def probe_ram_availability(
+    *,
+    snapshot_detector: Callable[[], RamSnapshot | None] | None = None,
+) -> CapabilityResult[RamAvailability]:
+    """Return a typed current-RAM fact without changing numeric fallback APIs.
+
+    This represents current availability, which must stay unknown when no
+    platform probe can measure it. Callers that only need a total-RAM fallback
+    continue to use ``detect_total_ram_bytes()`` unchanged.
+    """
+    detect_snapshot = snapshot_detector or detect_ram_snapshot
+    try:
+        snapshot = detect_snapshot()
+    except Exception:
+        return CapabilityResult.unknown(
+            reason_code="ram_availability_probe_failed",
+            evidence={"probe": "ram_snapshot"},
+        )
+
+    if snapshot is None:
+        return CapabilityResult.unknown(
+            reason_code="ram_availability_unknown",
+            evidence={"probe": "ram_snapshot"},
+        )
+
+    try:
+        total_bytes = int(snapshot.total_bytes)
+        available_bytes = int(snapshot.available_bytes)
+    except (TypeError, ValueError):
+        return CapabilityResult.unknown(
+            reason_code="ram_availability_invalid",
+            evidence={"probe": "ram_snapshot"},
+        )
+    if total_bytes <= 0 or available_bytes < 0:
+        return CapabilityResult.unknown(
+            reason_code="ram_availability_invalid",
+            evidence={"probe": "ram_snapshot"},
+        )
+
+    return CapabilityResult.available(
+        RamAvailability(
+            total_bytes=total_bytes,
+            available_bytes=min(available_bytes, total_bytes),
+        ),
+        reason_code="ram_availability_detected",
+        evidence={"probe": "ram_snapshot"},
+    )
 
 
 def detect_total_ram_bytes() -> int:

@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import os
+import math
 from pathlib import Path
 import subprocess
 import sys
-from typing import Callable
+from typing import Callable, Mapping
 
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    CapabilitySource,
+    GpuMemoryBudget,
+)
 from caveviewer.core.diagnostics.logging import get_logger
 
 
@@ -137,14 +143,35 @@ def _unknown_gpu_memory_fallback_bytes() -> tuple[int, str]:
     return UNKNOWN_GPU_MEMORY_FALLBACK_BYTES, "conservative fallback"
 
 
-def detect_total_gpu_memory_bytes(
+def _configured_gpu_memory_override_bytes(
+    environment: Mapping[str, str],
+) -> int | None:
+    """Parse the optional user ceiling without deciding how it is applied."""
+    override_gb = str(environment.get("CAVEVIEWER_GPU_MEMORY_GB", "")).strip()
+    if not override_gb:
+        return None
+    try:
+        value = float(override_gb)
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value <= 0.0:
+        return None
+    try:
+        override_bytes = int(value * (1024 ** 3))
+    except (OverflowError, ValueError):
+        return None
+    return override_bytes if override_bytes > 0 else None
+
+
+def probe_gpu_memory_budget(
     gpu_vendor: str | None = None,
     *,
     nvidia_detector: Callable[[], int | None] | None = None,
     amd_detector: Callable[[], int | None] | None = None,
     logger=None,
-) -> int | None:
-    """Best-effort active-GPU memory budget with a conservative fallback.
+    environment: Mapping[str, str] | None = None,
+) -> CapabilityResult[GpuMemoryBudget]:
+    """Report an active-GPU budget with provenance and a safe fallback.
 
     ``CAVEVIEWER_GPU_MEMORY_GB`` is treated as a user-requested ceiling, not a
     value that blindly overrides hardware discovery. If platform detection can
@@ -154,16 +181,9 @@ def detect_total_gpu_memory_bytes(
     log = logger or _LOG
     nvidia_detector = nvidia_detector or detect_nvidia_gpu_memory_bytes
     amd_detector = amd_detector or detect_linux_amd_gpu_memory_bytes
+    values = os.environ if environment is None else environment
 
-    override_bytes = None
-    override_gb = os.environ.get("CAVEVIEWER_GPU_MEMORY_GB", "").strip()
-    if override_gb:
-        try:
-            value = float(override_gb)
-            if value > 0.0:
-                override_bytes = int(value * (1024 ** 3))
-        except ValueError:
-            pass
+    override_bytes = _configured_gpu_memory_override_bytes(values)
 
     normalized_vendor = (gpu_vendor or "").strip().casefold()
     vendor_is_nvidia = "nvidia" in normalized_vendor
@@ -175,11 +195,13 @@ def detect_total_gpu_memory_bytes(
 
     detected_bytes = None
     detected_source = None
+    detected_route = None
     if vendor_is_nvidia or not normalized_vendor:
         memory_bytes = nvidia_detector()
         if memory_bytes is not None:
             detected_bytes = memory_bytes
             detected_source = "NVIDIA GPU memory via nvidia-smi"
+            detected_route = "nvidia_smi"
 
     if detected_bytes is None and sys.platform.startswith("linux") and (
         vendor_is_amd or not normalized_vendor
@@ -188,6 +210,7 @@ def detect_total_gpu_memory_bytes(
         if memory_bytes is not None:
             detected_bytes = memory_bytes
             detected_source = "AMD GPU memory budget via Linux DRM sysfs"
+            detected_route = "linux_drm_sysfs"
 
     if detected_bytes is not None:
         if override_bytes is None:
@@ -196,7 +219,12 @@ def detect_total_gpu_memory_bytes(
                 detected_source,
                 detected_bytes / (1024 ** 3),
             )
-            return detected_bytes
+            return CapabilityResult.available(
+                GpuMemoryBudget(detected_bytes),
+                reason_code="gpu_memory_detected",
+                source=CapabilitySource.DETECTED,
+                evidence={"detector": detected_route or "unknown"},
+            )
 
         effective_bytes = min(override_bytes, detected_bytes)
         if override_bytes > detected_bytes:
@@ -205,14 +233,31 @@ def detect_total_gpu_memory_bytes(
                 override_bytes / (1024 ** 3),
                 detected_bytes / (1024 ** 3),
             )
-        else:
-            log.info(
-                "Using configured GPU memory override %.1f GB below detected %s %.1f GB.",
-                override_bytes / (1024 ** 3),
-                detected_source,
-                detected_bytes / (1024 ** 3),
+            return CapabilityResult.available(
+                GpuMemoryBudget(effective_bytes),
+                reason_code="gpu_memory_detected",
+                source=CapabilitySource.DETECTED,
+                evidence={
+                    "detector": detected_route or "unknown",
+                    "override": "capped_to_detected",
+                },
             )
-        return effective_bytes
+
+        log.info(
+            "Using configured GPU memory override %.1f GB below detected %s %.1f GB.",
+            override_bytes / (1024 ** 3),
+            detected_source,
+            detected_bytes / (1024 ** 3),
+        )
+        return CapabilityResult.available(
+            GpuMemoryBudget(effective_bytes),
+            reason_code="gpu_memory_user_cap",
+            source=CapabilitySource.USER_OVERRIDE,
+            evidence={
+                "detector": detected_route or "unknown",
+                "override": "below_detected",
+            },
+        )
 
     if override_bytes is not None:
         log.warning(
@@ -220,7 +265,12 @@ def detect_total_gpu_memory_bytes(
             "Automatic active-GPU memory detection was unavailable.",
             override_bytes / (1024 ** 3),
         )
-        return override_bytes
+        return CapabilityResult.available(
+            GpuMemoryBudget(override_bytes),
+            reason_code="gpu_memory_user_override_unverified",
+            source=CapabilitySource.USER_OVERRIDE,
+            evidence={"override": "unverified"},
+        )
 
     fallback_bytes, fallback_label = _unknown_gpu_memory_fallback_bytes()
     log.warning(
@@ -228,4 +278,26 @@ def detect_total_gpu_memory_bytes(
         fallback_label,
         fallback_bytes / (1024 ** 3),
     )
-    return fallback_bytes
+    return CapabilityResult.available(
+        GpuMemoryBudget(fallback_bytes),
+        reason_code="gpu_memory_conservative_fallback",
+        source=CapabilitySource.CONSERVATIVE_FALLBACK,
+        evidence={"fallback": "conservative"},
+    )
+
+
+def detect_total_gpu_memory_bytes(
+    gpu_vendor: str | None = None,
+    *,
+    nvidia_detector: Callable[[], int | None] | None = None,
+    amd_detector: Callable[[], int | None] | None = None,
+    logger=None,
+) -> int | None:
+    """Return the legacy numeric GPU budget from the typed capability probe."""
+    result = probe_gpu_memory_budget(
+        gpu_vendor,
+        nvidia_detector=nvidia_detector,
+        amd_detector=amd_detector,
+        logger=logger,
+    )
+    return result.value.total_bytes if result.value is not None else None

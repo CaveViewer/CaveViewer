@@ -11,10 +11,13 @@ from .model import (
     CapabilitySource,
     CapabilityStatus,
 )
+from .hardware import GpuMemoryBudget, RamAvailability
 
 __all__ = [
     "CapabilityEvidenceValue",
     "CapabilityResult",
     "CapabilitySource",
     "CapabilityStatus",
+    "GpuMemoryBudget",
+    "RamAvailability",
 ]
