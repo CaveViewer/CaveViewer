@@ -34,13 +34,7 @@ from moderngl_window.context.base import KeyModifiers
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.core.navigation.cache_metadata import cached_centerline_path
-from caveviewer.core.navigation.centerline import (
-    CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
-    generate_centerline_path,
-)
 from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
-from caveviewer.core.navigation.route import NavigationConfigurationError
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
 from caveviewer.core.navigation.voxel_volume import VOXEL_VOLUME_METHOD
 from caveviewer.gui.chunk_upload import ChunkUploadManager
@@ -1388,11 +1382,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # from the manifest's chunk bounding boxes -- no extra rendering
         # pass or GPU cost beyond this tiny 2D overlay.
         minimap_started_at = time.perf_counter()
-        self.minimap = Minimap(
-            self.ctx,
-            self.manifest,
-            centerline_points_xz=self._minimap_centerline_points_xz(self.manifest),
-        )
+        self.minimap = Minimap(self.ctx, self.manifest)
         self._log_main_thread_stall(
             "minimap setup",
             time.perf_counter() - minimap_started_at,
@@ -2412,26 +2402,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         atlas_side = 2 ** _math.ceil(_math.log2(_math.sqrt(total_px))) if total_px > 0 else 0
         _LOG.info(f"  Estimated atlas needed  : {atlas_side}x{atlas_side} px "
               f"({atlas_side*atlas_side*3/1024/1024:.0f} MB)")
-
-    def _minimap_centerline_points_xz(
-        self,
-        manifest: Mapping[str, Any],
-    ) -> tuple[tuple[float, float], ...]:
-        """Return an optional centerline overlay for the minimap."""
-        cached_path = cached_centerline_path(manifest)
-        if cached_path is not None:
-            return cached_path.points_xz
-
-        if not _env_bool("CAVEVIEWER_MINIMAP_CENTERLINE", False):
-            return ()
-        try:
-            return generate_centerline_path(
-                manifest,
-                component_selection=CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH,
-            ).points_xz
-        except NavigationConfigurationError as exc:
-            _LOG.debug("Minimap centerline unavailable: %s", exc)
-            return ()
 
     def _recorded_dive_is_active(self) -> bool:
         controller = getattr(self, "_recorded_dive_controller", None)

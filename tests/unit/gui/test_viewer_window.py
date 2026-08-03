@@ -1416,63 +1416,6 @@ def test_window_shortcut_uses_command_modifier_on_macos():
     assert window._handle_window_shortcut(87, SimpleNamespace()) is False
     assert closed == ["closed"]
 
-
-
-
-def test_minimap_centerline_overlay_uses_cached_navigation_by_default(monkeypatch):
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    manifest = {"footprint_cells": [], "footprint_cell_size": 1.0}
-
-    monkeypatch.delenv("CAVEVIEWER_MINIMAP_CENTERLINE", raising=False)
-    monkeypatch.setattr(
-        viewer_window,
-        "cached_centerline_path",
-        lambda _manifest: SimpleNamespace(points_xz=((1.0, 2.0), (3.0, 4.0))),
-    )
-
-    assert window._minimap_centerline_points_xz(manifest) == (
-        (1.0, 2.0),
-        (3.0, 4.0),
-    )
-
-
-def test_minimap_generated_centerline_overlay_remains_opt_in(monkeypatch):
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    manifest = {"footprint_cells": [], "footprint_cell_size": 1.0}
-    calls = []
-
-    def fake_generate_centerline_path(_manifest, *, component_selection):
-        calls.append(component_selection)
-        return SimpleNamespace(points_xz=((1.0, 2.0), (3.0, 4.0)))
-
-    monkeypatch.delenv("CAVEVIEWER_MINIMAP_CENTERLINE", raising=False)
-    monkeypatch.setattr(
-        viewer_window,
-        "cached_centerline_path",
-        lambda _manifest: None,
-    )
-    monkeypatch.setattr(
-        viewer_window,
-        "generate_centerline_path",
-        fake_generate_centerline_path,
-    )
-
-    assert window._minimap_centerline_points_xz(manifest) == ()
-    assert calls == []
-
-    monkeypatch.setenv("CAVEVIEWER_MINIMAP_CENTERLINE", "1")
-
-    assert window._minimap_centerline_points_xz(manifest) == (
-        (1.0, 2.0),
-        (3.0, 4.0),
-    )
-    assert calls == [viewer_window.CENTERLINE_COMPONENT_SELECTION_LONGEST_PATH]
-
-
-
-
-
-
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     calls = []
     monkeypatch.setattr(

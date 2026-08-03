@@ -63,13 +63,7 @@ class Minimap:
     CELL_PIXEL_SIZE = 3.0  # how big each occupied chunk-cell renders as, in panel pixels
     _MAX_STATIC_OCCUPANCY_PIXELS = PANEL_SIZE * PANEL_SIZE
 
-    def __init__(
-        self,
-        ctx: moderngl.Context,
-        manifest: dict,
-        *,
-        centerline_points_xz: Iterable[tuple[float, float]] | None = None,
-    ):
+    def __init__(self, ctx: moderngl.Context, manifest: dict):
         """
         manifest: the same chunk manifest produced by caveviewer.core.chunking.builder
         (build_cache) / loaded via chunker.load_manifest(). Used once here
@@ -83,11 +77,10 @@ class Minimap:
         self._footprint_cells_flat = None
         self.occupied_xz = set()
         self._footprint_cell_count = 0
-        self._centerline_points_xz = tuple(centerline_points_xz or ())
         self._active_route_points_xz: tuple[tuple[float, float], ...] = ()
         self._compute_footprint(manifest)
 
-        # Static geometry (background + footprint + border) and dynamic
+        # Static geometry (background + footprint + active route + border) and dynamic
         # geometry (camera + bookmark markers) are kept in separate buffers.
         # That avoids re-uploading thousands of static footprint vertices
         # every frame just because the camera arrow moved.
@@ -127,7 +120,7 @@ class Minimap:
         self,
         points: Iterable[tuple[float, float]] | None,
     ) -> None:
-        """Set the highlighted route overlay shown on top of the centerline."""
+        """Set the highlighted route overlay shown over the minimap footprint."""
         normalized = tuple(
             (float(point[0]), float(point[1]))
             for point in (points or ())
@@ -389,13 +382,6 @@ class Minimap:
         for px, py in self._visible_footprint_pixels(window_size):
             add_quad(px - half, py - half, px + half, py + half, (0.45, 0.52, 0.64, 0.85))
 
-        self._add_route_geom(
-            verts,
-            window_size,
-            self._centerline_points_xz,
-            color=(0.10, 0.90, 0.78, 0.72),
-            thickness_px=2.0,
-        )
         self._add_route_geom(
             verts,
             window_size,
