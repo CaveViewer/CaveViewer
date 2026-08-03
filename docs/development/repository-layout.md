@@ -18,7 +18,8 @@ src/caveviewer/benchmarking/map_runner.py     local map benchmark orchestration 
 src/caveviewer/benchmarking/results.py        benchmark scenario/results model and controller
 src/caveviewer/benchmarking/routes.py         benchmark-specific route generation
 src/caveviewer/core/                          parsing, cache, streaming, and non-UI policy
-src/caveviewer/core/capabilities/             immutable cross-layer capability values
+src/caveviewer/core/capabilities/             immutable cross-layer capability values and hardware snapshots
+src/caveviewer/core/capabilities/hardware.py   typed GPU-memory and RAM-availability values
 src/caveviewer/core/json_io.py                 bounded JSON loading for core inputs
 src/caveviewer/core/map/                      map discovery, cache, and import workflow
 src/caveviewer/core/map/cache_paths.py         map-cache location policy
@@ -37,10 +38,10 @@ src/caveviewer/core/chunking/upload.py         CPU upload preparation and vertex
 src/caveviewer/core/diagnostics/              diagnostics and logging policy
 src/caveviewer/core/diagnostics/logging.py     runtime logging and console progress
 src/caveviewer/core/diagnostics/application.py  process lifecycle and exception diagnostics
-src/caveviewer/core/hardware/                 hardware capability and memory policy
-src/caveviewer/core/hardware/gpu_memory.py     active-GPU memory detection and fallbacks
+src/caveviewer/core/hardware/                 hardware probes and numeric compatibility APIs
+src/caveviewer/core/hardware/gpu_memory.py     active-GPU memory capability probes and numeric fallbacks
 src/caveviewer/core/hardware/memory_targets.py RAM/GPU utilization target parsing
-src/caveviewer/core/hardware/system_memory.py  system RAM detection
+src/caveviewer/core/hardware/system_memory.py  system-RAM availability probes and total-RAM fallback
 src/caveviewer/core/streaming/                 runtime chunk streaming policy
 src/caveviewer/core/streaming/world.py         worker lifecycle and render callbacks
 src/caveviewer/core/streaming/scheduler.py     backlog, selection, and eviction policy
