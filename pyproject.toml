@@ -40,6 +40,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "caveviewer.resources" = [
     "images/*.png",
+    "images/ui/*.svg",
     "shaders/*.frag",
     "shaders/*.vert",
     "*.pem",
@@ -76,7 +77,7 @@ omit = [
 show_missing = true
 skip_covered = true
 exclude_also = [
-    "if __name__ == .__main__.:",
+    "if __name__ == .__main__:",
     "if TYPE_CHECKING:",
 ]
 

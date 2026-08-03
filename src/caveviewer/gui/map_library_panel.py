@@ -3,13 +3,38 @@
 from __future__ import annotations
 
 import tkinter as tk
-import tkinter.font as tkfont
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
 
 MenuAction = tuple[str, Callable[[], None]]
 MenuActionsFactory = Callable[["MapLibraryRowWidgets"], Iterable[MenuAction]]
+
+
+@dataclass(frozen=True)
+class MapLibraryActionVisual:
+    """Presentation-only icon and interaction metadata for one row action."""
+
+    icon: str
+    tooltip: str
+    row_activates: bool = False
+
+
+def map_library_action_visual(
+    action_text: str,
+    *,
+    show_stop_progress: bool = False,
+) -> MapLibraryActionVisual:
+    """Map the workflow's stable action labels to compact row visuals."""
+    if show_stop_progress:
+        return MapLibraryActionVisual("stop-progress", "Stop download")
+    if action_text == "Open":
+        return MapLibraryActionVisual("chevron-right", "Open map", True)
+    if action_text == "Get":
+        return MapLibraryActionVisual("download", "Download map")
+    if action_text == "Retry":
+        return MapLibraryActionVisual("retry", "Retry download")
+    return MapLibraryActionVisual("none", "")
 
 
 @dataclass(frozen=True)
@@ -41,11 +66,9 @@ class MapLibraryPanelStyle:
     action_progress_ring_diameter: int
     action_progress_ring_stroke_width: int
     action_stop_size: int
-    action_button_width: int
-    action_button_pad_x: int
-    action_button_pad_y: int
-    overflow_text: str
-    overflow_font: tuple
+    action_button_size: int
+    action_icon_stroke_width: int
+    overflow_button_size: int
     overflow_fg: str
     overflow_hover_fg: str
     overflow_hover_bg: str
@@ -65,7 +88,7 @@ class MapLibraryRowWidgets:
     """Tk widgets owned by one map-library row on the splash thread."""
 
     row_shell: object
-    leading_widget: object
+    overflow_button: object
     action_button: object
     metadata_label: object | None
 
@@ -207,6 +230,8 @@ class MapLibraryPanel:
                 menu.destroy()
             except tk.TclError:
                 pass
+        for widgets in (*self.recent_rows.values(), *self.standard_rows.values()):
+            self._hide_row_action_tooltips(widgets)
 
     def add_recent_row(
         self,
@@ -252,6 +277,7 @@ class MapLibraryPanel:
         """Remove a recent row and restore the empty note if needed."""
         row_widgets = self.recent_rows.pop(key, None)
         if row_widgets is not None and self._widget_exists(row_widgets.row_shell):
+            self._hide_row_action_tooltips(row_widgets)
             row_widgets.row_shell.destroy()
         self.ensure_recent_empty_note()
         self.sync_after_row_change()
@@ -287,6 +313,7 @@ class MapLibraryPanel:
         """Remove a standard-library row when refreshed catalog metadata drops it."""
         row_widgets = self.standard_rows.pop(key, None)
         if row_widgets is not None and self._widget_exists(row_widgets.row_shell):
+            self._hide_row_action_tooltips(row_widgets)
             row_widgets.row_shell.destroy()
         self.sync_after_row_change()
 
@@ -376,8 +403,8 @@ class MapLibraryPanel:
         """Refresh one overflow button after its action availability changes."""
         if row_widgets is None:
             return
-        if self._widget_exists(row_widgets.leading_widget):
-            self._refresh_overflow_button(row_widgets.leading_widget)
+        if self._widget_exists(row_widgets.overflow_button):
+            self._refresh_overflow_button(row_widgets.overflow_button)
 
     def reset_standard_progress(self, key: str) -> None:
         """Return a standard-library row action button to text mode."""
@@ -509,7 +536,7 @@ class MapLibraryPanel:
                     return ()
                 return menu_actions_factory(row_widgets)
 
-        leading_widget = self._create_overflow_button(
+        overflow_button = self._create_overflow_button(
             row_content,
             button_factory,
         )
@@ -519,7 +546,7 @@ class MapLibraryPanel:
             side="left",
             fill="x",
             expand=True,
-            padx=(self._px(6), self._px(8)),
+            padx=(0, self._px(8)),
             pady=self._px(5),
         )
 
@@ -558,11 +585,17 @@ class MapLibraryPanel:
             action=action,
         )
         self._configure_action_button_hover(action_button)
-        action_button.pack(side="right", padx=(0, self._px(12)), pady=self._px(5))
+        action_button.pack(side="right", padx=(0, self._px(4)), pady=self._px(5))
+
+        row_action_widgets = [row_content, text_column, name_label]
+        if metadata_label is not None:
+            row_action_widgets.append(metadata_label)
+        action_button._cv_row_action_widgets = tuple(row_action_widgets)
+        self._set_row_open_activation(action_button)
 
         row_widgets = MapLibraryRowWidgets(
             row_shell=row_shell,
-            leading_widget=leading_widget,
+            overflow_button=overflow_button,
             action_button=action_button,
             metadata_label=metadata_label,
         )
@@ -604,7 +637,7 @@ class MapLibraryPanel:
         text: str,
         action: Callable[[], None],
     ) -> tk.Canvas:
-        """Create the fixed-size canvas button used by map-library rows."""
+        """Create the compact icon control used by one map-library row."""
         style = self._style
         button_width, button_height = self._action_button_pixel_size()
         button = tk.Canvas(
@@ -614,7 +647,7 @@ class MapLibraryPanel:
             bg=style.button_bg,
             borderwidth=0,
             highlightthickness=1,
-            highlightbackground=style.button_border_color,
+            highlightbackground=style.panel_color,
             highlightcolor=style.button_border_color,
             cursor="hand2",
             takefocus=True,
@@ -623,28 +656,22 @@ class MapLibraryPanel:
         button._cv_action_text = text
         button._cv_show_stop_progress = False
         button._cv_progress_fraction = 0.0
-        self._bind_activation(button, action)
+        button._cv_action_visual = map_library_action_visual(text)
+        button._cv_row_action_widgets = ()
+        button._cv_tooltip_after_id = None
+        button._cv_tooltip = None
+        self._set_action_button(button, text, action)
         button.bind(
             "<Configure>",
             lambda _event, target=button: self._draw_action_button(target),
             add="+",
         )
-        self._draw_action_button(button)
         return button
 
     def _action_button_pixel_size(self) -> tuple[int, int]:
-        """Return a canvas size matching the old fixed-width label button."""
-        style = self._style
-        pad_x = self._px(style.action_button_pad_x)
-        pad_y = self._px(style.action_button_pad_y)
-        try:
-            font = tkfont.Font(font=style.small_font)
-            text_width = font.measure("0" * style.action_button_width)
-            text_height = font.metrics("linespace")
-        except tk.TclError:
-            text_width = self._px(style.action_button_width * 8)
-            text_height = self._px(16)
-        return max(1, text_width + pad_x * 2), max(1, text_height + pad_y * 2)
+        """Return the fixed square hit target shared by all row actions."""
+        size = max(1, self._px(self._style.action_button_size))
+        return size, size
 
     def _set_action_button_style(self, button, *, hovered: bool = False) -> None:
         enabled = getattr(button, "_cv_enabled", True)
@@ -661,30 +688,122 @@ class MapLibraryPanel:
             bg=bg,
             cursor="hand2" if enabled else "arrow",
             takefocus=enabled,
-            highlightbackground=border,
+            highlightbackground=style.panel_color,
             highlightcolor=border,
         )
 
     def _draw_action_button(self, button) -> None:
-        """Redraw the button text or in-button stop/progress affordance."""
+        """Redraw the state-specific icon inside one compact row control."""
         if not self._widget_exists(button):
             return
 
         button.delete("cv_action_content")
         width = self._canvas_dimension(button, "width")
         height = self._canvas_dimension(button, "height")
-        if getattr(button, "_cv_show_stop_progress", False):
+        visual = getattr(button, "_cv_action_visual", None)
+        icon = getattr(visual, "icon", "none")
+        if icon == "stop-progress":
             self._draw_action_stop_progress(button, width, height)
             return
+        color = (
+            self._style.button_fg
+            if getattr(button, "_cv_enabled", True)
+            else self._style.disabled_button_fg
+        )
+        if icon == "chevron-right":
+            self._draw_chevron_right(button, width, height, color)
+        elif icon == "download":
+            self._draw_download(button, width, height, color)
+        elif icon == "retry":
+            self._draw_retry(button, width, height, color)
 
-        enabled = getattr(button, "_cv_enabled", True)
-        fill = self._style.button_fg if enabled else self._style.disabled_button_fg
-        button.create_text(
-            width / 2,
+    def _draw_chevron_right(self, button, width: int, height: int, color: str) -> None:
+        inset = max(2, self._px(7))
+        button.create_line(
+            width / 2 - inset / 3,
+            height / 2 - inset / 2,
+            width / 2 + inset / 3,
             height / 2,
-            text=getattr(button, "_cv_action_text", ""),
-            font=self._style.small_font,
-            fill=fill,
+            width / 2 - inset / 3,
+            height / 2 + inset / 2,
+            fill=color,
+            width=max(1, self._px(self._style.action_icon_stroke_width)),
+            capstyle="round",
+            joinstyle="round",
+            tags="cv_action_content",
+        )
+
+    def _draw_download(self, button, width: int, height: int, color: str) -> None:
+        """Draw a quiet download arrow with an open tray, not a boxed button."""
+        stroke_width = max(1, self._px(self._style.action_icon_stroke_width))
+        center_x = width / 2
+        center_y = height / 2
+        button.create_line(
+            center_x,
+            center_y - self._px(8),
+            center_x,
+            center_y + self._px(2),
+            fill=color,
+            width=stroke_width,
+            capstyle="round",
+            tags="cv_action_content",
+        )
+        button.create_line(
+            center_x - self._px(4),
+            center_y - self._px(2),
+            center_x,
+            center_y + self._px(2),
+            center_x + self._px(4),
+            center_y - self._px(2),
+            fill=color,
+            width=stroke_width,
+            capstyle="round",
+            joinstyle="round",
+            tags="cv_action_content",
+        )
+        button.create_line(
+            center_x - self._px(7),
+            center_y + self._px(6),
+            center_x - self._px(7),
+            center_y + self._px(9),
+            center_x + self._px(7),
+            center_y + self._px(9),
+            center_x + self._px(7),
+            center_y + self._px(6),
+            fill=color,
+            width=stroke_width,
+            capstyle="round",
+            tags="cv_action_content",
+        )
+
+    def _draw_retry(self, button, width: int, height: int, color: str) -> None:
+        stroke_width = max(1, self._px(self._style.action_icon_stroke_width))
+        radius = max(2, self._px(7))
+        center_x = width / 2
+        center_y = height / 2
+        button.create_arc(
+            center_x - radius,
+            center_y - radius,
+            center_x + radius,
+            center_y + radius,
+            start=38,
+            extent=282,
+            style="arc",
+            outline=color,
+            width=stroke_width,
+            tags="cv_action_content",
+        )
+        button.create_line(
+            center_x + self._px(4),
+            center_y - self._px(7),
+            center_x + self._px(8),
+            center_y - self._px(7),
+            center_x + self._px(8),
+            center_y - self._px(3),
+            fill=color,
+            width=stroke_width,
+            capstyle="round",
+            joinstyle="round",
             tags="cv_action_content",
         )
 
@@ -768,9 +887,14 @@ class MapLibraryPanel:
         enabled: bool = True,
         show_stop_progress: bool = False,
     ) -> None:
+        self._hide_action_tooltip(button)
         button._cv_enabled = bool(enabled)
         button._cv_action_text = text
         button._cv_show_stop_progress = bool(show_stop_progress)
+        button._cv_action_visual = map_library_action_visual(
+            text,
+            show_stop_progress=show_stop_progress,
+        )
         if not show_stop_progress:
             button._cv_progress_fraction = 0.0
 
@@ -778,20 +902,122 @@ class MapLibraryPanel:
             if getattr(button, "_cv_enabled", True):
                 command()
 
+        button._cv_invoke = invoke_if_enabled
         self._bind_activation(button, invoke_if_enabled)
         self._set_action_button_style(button)
         self._draw_action_button(button)
+        self._set_row_open_activation(button)
+
+    def _set_row_open_activation(self, button) -> None:
+        """Make only ready map rows mouse-openable; downloads stay explicit."""
+        visual = getattr(button, "_cv_action_visual", None)
+        row_activates = bool(
+            getattr(visual, "row_activates", False)
+            and getattr(button, "_cv_enabled", True)
+        )
+
+        def invoke_row(_event=None):
+            callback = getattr(button, "_cv_invoke", None)
+            if callback is not None:
+                callback()
+            return "break"
+
+        for widget in getattr(button, "_cv_row_action_widgets", ()):
+            if not self._widget_exists(widget):
+                continue
+            try:
+                widget.unbind("<Button-1>")
+                widget.config(cursor="hand2" if row_activates else "arrow")
+                if row_activates:
+                    widget.bind("<Button-1>", invoke_row)
+            except tk.TclError:
+                continue
 
     def _configure_action_button_hover(self, button) -> None:
         def show_hover(_event) -> None:
             if getattr(button, "_cv_enabled", True):
                 self._set_action_button_style(button, hovered=True)
+                self._schedule_action_tooltip(button)
 
         def clear_hover(_event) -> None:
+            self._hide_action_tooltip(button)
             self._set_action_button_style(button)
 
         button.bind("<Enter>", show_hover)
         button.bind("<Leave>", clear_hover)
+        button.bind("<FocusIn>", lambda _event: self._schedule_action_tooltip(button))
+        button.bind("<FocusOut>", lambda _event: self._hide_action_tooltip(button))
+
+    def _schedule_action_tooltip(self, button) -> None:
+        """Show the text action name after a short hover or focus delay."""
+        if not getattr(button, "_cv_enabled", True):
+            return
+        visual = getattr(button, "_cv_action_visual", None)
+        text = getattr(visual, "tooltip", "")
+        if not text:
+            return
+        self._hide_action_tooltip(button)
+        try:
+            button._cv_tooltip_after_id = self.root.after(
+                500,
+                lambda target=button, tooltip_text=text: self._show_action_tooltip(
+                    target,
+                    tooltip_text,
+                ),
+            )
+        except tk.TclError:
+            pass
+
+    def _hide_action_tooltip(self, button) -> None:
+        after_id = getattr(button, "_cv_tooltip_after_id", None)
+        button._cv_tooltip_after_id = None
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        tooltip = getattr(button, "_cv_tooltip", None)
+        button._cv_tooltip = None
+        if self._widget_exists(tooltip):
+            try:
+                tooltip.destroy()
+            except tk.TclError:
+                pass
+
+    def _hide_row_action_tooltips(self, row_widgets: MapLibraryRowWidgets) -> None:
+        """Dispose of any tooltip windows associated with a row's controls."""
+        self._hide_action_tooltip(row_widgets.action_button)
+        self._hide_action_tooltip(row_widgets.overflow_button)
+
+    def _show_action_tooltip(self, button, text: str) -> None:
+        button._cv_tooltip_after_id = None
+        if not self._widget_exists(button) or not getattr(button, "_cv_enabled", True):
+            return
+        self._hide_action_tooltip(button)
+        try:
+            tooltip = tk.Toplevel(self.root)
+            tooltip.withdraw()
+            tooltip.overrideredirect(True)
+            tooltip.transient(self.root)
+            tooltip.configure(bg=self._style.menu_border)
+            label = tk.Label(
+                tooltip,
+                text=text,
+                font=self._style.small_font,
+                bg=self._style.menu_bg,
+                fg=self._style.menu_text,
+                padx=self._px(8),
+                pady=self._px(4),
+            )
+            label.pack()
+            x = button.winfo_rootx() + button.winfo_width() + self._px(4)
+            y = button.winfo_rooty()
+            tooltip.geometry(f"+{x}+{y}")
+            button._cv_tooltip = tooltip
+            tooltip.deiconify()
+            tooltip.lift()
+        except tk.TclError:
+            self._hide_action_tooltip(button)
 
     def _menu_actions(self, button) -> tuple[MenuAction, ...]:
         factory = getattr(button, "_cv_menu_actions_factory", None)
@@ -806,10 +1032,12 @@ class MapLibraryPanel:
     def _refresh_overflow_button(self, button) -> None:
         has_actions = bool(self._menu_actions(button))
         button._cv_has_menu_actions = has_actions
+        button._cv_enabled = has_actions
         style = self._style
+        if not has_actions:
+            self._hide_action_tooltip(button)
         button.config(
-            text=style.overflow_text if has_actions else "",
-            fg=style.overflow_fg if has_actions else style.panel_color,
+            bg=style.panel_color,
             cursor="hand2" if has_actions else "arrow",
             takefocus=has_actions,
             highlightbackground=style.panel_color,
@@ -817,6 +1045,36 @@ class MapLibraryPanel:
                 style.button_border_color if has_actions else style.panel_color
             ),
         )
+        self._draw_overflow_button(button)
+
+    def _draw_overflow_button(self, button) -> None:
+        """Draw the trailing map-actions icon without relying on a font glyph."""
+        if not self._widget_exists(button):
+            return
+        button.delete("cv_overflow_content")
+        if not getattr(button, "_cv_has_menu_actions", False):
+            return
+        color = (
+            self._style.overflow_hover_fg
+            if getattr(button, "_cv_overflow_hover", False)
+            else self._style.overflow_fg
+        )
+        width = self._canvas_dimension(button, "width")
+        height = self._canvas_dimension(button, "height")
+        radius = max(1, self._px(1.3))
+        center_x = width / 2
+        center_y = height / 2
+        spacing = max(3, self._px(5))
+        for y in (center_y - spacing, center_y, center_y + spacing):
+            button.create_oval(
+                center_x - radius,
+                y - radius,
+                center_x + radius,
+                y + radius,
+                fill=color,
+                outline="",
+                tags="cv_overflow_content",
+            )
 
     def _show_row_menu(self, button) -> None:
         self.close_active_menu()
@@ -897,15 +1155,13 @@ class MapLibraryPanel:
 
     def _create_overflow_button(self, parent, menu_actions_factory=None):
         style = self._style
-        button = tk.Label(
+        size = max(1, self._px(style.overflow_button_size))
+        button = tk.Canvas(
             parent,
-            text="",
-            font=style.overflow_font,
+            width=size,
+            height=size,
             bg=style.panel_color,
-            fg=style.panel_color,
-            width=1,
-            padx=0,
-            pady=0,
+            borderwidth=0,
             cursor="arrow",
             takefocus=False,
             highlightthickness=1,
@@ -914,34 +1170,43 @@ class MapLibraryPanel:
         )
         button._cv_menu_actions_factory = menu_actions_factory
         button._cv_has_menu_actions = False
+        button._cv_overflow_hover = False
+        button._cv_enabled = False
+        button._cv_action_visual = MapLibraryActionVisual(
+            "more-vertical",
+            "Map actions",
+        )
+        button._cv_tooltip_after_id = None
+        button._cv_tooltip = None
 
         def show_hover(_event=None) -> None:
             if not getattr(button, "_cv_has_menu_actions", False):
                 return
-            button.config(
-                bg=style.overflow_hover_bg,
-                fg=style.overflow_hover_fg,
-                highlightbackground=style.menu_border,
-            )
+            button._cv_overflow_hover = True
+            button.config(bg=style.overflow_hover_bg, highlightbackground=style.menu_border)
+            self._draw_overflow_button(button)
+            self._schedule_action_tooltip(button)
 
         def clear_hover(_event=None) -> None:
+            self._hide_action_tooltip(button)
+            button._cv_overflow_hover = False
             if not getattr(button, "_cv_has_menu_actions", False):
-                button.config(
-                    bg=style.panel_color,
-                    fg=style.panel_color,
-                    highlightbackground=style.panel_color,
-                )
+                button.config(bg=style.panel_color, highlightbackground=style.panel_color)
                 return
-            button.config(
-                bg=style.panel_color,
-                fg=style.overflow_fg,
-                highlightbackground=style.panel_color,
-            )
+            button.config(bg=style.panel_color, highlightbackground=style.panel_color)
+            self._draw_overflow_button(button)
 
         self._bind_activation(button, lambda: self._show_row_menu(button))
         button.bind("<Enter>", show_hover)
         button.bind("<Leave>", clear_hover)
-        button.pack(side="left", padx=(0, self._px(4)), pady=self._px(5))
+        button.bind("<FocusIn>", lambda _event: self._schedule_action_tooltip(button))
+        button.bind("<FocusOut>", lambda _event: self._hide_action_tooltip(button))
+        button.bind(
+            "<Configure>",
+            lambda _event, target=button: self._draw_overflow_button(target),
+            add="+",
+        )
+        button.pack(side="right", padx=(0, self._px(12)), pady=self._px(5))
         self._refresh_overflow_button(button)
         return button
 

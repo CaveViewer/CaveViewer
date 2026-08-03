@@ -8,6 +8,7 @@ from caveviewer.resources import (
     map_library_catalog_path,
     release_public_key_path,
     shader_path,
+    ui_icon_path,
 )
 
 
@@ -89,6 +90,17 @@ def test_application_uses_src_package_layout():
 def test_package_resource_service_resolves_runtime_files():
     assert shader_path("mesh.vert").is_file()
     assert image_path("app_mark_transparent.png").is_file()
+    for icon_name in (
+        "chevron-right.svg",
+        "download.svg",
+        "folder-open.svg",
+        "more-vertical.svg",
+        "pause.svg",
+        "play.svg",
+        "retry.svg",
+        "stop.svg",
+    ):
+        assert ui_icon_path(icon_name).is_file()
     assert release_public_key_path().is_file()
     assert map_library_catalog_path().is_file()
 

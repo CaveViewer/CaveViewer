@@ -176,6 +176,8 @@ def _workflow(
     has_cache=None,
     remove_cache=None,
     map_library_root_dir_provider=None,
+    has_recorded_dive=None,
+    open_recorded_dive=None,
 ):
     root = _FakeRoot()
     panel = _FakePanel()
@@ -217,6 +219,8 @@ def _workflow(
         directory_selection_factory=lambda path: SimpleNamespace(path=path),
         inhibit_desktop=lambda *_args, **_kwargs: inhibitor,
         close_inhibitor=lambda handle: closed_inhibitors.append(handle),
+        has_recorded_dive=has_recorded_dive or (lambda _path: False),
+        open_recorded_dive=open_recorded_dive,
     )
     return SimpleNamespace(
         workflow=workflow,
@@ -317,6 +321,53 @@ def test_downloaded_standard_library_menu_omits_cache_action_without_cache():
     actions = menu_factory(SimpleNamespace(row_shell=object()))
 
     assert [label for label, _command in actions] == ["Remove downloaded maps"]
+
+
+def test_downloaded_standard_library_menu_offers_local_recorded_dive():
+    library_map = _library_map()
+    opened_recorded_dive = []
+    state = _workflow(
+        [library_map],
+        is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: "/library/Test Cave",
+        has_recorded_dive=lambda path: path == "/library/Test Cave",
+        open_recorded_dive=opened_recorded_dive.append,
+    )
+
+    state.workflow.add_standard_row(library_map)
+    menu_factory = state.panel.standard_menu_factories["Test Cave"]
+    actions = menu_factory(SimpleNamespace(row_shell=object()))
+
+    assert [label for label, _command in actions] == [
+        "Play recorded dive…",
+        "Remove downloaded maps",
+    ]
+
+    actions[0][1]()
+
+    assert opened_recorded_dive == ["/library/Test Cave"]
+
+
+def test_recent_map_menu_offers_local_recorded_dive():
+    opened_recorded_dive = []
+    state = _workflow(
+        [],
+        has_recorded_dive=lambda path: path == "/maps/Recent Cave",
+        open_recorded_dive=opened_recorded_dive.append,
+    )
+
+    state.workflow.add_recent_row("/maps/Recent Cave")
+    _entry, _open_map, menu_factory = state.panel.recent_row
+    actions = menu_factory(SimpleNamespace(row_shell=object()))
+
+    assert [label for label, _command in actions] == [
+        "Play recorded dive…",
+        "Remove from this list",
+    ]
+
+    actions[0][1]()
+
+    assert opened_recorded_dive == ["/maps/Recent Cave"]
 
 
 def test_downloaded_standard_library_menu_includes_remove_cache_when_cache_exists():
