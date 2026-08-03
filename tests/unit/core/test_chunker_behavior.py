@@ -20,6 +20,7 @@ from caveviewer.core.chunking import upload
 from caveviewer.core.hardware import system_memory
 from caveviewer.core.navigation.voxel_cache import (
     NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR,
+    NavigationVoxelCacheBuildResult,
 )
 from caveviewer.core.workers.allocation import WorkerAllocation
 
@@ -672,6 +673,102 @@ def test_build_cache_omits_uncertified_navigation_voxel_sidecar(tmp_path):
     assert "voxel_cache" not in navigation
     sidecar = cache_dir / "navigation_voxels.json"
     assert not sidecar.exists()
+
+
+def test_attach_navigation_metadata_publishes_certified_voxel_sidecar(
+    tmp_path,
+    monkeypatch,
+):
+    navigation_metadata = {
+        "routes": [{"id": "centerline-0"}],
+        "voxel_cache": {"path": chunker.NAVIGATION_VOXEL_CACHE_NAME},
+    }
+    chunk_payload = {"route": "centerline-0", "tile": 0}
+    published_payload = {
+        "storage_method": "navigation_voxel_chunks_v1",
+        "routes": {"centerline-0": {"model": "chunked"}},
+    }
+
+    class FakeMeshGuard:
+        def triangle_meshes_for_bounds(self, _lower, _upper):
+            return ()
+
+        def segment_collision(self, _first, _second):
+            return None
+
+        def opposing_axis_support(
+            self,
+            _point,
+            *,
+            max_distance_m,
+            minimum_clearance_m,
+        ):
+            assert max_distance_m == 128.0
+            assert minimum_clearance_m == 0.25
+            return True
+
+    class FakeGuardFactory:
+        @staticmethod
+        def from_manifest(manifest, *, cache_dir):
+            assert manifest["chunks"] == {}
+            assert manifest["navigation"] is navigation_metadata
+            assert cache_dir == str(tmp_path)
+            return FakeMeshGuard()
+
+    def build_certified_voxel_cache(
+        _manifest,
+        navigation,
+        *,
+        triangle_provider,
+        mesh_edge_is_clear,
+        mesh_point_has_opposing_support,
+    ):
+        assert navigation is navigation_metadata
+        assert triangle_provider((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)) == ()
+        assert mesh_edge_is_clear((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)) is True
+        assert mesh_point_has_opposing_support((0.5, 0.5, 0.5), 128.0, 0.25)
+        return NavigationVoxelCacheBuildResult(
+            payload={"routes": {}},
+            chunked_payload=published_payload,
+            chunk_payloads={"navigation_voxel_chunks/route.json": chunk_payload},
+            built_route_count=1,
+            recommended_route_id="centerline-0",
+        )
+
+    monkeypatch.setattr(
+        chunker,
+        "build_navigation_metadata",
+        lambda *_args, **_kwargs: navigation_metadata,
+    )
+    monkeypatch.setattr(
+        chunker,
+        "CachedChunkMeshCollisionGuard",
+        FakeGuardFactory,
+    )
+    monkeypatch.setattr(
+        chunker,
+        "build_navigation_voxel_cache",
+        build_certified_voxel_cache,
+    )
+
+    manifest = {"chunks": {}}
+    chunker._attach_navigation_metadata(
+        manifest,
+        surface_positions=None,
+        cache_dir=str(tmp_path),
+    )
+
+    assert manifest["navigation"] is navigation_metadata
+    with open(
+        tmp_path / chunker.NAVIGATION_VOXEL_CACHE_NAME,
+        encoding="utf-8",
+    ) as handle:
+        assert json.load(handle) == published_payload
+    with open(
+        tmp_path / "navigation_voxel_chunks" / "route.json",
+        encoding="utf-8",
+    ) as handle:
+        assert json.load(handle) == chunk_payload
 
 
 def test_build_cache_prefers_authored_sidecar_over_derived_map_start(tmp_path):
