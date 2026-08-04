@@ -12,6 +12,7 @@ from .desktop_services import (
 )
 from .factory import get_platform_adapter, get_splash_platform_adapter
 from .runtime import (
+    DirectorySelectionPreflight,
     PlatformProfile,
     PlatformRuntime,
     VideoRecordingPreflight,
@@ -38,6 +39,7 @@ __all__ = [
     "MacOSSplashPlatformAdapter",
     "WindowsSplashPlatformAdapter",
     "LinuxSplashPlatformAdapter",
+    "DirectorySelectionPreflight",
     "PlatformProfile",
     "PlatformRuntime",
     "VideoRecordingPreflight",

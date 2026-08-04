@@ -14,6 +14,10 @@ from types import TracebackType
 from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
 
+from caveviewer.core.capabilities import (
+    DirectorySelectionRoute,
+    DirectorySelectionTarget,
+)
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.platform.desktop_services import (
     DesktopInhibitor,
@@ -312,6 +316,13 @@ class LinuxPortalDesktopServices:
     ) -> None:
         self._portal = portal or XdgPortalClient()
         self._fallback = fallback
+
+    def directory_selection_target(self) -> DirectorySelectionTarget:
+        """Declare the Portal-first route and its portable Tk fallback."""
+        return DirectorySelectionTarget(
+            primary_route=DirectorySelectionRoute.PORTAL,
+            fallback_route=DirectorySelectionRoute.TK,
+        )
 
     def choose_directory(
         self,

@@ -17,6 +17,11 @@ from types import TracebackType
 from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
 
+from caveviewer.core.capabilities import (
+    DirectorySelectionRoute,
+    DirectorySelectionTarget,
+)
+
 
 class DesktopServiceError(RuntimeError):
     """A desktop integration request could not be completed."""
@@ -157,6 +162,10 @@ class DesktopServices(Protocol):
 
 class TkDesktopServices:
     """Portable chooser fallback used outside Linux portals."""
+
+    def directory_selection_target(self) -> DirectorySelectionTarget:
+        """Declare the portable Tk picker as this service's safe route."""
+        return DirectorySelectionTarget(DirectorySelectionRoute.TK)
 
     def choose_directory(
         self,

@@ -514,6 +514,7 @@ def test_main_force_update_flag_configures_process_owned_manager(monkeypatch):
             "version": "0.0.0",
             "update_manager": manager,
             "desktop_services": manager.platform_runtime.desktop_services,
+            "platform_runtime": manager.platform_runtime,
         }
     ]
     assert "--force-update" not in app.sys.argv

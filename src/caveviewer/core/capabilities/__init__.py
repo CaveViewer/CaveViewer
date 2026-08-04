@@ -11,6 +11,7 @@ from .model import (
     CapabilitySource,
     CapabilityStatus,
 )
+from .desktop import DirectorySelectionRoute, DirectorySelectionTarget
 from .hardware import GpuMemoryBudget, RamAvailability
 
 __all__ = [
@@ -18,6 +19,8 @@ __all__ = [
     "CapabilityResult",
     "CapabilitySource",
     "CapabilityStatus",
+    "DirectorySelectionRoute",
+    "DirectorySelectionTarget",
     "GpuMemoryBudget",
     "RamAvailability",
 ]

@@ -11,6 +11,7 @@ platform/
 ├── base.py                  # SplashPlatformAdapter protocol definition
 ├── desktop_services.py      # Desktop file, URI, notification, and inhibit services
 ├── runtime.py               # Per-process platform composition and feature gates
+├── probes/desktop.py        # On-demand directory-selection route declaration
 ├── probes/updates.py        # Static signed-update configuration and target probe
 ├── probes/recording.py      # On-demand encoder and output-directory preflight
 ├── portal.py                # Linux XDG Desktop Portal transport and states
@@ -102,6 +103,15 @@ video-recording decision from that exact snapshot. The same preflight is
 requested again immediately before ffmpeg starts, so a changed drive or folder
 permission cannot begin a recording that has nowhere reliable to go. No encoder
 lookup or output-directory write check happens during application startup.
+
+Directory selection is another on-demand gate. A
+`DirectorySelectionPreflight` records the desktop service's declared route for
+one map-picker action: Linux is `portal_then_tk`, a portable Tk service is the
+degraded `tk` route, and a legacy injected service is the degraded `injected`
+route. Declaring a route does not create a Tk root or contact D-Bus. Splash and
+viewer map pickers request a fresh preflight immediately before opening a
+chooser; `LinuxPortalDesktopServices` retains its action-time fallback when a
+portal request fails.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
 unmigrated platform actions. New features should add a narrow probe, a pure

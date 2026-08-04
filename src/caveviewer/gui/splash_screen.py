@@ -30,6 +30,7 @@ from __future__ import annotations
 import enum
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.diagnostics.logging import get_logger
@@ -55,8 +56,10 @@ from caveviewer.gui.map_library_workflow import MapLibraryWorkflow
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
+from caveviewer.gui.map_opening import directory_selection_decision
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import (
+    DesktopServiceError,
     DesktopServices,
     get_desktop_services,
     tk_root_options,
@@ -72,6 +75,9 @@ from caveviewer.gui.update_manager import (
     UpdateState,
 )
 from caveviewer.resources import image_path
+
+if TYPE_CHECKING:
+    from caveviewer.gui.platform.runtime import PlatformRuntime
 
 
 def _resolve_asset_path(filename: str) -> str | None:
@@ -429,6 +435,7 @@ def show_splash_screen(
     *,
     update_manager: UpdateManager,
     desktop_services: DesktopServices | None = None,
+    platform_runtime: PlatformRuntime | None = None,
 ) -> str | None:
     """
     Shows the launch splash screen and blocks until the person either
@@ -440,7 +447,12 @@ def show_splash_screen(
     import tkinter as tk
 
     session = SplashSession()
-    desktop_services = desktop_services or get_desktop_services()
+    if desktop_services is None:
+        desktop_services = (
+            platform_runtime.desktop_services
+            if platform_runtime is not None
+            else get_desktop_services()
+        )
     _apply_preferences_to_env(_load_preferences())
 
     configure_process_dpi_awareness()
@@ -659,12 +671,25 @@ def show_splash_screen(
         )
 
     def on_open_map_folder() -> None:
-        last_dir = _load_last_browse_dir()
-        selection = desktop_services.choose_directory(
-            title="Open Map Folder",
-            initial_dir=last_dir,
-            parent=root,
+        decision = directory_selection_decision(
+            desktop_services,
+            platform_runtime=platform_runtime,
         )
+        if not decision.allows_execution:
+            _show_invalid_map_feedback(decision.explanation)
+            return
+
+        last_dir = _load_last_browse_dir()
+        try:
+            selection = desktop_services.choose_directory(
+                title="Open Map Folder",
+                initial_dir=last_dir,
+                parent=root,
+            )
+        except DesktopServiceError as exc:
+            _LOG.warning("Map folder selection failed: %s", exc)
+            _show_invalid_map_feedback(str(exc))
+            return
         if selection:
             is_valid, error_message = _validate_selected_map_folder(selection.path)
             if not is_valid:

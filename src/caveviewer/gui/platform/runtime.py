@@ -8,12 +8,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Mapping
 
-from caveviewer.core.capabilities import CapabilityResult, CapabilitySource
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    CapabilitySource,
+    DirectorySelectionTarget,
+)
 from caveviewer.gui.features import (
     FeatureDecision,
     FeatureGateRegistry,
     FeatureId,
     decide_automatic_update,
+    decide_directory_selection,
     decide_video_recording,
 )
 
@@ -27,6 +32,7 @@ from .probes.updates import (
     probe_automatic_update,
 )
 from .probes.recording import VideoRecordingTarget, probe_video_recording
+from .probes.desktop import probe_directory_selection
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +60,26 @@ class VideoRecordingPreflight:
     def __post_init__(self) -> None:
         if self.decision.feature is not FeatureId.VIDEO_RECORDING:
             raise ValueError("recording preflight must contain a video-recording decision")
+
+
+@dataclass(frozen=True, slots=True)
+class DirectorySelectionPreflight:
+    """One directory-picker route fact paired with its current policy decision.
+
+    The route declaration is refreshed immediately before a picker action. It
+    does not contact D-Bus or create Tk resources; Linux portal execution keeps
+    its existing safe Tk fallback at the action boundary.
+    """
+
+    capability: CapabilityResult[DirectorySelectionTarget]
+    decision: FeatureDecision
+
+    def __post_init__(self) -> None:
+        if self.decision.feature is not FeatureId.DIRECTORY_SELECTION:
+            raise ValueError(
+                "directory-selection preflight must contain a "
+                "directory-selection decision"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +150,20 @@ class PlatformRuntime:
         return VideoRecordingPreflight(
             capability=capability,
             decision=decide_video_recording(capability),
+        )
+
+    def directory_selection_capability(
+        self,
+    ) -> CapabilityResult[DirectorySelectionTarget]:
+        """Probe the current safe map-directory picker route on demand."""
+        return probe_directory_selection(self.desktop_services)
+
+    def directory_selection_preflight(self) -> DirectorySelectionPreflight:
+        """Pair one fresh directory-selection route fact with pure policy."""
+        capability = self.directory_selection_capability()
+        return DirectorySelectionPreflight(
+            capability=capability,
+            decision=decide_directory_selection(capability),
         )
 
 

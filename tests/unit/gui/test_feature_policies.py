@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from caveviewer.core.capabilities import CapabilityResult, CapabilitySource
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    CapabilitySource,
+    DirectorySelectionRoute,
+    DirectorySelectionTarget,
+)
 from caveviewer.core.map import source_model
 from caveviewer.gui.features import (
     FeatureDecision,
@@ -12,6 +17,7 @@ from caveviewer.gui.features import (
     FeatureId,
     FeatureState,
     decide_automatic_update,
+    decide_directory_selection,
     decide_map_source_import,
     decide_video_recording,
 )
@@ -205,6 +211,75 @@ def test_map_source_import_policy_is_a_pure_capability_table(
     assert decision.reason_code == reason_code
     assert decision.route == route
     assert decision.allows_execution is (state is FeatureState.ENABLED)
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                DirectorySelectionTarget(
+                    primary_route=DirectorySelectionRoute.PORTAL,
+                    fallback_route=DirectorySelectionRoute.TK,
+                ),
+                reason_code="directory_selection_portal_route_available",
+            ),
+            FeatureState.ENABLED,
+            "directory_selection_available",
+            "portal_then_tk",
+        ),
+        (
+            CapabilityResult.available(
+                DirectorySelectionTarget(DirectorySelectionRoute.TK),
+                reason_code="directory_selection_tk_route_available",
+            ),
+            FeatureState.DEGRADED,
+            "directory_selection_tk_fallback",
+            "tk",
+        ),
+        (
+            CapabilityResult.available(
+                DirectorySelectionTarget(DirectorySelectionRoute.INJECTED),
+                reason_code="directory_selection_injected_service_available",
+            ),
+            FeatureState.DEGRADED,
+            "directory_selection_injected_service",
+            "injected",
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="directory_selection_service_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "directory_selection_service_unavailable",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="directory_selection_capability_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "directory_selection_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_directory_selection_policy_is_a_pure_capability_table(
+    capability,
+    state,
+    reason_code,
+    route,
+):
+    decision = decide_directory_selection(capability)
+
+    assert decision.feature is FeatureId.DIRECTORY_SELECTION
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (
+        state in {FeatureState.ENABLED, FeatureState.DEGRADED}
+    )
 
 
 def test_feature_gate_registry_copies_and_validates_registered_decisions():

@@ -401,6 +401,14 @@ writable recording folder, uses an on-demand preflight instead of a cached
 startup gate. The preflight pairs one fresh capability result with the policy
 decision derived from that same snapshot.
 
+Directory selection follows the same on-demand contract. Its immutable target
+declares an executable route rather than performing a desktop request:
+Linux declares `portal_then_tk`, portable desktop services declare `tk`, and
+legacy injected services use the conservative `injected` route. The declaration
+does not create Tk resources or contact D-Bus. Map-opening actions obtain a
+fresh preflight immediately before invoking the chooser; the Portal service
+still owns the action-time fallback to Tk if its current request fails.
+
 Feature-state semantics are fixed:
 
 | State | Presentation | Execution |
@@ -439,8 +447,11 @@ catalog or bundled catalog resource when offline.
 Directory selection, file reveal, notifications, and idle/suspend inhibition
 use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal
 first and falls back to Tk or `xdg-open` only when the portal is unavailable.
-Long map library downloads request desktop notification and inhibit support
-through this same capability, but the visible Map Library dialog suppresses
+Map-folder selection is policy-gated independently of the other desktop
+actions: an enabled Portal/Tk composite or degraded Tk/injected route may run,
+while a missing or indeterminate chooser route is blocked before the chooser is
+created. Long map library downloads request desktop notification and inhibit
+support through this same capability, but the visible Map Library dialog suppresses
 duplicate desktop notifications because it already presents progress and
 completion actions. Background update downloads request notification and
 inhibit support while the package is being downloaded and verified; a visible

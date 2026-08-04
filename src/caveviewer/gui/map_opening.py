@@ -4,13 +4,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.map import source_model
-from caveviewer.gui.features import FeatureDecision, decide_map_source_import
-from caveviewer.gui.platform import DesktopServices, get_desktop_services, tk_root_options
+from caveviewer.gui.features import (
+    FeatureDecision,
+    decide_directory_selection,
+    decide_map_source_import,
+)
+from caveviewer.gui.platform import (
+    DesktopServiceError,
+    DesktopServices,
+    get_desktop_services,
+    tk_root_options,
+)
+from caveviewer.gui.platform.probes.desktop import probe_directory_selection
+
+if TYPE_CHECKING:
+    from caveviewer.gui.platform.runtime import PlatformRuntime
 
 
 _LOG = get_logger("CaveViewer")
@@ -33,12 +46,49 @@ class OpenMapTarget:
         return self.cache_dir is not None
 
 
-def pick_folder_dialog(*, desktop_services: DesktopServices | None = None) -> str | None:
-    """Open the platform directory chooser used by folder/cache workflows."""
+def directory_selection_decision(
+    desktop_services: DesktopServices,
+    *,
+    platform_runtime: PlatformRuntime | None = None,
+) -> FeatureDecision:
+    """Return a fresh directory-picker decision for one map-opening action.
+
+    Interactive application paths inject one runtime and therefore reuse its
+    shared desktop service. Compatibility callers that supply another service
+    still receive the same on-demand probe and pure policy without creating a
+    second runtime.
+    """
+    if (
+        platform_runtime is not None
+        and desktop_services is platform_runtime.desktop_services
+    ):
+        return platform_runtime.directory_selection_preflight().decision
+    return decide_directory_selection(probe_directory_selection(desktop_services))
+
+
+def pick_folder_dialog(
+    *,
+    desktop_services: DesktopServices | None = None,
+    platform_runtime: PlatformRuntime | None = None,
+) -> str | None:
+    """Open the authorized platform directory chooser for map workflows."""
+    if desktop_services is None:
+        desktop_services = (
+            platform_runtime.desktop_services
+            if platform_runtime is not None
+            else get_desktop_services()
+        )
+
+    decision = directory_selection_decision(
+        desktop_services,
+        platform_runtime=platform_runtime,
+    )
+    if not decision.allows_execution:
+        raise DesktopServiceError(decision.explanation)
+
     root = _hidden_tk_root()
     try:
-        services = desktop_services or get_desktop_services()
-        selection = services.choose_directory(
+        selection = desktop_services.choose_directory(
             title="Open Map Folder",
             parent=root,
         )

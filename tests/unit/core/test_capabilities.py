@@ -8,6 +8,8 @@ from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilitySource,
     CapabilityStatus,
+    DirectorySelectionRoute,
+    DirectorySelectionTarget,
 )
 
 
@@ -44,3 +46,19 @@ def test_capability_result_rejects_mutable_evidence_values():
             reason_code="probe_failed",
             evidence={"details": ["mutable"]},  # type: ignore[dict-item]
         )
+
+
+def test_directory_selection_target_validates_known_distinct_routes():
+    target = DirectorySelectionTarget(
+        primary_route=DirectorySelectionRoute.PORTAL,
+        fallback_route=DirectorySelectionRoute.TK,
+    )
+
+    assert target.route_key == "portal_then_tk"
+    with pytest.raises(ValueError, match="must differ"):
+        DirectorySelectionTarget(
+            primary_route=DirectorySelectionRoute.TK,
+            fallback_route=DirectorySelectionRoute.TK,
+        )
+    with pytest.raises(TypeError, match="known route"):
+        DirectorySelectionTarget(primary_route="tk")  # type: ignore[arg-type]
