@@ -785,6 +785,49 @@ def test_runtime_configuration_is_passed_to_the_default_update_client(
                 "install_channel": "test_app",
                 "configuration": runtime.update_configuration,
                 "platform_adapter": adapter,
+                "tls_trust_adapter": runtime.tls_trust_adapter,
             },
         )
     ]
+
+
+def test_runtime_tls_adapter_is_passed_to_default_update_download(
+    monkeypatch, tmp_path
+):
+    adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
+
+    class FakeTlsTrustAdapter:
+        def augment_ssl_context(self, _context):
+            raise AssertionError("the fake download must not create an SSL context")
+
+    tls_trust_adapter = FakeTlsTrustAdapter()
+    runtime = create_platform_runtime(
+        platform_adapter=adapter,
+        desktop_services=FakeDesktopServices(),
+        tls_trust_adapter=tls_trust_adapter,
+        environment={},
+    )
+    calls = []
+
+    def download_update(_url, _expected_size, destination, **kwargs):
+        calls.append(kwargs)
+        Path(destination).write_bytes(b"payload")
+        kwargs["phase_cb"]("verifying")
+
+    monkeypatch.setattr(update_manager.update_checker, "download_update", download_update)
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=runtime,
+        check_for_update=lambda *_args, **_kwargs: _available_result(),
+        temp_root=str(tmp_path),
+    )
+    try:
+        assert manager.check_for_updates()
+        assert manager.wait_for_background_task(1)
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+    finally:
+        manager.shutdown()
+
+    assert calls[0]["platform_adapter"] is adapter
+    assert calls[0]["tls_trust_adapter"] is tls_trust_adapter

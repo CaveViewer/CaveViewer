@@ -55,6 +55,11 @@ class FakeRecordingProcessAdapter:
         raise AssertionError("runtime composition must not start an encoder")
 
 
+class FakeTlsTrustAdapter:
+    def augment_ssl_context(self, _context):
+        raise AssertionError("runtime composition must not create an SSL context")
+
+
 def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_UPDATE_BRANCH", "ignored-process-value")
     adapter = FakeUpdateAdapter()
@@ -62,6 +67,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     storage_adapter = FakeUpdatePackageStorageAdapter()
     recording_reveal_adapter = FakeSavedRecordingRevealAdapter()
     recording_process_adapter = FakeRecordingProcessAdapter()
+    tls_trust_adapter = FakeTlsTrustAdapter()
 
     runtime = create_platform_runtime(
         platform_adapter=adapter,
@@ -69,6 +75,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
         update_package_storage_adapter=storage_adapter,
         saved_recording_reveal_adapter=recording_reveal_adapter,
         recording_process_adapter=recording_process_adapter,
+        tls_trust_adapter=tls_trust_adapter,
         environment={
             "CAVEVIEWER_UPDATE_BRANCH": "release-candidate",
             "CAVEVIEWER_UPDATE_CHANNEL": "prerelease",
@@ -82,6 +89,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.update_package_storage_adapter is storage_adapter
     assert runtime.saved_recording_reveal_adapter is recording_reveal_adapter
     assert runtime.recording_process_adapter is recording_process_adapter
+    assert runtime.tls_trust_adapter is tls_trust_adapter
     assert runtime.profile.platform_name == "linux"
     assert runtime.profile.machine == "x86_64"
     assert runtime.update_configuration.branch == "release-candidate"

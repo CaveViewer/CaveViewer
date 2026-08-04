@@ -441,6 +441,15 @@ The current compatibility facade preserves Windows console suppression through
 `STARTUPINFO` and `CREATE_NO_WINDOW`, while default, macOS, and Linux behavior
 remains unchanged.
 
+TLS trust augmentation is also a focused action adapter, not a capability gate.
+Each update-network request creates Python's normal verifying SSL context, then
+asks `TlsTrustAdapter` to add any native trust roots before it contacts a
+manifest, signature, or verified payload URL. The compatibility facade
+preserves Windows `CA`/`ROOT` certificate-store augmentation and the empty
+default, macOS, and Linux behavior without disabling certificate verification.
+The process-global `truststore` startup compatibility path remains separate;
+this adapter does not change process initialization or network policy.
+
 Directory selection follows the same on-demand contract. Its immutable target
 declares an executable route rather than performing a desktop request:
 Linux declares `portal_then_tk`, portable desktop services declare `tk`, and

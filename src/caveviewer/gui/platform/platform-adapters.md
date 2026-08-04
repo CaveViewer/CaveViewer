@@ -16,6 +16,7 @@ platform/
 ├── update_package_storage.py # Focused verified-package storage facade
 ├── saved_recording_reveal.py # Focused post-save recording reveal facade
 ├── recording_process.py      # Focused recording-encoder startup facade
+├── tls_trust.py               # Focused native TLS-trust augmentation facade
 ├── probes/desktop.py        # On-demand directory-selection route declaration
 ├── probes/update_package_reveal.py # Static package-reveal route declaration
 ├── probes/updates.py        # Static signed-update configuration and target probe
@@ -145,6 +146,14 @@ facade preserves Windows `STARTUPINFO`/`CREATE_NO_WINDOW` console suppression
 and the empty default, macOS, and Linux option sets. Notifications and
 inhibition remain separate migrations.
 
+TLS trust augmentation has its own `TlsTrustAdapter`. It augments a fresh,
+normally verifying SSL context with native trust roots immediately before
+update networking. Its compatibility facade preserves Windows `CA` and `ROOT`
+certificate-store loading and the empty default, macOS, and Linux behavior.
+It does not decide whether updates are available, disable certificate
+verification, or alter the separate process-global `truststore` startup
+compatibility path.
+
 Video recording is the first on-demand gate. When the user starts recording,
 the viewer asks the runtime for a `VideoRecordingPreflight`: one narrow probe
 for an ffmpeg path and writable output directory paired with the pure
@@ -167,11 +176,12 @@ authorization rather than creating a Map Library-specific gate.
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
 unmigrated platform actions. `UpdatePackageRevealAdapter`,
 `UpdatePackageStorageAdapter`, `SavedRecordingRevealAdapter`, and
-`RecordingProcessAdapter` are narrow facades around existing package and
-recording actions. New features should add the smallest appropriate combination
-of a probe, a pure policy in `caveviewer.gui.features`, and an injected action
-adapter rather than expanding this broad protocol. Cache, chunk streaming,
-navigation, and map state are outside this runtime layer.
+`RecordingProcessAdapter`, and `TlsTrustAdapter` are narrow facades around
+existing package, recording, and network actions. New features should add the
+smallest appropriate combination of a probe, a pure policy in
+`caveviewer.gui.features`, and an injected action adapter rather than expanding
+this broad protocol. Cache, chunk streaming, navigation, and map state are
+outside this runtime layer.
 
 ## Key Components
 
@@ -425,6 +435,23 @@ the viewer is about to start its encoder session.
 
 The adapter must not replace the on-demand recording preflight, select an
 encoder binary, build the ffmpeg command, or own encoder worker lifecycle.
+
+### TLS Trust
+
+**When**: A network client is about to use a fresh Python SSL context for an
+update manifest, signature, or payload request.
+
+**How**:
+- `TlsTrustAdapter.augment_ssl_context()` adds native trust roots while the
+  default SSL verification policy remains enabled.
+- `load_system_certificates()` remains the compatibility implementation until
+  native certificate-store behavior moves behind the focused adapter.
+- Windows continues to load the `CA` and `ROOT` stores; default, macOS, and
+  Linux behavior remains empty.
+
+The adapter does not create a feature gate, decide network availability, bypass
+certificate verification, or replace the separate process-global `truststore`
+startup compatibility path.
 
 ### UI Framework & Fonts
 **When**: Native UI elements (menus, fonts, dialogs) behave differently per-platform

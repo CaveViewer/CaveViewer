@@ -22,6 +22,7 @@ from .update_package_reveal import UpdatePackageRevealAdapter
 from .update_package_storage import UpdatePackageStorageAdapter
 from .saved_recording_reveal import SavedRecordingRevealAdapter
 from .recording_process import RecordingProcessAdapter
+from .tls_trust import TlsTrustAdapter
 from .linux import LinuxSplashPlatformAdapter
 from .macos import MacOSSplashPlatformAdapter
 from .windows import WindowsSplashPlatformAdapter
@@ -51,5 +52,6 @@ __all__ = [
     "UpdatePackageStorageAdapter",
     "SavedRecordingRevealAdapter",
     "RecordingProcessAdapter",
+    "TlsTrustAdapter",
     "create_platform_runtime",
 ]
