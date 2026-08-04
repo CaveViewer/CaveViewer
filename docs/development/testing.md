@@ -297,7 +297,8 @@ the GUI.
 Manual route-trace coverage must exercise `Cmd/Ctrl+T` start/stop, post-movement
 pose sampling, orientation and stationary-heartbeat thresholds, bounded-queue
 drop reporting, final-pose retention, background write failure, map-switch
-cleanup, and bookmark/minimap discontinuities. Test output belongs under
+cleanup, saved-trace confirmation and native reveal only after atomic
+publication, and bookmark/minimap discontinuities. Test output belongs under
 `tmp_path`; generated `_guided_dives` directories are never repository
 fixtures.
 Recorded Dive coverage must validate bounded JSONL parsing, its versioned

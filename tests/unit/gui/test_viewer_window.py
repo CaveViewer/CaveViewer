@@ -14,7 +14,7 @@ import pytest
 
 from caveviewer.core.map import cache_paths
 from caveviewer.gui import recording, viewer_window
-from caveviewer.gui.manual_dive_trace import ManualDivePose
+from caveviewer.gui.manual_dive_trace import ManualDivePose, ManualDiveTraceResult
 from caveviewer.gui.platform.app_identity import tk_root_options
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
@@ -580,6 +580,99 @@ def test_manual_trace_stop_is_nonblocking_and_keeps_writer_for_polling():
             ManualDivePose.from_camera(window.camera),
             "map_changed",
         )
+    ]
+
+
+def test_completed_manual_trace_confirms_and_reveals_published_file(tmp_path):
+    output_path = tmp_path / "trace.jsonl"
+    output_path.write_text('{"record": "trace_completed"}\n', encoding="utf-8")
+    revealed = []
+
+    class FakeSavedRecordingRevealAdapter:
+        def reveal_saved_recording(self, path):
+            revealed.append(path)
+
+    window = _recording_window()
+    window._platform_runtime = SimpleNamespace(
+        saved_recording_reveal_adapter=FakeSavedRecordingRevealAdapter()
+    )
+    recorder = FakeManualDiveTrace()
+    recorder.result = ManualDiveTraceResult(
+        output_path=str(output_path),
+        partial_path=str(tmp_path / ".trace.jsonl.part"),
+        completed=True,
+        error=None,
+    )
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = [recorder]
+
+    window._update_manual_dive_trace()
+
+    assert window._manual_dive_trace_writers == []
+    assert window._recording_status_message == "Guided Dive saved"
+    assert window._recording_status_kind == "success"
+    assert revealed == [str(output_path)]
+
+
+def test_pending_or_failed_manual_trace_never_confirms_or_reveals(tmp_path):
+    revealed = []
+
+    class FakeSavedRecordingRevealAdapter:
+        def reveal_saved_recording(self, path):
+            revealed.append(path)
+
+    window = _recording_window()
+    window._platform_runtime = SimpleNamespace(
+        saved_recording_reveal_adapter=FakeSavedRecordingRevealAdapter()
+    )
+    pending = FakeManualDiveTrace()
+    failed = FakeManualDiveTrace()
+    failed.result = ManualDiveTraceResult(
+        output_path=str(tmp_path / "trace.jsonl"),
+        partial_path=str(tmp_path / ".trace.jsonl.part"),
+        completed=False,
+        error="disk full",
+    )
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = [pending, failed]
+
+    window._update_manual_dive_trace()
+
+    assert window._manual_dive_trace_writers == [pending]
+    assert window._recording_status_message is None
+    assert revealed == []
+
+
+def test_manual_trace_reveal_failure_keeps_saved_status(tmp_path, monkeypatch):
+    output_path = tmp_path / "trace.jsonl"
+    output_path.write_text('{"record": "trace_completed"}\n', encoding="utf-8")
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+
+    class FailingSavedRecordingRevealAdapter:
+        def reveal_saved_recording(self, path):
+            raise RuntimeError(f"blocked: {path}")
+
+    window = _recording_window()
+    window._platform_runtime = SimpleNamespace(
+        saved_recording_reveal_adapter=FailingSavedRecordingRevealAdapter()
+    )
+    recorder = FakeManualDiveTrace()
+    recorder.result = ManualDiveTraceResult(
+        output_path=str(output_path),
+        partial_path=str(tmp_path / ".trace.jsonl.part"),
+        completed=True,
+        error=None,
+    )
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = [recorder]
+
+    window._update_manual_dive_trace()
+
+    assert window._recording_status_message == "Guided Dive saved"
+    assert window._recording_status_kind == "success"
+    assert logger.warning_messages == [
+        f"Could not reveal saved Guided Dive {output_path}: blocked: {output_path}"
     ]
 
 
