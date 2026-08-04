@@ -202,27 +202,49 @@ def test_playback_clock_stops_for_chunk_loading_and_finishes_exactly(tmp_path):
     assert camera.position == pytest.approx([2.0, 0.0, 0.0])
 
 
-def test_pause_resume_does_not_add_paused_wall_time(tmp_path):
+def test_paused_inspection_preserves_look_and_resume_restores_trace_pose(tmp_path):
     path, _source = _write_trace(
         tmp_path,
         [
             _pose_record(0, 0.0, (0.0, 0.0, 0.0)),
-            _pose_record(1, 5.0, (5.0, 0.0, 0.0)),
+            _pose_record(
+                1,
+                5.0,
+                (5.0, 0.0, 0.0),
+                forward=(0.0, 0.0, 1.0),
+                right=(-1.0, 0.0, 0.0),
+            ),
         ],
     )
+    original_contents = path.read_bytes()
     controller = RecordedDivePlaybackController(load_recorded_dive_trace(path))
     camera = FlyCamera()
     controller.start(camera, now=0.0)
     controller.update(camera, now=1.0, chunks_ready=True)
     assert controller.pause(now=1.0) is True
 
+    paused_position = camera.position.copy()
+    camera.look(100.0, -40.0)
+    inspected_forward = camera.forward()
     controller.update(camera, now=20.0, chunks_ready=True)
+
     assert controller.elapsed_s == 1.0
-    assert controller.resume(now=20.0) is True
-    controller.update(camera, now=21.0, chunks_ready=True)
+    assert camera.position == pytest.approx(paused_position)
+    assert camera.forward() == pytest.approx(inspected_forward)
+
+    expected_pose = controller.trace.pose_at(1.0)
+    assert controller.resume(camera, now=20.0) is True
+    assert controller.state is RecordedDivePlaybackState.BUFFERING
+    assert camera.position == pytest.approx(expected_pose.position)
+    assert camera.forward() == pytest.approx(expected_pose.forward)
+
+    controller.update(camera, now=21.0, chunks_ready=False)
+    assert controller.elapsed_s == 1.0
+    controller.update(camera, now=22.0, chunks_ready=True)
 
     assert controller.elapsed_s == 2.0
     assert camera.position == pytest.approx([2.0, 0.0, 0.0])
+    assert path.read_bytes() == original_contents
 
 
 def test_loader_rejects_an_incomplete_trace(tmp_path):

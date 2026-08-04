@@ -474,6 +474,30 @@ def test_recorded_dive_readiness_requires_next_pose_chunks_on_gpu():
     assert window._recorded_dive_chunks_ready(now=10.0) is False
 
 
+def test_paused_recorded_dive_does_not_probe_chunks_until_resume():
+    calls = []
+
+    class PausedController:
+        active = True
+        state = viewer_window.recorded_dive.RecordedDivePlaybackState.PAUSED
+
+        def update(self, camera, *, now, chunks_ready):
+            calls.append((camera, now, chunks_ready))
+            return self.state
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.camera = object()
+    window._recorded_dive_controller = PausedController()
+    window._refresh_recorded_dive_prefetch = lambda: None
+    window._recorded_dive_chunks_ready = lambda **_kwargs: pytest.fail(
+        "paused inspection must defer chunk readiness until resume"
+    )
+
+    window._update_recorded_dive(now=10.0)
+
+    assert calls == [(window.camera, 10.0, True)]
+
+
 def test_recorded_dive_progress_reports_trace_time_and_loading_state():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._recorded_dive_controller = SimpleNamespace(
@@ -497,6 +521,101 @@ def test_recorded_dive_progress_reports_trace_time_and_loading_state():
             },
         )
     ]
+
+
+def test_paused_recorded_dive_progress_explains_orientation_inspection():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._recorded_dive_controller = SimpleNamespace(
+        active=True,
+        state=viewer_window.recorded_dive.RecordedDivePlaybackState.PAUSED,
+        elapsed_s=65.0,
+        trace=SimpleNamespace(duration_s=125.0),
+    )
+    calls = []
+    window._render_dive_status_prompt = (
+        lambda window_size, **kwargs: calls.append((window_size, kwargs))
+    )
+
+    assert window._render_recorded_dive_progress((800, 600)) is True
+    assert calls == [
+        (
+            (800, 600),
+            {
+                "title": "Recorded Dive",
+                "note": (
+                    "Paused for inspection at 1:05 / 2:05. "
+                    "Look around; Space resumes."
+                ),
+            },
+        )
+    ]
+
+
+def test_paused_recorded_dive_keyboard_input_allows_look_only():
+    look_calls = []
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.camera = SimpleNamespace(
+        look=lambda yaw, pitch: look_calls.append((yaw, pitch)),
+        barrel_roll=lambda _roll: pytest.fail("paused inspection must not roll"),
+    )
+    window._move_camera_guarded = lambda *_args: pytest.fail(
+        "paused inspection must not move"
+    )
+    window._continuous_input_intent = lambda _dt: SimpleNamespace(
+        has_motion=True,
+        has_look=True,
+        has_roll=True,
+        yaw_delta=12.0,
+        pitch_delta=-5.0,
+    )
+
+    window._handle_paused_recorded_dive_input(0.1)
+
+    assert look_calls == [(12.0, -5.0)]
+
+
+def test_paused_recorded_dive_mouse_look_does_not_cancel_playback():
+    look_calls = []
+    stopped = []
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window._closing_requested = False
+    window.color_picker = None
+    window._option_look_active = lambda: False
+    window._mouse_look_active = True
+    window._last_mouse_pos = (0, 0)
+    window._recorded_dive_controller = SimpleNamespace(
+        active=True,
+        state=viewer_window.recorded_dive.RecordedDivePlaybackState.PAUSED,
+    )
+    window._stop_recorded_dive = lambda *, reason: stopped.append(reason)
+    window.camera = SimpleNamespace(
+        look=lambda yaw, pitch: look_calls.append((yaw, pitch))
+    )
+
+    window._handle_mouse_look_motion(10, 20, 2, -3)
+
+    assert stopped == []
+    assert look_calls == [(2, -3)]
+
+
+def test_paused_recorded_dive_ignores_speed_scroll_input():
+    speed_changes = []
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._recorded_dive_controller = SimpleNamespace(
+        active=True,
+        state=viewer_window.recorded_dive.RecordedDivePlaybackState.PAUSED,
+    )
+    window.camera = SimpleNamespace(
+        adjust_speed=lambda amount: speed_changes.append(amount)
+    )
+
+    window.on_mouse_scroll_event(0.0, 2.0)
+
+    assert speed_changes == []
 
 
 def test_manual_trace_samples_the_current_camera_pose():

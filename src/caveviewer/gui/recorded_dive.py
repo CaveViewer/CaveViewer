@@ -222,7 +222,6 @@ class RecordedDivePlaybackController:
             return self.state
         if self.state is RecordedDivePlaybackState.PAUSED:
             self._last_wall_time = wall_time
-            apply_recorded_dive_pose(camera, self.trace.pose_at(self.elapsed_s))
             return self.state
 
         delta_s = 0.0
@@ -254,10 +253,12 @@ class RecordedDivePlaybackController:
         self.state = RecordedDivePlaybackState.PAUSED
         return True
 
-    def resume(self, *, now: float) -> bool:
+    def resume(self, camera: Any, *, now: float) -> bool:
+        """Restore the trace pose before returning to chunk-buffered playback."""
         if self.state is not RecordedDivePlaybackState.PAUSED:
             return False
         self._last_wall_time = _finite_float(now, "wall time")
+        apply_recorded_dive_pose(camera, self.trace.pose_at(self.elapsed_s))
         self.state = RecordedDivePlaybackState.BUFFERING
         return True
 
