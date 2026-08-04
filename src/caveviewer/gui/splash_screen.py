@@ -849,6 +849,7 @@ def show_splash_screen(
         standard_library_maps=standard_library_maps,
         map_library_root_dir=map_library_root_dir,
         desktop_services=desktop_services,
+        platform_runtime=platform_runtime,
         splash_exists=_splash_exists,
         open_map=_open_library_map_from_splash,
         show_feedback=_show_map_library_feedback,

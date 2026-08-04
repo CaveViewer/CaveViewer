@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import enum
 import importlib
 import os
 import sys
-from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable, Mapping
 
+from caveviewer.core.capabilities import WindowBackendPlan, WindowSystem
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.platform.app_identity import LINUX_WINDOW_INSTANCE_NAME
 from caveviewer.version import APPLICATION_ID
@@ -19,22 +18,8 @@ _LOG = get_logger("Windowing")
 WINDOW_SYSTEM_ENV_VAR = "CAVEVIEWER_WINDOW_SYSTEM"
 
 
-class WindowSystem(str, enum.Enum):
-    AUTO = "auto"
-    WAYLAND = "wayland"
-    X11 = "x11"
-
-
 class WindowBackendError(RuntimeError):
     """The requested Linux GLFW backend could not be initialized."""
-
-
-@dataclass(frozen=True)
-class WindowBackendPlan:
-    """Validated mode and ordered protocol attempts for one viewer launch."""
-
-    mode: WindowSystem
-    attempts: tuple[WindowSystem, ...]
 
 
 def resolve_window_backend_plan(

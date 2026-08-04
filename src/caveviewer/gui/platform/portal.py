@@ -15,8 +15,14 @@ from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
 
 from caveviewer.core.capabilities import (
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    FileSelectionRoute,
+    FileSelectionTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
 )
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.platform.desktop_services import (
@@ -317,11 +323,42 @@ class LinuxPortalDesktopServices:
         self._portal = portal or XdgPortalClient()
         self._fallback = fallback
 
+    def desktop_notification_target(self) -> DesktopNotificationTarget:
+        """Declare the Portal route and its portable no-op fallback.
+
+        This declaration never contacts the Portal. The existing ``notify``
+        and ``withdraw_notification`` methods retain ownership of the actual
+        Portal-to-fallback execution behavior.
+        """
+        return DesktopNotificationTarget(
+            primary_route=DesktopNotificationRoute.PORTAL,
+            fallback_route=DesktopNotificationRoute.NOOP,
+        )
+
+    def idle_suspend_inhibition_target(self) -> IdleSuspendInhibitionTarget:
+        """Declare the Portal inhibitor and its portable no-op fallback.
+
+        This declaration never opens a D-Bus connection or starts the Portal
+        inhibitor worker. The existing ``inhibit_idle_suspend`` method keeps
+        ownership of the actual Portal-to-fallback acquisition behavior.
+        """
+        return IdleSuspendInhibitionTarget(
+            primary_route=IdleSuspendInhibitionRoute.PORTAL,
+            fallback_route=IdleSuspendInhibitionRoute.NOOP,
+        )
+
     def directory_selection_target(self) -> DirectorySelectionTarget:
         """Declare the Portal-first route and its portable Tk fallback."""
         return DirectorySelectionTarget(
             primary_route=DirectorySelectionRoute.PORTAL,
             fallback_route=DirectorySelectionRoute.TK,
+        )
+
+    def file_selection_target(self) -> FileSelectionTarget:
+        """Declare the Portal-first file route and its portable Tk fallback."""
+        return FileSelectionTarget(
+            primary_route=FileSelectionRoute.PORTAL,
+            fallback_route=FileSelectionRoute.TK,
         )
 
     def choose_directory(

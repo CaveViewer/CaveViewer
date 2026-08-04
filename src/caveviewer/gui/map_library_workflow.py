@@ -7,7 +7,7 @@ import queue
 import threading
 import tkinter as tk
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from caveviewer.gui.map_cache_management import (
     has_managed_map_cache,
@@ -32,6 +32,10 @@ from caveviewer.gui.platform import (
     DesktopServices,
     DirectorySelection,
 )
+from caveviewer.gui.platform.file_selection import (
+    choose_authorized_file,
+    file_selection_preflight,
+)
 from caveviewer.gui.standard_library_download import (
     StandardLibraryDownloadFailed,
     StandardLibraryDownloadProgress,
@@ -50,6 +54,9 @@ from caveviewer.gui.standard_library_maps import (
 
 
 FeedbackCallback = Callable[..., None]
+
+if TYPE_CHECKING:
+    from caveviewer.gui.platform.runtime import PlatformRuntime
 
 
 def _remaining_cache_error(
@@ -110,6 +117,7 @@ class MapLibraryWorkflow:
         open_map: OpenMapCallback,
         show_feedback: FeedbackCallback,
         logger,
+        platform_runtime: PlatformRuntime | None = None,
         has_cache: Callable[[str], bool] = has_managed_map_cache,
         remove_cache: Callable[[str], Any] = remove_managed_map_cache,
         remove_recent_path: Callable[[str], None] = remove_recent_map_path,
@@ -145,6 +153,7 @@ class MapLibraryWorkflow:
         self.standard_library_maps = tuple(standard_library_maps)
         self.map_library_root_dir = map_library_root_dir
         self.desktop_services = desktop_services
+        self.platform_runtime = platform_runtime
         self.splash_exists = splash_exists
         self.open_map = open_map
         self.show_feedback = show_feedback
@@ -341,7 +350,20 @@ class MapLibraryWorkflow:
             return
 
         try:
-            selection = self.desktop_services.choose_file(
+            picker_preflight = file_selection_preflight(
+                self.desktop_services,
+                platform_runtime=self.platform_runtime,
+            )
+            if not picker_preflight.decision.allows_execution:
+                self.logger.warning(
+                    "Guided Dive file selection unavailable: %s",
+                    picker_preflight.decision.reason_code,
+                )
+                self._show_error(picker_preflight.decision.explanation)
+                return
+            selection = choose_authorized_file(
+                picker_preflight,
+                self.desktop_services,
                 title="Open Guided Dive",
                 initial_dir=os.fspath(guided_dive_trace_directory(map_path)),
                 parent=self.root,

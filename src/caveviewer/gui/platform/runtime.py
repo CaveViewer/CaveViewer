@@ -12,17 +12,25 @@ from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilityStatus,
     CapabilitySource,
+    DesktopNotificationTarget,
     DirectorySelectionTarget,
+    FileSelectionTarget,
+    IdleSuspendInhibitionTarget,
     UpdatePackageRevealRoute,
+    ViewerLaunchTarget,
 )
 from caveviewer.gui.features import (
     FeatureDecision,
     FeatureGateRegistry,
     FeatureId,
     decide_automatic_update,
+    decide_desktop_notification,
     decide_directory_selection,
+    decide_file_selection,
+    decide_idle_suspend_inhibition,
     decide_update_package_reveal,
     decide_video_recording,
+    decide_viewer_launch,
 )
 
 from .base import SplashPlatformAdapter
@@ -35,8 +43,14 @@ from .probes.updates import (
     probe_automatic_update,
 )
 from .probes.recording import VideoRecordingTarget, probe_video_recording
-from .probes.desktop import probe_directory_selection
+from .probes.desktop import (
+    probe_desktop_notification,
+    probe_directory_selection,
+    probe_file_selection,
+    probe_idle_suspend_inhibition,
+)
 from .probes.update_package_reveal import probe_update_package_reveal
+from .probes.windowing import probe_viewer_launch
 from .update_package_reveal import (
     UpdatePackageRevealAdapter,
     create_update_package_reveal_adapter,
@@ -115,6 +129,148 @@ class DirectorySelectionPreflight:
         if self.decision.route != target.route_key:
             raise ValueError(
                 "directory-selection decision route must match its typed target"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class FileSelectionPreflight:
+    """One file-opening route fact paired with its current policy decision.
+
+    The route declaration is refreshed immediately before a picker action. It
+    does not contact D-Bus or create Tk resources; Linux portal execution keeps
+    its existing safe Tk fallback at the action boundary.
+    """
+
+    capability: CapabilityResult[FileSelectionTarget]
+    decision: FeatureDecision
+
+    def __post_init__(self) -> None:
+        if self.decision.feature is not FeatureId.FILE_SELECTION:
+            raise ValueError(
+                "file-selection preflight must contain a file-selection decision"
+            )
+        if not self.decision.allows_execution:
+            return
+        target = self.capability.value
+        if (
+            self.capability.status is not CapabilityStatus.AVAILABLE
+            or not isinstance(target, FileSelectionTarget)
+        ):
+            raise ValueError(
+                "executable file-selection preflight requires an available "
+                "typed target"
+            )
+        if self.decision.route != target.route_key:
+            raise ValueError(
+                "file-selection decision route must match its typed target"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopNotificationPreflight:
+    """One optional notification route fact paired with its current policy.
+
+    Notification availability may change after startup, so callers request a
+    fresh preflight for each best-effort action. A disabled or unknown result
+    authorizes no native call, but it never changes the primary workflow's
+    state or outcome.
+    """
+
+    capability: CapabilityResult[DesktopNotificationTarget]
+    decision: FeatureDecision
+
+    def __post_init__(self) -> None:
+        if self.decision.feature is not FeatureId.DESKTOP_NOTIFICATION:
+            raise ValueError(
+                "desktop-notification preflight must contain a "
+                "desktop-notification decision"
+            )
+        if not self.decision.allows_execution:
+            return
+        target = self.capability.value
+        if (
+            self.capability.status is not CapabilityStatus.AVAILABLE
+            or not isinstance(target, DesktopNotificationTarget)
+        ):
+            raise ValueError(
+                "executable desktop-notification preflight requires an "
+                "available typed target"
+            )
+        if self.decision.route != target.route_key:
+            raise ValueError(
+                "desktop-notification decision route must match its typed target"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class IdleSuspendInhibitionPreflight:
+    """One optional inhibitor route fact paired with its current policy.
+
+    Inhibition is scoped to a long-running action and desktop availability can
+    change during the process lifetime. Callers request this fresh preflight
+    immediately before acquiring a handle. Releasing a successfully acquired
+    handle remains ordinary cleanup and is not re-gated.
+    """
+
+    capability: CapabilityResult[IdleSuspendInhibitionTarget]
+    decision: FeatureDecision
+
+    def __post_init__(self) -> None:
+        if self.decision.feature is not FeatureId.IDLE_SUSPEND_INHIBITION:
+            raise ValueError(
+                "idle-suspend-inhibition preflight must contain an "
+                "idle-suspend-inhibition decision"
+            )
+        if not self.decision.allows_execution:
+            return
+        target = self.capability.value
+        if (
+            self.capability.status is not CapabilityStatus.AVAILABLE
+            or not isinstance(target, IdleSuspendInhibitionTarget)
+        ):
+            raise ValueError(
+                "executable idle-suspend-inhibition preflight requires an "
+                "available typed target"
+            )
+        if self.decision.route != target.route_key:
+            raise ValueError(
+                "idle-suspend-inhibition decision route must match its typed target"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ViewerLaunchPreflight:
+    """One fresh viewer-window route fact paired with its policy decision.
+
+    The fact is deliberately gathered only when a viewer session is about to
+    start: display endpoints and requested backend overrides can change while
+    the splash UI is open. It does not initialize GLFW or create a rendering
+    context; the platform launch boundary rechecks the declaration immediately
+    before native execution.
+    """
+
+    capability: CapabilityResult[ViewerLaunchTarget]
+    decision: FeatureDecision
+
+    def __post_init__(self) -> None:
+        if self.decision.feature is not FeatureId.VIEWER_LAUNCH:
+            raise ValueError(
+                "viewer-launch preflight must contain a viewer-launch decision"
+            )
+        if not self.decision.allows_execution:
+            return
+        target = self.capability.value
+        if (
+            self.capability.status is not CapabilityStatus.AVAILABLE
+            or not isinstance(target, ViewerLaunchTarget)
+        ):
+            raise ValueError(
+                "executable viewer-launch preflight requires an available "
+                "typed target"
+            )
+        if self.decision.route != target.route_key:
+            raise ValueError(
+                "viewer-launch decision route must match its typed target"
             )
 
 
@@ -211,6 +367,62 @@ class PlatformRuntime:
         return DirectorySelectionPreflight(
             capability=capability,
             decision=decide_directory_selection(capability),
+        )
+
+    def file_selection_capability(
+        self,
+    ) -> CapabilityResult[FileSelectionTarget]:
+        """Probe the current safe file-opening route on demand."""
+        return probe_file_selection(self.desktop_services)
+
+    def file_selection_preflight(self) -> FileSelectionPreflight:
+        """Pair one fresh file-opening route fact with pure policy."""
+        capability = self.file_selection_capability()
+        return FileSelectionPreflight(
+            capability=capability,
+            decision=decide_file_selection(capability),
+        )
+
+    def desktop_notification_capability(
+        self,
+    ) -> CapabilityResult[DesktopNotificationTarget]:
+        """Probe the current optional desktop-notification route on demand."""
+        return probe_desktop_notification(self.desktop_services)
+
+    def desktop_notification_preflight(self) -> DesktopNotificationPreflight:
+        """Pair one fresh notification route fact with its pure policy."""
+        capability = self.desktop_notification_capability()
+        return DesktopNotificationPreflight(
+            capability=capability,
+            decision=decide_desktop_notification(capability),
+        )
+
+    def idle_suspend_inhibition_capability(
+        self,
+    ) -> CapabilityResult[IdleSuspendInhibitionTarget]:
+        """Probe the current scoped desktop-inhibition route on demand."""
+        return probe_idle_suspend_inhibition(self.desktop_services)
+
+    def idle_suspend_inhibition_preflight(
+        self,
+    ) -> IdleSuspendInhibitionPreflight:
+        """Pair one fresh inhibitor route fact with its pure policy."""
+        capability = self.idle_suspend_inhibition_capability()
+        return IdleSuspendInhibitionPreflight(
+            capability=capability,
+            decision=decide_idle_suspend_inhibition(capability),
+        )
+
+    def viewer_launch_capability(self) -> CapabilityResult[ViewerLaunchTarget]:
+        """Probe the current display/backend route only when opening a viewer."""
+        return probe_viewer_launch(platform_name=self.profile.platform_name)
+
+    def viewer_launch_preflight(self) -> ViewerLaunchPreflight:
+        """Pair one fresh viewer-launch route fact with its pure policy."""
+        capability = self.viewer_launch_capability()
+        return ViewerLaunchPreflight(
+            capability=capability,
+            decision=decide_viewer_launch(capability),
         )
 
 

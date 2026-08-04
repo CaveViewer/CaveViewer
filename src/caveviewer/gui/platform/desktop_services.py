@@ -18,8 +18,14 @@ from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
 
 from caveviewer.core.capabilities import (
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    FileSelectionRoute,
+    FileSelectionTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
 )
 
 
@@ -104,6 +110,14 @@ class NoopDesktopInhibitor:
 class DesktopServices(Protocol):
     """Capabilities used to interact with the host desktop."""
 
+    def desktop_notification_target(self) -> DesktopNotificationTarget:
+        """Declare the safe route for one optional notification action."""
+        ...
+
+    def idle_suspend_inhibition_target(self) -> IdleSuspendInhibitionTarget:
+        """Declare the safe route for one optional scoped inhibitor."""
+        ...
+
     def choose_directory(
         self,
         *,
@@ -163,9 +177,21 @@ class DesktopServices(Protocol):
 class TkDesktopServices:
     """Portable chooser fallback used outside Linux portals."""
 
+    def desktop_notification_target(self) -> DesktopNotificationTarget:
+        """Declare that the portable service has no native notification route."""
+        return DesktopNotificationTarget(DesktopNotificationRoute.NOOP)
+
+    def idle_suspend_inhibition_target(self) -> IdleSuspendInhibitionTarget:
+        """Declare that the portable service has no native inhibitor route."""
+        return IdleSuspendInhibitionTarget(IdleSuspendInhibitionRoute.NOOP)
+
     def directory_selection_target(self) -> DirectorySelectionTarget:
         """Declare the portable Tk picker as this service's safe route."""
         return DirectorySelectionTarget(DirectorySelectionRoute.TK)
+
+    def file_selection_target(self) -> FileSelectionTarget:
+        """Declare the portable Tk file picker as this service's safe route."""
+        return FileSelectionTarget(FileSelectionRoute.TK)
 
     def choose_directory(
         self,

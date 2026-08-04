@@ -8,8 +8,18 @@ from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilitySource,
     CapabilityStatus,
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    FileSelectionRoute,
+    FileSelectionTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
+    ViewerLaunchRoute,
+    ViewerLaunchTarget,
+    WindowBackendPlan,
+    WindowSystem,
 )
 
 
@@ -62,3 +72,83 @@ def test_directory_selection_target_validates_known_distinct_routes():
         )
     with pytest.raises(TypeError, match="known route"):
         DirectorySelectionTarget(primary_route="tk")  # type: ignore[arg-type]
+
+
+def test_file_selection_target_validates_known_distinct_routes():
+    target = FileSelectionTarget(
+        primary_route=FileSelectionRoute.PORTAL,
+        fallback_route=FileSelectionRoute.TK,
+    )
+
+    assert target.route_key == "portal_then_tk"
+    with pytest.raises(ValueError, match="must differ"):
+        FileSelectionTarget(
+            primary_route=FileSelectionRoute.TK,
+            fallback_route=FileSelectionRoute.TK,
+        )
+    with pytest.raises(TypeError, match="known route"):
+        FileSelectionTarget(primary_route="tk")  # type: ignore[arg-type]
+
+
+def test_desktop_notification_target_validates_known_distinct_routes():
+    target = DesktopNotificationTarget(
+        primary_route=DesktopNotificationRoute.PORTAL,
+        fallback_route=DesktopNotificationRoute.NOOP,
+    )
+
+    assert target.route_key == "portal_then_noop"
+    with pytest.raises(ValueError, match="must differ"):
+        DesktopNotificationTarget(
+            primary_route=DesktopNotificationRoute.NOOP,
+            fallback_route=DesktopNotificationRoute.NOOP,
+        )
+    with pytest.raises(TypeError, match="known route"):
+        DesktopNotificationTarget(primary_route="portal")  # type: ignore[arg-type]
+
+
+def test_idle_suspend_inhibition_target_validates_known_distinct_routes():
+    target = IdleSuspendInhibitionTarget(
+        primary_route=IdleSuspendInhibitionRoute.PORTAL,
+        fallback_route=IdleSuspendInhibitionRoute.NOOP,
+    )
+
+    assert target.route_key == "portal_then_noop"
+    with pytest.raises(ValueError, match="must differ"):
+        IdleSuspendInhibitionTarget(
+            primary_route=IdleSuspendInhibitionRoute.NOOP,
+            fallback_route=IdleSuspendInhibitionRoute.NOOP,
+        )
+    with pytest.raises(TypeError, match="known route"):
+        IdleSuspendInhibitionTarget(primary_route="portal")  # type: ignore[arg-type]
+
+
+def test_viewer_launch_target_validates_its_native_and_glfw_contracts():
+    native_target = ViewerLaunchTarget(
+        route=ViewerLaunchRoute.NATIVE_MODERNGL,
+        backend_plan=WindowBackendPlan(WindowSystem.AUTO, ()),
+    )
+    glfw_target = ViewerLaunchTarget(
+        route=ViewerLaunchRoute.GLFW_MODERNGL,
+        backend_plan=WindowBackendPlan(
+            WindowSystem.AUTO,
+            (WindowSystem.X11, WindowSystem.WAYLAND),
+        ),
+    )
+
+    assert native_target.route_key == "native_moderngl"
+    assert glfw_target.route_key == "glfw_moderngl:x11_then_wayland"
+    with pytest.raises(ValueError, match="must not select"):
+        ViewerLaunchTarget(
+            route=ViewerLaunchRoute.NATIVE_MODERNGL,
+            backend_plan=WindowBackendPlan(WindowSystem.X11, (WindowSystem.X11,)),
+        )
+    with pytest.raises(ValueError, match="requires at least one"):
+        ViewerLaunchTarget(
+            route=ViewerLaunchRoute.GLFW_MODERNGL,
+            backend_plan=WindowBackendPlan(WindowSystem.AUTO, ()),
+        )
+    with pytest.raises(ValueError, match="exactly that one"):
+        WindowBackendPlan(
+            WindowSystem.X11,
+            (WindowSystem.X11, WindowSystem.WAYLAND),
+        )

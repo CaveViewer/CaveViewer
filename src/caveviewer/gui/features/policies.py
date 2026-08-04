@@ -7,9 +7,17 @@ from typing import TypeVar
 from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilityStatus,
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    FileSelectionRoute,
+    FileSelectionTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
     UpdatePackageRevealRoute,
+    ViewerLaunchRoute,
+    ViewerLaunchTarget,
 )
 from caveviewer.core.map.source_model import SourceFormat
 
@@ -52,12 +60,52 @@ _DIRECTORY_SELECTION_EXPLANATIONS = {
     ),
 }
 
+_FILE_SELECTION_EXPLANATIONS = {
+    "file_selection_service_unavailable": (
+        "File selection is unavailable in this environment."
+    ),
+}
+
+_DESKTOP_NOTIFICATION_EXPLANATIONS = {
+    "desktop_notification_service_unavailable": (
+        "Desktop notifications are unavailable in this environment."
+    ),
+    "desktop_notification_noop_route": (
+        "Desktop notifications are unavailable in this environment."
+    ),
+}
+
+_IDLE_SUSPEND_INHIBITION_EXPLANATIONS = {
+    "idle_suspend_inhibition_service_unavailable": (
+        "Desktop idle/suspend inhibition is unavailable in this environment."
+    ),
+    "idle_suspend_inhibition_noop_route": (
+        "Desktop idle/suspend inhibition is unavailable in this environment."
+    ),
+}
+
 _UPDATE_PACKAGE_REVEAL_EXPLANATIONS = {
     "update_package_reveal_adapter_unavailable": (
         "The verified update package cannot be revealed automatically."
     ),
     "update_package_reveal_route_unsupported": (
         "The verified update package cannot be revealed automatically."
+    ),
+}
+
+_VIEWER_LAUNCH_EXPLANATIONS = {
+    "viewer_launch_backend_request_invalid": (
+        "The requested viewer window backend is not valid. "
+        "Use CAVEVIEWER_WINDOW_SYSTEM=auto, x11, or wayland."
+    ),
+    "viewer_launch_x11_display_unavailable": (
+        "The viewer cannot start because the requested X11 display is unavailable."
+    ),
+    "viewer_launch_wayland_display_unavailable": (
+        "The viewer cannot start because the requested Wayland display is unavailable."
+    ),
+    "viewer_launch_display_unavailable": (
+        "The viewer cannot start because no supported display is available."
     ),
 }
 
@@ -304,6 +352,260 @@ def decide_directory_selection(
         state=FeatureState.DISABLED,
         reason_code="directory_selection_capability_unknown",
         explanation="Directory selection availability could not be determined.",
+    )
+
+
+def decide_file_selection(
+    capability: CapabilityResult[FileSelectionTarget],
+) -> FeatureDecision:
+    """Choose a safe file-opening route without invoking desktop APIs.
+
+    Portal-backed Linux services own their existing Tk fallback internally, so
+    the Portal/Tk composite is the normal executable route. A Tk-only or
+    legacy injected service is still safe, but presented as degraded so callers
+    can preserve a concise compatibility explanation if needed.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        target = capability.value
+        if target.primary_route is FileSelectionRoute.PORTAL:
+            return FeatureDecision(
+                feature=FeatureId.FILE_SELECTION,
+                state=FeatureState.ENABLED,
+                reason_code="file_selection_available",
+                explanation="File selection is available.",
+                route=target.route_key,
+            )
+        if target.primary_route is FileSelectionRoute.TK:
+            return FeatureDecision(
+                feature=FeatureId.FILE_SELECTION,
+                state=FeatureState.DEGRADED,
+                reason_code="file_selection_tk_fallback",
+                explanation="File selection will use the compatible desktop picker.",
+                route=target.route_key,
+            )
+        if target.primary_route is FileSelectionRoute.INJECTED:
+            return FeatureDecision(
+                feature=FeatureId.FILE_SELECTION,
+                state=FeatureState.DEGRADED,
+                reason_code="file_selection_injected_service",
+                explanation="File selection is available through this desktop service.",
+                route=target.route_key,
+            )
+        return FeatureDecision(
+            feature=FeatureId.FILE_SELECTION,
+            state=FeatureState.DISABLED,
+            reason_code="file_selection_route_unsupported",
+            explanation="File selection has no supported execution route.",
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.FILE_SELECTION,
+            state=FeatureState.DISABLED,
+            reason_code=capability.reason_code,
+            explanation=_FILE_SELECTION_EXPLANATIONS.get(
+                capability.reason_code,
+                "File selection is unavailable in this environment.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.FILE_SELECTION,
+        state=FeatureState.DISABLED,
+        reason_code="file_selection_capability_unknown",
+        explanation="File selection availability could not be determined.",
+    )
+
+
+def decide_desktop_notification(
+    capability: CapabilityResult[DesktopNotificationTarget],
+) -> FeatureDecision:
+    """Choose whether an optional desktop notification route may run.
+
+    Notifications never control the underlying workflow. This policy only
+    decides whether the best-effort desktop action may be attempted: an
+    indeterminate or unavailable route becomes a logged no-op at the action
+    boundary, while the download, import, or other primary work continues.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        target = capability.value
+        if target.primary_route is DesktopNotificationRoute.PORTAL:
+            return FeatureDecision(
+                feature=FeatureId.DESKTOP_NOTIFICATION,
+                state=FeatureState.ENABLED,
+                reason_code="desktop_notification_available",
+                explanation="Desktop notifications are available.",
+                route=target.route_key,
+            )
+        if target.primary_route is DesktopNotificationRoute.INJECTED:
+            return FeatureDecision(
+                feature=FeatureId.DESKTOP_NOTIFICATION,
+                state=FeatureState.DEGRADED,
+                reason_code="desktop_notification_injected_service",
+                explanation=(
+                    "Desktop notifications are available through this desktop service."
+                ),
+                route=target.route_key,
+            )
+        if target.primary_route is DesktopNotificationRoute.NOOP:
+            return FeatureDecision(
+                feature=FeatureId.DESKTOP_NOTIFICATION,
+                state=FeatureState.DISABLED,
+                reason_code="desktop_notification_noop_route",
+                explanation=_DESKTOP_NOTIFICATION_EXPLANATIONS[
+                    "desktop_notification_noop_route"
+                ],
+            )
+        return FeatureDecision(
+            feature=FeatureId.DESKTOP_NOTIFICATION,
+            state=FeatureState.DISABLED,
+            reason_code="desktop_notification_route_unsupported",
+            explanation="Desktop notifications have no supported execution route.",
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.DESKTOP_NOTIFICATION,
+            state=FeatureState.DISABLED,
+            reason_code=capability.reason_code,
+            explanation=_DESKTOP_NOTIFICATION_EXPLANATIONS.get(
+                capability.reason_code,
+                "Desktop notifications are unavailable in this environment.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.DESKTOP_NOTIFICATION,
+        state=FeatureState.DISABLED,
+        reason_code="desktop_notification_capability_unknown",
+        explanation="Desktop notification availability could not be determined.",
+    )
+
+
+def decide_idle_suspend_inhibition(
+    capability: CapabilityResult[IdleSuspendInhibitionTarget],
+) -> FeatureDecision:
+    """Choose whether one optional scoped inhibitor may be acquired.
+
+    Inhibition only augments a long-running operation. An unavailable or
+    uncertain route becomes a diagnostic no-op at the action boundary; it never
+    blocks the map import, map-library download, or update download that asked
+    for it.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        target = capability.value
+        if target.primary_route is IdleSuspendInhibitionRoute.PORTAL:
+            return FeatureDecision(
+                feature=FeatureId.IDLE_SUSPEND_INHIBITION,
+                state=FeatureState.ENABLED,
+                reason_code="idle_suspend_inhibition_available",
+                explanation="Desktop idle/suspend inhibition is available.",
+                route=target.route_key,
+            )
+        if target.primary_route is IdleSuspendInhibitionRoute.INJECTED:
+            return FeatureDecision(
+                feature=FeatureId.IDLE_SUSPEND_INHIBITION,
+                state=FeatureState.DEGRADED,
+                reason_code="idle_suspend_inhibition_injected_service",
+                explanation=(
+                    "Desktop idle/suspend inhibition is available through this "
+                    "desktop service."
+                ),
+                route=target.route_key,
+            )
+        if target.primary_route is IdleSuspendInhibitionRoute.NOOP:
+            return FeatureDecision(
+                feature=FeatureId.IDLE_SUSPEND_INHIBITION,
+                state=FeatureState.DISABLED,
+                reason_code="idle_suspend_inhibition_noop_route",
+                explanation=_IDLE_SUSPEND_INHIBITION_EXPLANATIONS[
+                    "idle_suspend_inhibition_noop_route"
+                ],
+            )
+        return FeatureDecision(
+            feature=FeatureId.IDLE_SUSPEND_INHIBITION,
+            state=FeatureState.DISABLED,
+            reason_code="idle_suspend_inhibition_route_unsupported",
+            explanation=(
+                "Desktop idle/suspend inhibition has no supported execution route."
+            ),
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.IDLE_SUSPEND_INHIBITION,
+            state=FeatureState.DISABLED,
+            reason_code=capability.reason_code,
+            explanation=_IDLE_SUSPEND_INHIBITION_EXPLANATIONS.get(
+                capability.reason_code,
+                "Desktop idle/suspend inhibition is unavailable in this environment.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.IDLE_SUSPEND_INHIBITION,
+        state=FeatureState.DISABLED,
+        reason_code="idle_suspend_inhibition_capability_unknown",
+        explanation=(
+            "Desktop idle/suspend inhibition availability could not be determined."
+        ),
+    )
+
+
+def decide_viewer_launch(
+    capability: CapabilityResult[ViewerLaunchTarget],
+) -> FeatureDecision:
+    """Select a viewer-window route from a fresh, typed platform fact.
+
+    A viewer cannot safely continue without a window, so known unavailable or
+    indeterminate launch facts fail closed before map import or render setup.
+    The adapter still owns native GLFW/ModernGL creation and may report a
+    bounded initialization failure after this policy authorizes the target.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and isinstance(
+        capability.value,
+        ViewerLaunchTarget,
+    ):
+        target = capability.value
+        if target.route is ViewerLaunchRoute.NATIVE_MODERNGL:
+            return FeatureDecision(
+                feature=FeatureId.VIEWER_LAUNCH,
+                state=FeatureState.ENABLED,
+                reason_code="viewer_launch_native_route_available",
+                explanation="The viewer window is available.",
+                route=target.route_key,
+            )
+        if target.route is ViewerLaunchRoute.GLFW_MODERNGL:
+            return FeatureDecision(
+                feature=FeatureId.VIEWER_LAUNCH,
+                state=FeatureState.ENABLED,
+                reason_code="viewer_launch_glfw_route_available",
+                explanation="The viewer window is available.",
+                route=target.route_key,
+            )
+        return FeatureDecision(
+            feature=FeatureId.VIEWER_LAUNCH,
+            state=FeatureState.DISABLED,
+            reason_code="viewer_launch_route_unsupported",
+            explanation="The viewer window has no supported execution route.",
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.VIEWER_LAUNCH,
+            state=FeatureState.DISABLED,
+            reason_code=capability.reason_code,
+            explanation=_VIEWER_LAUNCH_EXPLANATIONS.get(
+                capability.reason_code,
+                "The viewer window is unavailable in this environment.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.VIEWER_LAUNCH,
+        state=FeatureState.DISABLED,
+        reason_code="viewer_launch_capability_unknown",
+        explanation="Viewer-window availability could not be determined.",
     )
 
 
