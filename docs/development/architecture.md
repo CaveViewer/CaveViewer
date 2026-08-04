@@ -416,9 +416,12 @@ Directory selection follows the same on-demand contract. Its immutable target
 declares an executable route rather than performing a desktop request:
 Linux declares `portal_then_tk`, portable desktop services declare `tk`, and
 legacy injected services use the conservative `injected` route. The declaration
-does not create Tk resources or contact D-Bus. Map-opening actions obtain a
-fresh preflight immediately before invoking the chooser; the Portal service
-still owns the action-time fallback to Tk if its current request fails.
+does not create Tk resources or contact D-Bus. Map-opening and Preferences
+browse actions obtain a fresh preflight immediately before invoking the chooser;
+the Portal service still owns the action-time fallback to Tk if its current
+request fails. The Preferences “Downloaded maps folder” control therefore
+shares the same on-demand contract used by Map Library storage without adding a
+separate startup gate.
 
 Feature-state semantics are fixed:
 

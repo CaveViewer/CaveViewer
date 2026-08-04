@@ -11,7 +11,6 @@ from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.map import source_model
 from caveviewer.gui.features import (
     FeatureDecision,
-    decide_directory_selection,
     decide_map_source_import,
 )
 from caveviewer.gui.platform import (
@@ -20,7 +19,7 @@ from caveviewer.gui.platform import (
     get_desktop_services,
     tk_root_options,
 )
-from caveviewer.gui.platform.probes.desktop import probe_directory_selection
+from caveviewer.gui.platform.directory_selection import directory_selection_decision
 
 if TYPE_CHECKING:
     from caveviewer.gui.platform.runtime import PlatformRuntime
@@ -44,26 +43,6 @@ class OpenMapTarget:
     def is_prebuilt_cache(self) -> bool:
         """Return whether this target is an already-built chunk cache."""
         return self.cache_dir is not None
-
-
-def directory_selection_decision(
-    desktop_services: DesktopServices,
-    *,
-    platform_runtime: PlatformRuntime | None = None,
-) -> FeatureDecision:
-    """Return a fresh directory-picker decision for one map-opening action.
-
-    Interactive application paths inject one runtime and therefore reuse its
-    shared desktop service. Compatibility callers that supply another service
-    still receive the same on-demand probe and pure policy without creating a
-    second runtime.
-    """
-    if (
-        platform_runtime is not None
-        and desktop_services is platform_runtime.desktop_services
-    ):
-        return platform_runtime.directory_selection_preflight().decision
-    return decide_directory_selection(probe_directory_selection(desktop_services))
 
 
 def pick_folder_dialog(

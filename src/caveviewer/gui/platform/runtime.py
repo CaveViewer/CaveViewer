@@ -169,7 +169,7 @@ class PlatformRuntime:
     def directory_selection_capability(
         self,
     ) -> CapabilityResult[DirectorySelectionTarget]:
-        """Probe the current safe map-directory picker route on demand."""
+        """Probe the current safe directory-picker route on demand."""
         return probe_directory_selection(self.desktop_services)
 
     def directory_selection_preflight(self) -> DirectorySelectionPreflight:

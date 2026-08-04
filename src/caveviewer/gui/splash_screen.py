@@ -797,6 +797,7 @@ def show_splash_screen(
             root,
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
+            platform_runtime=platform_runtime,
             on_applied=_on_preferences_applied,
         )
 
