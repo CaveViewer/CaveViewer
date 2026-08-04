@@ -1337,6 +1337,39 @@ def test_recording_success_reveals_saved_file_after_user_visible_stop():
     assert revealed == ["/recordings/cave.mp4"]
 
 
+def test_recording_success_uses_injected_runtime_reveal_adapter(monkeypatch):
+    revealed = []
+
+    class FakeSavedRecordingRevealAdapter:
+        def reveal_saved_recording(self, path):
+            revealed.append(path)
+
+    window = _recording_window()
+    window._platform_adapter = None
+    window._platform_runtime = SimpleNamespace(
+        saved_recording_reveal_adapter=FakeSavedRecordingRevealAdapter()
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "get_platform_adapter",
+        lambda: pytest.fail("runtime adapter must replace the legacy factory"),
+    )
+
+    window._apply_recording_stop_result(
+        recording.RecordingStopResult(
+            output_path="/recordings/cave.mp4",
+            returncode=0,
+            stderr_text="",
+            writer_error=None,
+            dropped_frames=0,
+            show_message=True,
+        )
+    )
+
+    assert window._recording_status_message == "Recording saved"
+    assert revealed == ["/recordings/cave.mp4"]
+
+
 def test_recording_success_does_not_reveal_after_background_stop():
     revealed = []
 

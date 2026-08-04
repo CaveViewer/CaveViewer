@@ -14,6 +14,7 @@ platform/
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── update_package_storage.py # Focused verified-package storage facade
+├── saved_recording_reveal.py # Focused post-save recording reveal facade
 ├── probes/desktop.py        # On-demand directory-selection route declaration
 ├── probes/update_package_reveal.py # Static package-reveal route declaration
 ├── probes/updates.py        # Static signed-update configuration and target probe
@@ -125,8 +126,16 @@ storage location can become unavailable while the app is running. Its current
 compatibility facade delegates to the broad adapter's established naming,
 collision, macOS DMG, and Linux AppImage behavior. A persistence exception is
 an ordinary update-workflow failure, after which `UpdateManager` performs its
-normal temporary-file cleanup. Saved-recording reveal, notifications, and
-inhibition remain separate migrations.
+normal temporary-file cleanup.
+
+Saved-recording reveal is a focused post-save
+`SavedRecordingRevealAdapter`. It runs only after the encoder reports success
+for a user-visible stop, so it does not require a capability probe or feature
+gate: a file-manager failure cannot undo a recording that was already saved.
+Its compatibility facade delegates to the broad adapter's established Finder,
+Explorer, and Linux desktop-service behavior. The viewer logs a reveal failure
+while preserving the successful recording status. Notifications and inhibition
+remain separate migrations.
 
 Video recording is the first on-demand gate. When the user starts recording,
 the viewer asks the runtime for a `VideoRecordingPreflight`: one narrow probe
@@ -148,12 +157,13 @@ control is Map Library's directory-setting surface, so it shares this same
 authorization rather than creating a Map Library-specific gate.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
-unmigrated platform actions. `UpdatePackageRevealAdapter` and
-`UpdatePackageStorageAdapter` are narrow facades around existing package
-actions. New features should add the smallest appropriate combination of a
-probe, a pure policy in `caveviewer.gui.features`, and an injected action
-adapter rather than expanding this broad protocol. Cache, chunk streaming,
-navigation, and map state are outside this runtime layer.
+unmigrated platform actions. `UpdatePackageRevealAdapter`,
+`UpdatePackageStorageAdapter`, and `SavedRecordingRevealAdapter` are narrow
+facades around existing package and post-save actions. New features should add
+the smallest appropriate combination of a probe, a pure policy in
+`caveviewer.gui.features`, and an injected action adapter rather than
+expanding this broad protocol. Cache, chunk streaming, navigation, and map
+state are outside this runtime layer.
 
 ## Key Components
 
@@ -379,7 +389,10 @@ and should show the file in the native file manager after a user-visible
 completion.
 
 **How**:
-- `reveal_file()` exposes a saved file without opening or executing it.
+- `SavedRecordingRevealAdapter.reveal_saved_recording()` exposes a completed
+  recording without opening or executing it.
+- `reveal_file()` remains the compatibility implementation until recording
+  reveal behavior moves behind that focused adapter.
 - macOS reveals the file in Finder.
 - Windows selects the file in Explorer.
 - Linux uses desktop-service reveal, with portal support and fallback behavior

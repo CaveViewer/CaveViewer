@@ -45,16 +45,23 @@ class FakeUpdatePackageStorageAdapter:
         raise AssertionError("runtime composition must not persist a package")
 
 
+class FakeSavedRecordingRevealAdapter:
+    def reveal_saved_recording(self, _output_path):
+        raise AssertionError("runtime composition must not reveal a recording")
+
+
 def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_UPDATE_BRANCH", "ignored-process-value")
     adapter = FakeUpdateAdapter()
     desktop_services = object()
     storage_adapter = FakeUpdatePackageStorageAdapter()
+    recording_reveal_adapter = FakeSavedRecordingRevealAdapter()
 
     runtime = create_platform_runtime(
         platform_adapter=adapter,
         desktop_services=desktop_services,
         update_package_storage_adapter=storage_adapter,
+        saved_recording_reveal_adapter=recording_reveal_adapter,
         environment={
             "CAVEVIEWER_UPDATE_BRANCH": "release-candidate",
             "CAVEVIEWER_UPDATE_CHANNEL": "prerelease",
@@ -66,6 +73,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.platform_adapter is adapter
     assert runtime.desktop_services is desktop_services
     assert runtime.update_package_storage_adapter is storage_adapter
+    assert runtime.saved_recording_reveal_adapter is recording_reveal_adapter
     assert runtime.profile.platform_name == "linux"
     assert runtime.profile.machine == "x86_64"
     assert runtime.update_configuration.branch == "release-candidate"
