@@ -169,6 +169,10 @@ so atomic cache replacement and managed-cache storage do not erase the
 reference flight. They remain optional ground truth: cache construction and
 offline certificate route selection never consume them as required map
 metadata.
+Once the background writer atomically publishes a completed trace, the viewer
+shows a transient success status and asks the runtime's
+`SavedRecordingRevealAdapter` to reveal that final JSONL file. Reveal is
+best-effort and cannot change the completed trace result.
 
 Recorded Dive is the separate trace-playback path. Opening a completed JSONL
 associates its bounded source basename, cache-manifest version, chunk size,

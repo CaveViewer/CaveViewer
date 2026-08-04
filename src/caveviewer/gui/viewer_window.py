@@ -2315,7 +2315,13 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._apply_recording_stop_result(result)
             self._recording_stop_thread = None
 
-    def _reveal_recording_output(self, output_path: str | None) -> None:
+    def _reveal_saved_output(
+        self,
+        output_path: str | None,
+        *,
+        output_kind: str,
+    ) -> None:
+        """Best-effort native reveal after a writer has published final output."""
         if not output_path:
             return
         try:
@@ -2324,7 +2330,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
         except Exception as exc:
             _LOG.warning(
-                "Could not reveal saved recording %s: %s",
+                "Could not reveal saved %s %s: %s",
+                output_kind,
                 output_path,
                 exc,
             )
@@ -2342,7 +2349,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                     kind="success",
                     duration=3.2,
                 )
-                self._reveal_recording_output(result.output_path)
+                self._reveal_saved_output(
+                    result.output_path,
+                    output_kind="recording",
+                )
         else:
             if result.stderr_text and result.writer_error:
                 detail = f": {result.stderr_text}; writer_error={result.writer_error}"
@@ -5790,6 +5800,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             pending.remove(finished)
             if result.completed:
                 _LOG.info("Manual Guided Dive trace saved: %s", result.output_path)
+                self._show_recording_status(
+                    "Guided Dive saved",
+                    kind="success",
+                    duration=3.2,
+                )
+                self._reveal_saved_output(
+                    result.output_path,
+                    output_kind="Guided Dive",
+                )
             else:
                 _LOG.warning(
                     "Manual Guided Dive trace failed to save: %s (%s)",
