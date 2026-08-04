@@ -24,6 +24,7 @@ src/caveviewer/core/capabilities/hardware.py   typed GPU-memory and RAM-availabi
 src/caveviewer/core/json_io.py                 bounded JSON loading for core inputs
 src/caveviewer/core/map/                      map discovery, cache, and import workflow
 src/caveviewer/core/map/cache_paths.py         map-cache location policy
+src/caveviewer/core/map/cache_identity.py      versioned Guided Dive cache identity
 src/caveviewer/core/map/source_model.py        source-format registry, capabilities, and discovery
 src/caveviewer/core/map/importer.py            model import and cache-build workflow
 src/caveviewer/core/map/compiler.py            CLI map compilation orchestration

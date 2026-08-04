@@ -300,10 +300,13 @@ drop reporting, final-pose retention, background write failure, map-switch
 cleanup, and bookmark/minimap discontinuities. Test output belongs under
 `tmp_path`; generated `_guided_dives` directories are never repository
 fixtures.
-Recorded Dive coverage must validate bounded JSONL parsing, source/cache
-association, exact first and final poses, frame-rate-independent interpolation,
-instantaneous declared discontinuities, pause/resume, GPU-chunk buffering, and
-direct camera application that bypasses the manual navigation guard.
+Recorded Dive coverage must validate bounded JSONL parsing, its versioned
+source/cache identity contract, exact first and final poses,
+frame-rate-independent interpolation, instantaneous declared discontinuities,
+pause/resume, GPU-chunk buffering, and direct camera application that bypasses
+the manual navigation guard. Cache-construction coverage must prove that both
+standard and incremental builds write the same portable Guided Dive identity
+that trace playback checks.
 Use the explicit farthest/frontier profile only when testing continuation
 behavior on incomplete or mesh-blocked evidence.
 Asynchronous replan, pacing-hold, and continuous-scan diagnostics remain core

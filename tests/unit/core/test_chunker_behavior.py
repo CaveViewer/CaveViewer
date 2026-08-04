@@ -22,6 +22,10 @@ from caveviewer.core.navigation.voxel_cache import (
     NAVIGATION_ROUTE_SELECTION_LONGEST_SAFE_NON_CIRCULAR,
     NavigationVoxelCacheBuildResult,
 )
+from caveviewer.core.map.cache_identity import (
+    build_guided_dive_cache_identity,
+    guided_dive_cache_identity_from_manifest,
+)
 from caveviewer.core.workers.allocation import WorkerAllocation
 
 
@@ -590,6 +594,9 @@ def test_build_cache_reports_progress_and_atomically_replaces_existing_cache(
     assert result == str(old_cache)
     assert not (old_cache / "old-marker").exists()
     assert (old_cache / chunker.MANIFEST_NAME).is_file()
+    manifest = chunker.load_manifest(str(old_cache))
+    identity = guided_dive_cache_identity_from_manifest(manifest)
+    assert identity == build_guided_dive_cache_identity(source, manifest)
     assert events[0] == ("computing face centroids", 0.0)
     assert events[-1] == ("done", 1.0)
     stages = {stage for stage, _fraction in events}
@@ -1003,6 +1010,9 @@ def test_incremental_obj_cache_build_writes_standard_chunks(tmp_path, monkeypatc
     assert manifest["triangle_count"] == 2
     assert manifest["mtl_materials"] == {"rock": "rock.jpg", "sand": "sand.jpg"}
     assert set(manifest["chunks"]) == {"0_0_0", "1_0_0"}
+    assert guided_dive_cache_identity_from_manifest(manifest) == (
+        build_guided_dive_cache_identity(source, manifest)
+    )
     assert not (cache_dir / ".chunk-buckets").exists()
 
     first = chunker.load_chunk_file(str(cache_dir), (0, 0, 0))

@@ -20,6 +20,11 @@ from typing import Any
 
 import numpy as np
 
+from caveviewer.core.map.cache_identity import (
+    GuidedDiveCacheIdentity,
+    guided_dive_cache_identity_from_manifest,
+    parse_guided_dive_cache_identity,
+)
 from caveviewer.gui.manual_dive_trace import (
     MANUAL_DIVE_TRACE_DIRECTORY,
     MANUAL_DIVE_TRACE_SCHEMA_VERSION,
@@ -52,6 +57,7 @@ class RecordedDiveMapReference:
     manifest_version: int | None
     chunk_size_m: float | None
     triangle_count: int | None
+    cache_identity: GuidedDiveCacheIdentity
 
 
 @dataclass(frozen=True)
@@ -494,6 +500,16 @@ def validate_recorded_dive_manifest(
             raise RecordedDiveMapError(
                 "Recorded Dive geometry does not match this map cache."
             )
+    cache_identity = guided_dive_cache_identity_from_manifest(manifest)
+    if cache_identity is None:
+        raise RecordedDiveMapError(
+            "This map cache lacks a stable Guided Dive identity. Rebuild the map "
+            "before playing a Guided Dive."
+        )
+    if cache_identity != reference.cache_identity:
+        raise RecordedDiveMapError(
+            "Recorded Dive cache identity does not match this map cache."
+        )
 
 
 def apply_recorded_dive_pose(camera: Any, pose: RecordedDivePose) -> None:
@@ -560,11 +576,17 @@ def _parse_map_reference(value: Any) -> RecordedDiveMapReference:
     if chunk_size_m is not None and chunk_size_m <= 0.0:
         raise RecordedDiveFormatError("Recorded Dive chunk size must be positive.")
     triangle_count = _optional_nonnegative_int(value.get("triangle_count"))
+    cache_identity = parse_guided_dive_cache_identity(value.get("cache_identity"))
+    if cache_identity is None:
+        raise RecordedDiveFormatError(
+            "Recorded Dive header is missing a stable cache identity."
+        )
     return RecordedDiveMapReference(
         source_name=source_name,
         manifest_version=manifest_version,
         chunk_size_m=chunk_size_m,
         triangle_count=triangle_count,
+        cache_identity=cache_identity,
     )
 
 

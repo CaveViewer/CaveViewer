@@ -534,7 +534,14 @@ def test_manual_trace_starts_in_the_explicit_map_root(tmp_path, monkeypatch):
     window._manual_dive_trace = None
     window.camera = _manual_trace_camera()
     window.map_root = str(map_root)
-    window.manifest = {"source_obj": "cave.obj"}
+    window.manifest = {
+        "source_obj": "cave.obj",
+        "guided_dive_identity": {
+            "version": 1,
+            "source_sha256": "a" * 64,
+            "cache_manifest_sha256": "b" * 64,
+        },
+    }
     window._primary_shortcut_label = lambda: "Ctrl"
     monkeypatch.setattr(
         viewer_window.manual_dive_trace,

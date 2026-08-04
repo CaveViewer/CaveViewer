@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from caveviewer.core.map.cache_identity import GUIDED_DIVE_CACHE_IDENTITY_KEY
 from caveviewer.gui import manual_dive_trace
 from caveviewer.gui.manual_dive_trace import (
     ManualDivePose,
@@ -43,9 +44,26 @@ def _records(path) -> list[dict]:
     ]
 
 
+def _cache_identity() -> dict[str, int | str]:
+    return {
+        "version": 1,
+        "source_sha256": "a" * 64,
+        "cache_manifest_sha256": "b" * 64,
+    }
+
+
+def _trace_map_context(*, source_obj: str = "cave.obj") -> dict:
+    return {
+        "source_obj": source_obj,
+        "cache_identity": _cache_identity(),
+    }
+
+
 def _recorder(tmp_path, **kwargs) -> ManualDiveTraceRecorder:
+    map_context = kwargs.pop("map_context", _trace_map_context())
     return ManualDiveTraceRecorder(
         tmp_path / "_guided_dives",
+        map_context=map_context,
         utc_now=lambda: datetime(2026, 8, 2, 12, 30, tzinfo=timezone.utc),
         **kwargs,
     )
@@ -68,6 +86,7 @@ def test_map_context_keeps_source_basename_and_entrance_evidence():
             "version": 1,
             "source_obj": "/private/maps/cave.obj",
             "chunk_size": 50.0,
+            GUIDED_DIVE_CACHE_IDENTITY_KEY: _cache_identity(),
             "navigation": {
                 "version": 12,
                 "method": "fixed_orthogonal_voxel_graph_v12",
@@ -92,13 +111,14 @@ def test_map_context_keeps_source_basename_and_entrance_evidence():
         "coordinate_space": "manifest_xyz",
         "distance_unit": "meter",
         "orientation_unit": "radian",
+        "cache_identity": _cache_identity(),
     }
 
 
 def test_manual_trace_writes_start_samples_and_completion(tmp_path):
     recorder = _recorder(
         tmp_path,
-        map_context={"source_obj": "small.obj"},
+        map_context=_trace_map_context(source_obj="small.obj"),
         sample_interval_s=0.10,
         sample_distance_m=0.25,
     )
@@ -123,6 +143,8 @@ def test_manual_trace_writes_start_samples_and_completion(tmp_path):
         "trace_completed",
     ]
     assert records[0]["map"]["source_obj"] == "small.obj"
+    assert records[0]["schema_version"] == 2
+    assert records[0]["map"]["cache_identity"] == _cache_identity()
     assert records[-1]["reason"] == "user_stopped"
     assert records[-1]["total_flown_distance_m"] == 0.5
     assert records[-1]["dropped_sample_count"] == 0
@@ -159,6 +181,16 @@ def test_trace_closes_partial_file_before_atomic_publish(tmp_path, monkeypatch):
     result = recorder.wait()
     assert result is not None
     assert result.completed is True
+
+
+def test_trace_requires_a_stable_cache_identity(tmp_path):
+    recorder = ManualDiveTraceRecorder(
+        tmp_path / "_guided_dives",
+        map_context={"source_obj": "cave.obj"},
+    )
+
+    with pytest.raises(ValueError, match="stable identity"):
+        recorder.start(_pose(), now=0.0)
 
 
 def test_orientation_threshold_and_stationary_heartbeat_are_recorded(tmp_path):
@@ -238,6 +270,7 @@ def test_background_write_failure_is_nonfatal_and_reported(tmp_path):
     not_a_directory.write_text("occupied", encoding="utf-8")
     recorder = ManualDiveTraceRecorder(
         not_a_directory,
+        map_context=_trace_map_context(),
         utc_now=lambda: datetime(2026, 8, 2, tzinfo=timezone.utc),
     )
 

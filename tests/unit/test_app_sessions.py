@@ -12,6 +12,7 @@ import pytest
 
 from caveviewer import app
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.gui.manual_dive_trace import MANUAL_DIVE_TRACE_SCHEMA_VERSION
 from caveviewer.gui.platform import runtime as platform_runtime_module
 from caveviewer.gui.platform.app_identity import tk_root_options
 
@@ -34,6 +35,14 @@ class _LogRecorder:
 
     def error(self, message, *args):
         self.error_messages.append(self._format(message, args))
+
+
+def _guided_dive_cache_identity() -> dict[str, int | str]:
+    return {
+        "version": 1,
+        "source_sha256": "a" * 64,
+        "cache_manifest_sha256": "b" * 64,
+    }
 
 
 def _install_viewer_module(monkeypatch, *, run_viewer=None, run_pending=None):
@@ -255,13 +264,14 @@ def test_map_session_opens_recorded_dive_against_its_map_local_cache(
     records = [
         {
             "record": "trace_started",
-            "schema_version": 1,
+            "schema_version": MANUAL_DIVE_TRACE_SCHEMA_VERSION,
             "session_id": "shared-dive",
             "map": {
                 "source_obj": "cave.obj",
                 "manifest_version": 1,
                 "chunk_size_m": 50.0,
                 "triangle_count": 12,
+                "cache_identity": _guided_dive_cache_identity(),
                 "coordinate_space": "manifest_xyz",
                 "distance_unit": "meter",
                 "orientation_unit": "radian",
@@ -269,7 +279,7 @@ def test_map_session_opens_recorded_dive_against_its_map_local_cache(
         },
         {
             "record": "sample",
-            "schema_version": 1,
+            "schema_version": MANUAL_DIVE_TRACE_SCHEMA_VERSION,
             "session_id": "shared-dive",
             "sample_index": 0,
             "elapsed_s": 0.0,
@@ -284,7 +294,7 @@ def test_map_session_opens_recorded_dive_against_its_map_local_cache(
         },
         {
             "record": "trace_completed",
-            "schema_version": 1,
+            "schema_version": MANUAL_DIVE_TRACE_SCHEMA_VERSION,
             "session_id": "shared-dive",
             "duration_s": 0.0,
         },
@@ -303,6 +313,7 @@ def test_map_session_opens_recorded_dive_against_its_map_local_cache(
         "source_obj": "cave.obj",
         "chunk_size": 50.0,
         "triangle_count": 12,
+        "guided_dive_identity": _guided_dive_cache_identity(),
     }
     opened = []
     monkeypatch.setattr(app, "find_model_file", lambda path: descriptor)
@@ -351,7 +362,7 @@ def test_map_session_reports_an_incomplete_recorded_dive(tmp_path, monkeypatch):
         json.dumps(
             {
                 "record": "trace_started",
-                "schema_version": 1,
+                "schema_version": MANUAL_DIVE_TRACE_SCHEMA_VERSION,
                 "session_id": "broken",
                 "map": {},
             }

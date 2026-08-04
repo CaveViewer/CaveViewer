@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from caveviewer.gui.camera import FlyCamera
+from caveviewer.gui.manual_dive_trace import MANUAL_DIVE_TRACE_SCHEMA_VERSION
 from caveviewer.gui.recorded_dive import (
     RecordedDiveFormatError,
     RecordedDiveMapError,
@@ -19,6 +20,28 @@ from caveviewer.gui.recorded_dive import (
     resolve_recorded_dive_source_path,
     validate_recorded_dive_manifest,
 )
+
+
+def _cache_identity(
+    *,
+    source_sha256: str = "a" * 64,
+    cache_manifest_sha256: str = "b" * 64,
+) -> dict[str, int | str]:
+    return {
+        "version": 1,
+        "source_sha256": source_sha256,
+        "cache_manifest_sha256": cache_manifest_sha256,
+    }
+
+
+def _manifest() -> dict:
+    return {
+        "version": 1,
+        "source_obj": "cave.obj",
+        "chunk_size": 50.0,
+        "triangle_count": 12,
+        "guided_dive_identity": _cache_identity(),
+    }
 
 
 def _pose_record(
@@ -33,7 +56,7 @@ def _pose_record(
 ) -> dict:
     return {
         "record": record,
-        "schema_version": 1,
+        "schema_version": MANUAL_DIVE_TRACE_SCHEMA_VERSION,
         "session_id": "recorded-session",
         "sample_index": sample_index,
         "elapsed_s": elapsed_s,
@@ -56,13 +79,14 @@ def _write_trace(tmp_path, poses: list[dict], *, completed: bool = True):
     records = [
         {
             "record": "trace_started",
-            "schema_version": 1,
+            "schema_version": MANUAL_DIVE_TRACE_SCHEMA_VERSION,
             "session_id": "recorded-session",
             "map": {
                 "source_obj": "cave.obj",
                 "manifest_version": 1,
                 "chunk_size_m": 50.0,
                 "triangle_count": 12,
+                "cache_identity": _cache_identity(),
                 "coordinate_space": "manifest_xyz",
                 "distance_unit": "meter",
                 "orientation_unit": "radian",
@@ -74,7 +98,7 @@ def _write_trace(tmp_path, poses: list[dict], *, completed: bool = True):
         records.append(
             {
                 "record": "trace_completed",
-                "schema_version": 1,
+                "schema_version": MANUAL_DIVE_TRACE_SCHEMA_VERSION,
                 "session_id": "recorded-session",
                 "duration_s": poses[-1]["elapsed_s"],
             }
@@ -218,12 +242,7 @@ def test_trace_resolves_adjacent_map_and_validates_cache_identity(tmp_path):
         [_pose_record(0, 0.0, (0.0, 0.0, 0.0))],
     )
     trace = load_recorded_dive_trace(path)
-    manifest = {
-        "version": 1,
-        "source_obj": "cave.obj",
-        "chunk_size": 50.0,
-        "triangle_count": 12,
-    }
+    manifest = _manifest()
 
     assert resolve_recorded_dive_source_path(trace) == source.resolve()
     validate_recorded_dive_manifest(trace, manifest)
@@ -232,6 +251,62 @@ def test_trace_resolves_adjacent_map_and_validates_cache_identity(tmp_path):
         validate_recorded_dive_manifest(
             trace,
             {**manifest, "triangle_count": 13},
+        )
+
+
+def test_loader_rejects_a_trace_without_stable_cache_identity(tmp_path):
+    path, _source = _write_trace(
+        tmp_path,
+        [_pose_record(0, 0.0, (0.0, 0.0, 0.0))],
+    )
+    records = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    records[0]["map"].pop("cache_identity")
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RecordedDiveFormatError, match="stable cache identity"):
+        load_recorded_dive_trace(path)
+
+
+def test_loader_rejects_the_previous_trace_schema_version(tmp_path):
+    path, _source = _write_trace(
+        tmp_path,
+        [_pose_record(0, 0.0, (0.0, 0.0, 0.0))],
+    )
+    records = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    for record in records:
+        record["schema_version"] = MANUAL_DIVE_TRACE_SCHEMA_VERSION - 1
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RecordedDiveFormatError, match="unsupported schema version"):
+        load_recorded_dive_trace(path)
+
+
+def test_trace_rejects_a_different_stable_cache_identity(tmp_path):
+    path, _source = _write_trace(
+        tmp_path,
+        [_pose_record(0, 0.0, (0.0, 0.0, 0.0))],
+    )
+    trace = load_recorded_dive_trace(path)
+
+    with pytest.raises(RecordedDiveMapError, match="cache identity"):
+        validate_recorded_dive_manifest(
+            trace,
+            {
+                **_manifest(),
+                "guided_dive_identity": _cache_identity(source_sha256="c" * 64),
+            },
         )
 
 

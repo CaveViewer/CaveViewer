@@ -17,8 +17,12 @@ import uuid
 
 import numpy as np
 
+from caveviewer.core.map.cache_identity import (
+    guided_dive_cache_identity_from_manifest,
+    parse_guided_dive_cache_identity,
+)
 
-MANUAL_DIVE_TRACE_SCHEMA_VERSION = 1
+MANUAL_DIVE_TRACE_SCHEMA_VERSION = 2
 MANUAL_DIVE_TRACE_DIRECTORY = "_guided_dives"
 MANUAL_DIVE_TRACE_FILENAME_PREFIX = "guided_dive_manual_trace"
 DEFAULT_SAMPLE_INTERVAL_S = 0.10
@@ -44,7 +48,7 @@ def manual_dive_trace_directory(
 def manual_dive_trace_map_context(
     manifest: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Return bounded map identity and entrance evidence for a trace header."""
+    """Return bounded map identity and cache evidence for a trace header."""
     manifest = manifest if isinstance(manifest, Mapping) else {}
     navigation = manifest.get("navigation")
     navigation = navigation if isinstance(navigation, Mapping) else {}
@@ -53,7 +57,7 @@ def manual_dive_trace_map_context(
     source_obj = os.path.basename(
         os.fspath(manifest.get("source_obj") or "map")
     )
-    return {
+    context = {
         "source_obj": source_obj,
         "manifest_version": manifest.get("version"),
         "chunk_size_m": manifest.get("chunk_size"),
@@ -66,6 +70,10 @@ def manual_dive_trace_map_context(
         "distance_unit": "meter",
         "orientation_unit": "radian",
     }
+    cache_identity = guided_dive_cache_identity_from_manifest(manifest)
+    if cache_identity is not None:
+        context["cache_identity"] = cache_identity.payload()
+    return context
 
 
 @dataclass(frozen=True)
@@ -185,6 +193,16 @@ class ManualDiveTraceRecorder:
         """Start one trace and enqueue its exact initial pose."""
         if self._active or self._thread is not None:
             raise RuntimeError("manual dive trace recorder is single-use")
+        if (
+            parse_guided_dive_cache_identity(
+                self.map_context.get("cache_identity")
+            )
+            is None
+        ):
+            raise ValueError(
+                "manual Guided Dive traces require a cache with stable identity; "
+                "rebuild the map before recording"
+            )
         sample_now = self._perf_counter() if now is None else float(now)
         started_utc = self._utc_now().astimezone(timezone.utc)
         self._started_at = sample_now
