@@ -40,6 +40,10 @@ from .update_package_reveal import (
     UpdatePackageRevealAdapter,
     create_update_package_reveal_adapter,
 )
+from .update_package_storage import (
+    UpdatePackageStorageAdapter,
+    create_update_package_storage_adapter,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +109,7 @@ class PlatformRuntime:
     update_configuration: UpdateConfiguration
     automatic_update_capability: CapabilityResult[UpdateTarget]
     update_package_reveal_adapter: UpdatePackageRevealAdapter
+    update_package_storage_adapter: UpdatePackageStorageAdapter
     update_package_reveal_capability: CapabilityResult[UpdatePackageRevealRoute]
     feature_gates: FeatureGateRegistry
 
@@ -186,6 +191,7 @@ def create_platform_runtime(
     platform_adapter: SplashPlatformAdapter | None = None,
     desktop_services: DesktopServices | None = None,
     update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
+    update_package_storage_adapter: UpdatePackageStorageAdapter | None = None,
     environment: Mapping[str, str] | None = None,
     platform_name: str | None = None,
     machine: str | None = None,
@@ -214,6 +220,10 @@ def create_platform_runtime(
             resolved_platform_adapter,
             platform_name=resolved_platform_name,
         )
+    )
+    resolved_update_package_storage_adapter = (
+        update_package_storage_adapter
+        or create_update_package_storage_adapter(resolved_platform_adapter)
     )
     try:
         update_configuration = build_update_configuration(
@@ -262,6 +272,7 @@ def create_platform_runtime(
         update_configuration=update_configuration,
         automatic_update_capability=automatic_update_capability,
         update_package_reveal_adapter=resolved_update_package_reveal_adapter,
+        update_package_storage_adapter=resolved_update_package_storage_adapter,
         update_package_reveal_capability=update_package_reveal_capability,
         feature_gates=FeatureGateRegistry(
             {

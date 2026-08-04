@@ -13,6 +13,7 @@ platform/
 ├── directory_selection.py   # Shared action-time directory-picker authorization
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── update_package_reveal.py # Focused non-executing verified-package facade
+├── update_package_storage.py # Focused verified-package storage facade
 ├── probes/desktop.py        # On-demand directory-selection route declaration
 ├── probes/update_package_reveal.py # Static package-reveal route declaration
 ├── probes/updates.py        # Static signed-update configuration and target probe
@@ -115,8 +116,17 @@ decision again before revealing a verified payload, and the splash omits the
 reveal action when it is disabled. `PlatformUpdatePackageRevealAdapter` is a
 temporary narrow facade over the existing broad adapter methods, deliberately
 preserving macOS read-only DMG mounting, Windows Explorer selection, and the
-Linux desktop-service fallback. Package persistence, saved-recording reveal,
-notifications, and inhibition remain separate migrations.
+Linux desktop-service fallback.
+
+Verified package persistence has its own focused
+`UpdatePackageStorageAdapter`. It is invoked only after checksum verification,
+so it has no process-static capability probe or feature gate: a user-visible
+storage location can become unavailable while the app is running. Its current
+compatibility facade delegates to the broad adapter's established naming,
+collision, macOS DMG, and Linux AppImage behavior. A persistence exception is
+an ordinary update-workflow failure, after which `UpdateManager` performs its
+normal temporary-file cleanup. Saved-recording reveal, notifications, and
+inhibition remain separate migrations.
 
 Video recording is the first on-demand gate. When the user starts recording,
 the viewer asks the runtime for a `VideoRecordingPreflight`: one narrow probe
@@ -138,8 +148,9 @@ control is Map Library's directory-setting surface, so it shares this same
 authorization rather than creating a Map Library-specific gate.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
-unmigrated platform actions. `UpdatePackageRevealAdapter` is the first narrow
-facade around an existing package action. New features should add a narrow
+unmigrated platform actions. `UpdatePackageRevealAdapter` and
+`UpdatePackageStorageAdapter` are narrow facades around existing package
+actions. New features should add the smallest appropriate combination of a
 probe, a pure policy in `caveviewer.gui.features`, and an injected action
 adapter rather than expanding this broad protocol. Cache, chunk streaming,
 navigation, and map state are outside this runtime layer.
@@ -349,7 +360,10 @@ class MockAdapter:
 
 **How**:
 - `install_channel()` returns the channel identifier
-- `persist_downloaded_payload()` implements platform-specific storage
+- `UpdatePackageStorageAdapter.persist_verified_package()` promotes a verified
+  temporary package into platform-specific user-visible storage
+- `persist_downloaded_payload()` remains the compatibility implementation until
+  storage behavior moves behind that focused adapter
 - `download_reveal_action_label()` provides the splash action text
 - `reveal_downloaded_payload()` exposes the verified package without running it
 - The update system knows which channel the current build came from

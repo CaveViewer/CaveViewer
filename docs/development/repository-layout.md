@@ -64,6 +64,7 @@ src/caveviewer/gui/features/                  pure feature availability policies
 src/caveviewer/gui/platform/runtime.py        process-owned platform composition root
 src/caveviewer/gui/platform/directory_selection.py shared action-time directory-picker authorization
 src/caveviewer/gui/platform/update_package_reveal.py focused verified-package reveal facade
+src/caveviewer/gui/platform/update_package_storage.py focused verified-package storage facade
 src/caveviewer/gui/platform/probes/           platform capability probes and configuration
 src/caveviewer/gui/platform/probes/desktop.py on-demand directory-selection route probe
 src/caveviewer/gui/platform/probes/update_package_reveal.py static verified-package reveal route probe
