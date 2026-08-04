@@ -11,8 +11,64 @@ import pytest
 
 from caveviewer import app
 from caveviewer.app import find_input_files, find_model_file
+from caveviewer.core.capabilities import CapabilityStatus
 from caveviewer.core.map import source_model
 from caveviewer.core.mesh.glb import parse_glb
+
+
+def test_source_format_registry_declares_supported_import_and_package_metadata():
+    formats = source_model.supported_source_formats()
+
+    assert formats == (
+        source_model.OBJ_SOURCE_FORMAT,
+        source_model.GLB_SOURCE_FORMAT,
+    )
+    assert [source_format.id.value for source_format in formats] == ["obj", "glb"]
+    assert [source_format.extension for source_format in formats] == [".obj", ".glb"]
+    assert [source_format.mime_type for source_format in formats] == [
+        "model/obj",
+        "model/gltf-binary",
+    ]
+    assert source_model.supported_source_format_summary() == (
+        ".obj (with a matching .mtl) and .glb"
+    )
+    assert source_model.supported_source_format_summary(conjunction="or") == (
+        ".obj (with a matching .mtl) or .glb"
+    )
+
+
+def test_source_format_capability_classifies_paths_and_descriptors():
+    glb_capability = source_model.probe_source_format("/maps/cave.GLB")
+    unsupported_capability = source_model.probe_source_format("/maps/notes.txt")
+    descriptor_capability = source_model.probe_model_descriptor({"format": "obj"})
+    unknown_descriptor_capability = source_model.probe_model_descriptor(
+        {"format": "ply"}
+    )
+
+    assert glb_capability.status is CapabilityStatus.AVAILABLE
+    assert glb_capability.value is source_model.GLB_SOURCE_FORMAT
+    assert glb_capability.evidence == {"extension": ".glb", "format": "glb"}
+    assert unsupported_capability.status is CapabilityStatus.UNAVAILABLE
+    assert unsupported_capability.reason_code == "map_source_format_unsupported"
+    assert unsupported_capability.evidence == {"extension": ".txt"}
+    assert descriptor_capability.status is CapabilityStatus.AVAILABLE
+    assert descriptor_capability.value is source_model.OBJ_SOURCE_FORMAT
+    assert unknown_descriptor_capability.status is CapabilityStatus.UNAVAILABLE
+    assert unknown_descriptor_capability.evidence == {"format": "ply"}
+
+
+def test_find_supported_source_files_uses_the_format_registry(tmp_path):
+    obj = tmp_path / "cave.obj"
+    glb = tmp_path / "cave.glb"
+    obj.write_text("v 0 0 0\n", encoding="utf-8")
+    glb.write_bytes(b"glTF")
+
+    candidates = source_model.find_supported_source_files(str(tmp_path))
+
+    assert candidates == (
+        source_model.SourceModelCandidate(source_model.OBJ_SOURCE_FORMAT, str(obj)),
+        source_model.SourceModelCandidate(source_model.GLB_SOURCE_FORMAT, str(glb)),
+    )
 
 
 def test_find_model_rejects_missing_directory(tmp_path):

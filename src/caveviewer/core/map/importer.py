@@ -14,6 +14,7 @@ from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.mesh import glb as glb_parser
 from caveviewer.core.mesh import obj as obj_parser
+from caveviewer.core.map import source_model
 from caveviewer.core.map.cache_paths import map_cache_build_dir
 from caveviewer.core.textures.decoding import resolve_texture_path
 
@@ -114,9 +115,12 @@ def import_and_cache_any(
     obj_bucket_workers: int | None = None,
 ) -> str:
     """Dispatch a model descriptor to the correct parser/cache path."""
-    fmt = model_descriptor["format"]
+    raw_format = model_descriptor.get("format")
+    source_format = source_model.source_format_for_id(raw_format)
+    if source_format is None:
+        raise ValueError(f"Unknown model format: {raw_format!r}")
 
-    if fmt == "obj":
+    if source_format.id is source_model.SourceFormatId.OBJ:
         return import_and_cache(
             model_descriptor["obj_path"],
             model_descriptor["mtl_path"],
@@ -130,9 +134,15 @@ def import_and_cache_any(
             obj_bucket_workers=obj_bucket_workers,
         )
 
-    source_path = model_descriptor.get("glb_path") or model_descriptor.get("obj_path")
+    if source_format.id is not source_model.SourceFormatId.GLB:
+        raise ValueError(f"Unknown model format: {raw_format!r}")
+
+    source_path = model_descriptor.get(source_format.descriptor_path_key)
     if not source_path:
-        raise ValueError(f"Unknown model format: {fmt!r}")
+        raise ValueError(
+            f"Missing {source_format.descriptor_path_key} for "
+            f"{source_format.id.value!r} model format"
+        )
 
     target_cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(source_path))
     if not force_rebuild and cache_dir is not None:
@@ -167,9 +177,6 @@ def import_and_cache_any(
 
     def cache_progress(stage: str, frac: float) -> None:
         _emit_progress(progress_cb, stage, parse_weight + (1.0 - parse_weight) * frac)
-
-    if fmt != "glb":
-        raise ValueError(f"Unknown model format: {fmt!r}")
 
     chunker.ensure_sufficient_source_file_read_memory(source_path)
     mesh, embedded_textures = glb_parser.parse_glb(

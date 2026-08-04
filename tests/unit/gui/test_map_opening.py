@@ -60,6 +60,20 @@ def test_resolve_selected_map_folder_returns_model_target(monkeypatch, tmp_path)
     assert not target.is_prebuilt_cache
 
 
+def test_resolve_selected_map_folder_enforces_source_format_policy(monkeypatch, tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    descriptor = {"format": "ply", "ply_path": str(source_dir / "map.ply")}
+    monkeypatch.setattr(
+        map_opening.source_model,
+        "find_model_file",
+        lambda folder, *, logger=None: descriptor,
+    )
+
+    with pytest.raises(FileNotFoundError, match="not supported"):
+        map_opening.resolve_selected_map_folder(str(source_dir))
+
+
 def test_resolve_selected_map_folder_returns_prebuilt_cache(monkeypatch, tmp_path):
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()

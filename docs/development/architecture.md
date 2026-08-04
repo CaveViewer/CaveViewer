@@ -192,7 +192,14 @@ manual tracing.
 ## Startup and map import
 
 Core import services discover supported models and dispatch them to the OBJ or
-GLB parser. `core.map.source_model` owns source selection,
+GLB parser. `core.map.source_model` owns the immutable source-format registry,
+source selection, and selected-format capability facts; that registry is the
+release-policy source of truth for discovery, map-picker guidance, and Linux
+package metadata validation. `gui.features.decide_map_source_import` turns one
+selected descriptor's capability into an action-time decision before the GUI
+accepts an import. It is intentionally not stored in
+`PlatformRuntime.feature_gates`: the released format list is static, but the
+user-selected descriptor and its required companion assets vary per action.
 `core.map.importer` owns parse/cache orchestration, and app/GUI/CLI code adapts
 those services to console or Tk progress displays. Parsers produce CPU-side
 mesh and material data. `src/caveviewer/core/chunking/builder.py` partitions

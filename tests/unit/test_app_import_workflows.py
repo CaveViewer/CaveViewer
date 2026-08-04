@@ -281,13 +281,14 @@ def test_glb_import_checks_source_read_memory_before_parsing(tmp_path, monkeypat
         )
 
 
-def test_glb_import_rejects_unknown_model_format_after_capacity_check(monkeypatch):
-    monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
+def test_import_rejects_unknown_model_format_before_capacity_check(monkeypatch):
     monkeypatch.setattr(
-        chunker, "ensure_sufficient_disk_space", lambda *_args, **_kwargs: None
+        chunker,
+        "ensure_sufficient_disk_space",
+        lambda *_args, **_kwargs: pytest.fail(
+            "unknown formats must fail before capacity checks"
+        ),
     )
-    monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
-    monkeypatch.setattr(app.os.path, "getsize", lambda _path: 0)
 
     with pytest.raises(ValueError, match="Unknown model format"):
         app.import_and_cache_any(
