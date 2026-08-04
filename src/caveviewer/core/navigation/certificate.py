@@ -31,6 +31,9 @@ from caveviewer.core.navigation.autodive import (
     build_voxel_graph_auto_dive_plan,
 )
 from caveviewer.core.navigation.centerline import parse_cell_key
+from caveviewer.core.navigation.certificate_build import (
+    manifest_with_navigation_certificate,
+)
 from caveviewer.core.navigation.graph_route_safety import (
     GraphRouteSafetyFailure,
     GraphRouteSafetyPolicy,
@@ -162,6 +165,10 @@ def certify_navigation_cache(
         raise ValueError("max_checkpoints must be at least 2")
 
     cache_path = os.path.abspath(os.fspath(cache_dir))
+    manifest = manifest_with_navigation_certificate(
+        manifest,
+        cache_dir=cache_path,
+    )
     point = (
         None
         if start_position is None

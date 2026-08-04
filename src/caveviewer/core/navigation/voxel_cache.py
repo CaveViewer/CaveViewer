@@ -138,6 +138,10 @@ _LEGACY_PREPARED_NAVIGATION_VOXEL_CACHE_METHOD = "whole_cave_voxel_atlas_v3"
 _LEGACY_NAVIGATION_VOXEL_CACHE_VERSION = 1
 _LEGACY_NAVIGATION_VOXEL_CACHE_METHOD = "curvature_corridor_voxels_v1"
 NAVIGATION_VOXEL_CACHE_NAME = "navigation_voxels.json"
+NAVIGATION_CERTIFICATE_DIRECTORY_NAME = "navigation_certificate"
+NAVIGATION_CERTIFICATE_VOXEL_CACHE_PATH = (
+    f"{NAVIGATION_CERTIFICATE_DIRECTORY_NAME}/{NAVIGATION_VOXEL_CACHE_NAME}"
+)
 NAVIGATION_VOXEL_CACHE_MAX_BYTES = 256 * 1024 * 1024
 NAVIGATION_VOXEL_ATLAS_MODEL_METHOD = "navigation_voxel_atlas_v12"
 MeshPointSupportCheck = Callable[[Point, float, float], bool]
@@ -4780,6 +4784,7 @@ def build_navigation_voxel_cache(
     mesh_edge_is_clear: MeshEdgeSafetyCheck | None = None,
     mesh_point_has_opposing_support: MeshPointSupportCheck | None = None,
     config: NavigationVoxelCacheConfig | None = None,
+    progress_cb: Callable[[str, float], None] | None = None,
 ) -> NavigationVoxelCacheBuildResult:
     """Build bounded voxel models and volume summaries for cached routes.
 
@@ -4797,6 +4802,8 @@ def build_navigation_voxel_cache(
     )
     routes = navigation_metadata.get("routes")
     if not isinstance(routes, Sequence) or isinstance(routes, (str, bytes)):
+        if progress_cb is not None:
+            progress_cb("navigation routes unavailable", 1.0)
         return NavigationVoxelCacheBuildResult(
             payload=_empty_payload(resolved),
             built_route_count=0,
@@ -4810,9 +4817,15 @@ def build_navigation_voxel_cache(
     chunk_payloads: dict[str, Mapping[str, object]] = {}
     route_summaries: dict[str, Mapping[str, object]] = {}
     built_route_ids: list[str] = []
+    route_limit = min(len(routes), int(resolved.max_routes))
     for route_index, route_value in enumerate(routes):
         if route_index >= resolved.max_routes:
             break
+        if progress_cb is not None:
+            progress_cb(
+                f"certifying navigation route {route_index + 1}/{max(1, route_limit)}",
+                route_index / max(1, route_limit),
+            )
         if not isinstance(route_value, dict):
             continue
         route_id = _route_id(route_value, route_index)
@@ -4851,6 +4864,11 @@ def build_navigation_voxel_cache(
                 is True
             ),
         )
+        if progress_cb is not None:
+            progress_cb(
+                f"certified navigation route {route_index + 1}/{max(1, route_limit)}",
+                (route_index + 1) / max(1, route_limit),
+            )
         certified_component_cells = summary.pop(
             "_certified_component_cells",
             None,
@@ -4945,6 +4963,9 @@ def build_navigation_voxel_cache(
                     chunk_payloads[relative_path] = chunk_payload
         built_route_ids.append(route_id)
         _augment_recovery_hotspots_with_volume(route_value, summary)
+
+    if progress_cb is not None:
+        progress_cb("navigation route certification complete", 1.0)
 
     recommended_route_id = _select_recommended_route_id(
         navigation_metadata,
@@ -5171,10 +5192,13 @@ def load_cached_navigation_voxel_volume(
     descriptor_method = descriptor.get("method")
     if not _supported_cache_identity(descriptor_version, descriptor_method):
         return None
-    relative_path = descriptor.get("path")
-    if relative_path != NAVIGATION_VOXEL_CACHE_NAME:
+    artifact_paths = _navigation_voxel_artifact_paths(
+        os.fspath(cache_dir),
+        descriptor.get("path"),
+    )
+    if artifact_paths is None:
         return None
-    path = os.path.join(os.fspath(cache_dir), NAVIGATION_VOXEL_CACHE_NAME)
+    path, artifact_root = artifact_paths
     try:
         signature_info = os.stat(path)
     except OSError:
@@ -5227,7 +5251,7 @@ def load_cached_navigation_voxel_volume(
     try:
         chunk_store = _navigation_voxel_chunk_store_from_model(
             model,
-            cache_dir=os.fspath(cache_dir),
+            cache_dir=artifact_root,
         )
         restored = deserialize_navigation_voxel_volume(
             model,
@@ -5260,6 +5284,30 @@ def load_cached_navigation_voxel_volume(
             if callable(close_store):
                 close_store()
     return restored
+
+
+def _navigation_voxel_artifact_paths(
+    cache_dir: str,
+    relative_path: object,
+) -> tuple[str, str] | None:
+    """Resolve the supported root or certificate-local voxel sidecar.
+
+    Legacy caches keep their sidecar directly below the render-cache root.
+    New explicit certificates retain the same internal chunk-store contract,
+    but use their own artifact root so navigation data cannot alter the render
+    manifest or Guided Dive identity.
+    """
+    if not isinstance(relative_path, str) or not relative_path:
+        return None
+    normalized = os.path.normpath(relative_path)
+    root = os.path.abspath(cache_dir)
+    if normalized == NAVIGATION_VOXEL_CACHE_NAME:
+        return os.path.join(root, normalized), root
+    certificate_path = os.path.normpath(NAVIGATION_CERTIFICATE_VOXEL_CACHE_PATH)
+    if normalized == certificate_path:
+        artifact_root = os.path.join(root, NAVIGATION_CERTIFICATE_DIRECTORY_NAME)
+        return os.path.join(root, normalized), artifact_root
+    return None
 
 
 def _navigation_voxel_chunk_store_from_model(

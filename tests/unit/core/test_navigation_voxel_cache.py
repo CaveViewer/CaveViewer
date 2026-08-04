@@ -2239,6 +2239,36 @@ def test_cache_time_publishes_graph_index_and_lazy_voxel_chunks(tmp_path):
     assert restored.chunk_store.stats()["resident_chunk_count"] >= 1
     assert restored.probe_point((0.5, 2.0, 0.5)) is not None
 
+    certificate_cache_dir = tmp_path / "certificate-cache"
+    certificate_dir = certificate_cache_dir / "navigation_certificate"
+    certificate_dir.mkdir(parents=True)
+    for relative_path, chunk_payload in result.chunk_payloads.items():
+        chunk_path = certificate_dir / relative_path
+        chunk_path.parent.mkdir(parents=True, exist_ok=True)
+        chunk_path.write_text(json.dumps(chunk_payload), encoding="utf-8")
+    (certificate_dir / NAVIGATION_VOXEL_CACHE_NAME).write_text(
+        json.dumps(result.chunked_payload),
+        encoding="utf-8",
+    )
+    certificate_navigation = copy.deepcopy(navigation)
+    certificate_navigation["voxel_cache"].update(
+        {
+            "path": "navigation_certificate/navigation_voxels.json",
+            "chunk_directory": "navigation_certificate/navigation_voxel_chunks",
+        }
+    )
+    certificate_manifest = dict(manifest)
+    certificate_manifest["navigation"] = certificate_navigation
+
+    certificate_restored = load_cached_navigation_voxel_volume(
+        str(certificate_cache_dir),
+        certificate_manifest,
+        "centerline-0",
+    )
+    assert isinstance(certificate_restored, NavigationVoxelAtlas)
+    assert certificate_restored.chunk_store is not None
+    assert certificate_restored.fine_tile_for_point((0.5, 2.0, 0.5)) is not None
+
     bad_cache_dir = tmp_path / "bad-cache"
     bad_cache_dir.mkdir()
     first_relative_path = next(iter(result.chunk_payloads))

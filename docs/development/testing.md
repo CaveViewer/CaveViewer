@@ -105,7 +105,21 @@ tracked local pre-push hook template for pushes to `main`.
 
 ## Navigation cache certification
 
-Certify a generated cache in phases. The artifact phase is fast and does not
+Normal `caveviewer-chunker` and GUI cache builds contain render chunks and the
+Guided Dive identity only. They do not create navigation metadata, voxel
+graphs, or navigation chunks. Build the optional offline certificate explicitly
+after the render cache is complete:
+
+```bash
+caveviewer-navigation-certify \
+  --source /path/to/map/source.obj \
+  --cache-dir /path/to/map/_cache
+```
+
+The command reports timed progress phases and atomically publishes
+`navigation_certificate/`. It binds that directory to the render cache's
+Guided Dive identity without rewriting `manifest.json`. Then certify the
+generated certificate in phases. The artifact phase is fast and does not
 deserialize the navigation graph:
 
 ```bash
@@ -222,9 +236,9 @@ triangle collision checks remain required afterward.
 Surface-rasterizer tests must also keep out-of-bounds triangles excluded after
 the vectorized local-AABB prefilter; triangle counts and sampled surface cells
 remain the behavioral contract.
-Rebuild V11 or older caches before this test because they do not contain the
-fixed-orthogonal V12 evidence contract. Render caches remain usable when that
-optional navigation rebuild is absent.
+Rebuild V11 or older navigation certificates before this test because they do
+not contain the fixed-orthogonal V12 evidence contract. Render caches remain
+usable when the optional certificate is absent.
 Large-map regression fixtures must also prove that whole-map and average-chunk
 triangle thresholds disable only optional speculative recovery. They must not
 make the lazy exact collision guard unavailable or cause a render-only cache to
@@ -284,7 +298,7 @@ separate child processes so one cave's graph and search
 state are released before the next cave starts. `PASSED` means a route was
 proved and exact-mesh checked. `INCOMPATIBLE_RESOLUTION` means V10 coarsened at
 least one source tile, while `MISSING_ARTIFACT` means the render cache has no
-usable navigation sidecar. Those outcomes are cache limitations, not geometry
+usable navigation certificate artifact. Those outcomes are cache limitations, not geometry
 failures. The command exits nonzero unless every discovered map passes.
 Map labels are paths relative to `--maps-root`, so nested libraries and maps
 with duplicate directory names remain unambiguous. No map data or local result
@@ -306,9 +320,12 @@ source/cache identity contract, exact first and final poses,
 frame-rate-independent interpolation, instantaneous declared discontinuities,
 orientation-only paused inspection, pose restoration and chunk buffering on
 resume, unchanged trace files, and direct camera application that bypasses the
-manual navigation guard. Cache-construction coverage must prove that both
-standard and incremental builds write the same portable Guided Dive identity
-that trace playback checks. Map Library coverage must also prove that no trace
+manual navigation guard. Normal-cache coverage must prove that both standard
+and incremental builds write the same portable Guided Dive identity that trace
+playback checks and do not create navigation artifacts. Certificate-build
+coverage must prove atomic replacement, identity binding, phase progress, and
+preservation of the prior certificate on failure. Map Library coverage must
+also prove that no trace
 hides the Guided Dive action and that a selected trace is preflighted against
 its map-local source and current cache before the splash session can launch it.
 Use the explicit farthest/frontier profile only when testing continuation

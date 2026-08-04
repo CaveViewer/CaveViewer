@@ -36,14 +36,14 @@ presentation or render-thread OpenGL resources. `viewer_window.py` adapts a
 `BenchmarkController` into the real render loop when the benchmark CLI launches
 the viewer.
 
-## Offline navigation-cache refinement
+## Explicit offline navigation-certificate refinement
 
 Offline navigation certification keeps the centerline generator and local
 geometric refinements replaceable. `core.navigation.curvature` profiles any 3D route polyline and
 labels contiguous high-curvature regions with map-relative ranks from 0 to 100.
 `core.navigation.voxel_volume` rasterizes cached triangle surfaces into bounded
-local voxel fields. During cache construction, `core.navigation.voxel_cache`
-reuses the already-written chunk files to build a bounded atlas around one
+local voxel fields. An explicit `caveviewer-navigation-certify` operation
+reuses already-published render chunks to build a bounded atlas around one
 selected terminal-route corridor. V12 divides that corridor into fixed
 orthogonal chunks at 1 m X/Z by 0.25 m Y. Capacity pressure subdivides chunks rather
 than coarsening them, and incomplete surface sampling fails the navigation
@@ -58,7 +58,7 @@ anchor. The vertex is
 surface evidence rather than an executable camera position, so the cache
 chooses a free XYZ attachment within an immutable 24 m cap; only that certified
 interior attachment is executable. A numerically sorted spatial chunk is not
-entrance provenance. The builder
+entrance provenance. The certificate builder
 derives open candidates from that entrance toward both footprint-diameter
 directions and recommends the longest route that survives complete voxel and
 mesh certification; clearance and volume are tie-breakers.
@@ -66,7 +66,7 @@ mesh certification; clearance and volume are tie-breakers.
 One packed six-connected component must contain both ingress and endpoint
 evidence. Surface-gap intervals propose vertical layers, but disconnected
 fragments are never combined and never defer connectivity to the roadmap.
-The manifest entrance selects one complete, source-connected interval chain
+The certificate metadata entrance selects one complete, source-connected interval chain
 before the route is executable. Every ordered route-cell candidate stays in
 that exact footprint cell. Entrance and final candidates must intersect their
 selected bounded intervals, allowing only half a vertical voxel of Y
@@ -115,44 +115,48 @@ interval-backed candidates may be exact-tested; a local neighbor shell cannot
 reintroduce an out-of-interval layer. Only the exact-reachable candidate
 becomes the terminal, and an ingress seed cannot count as zero-edge completion.
 
-Metadata persists every bounded surface-gap interval and its midpoint needed
-to propose stacked passage layers. Its sparse vertical surface bins are 0.25 m or finer, so a
-half-metre floor-to-ceiling gap remains representable without allocating a
-dense whole-height column. It never substitutes an imported or interpolated
-centerline Y for missing vertical evidence. A failed fixed field or exact route still
-publishes no V12 sidecar. The bounded cache-time searches read the
-conservative clearance floor from selected packed evidence instead of
-recomputing surface distance for every candidate. It may skip collision work
-for a non-improving relaxation because the existing cost already came through
-a safe edge; every improving edge remains voxel- and mesh-validated.
+Certificate metadata persists every bounded surface-gap interval and its
+midpoint needed to propose stacked passage layers. Its sparse vertical surface
+bins are 0.25 m or finer, so a half-metre floor-to-ceiling gap remains
+representable without allocating a dense whole-height column. It never
+substitutes an imported or interpolated centerline Y for missing vertical
+evidence. A failed fixed field or exact route publishes no usable V12
+certificate. The bounded certificate searches read the conservative clearance
+floor from selected packed evidence instead of recomputing surface distance for
+every candidate. It may skip collision work for a non-improving relaxation
+because the existing cost already came through a safe edge; every improving
+edge remains voxel- and mesh-validated.
+
 Per-tile limits keep memory and sampling work bounded on consumer hardware.
-Compact route volume summaries are stored in the manifest. New caches publish the complete
-navigation graph and chunk descriptors in the optional `navigation_voxels.json`
-sidecar, while dense tile occupancy is stored below
-`navigation_voxel_chunks/`. Certificate tooling can select either the
-full-memory chunk backend or a bounded lazy LRU backend; this storage seam is
-independent of render `StreamingWorld`. For the inferred
-manifest entrance or a valid explicit entrance override, the cache-time selector chooses the longest complete
-certified non-circular path, with clearance and volume as deterministic
-tie-breakers. Exhausting a bounded exact search is unresolved, not proof that
-the candidate is unsafe; while a longer candidate is capacity-limited, the
-selector publishes no shorter recommendation. The sidecar is versioned; V11 and older supported
-models remain readable for compatibility but cannot authorize current
-certificate workflows.
+The explicit command writes its metadata to
+`navigation_certificate/certificate.json`, the complete graph to
+`navigation_certificate/navigation_voxels.json`, and dense occupancy below
+`navigation_certificate/navigation_voxel_chunks/`. The certificate directory
+is atomically replaced only after it is complete and records the render
+cache's Guided Dive identity. It never changes `manifest.json`, so it cannot
+invalidate rendering or recorded Guided Dives. Certificate tooling can select
+either the full-memory chunk backend or a bounded lazy LRU backend; this
+storage seam is independent of render `StreamingWorld`. For an inferred
+entrance or valid explicit entrance override, the certificate-time selector
+chooses the longest complete certified non-circular path, with clearance and
+volume as deterministic tie-breakers. Exhausting a bounded exact search is
+unresolved, not proof that the candidate is unsafe; while a longer candidate
+is capacity-limited, the selector publishes no shorter recommendation.
 
 The viewer does not execute this route data. Cmd/Ctrl+A is deliberately
 unhandled, no GUI controller imports the autonomous planner, and a normal map
 open starts at the first manifest chunk center. The retained graph, voxel, and
 mesh-route helpers are offline certificate and developer-inspection tools: they
-are used by `caveviewer-navigation-verify` and core tests, not to move a
-viewer camera or adjust `StreamingWorld` policy. Recorded Dive is the only
+are used by `caveviewer-navigation-certify`,
+`caveviewer-navigation-verify`, and core tests, not to move a viewer camera or
+adjust `StreamingWorld` policy. Recorded Dive is the only
 camera-playback path and supplies its own first pose.
 
-The navigation sidecar remains optional and additive to the render cache. Its
-prepared true-3D graph, fixed voxel chunks, clearance/volume metrics, and
-exact-mesh evidence preserve cache certification and compatibility checks
-without adding a runtime cache rebuild, cache mutation, or background decode
-to ordinary viewing.
+The navigation certificate remains optional and separate from the render
+cache. Its prepared true-3D graph, fixed voxel chunks, clearance/volume
+metrics, and exact-mesh evidence preserve offline certification and
+compatibility checks without adding a runtime cache rebuild, cache-manifest
+mutation, or background decode to ordinary viewing.
 
 Certificate tooling may use bounded recovery probes and local mesh/voxel
 analysis to explain an unresolved route, but those results are non-executable
@@ -211,7 +215,7 @@ The process boundary also installs main-thread and worker-thread exception
 hooks. `ApplicationDiagnostics` is a generic optional sink with no output path
 until an explicit consumer binds one, so ordinary viewer sessions do not create
 cache-local diagnostic files. It can record lifecycle and bounded exception
-context without changing cache construction, navigation-sidecar contents, or
+context without changing cache construction, navigation-certificate contents, or
 manual tracing.
 
 
@@ -269,18 +273,17 @@ admits only one additional concurrent worker per sample while utilization is
 below 80%. Unknown availability or memory pressure keeps the build at its
 already-admitted concurrency, with one worker always able to make progress.
 
-The cache manifest records chunk metadata, spatial bounds, material references,
-the minimap occupancy footprint, optional versioned navigation summaries, and
-an additive `guided_dive_identity` when source hashing succeeds. This identity
+The render-cache manifest records chunk metadata, spatial bounds, material
+references, the minimap occupancy footprint, and an additive
+`guided_dive_identity` when source hashing succeeds. This identity
 is produced during cache construction, not while the render thread starts a
 manual trace. Existing cache manifests stay renderable; they must be rebuilt
 before the versioned Guided Dive contract can record or replay against them.
-Cache-time voxel occupancy is kept in the atomically published
-`navigation_voxels.json` sidecar rather than in the render manifest. A
-cache-format change must either remain backward compatible or increment its
-version and force a deliberate rebuild; unsupported or missing optional voxel
-artifacts must never make a render cache unusable. Large cache-time navigation
-builds first measure the filled-cell cardinality and aggregate graph samples
+An explicit navigation certificate is atomically published below
+`navigation_certificate/` and is bound to that identity rather than stored in
+the render manifest. Unsupported, missing, or stale certificate artifacts
+never make a render cache unusable. Large certificate builds first measure the
+filled-cell cardinality and aggregate graph samples
 into bounded horizontal buckets while retaining the configured vertical
 resolution; they do not materialize an unbounded 1 m graph metric dictionary.
 The cached-mesh collision provider also streams render-chunk triangles through
@@ -293,10 +296,10 @@ triangle-AABB prefilter as one vectorized mask while preserving source order,
 surface sampling, occupied cells, and truncation limits. Whole-map and
 average-chunk triangle counts
 may disable optional bounded recovery analysis, but they do not remove the
-lazy exact collision guard from cache construction or route certification.
+lazy exact collision guard from certificate construction or route certification.
 Large chunked maps therefore retain the same collision authority without
 requiring per-map environment overrides.
-For each selected V12 route, cache construction runs a bounded, goal-directed
+For each selected V12 route, explicit certificate construction runs a bounded, goal-directed
 mesh-roadmap search inside that route's horizontal footprint corridor. Without
 an explicit sidecar, OBJ declaration-order vertex zero is the route anchor.
 It is only a locator: it must bind within the fixed snap cap to an
@@ -323,7 +326,7 @@ Map load does not resolve or apply a certified mesh-graph entrance. Ordinary
 viewing starts at the first manifest chunk center; an explicit certificate run
 supplies its own start position and validates it without changing viewer state.
 Navigation cache certification is deliberately split into independent phases.
-The `artifacts` phase validates the manifest, render chunks, navigation sidecar
+The `artifacts` phase validates the manifest, render chunks, certificate sidecar
 paths, navigation-chunk counts, inferred/authored entrance binding, and the
 complete source-hint span without deserializing the large graph. A safe
 midpoint-to-end route therefore fails before graph loading. The
@@ -331,7 +334,7 @@ midpoint-to-end route therefore fails before graph loading. The
 exact mesh path for current caches) and terminal-route coverage profile. The `route` phase
 adds start-position preflight, exact graph/voxel/mesh safety, and bounded
 execution simulation (with no replan requests for a fixed route); `all` runs
-the complete strict sequence. Artifact certification belongs immediately after cache publication;
+the complete strict sequence. Artifact verification belongs after explicit certificate publication;
 graph and route certification are deeper post-build or preflight checks and
 must not be mistaken for a cheap GUI-startup probe.
 The render-chunk binary format remains at version 1: unknown manifest fields

@@ -15,16 +15,6 @@ from caveviewer.core.chunking import capacity as chunk_capacity
 from caveviewer.core.chunking import builder as chunker
 
 
-@pytest.fixture(autouse=True)
-def _disable_optional_navigation_cache(monkeypatch):
-    """Keep disk-capacity tests focused on atomic render-cache writes."""
-    monkeypatch.setattr(
-        chunker,
-        "_attach_navigation_metadata",
-        lambda *_args, **_kwargs: None,
-    )
-
-
 def _mesh_with_cells(cell_count: int = 2) -> obj_parser.RawMesh:
     positions = []
     faces = []
