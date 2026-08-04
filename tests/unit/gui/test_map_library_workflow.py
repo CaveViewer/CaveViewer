@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 from caveviewer.core.capabilities import CapabilityResult
@@ -409,7 +410,7 @@ def test_downloaded_standard_library_menu_preflights_local_guided_dive():
     assert desktop_services.file_calls == [
         {
             "title": "Open Guided Dive",
-            "initial_dir": "/library/Test Cave/_guided_dives",
+            "initial_dir": str(Path("/library/Test Cave").resolve() / "_guided_dives"),
             "parent": state.root,
         }
     ]
