@@ -15,6 +15,7 @@ platform/
 ├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── update_package_storage.py # Focused verified-package storage facade
 ├── saved_recording_reveal.py # Focused post-save recording reveal facade
+├── recording_process.py      # Focused recording-encoder startup facade
 ├── probes/desktop.py        # On-demand directory-selection route declaration
 ├── probes/update_package_reveal.py # Static package-reveal route declaration
 ├── probes/updates.py        # Static signed-update configuration and target probe
@@ -134,8 +135,15 @@ for a user-visible stop, so it does not require a capability probe or feature
 gate: a file-manager failure cannot undo a recording that was already saved.
 Its compatibility facade delegates to the broad adapter's established Finder,
 Explorer, and Linux desktop-service behavior. The viewer logs a reveal failure
-while preserving the successful recording status. Notifications and inhibition
-remain separate migrations.
+while preserving the successful recording status.
+
+Recording encoder startup has its own `RecordingProcessAdapter`. It runs only
+after the existing on-demand video-recording preflight and provides the
+platform-specific non-command `Popen` kwargs used to launch ffmpeg. It neither
+selects the encoder nor decides recording availability. Its compatibility
+facade preserves Windows `STARTUPINFO`/`CREATE_NO_WINDOW` console suppression
+and the empty default, macOS, and Linux option sets. Notifications and
+inhibition remain separate migrations.
 
 Video recording is the first on-demand gate. When the user starts recording,
 the viewer asks the runtime for a `VideoRecordingPreflight`: one narrow probe
@@ -158,12 +166,12 @@ authorization rather than creating a Map Library-specific gate.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
 unmigrated platform actions. `UpdatePackageRevealAdapter`,
-`UpdatePackageStorageAdapter`, and `SavedRecordingRevealAdapter` are narrow
-facades around existing package and post-save actions. New features should add
-the smallest appropriate combination of a probe, a pure policy in
-`caveviewer.gui.features`, and an injected action adapter rather than
-expanding this broad protocol. Cache, chunk streaming, navigation, and map
-state are outside this runtime layer.
+`UpdatePackageStorageAdapter`, `SavedRecordingRevealAdapter`, and
+`RecordingProcessAdapter` are narrow facades around existing package and
+recording actions. New features should add the smallest appropriate combination
+of a probe, a pure policy in `caveviewer.gui.features`, and an injected action
+adapter rather than expanding this broad protocol. Cache, chunk streaming,
+navigation, and map state are outside this runtime layer.
 
 ## Key Components
 
@@ -400,6 +408,23 @@ completion.
 
 Callers should treat reveal as best-effort and keep the primary success state
 intact if the file manager cannot be launched.
+
+### Recording Encoder Process
+
+**When**: A video-recording preflight has already approved an ffmpeg target and
+the viewer is about to start its encoder session.
+
+**How**:
+- `RecordingProcessAdapter.encoder_popen_kwargs()` supplies only native
+  non-command `Popen` options.
+- `recording_subprocess_startup_kwargs()` remains the compatibility
+  implementation until process-startup behavior moves behind that focused
+  adapter.
+- Windows continues to suppress the GUI-launched ffmpeg console; default,
+  macOS, and Linux behavior remains empty.
+
+The adapter must not replace the on-demand recording preflight, select an
+encoder binary, build the ffmpeg command, or own encoder worker lifecycle.
 
 ### UI Framework & Fonts
 **When**: Native UI elements (menus, fonts, dialogs) behave differently per-platform

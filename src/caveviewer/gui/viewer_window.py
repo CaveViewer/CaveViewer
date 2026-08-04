@@ -74,6 +74,10 @@ from caveviewer.gui.platform.saved_recording_reveal import (
     SavedRecordingRevealAdapter,
     create_saved_recording_reveal_adapter,
 )
+from caveviewer.gui.platform.recording_process import (
+    RecordingProcessAdapter,
+    create_recording_process_adapter,
+)
 from caveviewer.gui.platform import DesktopServiceError, tk_root_options
 from caveviewer.gui.platform.windowing import run_window_config
 from caveviewer.resources import image_path, resource_path
@@ -468,6 +472,19 @@ def _saved_recording_reveal_adapter_for_runtime(
     if platform_adapter is None:
         platform_adapter = get_platform_adapter()
     return create_saved_recording_reveal_adapter(platform_adapter)
+
+
+def _recording_process_adapter_for_runtime(
+    platform_runtime: PlatformRuntime | None = None,
+    *,
+    platform_adapter=None,
+) -> RecordingProcessAdapter:
+    """Use the injected process adapter with a legacy facade fallback."""
+    if platform_runtime is not None:
+        return platform_runtime.recording_process_adapter
+    if platform_adapter is None:
+        platform_adapter = get_platform_adapter()
+    return create_recording_process_adapter(platform_adapter)
 
 
 def _runtime_app_icon_path(platform_adapter) -> str:
@@ -1032,6 +1049,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         if platform_runtime is not None:
             return _saved_recording_reveal_adapter_for_runtime(platform_runtime)
         return _saved_recording_reveal_adapter_for_runtime(
+            platform_adapter=self._active_platform_adapter(),
+        )
+
+    def _active_recording_process_adapter(self) -> RecordingProcessAdapter:
+        """Return the runtime launch adapter or preserve direct legacy callers."""
+        platform_runtime = getattr(self, "_platform_runtime", None)
+        if platform_runtime is not None:
+            return _recording_process_adapter_for_runtime(platform_runtime)
+        return _recording_process_adapter_for_runtime(
             platform_adapter=self._active_platform_adapter(),
         )
 
@@ -2149,7 +2175,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 crf=self._recording_crf,
                 raw_pix_fmt=self.RECORDING_RAW_PIX_FMT,
                 popen_startup_kwargs=(
-                    self._active_platform_adapter().recording_subprocess_startup_kwargs()
+                    self._active_recording_process_adapter().encoder_popen_kwargs()
                 ),
             )
         except (OSError, RuntimeError) as exc:

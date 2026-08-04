@@ -48,6 +48,10 @@ from .saved_recording_reveal import (
     SavedRecordingRevealAdapter,
     create_saved_recording_reveal_adapter,
 )
+from .recording_process import (
+    RecordingProcessAdapter,
+    create_recording_process_adapter,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +119,7 @@ class PlatformRuntime:
     update_package_reveal_adapter: UpdatePackageRevealAdapter
     update_package_storage_adapter: UpdatePackageStorageAdapter
     saved_recording_reveal_adapter: SavedRecordingRevealAdapter
+    recording_process_adapter: RecordingProcessAdapter
     update_package_reveal_capability: CapabilityResult[UpdatePackageRevealRoute]
     feature_gates: FeatureGateRegistry
 
@@ -198,6 +203,7 @@ def create_platform_runtime(
     update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
     update_package_storage_adapter: UpdatePackageStorageAdapter | None = None,
     saved_recording_reveal_adapter: SavedRecordingRevealAdapter | None = None,
+    recording_process_adapter: RecordingProcessAdapter | None = None,
     environment: Mapping[str, str] | None = None,
     platform_name: str | None = None,
     machine: str | None = None,
@@ -234,6 +240,10 @@ def create_platform_runtime(
     resolved_saved_recording_reveal_adapter = (
         saved_recording_reveal_adapter
         or create_saved_recording_reveal_adapter(resolved_platform_adapter)
+    )
+    resolved_recording_process_adapter = (
+        recording_process_adapter
+        or create_recording_process_adapter(resolved_platform_adapter)
     )
     try:
         update_configuration = build_update_configuration(
@@ -284,6 +294,7 @@ def create_platform_runtime(
         update_package_reveal_adapter=resolved_update_package_reveal_adapter,
         update_package_storage_adapter=resolved_update_package_storage_adapter,
         saved_recording_reveal_adapter=resolved_saved_recording_reveal_adapter,
+        recording_process_adapter=resolved_recording_process_adapter,
         update_package_reveal_capability=update_package_reveal_capability,
         feature_gates=FeatureGateRegistry(
             {

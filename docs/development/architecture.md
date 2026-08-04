@@ -432,6 +432,15 @@ success state. The compatibility facade delegates to the existing
 `reveal_file()` behavior until native implementations move behind the narrow
 contract.
 
+Recording encoder startup is likewise a focused action adapter, not another
+recording gate. After the existing on-demand preflight has confirmed ffmpeg and
+the output directory, `RecordingProcessAdapter` supplies only the native
+non-command `Popen` options immediately before the encoder session starts. It
+does not select an ffmpeg binary, build the command, or alter recording policy.
+The current compatibility facade preserves Windows console suppression through
+`STARTUPINFO` and `CREATE_NO_WINDOW`, while default, macOS, and Linux behavior
+remains unchanged.
+
 Directory selection follows the same on-demand contract. Its immutable target
 declares an executable route rather than performing a desktop request:
 Linux declares `portal_then_tk`, portable desktop services declare `tk`, and

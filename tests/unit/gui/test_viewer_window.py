@@ -255,6 +255,22 @@ def test_viewer_uses_the_injected_runtime_adapter_before_legacy_factory(monkeypa
     assert window._active_platform_adapter() is adapter
 
 
+def test_viewer_uses_injected_recording_process_adapter_before_legacy_factory(
+    monkeypatch,
+):
+    adapter = object()
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_runtime = SimpleNamespace(recording_process_adapter=adapter)
+    window._platform_adapter = None
+    monkeypatch.setattr(
+        viewer_window,
+        "get_platform_adapter",
+        lambda: pytest.fail("injected recording process adapter must be used"),
+    )
+
+    assert window._active_recording_process_adapter() is adapter
+
+
 def test_recording_target_uses_one_injected_runtime_preflight(monkeypatch):
     target = viewer_window.VideoRecordingTarget("/usr/bin/ffmpeg", "/recordings")
     capability = viewer_window.CapabilityResult.available(
@@ -1047,6 +1063,50 @@ def test_start_recording_encoder_rechecks_gate_before_starting_ffmpeg(monkeypatc
         "Video recording cannot save to the selected folder."
     )
     assert window._recording_readback_slots == []
+
+
+def test_start_recording_encoder_uses_runtime_process_adapter(monkeypatch, tmp_path):
+    startup_kwargs = {"creationflags": 17}
+    process_adapter_calls = []
+    encoder_calls = []
+    target = viewer_window.VideoRecordingTarget("/usr/bin/ffmpeg", str(tmp_path))
+
+    class FakeRecordingProcessAdapter:
+        def encoder_popen_kwargs(self):
+            process_adapter_calls.append(True)
+            return startup_kwargs
+
+    def start_encoder_session(**kwargs):
+        encoder_calls.append(kwargs)
+        return SimpleNamespace(
+            frame_queue=queue.Queue(),
+            output_path=kwargs["output_path"],
+            output_size=kwargs["output_size"],
+            viewport=kwargs["viewport"],
+        )
+
+    window = _recording_window()
+    window._platform_adapter = None
+    window._platform_runtime = SimpleNamespace(
+        recording_process_adapter=FakeRecordingProcessAdapter()
+    )
+    window._recording_target_if_available = lambda: target
+    window._recording_capture_viewport = lambda: (0, 0, 2, 2)
+    window._recording_output_size = lambda _width, _height: (2, 2)
+    window._create_recording_readback_framebuffer = lambda *_args: None
+    window._create_recording_readback_buffers = lambda *_args: None
+    window._recording_fps = 30
+    window._recording_crf = 23
+    monkeypatch.setattr(recording, "start_encoder_session", start_encoder_session)
+    monkeypatch.setattr(
+        viewer_window,
+        "get_platform_adapter",
+        lambda: pytest.fail("runtime process adapter must replace the legacy factory"),
+    )
+
+    assert window._start_recording_encoder() is True
+    assert process_adapter_calls == [True]
+    assert encoder_calls[0]["popen_startup_kwargs"] == startup_kwargs
 
 
 def test_recording_skips_framebuffer_read_when_writer_queue_is_full(monkeypatch):
