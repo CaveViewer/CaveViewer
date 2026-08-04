@@ -6,6 +6,8 @@ from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilitySource,
     CapabilityStatus,
+    DirectorySelectionRoute,
+    DirectorySelectionTarget,
 )
 from caveviewer.gui.features import FeatureId, FeatureState
 from caveviewer.gui.platform import runtime
@@ -133,6 +135,40 @@ def test_runtime_keeps_video_recording_probe_on_demand(monkeypatch):
     )
     assert preflight.decision.state is FeatureState.ENABLED
     assert preflight.decision.route == "ffmpeg"
+
+
+def test_runtime_keeps_directory_selection_probe_on_demand(monkeypatch):
+    calls = []
+    desktop_services = object()
+    target = DirectorySelectionTarget(
+        primary_route=DirectorySelectionRoute.PORTAL,
+        fallback_route=DirectorySelectionRoute.TK,
+    )
+
+    def probe(service):
+        calls.append(service)
+        return CapabilityResult.available(
+            target,
+            reason_code="directory_selection_portal_route_available",
+        )
+
+    monkeypatch.setattr(runtime, "probe_directory_selection", probe)
+    platform_runtime = create_platform_runtime(
+        platform_adapter=FakeUpdateAdapter(),
+        desktop_services=desktop_services,
+        environment={},
+    )
+
+    assert calls == []
+    assert FeatureId.DIRECTORY_SELECTION not in platform_runtime.feature_gates.decisions
+
+    preflight = platform_runtime.directory_selection_preflight()
+
+    assert calls == [desktop_services]
+    assert preflight.capability.value is target
+    assert preflight.decision.feature is FeatureId.DIRECTORY_SELECTION
+    assert preflight.decision.state is FeatureState.ENABLED
+    assert preflight.decision.route == "portal_then_tk"
 
 
 def test_linux_factory_shares_an_injected_desktop_service_with_its_adapter():

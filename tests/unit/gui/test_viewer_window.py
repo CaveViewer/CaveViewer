@@ -1507,6 +1507,30 @@ def test_window_shortcut_opens_map_only_when_loaded():
     assert calls == ["open"]
 
 
+def test_open_action_uses_runtime_and_handles_unavailable_directory_selection(
+    monkeypatch,
+):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    runtime = object()
+    logger = FakeLogger()
+    calls = []
+
+    def unavailable_picker(*, platform_runtime=None):
+        calls.append(platform_runtime)
+        raise viewer_window.DesktopServiceError("Directory selection unavailable.")
+
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    monkeypatch.setattr(viewer_window, "pick_folder_dialog", unavailable_picker)
+    window._platform_runtime = runtime
+
+    window._handle_open_button_click()
+
+    assert calls == [runtime]
+    assert logger.warning_messages == [
+        "Map folder selection unavailable: Directory selection unavailable."
+    ]
+
+
 def test_window_shortcut_leaves_control_a_unhandled():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._platform_adapter = DefaultSplashPlatformAdapter()

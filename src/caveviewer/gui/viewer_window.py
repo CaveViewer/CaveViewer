@@ -70,7 +70,7 @@ from caveviewer.gui.platform.probes.recording import (
     VideoRecordingTarget,
     probe_video_recording,
 )
-from caveviewer.gui.platform import tk_root_options
+from caveviewer.gui.platform import DesktopServiceError, tk_root_options
 from caveviewer.gui.platform.windowing import run_window_config
 from caveviewer.resources import image_path, resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
@@ -3004,7 +3004,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         open a different map should never take down the map you already
         had open and were presumably still looking at.
         """
-        folder = pick_folder_dialog()
+        try:
+            folder = pick_folder_dialog(
+                platform_runtime=getattr(self, "_platform_runtime", None)
+            )
+        except DesktopServiceError as exc:
+            _LOG.warning("Map folder selection unavailable: %s", exc)
+            return
         if not folder:
             _LOG.info("Open cancelled -- no folder selected.")
             return

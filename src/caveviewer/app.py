@@ -413,11 +413,18 @@ def _embedded_texture_filename(image_bytes: bytes, material_name: str) -> str:
     return importer.embedded_texture_filename(image_bytes, material_name)
 
 
-def pick_folder_dialog(*, desktop_services=None) -> str | None:
+def pick_folder_dialog(
+    *,
+    desktop_services=None,
+    platform_runtime=None,
+) -> str | None:
     """Open the platform directory chooser used by folder/cache workflows."""
     from caveviewer.gui.map_opening import pick_folder_dialog as _pick_folder_dialog
 
-    return _pick_folder_dialog(desktop_services=desktop_services)
+    return _pick_folder_dialog(
+        desktop_services=desktop_services,
+        platform_runtime=platform_runtime,
+    )
 
 
 def _print_viewer_controls() -> None:
@@ -696,6 +703,7 @@ def main():
                 version=_splash_version,
                 update_manager=update_manager,
                 desktop_services=platform_runtime.desktop_services,
+                platform_runtime=platform_runtime,
             )
 
             if not folder:

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-from caveviewer.core.capabilities import CapabilityResult, CapabilityStatus
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    CapabilityStatus,
+    DirectorySelectionRoute,
+    DirectorySelectionTarget,
+)
 from caveviewer.core.map.source_model import SourceFormat
 
 from .ids import FeatureId
@@ -37,6 +42,12 @@ _VIDEO_RECORDING_EXPLANATIONS = {
 _MAP_SOURCE_IMPORT_EXPLANATIONS = {
     "map_source_format_unsupported": (
         "This map source format is not supported by this installation."
+    ),
+}
+
+_DIRECTORY_SELECTION_EXPLANATIONS = {
+    "directory_selection_service_unavailable": (
+        "Directory selection is unavailable in this environment."
     ),
 }
 
@@ -151,4 +162,68 @@ def decide_map_source_import(
         state=FeatureState.DISABLED,
         reason_code="map_source_import_capability_unknown",
         explanation="Map source format availability could not be determined.",
+    )
+
+
+def decide_directory_selection(
+    capability: CapabilityResult[DirectorySelectionTarget],
+) -> FeatureDecision:
+    """Choose a safe directory-picker route without invoking desktop APIs.
+
+    Portal-backed Linux services own their existing Tk fallback internally, so
+    the Portal/Tk composite is the normal executable route. A Tk-only or
+    legacy injected service is still safe, but presented as degraded so callers
+    can preserve a concise compatibility explanation if needed.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        target = capability.value
+        if target.primary_route is DirectorySelectionRoute.PORTAL:
+            return FeatureDecision(
+                feature=FeatureId.DIRECTORY_SELECTION,
+                state=FeatureState.ENABLED,
+                reason_code="directory_selection_available",
+                explanation="Directory selection is available.",
+                route=target.route_key,
+            )
+        if target.primary_route is DirectorySelectionRoute.TK:
+            return FeatureDecision(
+                feature=FeatureId.DIRECTORY_SELECTION,
+                state=FeatureState.DEGRADED,
+                reason_code="directory_selection_tk_fallback",
+                explanation="Directory selection will use the compatible desktop picker.",
+                route=target.route_key,
+            )
+        if target.primary_route is DirectorySelectionRoute.INJECTED:
+            return FeatureDecision(
+                feature=FeatureId.DIRECTORY_SELECTION,
+                state=FeatureState.DEGRADED,
+                reason_code="directory_selection_injected_service",
+                explanation=(
+                    "Directory selection is available through this desktop service."
+                ),
+                route=target.route_key,
+            )
+        return FeatureDecision(
+            feature=FeatureId.DIRECTORY_SELECTION,
+            state=FeatureState.DISABLED,
+            reason_code="directory_selection_route_unsupported",
+            explanation="Directory selection has no supported execution route.",
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.DIRECTORY_SELECTION,
+            state=FeatureState.DISABLED,
+            reason_code=capability.reason_code,
+            explanation=_DIRECTORY_SELECTION_EXPLANATIONS.get(
+                capability.reason_code,
+                "Directory selection is unavailable in this environment.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.DIRECTORY_SELECTION,
+        state=FeatureState.DISABLED,
+        reason_code="directory_selection_capability_unknown",
+        explanation="Directory selection availability could not be determined.",
     )
