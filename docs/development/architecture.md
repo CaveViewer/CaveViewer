@@ -423,6 +423,15 @@ adapter behavior, preserving macOS DMG naming, Windows/default Downloads
 handling, and Linux AppImage permissions until those implementations move
 behind the narrow contract.
 
+Saved-recording reveal is another focused action, not a feature gate. The
+encoder has already reported success when `CaveViewerWindow` calls
+`SavedRecordingRevealAdapter`, and the action is only a post-save convenience
+after a user-visible stop. A failure to launch Finder, Explorer, or the Linux
+desktop reveal route is logged but cannot downgrade the completed recording's
+success state. The compatibility facade delegates to the existing
+`reveal_file()` behavior until native implementations move behind the narrow
+contract.
+
 Directory selection follows the same on-demand contract. Its immutable target
 declares an executable route rather than performing a desktop request:
 Linux declares `portal_then_tk`, portable desktop services declare `tk`, and

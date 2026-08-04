@@ -20,6 +20,7 @@ from .runtime import (
 )
 from .update_package_reveal import UpdatePackageRevealAdapter
 from .update_package_storage import UpdatePackageStorageAdapter
+from .saved_recording_reveal import SavedRecordingRevealAdapter
 from .linux import LinuxSplashPlatformAdapter
 from .macos import MacOSSplashPlatformAdapter
 from .windows import WindowsSplashPlatformAdapter
@@ -47,5 +48,6 @@ __all__ = [
     "VideoRecordingPreflight",
     "UpdatePackageRevealAdapter",
     "UpdatePackageStorageAdapter",
+    "SavedRecordingRevealAdapter",
     "create_platform_runtime",
 ]

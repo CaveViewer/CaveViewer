@@ -70,6 +70,10 @@ from caveviewer.gui.platform.probes.recording import (
     VideoRecordingTarget,
     probe_video_recording,
 )
+from caveviewer.gui.platform.saved_recording_reveal import (
+    SavedRecordingRevealAdapter,
+    create_saved_recording_reveal_adapter,
+)
 from caveviewer.gui.platform import DesktopServiceError, tk_root_options
 from caveviewer.gui.platform.windowing import run_window_config
 from caveviewer.resources import image_path, resource_path
@@ -451,6 +455,19 @@ def _platform_adapter_for_runtime(platform_runtime: PlatformRuntime | None = Non
     if platform_runtime is not None:
         return platform_runtime.platform_adapter
     return get_platform_adapter()
+
+
+def _saved_recording_reveal_adapter_for_runtime(
+    platform_runtime: PlatformRuntime | None = None,
+    *,
+    platform_adapter=None,
+) -> SavedRecordingRevealAdapter:
+    """Use the injected recording-reveal action with a legacy facade fallback."""
+    if platform_runtime is not None:
+        return platform_runtime.saved_recording_reveal_adapter
+    if platform_adapter is None:
+        platform_adapter = get_platform_adapter()
+    return create_saved_recording_reveal_adapter(platform_adapter)
 
 
 def _runtime_app_icon_path(platform_adapter) -> str:
@@ -1008,6 +1025,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             self._platform_adapter = adapter
         return adapter
+
+    def _active_saved_recording_reveal_adapter(self) -> SavedRecordingRevealAdapter:
+        """Return the runtime action adapter or preserve direct legacy callers."""
+        platform_runtime = getattr(self, "_platform_runtime", None)
+        if platform_runtime is not None:
+            return _saved_recording_reveal_adapter_for_runtime(platform_runtime)
+        return _saved_recording_reveal_adapter_for_runtime(
+            platform_adapter=self._active_platform_adapter(),
+        )
 
     def _acquire_import_inhibitor(self, map_name: str):
         """Use the runtime's shared desktop service for a map-import action."""
@@ -2248,7 +2274,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not output_path:
             return
         try:
-            self._active_platform_adapter().reveal_file(output_path)
+            self._active_saved_recording_reveal_adapter().reveal_saved_recording(
+                output_path
+            )
         except Exception as exc:
             _LOG.warning(
                 "Could not reveal saved recording %s: %s",
