@@ -539,6 +539,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     # at the bottom of this file sets these right before launching.
     cave_cache_dir: str = None
     cave_textures_dir: str = None
+    cave_map_root: str | None = None
     cave_manifest: dict = None
     cave_benchmark_config: dict | None = None
     cave_recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
@@ -931,6 +932,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # the OPEN button -- see load_new_map() / _teardown_current_map().
         self.cache_dir = None
         self.textures_dir = None
+        self.map_root: str | None = None
         self.manifest = None
         self.world = None
         self.camera = None
@@ -1013,7 +1015,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._import_pause_notice_title: str = "Import paused"
         self._import_pause_notice_stage: str = "resume point saved"
         self._import_pause_notice_note: str = ""
-        self._startup_map_load_pending: tuple[str, str, dict] | None = None
+        self._startup_map_load_pending: tuple[
+            str,
+            str,
+            dict,
+            str | None,
+        ] | None = None
         self._startup_map_load_splash_rendered = False
 
         if have_ready_cache:
@@ -1021,6 +1028,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 CaveViewerWindow.cave_cache_dir,
                 CaveViewerWindow.cave_textures_dir,
                 CaveViewerWindow.cave_manifest,
+                CaveViewerWindow.cave_map_root,
             )
         # else: have_pending_import is true instead -- the actual import
         # is deliberately NOT run here, before the window has rendered
@@ -1261,7 +1269,14 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         _LOG.debug("viewer backend does not expose a set_icon() hook.")
 
-    def _load_map(self, cache_dir: str, textures_dir: str, manifest: dict) -> None:
+    def _load_map(
+        self,
+        cache_dir: str,
+        textures_dir: str,
+        manifest: dict,
+        *,
+        map_root: str | os.PathLike[str] | None = None,
+    ) -> None:
         """
         Sets up everything specific to ONE map: the texture manager, the
         streaming world, the starting camera position, and the minimap.
@@ -1274,6 +1289,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         load_started_at = time.perf_counter()
         self.cache_dir = cache_dir
         self.textures_dir = textures_dir
+        self.map_root = _normalize_map_root(map_root)
         self.manifest = manifest
         pending_recorded_dive = getattr(
             self,
@@ -3013,6 +3029,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         CaveViewerWindow.cave_cache_dir = None
         CaveViewerWindow.cave_textures_dir = None
+        CaveViewerWindow.cave_map_root = None
         CaveViewerWindow.cave_manifest = None
         CaveViewerWindow.cave_pending_import = None
         CaveViewerWindow.cave_recorded_dive_trace = None
@@ -3040,7 +3057,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         those aren't cleaned up by garbage collection alone).
         """
         self._teardown_current_map()
-        self._load_map(cache_dir, textures_dir, manifest)
+        self._load_map(
+            cache_dir,
+            textures_dir,
+            manifest,
+            map_root=source_dir,
+        )
         self._has_map_loaded = True
         try:
             from caveviewer.gui.map_history import remember_recent_map_path
@@ -3173,8 +3195,13 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         self._startup_map_load_pending = None
-        cache_dir, textures_dir, manifest = pending
-        self._load_map(cache_dir, textures_dir, manifest)
+        cache_dir, textures_dir, manifest, map_root = pending
+        self._load_map(
+            cache_dir,
+            textures_dir,
+            manifest,
+            map_root=map_root,
+        )
         self._has_map_loaded = True
 
     def _present_pending_import_splash_now(self) -> bool:
@@ -5694,8 +5721,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         if pose is None:
             _LOG.warning("Manual Guided Dive trace could not read the camera pose.")
             return False
+        map_root = getattr(self, "map_root", None)
+        if not map_root:
+            _LOG.warning(
+                "Manual Guided Dive trace could not start because the map root is unknown."
+            )
+            return False
         recorder = manual_dive_trace.ManualDiveTraceRecorder(
-            manual_dive_trace.manual_dive_trace_directory(self.cache_dir),
+            manual_dive_trace.manual_dive_trace_directory(map_root),
             map_context=manual_dive_trace.manual_dive_trace_map_context(
                 self.manifest
             ),
@@ -6517,11 +6550,24 @@ def _launch_viewer_window(
     )
 
 
+def _normalize_map_root(
+    map_root: str | os.PathLike[str] | None,
+) -> str | None:
+    """Return an absolute map root, or ``None`` when launch context lacks one."""
+    if map_root is None:
+        return None
+    raw_map_root = os.fspath(map_root).strip()
+    if not raw_map_root:
+        return None
+    return os.path.abspath(os.path.expanduser(raw_map_root))
+
+
 def run_viewer(
     cache_dir: str,
     textures_dir: str,
     recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None,
     platform_runtime: PlatformRuntime | None = None,
+    map_root: str | os.PathLike[str] | None = None,
 ):
     manifest = chunker.load_manifest(cache_dir)
 
@@ -6531,6 +6577,7 @@ def run_viewer(
     # (or whether) run_window_config forwards extra keyword arguments.
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
+    CaveViewerWindow.cave_map_root = _normalize_map_root(map_root)
     CaveViewerWindow.cave_manifest = manifest
     CaveViewerWindow.cave_pending_import = None
     CaveViewerWindow.cave_benchmark_config = None
@@ -6540,6 +6587,7 @@ def run_viewer(
     try:
         _launch_viewer_window()
     finally:
+        CaveViewerWindow.cave_map_root = None
         CaveViewerWindow.cave_platform_runtime = None
 
 
@@ -6569,6 +6617,7 @@ def run_viewer_benchmark(
     )
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
+    CaveViewerWindow.cave_map_root = None
     CaveViewerWindow.cave_manifest = manifest
     CaveViewerWindow.cave_pending_import = None
     CaveViewerWindow.cave_benchmark_config = {
@@ -6645,6 +6694,7 @@ def run_viewer_with_pending_import(
     """
     CaveViewerWindow.cave_cache_dir = None
     CaveViewerWindow.cave_textures_dir = None
+    CaveViewerWindow.cave_map_root = None
     CaveViewerWindow.cave_manifest = None
     CaveViewerWindow.cave_benchmark_config = None
     CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace

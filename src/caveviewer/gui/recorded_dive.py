@@ -445,11 +445,11 @@ def resolve_recorded_dive_source_path(
     if len(fallback_matches) > 1:
         raise RecordedDiveMapError(
             "More than one recent map matches this Recorded Dive. Place the "
-            "trace in the correct map's _guided_dive_traces directory."
+            "trace in the correct map's _guided_dives directory."
         )
     raise RecordedDiveMapError(
         f"Could not find {trace.map_reference.source_name!r} for this Recorded Dive. "
-        "Place the trace in that map's _guided_dive_traces directory."
+        "Place the trace in that map's _guided_dives directory."
     )
 
 

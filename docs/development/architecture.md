@@ -163,10 +163,12 @@ An explicit `Cmd/Ctrl+T` manual route trace is a separate diagnostic surface.
 It samples the render-thread camera pose after movement, sends JSONL records
 through a bounded queue to one background writer, and marks bookmark/minimap
 teleports as discontinuities instead of counting them as flown distance.
-Completed traces live under the map-local `_guided_dive_traces` directory
-beside `_cache`, so atomic cache replacement does not erase the reference
-flight. They remain optional ground truth: cache construction and offline
-certificate route selection never consume them as required map metadata.
+Completed traces live under the map-local `_guided_dives` directory. Their
+location is anchored to the map root rather than the generated-cache location,
+so atomic cache replacement and managed-cache storage do not erase the
+reference flight. They remain optional ground truth: cache construction and
+offline certificate route selection never consume them as required map
+metadata.
 
 Recorded Dive is the separate trace-playback path. Opening a completed JSONL
 associates its bounded source basename, cache-manifest version, chunk size, and

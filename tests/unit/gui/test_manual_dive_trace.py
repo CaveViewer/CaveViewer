@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
+import pytest
+
 from caveviewer.gui import manual_dive_trace
 from caveviewer.gui.manual_dive_trace import (
     ManualDivePose,
@@ -43,16 +45,21 @@ def _records(path) -> list[dict]:
 
 def _recorder(tmp_path, **kwargs) -> ManualDiveTraceRecorder:
     return ManualDiveTraceRecorder(
-        tmp_path / "_guided_dive_traces",
+        tmp_path / "_guided_dives",
         utc_now=lambda: datetime(2026, 8, 2, 12, 30, tzinfo=timezone.utc),
         **kwargs,
     )
 
 
-def test_trace_directory_is_map_local_but_survives_cache_rebuild(tmp_path):
-    assert manual_dive_trace_directory(tmp_path / "Map" / "_cache") == (
-        tmp_path / "Map" / "_guided_dive_traces"
-    )
+def test_trace_directory_is_map_local_independent_of_cache_location(tmp_path):
+    map_root = tmp_path / "Map"
+
+    assert manual_dive_trace_directory(map_root) == map_root / "_guided_dives"
+
+
+def test_trace_directory_requires_a_map_root():
+    with pytest.raises(ValueError, match="map root"):
+        manual_dive_trace_directory("")
 
 
 def test_map_context_keeps_source_basename_and_entrance_evidence():
@@ -106,7 +113,7 @@ def test_manual_trace_writes_start_samples_and_completion(tmp_path):
     assert result is not None
     assert result.completed is True
     assert result.output_path == output_path
-    records = _records(tmp_path / "_guided_dive_traces" / Path(output_path).name)
+    records = _records(tmp_path / "_guided_dives" / Path(output_path).name)
     assert [record["record"] for record in records] == [
         "trace_started",
         "sample",
@@ -192,7 +199,7 @@ def test_discontinuity_does_not_count_as_flown_distance(tmp_path):
 
     result = recorder.wait()
     records = _records(
-        tmp_path / "_guided_dive_traces" / Path(result.output_path).name
+        tmp_path / "_guided_dives" / Path(result.output_path).name
     )
     completed = records[-1]
     assert completed["total_flown_distance_m"] == 2.0
@@ -219,7 +226,7 @@ def test_trace_sample_cap_drops_regular_samples_but_keeps_final_pose(tmp_path):
 
     result = recorder.wait()
     records = _records(
-        tmp_path / "_guided_dive_traces" / Path(result.output_path).name
+        tmp_path / "_guided_dives" / Path(result.output_path).name
     )
     assert records[-1]["sample_cap_reached"] is True
     assert records[-1]["dropped_sample_count"] >= 1

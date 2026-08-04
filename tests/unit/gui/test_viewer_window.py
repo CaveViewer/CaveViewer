@@ -355,7 +355,7 @@ def _manual_trace_camera(position=(1.0, 2.0, 3.0)):
 class FakeManualDiveTrace:
     def __init__(self):
         self.writer_failed = False
-        self.output_path = "/maps/cave/_guided_dive_traces/trace.jsonl"
+        self.output_path = "/maps/cave/_guided_dives/trace.jsonl"
         self.observed = []
         self.stopped = []
         self.discontinuities = []
@@ -514,6 +514,47 @@ def test_manual_trace_samples_the_current_camera_pose():
         (1.0, 2.0, 3.0),
         (4.0, 5.0, 6.0),
     ]
+
+
+def test_manual_trace_starts_in_the_explicit_map_root(tmp_path, monkeypatch):
+    map_root = tmp_path / "Devils Eye"
+    created = []
+
+    class FakeRecorder:
+        def __init__(self, output_dir, *, map_context):
+            self.output_dir = output_dir
+            self.map_context = map_context
+            created.append(self)
+
+        def start(self, _pose):
+            return self.output_dir / "trace.jsonl"
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+    window._manual_dive_trace = None
+    window.camera = _manual_trace_camera()
+    window.map_root = str(map_root)
+    window.manifest = {"source_obj": "cave.obj"}
+    window._primary_shortcut_label = lambda: "Ctrl"
+    monkeypatch.setattr(
+        viewer_window.manual_dive_trace,
+        "ManualDiveTraceRecorder",
+        FakeRecorder,
+    )
+
+    assert window._start_manual_dive_trace() is True
+    assert created[0].output_dir == map_root / "_guided_dives"
+    assert window._manual_dive_trace is created[0]
+
+
+def test_manual_trace_does_not_start_without_a_map_root():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+    window._manual_dive_trace = None
+    window.camera = _manual_trace_camera()
+    window.map_root = None
+
+    assert window._start_manual_dive_trace() is False
 
 
 def test_manual_trace_stop_is_nonblocking_and_keeps_writer_for_polling():
@@ -1768,6 +1809,41 @@ def test_viewer_launch_uses_injected_runtime_adapter(monkeypatch):
 
     assert calls[0][1]["window_size_fraction"] == 0.8
     assert calls[0][1]["fallback_window_size"] == (1600, 1000)
+
+
+def test_run_viewer_forwards_map_root_to_the_deferred_window_load(
+    tmp_path, monkeypatch
+):
+    cache_dir = tmp_path / "managed-cache"
+    map_root = tmp_path / "Devils Eye"
+    launched = []
+    monkeypatch.setattr(
+        viewer_window.chunker,
+        "load_manifest",
+        lambda cache: {"cache": cache},
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "_launch_viewer_window",
+        lambda: launched.append(
+            (
+                viewer_window.CaveViewerWindow.cave_cache_dir,
+                viewer_window.CaveViewerWindow.cave_textures_dir,
+                viewer_window.CaveViewerWindow.cave_map_root,
+            )
+        ),
+    )
+
+    viewer_window.run_viewer(
+        str(cache_dir),
+        str(cache_dir),
+        map_root=map_root,
+    )
+
+    assert launched == [
+        (str(cache_dir), str(cache_dir), str(map_root.resolve()))
+    ]
+    assert viewer_window.CaveViewerWindow.cave_map_root is None
 
 
 def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monkeypatch):
@@ -3280,6 +3356,7 @@ def test_ready_cache_startup_splash_is_indeterminate():
         "/cache/devils-eye",
         "/textures/devils-eye",
         {"source_obj": "/maps/devils_eye.obj"},
+        "/maps/devils-eye",
     )
 
     window._render_startup_map_load_splash()
@@ -3311,6 +3388,7 @@ def test_startup_render_presents_ready_cache_splash_before_loading_map():
         "/cache/devils-eye",
         "/textures/devils-eye",
         {"source_obj": "/maps/devils_eye.obj"},
+        "/maps/devils-eye",
     )
     window._startup_map_load_splash_rendered = False
     window._sync_render_mode_loading_policy = lambda: None
@@ -3318,7 +3396,9 @@ def test_startup_render_presents_ready_cache_splash_before_loading_map():
     window._set_background_pause = lambda _should_pause, _reason: None
     window._drain_recording_stop_results = lambda: None
     window._render_startup_map_load_splash = lambda: calls.append("splash")
-    window._load_map = lambda *args: calls.append(("load", args))
+    window._load_map = lambda *args, **kwargs: calls.append(
+        ("load", args, kwargs)
+    )
 
     window.on_render(0.0, 0.0)
 
@@ -3337,6 +3417,7 @@ def test_startup_render_presents_ready_cache_splash_before_loading_map():
                 "/textures/devils-eye",
                 {"source_obj": "/maps/devils_eye.obj"},
             ),
+            {"map_root": "/maps/devils-eye"},
         ),
     ]
     assert window._startup_map_load_pending is None
@@ -3804,8 +3885,8 @@ def test_load_new_map_remembers_source_dir_instead_of_cache_dir(monkeypatch):
 
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._teardown_current_map = lambda: calls.append("teardown")
-    window._load_map = lambda cache_dir, textures_dir, manifest: calls.append(
-        ("load", cache_dir, textures_dir, manifest)
+    window._load_map = lambda cache_dir, textures_dir, manifest, **kwargs: calls.append(
+        ("load", cache_dir, textures_dir, manifest, kwargs)
     )
 
     window.load_new_map(
@@ -3822,6 +3903,7 @@ def test_load_new_map_remembers_source_dir_instead_of_cache_dir(monkeypatch):
             "/cache/Generated-f566598453a9e673",
             "/cache/Generated-f566598453a9e673",
             {"chunks": {}},
+            {"map_root": "/maps/DevilsEyeGoldLine_resized"},
         ),
     ]
     assert window._has_map_loaded is True

@@ -87,7 +87,12 @@ def test_map_session_opens_selected_prebuilt_cache_folder(tmp_path, monkeypatch)
 
     app._run_map_session(str(tmp_path))
 
-    assert opened == [((str(tmp_path),), {"textures_dir": str(tmp_path)})]
+    assert opened == [
+        (
+            (str(tmp_path),),
+            {"textures_dir": str(tmp_path), "map_root": str(tmp_path)},
+        )
+    ]
 
 
 def test_map_session_forwards_an_injected_runtime_to_the_viewer(tmp_path, monkeypatch):
@@ -106,7 +111,11 @@ def test_map_session_forwards_an_injected_runtime_to_the_viewer(tmp_path, monkey
     assert opened == [
         (
             (str(tmp_path),),
-            {"textures_dir": str(tmp_path), "platform_runtime": runtime},
+            {
+                "textures_dir": str(tmp_path),
+                "map_root": str(tmp_path),
+                "platform_runtime": runtime,
+            },
         )
     ]
 
@@ -188,7 +197,12 @@ def test_map_session_opens_obj_with_existing_cache(tmp_path, monkeypatch):
 
     app._run_map_session(str(tmp_path))
 
-    assert opened == [((str(cache_dir),), {"textures_dir": str(cache_dir)})]
+    assert opened == [
+        (
+            (str(cache_dir),),
+            {"textures_dir": str(cache_dir), "map_root": str(tmp_path)},
+        )
+    ]
 
 
 def test_map_session_opens_uncached_glb_with_pending_import(tmp_path, monkeypatch):
@@ -231,7 +245,7 @@ def test_map_session_opens_recorded_dive_against_its_map_local_cache(
     cache_valid,
 ):
     map_dir = tmp_path / "Devils Eye"
-    trace_dir = map_dir / "_guided_dive_traces"
+    trace_dir = map_dir / "_guided_dives"
     cache_dir = map_dir / "_cache"
     trace_dir.mkdir(parents=True)
     cache_dir.mkdir()
@@ -310,6 +324,7 @@ def test_map_session_opens_recorded_dive_against_its_map_local_cache(
     if cache_valid:
         assert args == (str(cache_dir),)
         assert kwargs["textures_dir"] == str(cache_dir)
+        assert kwargs["map_root"] == str(map_dir)
     else:
         assert args == (descriptor,)
         assert kwargs["textures_dir"] == str(map_dir)

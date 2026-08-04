@@ -49,7 +49,7 @@ def _pose_record(
 
 
 def _write_trace(tmp_path, poses: list[dict], *, completed: bool = True):
-    trace_dir = tmp_path / "Map" / "_guided_dive_traces"
+    trace_dir = tmp_path / "Map" / "_guided_dives"
     trace_dir.mkdir(parents=True)
     source = trace_dir.parent / "cave.obj"
     source.write_text("v 0 0 0\n", encoding="utf-8")
@@ -93,7 +93,7 @@ def test_map_local_trace_detection_requires_a_jsonl_file(tmp_path):
 
     assert not has_recorded_dive_trace(map_dir)
 
-    trace_dir = map_dir / "_guided_dive_traces"
+    trace_dir = map_dir / "_guided_dives"
     trace_dir.mkdir()
     (trace_dir / "notes.txt").write_text("not a trace", encoding="utf-8")
     assert not has_recorded_dive_trace(map_dir)
