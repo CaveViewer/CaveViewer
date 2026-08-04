@@ -19,11 +19,13 @@ class FakePlatformAdapter:
     def __init__(self, downloads_dir: Path):
         self.downloads_dir = downloads_dir
         self.revealed_paths = []
+        self.persisted_payloads = []
 
     def install_channel(self):
         return "test_app"
 
     def persist_downloaded_payload(self, temp_payload_path, download_url):
+        self.persisted_payloads.append((temp_payload_path, download_url))
         self.downloads_dir.mkdir(exist_ok=True)
         destination = self.downloads_dir / Path(download_url).name
         Path(temp_payload_path).replace(destination)
@@ -68,6 +70,21 @@ class FakeUpdatePackageRevealAdapter:
 
     def reveal_verified_package(self, payload_path):
         self.revealed_paths.append(payload_path)
+
+
+class FakeUpdatePackageStorageAdapter:
+    def __init__(self, destination: Path, *, error: Exception | None = None):
+        self.destination = destination
+        self.error = error
+        self.persisted_payloads = []
+
+    def persist_verified_package(self, temporary_payload_path, download_url):
+        self.persisted_payloads.append((temporary_payload_path, download_url))
+        if self.error is not None:
+            raise self.error
+        self.destination.parent.mkdir(exist_ok=True)
+        Path(temporary_payload_path).replace(self.destination)
+        return str(self.destination)
 
 
 class FakeDesktopInhibitor:
@@ -249,6 +266,10 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
         assert snapshot.state == UpdateState.READY
         assert snapshot.payload_path is not None
         assert Path(snapshot.payload_path).read_bytes() == b"payload"
+        assert len(adapter.persisted_payloads) == 1
+        temporary_payload_path, download_url = adapter.persisted_payloads[0]
+        assert Path(temporary_payload_path).name == "update_payload.bin"
+        assert download_url == _available_result().download_url
         assert not list(tmp_path.glob("caveviewer_update_*"))
 
         assert manager.reveal_download(automatic=True)
@@ -555,6 +576,108 @@ def test_runtime_package_reveal_adapter_controls_label_and_action(tmp_path):
         assert platform_adapter.revealed_paths == []
     finally:
         manager.shutdown()
+
+
+def test_runtime_storage_adapter_owns_verified_package_persistence(tmp_path):
+    platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
+    storage_adapter = FakeUpdatePackageStorageAdapter(
+        tmp_path / "Stored Packages" / "CaveViewer-1.0.64.zip"
+    )
+    runtime = create_platform_runtime(
+        platform_adapter=platform_adapter,
+        desktop_services=FakeDesktopServices(),
+        update_package_storage_adapter=storage_adapter,
+        environment={},
+    )
+
+    def download_update(_url, _expected_size, destination, *, phase_cb, **_kwargs):
+        Path(destination).write_bytes(b"payload")
+        phase_cb("verifying")
+
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=runtime,
+        check_for_update=lambda *_args, **_kwargs: _available_result(),
+        download_update=download_update,
+        temp_root=str(tmp_path),
+    )
+    try:
+        assert manager.check_for_updates()
+        assert manager.wait_for_background_task(1)
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+
+        snapshot = manager.snapshot()
+        assert snapshot.state is UpdateState.READY
+        assert snapshot.payload_path == str(storage_adapter.destination)
+        assert storage_adapter.destination.read_bytes() == b"payload"
+        assert len(storage_adapter.persisted_payloads) == 1
+        temporary_payload_path, download_url = storage_adapter.persisted_payloads[0]
+        assert Path(temporary_payload_path).name == "update_payload.bin"
+        assert download_url == _available_result().download_url
+        assert platform_adapter.persisted_payloads == []
+        assert not list(tmp_path.glob("caveviewer_update_*"))
+    finally:
+        manager.shutdown()
+
+
+def test_storage_adapter_failure_is_an_ordinary_update_workflow_failure(tmp_path):
+    platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
+    storage_adapter = FakeUpdatePackageStorageAdapter(
+        tmp_path / "Stored Packages" / "CaveViewer-1.0.64.zip",
+        error=OSError("downloads directory is unavailable"),
+    )
+    runtime = create_platform_runtime(
+        platform_adapter=platform_adapter,
+        desktop_services=FakeDesktopServices(),
+        update_package_storage_adapter=storage_adapter,
+        environment={},
+    )
+
+    def download_update(_url, _expected_size, destination, **_kwargs):
+        Path(destination).write_bytes(b"payload")
+
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=runtime,
+        check_for_update=lambda *_args, **_kwargs: _available_result(),
+        download_update=download_update,
+        temp_root=str(tmp_path),
+    )
+    try:
+        assert manager.check_for_updates()
+        assert manager.wait_for_background_task(1)
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+
+        snapshot = manager.snapshot()
+        assert snapshot.state is UpdateState.FAILED
+        assert snapshot.error == "downloads directory is unavailable"
+        assert len(storage_adapter.persisted_payloads) == 1
+        assert platform_adapter.persisted_payloads == []
+        assert not list(tmp_path.glob("caveviewer_update_*"))
+    finally:
+        manager.shutdown()
+
+
+def test_runtime_rejects_mismatched_update_package_storage_adapter(tmp_path):
+    runtime = create_platform_runtime(
+        platform_adapter=FakeRuntimePlatformAdapter(tmp_path / "Downloads"),
+        desktop_services=FakeDesktopServices(),
+        environment={},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="update_package_storage_adapter must match the injected platform_runtime",
+    ):
+        UpdateManager(
+            "1.0.63",
+            platform_runtime=runtime,
+            update_package_storage_adapter=FakeUpdatePackageStorageAdapter(
+                tmp_path / "other-package.zip"
+            ),
+        )
 
 
 def test_disabled_runtime_package_reveal_gate_blocks_native_action(tmp_path):

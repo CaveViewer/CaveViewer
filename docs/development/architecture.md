@@ -412,6 +412,17 @@ and Linux desktop-service fallback are preserved behind the focused facade.
 Direct compatibility callers use a visible degraded `legacy_adapter` route
 until they adopt an injected runtime.
 
+Verified update-package storage uses a similarly focused adapter, but it is
+not a feature gate. Checksum verification has already completed when
+`UpdateManager` calls `UpdatePackageStorageAdapter`, while the availability of
+a user-visible local destination can change at any time. The adapter promotes
+the temporary verified payload and returns its final path; a storage exception
+is an ordinary update-workflow failure and still runs the normal temporary-file
+cleanup. The current compatibility facade delegates to the established native
+adapter behavior, preserving macOS DMG naming, Windows/default Downloads
+handling, and Linux AppImage permissions until those implementations move
+behind the narrow contract.
+
 Directory selection follows the same on-demand contract. Its immutable target
 declares an executable route rather than performing a desktop request:
 Linux declares `portal_then_tk`, portable desktop services declare `tk`, and

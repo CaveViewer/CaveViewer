@@ -35,6 +35,10 @@ from caveviewer.gui.platform.update_package_reveal import (
     UpdatePackageRevealAdapter,
     create_legacy_update_package_reveal_adapter,
 )
+from caveviewer.gui.platform.update_package_storage import (
+    UpdatePackageStorageAdapter,
+    create_update_package_storage_adapter,
+)
 from caveviewer.gui.update_checker import (
     DownloadCancelled,
     UpdateCheckResult,
@@ -124,6 +128,7 @@ class UpdateManager:
         download_update: Callable[..., None] | None = None,
         desktop_services: DesktopServices | None = None,
         update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
+        update_package_storage_adapter: UpdatePackageStorageAdapter | None = None,
         temp_root: str | None = None,
         platform_runtime: PlatformRuntime | None = None,
     ):
@@ -154,6 +159,16 @@ class UpdateManager:
                 "update_package_reveal_adapter must match the injected "
                 "platform_runtime"
             )
+        if (
+            platform_runtime is not None
+            and update_package_storage_adapter is not None
+            and update_package_storage_adapter
+            is not platform_runtime.update_package_storage_adapter
+        ):
+            raise ValueError(
+                "update_package_storage_adapter must match the injected "
+                "platform_runtime"
+            )
 
         self._platform_runtime = platform_runtime
         self._platform_adapter = (
@@ -171,6 +186,12 @@ class UpdateManager:
             if platform_runtime is not None
             else update_package_reveal_adapter
             or create_legacy_update_package_reveal_adapter(self._platform_adapter)
+        )
+        self._update_package_storage_adapter = (
+            platform_runtime.update_package_storage_adapter
+            if platform_runtime is not None
+            else update_package_storage_adapter
+            or create_update_package_storage_adapter(self._platform_adapter)
         )
         self._check_for_update = check_for_update or update_checker.check_for_update
         self._download_update = download_update or update_checker.download_update
@@ -515,7 +536,7 @@ class UpdateManager:
             if cancel_event.is_set():
                 raise DownloadCancelled("Download cancelled")
             final_payload_path = (
-                self._platform_adapter.persist_downloaded_payload(
+                self._update_package_storage_adapter.persist_verified_package(
                     payload_path,
                     result.download_url,
                 )
