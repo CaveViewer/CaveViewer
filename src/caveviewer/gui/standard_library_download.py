@@ -13,6 +13,10 @@ import threading
 from dataclasses import dataclass
 
 from caveviewer.gui.platform import DesktopServices, DirectorySelection
+from caveviewer.gui.platform.desktop_notifications import (
+    send_desktop_notification,
+    withdraw_desktop_notification,
+)
 
 
 @dataclass(frozen=True)
@@ -129,25 +133,20 @@ def safe_desktop_notify(
     priority: str = "normal",
 ) -> None:
     """Send a best-effort desktop notification without affecting workflow."""
-    try:
-        desktop_services.notify(
-            notification_id, title, body, priority=priority
-        )
-    except Exception:
-        # Notification failures must never break a download. Linux portals
-        # already fall back internally, but tests and unusual desktop sessions
-        # may provide smaller DesktopServices implementations.
-        pass
+    send_desktop_notification(
+        desktop_services,
+        notification_id,
+        title,
+        body,
+        priority=priority,
+    )
 
 
 def safe_desktop_withdraw(
     desktop_services: DesktopServices, notification_id: str
 ) -> None:
     """Withdraw a best-effort desktop notification without affecting workflow."""
-    try:
-        desktop_services.withdraw_notification(notification_id)
-    except Exception:
-        pass
+    withdraw_desktop_notification(desktop_services, notification_id)
 
 
 def safe_desktop_inhibit(
