@@ -21,6 +21,7 @@ from .runtime import (
 from .update_package_reveal import UpdatePackageRevealAdapter
 from .update_package_storage import UpdatePackageStorageAdapter
 from .saved_recording_reveal import SavedRecordingRevealAdapter
+from .recording_process import RecordingProcessAdapter
 from .linux import LinuxSplashPlatformAdapter
 from .macos import MacOSSplashPlatformAdapter
 from .windows import WindowsSplashPlatformAdapter
@@ -49,5 +50,6 @@ __all__ = [
     "UpdatePackageRevealAdapter",
     "UpdatePackageStorageAdapter",
     "SavedRecordingRevealAdapter",
+    "RecordingProcessAdapter",
     "create_platform_runtime",
 ]
