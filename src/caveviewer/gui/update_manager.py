@@ -345,6 +345,7 @@ class UpdateManager:
                     install_channel=self._platform_adapter.install_channel(),
                     configuration=self._platform_runtime.update_configuration,
                     platform_adapter=self._platform_adapter,
+                    tls_trust_adapter=self._platform_runtime.tls_trust_adapter,
                 )
             else:
                 result = self._check_for_update(
@@ -527,6 +528,10 @@ class UpdateManager:
             }
             if self._uses_runtime_download_adapter:
                 download_kwargs["platform_adapter"] = self._platform_adapter
+                assert self._platform_runtime is not None
+                download_kwargs["tls_trust_adapter"] = (
+                    self._platform_runtime.tls_trust_adapter
+                )
             self._download_update(
                 result.download_url,
                 result.download_size_bytes,

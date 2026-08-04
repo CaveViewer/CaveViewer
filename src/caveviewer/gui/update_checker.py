@@ -26,6 +26,10 @@ from caveviewer.core.capabilities import CapabilitySource
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.platform import get_platform_adapter
 from caveviewer.gui.platform.base import SplashPlatformAdapter
+from caveviewer.gui.platform.tls_trust import (
+    TlsTrustAdapter,
+    create_tls_trust_adapter,
+)
 from caveviewer.gui.platform.probes.updates import (
     UpdateConfiguration,
     build_update_configuration,
@@ -68,7 +72,9 @@ def _legacy_update_configuration() -> UpdateConfiguration:
 
 
 def make_ssl_context(
-    *, platform_adapter: SplashPlatformAdapter | None = None
+    *,
+    tls_trust_adapter: TlsTrustAdapter | None = None,
+    platform_adapter: SplashPlatformAdapter | None = None,
 ) -> ssl.SSLContext:
     """
     Returns an SSL context that trusts both Python's bundled CA bundle and
@@ -83,11 +89,15 @@ def make_ssl_context(
     root CA, which Windows trusts but Python's bundle does not.
 
     Loading the Windows store alongside the bundled bundle fixes both cases
-    without disabling verification.  The active platform adapter owns whether
-    any operating-system certificate stores need to be loaded.
+    without disabling verification. The focused TLS adapter owns whether any
+    operating-system certificate stores need to be loaded. ``platform_adapter``
+    remains a legacy compatibility input for direct callers.
     """
     ctx = ssl.create_default_context()
-    (platform_adapter or _legacy_platform_adapter()).load_system_certificates(ctx)
+    active_tls_trust_adapter = tls_trust_adapter or create_tls_trust_adapter(
+        platform_adapter or _legacy_platform_adapter()
+    )
+    active_tls_trust_adapter.augment_ssl_context(ctx)
     return ctx
 
 
@@ -181,6 +191,7 @@ def check_for_update(
     *,
     configuration: UpdateConfiguration | None = None,
     platform_adapter: SplashPlatformAdapter | None = None,
+    tls_trust_adapter: TlsTrustAdapter | None = None,
 ) -> UpdateCheckResult:
     """
     Synchronous -- intended to be called from a button click (the
@@ -190,12 +201,20 @@ def check_for_update(
     caller can show a calm "couldn't check for updates right now"
     message rather than a stack trace.
 
-    New application code passes a process-owned configuration and platform
-    adapter.  Omitting both preserves the legacy public API while resolving
-    its environment-derived settings lazily on first use.
+    New application code passes process-owned configuration, platform, and TLS
+    trust adapters. Omitting them preserves the legacy public API while
+    resolving environment-derived settings lazily on first use.
     """
-    legacy_call = configuration is None and platform_adapter is None
+    legacy_call = (
+        configuration is None
+        and platform_adapter is None
+        and tls_trust_adapter is None
+    )
     resolved_platform_adapter = platform_adapter or _legacy_platform_adapter()
+    resolved_tls_trust_adapter = (
+        tls_trust_adapter
+        or create_tls_trust_adapter(resolved_platform_adapter)
+    )
     resolved_configuration = (
         _legacy_update_configuration()
         if legacy_call
@@ -211,7 +230,7 @@ def check_for_update(
                 url,
                 headers=headers,
                 timeout=timeout,
-                platform_adapter=resolved_platform_adapter,
+                tls_trust_adapter=resolved_tls_trust_adapter,
             )
 
         def verify_manifest_signature(manifest_bytes: bytes) -> bool:
@@ -421,14 +440,14 @@ def _fetch_url_bytes_for_adapter(
     *,
     headers: dict[str, str],
     timeout: int,
-    platform_adapter: SplashPlatformAdapter,
+    tls_trust_adapter: TlsTrustAdapter,
 ) -> bytes:
     """Fetch a manifest using the explicitly injected platform TLS adapter."""
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(
         request,
         timeout=timeout,
-        context=make_ssl_context(platform_adapter=platform_adapter),
+        context=make_ssl_context(tls_trust_adapter=tls_trust_adapter),
     ) as response:
         return response.read()
 
@@ -518,6 +537,7 @@ def download_update(
     phase_cb: Callable[[str], None] | None = None,
     *,
     platform_adapter: SplashPlatformAdapter | None = None,
+    tls_trust_adapter: TlsTrustAdapter | None = None,
 ) -> None:
     """
     Downloads the release payload to dest_path. Raises on any failure
@@ -571,8 +591,11 @@ def download_update(
         raise_if_cancelled()
         ssl_context = (
             make_ssl_context()
-            if platform_adapter is None
-            else make_ssl_context(platform_adapter=active_platform_adapter)
+            if platform_adapter is None and tls_trust_adapter is None
+            else make_ssl_context(
+                tls_trust_adapter=tls_trust_adapter,
+                platform_adapter=active_platform_adapter,
+            )
         )
         with urllib.request.urlopen(request, timeout=30, context=ssl_context) as response:
             total = expected_size_bytes or int(response.headers.get("Content-Length", 0)) or None

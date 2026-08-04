@@ -67,6 +67,7 @@ src/caveviewer/gui/platform/update_package_reveal.py focused verified-package re
 src/caveviewer/gui/platform/update_package_storage.py focused verified-package storage facade
 src/caveviewer/gui/platform/saved_recording_reveal.py focused post-save recording reveal facade
 src/caveviewer/gui/platform/recording_process.py focused recording-encoder startup facade
+src/caveviewer/gui/platform/tls_trust.py       focused native TLS-trust augmentation facade
 src/caveviewer/gui/platform/probes/           platform capability probes and configuration
 src/caveviewer/gui/platform/probes/desktop.py on-demand directory-selection route probe
 src/caveviewer/gui/platform/probes/update_package_reveal.py static verified-package reveal route probe

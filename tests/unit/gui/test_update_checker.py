@@ -138,6 +138,24 @@ def test_windows_ssl_context_loads_usable_system_certificates(monkeypatch):
     assert loaded_certificates == [b"usable certificate", b"bad certificate"]
 
 
+def test_ssl_context_uses_injected_tls_trust_adapter(monkeypatch):
+    context = object()
+    augmented_contexts = []
+
+    class FakeTlsTrustAdapter:
+        def augment_ssl_context(self, received_context):
+            augmented_contexts.append(received_context)
+
+    tls_trust_adapter = FakeTlsTrustAdapter()
+    monkeypatch.setattr(update_checker.ssl, "create_default_context", lambda: context)
+
+    assert (
+        update_checker.make_ssl_context(tls_trust_adapter=tls_trust_adapter)
+        is context
+    )
+    assert augmented_contexts == [context]
+
+
 def test_fetch_url_bytes_uses_headers_timeout_and_ssl_context(monkeypatch):
     """The transport wrapper must preserve request policy for every manifest fetch."""
     opened = {}
@@ -171,6 +189,56 @@ def test_fetch_url_bytes_uses_headers_timeout_and_ssl_context(monkeypatch):
     assert opened["request"].get_header("Accept") == "application/json"
     assert opened["timeout"] == 17
     assert opened["context"] is ssl_context
+
+
+def test_download_update_uses_injected_tls_trust_adapter(monkeypatch, tmp_path):
+    platform_adapter = FakePlatformAdapter()
+    tls_trust_adapter = object()
+    context = object()
+    context_calls = []
+
+    class FakeResponse:
+        headers = {}
+
+        def __init__(self):
+            self._chunks = iter((b"payload", b""))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, _size):
+            return next(self._chunks)
+
+    monkeypatch.setattr(
+        update_checker,
+        "make_ssl_context",
+        lambda **kwargs: context_calls.append(kwargs) or context,
+    )
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda request, *, timeout, context: FakeResponse(),
+    )
+    destination = tmp_path / "CaveViewer.zip"
+
+    update_checker.download_update(
+        "https://updates.example/CaveViewer.zip",
+        7,
+        str(destination),
+        platform_adapter=platform_adapter,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert destination.read_bytes() == b"payload"
+    assert context_calls == [
+        {
+            "tls_trust_adapter": tls_trust_adapter,
+            "platform_adapter": platform_adapter,
+        }
+    ]
 
 
 def test_update_check_reports_unconfigured_manifest(monkeypatch):
@@ -411,6 +479,7 @@ def test_signature_check_accepts_valid_signature(monkeypatch):
 
 def test_explicit_runtime_configuration_bypasses_legacy_update_globals(monkeypatch):
     adapter = FakePlatformAdapter()
+    tls_trust_adapter = object()
     configuration = UpdateConfiguration(
         repository="example/CaveViewer",
         branch="release-candidate",
@@ -424,8 +493,8 @@ def test_explicit_runtime_configuration_bypasses_legacy_update_globals(monkeypat
     monkeypatch.setattr(
         update_checker,
         "_fetch_url_bytes_for_adapter",
-        lambda url, *, headers, timeout, platform_adapter: (
-            fetched.append((url, headers, timeout, platform_adapter))
+        lambda url, *, headers, timeout, tls_trust_adapter: (
+            fetched.append((url, headers, timeout, tls_trust_adapter))
             or json.dumps(
                 {
                     "latest_version": "1.0.0",
@@ -444,6 +513,7 @@ def test_explicit_runtime_configuration_bypasses_legacy_update_globals(monkeypat
         "1.0.0",
         configuration=configuration,
         platform_adapter=adapter,
+        tls_trust_adapter=tls_trust_adapter,
     )
 
     assert not result.update_available
@@ -452,6 +522,6 @@ def test_explicit_runtime_configuration_bypasses_legacy_update_globals(monkeypat
             "https://updates.example/runtime.json",
             {"Accept": "application/json", "User-Agent": "CaveViewer-Test"},
             8,
-            adapter,
+            tls_trust_adapter,
         )
     ]
