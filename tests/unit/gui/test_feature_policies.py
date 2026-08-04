@@ -5,12 +5,14 @@ from __future__ import annotations
 import pytest
 
 from caveviewer.core.capabilities import CapabilityResult, CapabilitySource
+from caveviewer.core.map import source_model
 from caveviewer.gui.features import (
     FeatureDecision,
     FeatureGateRegistry,
     FeatureId,
     FeatureState,
     decide_automatic_update,
+    decide_map_source_import,
     decide_video_recording,
 )
 
@@ -147,6 +149,58 @@ def test_video_recording_policy_is_a_pure_capability_table(
     decision = decide_video_recording(capability)
 
     assert decision.feature is FeatureId.VIDEO_RECORDING
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (state is FeatureState.ENABLED)
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                source_model.OBJ_SOURCE_FORMAT,
+                reason_code="map_source_format_available",
+            ),
+            FeatureState.ENABLED,
+            "map_source_import_available",
+            "obj",
+        ),
+        (
+            CapabilityResult.available(
+                source_model.GLB_SOURCE_FORMAT,
+                reason_code="map_source_format_available",
+            ),
+            FeatureState.ENABLED,
+            "map_source_import_available",
+            "glb",
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="map_source_format_unsupported",
+            ),
+            FeatureState.DISABLED,
+            "map_source_format_unsupported",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="map_source_format_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "map_source_import_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_map_source_import_policy_is_a_pure_capability_table(
+    capability, state, reason_code, route
+):
+    decision = decide_map_source_import(capability)
+
+    assert decision.feature is FeatureId.MAP_SOURCE_IMPORT
     assert decision.state is state
     assert decision.reason_code == reason_code
     assert decision.route == route

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from caveviewer.core.map import source_model
 from caveviewer.gui import map_selection
 
 
@@ -72,6 +73,13 @@ def test_obj_without_material_or_cache_is_rejected(tmp_path, monkeypatch):
     assert not valid
     assert "no matching .mtl file" in message
     assert "cache" not in message.lower()
+
+
+def test_missing_source_guidance_uses_the_core_format_registry(tmp_path):
+    valid, message = map_selection.validate_selected_map_folder(str(tmp_path))
+
+    assert not valid
+    assert source_model.supported_source_format_summary(conjunction="or") in message
 
 
 def test_precompiled_cache_folder_is_accepted(tmp_path, monkeypatch):

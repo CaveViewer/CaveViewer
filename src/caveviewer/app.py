@@ -366,9 +366,12 @@ def import_and_cache_any(
     downstream consumer sees ordinary files beside the manifest without the
     source folder ever needing to be writable.
     """
-    fmt = model_descriptor["format"]
+    source_format = source_model.source_format_for_id(model_descriptor.get("format"))
 
-    if fmt == "obj":
+    if (
+        source_format is not None
+        and source_format.id is source_model.SourceFormatId.OBJ
+    ):
         return import_and_cache(
             model_descriptor["obj_path"], model_descriptor["mtl_path"],
             force_rebuild=force_rebuild,

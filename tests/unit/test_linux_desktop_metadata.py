@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from caveviewer.core.map import source_model
 from caveviewer.version import APPLICATION_ID, APP_VERSION
 
 
@@ -31,24 +32,42 @@ def _generated_apprun_script() -> str:
     return package_script[start:end] + "\n"
 
 
+def _desktop_entry(desktop_text: str):
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str
+    parser.read_string(desktop_text)
+    return parser["Desktop Entry"]
+
+
+def _packaged_source_mime_types() -> set[str]:
+    return {
+        source_format.mime_type
+        for source_format in source_model.supported_source_formats()
+    }
+
+
 def test_linux_metadata_uses_one_stable_application_id():
     desktop_template = LINUX_PACKAGING / f"{APPLICATION_ID}.desktop.in"
     metainfo_path = LINUX_PACKAGING / f"{APPLICATION_ID}.metainfo.xml"
 
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.optionxform = str
-    parser.read_string(
+    desktop = _desktop_entry(
         desktop_template.read_text(encoding="utf-8").replace("@EXEC@", "AppRun")
     )
-    desktop = parser["Desktop Entry"]
     metainfo = ElementTree.parse(metainfo_path).getroot()
+    packaged_mime_types = _packaged_source_mime_types()
+    packaged_display_names = {
+        source_format.display_name
+        for source_format in source_model.supported_source_formats()
+    }
 
     assert APPLICATION_ID == "io.github.caveviewer.caveviewer"
     assert desktop["Icon"] == APPLICATION_ID
     assert desktop["StartupWMClass"] == APPLICATION_ID
     assert desktop["StartupNotify"] == "true"
     assert desktop["Exec"] == "AppRun %f"
-    assert desktop["MimeType"] == "model/gltf-binary;model/obj;"
+    assert {mime_type for mime_type in desktop["MimeType"].split(";") if mime_type} == (
+        packaged_mime_types
+    )
     assert desktop["Categories"] == "Graphics;3DGraphics;Viewer;"
     assert {
         "Cave",
@@ -56,15 +75,18 @@ def test_linux_metadata_uses_one_stable_application_id():
         "3D",
         "Map",
         "Viewer",
-        "OBJ",
-        "GLB",
         "Photogrammetry",
     } <= {keyword for keyword in desktop["Keywords"].split(";") if keyword}
+    assert packaged_display_names <= {
+        keyword for keyword in desktop["Keywords"].split(";") if keyword
+    }
     assert metainfo.findtext("id") == APPLICATION_ID
     assert metainfo.find("launchable").text == f"{APPLICATION_ID}.desktop"
-    assert [
+    assert {
         mediatype.text for mediatype in metainfo.findall("./provides/mediatype")
-    ] == ["model/gltf-binary", "model/obj"]
+    } == packaged_mime_types
+    description = " ".join(metainfo.find("description").itertext())
+    assert all(display_name in description for display_name in packaged_display_names)
     assert any(
         release.attrib.get("version") == APP_VERSION
         for release in metainfo.findall("./releases/release")
@@ -172,9 +194,10 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
     assert installed_metainfo.is_file()
     assert installed_icon.read_bytes() == b"fake icon"
     assert f'Exec="{appimage}" %f' in installed_desktop.read_text(encoding="utf-8")
-    assert "MimeType=model/gltf-binary;model/obj;" in installed_desktop.read_text(
-        encoding="utf-8"
-    )
+    installed_entry = _desktop_entry(installed_desktop.read_text(encoding="utf-8"))
+    assert {
+        mime_type for mime_type in installed_entry["MimeType"].split(";") if mime_type
+    } == _packaged_source_mime_types()
 
     unrelated_icon = (
         xdg_data_home

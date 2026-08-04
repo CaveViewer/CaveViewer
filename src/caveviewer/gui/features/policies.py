@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TypeVar
 
 from caveviewer.core.capabilities import CapabilityResult, CapabilityStatus
+from caveviewer.core.map.source_model import SourceFormat
 
 from .ids import FeatureId
 from .model import FeatureDecision, FeatureState
@@ -30,6 +31,12 @@ _VIDEO_RECORDING_EXPLANATIONS = {
     ),
     "video_recording_output_directory_unavailable": (
         "Video recording cannot save to the selected folder."
+    ),
+}
+
+_MAP_SOURCE_IMPORT_EXPLANATIONS = {
+    "map_source_format_unsupported": (
+        "This map source format is not supported by this installation."
     ),
 }
 
@@ -106,4 +113,42 @@ def decide_video_recording(
         state=FeatureState.DISABLED,
         reason_code="video_recording_capability_unknown",
         explanation="Video recording availability could not be determined.",
+    )
+
+
+def decide_map_source_import(
+    capability: CapabilityResult[SourceFormat],
+) -> FeatureDecision:
+    """Choose whether one selected source format may enter import workflow.
+
+    The selected descriptor is action-specific, so this policy is evaluated
+    immediately before the GUI accepts a source import rather than stored in
+    the process-stable feature-gate registry.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        source_format = capability.value
+        return FeatureDecision(
+            feature=FeatureId.MAP_SOURCE_IMPORT,
+            state=FeatureState.ENABLED,
+            reason_code="map_source_import_available",
+            explanation=f"{source_format.display_name} map import is available.",
+            route=source_format.id.value,
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.MAP_SOURCE_IMPORT,
+            state=FeatureState.DISABLED,
+            reason_code=capability.reason_code,
+            explanation=_MAP_SOURCE_IMPORT_EXPLANATIONS.get(
+                capability.reason_code,
+                "This map source format is not supported by this installation.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.MAP_SOURCE_IMPORT,
+        state=FeatureState.DISABLED,
+        reason_code="map_source_import_capability_unknown",
+        explanation="Map source format availability could not be determined.",
     )

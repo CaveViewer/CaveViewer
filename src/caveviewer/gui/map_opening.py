@@ -9,6 +9,7 @@ from typing import Any
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.map import source_model
+from caveviewer.gui.features import FeatureDecision, decide_map_source_import
 from caveviewer.gui.platform import DesktopServices, get_desktop_services, tk_root_options
 
 
@@ -54,6 +55,10 @@ def resolve_selected_map_folder(folder: str) -> OpenMapTarget:
     except FileNotFoundError as exc:
         return _resolve_prebuilt_cache(normalized, exc)
 
+    source_import_decision = map_source_import_decision(model_descriptor)
+    if not source_import_decision.allows_execution:
+        raise FileNotFoundError(source_import_decision.explanation)
+
     source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
     map_name = os.path.basename(str(source_path or normalized))
     return OpenMapTarget(
@@ -62,6 +67,13 @@ def resolve_selected_map_folder(folder: str) -> OpenMapTarget:
         model_descriptor=model_descriptor,
         textures_dir=normalized,
     )
+
+
+def map_source_import_decision(
+    model_descriptor: dict[str, Any],
+) -> FeatureDecision:
+    """Evaluate the action-time gate for one already-discovered map descriptor."""
+    return decide_map_source_import(source_model.probe_model_descriptor(model_descriptor))
 
 
 def _resolve_prebuilt_cache(folder: str, no_model_error: FileNotFoundError) -> OpenMapTarget:

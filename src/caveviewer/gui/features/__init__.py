@@ -3,7 +3,11 @@
 from .gates import FeatureGateRegistry
 from .ids import FeatureId
 from .model import FeatureDecision, FeatureState
-from .policies import decide_automatic_update, decide_video_recording
+from .policies import (
+    decide_automatic_update,
+    decide_map_source_import,
+    decide_video_recording,
+)
 
 __all__ = [
     "FeatureDecision",
@@ -11,5 +15,6 @@ __all__ = [
     "FeatureId",
     "FeatureState",
     "decide_automatic_update",
+    "decide_map_source_import",
     "decide_video_recording",
 ]

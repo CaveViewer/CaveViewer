@@ -4,14 +4,185 @@ from __future__ import annotations
 
 import glob
 import os
-from typing import Any
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Mapping
 
+from caveviewer.core.capabilities import CapabilityResult
 from caveviewer.core.diagnostics.logging import get_logger
 
 
 _LOG = get_logger("ModelDiscovery")
-_SUPPORTED_EXTENSIONS = (".obj", ".glb")
 OBJ_MATERIAL_SCAN_LIMIT_BYTES = 1024 * 1024
+
+
+class SourceFormatId(str, Enum):
+    """Stable identifiers for source formats CaveViewer can import."""
+
+    OBJ = "obj"
+    GLB = "glb"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFormat:
+    """Release-policy metadata for one supported source-model format.
+
+    The registry below is intentionally the single declaration of formats that
+    discovery, presentation, and package metadata may advertise. Parser
+    dispatch remains separate because it owns the format-specific work.
+    """
+
+    id: SourceFormatId
+    extension: str
+    display_name: str
+    mime_type: str
+    companion_file_extension: str | None = None
+
+    @property
+    def descriptor_path_key(self) -> str:
+        """Return the descriptor key carrying this format's source path."""
+        return f"{self.id.value}_path"
+
+    @property
+    def help_label(self) -> str:
+        """Return concise guidance for selecting this format."""
+        if self.companion_file_extension:
+            return (
+                f"{self.extension} (with a matching "
+                f"{self.companion_file_extension})"
+            )
+        return self.extension
+
+
+@dataclass(frozen=True, slots=True)
+class SourceModelCandidate:
+    """One source file found through the supported-format registry."""
+
+    source_format: SourceFormat
+    path: str
+
+
+OBJ_SOURCE_FORMAT = SourceFormat(
+    id=SourceFormatId.OBJ,
+    extension=".obj",
+    display_name="OBJ",
+    mime_type="model/obj",
+    companion_file_extension=".mtl",
+)
+GLB_SOURCE_FORMAT = SourceFormat(
+    id=SourceFormatId.GLB,
+    extension=".glb",
+    display_name="GLB",
+    mime_type="model/gltf-binary",
+)
+SUPPORTED_SOURCE_FORMATS = (OBJ_SOURCE_FORMAT, GLB_SOURCE_FORMAT)
+
+
+def supported_source_formats() -> tuple[SourceFormat, ...]:
+    """Return the immutable release-policy registry of supported formats."""
+    return SUPPORTED_SOURCE_FORMATS
+
+
+def source_format_for_id(
+    format_id: SourceFormatId | str | None,
+) -> SourceFormat | None:
+    """Return one registered format for a descriptor identifier, if any."""
+    if isinstance(format_id, SourceFormatId):
+        normalized_id = format_id.value
+    elif isinstance(format_id, str):
+        normalized_id = format_id.strip().lower()
+    else:
+        return None
+    return next(
+        (
+            source_format
+            for source_format in SUPPORTED_SOURCE_FORMATS
+            if source_format.id.value == normalized_id
+        ),
+        None,
+    )
+
+
+def source_format_for_path(path: str | os.PathLike[str]) -> SourceFormat | None:
+    """Return the registered format selected by a source filename extension."""
+    extension = os.path.splitext(os.fspath(path))[1].lower()
+    return next(
+        (
+            source_format
+            for source_format in SUPPORTED_SOURCE_FORMATS
+            if source_format.extension == extension
+        ),
+        None,
+    )
+
+
+def probe_source_format(
+    path: str | os.PathLike[str],
+) -> CapabilityResult[SourceFormat]:
+    """Report whether one selected source filename has a released importer.
+
+    This is a pure classification of the selected path. It does not claim the
+    file exists or that required companion assets are present; discovery keeps
+    those filesystem checks at its boundary.
+    """
+    extension = os.path.splitext(os.fspath(path))[1].lower()
+    source_format = source_format_for_path(path)
+    if source_format is not None:
+        return CapabilityResult.available(
+            source_format,
+            reason_code="map_source_format_available",
+            evidence={
+                "extension": extension,
+                "format": source_format.id.value,
+            },
+        )
+    return CapabilityResult.unavailable(
+        reason_code="map_source_format_unsupported",
+        evidence={"extension": extension or None},
+    )
+
+
+def probe_model_descriptor(
+    model_descriptor: Mapping[str, Any],
+) -> CapabilityResult[SourceFormat]:
+    """Report whether a model descriptor selects a released source format."""
+    raw_format = model_descriptor.get("format")
+    source_format = source_format_for_id(raw_format)
+    if source_format is not None:
+        return CapabilityResult.available(
+            source_format,
+            reason_code="map_source_format_available",
+            evidence={"format": source_format.id.value},
+        )
+    return CapabilityResult.unavailable(
+        reason_code="map_source_format_unsupported",
+        evidence={"format": str(raw_format) if raw_format is not None else None},
+    )
+
+
+def supported_source_format_summary(*, conjunction: str = "and") -> str:
+    """Return a human-readable summary derived from the format registry."""
+    labels = [source_format.help_label for source_format in SUPPORTED_SOURCE_FORMATS]
+    if not labels:
+        return "no source formats"
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} {conjunction} {labels[1]}"
+    return f"{', '.join(labels[:-1])}, {conjunction} {labels[-1]}"
+
+
+def find_supported_source_files(folder: str) -> tuple[SourceModelCandidate, ...]:
+    """Return source files found through the canonical supported-format list."""
+    return tuple(
+        SourceModelCandidate(source_format=source_format, path=path)
+        for source_format in SUPPORTED_SOURCE_FORMATS
+        for path in _source_files_for_format(folder, source_format)
+    )
+
+
+def _source_files_for_format(folder: str, source_format: SourceFormat) -> list[str]:
+    return glob.glob(os.path.join(folder, f"*{source_format.extension}"))
 
 
 def _info(logger: Any | None, message: str) -> None:
@@ -43,7 +214,7 @@ def _resolve_companion_path(folder: str, relative_path: str, description: str) -
 
 def find_input_files(folder: str, *, logger: Any | None = None) -> tuple[str, str]:
     """Locate the OBJ and MTL files inside ``folder``."""
-    obj_candidates = glob.glob(os.path.join(folder, "*.obj"))
+    obj_candidates = _source_files_for_format(folder, OBJ_SOURCE_FORMAT)
     if not obj_candidates:
         raise FileNotFoundError(
             f"No .obj file found in:\n  {folder}\n\n"
@@ -130,37 +301,45 @@ def find_model_file(folder: str, *, logger: Any | None = None) -> dict:
     """
     selected_path = os.path.abspath(folder)
     if os.path.isfile(selected_path):
-        ext = os.path.splitext(selected_path)[1].lower()
-        if ext == ".obj":
-            return {
-                "format": "obj",
-                "obj_path": selected_path,
-                "mtl_path": find_material_file_for_obj(selected_path),
-            }
-        if ext == ".glb":
-            return {"format": "glb", "glb_path": selected_path}
+        source_format = source_format_for_path(selected_path)
+        if source_format is not None:
+            return _model_descriptor_for_path(selected_path, source_format)
         raise FileNotFoundError(
             f"No supported model file found at:\n  {selected_path}\n\n"
-            f"CaveViewer supports .obj (with a matching .mtl) and .glb files."
+            f"CaveViewer supports {supported_source_format_summary()} files."
         )
 
     folder = selected_path
-    for ext in _SUPPORTED_EXTENSIONS:
-        candidates = glob.glob(os.path.join(folder, f"*{ext}"))
+    for source_format in SUPPORTED_SOURCE_FORMATS:
+        candidates = _source_files_for_format(folder, source_format)
         if not candidates:
             continue
         if len(candidates) > 1:
-            _info(logger, f"Note: multiple {ext} files found, using the first one: {candidates[0]}")
+            _info(
+                logger,
+                "Note: multiple "
+                f"{source_format.extension} files found, using the first one: "
+                f"{candidates[0]}",
+            )
         model_path = candidates[0]
-
-        if ext == ".obj":
-            obj_path, mtl_path = find_input_files(folder, logger=logger)
-            return {"format": "obj", "obj_path": obj_path, "mtl_path": mtl_path}
-        if ext == ".glb":
-            return {"format": "glb", "glb_path": model_path}
+        return _model_descriptor_for_path(model_path, source_format)
 
     raise FileNotFoundError(
         f"No supported model file found in:\n  {folder}\n\n"
-        f"CaveViewer supports .obj (with a matching .mtl) and .glb files. "
+        f"CaveViewer supports {supported_source_format_summary()} files. "
         f"Make sure you selected the folder containing your exported map."
     )
+
+
+def _model_descriptor_for_path(
+    model_path: str,
+    source_format: SourceFormat,
+) -> dict:
+    """Build one parser descriptor from a released source format and path."""
+    descriptor = {
+        "format": source_format.id.value,
+        source_format.descriptor_path_key: model_path,
+    }
+    if source_format.id is SourceFormatId.OBJ:
+        descriptor["mtl_path"] = find_material_file_for_obj(model_path)
+    return descriptor
