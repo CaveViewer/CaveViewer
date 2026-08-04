@@ -80,7 +80,7 @@ def test_trace_directory_requires_a_map_root():
         manual_dive_trace_directory("")
 
 
-def test_map_context_keeps_source_basename_and_entrance_evidence():
+def test_map_context_keeps_source_basename_and_render_identity_only():
     assert manual_dive_trace_map_context(
         {
             "version": 1,
@@ -101,13 +101,6 @@ def test_map_context_keeps_source_basename_and_entrance_evidence():
         "manifest_version": 1,
         "chunk_size_m": 50.0,
         "triangle_count": None,
-        "navigation_version": 12,
-        "navigation_method": "fixed_orthogonal_voxel_graph_v12",
-        "navigation_start_anchor": {
-            "position": [1.0, 2.0, 3.0],
-            "source_vertex_index": 0,
-        },
-        "recommended_route_id": None,
         "coordinate_space": "manifest_xyz",
         "distance_unit": "meter",
         "orientation_unit": "radian",

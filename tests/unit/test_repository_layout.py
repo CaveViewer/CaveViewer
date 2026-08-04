@@ -179,6 +179,10 @@ def test_pyproject_declares_src_package_and_entry_point():
     )
     assert 'caveviewer-chunker = "caveviewer.chunker:main"' in pyproject
     assert (
+        'caveviewer-navigation-certify = '
+        '"caveviewer.core.navigation.certificate_build:main"'
+    ) in pyproject
+    assert (
         'caveviewer-navigation-verify = '
         '"caveviewer.core.navigation.certificate:main"'
     ) in pyproject

@@ -28,11 +28,13 @@ at the camera's center of attention for long.
 from __future__ import annotations
 
 import concurrent.futures
+from collections.abc import Mapping
 import gc
 import json
 import os
 import shutil
 import tempfile
+import time
 from typing import Callable
 
 import numpy as np
@@ -109,7 +111,6 @@ from caveviewer.core.chunking.staging import (
     MANIFEST_NAME,
     CacheAsset,
     ImportPaused,
-    _atomic_write_json,
     _cache_asset_size,
     _deserialize_bucket_parts,
     _find_incremental_obj_resume,
@@ -147,13 +148,6 @@ from caveviewer.core.chunking.upload import (
 )
 from caveviewer.core.hardware import system_memory
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.core.navigation.cache_metadata import build_navigation_metadata
-from caveviewer.core.navigation.mesh_collision import CachedChunkMeshCollisionGuard
-from caveviewer.core.navigation.voxel_cache import (
-    NAVIGATION_VOXEL_CACHE_NAME,
-    build_navigation_voxel_cache,
-    first_manifest_chunk_center_for_route_contract,
-)
 from caveviewer.core.workers.allocation import (
     MAX_WORKER_RAM_UTILIZATION,
     can_start_additional_worker,
@@ -178,9 +172,15 @@ from caveviewer.core.map.cache_identity import (
 
 _LOG = get_logger("chunker")
 
-NAVIGATION_START_SOURCE_FIRST_MANIFEST_CHUNK = (
-    "first_manifest_chunk_center_v1"
-)
+
+def _log_cache_build_phase(phase: str, started_at: float) -> float:
+    """Log one completed cache-build phase and return a fresh phase clock."""
+    _LOG.info(
+        "Cache build phase %s completed in %.2fs.",
+        phase,
+        time.perf_counter() - started_at,
+    )
+    return time.perf_counter()
 
 
 def _attach_guided_dive_cache_identity(manifest: dict, source_path: str) -> None:
@@ -230,6 +230,7 @@ def build_cache(
 
     progress_cb(stage: str, fraction: float)
     """
+    build_started_at = time.perf_counter()
     cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
     cache_parent = os.path.dirname(cache_dir)
     assets = tuple(assets)
@@ -249,7 +250,9 @@ def build_cache(
         dir=cache_parent,
     )
     try:
+        phase_started_at = time.perf_counter()
         _stage_cache_assets(staging_dir, assets)
+        _log_cache_build_phase("render assets staged", phase_started_at)
         _build_cache_in_directory(
             obj_path,
             mesh,
@@ -260,7 +263,9 @@ def build_cache(
             max_upload_group_mb=resolved_max_upload_group_mb,
             max_upload_group_bytes=resolved_max_upload_group_bytes,
         )
+        phase_started_at = time.perf_counter()
         _publish_cache_directory(staging_dir, cache_dir)
+        _log_cache_build_phase("render cache published", phase_started_at)
     except BaseException:
         # In particular, ENOSPC can be raised after several worker writes.
         # Removing the private staging tree guarantees a failed build never
@@ -270,6 +275,12 @@ def build_cache(
 
     if progress_cb:
         progress_cb("done", 1.0)
+
+    _LOG.info(
+        "Cache build completed in %.2fs: %s",
+        time.perf_counter() - build_started_at,
+        cache_dir,
+    )
 
     return cache_dir
 
@@ -295,6 +306,7 @@ def build_cache_incremental_obj(
     per-cell/material bucket files, then finalizes those buckets into the same
     chunk binary format used by ``build_cache``.
     """
+    build_started_at = time.perf_counter()
     cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
     cache_parent = os.path.dirname(cache_dir)
     assets = tuple(assets)
@@ -351,7 +363,9 @@ def build_cache_incremental_obj(
 
     try:
         if not is_resuming:
+            phase_started_at = time.perf_counter()
             _stage_cache_assets(staging_dir, assets)
+            _log_cache_build_phase("render assets staged", phase_started_at)
         _build_incremental_obj_cache_in_directory(
             obj_path,
             materials,
@@ -366,7 +380,9 @@ def build_cache_incremental_obj(
             resume_checkpoint=resume_checkpoint,
         )
         _remove_resume_checkpoint(staging_dir)
+        phase_started_at = time.perf_counter()
         _publish_cache_directory(staging_dir, cache_dir)
+        _log_cache_build_phase("render cache published", phase_started_at)
     except ImportPaused as paused:
         resume_dir = _preserve_resumable_import(staging_dir, cache_dir)
         paused.resume_dir = resume_dir
@@ -378,6 +394,12 @@ def build_cache_incremental_obj(
 
     if progress_cb:
         progress_cb("done", 1.0)
+
+    _LOG.info(
+        "Cache build completed in %.2fs: %s",
+        time.perf_counter() - build_started_at,
+        cache_dir,
+    )
 
     return cache_dir
 
@@ -397,6 +419,7 @@ def _build_incremental_obj_cache_in_directory(
     resume_checkpoint: dict | None = None,
 ) -> str:
     """Build cache artifacts incrementally inside an unpublished directory."""
+    render_chunks_started_at = time.perf_counter()
     chunks_dir = os.path.join(cache_dir, CHUNKS_DIRNAME)
     bucket_root = os.path.join(cache_dir, ".chunk-buckets")
     os.makedirs(chunks_dir, exist_ok=True)
@@ -640,7 +663,11 @@ def _build_incremental_obj_cache_in_directory(
     )
     shutil.rmtree(bucket_root, ignore_errors=True)
 
-    emit_progress("writing manifest", 0.98)
+    phase_started_at = _log_cache_build_phase(
+        "render chunks finalized",
+        render_chunks_started_at,
+    )
+    emit_progress("assembling render manifest", 0.98)
 
     footprint_cell_size, footprint_flat = _footprint_from_positions(
         vertex_data.positions
@@ -659,23 +686,20 @@ def _build_incremental_obj_cache_in_directory(
         "triangle_count": int(bucketed_faces),
         "import_mode": "incremental_obj",
     }
-    navigation_start, navigation_start_anchor = (
-        _navigation_start_metadata_for_source(
-            obj_path,
-            vertex_data.positions,
-            manifest_chunks=manifest_chunks,
-        )
+    phase_started_at = _log_cache_build_phase(
+        "render manifest assembled",
+        phase_started_at,
     )
-    _attach_navigation_metadata(
-        manifest,
-        surface_positions=vertex_data.positions,
-        navigation_start=navigation_start,
-        navigation_start_anchor=navigation_start_anchor,
-        cache_dir=cache_dir,
-    )
+    emit_progress("building Guided Dive identity", 0.99)
     _attach_guided_dive_cache_identity(manifest, obj_path)
+    phase_started_at = _log_cache_build_phase(
+        "Guided Dive identity built",
+        phase_started_at,
+    )
+    emit_progress("writing manifest", 0.995)
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
+    _log_cache_build_phase("render manifest written", phase_started_at)
 
     return cache_dir
 
@@ -688,6 +712,7 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
                               max_upload_group_mb: float | None = None,
                               max_upload_group_bytes: int | None = None) -> str:
     """Build all cache artifacts inside an unpublished staging directory."""
+    render_chunks_started_at = time.perf_counter()
     chunks_dir = os.path.join(cache_dir, CHUNKS_DIRNAME)
     os.makedirs(chunks_dir, exist_ok=True)
     max_upload_group_mb = _resolve_max_upload_group_mb(max_upload_group_mb)
@@ -920,8 +945,12 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
                 pending_future.cancel()
             raise
 
+    phase_started_at = _log_cache_build_phase(
+        "render chunks finalized",
+        render_chunks_started_at,
+    )
     if progress_cb:
-        progress_cb("writing manifest", 0.98)
+        progress_cb("assembling render manifest", 0.98)
 
     # Fine-grained 2D occupancy footprint for the minimap.  This is computed
     # from raw vertex positions (not face centroids), at a resolution chosen
@@ -944,218 +973,69 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         "footprint_cells": footprint_flat,
         "triangle_count": int(n_faces),
     }
-    navigation_start, navigation_start_anchor = (
-        _navigation_start_metadata_for_source(
-            obj_path,
-            mesh.positions,
-            manifest_chunks=manifest_chunks,
-        )
+    phase_started_at = _log_cache_build_phase(
+        "render manifest assembled",
+        phase_started_at,
     )
-    _attach_navigation_metadata(
-        manifest,
-        surface_positions=mesh.positions,
-        navigation_start=navigation_start,
-        navigation_start_anchor=navigation_start_anchor,
-        cache_dir=cache_dir,
-    )
+    if progress_cb:
+        progress_cb("building Guided Dive identity", 0.99)
     _attach_guided_dive_cache_identity(manifest, obj_path)
+    phase_started_at = _log_cache_build_phase(
+        "Guided Dive identity built",
+        phase_started_at,
+    )
+    if progress_cb:
+        progress_cb("writing manifest", 0.995)
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
+    _log_cache_build_phase("render manifest written", phase_started_at)
 
     return cache_dir
 
 
-def _attach_navigation_metadata(
-    manifest: dict,
-    *,
-    surface_positions: np.ndarray | None,
-    navigation_start: dict | None = None,
-    navigation_start_anchor: dict | None = None,
-    cache_dir: str | None = None,
-) -> None:
-    """Attach optional navigation metadata without affecting cache validity."""
-    try:
-        navigation_metadata = build_navigation_metadata(
-            manifest,
-            surface_positions=surface_positions,
-            navigation_start=navigation_start,
-            navigation_start_anchor=navigation_start_anchor,
-        )
-    except Exception as exc:
-        _LOG.warning(
-            "Could not build optional navigation metadata; "
-            "cache remains usable without it: %s",
-            exc,
-        )
-        return
-    if navigation_metadata is not None:
-        manifest["navigation"] = navigation_metadata
-        if cache_dir:
-            try:
-                mesh_guard = CachedChunkMeshCollisionGuard.from_manifest(
-                    manifest,
-                    cache_dir=cache_dir,
-                )
-                if mesh_guard is None:
-                    _LOG.info(
-                        "Skipping cache-time navigation voxel analysis: "
-                        "cached mesh provider unavailable."
-                    )
-                    return
-                voxel_result = build_navigation_voxel_cache(
-                    manifest,
-                    navigation_metadata,
-                    triangle_provider=mesh_guard.triangle_meshes_for_bounds,
-                    mesh_edge_is_clear=lambda first, second: (
-                        mesh_guard.segment_collision(first, second) is None
-                    ),
-                    mesh_point_has_opposing_support=(
-                        lambda point, max_distance_m, minimum_clearance_m: bool(
-                            mesh_guard.opposing_axis_support(
-                                point,
-                                max_distance_m=max_distance_m,
-                                minimum_clearance_m=minimum_clearance_m,
-                            )
-                        )
-                    ),
-                )
-                if voxel_result.built_route_count:
-                    published_payload = (
-                        voxel_result.chunked_payload
-                        if voxel_result.chunked_payload is not None
-                        else voxel_result.payload
-                    )
-                    for relative_path, chunk_payload in (
-                        voxel_result.chunk_payloads.items()
-                    ):
-                        _atomic_write_json(
-                            os.path.join(cache_dir, relative_path),
-                            dict(chunk_payload),
-                        )
-                    _atomic_write_json(
-                        os.path.join(cache_dir, NAVIGATION_VOXEL_CACHE_NAME),
-                        published_payload,
-                    )
-                    _LOG.info(
-                        "Built whole-cave navigation voxel atlases for %d route(s) "
-                        "using %s with %d persisted chunk(s); recommended route=%s.",
-                        voxel_result.built_route_count,
-                        published_payload.get(
-                            "storage_method",
-                            "embedded_memory",
-                        ),
-                        len(voxel_result.chunk_payloads),
-                        voxel_result.recommended_route_id,
-                    )
-            except Exception as exc:
-                navigation_metadata.pop("voxel_cache", None)
-                _LOG.warning(
-                    "Could not build optional cache-time navigation voxel data; "
-                    "cache remains usable without it: %s",
-                    exc,
-                )
-
-
-def _navigation_start_metadata_for_source(
-    source_path: str,
-    surface_positions: np.ndarray | None,
-    *,
-    manifest_chunks: dict | None = None,
-) -> tuple[dict | None, dict | None]:
-    """Return the authored or source-order cave entrance.
-
-    A valid sidecar remains authoritative.  Otherwise an OBJ starts at its
-    first declared vertex: that is the only source-order signal retained by
-    the importer and is the map contract for Guided Dive.  Because an OBJ
-    vertex lies on the cave surface, it is published as a non-executable
-    anchor; cache construction must attach it to nearby certified free space
-    before either the camera or Guided Dive may use it.
-
-    The first manifest chunk is only a compatibility fallback for non-OBJ
-    callers that do not provide an ordered source anchor.
-    """
-    anchor = _obj_navigation_start_anchor(source_path, surface_positions)
-    sidecar = _navigation_start_sidecar_for_obj(source_path)
-    if sidecar is not None:
-        # Passing both lets metadata validation fall back to the OBJ anchor if
-        # the optional sidecar exists but is malformed.
-        return sidecar, anchor
-    if anchor is not None:
-        return None, anchor
-    position = first_manifest_chunk_center(manifest_chunks)
-    if position is not None:
-        return {
-            "position": [float(value) for value in position],
-            "label": "Cave start",
-            "source": NAVIGATION_START_SOURCE_FIRST_MANIFEST_CHUNK,
-        }, None
-    return None, None
-
-
 def first_manifest_chunk_center(
-    manifest_chunks: dict | None,
+    manifest_chunks: Mapping[str, object] | None,
 ) -> tuple[float, float, float] | None:
-    """Return the original viewer start using the minimum spatial chunk."""
-    return first_manifest_chunk_center_for_route_contract(manifest_chunks)
+    """Return the original viewer start using the minimum spatial chunk.
 
-
-def _obj_navigation_start_anchor(
-    source_path: str,
-    surface_positions: np.ndarray | None,
-) -> dict | None:
-    if os.path.splitext(source_path)[1].casefold() != ".obj":
+    This render-only helper intentionally lives beside the chunk format rather
+    than depending on the optional navigation certificate subsystem.
+    """
+    if not isinstance(manifest_chunks, Mapping) or not manifest_chunks:
         return None
-    if surface_positions is None:
-        return None
-    try:
-        positions = np.asarray(surface_positions)
-        if positions.ndim != 2 or positions.shape[1] != 3 or not len(positions):
-            return None
-        position = [float(value) for value in positions[0]]
-    except (TypeError, ValueError):
-        return None
-    if not bool(np.isfinite(position).all()):
-        return None
-    return {
-        "position": position,
-        "kind": "obj_surface_vertex",
-        "source": os.path.basename(source_path),
-        "source_vertex_index": 0,
-        "source_order": "obj_declaration_order",
-        "executable": False,
-        "attachment_required": True,
-        "attachment_coordinate_space": "xyz",
-    }
-
-
-def _navigation_start_sidecar_for_obj(obj_path: str) -> dict | None:
-    """Return optional navigation start metadata from a source-model sidecar."""
-    base_path, _extension = os.path.splitext(os.path.abspath(obj_path))
-    source_dir = os.path.dirname(os.path.abspath(obj_path))
-    candidate_paths = (
-        f"{base_path}.navigation.json",
-        os.path.join(source_dir, "navigation.json"),
-    )
-    seen: set[str] = set()
-    for path in candidate_paths:
-        if path in seen:
-            continue
-        seen.add(path)
-        if not os.path.isfile(path):
+    numeric_chunks: list[tuple[tuple[int, int, int], str, object]] = []
+    for raw_key, info in manifest_chunks.items():
+        parts = str(raw_key).replace(",", "_").split("_")
+        if len(parts) != 3:
             continue
         try:
-            with open(path, encoding="utf-8") as handle:
-                payload = json.load(handle)
-        except Exception as exc:
-            _LOG.warning("Could not read navigation sidecar %s: %s", path, exc)
-            return None
-        if not isinstance(payload, dict):
-            _LOG.warning("Ignoring navigation sidecar %s: expected a JSON object.", path)
-            return None
-        result = dict(payload)
-        result.setdefault("source", os.path.basename(path))
-        return result
-    return None
+            cell = tuple(int(part) for part in parts)
+        except ValueError:
+            continue
+        numeric_chunks.append((cell, str(raw_key), info))
+    if numeric_chunks:
+        _cell, _key, info = min(numeric_chunks, key=lambda item: (item[0], item[1]))
+    else:
+        info = next(iter(manifest_chunks.values()))
+    if not isinstance(info, Mapping):
+        return None
+    try:
+        minimum = tuple(float(value) for value in info["bounds_min"])
+        maximum = tuple(float(value) for value in info["bounds_max"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        len(minimum) != 3
+        or len(maximum) != 3
+        or not np.isfinite(minimum).all()
+        or not np.isfinite(maximum).all()
+        or any(maximum[axis] < minimum[axis] for axis in range(3))
+    ):
+        return None
+    return tuple(
+        (minimum[axis] + maximum[axis]) * 0.5
+        for axis in range(3)
+    )
 
 
 def load_chunk_file(

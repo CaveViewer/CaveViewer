@@ -50,10 +50,6 @@ def manual_dive_trace_map_context(
 ) -> dict[str, Any]:
     """Return bounded map identity and cache evidence for a trace header."""
     manifest = manifest if isinstance(manifest, Mapping) else {}
-    navigation = manifest.get("navigation")
-    navigation = navigation if isinstance(navigation, Mapping) else {}
-    anchor = navigation.get("navigation_start_anchor")
-    anchor = dict(anchor) if isinstance(anchor, Mapping) else None
     source_obj = os.path.basename(
         os.fspath(manifest.get("source_obj") or "map")
     )
@@ -62,10 +58,6 @@ def manual_dive_trace_map_context(
         "manifest_version": manifest.get("version"),
         "chunk_size_m": manifest.get("chunk_size"),
         "triangle_count": manifest.get("triangle_count"),
-        "navigation_version": navigation.get("version"),
-        "navigation_method": navigation.get("method"),
-        "navigation_start_anchor": anchor,
-        "recommended_route_id": navigation.get("recommended_route_id"),
         "coordinate_space": "manifest_xyz",
         "distance_unit": "meter",
         "orientation_unit": "radian",

@@ -49,6 +49,7 @@ src/caveviewer/core/streaming/world.py         worker lifecycle and render callb
 src/caveviewer/core/streaming/scheduler.py     backlog, selection, and eviction policy
 src/caveviewer/core/streaming/budget.py        typed-memory policy and residency budget calculation
 src/caveviewer/core/navigation/                 centerline, curvature, and voxel route policy
+src/caveviewer/core/navigation/certificate_build.py explicit cache-bound navigation certificate CLI
 src/caveviewer/core/navigation/voxel_cache.py   cache-time voxel graph/index models and summaries
 src/caveviewer/core/navigation/voxel_store.py   in-memory and bounded-LRU navigation voxel chunks
 src/caveviewer/core/workers/                  worker allocation policy
