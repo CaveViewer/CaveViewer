@@ -14,6 +14,15 @@ class DirectorySelectionRoute(str, Enum):
     INJECTED = "injected"
 
 
+class UpdatePackageRevealRoute(str, Enum):
+    """A native route that exposes a verified update without executing it."""
+
+    FINDER = "finder"
+    EXPLORER = "explorer"
+    DESKTOP_SERVICE = "desktop_service"
+    LEGACY_ADAPTER = "legacy_adapter"
+
+
 @dataclass(frozen=True, slots=True)
 class DirectorySelectionTarget:
     """Preferred and fallback routes available for one picker invocation.

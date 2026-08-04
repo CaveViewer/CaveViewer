@@ -9,6 +9,7 @@ from caveviewer.core.capabilities import (
     CapabilityStatus,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    UpdatePackageRevealRoute,
 )
 from caveviewer.core.map.source_model import SourceFormat
 
@@ -48,6 +49,15 @@ _MAP_SOURCE_IMPORT_EXPLANATIONS = {
 _DIRECTORY_SELECTION_EXPLANATIONS = {
     "directory_selection_service_unavailable": (
         "Directory selection is unavailable in this environment."
+    ),
+}
+
+_UPDATE_PACKAGE_REVEAL_EXPLANATIONS = {
+    "update_package_reveal_adapter_unavailable": (
+        "The verified update package cannot be revealed automatically."
+    ),
+    "update_package_reveal_route_unsupported": (
+        "The verified update package cannot be revealed automatically."
     ),
 }
 
@@ -226,4 +236,53 @@ def decide_directory_selection(
         state=FeatureState.DISABLED,
         reason_code="directory_selection_capability_unknown",
         explanation="Directory selection availability could not be determined.",
+    )
+
+
+def decide_update_package_reveal(
+    capability: CapabilityResult[UpdatePackageRevealRoute],
+) -> FeatureDecision:
+    """Choose whether a verified update package may be exposed to the user.
+
+    Reveal is intentionally non-executing. Its route is process-stable, so the
+    runtime composes this decision once; the action still checks the decision
+    before it invokes a file-manager or package-specific adapter.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        route = capability.value
+        if route is UpdatePackageRevealRoute.LEGACY_ADAPTER:
+            return FeatureDecision(
+                feature=FeatureId.UPDATE_PACKAGE_REVEAL,
+                state=FeatureState.DEGRADED,
+                reason_code="update_package_reveal_legacy_adapter",
+                explanation=(
+                    "Verified update package reveal is available through the "
+                    "compatibility adapter."
+                ),
+                route=route.value,
+            )
+        return FeatureDecision(
+            feature=FeatureId.UPDATE_PACKAGE_REVEAL,
+            state=FeatureState.ENABLED,
+            reason_code="update_package_reveal_available",
+            explanation="Verified update package reveal is available.",
+            route=route.value,
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        return FeatureDecision(
+            feature=FeatureId.UPDATE_PACKAGE_REVEAL,
+            state=FeatureState.DISABLED,
+            reason_code=capability.reason_code,
+            explanation=_UPDATE_PACKAGE_REVEAL_EXPLANATIONS.get(
+                capability.reason_code,
+                "The verified update package cannot be revealed automatically.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.UPDATE_PACKAGE_REVEAL,
+        state=FeatureState.DISABLED,
+        reason_code="update_package_reveal_capability_unknown",
+        explanation="Verified update package reveal availability could not be determined.",
     )

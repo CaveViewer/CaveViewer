@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from caveviewer.core.capabilities import UpdatePackageRevealRoute
+from caveviewer.gui.features import FeatureState
 from caveviewer.gui.update_checker import DownloadCancelled, UpdateCheckResult
 from caveviewer.gui import update_manager
 from caveviewer.gui.platform.runtime import create_platform_runtime
@@ -47,6 +49,25 @@ class FakeRuntimePlatformAdapter(FakePlatformAdapter):
 
     def supports_install_channel(self, channel):
         return self.supported and channel == "test_app"
+
+
+class FakeUpdatePackageRevealAdapter:
+    def __init__(
+        self,
+        *,
+        route: UpdatePackageRevealRoute = UpdatePackageRevealRoute.DESKTOP_SERVICE,
+    ):
+        self._route = route
+        self.revealed_paths = []
+
+    def reveal_route(self):
+        return self._route
+
+    def reveal_action_label(self):
+        return "Show Verified Test Package"
+
+    def reveal_verified_package(self, payload_path):
+        self.revealed_paths.append(payload_path)
 
 
 class FakeDesktopInhibitor:
@@ -214,6 +235,7 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
     manager, adapter = _checked_manager(tmp_path, download_update)
     try:
         assert manager.reveal_action_label == "Show Test Package"
+        assert manager.update_package_reveal_decision.state is FeatureState.DEGRADED
         assert manager.start_download()
         assert manager.wait_for_background_task(1)
 
@@ -500,6 +522,70 @@ def test_non_actionable_states_reject_download_and_reveal(tmp_path):
     try:
         assert not manager.start_download()
         assert not manager.reveal_download()
+    finally:
+        manager.shutdown()
+
+
+def test_runtime_package_reveal_adapter_controls_label_and_action(tmp_path):
+    payload_path = tmp_path / "CaveViewer.zip"
+    payload_path.write_bytes(b"verified package")
+    platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
+    reveal_adapter = FakeUpdatePackageRevealAdapter()
+    runtime = create_platform_runtime(
+        platform_adapter=platform_adapter,
+        desktop_services=FakeDesktopServices(),
+        update_package_reveal_adapter=reveal_adapter,
+        environment={},
+        platform_name="freebsd",
+    )
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=runtime,
+        temp_root=str(tmp_path),
+    )
+    try:
+        with manager._lock:
+            manager._state = UpdateState.READY
+            manager._payload_path = str(payload_path)
+
+        assert manager.reveal_action_label == "Show Verified Test Package"
+        assert manager.update_package_reveal_decision.state is FeatureState.ENABLED
+        assert manager.reveal_download()
+        assert reveal_adapter.revealed_paths == [str(payload_path)]
+        assert platform_adapter.revealed_paths == []
+    finally:
+        manager.shutdown()
+
+
+def test_disabled_runtime_package_reveal_gate_blocks_native_action(tmp_path):
+    payload_path = tmp_path / "CaveViewer.bin"
+    payload_path.write_bytes(b"verified package")
+    platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
+    runtime = create_platform_runtime(
+        platform_adapter=platform_adapter,
+        desktop_services=FakeDesktopServices(),
+        environment={},
+        platform_name="freebsd",
+    )
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=runtime,
+        temp_root=str(tmp_path),
+    )
+    try:
+        with manager._lock:
+            manager._state = UpdateState.READY
+            manager._payload_path = str(payload_path)
+
+        snapshot = manager.snapshot()
+        assert snapshot.update_package_reveal is not None
+        assert snapshot.update_package_reveal.state is FeatureState.DISABLED
+        assert (
+            snapshot.update_package_reveal.reason_code
+            == "update_package_reveal_route_unsupported"
+        )
+        assert not manager.reveal_download()
+        assert platform_adapter.revealed_paths == []
     finally:
         manager.shutdown()
 

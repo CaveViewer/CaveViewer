@@ -136,6 +136,28 @@ def test_disabled_update_gate_shows_its_safe_explanation_without_an_action():
     )
 
 
+def test_disabled_update_package_reveal_gate_hides_ready_action():
+    presentation = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.READY,
+            current_version="1.0.63",
+            available_version="1.0.64",
+            payload_path="/downloads/CaveViewer.bin",
+            update_package_reveal=FeatureDecision(
+                feature=FeatureId.UPDATE_PACKAGE_REVEAL,
+                state=FeatureState.DISABLED,
+                reason_code="update_package_reveal_route_unsupported",
+                explanation="The verified update package cannot be revealed automatically.",
+            ),
+        ),
+        "Show in Finder",
+    )
+
+    assert presentation == splash_screen._UpdatePresentation(
+        status_text="The verified update package cannot be revealed automatically."
+    )
+
+
 def test_last_browse_directory_uses_xdg_state_home(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     state_home = tmp_path / "state"

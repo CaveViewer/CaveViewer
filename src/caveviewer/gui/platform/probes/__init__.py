@@ -12,6 +12,7 @@ from .recording import (
     probe_video_recording,
 )
 from .desktop import probe_directory_selection
+from .update_package_reveal import probe_update_package_reveal
 
 __all__ = [
     "UpdateConfiguration",
@@ -20,6 +21,7 @@ __all__ = [
     "build_update_configuration",
     "probe_automatic_update",
     "probe_directory_selection",
+    "probe_update_package_reveal",
     "probe_recording_output_directory",
     "probe_video_recording",
 ]

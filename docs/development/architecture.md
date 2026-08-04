@@ -394,12 +394,23 @@ with a stable `reason_code`, concise user-safe `explanation`, and selected
 do not decide whether the product feature is available.
 
 `PlatformRuntime.feature_gates` contains only process-stable decisions, such
-as automatic-update compatibility. It is composed once after command-line
-overrides, then injected into every interactive viewer path, including a direct
-CLI map launch. A mutable action prerequisite, such as an ffmpeg path or a
-writable recording folder, uses an on-demand preflight instead of a cached
-startup gate. The preflight pairs one fresh capability result with the policy
-decision derived from that same snapshot.
+as automatic-update compatibility and the selected native route for revealing
+a verified update package. It is composed once after command-line overrides,
+then injected into every interactive viewer path, including a direct CLI map
+launch. A mutable action prerequisite, such as an ffmpeg path or a writable
+recording folder, uses an on-demand preflight instead of a cached startup gate.
+The preflight pairs one fresh capability result with the policy decision
+derived from that same snapshot.
+
+Verified update-package reveal uses a focused adapter. At composition it
+declares `finder`, `explorer`, or Linux `desktop_service` without mounting a
+DMG, launching a file manager, or contacting D-Bus. The pure policy stores the
+resulting static decision, and `UpdateManager` checks it again immediately
+before revealing the verified payload. The action remains non-executing:
+macOS's existing read-only DMG mount/reveal path, Windows Explorer selection,
+and Linux desktop-service fallback are preserved behind the focused facade.
+Direct compatibility callers use a visible degraded `legacy_adapter` route
+until they adopt an injected runtime.
 
 Directory selection follows the same on-demand contract. Its immutable target
 declares an executable route rather than performing a desktop request:
