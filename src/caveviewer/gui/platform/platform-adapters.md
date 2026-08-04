@@ -10,6 +10,7 @@ platform/
 ├── app_identity.py          # Native window identity and Tk root options
 ├── base.py                  # SplashPlatformAdapter protocol definition
 ├── desktop_services.py      # Desktop file, URI, notification, and inhibit services
+├── directory_selection.py   # Shared action-time directory-picker authorization
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── probes/desktop.py        # On-demand directory-selection route declaration
@@ -127,12 +128,14 @@ lookup or output-directory write check happens during application startup.
 
 Directory selection is another on-demand gate. A
 `DirectorySelectionPreflight` records the desktop service's declared route for
-one map-picker action: Linux is `portal_then_tk`, a portable Tk service is the
+one picker action: Linux is `portal_then_tk`, a portable Tk service is the
 degraded `tk` route, and a legacy injected service is the degraded `injected`
-route. Declaring a route does not create a Tk root or contact D-Bus. Splash and
-viewer map pickers request a fresh preflight immediately before opening a
-chooser; `LinuxPortalDesktopServices` retains its action-time fallback when a
-portal request fails.
+route. Declaring a route does not create a Tk root or contact D-Bus. Splash,
+viewer, and Preferences browse actions request a fresh preflight immediately
+before opening a chooser; `LinuxPortalDesktopServices` retains its action-time
+fallback when a portal request fails. The Preferences “Downloaded maps folder”
+control is Map Library's directory-setting surface, so it shares this same
+authorization rather than creating a Map Library-specific gate.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
 unmigrated platform actions. `UpdatePackageRevealAdapter` is the first narrow

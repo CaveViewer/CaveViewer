@@ -62,6 +62,7 @@ src/caveviewer/core/textures/decoding.py       texture decode, inspection, and b
 src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
 src/caveviewer/gui/features/                  pure feature availability policies and gates
 src/caveviewer/gui/platform/runtime.py        process-owned platform composition root
+src/caveviewer/gui/platform/directory_selection.py shared action-time directory-picker authorization
 src/caveviewer/gui/platform/update_package_reveal.py focused verified-package reveal facade
 src/caveviewer/gui/platform/probes/           platform capability probes and configuration
 src/caveviewer/gui/platform/probes/desktop.py on-demand directory-selection route probe

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import tkinter as tk
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from caveviewer.gui.preferences import (
     PREFERENCE_FIELDS,
@@ -22,6 +22,7 @@ from caveviewer.gui.preferences_form import (
     PreferencesFormState,
     MessageKind,
 )
+from caveviewer.gui.features import FeatureState
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
     DIALOG_PANEL_BORDER,
@@ -29,12 +30,17 @@ from caveviewer.gui.dialog_style import (
     set_dialog_action_button,
 )
 from caveviewer.gui.platform import (
+    DesktopServiceError,
     DesktopServices,
     get_desktop_services,
     get_platform_adapter,
 )
+from caveviewer.gui.platform.directory_selection import directory_selection_decision
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
+
+if TYPE_CHECKING:
+    from caveviewer.gui.platform.runtime import PlatformRuntime
 
 
 _BG_COLOR = DARK_THEME.background
@@ -91,11 +97,25 @@ class PreferencesDialog:
         *,
         ui_font_family: str,
         desktop_services: DesktopServices | None = None,
+        platform_runtime: PlatformRuntime | None = None,
         on_applied: Callable[[Preferences], None] | None = None,
     ) -> None:
+        if (
+            platform_runtime is not None
+            and desktop_services is not None
+            and desktop_services is not platform_runtime.desktop_services
+        ):
+            raise ValueError(
+                "desktop_services must match the injected platform_runtime"
+            )
         self.parent = parent
         self.ui_font_family = ui_font_family
-        self.desktop_services = desktop_services or get_desktop_services()
+        self.platform_runtime = platform_runtime
+        self.desktop_services = (
+            platform_runtime.desktop_services
+            if platform_runtime is not None
+            else desktop_services or get_desktop_services()
+        )
         self.on_applied = on_applied
         self.workflow = PreferencesDialogWorkflow(
             load_preferences_fn=load_preferences,
@@ -499,15 +519,31 @@ class PreferencesDialog:
             label.configure(wraplength=wraplength)
 
     def _choose_directory(self, key: str, title: str) -> None:
+        decision = directory_selection_decision(
+            self.desktop_services,
+            platform_runtime=self.platform_runtime,
+        )
+        if not decision.allows_execution:
+            self._set_feedback(decision.explanation, MessageKind.WARNING)
+            return
+        if decision.state is FeatureState.DEGRADED:
+            self._set_feedback(decision.explanation, MessageKind.WARNING)
+
         var = self.field_vars[key]
         initial_dir = os.path.expanduser(var.get().strip() or "~")
         if not os.path.isdir(initial_dir):
             initial_dir = os.path.dirname(initial_dir)
         if not os.path.isdir(initial_dir):
             initial_dir = os.path.expanduser("~")
-        selection = self.desktop_services.choose_directory(
-            title=title, initial_dir=initial_dir, parent=self.dialog
-        )
+        try:
+            selection = self.desktop_services.choose_directory(
+                title=title,
+                initial_dir=initial_dir,
+                parent=self.dialog,
+            )
+        except DesktopServiceError as exc:
+            self._set_feedback(str(exc), MessageKind.ERROR)
+            return
         if selection:
             var.set(selection.path)
 
@@ -1075,6 +1111,7 @@ def show_preferences_dialog(
     *,
     ui_font_family: str,
     desktop_services: DesktopServices | None = None,
+    platform_runtime: PlatformRuntime | None = None,
     on_applied: Callable[[Preferences], None] | None = None,
 ) -> None:
     """Create and display a non-blocking modal Preferences dialog."""
@@ -1082,5 +1119,6 @@ def show_preferences_dialog(
         parent,
         ui_font_family=ui_font_family,
         desktop_services=desktop_services,
+        platform_runtime=platform_runtime,
         on_applied=on_applied,
     ).show()

@@ -615,6 +615,241 @@ def test_preferences_dialog_uses_extracted_settings_logic():
         splash_screen._show_preferences_dialog
         is preferences_dialog.show_preferences_dialog
     )
+    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    preferences_call_start = splash_source.index("_show_preferences_dialog(")
+    preferences_call_end = splash_source.index(
+        "def _widget_exists",
+        preferences_call_start,
+    )
+    assert "platform_runtime=platform_runtime" in splash_source[
+        preferences_call_start:preferences_call_end
+    ]
+
+
+def test_show_preferences_dialog_forwards_the_injected_runtime(monkeypatch):
+    from caveviewer.gui import preferences_dialog
+
+    constructed = []
+
+    class FakeDialog:
+        def __init__(self, *args, **kwargs):
+            constructed.append((args, kwargs))
+
+        def show(self):
+            constructed.append("show")
+
+    parent = object()
+    desktop_services = object()
+    platform_runtime = SimpleNamespace(desktop_services=desktop_services)
+    monkeypatch.setattr(preferences_dialog, "PreferencesDialog", FakeDialog)
+
+    preferences_dialog.show_preferences_dialog(
+        parent,
+        ui_font_family="Test UI",
+        desktop_services=desktop_services,
+        platform_runtime=platform_runtime,
+    )
+
+    assert constructed == [
+        (
+            (parent,),
+            {
+                "ui_font_family": "Test UI",
+                "desktop_services": desktop_services,
+                "platform_runtime": platform_runtime,
+                "on_applied": None,
+            },
+        ),
+        "show",
+    ]
+
+
+def _directory_picker_dialog(
+    preferences_dialog,
+    *,
+    desktop_services,
+    platform_runtime,
+    initial_dir,
+):
+    values = SimpleNamespace(value=str(initial_dir))
+    values.get = lambda: values.value
+    values.set = lambda value: setattr(values, "value", value)
+    feedback = []
+    dialog = preferences_dialog.PreferencesDialog.__new__(
+        preferences_dialog.PreferencesDialog
+    )
+    dialog.desktop_services = desktop_services
+    dialog.platform_runtime = platform_runtime
+    dialog.field_vars = {"map_library_dir": values}
+    dialog.dialog = object()
+    dialog._set_feedback = lambda message, kind: feedback.append((message, kind))
+    return dialog, values, feedback
+
+
+def test_preferences_directory_browse_rechecks_the_injected_runtime(tmp_path):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
+
+    selected_dir = tmp_path / "selected"
+    selected_dir.mkdir()
+    chooser_calls = []
+    preflight_calls = []
+
+    class FakeDesktopServices:
+        def choose_directory(self, **options):
+            chooser_calls.append(options)
+            return SimpleNamespace(path=str(selected_dir))
+
+    desktop_services = FakeDesktopServices()
+
+    class FakeRuntime:
+        def __init__(self):
+            self.desktop_services = desktop_services
+
+        def directory_selection_preflight(self):
+            preflight_calls.append(True)
+            return SimpleNamespace(
+                decision=FeatureDecision(
+                    feature=FeatureId.DIRECTORY_SELECTION,
+                    state=FeatureState.ENABLED,
+                    reason_code="directory_selection_available",
+                    explanation="Directory selection is available.",
+                    route="portal_then_tk",
+                )
+            )
+
+    dialog, values, feedback = _directory_picker_dialog(
+        preferences_dialog,
+        desktop_services=desktop_services,
+        platform_runtime=FakeRuntime(),
+        initial_dir=tmp_path,
+    )
+
+    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+
+    assert preflight_calls == [True, True]
+    assert len(chooser_calls) == 2
+    assert all(call["title"] == "Downloaded maps folder" for call in chooser_calls)
+    assert all(call["parent"] is dialog.dialog for call in chooser_calls)
+    assert values.value == str(selected_dir)
+    assert feedback == []
+
+
+def test_preferences_directory_browse_blocks_disabled_route_before_chooser(tmp_path):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
+    from caveviewer.gui.preferences_form import MessageKind
+
+    preflight_calls = []
+
+    class FakeDesktopServices:
+        def choose_directory(self, **_options):
+            pytest.fail("disabled directory selection must not open a chooser")
+
+    desktop_services = FakeDesktopServices()
+
+    class FakeRuntime:
+        def __init__(self):
+            self.desktop_services = desktop_services
+
+        def directory_selection_preflight(self):
+            preflight_calls.append(True)
+            return SimpleNamespace(
+                decision=FeatureDecision(
+                    feature=FeatureId.DIRECTORY_SELECTION,
+                    state=FeatureState.DISABLED,
+                    reason_code="directory_selection_service_unavailable",
+                    explanation="Directory selection is unavailable in this environment.",
+                )
+            )
+
+    dialog, _values, feedback = _directory_picker_dialog(
+        preferences_dialog,
+        desktop_services=desktop_services,
+        platform_runtime=FakeRuntime(),
+        initial_dir=tmp_path,
+    )
+
+    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+
+    assert preflight_calls == [True]
+    assert feedback == [
+        (
+            "Directory selection is unavailable in this environment.",
+            MessageKind.WARNING,
+        )
+    ]
+
+
+def test_preferences_directory_browse_uses_legacy_compatible_service(tmp_path):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_form import MessageKind
+
+    selected_dir = tmp_path / "selected"
+    selected_dir.mkdir()
+    chooser_calls = []
+
+    class LegacyDesktopServices:
+        def choose_directory(self, **options):
+            chooser_calls.append(options)
+            return SimpleNamespace(path=str(selected_dir))
+
+    dialog, values, feedback = _directory_picker_dialog(
+        preferences_dialog,
+        desktop_services=LegacyDesktopServices(),
+        platform_runtime=None,
+        initial_dir=tmp_path,
+    )
+
+    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+
+    assert len(chooser_calls) == 1
+    assert values.value == str(selected_dir)
+    assert feedback == [
+        (
+            "Directory selection is available through this desktop service.",
+            MessageKind.WARNING,
+        )
+    ]
+
+
+def test_preferences_directory_browse_reports_desktop_action_failure(tmp_path):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
+    from caveviewer.gui.preferences_form import MessageKind
+
+    class FakeDesktopServices:
+        def choose_directory(self, **_options):
+            raise preferences_dialog.DesktopServiceError("Desktop picker failed.")
+
+    desktop_services = FakeDesktopServices()
+
+    class FakeRuntime:
+        def __init__(self):
+            self.desktop_services = desktop_services
+
+        def directory_selection_preflight(self):
+            return SimpleNamespace(
+                decision=FeatureDecision(
+                    feature=FeatureId.DIRECTORY_SELECTION,
+                    state=FeatureState.ENABLED,
+                    reason_code="directory_selection_available",
+                    explanation="Directory selection is available.",
+                    route="portal_then_tk",
+                )
+            )
+
+    dialog, _values, feedback = _directory_picker_dialog(
+        preferences_dialog,
+        desktop_services=desktop_services,
+        platform_runtime=FakeRuntime(),
+        initial_dir=tmp_path,
+    )
+
+    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+
+    assert feedback == [("Desktop picker failed.", MessageKind.ERROR)]
 
 
 def test_preferences_dialog_uses_compact_tabbed_pages():

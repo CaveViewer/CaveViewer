@@ -9,6 +9,7 @@ import pytest
 from caveviewer.gui import map_opening
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.platform import DesktopServiceError
+from caveviewer.gui.platform import directory_selection as directory_selection_guard
 
 
 def test_pick_folder_dialog_uses_desktop_services_and_destroys_root(monkeypatch):
@@ -75,7 +76,7 @@ def test_pick_folder_dialog_rechecks_the_injected_runtime_for_each_action(
         lambda: calls.append("root") or FakeRoot(),
     )
     monkeypatch.setattr(
-        map_opening,
+        directory_selection_guard,
         "probe_directory_selection",
         lambda _services: pytest.fail("runtime preflight must be reused"),
     )
