@@ -19,7 +19,7 @@ import numpy as np
 
 
 MANUAL_DIVE_TRACE_SCHEMA_VERSION = 1
-MANUAL_DIVE_TRACE_DIRECTORY = "_guided_dive_traces"
+MANUAL_DIVE_TRACE_DIRECTORY = "_guided_dives"
 MANUAL_DIVE_TRACE_FILENAME_PREFIX = "guided_dive_manual_trace"
 DEFAULT_SAMPLE_INTERVAL_S = 0.10
 DEFAULT_SAMPLE_DISTANCE_M = 0.25
@@ -32,10 +32,13 @@ _STOP_WRITER = object()
 
 
 def manual_dive_trace_directory(
-    cache_dir: str | os.PathLike[str],
+    map_root: str | os.PathLike[str],
 ) -> Path:
-    """Return the map-local trace directory adjacent to the replaceable cache."""
-    return Path(cache_dir).resolve().parent / MANUAL_DIVE_TRACE_DIRECTORY
+    """Return the canonical map-local directory for completed Guided Dives."""
+    raw_map_root = os.fspath(map_root).strip()
+    if not raw_map_root:
+        raise ValueError("manual Guided Dive traces require a map root")
+    return Path(raw_map_root).expanduser().resolve() / MANUAL_DIVE_TRACE_DIRECTORY
 
 
 def manual_dive_trace_map_context(

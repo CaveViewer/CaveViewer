@@ -514,7 +514,10 @@ def _run_map_session(folder: str, *, platform_runtime=None) -> None:
             _print_viewer_controls()
             from caveviewer.gui.viewer_window import run_viewer
             try:
-                viewer_kwargs = {"textures_dir": _textures_dir}
+                viewer_kwargs = {
+                    "textures_dir": _textures_dir,
+                    "map_root": folder,
+                }
                 if platform_runtime is not None:
                     viewer_kwargs["platform_runtime"] = platform_runtime
                 run_viewer(_prebuilt_cache, **viewer_kwargs)
@@ -566,7 +569,10 @@ def _run_map_session(folder: str, *, platform_runtime=None) -> None:
         _log_cache_chunk_size(cache_dir, context="Existing chunk cache")
         from caveviewer.gui.viewer_window import run_viewer
         try:
-            viewer_kwargs = {"textures_dir": cache_textures_dir}
+            viewer_kwargs = {
+                "textures_dir": cache_textures_dir,
+                "map_root": folder,
+            }
             if platform_runtime is not None:
                 viewer_kwargs["platform_runtime"] = platform_runtime
             if recorded_dive_trace is not None:
