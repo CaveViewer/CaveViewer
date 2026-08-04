@@ -127,7 +127,7 @@ def test_fullscreen_begin_prompt_waits_for_visual_ready_signal():
 
 
 def test_recording_help_copy_is_format_neutral():
-    rows = dict(controls_overlay._get_platform_control_rows())
+    rows = _control_rows_for_adapter(DefaultSplashPlatformAdapter())
 
     assert rows["REC button"] == "Start recording countdown"
     assert "MP4" not in rows["REC button"]
