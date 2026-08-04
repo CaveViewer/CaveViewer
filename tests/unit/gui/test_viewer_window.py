@@ -375,21 +375,63 @@ class FakeManualDiveTrace:
         return self.result
 
 
-def test_manual_trace_hotkey_toggles_only_for_shift_t():
+@pytest.mark.parametrize(
+    ("adapter", "primary_modifiers"),
+    [
+        (DefaultSplashPlatformAdapter(), SimpleNamespace(ctrl=True)),
+        (MacOSSplashPlatformAdapter(), SimpleNamespace(command=True)),
+    ],
+)
+def test_manual_trace_hotkey_uses_platform_primary_modifier(
+    adapter,
+    primary_modifiers,
+):
     window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = adapter
     window._has_map_loaded = True
     window.wnd = SimpleNamespace(keys=SimpleNamespace(T=84))
-    window._shift_is_down = lambda _modifiers: True
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    window._raw_command_modifier_down = lambda: False
     calls = []
     window._toggle_manual_dive_trace = lambda: calls.append("toggle") or True
 
-    assert window._handle_manual_dive_trace_hotkey(84, None) is True
+    assert window._handle_manual_dive_trace_hotkey(84, primary_modifiers) is True
     assert calls == ["toggle"]
-    assert window._handle_manual_dive_trace_hotkey(85, None) is False
+    assert window._handle_manual_dive_trace_hotkey(85, primary_modifiers) is False
+    assert (
+        window._handle_manual_dive_trace_hotkey(84, SimpleNamespace(shift=True))
+        is False
+    )
 
-    window._shift_is_down = lambda _modifiers: False
-    assert window._handle_manual_dive_trace_hotkey(84, None) is False
+
+@pytest.mark.parametrize(
+    ("adapter", "primary_modifiers"),
+    [
+        (DefaultSplashPlatformAdapter(), SimpleNamespace(ctrl=True)),
+        (MacOSSplashPlatformAdapter(), SimpleNamespace(command=True)),
+    ],
+)
+def test_recording_hotkey_uses_platform_primary_modifier(
+    adapter,
+    primary_modifiers,
+):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = adapter
+    window._has_map_loaded = True
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(R=82))
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    window._raw_command_modifier_down = lambda: False
+    window._recording_is_armed = lambda: True
+    calls = []
+    window._toggle_recording = lambda: calls.append("toggle")
+
+    assert window._handle_recording_hotkey(82, primary_modifiers) is True
     assert calls == ["toggle"]
+    assert (
+        window._handle_recording_hotkey(82, SimpleNamespace(shift=True)) is False
+    )
 
 
 def test_recorded_dive_space_hotkey_toggles_pause_only_while_active():
@@ -517,8 +559,19 @@ def test_manual_trace_marks_bookmark_recall_as_discontinuity():
     assert reason == "bookmark_recall"
 
 
-def test_manual_trace_active_renders_persistent_save_prompt():
+@pytest.mark.parametrize(
+    ("adapter", "shortcut_label"),
+    [
+        (DefaultSplashPlatformAdapter(), "Ctrl"),
+        (MacOSSplashPlatformAdapter(), "Cmd"),
+    ],
+)
+def test_manual_trace_active_renders_persistent_save_prompt(
+    adapter,
+    shortcut_label,
+):
     window = object.__new__(viewer_window.CaveViewerWindow)
+    window._platform_adapter = adapter
     window._manual_dive_trace = FakeManualDiveTrace()
     calls = []
     window._render_dive_status_prompt = (
@@ -533,7 +586,8 @@ def test_manual_trace_active_renders_persistent_save_prompt():
             {
                 "title": "Manual route trace active",
                 "note": (
-                    "Fly the reference route, then press Shift + T to save."
+                    "Fly the reference route, then press "
+                    f"{shortcut_label} + T to save."
                 ),
             },
         )

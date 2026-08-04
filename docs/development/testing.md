@@ -294,7 +294,7 @@ Viewer coverage must prove Cmd/Ctrl+A is unhandled and that opening a map does
 not queue a navigation planner or change the ordinary cache-derived camera
 position. The core certificate tests cover route preflight independently of
 the GUI.
-Manual route-trace coverage must exercise `Shift+T` start/stop, post-movement
+Manual route-trace coverage must exercise `Cmd/Ctrl+T` start/stop, post-movement
 pose sampling, orientation and stationary-heartbeat thresholds, bounded-queue
 drop reporting, final-pose retention, background write failure, map-switch
 cleanup, and bookmark/minimap discontinuities. Test output belongs under
