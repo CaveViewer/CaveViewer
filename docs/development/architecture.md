@@ -171,11 +171,17 @@ offline certificate route selection never consume them as required map
 metadata.
 
 Recorded Dive is the separate trace-playback path. Opening a completed JSONL
-associates its bounded source basename, cache-manifest version, chunk size, and
-triangle count with the local map. Normal cache validation rebuilds a stale or
-missing map-local cache before viewing; playback refuses a different geometry
-or cache layout. The trace's first pose replaces ordinary cache-derived viewer placement, and every pose is applied directly on the render thread without
-navigation clamping, smoothing, collision rejection, or route planning.
+associates its bounded source basename, cache-manifest version, chunk size,
+triangle count, and versioned cache identity with the local map. Cache
+construction writes that identity from a streaming SHA-256 of the source file
+and a canonical SHA-256 of the completed manifest. Normal rendering remains
+compatible with manifests that predate this additive field, but Guided Dive
+recording and v2 playback require a rebuild when it is absent.
+Normal cache validation rebuilds a stale or missing map-local cache before
+viewing; playback refuses a different geometry or cache layout. The trace's
+first pose replaces ordinary cache-derived viewer placement, and every pose is
+applied directly on the render thread without navigation clamping, smoothing,
+collision rejection, or route planning.
 Position and orientation are interpolated by trace time; a declared
 discontinuity remains an instantaneous jump. `StreamingWorld` receives a
 bounded chronological lookahead tube, and the playback clock freezes whenever
@@ -246,7 +252,11 @@ below 80%. Unknown availability or memory pressure keeps the build at its
 already-admitted concurrency, with one worker always able to make progress.
 
 The cache manifest records chunk metadata, spatial bounds, material references,
-the minimap occupancy footprint, and optional versioned navigation summaries.
+the minimap occupancy footprint, optional versioned navigation summaries, and
+an additive `guided_dive_identity` when source hashing succeeds. This identity
+is produced during cache construction, not while the render thread starts a
+manual trace. Existing cache manifests stay renderable; they must be rebuilt
+before the versioned Guided Dive contract can record or replay against them.
 Cache-time voxel occupancy is kept in the atomically published
 `navigation_voxels.json` sidecar rather than in the render manifest. A
 cache-format change must either remain backward compatible or increment its

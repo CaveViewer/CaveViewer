@@ -171,12 +171,31 @@ from caveviewer.core.mesh.obj import (
 from caveviewer.core.map.cache_paths import (
     map_cache_build_dir,
 )
+from caveviewer.core.map.cache_identity import (
+    GUIDED_DIVE_CACHE_IDENTITY_KEY,
+    build_guided_dive_cache_identity,
+)
 
 _LOG = get_logger("chunker")
 
 NAVIGATION_START_SOURCE_FIRST_MANIFEST_CHUNK = (
     "first_manifest_chunk_center_v1"
 )
+
+
+def _attach_guided_dive_cache_identity(manifest: dict, source_path: str) -> None:
+    """Add the portable Guided Dive identity while cache construction owns I/O."""
+    try:
+        identity = build_guided_dive_cache_identity(source_path, manifest)
+    except (OSError, TypeError, ValueError) as exc:
+        _LOG.warning(
+            "Could not create Guided Dive cache identity for %s; "
+            "rebuild this map before recording a Guided Dive: %s",
+            source_path,
+            exc,
+        )
+        return
+    manifest[GUIDED_DIVE_CACHE_IDENTITY_KEY] = identity.payload()
 
 
 def _resolve_max_upload_group_mb(value: float | None) -> float:
@@ -654,6 +673,7 @@ def _build_incremental_obj_cache_in_directory(
         navigation_start_anchor=navigation_start_anchor,
         cache_dir=cache_dir,
     )
+    _attach_guided_dive_cache_identity(manifest, obj_path)
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
 
@@ -938,6 +958,7 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         navigation_start_anchor=navigation_start_anchor,
         cache_dir=cache_dir,
     )
+    _attach_guided_dive_cache_identity(manifest, obj_path)
     with open(os.path.join(cache_dir, MANIFEST_NAME), "w") as f:
         json.dump(manifest, f)
 
