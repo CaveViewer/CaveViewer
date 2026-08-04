@@ -8,6 +8,7 @@ from caveviewer.core.capabilities import (
     CapabilityStatus,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    UpdatePackageRevealRoute,
 )
 from caveviewer.gui.features import FeatureId, FeatureState
 from caveviewer.gui.platform import runtime
@@ -71,6 +72,20 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
         runtime.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
         is runtime.automatic_update_decision
     )
+    assert (
+        runtime.update_package_reveal_capability.status
+        is CapabilityStatus.AVAILABLE
+    )
+    assert (
+        runtime.update_package_reveal_capability.value
+        is UpdatePackageRevealRoute.DESKTOP_SERVICE
+    )
+    assert runtime.update_package_reveal_decision.state is FeatureState.ENABLED
+    assert (
+        runtime.static_feature_decision(FeatureId.UPDATE_PACKAGE_REVEAL)
+        is runtime.update_package_reveal_decision
+    )
+    assert FeatureId.UPDATE_PACKAGE_REVEAL in runtime.feature_gates.decisions
     assert FeatureId.VIDEO_RECORDING not in runtime.feature_gates.decisions
 
 
@@ -87,6 +102,25 @@ def test_runtime_disables_unsupported_update_targets_before_network_work():
         == "automatic_update_target_unsupported"
     )
     assert runtime.automatic_update_decision.state is FeatureState.DISABLED
+
+
+def test_runtime_disables_unsupported_update_package_reveal_routes():
+    runtime = create_platform_runtime(
+        platform_adapter=FakeUpdateAdapter(),
+        desktop_services=object(),
+        environment={},
+        platform_name="freebsd",
+    )
+
+    assert (
+        runtime.update_package_reveal_capability.status
+        is CapabilityStatus.UNAVAILABLE
+    )
+    assert (
+        runtime.update_package_reveal_capability.reason_code
+        == "update_package_reveal_route_unsupported"
+    )
+    assert runtime.update_package_reveal_decision.state is FeatureState.DISABLED
 
 
 def test_runtime_fails_closed_when_static_update_configuration_cannot_be_probed():

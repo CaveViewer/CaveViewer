@@ -11,7 +11,9 @@ platform/
 ├── base.py                  # SplashPlatformAdapter protocol definition
 ├── desktop_services.py      # Desktop file, URI, notification, and inhibit services
 ├── runtime.py               # Per-process platform composition and feature gates
+├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── probes/desktop.py        # On-demand directory-selection route declaration
+├── probes/update_package_reveal.py # Static package-reveal route declaration
 ├── probes/updates.py        # Static signed-update configuration and target probe
 ├── probes/recording.py      # On-demand encoder and output-directory preflight
 ├── portal.py                # Linux XDG Desktop Portal transport and states
@@ -73,12 +75,13 @@ keeps test setup deterministic and prevents unrelated GUI surfaces from
 repeatedly constructing portal-backed services.
 
 `feature_gates` is deliberately limited to process-stable decisions. An update
-target is safe to evaluate once at composition time, so it appears in that
-registry. A mutable action prerequisite is different: an on-demand probe
-returns a fresh `CapabilityResult`, its pure policy returns a
-`FeatureDecision`, and the feature service uses that paired preflight result
-only for the current action. `UNKNOWN` is interpreted by the feature policy;
-it is not silently converted into either enabled or disabled behavior.
+target and the OS-selected update-package reveal route are safe to evaluate
+once at composition time, so they appear in that registry. A mutable action
+prerequisite is different: an on-demand probe returns a fresh
+`CapabilityResult`, its pure policy returns a `FeatureDecision`, and the
+feature service uses that paired preflight result only for the current action.
+`UNKNOWN` is interpreted by the feature policy; it is not silently converted
+into either enabled or disabled behavior.
 
 The first migrated feature is automatic update checking and downloading:
 
@@ -95,6 +98,24 @@ other explicit configuration are seen by the process-owned manager. The
 manager rechecks the gate before it starts a check and before it starts a
 download; a disabled gate never starts network work. Offline failures remain
 ordinary transient check results, not a platform capability failure.
+
+Verified update-package reveal is a separate static gate and focused adapter:
+
+```text
+verified update package reveal
+    -> pure FeatureDecision policy
+    -> immutable Finder / Explorer / desktop-service route declaration
+    -> UpdatePackageRevealAdapter
+    -> non-executing native reveal
+```
+
+The route declaration has no native side effects. `UpdateManager` checks the
+decision again before revealing a verified payload, and the splash omits the
+reveal action when it is disabled. `PlatformUpdatePackageRevealAdapter` is a
+temporary narrow facade over the existing broad adapter methods, deliberately
+preserving macOS read-only DMG mounting, Windows Explorer selection, and the
+Linux desktop-service fallback. Package persistence, saved-recording reveal,
+notifications, and inhibition remain separate migrations.
 
 Video recording is the first on-demand gate. When the user starts recording,
 the viewer asks the runtime for a `VideoRecordingPreflight`: one narrow probe
@@ -114,10 +135,11 @@ chooser; `LinuxPortalDesktopServices` retains its action-time fallback when a
 portal request fails.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
-unmigrated platform actions. New features should add a narrow probe, a pure
-policy in `caveviewer.gui.features`, and an injected action adapter rather than
-expanding this broad protocol. Cache, chunk streaming, navigation, and map
-state are outside this runtime layer.
+unmigrated platform actions. `UpdatePackageRevealAdapter` is the first narrow
+facade around an existing package action. New features should add a narrow
+probe, a pure policy in `caveviewer.gui.features`, and an injected action
+adapter rather than expanding this broad protocol. Cache, chunk streaming,
+navigation, and map state are outside this runtime layer.
 
 ## Key Components
 
@@ -168,8 +190,8 @@ def get_platform_adapter() -> SplashPlatformAdapter:
 `create_platform_runtime()` is the application composition boundary. It reads
 the selected environment once, after app-level command-line overrides, and
 creates immutable update capability and feature-decision values. It must not
-perform network checks, D-Bus calls, GPU probes, or other expensive on-demand
-work while it is being composed.
+perform network checks, D-Bus calls, GPU probes, file-manager launches, DMG
+mounts, or other expensive on-demand work while it is being composed.
 
 Inject `PlatformRuntime` into a feature service when migrating it. The service
 must use the runtime's adapter and `DesktopServices`, rather than construct a

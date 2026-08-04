@@ -12,6 +12,7 @@ from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilitySource,
     DirectorySelectionTarget,
+    UpdatePackageRevealRoute,
 )
 from caveviewer.gui.features import (
     FeatureDecision,
@@ -19,6 +20,7 @@ from caveviewer.gui.features import (
     FeatureId,
     decide_automatic_update,
     decide_directory_selection,
+    decide_update_package_reveal,
     decide_video_recording,
 )
 
@@ -33,6 +35,11 @@ from .probes.updates import (
 )
 from .probes.recording import VideoRecordingTarget, probe_video_recording
 from .probes.desktop import probe_directory_selection
+from .probes.update_package_reveal import probe_update_package_reveal
+from .update_package_reveal import (
+    UpdatePackageRevealAdapter,
+    create_update_package_reveal_adapter,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +104,8 @@ class PlatformRuntime:
     desktop_services: DesktopServices
     update_configuration: UpdateConfiguration
     automatic_update_capability: CapabilityResult[UpdateTarget]
+    update_package_reveal_adapter: UpdatePackageRevealAdapter
+    update_package_reveal_capability: CapabilityResult[UpdatePackageRevealRoute]
     feature_gates: FeatureGateRegistry
 
     def static_feature_decision(self, feature: FeatureId) -> FeatureDecision:
@@ -111,6 +120,11 @@ class PlatformRuntime:
     def automatic_update_decision(self) -> FeatureDecision:
         """Return the gate used before checking or downloading an update."""
         return self.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
+
+    @property
+    def update_package_reveal_decision(self) -> FeatureDecision:
+        """Return the static gate used before revealing a verified package."""
+        return self.static_feature_decision(FeatureId.UPDATE_PACKAGE_REVEAL)
 
     def video_recording_capability(
         self,
@@ -171,6 +185,7 @@ def create_platform_runtime(
     *,
     platform_adapter: SplashPlatformAdapter | None = None,
     desktop_services: DesktopServices | None = None,
+    update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
     environment: Mapping[str, str] | None = None,
     platform_name: str | None = None,
     machine: str | None = None,
@@ -192,6 +207,13 @@ def create_platform_runtime(
         platform_name=resolved_platform_name,
         machine=(machine or platform.machine()).strip() or "unknown",
         install_channel=install_channel or "unknown",
+    )
+    resolved_update_package_reveal_adapter = (
+        update_package_reveal_adapter
+        or create_update_package_reveal_adapter(
+            resolved_platform_adapter,
+            platform_name=resolved_platform_name,
+        )
     )
     try:
         update_configuration = build_update_configuration(
@@ -220,6 +242,18 @@ def create_platform_runtime(
     automatic_update_decision = decide_automatic_update(
         automatic_update_capability
     )
+    try:
+        update_package_reveal_capability = probe_update_package_reveal(
+            resolved_update_package_reveal_adapter
+        )
+    except Exception:
+        update_package_reveal_capability = CapabilityResult.unknown(
+            reason_code="update_package_reveal_capability_probe_failed",
+            evidence={"probe": "update_package_reveal"},
+        )
+    update_package_reveal_decision = decide_update_package_reveal(
+        update_package_reveal_capability
+    )
 
     return PlatformRuntime(
         profile=profile,
@@ -227,7 +261,12 @@ def create_platform_runtime(
         desktop_services=resolved_desktop_services,
         update_configuration=update_configuration,
         automatic_update_capability=automatic_update_capability,
+        update_package_reveal_adapter=resolved_update_package_reveal_adapter,
+        update_package_reveal_capability=update_package_reveal_capability,
         feature_gates=FeatureGateRegistry(
-            {FeatureId.AUTOMATIC_UPDATE: automatic_update_decision}
+            {
+                FeatureId.AUTOMATIC_UPDATE: automatic_update_decision,
+                FeatureId.UPDATE_PACKAGE_REVEAL: update_package_reveal_decision,
+            }
         ),
     )

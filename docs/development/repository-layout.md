@@ -19,7 +19,7 @@ src/caveviewer/benchmarking/results.py        benchmark scenario/results model a
 src/caveviewer/benchmarking/routes.py         benchmark-specific route generation
 src/caveviewer/core/                          parsing, cache, streaming, and non-UI policy
 src/caveviewer/core/capabilities/             immutable cross-layer capability values and hardware snapshots
-src/caveviewer/core/capabilities/desktop.py    directory-selection execution-route values
+src/caveviewer/core/capabilities/desktop.py    desktop execution-route values
 src/caveviewer/core/capabilities/hardware.py   typed GPU-memory and RAM-availability values
 src/caveviewer/core/json_io.py                 bounded JSON loading for core inputs
 src/caveviewer/core/map/                      map discovery, cache, and import workflow
@@ -62,8 +62,10 @@ src/caveviewer/core/textures/decoding.py       texture decode, inspection, and b
 src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
 src/caveviewer/gui/features/                  pure feature availability policies and gates
 src/caveviewer/gui/platform/runtime.py        process-owned platform composition root
+src/caveviewer/gui/platform/update_package_reveal.py focused verified-package reveal facade
 src/caveviewer/gui/platform/probes/           platform capability probes and configuration
 src/caveviewer/gui/platform/probes/desktop.py on-demand directory-selection route probe
+src/caveviewer/gui/platform/probes/update_package_reveal.py static verified-package reveal route probe
 src/caveviewer/gui/map_library.py             recent-map row display models
 src/caveviewer/gui/map_library_controller.py  standard-library row/download state
 src/caveviewer/gui/map_library_panel.py       splash Map Library Tk panel

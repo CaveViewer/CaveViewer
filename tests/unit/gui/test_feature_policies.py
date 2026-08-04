@@ -9,6 +9,7 @@ from caveviewer.core.capabilities import (
     CapabilitySource,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    UpdatePackageRevealRoute,
 )
 from caveviewer.core.map import source_model
 from caveviewer.gui.features import (
@@ -19,6 +20,7 @@ from caveviewer.gui.features import (
     decide_automatic_update,
     decide_directory_selection,
     decide_map_source_import,
+    decide_update_package_reveal,
     decide_video_recording,
 )
 
@@ -274,6 +276,63 @@ def test_directory_selection_policy_is_a_pure_capability_table(
     decision = decide_directory_selection(capability)
 
     assert decision.feature is FeatureId.DIRECTORY_SELECTION
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (
+        state in {FeatureState.ENABLED, FeatureState.DEGRADED}
+    )
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                UpdatePackageRevealRoute.FINDER,
+                reason_code="update_package_reveal_route_available",
+            ),
+            FeatureState.ENABLED,
+            "update_package_reveal_available",
+            "finder",
+        ),
+        (
+            CapabilityResult.available(
+                UpdatePackageRevealRoute.LEGACY_ADAPTER,
+                reason_code="update_package_reveal_route_available",
+            ),
+            FeatureState.DEGRADED,
+            "update_package_reveal_legacy_adapter",
+            "legacy_adapter",
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="update_package_reveal_route_unsupported",
+            ),
+            FeatureState.DISABLED,
+            "update_package_reveal_route_unsupported",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="update_package_reveal_capability_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "update_package_reveal_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_update_package_reveal_policy_is_a_pure_capability_table(
+    capability,
+    state,
+    reason_code,
+    route,
+):
+    decision = decide_update_package_reveal(capability)
+
+    assert decision.feature is FeatureId.UPDATE_PACKAGE_REVEAL
     assert decision.state is state
     assert decision.reason_code == reason_code
     assert decision.route == route

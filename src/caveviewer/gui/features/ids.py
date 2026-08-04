@@ -11,4 +11,5 @@ class FeatureId(str, Enum):
     AUTOMATIC_UPDATE = "automatic_update"
     DIRECTORY_SELECTION = "directory_selection"
     MAP_SOURCE_IMPORT = "map_source_import"
+    UPDATE_PACKAGE_REVEAL = "update_package_reveal"
     VIDEO_RECORDING = "video_recording"

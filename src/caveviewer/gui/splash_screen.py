@@ -414,6 +414,13 @@ def _update_presentation(
             progress_fraction=1.0,
         )
     if snapshot.state == UpdateState.READY:
+        if (
+            snapshot.update_package_reveal is not None
+            and not snapshot.update_package_reveal.allows_execution
+        ):
+            return _UpdatePresentation(
+                status_text=snapshot.update_package_reveal.explanation
+            )
         return _UpdatePresentation(
             status_text="Update ready",
             action_text=reveal_action_label,
@@ -645,7 +652,13 @@ def show_splash_screen(
         if presentation != last_update_presentation[0]:
             _apply_update_presentation(presentation)
             last_update_presentation[0] = presentation
-        if snapshot.state == UpdateState.READY:
+        if (
+            snapshot.state == UpdateState.READY
+            and (
+                snapshot.update_package_reveal is None
+                or snapshot.update_package_reveal.allows_execution
+            )
+        ):
             # Only a visible splash performs the one automatic file-manager
             # reveal; downloads completing inside the viewer stay unobtrusive.
             update_manager.reveal_download(automatic=True)

@@ -21,12 +21,20 @@ from caveviewer.gui.features import (
     FeatureDecision,
     FeatureId,
     FeatureState,
+    decide_update_package_reveal,
 )
 from caveviewer.gui import update_checker
 from caveviewer.gui.platform import get_desktop_services, get_platform_adapter
 from caveviewer.gui.platform.base import SplashPlatformAdapter
 from caveviewer.gui.platform.desktop_services import DesktopInhibitor, DesktopServices
+from caveviewer.gui.platform.probes.update_package_reveal import (
+    probe_update_package_reveal,
+)
 from caveviewer.gui.platform.runtime import PlatformRuntime
+from caveviewer.gui.platform.update_package_reveal import (
+    UpdatePackageRevealAdapter,
+    create_legacy_update_package_reveal_adapter,
+)
 from caveviewer.gui.update_checker import (
     DownloadCancelled,
     UpdateCheckResult,
@@ -94,6 +102,7 @@ class UpdateSnapshot:
     payload_path: str | None = None
     error: str | None = None
     automatic_update: FeatureDecision | None = None
+    update_package_reveal: FeatureDecision | None = None
 
     @property
     def progress_percent(self) -> int:
@@ -114,6 +123,7 @@ class UpdateManager:
         check_for_update: Callable[..., UpdateCheckResult] | None = None,
         download_update: Callable[..., None] | None = None,
         desktop_services: DesktopServices | None = None,
+        update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
         temp_root: str | None = None,
         platform_runtime: PlatformRuntime | None = None,
     ):
@@ -134,6 +144,16 @@ class UpdateManager:
             raise ValueError(
                 "desktop_services must match the injected platform_runtime"
             )
+        if (
+            platform_runtime is not None
+            and update_package_reveal_adapter is not None
+            and update_package_reveal_adapter
+            is not platform_runtime.update_package_reveal_adapter
+        ):
+            raise ValueError(
+                "update_package_reveal_adapter must match the injected "
+                "platform_runtime"
+            )
 
         self._platform_runtime = platform_runtime
         self._platform_adapter = (
@@ -145,6 +165,12 @@ class UpdateManager:
             platform_runtime.desktop_services
             if platform_runtime is not None
             else desktop_services or get_desktop_services()
+        )
+        self._update_package_reveal_adapter = (
+            platform_runtime.update_package_reveal_adapter
+            if platform_runtime is not None
+            else update_package_reveal_adapter
+            or create_legacy_update_package_reveal_adapter(self._platform_adapter)
         )
         self._check_for_update = check_for_update or update_checker.check_for_update
         self._download_update = download_update or update_checker.download_update
@@ -163,6 +189,13 @@ class UpdateManager:
                 reason_code="automatic_update_legacy_runtime",
                 explanation="Automatic updates are available for this installation.",
                 route="signed_manifest",
+            )
+        )
+        self._update_package_reveal_decision = (
+            platform_runtime.update_package_reveal_decision
+            if platform_runtime is not None
+            else decide_update_package_reveal(
+                probe_update_package_reveal(self._update_package_reveal_adapter)
             )
         )
         self._temp_root = temp_root
@@ -212,16 +245,22 @@ class UpdateManager:
                 payload_path=self._payload_path,
                 error=self._error,
                 automatic_update=self._automatic_update_decision,
+                update_package_reveal=self._update_package_reveal_decision,
             )
 
     @property
     def reveal_action_label(self) -> str:
-        return self._platform_adapter.download_reveal_action_label()
+        return self._update_package_reveal_adapter.reveal_action_label()
 
     @property
     def automatic_update_decision(self) -> FeatureDecision:
         """Return the static gate enforced for this manager's update workflow."""
         return self._automatic_update_decision
+
+    @property
+    def update_package_reveal_decision(self) -> FeatureDecision:
+        """Return the static gate enforced before a verified package is revealed."""
+        return self._update_package_reveal_decision
 
     def set_foreground_update_surface_active(self, active: bool) -> None:
         """Tell the manager whether an in-app update surface is visible.
@@ -526,6 +565,12 @@ class UpdateManager:
 
     def reveal_download(self, *, automatic: bool = False) -> bool:
         """Reveal the verified package without executing or installing it."""
+        if not self._update_package_reveal_decision.allows_execution:
+            _LOG.info(
+                "Update package reveal is gated: reason=%s",
+                self._update_package_reveal_decision.reason_code,
+            )
+            return False
         with self._lock:
             if self._state != UpdateState.READY or not self._payload_path:
                 return False
@@ -538,7 +583,7 @@ class UpdateManager:
             payload_path = self._payload_path
 
         try:
-            self._platform_adapter.reveal_downloaded_payload(payload_path)
+            self._update_package_reveal_adapter.reveal_verified_package(payload_path)
         except Exception as exc:
             _LOG.warning("Could not reveal downloaded update %s: %s", payload_path, exc)
             return False
