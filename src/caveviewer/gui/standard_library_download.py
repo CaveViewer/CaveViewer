@@ -17,6 +17,10 @@ from caveviewer.gui.platform.desktop_notifications import (
     send_desktop_notification,
     withdraw_desktop_notification,
 )
+from caveviewer.gui.platform.desktop_inhibition import (
+    acquire_idle_suspend_inhibitor,
+    release_desktop_inhibitor,
+)
 
 
 @dataclass(frozen=True)
@@ -153,20 +157,16 @@ def safe_desktop_inhibit(
     desktop_services: DesktopServices, reason: str, *, parent
 ):
     """Keep the desktop awake during long work when the host supports it."""
-    try:
-        return desktop_services.inhibit_idle_suspend(reason, parent=parent)
-    except Exception:
-        return None
+    return acquire_idle_suspend_inhibitor(
+        desktop_services,
+        reason,
+        parent=parent,
+    )
 
 
 def close_desktop_inhibitor(inhibitor) -> None:
     """Release a desktop inhibitor returned by DesktopServices."""
-    if inhibitor is None:
-        return
-    try:
-        inhibitor.close()
-    except Exception:
-        pass
+    release_desktop_inhibitor(inhibitor)
 
 
 def download_standard_library_with_desktop_activity(

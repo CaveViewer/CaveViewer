@@ -31,6 +31,10 @@ from caveviewer.gui.platform.desktop_notifications import (
     send_desktop_notification,
     withdraw_desktop_notification,
 )
+from caveviewer.gui.platform.desktop_inhibition import (
+    acquire_idle_suspend_inhibitor,
+    release_desktop_inhibitor,
+)
 from caveviewer.gui.platform.probes.update_package_reveal import (
     probe_update_package_reveal,
 )
@@ -462,23 +466,16 @@ class UpdateManager:
 
     def _inhibit_update_download(self) -> DesktopInhibitor | None:
         """Best-effort idle/suspend inhibitor while an update payload downloads."""
-        try:
-            return self._desktop_services.inhibit_idle_suspend(
-                f"{APP_NAME} is downloading an update"
-            )
-        except Exception as exc:
-            _LOG.debug("Desktop idle/suspend inhibit unavailable for update: %s", exc)
-            return None
+        return acquire_idle_suspend_inhibitor(
+            self._desktop_services,
+            f"{APP_NAME} is downloading an update",
+            platform_runtime=self._platform_runtime,
+        )
 
     @staticmethod
     def _close_desktop_inhibitor(inhibitor: DesktopInhibitor | None) -> None:
         """Release a best-effort desktop inhibitor."""
-        if inhibitor is None:
-            return
-        try:
-            inhibitor.close()
-        except Exception as exc:
-            _LOG.debug("Could not release desktop update inhibitor: %s", exc)
+        release_desktop_inhibitor(inhibitor)
 
     def _run_download(
         self,

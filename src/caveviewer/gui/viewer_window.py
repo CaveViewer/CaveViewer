@@ -78,6 +78,10 @@ from caveviewer.gui.platform.recording_process import (
     RecordingProcessAdapter,
     create_recording_process_adapter,
 )
+from caveviewer.gui.platform.desktop_inhibition import (
+    acquire_idle_suspend_inhibitor,
+    release_desktop_inhibitor,
+)
 from caveviewer.gui.platform import DesktopServiceError, tk_root_options
 from caveviewer.gui.platform.windowing import run_window_config
 from caveviewer.resources import image_path, resource_path
@@ -364,37 +368,37 @@ def _map_import_inhibit_reason(map_name: str) -> str:
     return f"Importing {display_name}"
 
 
-def _acquire_map_import_inhibitor(map_name: str, *, desktop_services=None):
+def _acquire_map_import_inhibitor(
+    map_name: str,
+    *,
+    desktop_services=None,
+    platform_runtime: PlatformRuntime | None = None,
+):
     """Best-effort desktop idle/suspend inhibitor for long map imports."""
     try:
         if desktop_services is None:
             from caveviewer.gui.platform import get_desktop_services
 
             desktop_services = get_desktop_services()
-        return desktop_services.inhibit_idle_suspend(
-            _map_import_inhibit_reason(map_name)
+        return acquire_idle_suspend_inhibitor(
+            desktop_services,
+            _map_import_inhibit_reason(map_name),
+            platform_runtime=platform_runtime,
         )
     except Exception as exc:
-        # Desktop integration must not block opening maps. Linux portals
-        # provide the real inhibitor; unsupported sessions continue normally.
-        _LOG.warning(
-            "Desktop idle/suspend inhibit unavailable during map import: %s",
-            exc,
+        # Legacy desktop-service construction must not block opening maps. The
+        # typed acquisition boundary already handles capability and action
+        # failures as no-ops once a service exists.
+        _LOG.debug(
+            "Desktop idle/suspend inhibitor setup skipped: error_type=%s",
+            type(exc).__name__,
         )
         return None
 
 
 def _release_desktop_inhibitor(inhibitor) -> None:
     """Release a desktop inhibitor without affecting import completion."""
-    if inhibitor is None:
-        return
-    try:
-        inhibitor.close()
-    except Exception as exc:
-        _LOG.warning(
-            "Desktop idle/suspend inhibit release failed after map import: %s",
-            exc,
-        )
+    release_desktop_inhibitor(inhibitor)
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -1077,6 +1081,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         return _acquire_map_import_inhibitor(
             map_name,
             desktop_services=runtime.desktop_services,
+            platform_runtime=runtime,
         )
 
     def _ensure_import_controller(self) -> MapImportController:
