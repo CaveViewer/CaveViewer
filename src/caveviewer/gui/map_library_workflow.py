@@ -20,8 +20,18 @@ from caveviewer.gui.map_library_panel import (
     MapLibraryPanel,
     MapLibraryRowWidgets,
 )
-from caveviewer.gui.platform import DesktopServices, DirectorySelection
-from caveviewer.gui.recorded_dive import has_recorded_dive_trace
+from caveviewer.gui.guided_dive_playback import (
+    GuidedDivePlaybackPreflight,
+    guided_dive_menu_decision,
+    guided_dive_playback_preflight,
+    guided_dive_trace_directory,
+)
+from caveviewer.gui.features import FeatureDecision
+from caveviewer.gui.platform import (
+    DesktopServiceError,
+    DesktopServices,
+    DirectorySelection,
+)
 from caveviewer.gui.standard_library_download import (
     StandardLibraryDownloadFailed,
     StandardLibraryDownloadProgress,
@@ -65,6 +75,7 @@ def _remaining_cache_error(
 
 
 OpenMapCallback = Callable[[str], None]
+OpenGuidedDiveCallback = Callable[[str], None]
 
 
 def _start_catalog_thread(target: Callable[[], None]) -> None:
@@ -122,8 +133,11 @@ class MapLibraryWorkflow:
         ] = DirectorySelection.from_path,
         inhibit_desktop: Callable[..., Any] = safe_desktop_inhibit,
         close_inhibitor: Callable[[Any], None] = close_desktop_inhibitor,
-        has_recorded_dive: Callable[[str], bool] = has_recorded_dive_trace,
-        open_recorded_dive: OpenMapCallback | None = None,
+        guided_dive_menu: Callable[[str], FeatureDecision] = guided_dive_menu_decision,
+        guided_dive_preflight: Callable[
+            [str, str], GuidedDivePlaybackPreflight
+        ] = guided_dive_playback_preflight,
+        open_guided_dive: OpenGuidedDiveCallback | None = None,
     ) -> None:
         self.root = root
         self.controller = controller
@@ -152,8 +166,9 @@ class MapLibraryWorkflow:
         self.directory_selection_factory = directory_selection_factory
         self.inhibit_desktop = inhibit_desktop
         self.close_inhibitor = close_inhibitor
-        self.has_recorded_dive = has_recorded_dive
-        self.open_recorded_dive = open_recorded_dive
+        self.guided_dive_menu = guided_dive_menu
+        self.guided_dive_preflight = guided_dive_preflight
+        self.open_guided_dive = open_guided_dive
         self.recent_map_paths: list[str] = []
 
     def populate_panel(self, parent, recent_map_paths: Sequence[str]) -> None:
@@ -211,11 +226,11 @@ class MapLibraryWorkflow:
 
         def menu_actions(row_widgets, path=path, title=title):
             actions = []
-            if self._recorded_dive_action_available(path):
+            if self._guided_dive_action_available(path):
                 actions.append(
                     (
-                        "Play recorded dive…",
-                        lambda path=path: self.open_recorded_dive(path),
+                        "Open guided dive…",
+                        lambda path=path: self.open_guided_dive_for_map(path),
                     )
                 )
             actions.append(
@@ -258,11 +273,13 @@ class MapLibraryWorkflow:
             if map_path is None:
                 return ()
             actions = []
-            if self._recorded_dive_action_available(map_path):
+            if self._guided_dive_action_available(map_path):
                 actions.append(
                     (
-                        "Play recorded dive…",
-                        lambda map_path=map_path: self.open_recorded_dive(map_path),
+                        "Open guided dive…",
+                        lambda map_path=map_path: self.open_guided_dive_for_map(
+                            map_path
+                        ),
                     )
                 )
             actions.append(
@@ -298,12 +315,66 @@ class MapLibraryWorkflow:
             menu_actions_factory=menu_actions,
         )
 
-    def _recorded_dive_action_available(self, map_path: str) -> bool:
-        """Return whether this local map can offer its trace-picker shortcut."""
+    def _guided_dive_action_available(self, map_path: str) -> bool:
+        """Return whether this map currently exposes an executable dive action."""
         return bool(
-            self.open_recorded_dive is not None
-            and self.has_recorded_dive(map_path)
+            self.open_guided_dive is not None
+            and self.guided_dive_menu(map_path).allows_execution
         )
+
+    def open_guided_dive_for_map(self, map_path: str) -> None:
+        """Choose, preflight, then launch one map-local Guided Dive.
+
+        The menu may have been open while the trace or cache changed. Recheck
+        availability before the desktop picker, then validate the actual
+        selected JSONL and its current cache before the splash session leaves.
+        """
+        if self.open_guided_dive is None:
+            return
+
+        availability = self.guided_dive_menu(map_path)
+        if not availability.allows_execution:
+            if availability.is_visible:
+                self._show_error(availability.explanation)
+            else:
+                self._show_info(availability.explanation)
+            return
+
+        try:
+            selection = self.desktop_services.choose_file(
+                title="Open Guided Dive",
+                initial_dir=os.fspath(guided_dive_trace_directory(map_path)),
+                parent=self.root,
+            )
+        except DesktopServiceError as exc:
+            self.logger.warning("Guided Dive file selection failed: %s", exc)
+            self._show_error("Couldn't open the Guided Dive picker.")
+            return
+        except Exception as exc:
+            self.logger.warning("Guided Dive file selection failed: %s", exc)
+            self._show_error("Couldn't open the Guided Dive picker.")
+            return
+        if selection is None:
+            return
+
+        try:
+            preflight = self.guided_dive_preflight(map_path, selection.path)
+        except Exception as exc:
+            self.logger.warning("Guided Dive preflight failed: %s", exc)
+            self._show_error("Guided Dive availability could not be determined.")
+            return
+
+        target = preflight.capability.value
+        if not preflight.decision.allows_execution or target is None:
+            self.logger.warning(
+                "Guided Dive preflight rejected %s: %s",
+                selection.path,
+                preflight.decision.reason_code,
+            )
+            self._show_error(preflight.decision.explanation)
+            return
+
+        self.open_guided_dive(os.fspath(target.trace.path))
 
     def remove_map_cache(
         self,

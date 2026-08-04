@@ -182,6 +182,16 @@ viewing; playback refuses a different geometry or cache layout. The trace's
 first pose replaces ordinary cache-derived viewer placement, and every pose is
 applied directly on the render thread without navigation clamping, smoothing,
 collision rejection, or route planning.
+Map Library exposes **Open guided dive…** only when the selected map's
+canonical `_guided_dives` directory has a JSONL file. Its action uses the
+existing `DesktopServices` file picker, then obtains one fresh capability fact
+for the selected file: the file must remain map-local, parse within the bounded
+trace contract, resolve to that map's source, and match a current cache
+manifest exactly. `decide_guided_dive_playback` hides a map with no trace and
+otherwise fails closed with a concise disabled-state explanation. This is a
+per-map action-time preflight, not a `PlatformRuntime.feature_gates` entry;
+startup repeats the manifest validation at the viewer boundary to cover a
+filesystem change after splash has closed.
 Position and orientation are interpolated by trace time; a declared
 discontinuity remains an instantaneous jump. `StreamingWorld` receives a
 bounded chronological lookahead tube, and the playback clock freezes whenever
@@ -507,6 +517,11 @@ GitHub release, loads the `caveviewer-map-library.v1.json` release asset when
 present, joins manifest entries to release zip assets, infers rows for extra
 zip assets when no manifest is present, and falls back to the last cached
 catalog or bundled catalog resource when offline.
+The Map Library also owns the Guided Dive action-time handoff: it invokes the
+desktop file-selection service only after the map-local discovery policy is
+enabled, runs the selected trace/cache preflight, and leaves splash only after
+the resulting target is executable. It does not reuse the directory-selection
+gate for this file-picker action.
 
 Directory selection, file reveal, notifications, and idle/suspend inhibition
 use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal

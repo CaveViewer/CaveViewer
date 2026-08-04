@@ -306,7 +306,9 @@ frame-rate-independent interpolation, instantaneous declared discontinuities,
 pause/resume, GPU-chunk buffering, and direct camera application that bypasses
 the manual navigation guard. Cache-construction coverage must prove that both
 standard and incremental builds write the same portable Guided Dive identity
-that trace playback checks.
+that trace playback checks. Map Library coverage must also prove that no trace
+hides the Guided Dive action and that a selected trace is preflighted against
+its map-local source and current cache before the splash session can launch it.
 Use the explicit farthest/frontier profile only when testing continuation
 behavior on incomplete or mesh-blocked evidence.
 Asynchronous replan, pacing-hold, and continuous-scan diagnostics remain core
