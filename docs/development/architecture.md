@@ -159,7 +159,7 @@ analysis to explain an unresolved route, but those results are non-executable
 viewer diagnostics. The former autonomous-controller JSONL blackbox and its
 cache-local writer were removed with the controller.
 
-An explicit `Shift+T` manual route trace is a separate diagnostic surface.
+An explicit `Cmd/Ctrl+T` manual route trace is a separate diagnostic surface.
 It samples the render-thread camera pose after movement, sends JSONL records
 through a bounded queue to one background writer, and marks bookmark/minimap
 teleports as discontinuities instead of counting them as flown distance.

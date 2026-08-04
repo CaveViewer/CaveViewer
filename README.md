@@ -104,8 +104,8 @@ encoded as MP4 files with `ffmpeg`.
 
 Use the `REC` button to arm recording. The minimap, controls, and control panel
 disappear immediately, a 3-to-0 countdown appears in the amber loading ring,
-and then recording begins. Press `Shift+R` to cancel the countdown or stop
-recording.
+and then recording begins. Press `Ctrl+R` (`Cmd+R` on macOS) to cancel the
+countdown or stop recording.
 
 Videos are saved to:
 

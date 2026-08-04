@@ -2007,7 +2007,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             now=now,
             start_number=self.RECORDING_COUNTDOWN_START_NUMBER,
         )
-        _LOG.info("Recording countdown started. Press Shift+R to cancel or stop.")
+        _LOG.info(
+            "Recording countdown started. Press %s+R to cancel or stop.",
+            self._primary_shortcut_label(),
+        )
 
     def _resolve_ffmpeg_path(self) -> str | None:
         return recording.resolve_ffmpeg_path()
@@ -2707,7 +2710,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._render_dive_status_prompt(
                 window_size,
                 title="Manual route trace active",
-                note="Fly the reference route, then press Shift + T to save.",
+                note=(
+                    "Fly the reference route, then press "
+                    f"{self._primary_shortcut_label()} + T to save."
+                ),
             )
 
     @staticmethod
@@ -5701,7 +5707,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         self._manual_dive_trace = recorder
         _LOG.info(
-            "Manual Guided Dive trace started. Press Shift+T to stop and save: %s",
+            "Manual Guided Dive trace started. Press %s+T to stop and save: %s",
+            self._primary_shortcut_label(),
             output_path,
         )
         return True
@@ -5947,14 +5954,19 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     key_event = on_key_event
 
+    def _primary_shortcut_is_down(self, modifiers: KeyModifiers) -> bool:
+        """Return whether the platform-native application modifier is active."""
+        if self._active_platform_adapter().tk_primary_modifier_name() == "Command":
+            return self._command_is_down(modifiers)
+        return self._control_is_down(modifiers)
+
+    def _primary_shortcut_label(self) -> str:
+        """Return the platform-native label for an application shortcut."""
+        return self._active_platform_adapter().primary_shortcut_modifier_label()
+
     def _handle_window_shortcut(self, key, modifiers: KeyModifiers) -> bool:
         """Handle desktop-standard window and open shortcuts."""
-        shortcut_down = (
-            self._command_is_down(modifiers)
-            if self._active_platform_adapter().tk_primary_modifier_name() == "Command"
-            else self._control_is_down(modifiers)
-        )
-        if not shortcut_down:
+        if not self._primary_shortcut_is_down(modifiers):
             return False
 
         close_key = self._resolve_key_optional(self.wnd.keys, "W")
@@ -5988,13 +6000,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         key,
         modifiers: KeyModifiers,
     ) -> bool:
-        """Use Shift+T to start or stop a map-local manual route trace."""
+        """Use Ctrl/Cmd+T to start or stop a map-local manual route trace."""
         if not self._has_map_loaded:
             return False
         trace_key = self._resolve_key_optional(self.wnd.keys, "T")
         if trace_key is None or key != trace_key:
             return False
-        if not self._shift_is_down(modifiers):
+        if not self._primary_shortcut_is_down(modifiers):
             return False
         self._toggle_manual_dive_trace()
         return True
@@ -6014,13 +6026,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         return self._toggle_recorded_dive_pause()
 
     def _handle_recording_hotkey(self, key, modifiers: KeyModifiers) -> bool:
-        """Use Shift+R to cancel countdown or stop active recording."""
+        """Use Ctrl/Cmd+R to cancel countdown or stop active recording."""
         if not self._has_map_loaded or not self._recording_is_armed():
             return False
         record_key = self._resolve_key_optional(self.wnd.keys, "R")
         if record_key is None or key != record_key:
             return False
-        if not self._shift_is_down(modifiers):
+        if not self._primary_shortcut_is_down(modifiers):
             return False
         self._toggle_recording()
         return True
@@ -6033,12 +6045,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not self._is_zero_key(keys, key):
             return False
 
-        shortcut_down = (
-            self._command_is_down(modifiers)
-            if self._active_platform_adapter().tk_primary_modifier_name() == "Command"
-            else self._control_is_down(modifiers)
-        )
-        if shortcut_down:
+        if self._primary_shortcut_is_down(modifiers):
             if self._recorded_dive_is_active():
                 self._stop_recorded_dive(reason="view_reset")
             self.camera.reset_view()

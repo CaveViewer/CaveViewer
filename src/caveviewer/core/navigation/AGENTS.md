@@ -166,7 +166,7 @@ voxel fixtures that cannot execute a camera route.
 The viewer no longer has an autonomous camera controller. Cmd/Ctrl+A is
 unhandled, ordinary map opening uses the render-cache start position, and no
 module in `caveviewer.gui` may import or execute an auto-dive planner. Preserve
-`Shift+T` manual tracing and Recorded Dive separately; neither is a navigation
+`Cmd/Ctrl+T` manual tracing and Recorded Dive separately; neither is a navigation
 certificate consumer.
 
 `autodive.py` and its `AutoDive*` names remain a compatibility-oriented core

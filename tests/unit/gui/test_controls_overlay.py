@@ -131,7 +131,8 @@ def test_recording_help_copy_is_format_neutral():
 
     assert rows["REC button"] == "Start recording countdown"
     assert "MP4" not in rows["REC button"]
-    assert rows["Shift + T"] == "Start/stop manual route trace"
+    assert rows["Ctrl + R"] == "Stop or cancel recording"
+    assert rows["Ctrl + T"] == "Start/stop manual route trace"
     assert rows["Space"] == "Pause/resume a recorded dive"
 
 
@@ -158,6 +159,8 @@ def test_control_help_copy_uses_adapter_for_macos_shortcuts():
     assert rows["Cmd + 1..9"] == "Save camera bookmark slot"
     assert rows["Cmd + O"] == "Switch to a different map"
     assert rows["Cmd + W"] == "Close window"
+    assert rows["Cmd + R"] == "Stop or cancel recording"
+    assert rows["Cmd + T"] == "Start/stop manual route trace"
 
 
 def test_control_help_copy_uses_adapter_for_control_shortcuts():
@@ -176,6 +179,8 @@ def test_control_help_copy_uses_adapter_for_control_shortcuts():
     assert "Ctrl + A" not in rows
     assert rows["Ctrl + O"] == "Switch to a different map"
     assert rows["Ctrl + W"] == "Close window"
+    assert rows["Ctrl + R"] == "Stop or cancel recording"
+    assert rows["Ctrl + T"] == "Start/stop manual route trace"
 
 
 def test_platform_adapters_define_controls_overlay_layout_policy():

@@ -144,8 +144,8 @@ def _get_platform_control_sections(
 
     recording = [
         ("REC button", "Start recording countdown"),
-        ("Shift + R", "Stop or cancel recording"),
-        ("Shift + T", "Start/stop manual route trace"),
+        (f"{primary_shortcut_label} + R", "Stop or cancel recording"),
+        (f"{primary_shortcut_label} + T", "Start/stop manual route trace"),
     ]
 
     return [
