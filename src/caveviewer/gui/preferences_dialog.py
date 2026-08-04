@@ -35,7 +35,10 @@ from caveviewer.gui.platform import (
     get_desktop_services,
     get_platform_adapter,
 )
-from caveviewer.gui.platform.directory_selection import directory_selection_decision
+from caveviewer.gui.platform.directory_selection import (
+    choose_authorized_directory,
+    directory_selection_preflight,
+)
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
 
@@ -519,10 +522,11 @@ class PreferencesDialog:
             label.configure(wraplength=wraplength)
 
     def _choose_directory(self, key: str, title: str) -> None:
-        decision = directory_selection_decision(
+        preflight = directory_selection_preflight(
             self.desktop_services,
             platform_runtime=self.platform_runtime,
         )
+        decision = preflight.decision
         if not decision.allows_execution:
             self._set_feedback(decision.explanation, MessageKind.WARNING)
             return
@@ -536,7 +540,9 @@ class PreferencesDialog:
         if not os.path.isdir(initial_dir):
             initial_dir = os.path.expanduser("~")
         try:
-            selection = self.desktop_services.choose_directory(
+            selection = choose_authorized_directory(
+                preflight,
+                self.desktop_services,
                 title=title,
                 initial_dir=initial_dir,
                 parent=self.dialog,

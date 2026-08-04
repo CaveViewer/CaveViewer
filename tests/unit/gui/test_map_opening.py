@@ -7,9 +7,15 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer.gui import map_opening
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    DirectorySelectionRoute,
+    DirectorySelectionTarget,
+)
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.platform import DesktopServiceError
 from caveviewer.gui.platform import directory_selection as directory_selection_guard
+from caveviewer.gui.platform.runtime import DirectorySelectionPreflight
 
 
 def test_pick_folder_dialog_uses_desktop_services_and_destroys_root(monkeypatch):
@@ -60,6 +66,37 @@ def test_pick_folder_dialog_rejects_unavailable_service_before_creating_tk_root(
         map_opening.pick_folder_dialog(desktop_services=object())
 
 
+def test_pick_folder_dialog_rejects_a_changed_route_before_creating_tk_root(
+    monkeypatch,
+):
+    portal_target = DirectorySelectionTarget(
+        primary_route=DirectorySelectionRoute.PORTAL,
+        fallback_route=DirectorySelectionRoute.TK,
+    )
+    target_calls = []
+
+    class ChangingDesktopServices:
+        def directory_selection_target(self):
+            target_calls.append(True)
+            if len(target_calls) == 1:
+                return portal_target
+            return DirectorySelectionTarget(DirectorySelectionRoute.TK)
+
+        def choose_directory(self, **_options):
+            pytest.fail("a changed route must not open a chooser")
+
+    monkeypatch.setattr(
+        map_opening,
+        "_hidden_tk_root",
+        lambda: pytest.fail("a changed route must not create Tk"),
+    )
+
+    with pytest.raises(DesktopServiceError, match="availability changed"):
+        map_opening.pick_folder_dialog(desktop_services=ChangingDesktopServices())
+
+    assert target_calls == [True, True]
+
+
 def test_pick_folder_dialog_rechecks_the_injected_runtime_for_each_action(
     monkeypatch,
 ):
@@ -75,13 +112,26 @@ def test_pick_folder_dialog_rechecks_the_injected_runtime_for_each_action(
         "_hidden_tk_root",
         lambda: calls.append("root") or FakeRoot(),
     )
-    monkeypatch.setattr(
-        directory_selection_guard,
-        "probe_directory_selection",
-        lambda _services: pytest.fail("runtime preflight must be reused"),
+    target = DirectorySelectionTarget(
+        primary_route=DirectorySelectionRoute.PORTAL,
+        fallback_route=DirectorySelectionRoute.TK,
     )
+    adapter_rechecks = []
+
+    def probe(service):
+        assert service is desktop_services
+        adapter_rechecks.append(True)
+        return CapabilityResult.available(
+            target,
+            reason_code="directory_selection_portal_route_available",
+        )
+
+    monkeypatch.setattr(directory_selection_guard, "probe_directory_selection", probe)
 
     class FakeDesktopServices:
+        def directory_selection_target(self):
+            return target
+
         def choose_directory(self, **options):
             calls.append(("choose_directory", options))
             return SimpleNamespace(path="/maps/cave")
@@ -94,7 +144,11 @@ def test_pick_folder_dialog_rechecks_the_injected_runtime_for_each_action(
 
         def directory_selection_preflight(self):
             preflight_calls.append(True)
-            return SimpleNamespace(
+            return DirectorySelectionPreflight(
+                capability=CapabilityResult.available(
+                    target,
+                    reason_code="directory_selection_portal_route_available",
+                ),
                 decision=FeatureDecision(
                     feature=FeatureId.DIRECTORY_SELECTION,
                     state=FeatureState.ENABLED,
@@ -109,6 +163,7 @@ def test_pick_folder_dialog_rechecks_the_injected_runtime_for_each_action(
     assert map_opening.pick_folder_dialog(platform_runtime=runtime) == "/maps/cave"
     assert map_opening.pick_folder_dialog(platform_runtime=runtime) == "/maps/cave"
     assert preflight_calls == [True, True]
+    assert adapter_rechecks == [True, True, True, True]
     assert [call for call in calls if call == "root"] == ["root", "root"]
     assert len([call for call in calls if call == "destroy"]) == 2
     assert len([call for call in calls if call[0] == "choose_directory"]) == 2

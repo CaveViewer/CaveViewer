@@ -368,9 +368,10 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
 def test_splash_map_picker_checks_its_directory_selection_route_before_calling_it():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
-    assert "directory_selection_decision(" in source
-    assert source.index("directory_selection_decision(") < source.index(
-        "desktop_services.choose_directory("
+    assert "directory_selection_preflight(" in source
+    assert "choose_authorized_directory(" in source
+    assert source.index("directory_selection_preflight(") < source.index(
+        "choose_authorized_directory("
     )
 
 
