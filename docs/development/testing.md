@@ -304,8 +304,9 @@ fixtures.
 Recorded Dive coverage must validate bounded JSONL parsing, its versioned
 source/cache identity contract, exact first and final poses,
 frame-rate-independent interpolation, instantaneous declared discontinuities,
-pause/resume, GPU-chunk buffering, and direct camera application that bypasses
-the manual navigation guard. Cache-construction coverage must prove that both
+orientation-only paused inspection, pose restoration and chunk buffering on
+resume, unchanged trace files, and direct camera application that bypasses the
+manual navigation guard. Cache-construction coverage must prove that both
 standard and incremental builds write the same portable Guided Dive identity
 that trace playback checks. Map Library coverage must also prove that no trace
 hides the Guided Dive action and that a selected trace is preflighted against

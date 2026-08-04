@@ -2556,6 +2556,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         controller = getattr(self, "_recorded_dive_controller", None)
         return controller is not None and controller.active
 
+    def _recorded_dive_is_paused(self) -> bool:
+        """Report whether an active dive is in orientation-only inspection mode."""
+        controller = getattr(self, "_recorded_dive_controller", None)
+        return bool(
+            controller is not None
+            and controller.active
+            and getattr(controller, "state", None)
+            is recorded_dive.RecordedDivePlaybackState.PAUSED
+        )
+
     def _recorded_dive_prefetch_cells(self) -> frozenset[tuple[int, int, int]]:
         """Build a bounded, chronological chunk tube ahead of trace time."""
         controller = getattr(self, "_recorded_dive_controller", None)
@@ -2678,10 +2688,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         self._refresh_recorded_dive_prefetch()
         previous_state = controller.state
+        chunks_ready = (
+            True
+            if previous_state is recorded_dive.RecordedDivePlaybackState.PAUSED
+            else self._recorded_dive_chunks_ready(now=now)
+        )
         current_state = controller.update(
             self.camera,
             now=now,
-            chunks_ready=self._recorded_dive_chunks_ready(now=now),
+            chunks_ready=chunks_ready,
         )
         if current_state is recorded_dive.RecordedDivePlaybackState.BUFFERING:
             if previous_state is not current_state:
@@ -2725,7 +2740,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         now = time.perf_counter()
         if controller.state is recorded_dive.RecordedDivePlaybackState.PAUSED:
-            return controller.resume(now=now)
+            return controller.resume(self.camera, now=now)
         return controller.pause(now=now)
 
     def _render_dive_status(self, window_size: tuple[int, int]) -> None:
@@ -2763,7 +2778,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if controller.state is recorded_dive.RecordedDivePlaybackState.BUFFERING:
             note = f"Loading nearby cave chunks… {elapsed} / {duration}"
         elif controller.state is recorded_dive.RecordedDivePlaybackState.PAUSED:
-            note = f"Paused at {elapsed} / {duration}. Press Space to resume."
+            note = (
+                f"Paused for inspection at {elapsed} / {duration}. "
+                "Look around; Space resumes."
+            )
         else:
             note = f"{elapsed} / {duration}. Space pauses; movement takes control."
         self._render_dive_status_prompt(
@@ -5154,7 +5172,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             if benchmark_controller.started:
                 benchmark_controller.update_camera(self.camera, time.perf_counter())
         elif self._recorded_dive_is_active():
-            if self._continuous_input_has_navigation_intent(dt):
+            if self._recorded_dive_is_paused():
+                self._handle_paused_recorded_dive_input(dt)
+                self._update_recorded_dive(now=time.perf_counter())
+            elif self._continuous_input_has_navigation_intent(dt):
                 self._stop_recorded_dive(reason="manual_control")
                 self._handle_continuous_input(dt)
             else:
@@ -5961,6 +5982,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         if intent.has_roll:
             self.camera.barrel_roll(intent.roll_delta)
 
+    def _handle_paused_recorded_dive_input(self, dt: float) -> None:
+        """Permit look-only inspection without turning a paused dive into flight."""
+        intent = self._continuous_input_intent(dt)
+        if intent.has_look:
+            self.camera.look(intent.yaw_delta, intent.pitch_delta)
+
     def _handle_manual_input_frame(self, dt: float, *, now: float) -> None:
         """Apply manual camera controls for the current frame."""
         del now
@@ -6180,7 +6207,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 and controller.state
                 is recorded_dive.RecordedDivePlaybackState.PAUSED
             ):
-                controller.resume(now=time.perf_counter())
+                controller.resume(self.camera, now=time.perf_counter())
             self._recorded_dive_background_paused = False
 
     def on_focus_event(self, focused: bool):
@@ -6236,7 +6263,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._last_mouse_pos = (x, y)
                 return
             self._last_mouse_pos = (x, y)
-            if self._recorded_dive_is_active():
+            if (
+                self._recorded_dive_is_active()
+                and not self._recorded_dive_is_paused()
+            ):
                 self._stop_recorded_dive(reason="mouse_look")
             self.camera.look(dx, dy)
 
@@ -6464,6 +6494,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_release_event = on_mouse_release_event
 
     def on_mouse_scroll_event(self, x_offset, y_offset):
+        if self._recorded_dive_is_paused():
+            return
         self.camera.adjust_speed(y_offset)
 
     mouse_scroll_event = on_mouse_scroll_event

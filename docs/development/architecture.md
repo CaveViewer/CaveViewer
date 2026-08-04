@@ -202,6 +202,10 @@ bounded chronological lookahead tube, and the playback clock freezes whenever
 the next pose's local render chunks are not GPU-resident. This makes trace time
 independent of render frame rate while allowing slower hardware to buffer
 without skipping part of the recorded flight.
+While a user-paused dive is inspecting the cave, only camera look is applied:
+its trace time and position remain frozen. Resuming reapplies the authoritative
+recorded pose at that timestamp, then returns through the same chunk-buffering
+path before the trace clock advances again.
 
 The process boundary also installs main-thread and worker-thread exception
 hooks. `ApplicationDiagnostics` is a generic optional sink with no output path
