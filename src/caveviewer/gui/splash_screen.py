@@ -713,31 +713,11 @@ def show_splash_screen(
             _save_last_browse_dir(selection.path)
             _leave_splash()
 
-    def on_open_recorded_dive(initial_dir: str | None = None) -> None:
-        selection = desktop_services.choose_file(
-            title="Open Recorded Dive",
-            initial_dir=initial_dir or _load_last_browse_dir(),
-            parent=root,
-        )
-        if not selection:
-            return
-        if not selection.path.lower().endswith(".jsonl"):
-            show_feedback(
-                root,
-                "Unable to open this file: Recorded Dives use the .jsonl extension.",
-                kind="error",
-                duration_ms=9000,
-                font=_BODY_FONT,
-            )
-            return
-        session.select_folder(selection.path)
-        _save_last_browse_dir(selection.path)
+    def _open_guided_dive_from_splash(trace_path: str) -> None:
+        """Leave splash only after Map Library has preflighted this trace."""
+        session.select_folder(trace_path)
+        _save_last_browse_dir(os.path.dirname(trace_path))
         _leave_splash()
-
-    def _open_map_local_recorded_dive(map_path: str) -> None:
-        from caveviewer.gui.manual_dive_trace import MANUAL_DIVE_TRACE_DIRECTORY
-
-        on_open_recorded_dive(os.path.join(map_path, MANUAL_DIVE_TRACE_DIRECTORY))
 
     def on_close(_event=None):
         _leave_splash()
@@ -868,7 +848,7 @@ def show_splash_screen(
         show_feedback=_show_map_library_feedback,
         logger=_LOG,
         map_library_root_dir_provider=default_map_library_install_dir,
-        open_recorded_dive=_open_map_local_recorded_dive,
+        open_guided_dive=_open_guided_dive_from_splash,
     )
     map_library_workflow_ref[0] = map_library_workflow
 

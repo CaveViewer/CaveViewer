@@ -488,8 +488,8 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "self._recent_container = tk.Frame(" in panel_source
     assert "self.recent_rows" in panel_source
     assert "self._recent_empty_note = self._create_empty_note" in panel_source
-    assert "Play recorded dive…" in source
-    assert "has_recorded_dive" in workflow_source
+    assert "Open guided dive…" in source
+    assert "guided_dive_preflight" in workflow_source
     assert "Open" in source
     assert "button.create_oval(" in panel_source
     assert 'button.pack(side="right", padx=(0, self._px(12))' in panel_source

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
+from caveviewer.core.capabilities import CapabilityResult
+from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_library import recent_map_key
 from caveviewer.gui.map_library_workflow import (
@@ -140,6 +143,16 @@ class _FakeLogger:
         self.warnings.append((message, args))
 
 
+class _FakeDesktopServices:
+    def __init__(self, *, file_selection=None) -> None:
+        self.file_selection = file_selection
+        self.file_calls = []
+
+    def choose_file(self, **options):
+        self.file_calls.append(options)
+        return self.file_selection
+
+
 class _FakeInhibitor:
     def __init__(self) -> None:
         self.closed = False
@@ -176,8 +189,10 @@ def _workflow(
     has_cache=None,
     remove_cache=None,
     map_library_root_dir_provider=None,
-    has_recorded_dive=None,
-    open_recorded_dive=None,
+    desktop_services=None,
+    guided_dive_menu=None,
+    guided_dive_preflight=None,
+    open_guided_dive=None,
 ):
     root = _FakeRoot()
     panel = _FakePanel()
@@ -186,6 +201,7 @@ def _workflow(
     closed_inhibitors = []
     opened = []
     inhibitor = _FakeInhibitor()
+    desktop_services = desktop_services or _FakeDesktopServices()
 
     workflow = MapLibraryWorkflow(
         root=root,
@@ -193,7 +209,7 @@ def _workflow(
         panel=panel,
         standard_library_maps=maps,
         map_library_root_dir="/library",
-        desktop_services=object(),
+        desktop_services=desktop_services,
         splash_exists=lambda: True,
         open_map=opened.append,
         show_feedback=lambda message, **kwargs: feedback.append(
@@ -219,8 +235,11 @@ def _workflow(
         directory_selection_factory=lambda path: SimpleNamespace(path=path),
         inhibit_desktop=lambda *_args, **_kwargs: inhibitor,
         close_inhibitor=lambda handle: closed_inhibitors.append(handle),
-        has_recorded_dive=has_recorded_dive or (lambda _path: False),
-        open_recorded_dive=open_recorded_dive,
+        guided_dive_menu=guided_dive_menu or _hidden_guided_dive_decision,
+        guided_dive_preflight=(
+            guided_dive_preflight or _unexpected_guided_dive_preflight
+        ),
+        open_guided_dive=open_guided_dive,
     )
     return SimpleNamespace(
         workflow=workflow,
@@ -231,7 +250,31 @@ def _workflow(
         opened=opened,
         inhibitor=inhibitor,
         closed_inhibitors=closed_inhibitors,
+        desktop_services=desktop_services,
     )
+
+
+def _enabled_guided_dive_decision(_map_path: str | None = None) -> FeatureDecision:
+    return FeatureDecision(
+        feature=FeatureId.GUIDED_DIVE_PLAYBACK,
+        state=FeatureState.ENABLED,
+        reason_code="guided_dive_playback_available",
+        explanation="Guided Dive playback is available for this map.",
+        route="map_local_trace",
+    )
+
+
+def _hidden_guided_dive_decision(_map_path: str | None = None) -> FeatureDecision:
+    return FeatureDecision(
+        feature=FeatureId.GUIDED_DIVE_PLAYBACK,
+        state=FeatureState.HIDDEN,
+        reason_code="guided_dive_trace_unavailable",
+        explanation="No completed Guided Dives are available for this map.",
+    )
+
+
+def _unexpected_guided_dive_preflight(*_args):
+    raise AssertionError("Guided Dive preflight should not run")
 
 
 def test_populate_panel_creates_rows_and_starts_catalog_fetch():
@@ -323,15 +366,33 @@ def test_downloaded_standard_library_menu_omits_cache_action_without_cache():
     assert [label for label, _command in actions] == ["Remove downloaded maps"]
 
 
-def test_downloaded_standard_library_menu_offers_local_recorded_dive():
+def test_downloaded_standard_library_menu_preflights_local_guided_dive():
     library_map = _library_map()
-    opened_recorded_dive = []
+    selected_trace = "/library/Test Cave/_guided_dives/favorite.jsonl"
+    opened_guided_dive = []
+    desktop_services = _FakeDesktopServices(
+        file_selection=SimpleNamespace(path=selected_trace)
+    )
+
+    def preflight(map_path, trace_path):
+        assert map_path == "/library/Test Cave"
+        assert trace_path == selected_trace
+        return SimpleNamespace(
+            capability=CapabilityResult.available(
+                SimpleNamespace(trace=SimpleNamespace(path=trace_path)),
+                reason_code="guided_dive_playback_target_available",
+            ),
+            decision=_enabled_guided_dive_decision(),
+        )
+
     state = _workflow(
         [library_map],
         is_downloaded=lambda _root, _map: True,
         existing_path=lambda _root, _map: "/library/Test Cave",
-        has_recorded_dive=lambda path: path == "/library/Test Cave",
-        open_recorded_dive=opened_recorded_dive.append,
+        desktop_services=desktop_services,
+        guided_dive_menu=_enabled_guided_dive_decision,
+        guided_dive_preflight=preflight,
+        open_guided_dive=opened_guided_dive.append,
     )
 
     state.workflow.add_standard_row(library_map)
@@ -339,21 +400,46 @@ def test_downloaded_standard_library_menu_offers_local_recorded_dive():
     actions = menu_factory(SimpleNamespace(row_shell=object()))
 
     assert [label for label, _command in actions] == [
-        "Play recorded dive…",
+        "Open guided dive…",
         "Remove downloaded maps",
     ]
 
     actions[0][1]()
 
-    assert opened_recorded_dive == ["/library/Test Cave"]
+    assert opened_guided_dive == [selected_trace]
+    assert desktop_services.file_calls == [
+        {
+            "title": "Open Guided Dive",
+            "initial_dir": str(Path("/library/Test Cave").resolve() / "_guided_dives"),
+            "parent": state.root,
+        }
+    ]
 
 
-def test_recent_map_menu_offers_local_recorded_dive():
-    opened_recorded_dive = []
+def test_recent_map_menu_preflights_local_guided_dive():
+    selected_trace = "/maps/Recent Cave/_guided_dives/favorite.jsonl"
+    opened_guided_dive = []
+    desktop_services = _FakeDesktopServices(
+        file_selection=SimpleNamespace(path=selected_trace)
+    )
+
+    def preflight(map_path, trace_path):
+        assert map_path == "/maps/Recent Cave"
+        assert trace_path == selected_trace
+        return SimpleNamespace(
+            capability=CapabilityResult.available(
+                SimpleNamespace(trace=SimpleNamespace(path=trace_path)),
+                reason_code="guided_dive_playback_target_available",
+            ),
+            decision=_enabled_guided_dive_decision(),
+        )
+
     state = _workflow(
         [],
-        has_recorded_dive=lambda path: path == "/maps/Recent Cave",
-        open_recorded_dive=opened_recorded_dive.append,
+        desktop_services=desktop_services,
+        guided_dive_menu=_enabled_guided_dive_decision,
+        guided_dive_preflight=preflight,
+        open_guided_dive=opened_guided_dive.append,
     )
 
     state.workflow.add_recent_row("/maps/Recent Cave")
@@ -361,13 +447,44 @@ def test_recent_map_menu_offers_local_recorded_dive():
     actions = menu_factory(SimpleNamespace(row_shell=object()))
 
     assert [label for label, _command in actions] == [
-        "Play recorded dive…",
+        "Open guided dive…",
         "Remove from this list",
     ]
 
     actions[0][1]()
 
-    assert opened_recorded_dive == ["/maps/Recent Cave"]
+    assert opened_guided_dive == [selected_trace]
+
+
+def test_guided_dive_preflight_rejection_keeps_the_splash_open():
+    selected_trace = "/maps/Recent Cave/_guided_dives/broken.jsonl"
+    opened_guided_dive = []
+    rejected = FeatureDecision(
+        feature=FeatureId.GUIDED_DIVE_PLAYBACK,
+        state=FeatureState.DISABLED,
+        reason_code="guided_dive_cache_incompatible",
+        explanation="This Guided Dive does not match the current map cache.",
+    )
+    state = _workflow(
+        [],
+        desktop_services=_FakeDesktopServices(
+            file_selection=SimpleNamespace(path=selected_trace)
+        ),
+        guided_dive_menu=_enabled_guided_dive_decision,
+        guided_dive_preflight=lambda _map_path, _trace_path: SimpleNamespace(
+            capability=CapabilityResult.unavailable(
+                reason_code="guided_dive_cache_incompatible"
+            ),
+            decision=rejected,
+        ),
+        open_guided_dive=opened_guided_dive.append,
+    )
+
+    state.workflow.open_guided_dive_for_map("/maps/Recent Cave")
+
+    assert opened_guided_dive == []
+    assert state.feedback[-1][0] == rejected.explanation
+    assert state.feedback[-1][1]["kind"] == "error"
 
 
 def test_downloaded_standard_library_menu_includes_remove_cache_when_cache_exists():

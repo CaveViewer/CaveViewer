@@ -19,6 +19,7 @@ from caveviewer.gui.features import (
     FeatureState,
     decide_automatic_update,
     decide_directory_selection,
+    decide_guided_dive_playback,
     decide_map_source_import,
     decide_update_package_reveal,
     decide_video_recording,
@@ -157,6 +158,60 @@ def test_video_recording_policy_is_a_pure_capability_table(
     decision = decide_video_recording(capability)
 
     assert decision.feature is FeatureId.VIDEO_RECORDING
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (state is FeatureState.ENABLED)
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                "target",
+                reason_code="guided_dive_playback_target_available",
+            ),
+            FeatureState.ENABLED,
+            "guided_dive_playback_available",
+            "map_local_trace",
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="guided_dive_trace_unavailable",
+            ),
+            FeatureState.HIDDEN,
+            "guided_dive_trace_unavailable",
+            None,
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="guided_dive_cache_incompatible",
+            ),
+            FeatureState.DISABLED,
+            "guided_dive_cache_incompatible",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="guided_dive_cache_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "guided_dive_playback_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_guided_dive_playback_policy_is_a_pure_capability_table(
+    capability,
+    state,
+    reason_code,
+    route,
+):
+    decision = decide_guided_dive_playback(capability)
+
+    assert decision.feature is FeatureId.GUIDED_DIVE_PLAYBACK
     assert decision.state is state
     assert decision.reason_code == reason_code
     assert decision.route == route

@@ -61,6 +61,29 @@ _UPDATE_PACKAGE_REVEAL_EXPLANATIONS = {
     ),
 }
 
+_GUIDED_DIVE_PLAYBACK_EXPLANATIONS = {
+    "guided_dive_trace_unavailable": (
+        "No completed Guided Dives are available for this map."
+    ),
+    "guided_dive_trace_not_map_local": (
+        "Choose a Guided Dive from this map's _guided_dives folder."
+    ),
+    "guided_dive_trace_missing": "The selected Guided Dive is no longer available.",
+    "guided_dive_trace_invalid": "This Guided Dive file cannot be opened.",
+    "guided_dive_source_unavailable": (
+        "The source map for this Guided Dive is unavailable."
+    ),
+    "guided_dive_source_not_map_local": (
+        "This Guided Dive does not belong to the selected map."
+    ),
+    "guided_dive_cache_unavailable": (
+        "This map needs a current cache before opening a Guided Dive."
+    ),
+    "guided_dive_cache_incompatible": (
+        "This Guided Dive does not match the current map cache."
+    ),
+}
+
 
 def decide_automatic_update(
     capability: CapabilityResult[CapabilityValue],
@@ -134,6 +157,51 @@ def decide_video_recording(
         state=FeatureState.DISABLED,
         reason_code="video_recording_capability_unknown",
         explanation="Video recording availability could not be determined.",
+    )
+
+
+def decide_guided_dive_playback(
+    capability: CapabilityResult[CapabilityValue],
+) -> FeatureDecision:
+    """Choose whether one map-local Guided Dive may enter playback.
+
+    Trace presence, bounded trace validation, and cache identity are all facts
+    about one selected map and may change while the splash window is open.
+    This policy is therefore deliberately action-time rather than a static
+    ``PlatformRuntime.feature_gates`` entry. A map with no trace is hidden;
+    a selected malformed or incompatible trace becomes a non-executable
+    feedback outcome.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        return FeatureDecision(
+            feature=FeatureId.GUIDED_DIVE_PLAYBACK,
+            state=FeatureState.ENABLED,
+            reason_code="guided_dive_playback_available",
+            explanation="Guided Dive playback is available for this map.",
+            route="map_local_trace",
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        state = (
+            FeatureState.HIDDEN
+            if capability.reason_code == "guided_dive_trace_unavailable"
+            else FeatureState.DISABLED
+        )
+        return FeatureDecision(
+            feature=FeatureId.GUIDED_DIVE_PLAYBACK,
+            state=state,
+            reason_code=capability.reason_code,
+            explanation=_GUIDED_DIVE_PLAYBACK_EXPLANATIONS.get(
+                capability.reason_code,
+                "Guided Dive playback is unavailable for this map.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.GUIDED_DIVE_PLAYBACK,
+        state=FeatureState.DISABLED,
+        reason_code="guided_dive_playback_capability_unknown",
+        explanation="Guided Dive availability could not be determined.",
     )
 
 

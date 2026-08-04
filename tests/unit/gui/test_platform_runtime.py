@@ -227,6 +227,7 @@ def test_runtime_keeps_directory_selection_probe_on_demand(monkeypatch):
 
     assert calls == []
     assert FeatureId.DIRECTORY_SELECTION not in platform_runtime.feature_gates.decisions
+    assert FeatureId.GUIDED_DIVE_PLAYBACK not in platform_runtime.feature_gates.decisions
 
     preflight = platform_runtime.directory_selection_preflight()
 
