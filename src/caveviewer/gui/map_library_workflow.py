@@ -289,7 +289,7 @@ class MapLibraryWorkflow:
             if self._guided_dive_action_available(path):
                 actions.append(
                     (
-                        "Open guided dive…",
+                        "Open dive plan…",
                         lambda path=path: self.open_guided_dive_for_map(path),
                     )
                 )
@@ -340,7 +340,7 @@ class MapLibraryWorkflow:
             if self._guided_dive_action_available(map_path):
                 actions.append(
                     (
-                        "Open guided dive…",
+                        "Open dive plan…",
                         lambda map_path=map_path: self.open_guided_dive_for_map(
                             map_path
                         ),
@@ -348,7 +348,7 @@ class MapLibraryWorkflow:
                 )
             actions.append(
                 (
-                    "Remove downloaded maps",
+                    "Remove map files",
                     lambda map_path=map_path, library_map=library_map: (
                         self.remove_standard_download(
                             library_map,
@@ -750,17 +750,17 @@ class MapLibraryWorkflow:
             selection = choose_authorized_file(
                 picker_preflight,
                 self.desktop_services,
-                title="Open Guided Dive",
+                title="Open Dive Plan",
                 initial_dir=os.fspath(guided_dive_trace_directory(map_path)),
                 parent=self.root,
             )
         except DesktopServiceError as exc:
             self.logger.warning("Guided Dive file selection failed: %s", exc)
-            self._show_error("Couldn't open the Guided Dive picker.")
+            self._show_error("Couldn't open the dive plan picker.")
             return
         except Exception as exc:
             self.logger.warning("Guided Dive file selection failed: %s", exc)
-            self._show_error("Couldn't open the Guided Dive picker.")
+            self._show_error("Couldn't open the dive plan picker.")
             return
         if selection is None:
             return
@@ -769,7 +769,7 @@ class MapLibraryWorkflow:
             preflight = self.guided_dive_preflight(map_path, selection.path)
         except Exception as exc:
             self.logger.warning("Guided Dive preflight failed: %s", exc)
-            self._show_error("Guided Dive availability could not be determined.")
+            self._show_error("Dive plan availability could not be determined.")
             return
 
         target = preflight.capability.value

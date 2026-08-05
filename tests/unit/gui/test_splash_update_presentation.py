@@ -475,7 +475,7 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
 
     assert "Remove from this list" in source
     assert "Remove cache" in source
-    assert "Remove downloaded maps" in source
+    assert "Remove map files" in source
     assert "Remove from Recent" not in source
     assert "_create_overflow_button" in panel_source
     assert "_create_recent_overflow_button" not in source
@@ -500,7 +500,7 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "self._recent_container = tk.Frame(" in panel_source
     assert "self.recent_rows" in panel_source
     assert "self._recent_empty_note = self._create_empty_note" in panel_source
-    assert "Open guided dive…" in source
+    assert "Open dive plan…" in source
     assert "guided_dive_preflight" in workflow_source
     assert "file_selection_preflight" in workflow_source
     assert "choose_authorized_file" in workflow_source

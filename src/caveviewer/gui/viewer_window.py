@@ -5846,13 +5846,13 @@ class CaveViewerWindow(mglw.WindowConfig):
             if result.completed:
                 _LOG.info("Manual Guided Dive trace saved: %s", result.output_path)
                 self._show_recording_status(
-                    "Guided Dive saved",
+                    "Dive plan saved",
                     kind="success",
                     duration=3.2,
                 )
                 self._reveal_saved_output(
                     result.output_path,
-                    output_kind="Guided Dive",
+                    output_kind="dive plan",
                 )
             else:
                 _LOG.warning(

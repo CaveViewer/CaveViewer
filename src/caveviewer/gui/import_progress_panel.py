@@ -505,7 +505,7 @@ class ImportProgressPanel:
             "grouping chunk faces": "Building map chunks…",
             "writing chunk files": "Writing map cache…",
             "assembling render manifest": "Assembling render manifest…",
-            "building guided dive identity": "Creating Guided Dive identity…",
+            "building guided dive identity": "Creating dive plan identity…",
             "writing manifest": "Finalizing map cache…",
             "loading cached map": "Loading cached map…",
             "resuming import": "Resuming import…",
