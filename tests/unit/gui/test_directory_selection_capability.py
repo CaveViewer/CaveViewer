@@ -11,6 +11,12 @@ from caveviewer.core.capabilities import (
     DirectorySelectionTarget,
 )
 from caveviewer.gui.platform.desktop_services import TkDesktopServices
+from caveviewer.gui.platform.desktop_services import DesktopServiceError
+from caveviewer.gui.platform.directory_selection import (
+    authorized_directory_selection_target,
+    choose_authorized_directory,
+    directory_selection_preflight,
+)
 from caveviewer.gui.platform.portal import LinuxPortalDesktopServices
 from caveviewer.gui.platform.probes.desktop import probe_directory_selection
 
@@ -82,3 +88,58 @@ def test_directory_selection_probe_fails_closed_for_missing_or_invalid_declarati
     assert broken.reason_code == "directory_selection_capability_probe_failed"
     assert invalid.status is CapabilityStatus.UNKNOWN
     assert invalid.reason_code == "directory_selection_capability_probe_failed"
+
+
+class _RoutedDirectoryService:
+    def __init__(self, target: DirectorySelectionTarget):
+        self.target = target
+        self.calls: list[dict] = []
+
+    def directory_selection_target(self) -> DirectorySelectionTarget:
+        return self.target
+
+    def choose_directory(self, **options):
+        self.calls.append(options)
+        return None
+
+
+def test_typed_directory_preflight_authorizes_only_the_matching_adapter_route():
+    target = DirectorySelectionTarget(
+        primary_route=DirectorySelectionRoute.PORTAL,
+        fallback_route=DirectorySelectionRoute.TK,
+    )
+    services = _RoutedDirectoryService(target)
+
+    preflight = directory_selection_preflight(services)
+
+    assert authorized_directory_selection_target(preflight, services) is target
+    assert choose_authorized_directory(
+        preflight,
+        services,
+        title="Open Map Folder",
+        initial_dir="/maps",
+        parent=object(),
+    ) is None
+    assert len(services.calls) == 1
+    assert services.calls[0]["title"] == "Open Map Folder"
+    assert services.calls[0]["initial_dir"] == "/maps"
+    assert services.calls[0]["parent"] is not None
+
+
+def test_directory_selection_rejects_a_route_change_before_opening_chooser():
+    portal_target = DirectorySelectionTarget(
+        primary_route=DirectorySelectionRoute.PORTAL,
+        fallback_route=DirectorySelectionRoute.TK,
+    )
+    services = _RoutedDirectoryService(portal_target)
+    preflight = directory_selection_preflight(services)
+    services.target = DirectorySelectionTarget(DirectorySelectionRoute.TK)
+
+    with pytest.raises(DesktopServiceError, match="availability changed"):
+        choose_authorized_directory(
+            preflight,
+            services,
+            title="Open Map Folder",
+        )
+
+    assert services.calls == []

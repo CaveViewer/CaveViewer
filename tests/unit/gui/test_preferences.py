@@ -688,14 +688,27 @@ def _directory_picker_dialog(
 
 def test_preferences_directory_browse_rechecks_the_injected_runtime(tmp_path):
     from caveviewer.gui import preferences_dialog
+    from caveviewer.core.capabilities import (
+        CapabilityResult,
+        DirectorySelectionRoute,
+        DirectorySelectionTarget,
+    )
     from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
+    from caveviewer.gui.platform.runtime import DirectorySelectionPreflight
 
     selected_dir = tmp_path / "selected"
     selected_dir.mkdir()
     chooser_calls = []
     preflight_calls = []
+    target = DirectorySelectionTarget(
+        primary_route=DirectorySelectionRoute.PORTAL,
+        fallback_route=DirectorySelectionRoute.TK,
+    )
 
     class FakeDesktopServices:
+        def directory_selection_target(self):
+            return target
+
         def choose_directory(self, **options):
             chooser_calls.append(options)
             return SimpleNamespace(path=str(selected_dir))
@@ -708,7 +721,11 @@ def test_preferences_directory_browse_rechecks_the_injected_runtime(tmp_path):
 
         def directory_selection_preflight(self):
             preflight_calls.append(True)
-            return SimpleNamespace(
+            return DirectorySelectionPreflight(
+                capability=CapabilityResult.available(
+                    target,
+                    reason_code="directory_selection_portal_route_available",
+                ),
                 decision=FeatureDecision(
                     feature=FeatureId.DIRECTORY_SELECTION,
                     state=FeatureState.ENABLED,
@@ -816,10 +833,24 @@ def test_preferences_directory_browse_uses_legacy_compatible_service(tmp_path):
 
 def test_preferences_directory_browse_reports_desktop_action_failure(tmp_path):
     from caveviewer.gui import preferences_dialog
+    from caveviewer.core.capabilities import (
+        CapabilityResult,
+        DirectorySelectionRoute,
+        DirectorySelectionTarget,
+    )
     from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
     from caveviewer.gui.preferences_form import MessageKind
+    from caveviewer.gui.platform.runtime import DirectorySelectionPreflight
+
+    target = DirectorySelectionTarget(
+        primary_route=DirectorySelectionRoute.PORTAL,
+        fallback_route=DirectorySelectionRoute.TK,
+    )
 
     class FakeDesktopServices:
+        def directory_selection_target(self):
+            return target
+
         def choose_directory(self, **_options):
             raise preferences_dialog.DesktopServiceError("Desktop picker failed.")
 
@@ -830,7 +861,11 @@ def test_preferences_directory_browse_reports_desktop_action_failure(tmp_path):
             self.desktop_services = desktop_services
 
         def directory_selection_preflight(self):
-            return SimpleNamespace(
+            return DirectorySelectionPreflight(
+                capability=CapabilityResult.available(
+                    target,
+                    reason_code="directory_selection_portal_route_available",
+                ),
                 decision=FeatureDecision(
                     feature=FeatureId.DIRECTORY_SELECTION,
                     state=FeatureState.ENABLED,

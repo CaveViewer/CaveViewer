@@ -10,6 +10,7 @@ from typing import Mapping
 
 from caveviewer.core.capabilities import (
     CapabilityResult,
+    CapabilityStatus,
     CapabilitySource,
     DirectorySelectionTarget,
     UpdatePackageRevealRoute,
@@ -99,6 +100,21 @@ class DirectorySelectionPreflight:
             raise ValueError(
                 "directory-selection preflight must contain a "
                 "directory-selection decision"
+            )
+        if not self.decision.allows_execution:
+            return
+        target = self.capability.value
+        if (
+            self.capability.status is not CapabilityStatus.AVAILABLE
+            or not isinstance(target, DirectorySelectionTarget)
+        ):
+            raise ValueError(
+                "executable directory-selection preflight requires an "
+                "available typed target"
+            )
+        if self.decision.route != target.route_key:
+            raise ValueError(
+                "directory-selection decision route must match its typed target"
             )
 
 

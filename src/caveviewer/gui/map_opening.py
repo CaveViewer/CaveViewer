@@ -14,12 +14,15 @@ from caveviewer.gui.features import (
     decide_map_source_import,
 )
 from caveviewer.gui.platform import (
-    DesktopServiceError,
     DesktopServices,
     get_desktop_services,
     tk_root_options,
 )
-from caveviewer.gui.platform.directory_selection import directory_selection_decision
+from caveviewer.gui.platform.directory_selection import (
+    authorized_directory_selection_target,
+    choose_authorized_directory,
+    directory_selection_preflight,
+)
 
 if TYPE_CHECKING:
     from caveviewer.gui.platform.runtime import PlatformRuntime
@@ -58,16 +61,19 @@ def pick_folder_dialog(
             else get_desktop_services()
         )
 
-    decision = directory_selection_decision(
+    preflight = directory_selection_preflight(
         desktop_services,
         platform_runtime=platform_runtime,
     )
-    if not decision.allows_execution:
-        raise DesktopServiceError(decision.explanation)
+    # Validate before creating a hidden Tk root, so a stale or mismatched route
+    # cannot cause native chooser setup as a side effect.
+    authorized_directory_selection_target(preflight, desktop_services)
 
     root = _hidden_tk_root()
     try:
-        selection = desktop_services.choose_directory(
+        selection = choose_authorized_directory(
+            preflight,
+            desktop_services,
             title="Open Map Folder",
             parent=root,
         )

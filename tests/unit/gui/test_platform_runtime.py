@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilitySource,
@@ -10,7 +12,7 @@ from caveviewer.core.capabilities import (
     DirectorySelectionTarget,
     UpdatePackageRevealRoute,
 )
-from caveviewer.gui.features import FeatureId, FeatureState
+from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.platform import runtime
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.linux import LinuxSplashPlatformAdapter
@@ -236,6 +238,26 @@ def test_runtime_keeps_directory_selection_probe_on_demand(monkeypatch):
     assert preflight.decision.feature is FeatureId.DIRECTORY_SELECTION
     assert preflight.decision.state is FeatureState.ENABLED
     assert preflight.decision.route == "portal_then_tk"
+
+
+def test_directory_selection_preflight_rejects_a_route_that_disagrees_with_target():
+    capability = CapabilityResult.available(
+        DirectorySelectionTarget(DirectorySelectionRoute.TK),
+        reason_code="directory_selection_tk_route_available",
+    )
+    decision = FeatureDecision(
+        feature=FeatureId.DIRECTORY_SELECTION,
+        state=FeatureState.ENABLED,
+        reason_code="directory_selection_available",
+        explanation="Directory selection is available.",
+        route="portal_then_tk",
+    )
+
+    with pytest.raises(ValueError, match="must match its typed target"):
+        runtime.DirectorySelectionPreflight(
+            capability=capability,
+            decision=decision,
+        )
 
 
 def test_linux_factory_shares_an_injected_desktop_service_with_its_adapter():

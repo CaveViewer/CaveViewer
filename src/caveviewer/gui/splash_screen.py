@@ -56,7 +56,10 @@ from caveviewer.gui.map_library_workflow import MapLibraryWorkflow
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
-from caveviewer.gui.map_opening import directory_selection_decision
+from caveviewer.gui.platform.directory_selection import (
+    choose_authorized_directory,
+    directory_selection_preflight,
+)
 from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import (
     DesktopServiceError,
@@ -684,17 +687,20 @@ def show_splash_screen(
         )
 
     def on_open_map_folder() -> None:
-        decision = directory_selection_decision(
+        preflight = directory_selection_preflight(
             desktop_services,
             platform_runtime=platform_runtime,
         )
+        decision = preflight.decision
         if not decision.allows_execution:
             _show_invalid_map_feedback(decision.explanation)
             return
 
         last_dir = _load_last_browse_dir()
         try:
-            selection = desktop_services.choose_directory(
+            selection = choose_authorized_directory(
+                preflight,
+                desktop_services,
                 title="Open Map Folder",
                 initial_dir=last_dir,
                 parent=root,
