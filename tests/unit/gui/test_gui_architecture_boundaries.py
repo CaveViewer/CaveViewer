@@ -175,6 +175,96 @@ def test_feature_policies_do_not_import_platform_or_side_effect_modules():
     assert not violations, _format_violations(violations)
 
 
+def test_desktop_notification_actions_stay_inside_platform_boundary():
+    """Keep best-effort notification execution behind its typed gate."""
+    violations: list[Violation] = []
+
+    for path in _gui_python_files():
+        if path.is_relative_to(GUI_PLATFORM_ROOT):
+            continue
+        for node in ast.walk(_parse_module(path)):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"notify", "withdraw_notification"}:
+                continue
+            receiver = node.func.value
+            is_named_service = (
+                isinstance(receiver, ast.Name)
+                and receiver.id == "desktop_services"
+            )
+            is_instance_service = (
+                isinstance(receiver, ast.Attribute)
+                and receiver.attr == "_desktop_services"
+            )
+            if is_named_service or is_instance_service:
+                violations.append(
+                    Violation(
+                        path,
+                        node.lineno,
+                        f"calls DesktopServices.{node.func.attr} outside platform",
+                    )
+                )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_desktop_inhibition_acquisition_stays_inside_platform_boundary():
+    """Keep optional inhibitor acquisition behind its typed gate."""
+    violations: list[Violation] = []
+
+    for path in _gui_python_files():
+        if path.is_relative_to(GUI_PLATFORM_ROOT):
+            continue
+        for node in ast.walk(_parse_module(path)):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr != "inhibit_idle_suspend":
+                continue
+            receiver = node.func.value
+            is_named_service = (
+                isinstance(receiver, ast.Name)
+                and receiver.id == "desktop_services"
+            )
+            is_instance_service = (
+                isinstance(receiver, ast.Attribute)
+                and receiver.attr == "_desktop_services"
+            )
+            if is_named_service or is_instance_service:
+                violations.append(
+                    Violation(
+                        path,
+                        node.lineno,
+                        "calls DesktopServices.inhibit_idle_suspend outside platform",
+                    )
+                )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_viewer_launch_execution_stays_inside_platform_boundary():
+    """Keep GLFW/ModernGL execution behind the focused window adapter."""
+    violations: list[Violation] = []
+
+    for path in _gui_python_files():
+        if path.is_relative_to(GUI_PLATFORM_ROOT):
+            continue
+        for node in ast.walk(_parse_module(path)):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module != "caveviewer.gui.platform.windowing":
+                continue
+            if any(alias.name == "run_window_config" for alias in node.names):
+                violations.append(
+                    Violation(
+                        path,
+                        node.lineno,
+                        "imports direct window executor outside platform",
+                    )
+                )
+
+    assert not violations, _format_violations(violations)
+
+
 def test_viewer_does_not_construct_platform_services_at_module_import():
     """Keep process-owned platform construction out of viewer module import."""
     viewer_module = _parse_module(GUI_ROOT / "viewer_window.py")

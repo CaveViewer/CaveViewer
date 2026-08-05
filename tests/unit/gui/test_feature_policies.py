@@ -7,9 +7,19 @@ import pytest
 from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilitySource,
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    FileSelectionRoute,
+    FileSelectionTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
     UpdatePackageRevealRoute,
+    ViewerLaunchRoute,
+    ViewerLaunchTarget,
+    WindowBackendPlan,
+    WindowSystem,
 )
 from caveviewer.core.map import source_model
 from caveviewer.gui.features import (
@@ -18,11 +28,15 @@ from caveviewer.gui.features import (
     FeatureId,
     FeatureState,
     decide_automatic_update,
+    decide_desktop_notification,
     decide_directory_selection,
+    decide_file_selection,
     decide_guided_dive_playback,
+    decide_idle_suspend_inhibition,
     decide_map_source_import,
     decide_update_package_reveal,
     decide_video_recording,
+    decide_viewer_launch,
 )
 
 
@@ -337,6 +351,279 @@ def test_directory_selection_policy_is_a_pure_capability_table(
     assert decision.allows_execution is (
         state in {FeatureState.ENABLED, FeatureState.DEGRADED}
     )
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                FileSelectionTarget(
+                    primary_route=FileSelectionRoute.PORTAL,
+                    fallback_route=FileSelectionRoute.TK,
+                ),
+                reason_code="file_selection_portal_route_available",
+            ),
+            FeatureState.ENABLED,
+            "file_selection_available",
+            "portal_then_tk",
+        ),
+        (
+            CapabilityResult.available(
+                FileSelectionTarget(FileSelectionRoute.TK),
+                reason_code="file_selection_tk_route_available",
+            ),
+            FeatureState.DEGRADED,
+            "file_selection_tk_fallback",
+            "tk",
+        ),
+        (
+            CapabilityResult.available(
+                FileSelectionTarget(FileSelectionRoute.INJECTED),
+                reason_code="file_selection_injected_service_available",
+            ),
+            FeatureState.DEGRADED,
+            "file_selection_injected_service",
+            "injected",
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="file_selection_service_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "file_selection_service_unavailable",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="file_selection_capability_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "file_selection_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_file_selection_policy_is_a_pure_capability_table(
+    capability,
+    state,
+    reason_code,
+    route,
+):
+    decision = decide_file_selection(capability)
+
+    assert decision.feature is FeatureId.FILE_SELECTION
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (
+        state in {FeatureState.ENABLED, FeatureState.DEGRADED}
+    )
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                DesktopNotificationTarget(
+                    primary_route=DesktopNotificationRoute.PORTAL,
+                    fallback_route=DesktopNotificationRoute.NOOP,
+                ),
+                reason_code="desktop_notification_portal_route_available",
+            ),
+            FeatureState.ENABLED,
+            "desktop_notification_available",
+            "portal_then_noop",
+        ),
+        (
+            CapabilityResult.available(
+                DesktopNotificationTarget(DesktopNotificationRoute.INJECTED),
+                reason_code="desktop_notification_injected_service_available",
+            ),
+            FeatureState.DEGRADED,
+            "desktop_notification_injected_service",
+            "injected",
+        ),
+        (
+            CapabilityResult.available(
+                DesktopNotificationTarget(DesktopNotificationRoute.NOOP),
+                reason_code="desktop_notification_service_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "desktop_notification_noop_route",
+            None,
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="desktop_notification_service_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "desktop_notification_service_unavailable",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="desktop_notification_capability_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "desktop_notification_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_desktop_notification_policy_is_a_pure_capability_table(
+    capability,
+    state,
+    reason_code,
+    route,
+):
+    decision = decide_desktop_notification(capability)
+
+    assert decision.feature is FeatureId.DESKTOP_NOTIFICATION
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (
+        state in {FeatureState.ENABLED, FeatureState.DEGRADED}
+    )
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                IdleSuspendInhibitionTarget(
+                    primary_route=IdleSuspendInhibitionRoute.PORTAL,
+                    fallback_route=IdleSuspendInhibitionRoute.NOOP,
+                ),
+                reason_code="idle_suspend_inhibition_portal_route_available",
+            ),
+            FeatureState.ENABLED,
+            "idle_suspend_inhibition_available",
+            "portal_then_noop",
+        ),
+        (
+            CapabilityResult.available(
+                IdleSuspendInhibitionTarget(
+                    IdleSuspendInhibitionRoute.INJECTED
+                ),
+                reason_code="idle_suspend_inhibition_injected_service_available",
+            ),
+            FeatureState.DEGRADED,
+            "idle_suspend_inhibition_injected_service",
+            "injected",
+        ),
+        (
+            CapabilityResult.available(
+                IdleSuspendInhibitionTarget(IdleSuspendInhibitionRoute.NOOP),
+                reason_code="idle_suspend_inhibition_service_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "idle_suspend_inhibition_noop_route",
+            None,
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="idle_suspend_inhibition_service_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "idle_suspend_inhibition_service_unavailable",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="idle_suspend_inhibition_capability_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "idle_suspend_inhibition_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_idle_suspend_inhibition_policy_is_a_pure_capability_table(
+    capability,
+    state,
+    reason_code,
+    route,
+):
+    decision = decide_idle_suspend_inhibition(capability)
+
+    assert decision.feature is FeatureId.IDLE_SUSPEND_INHIBITION
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (
+        state in {FeatureState.ENABLED, FeatureState.DEGRADED}
+    )
+
+
+@pytest.mark.parametrize(
+    ("capability", "state", "reason_code", "route"),
+    [
+        (
+            CapabilityResult.available(
+                ViewerLaunchTarget(
+                    ViewerLaunchRoute.GLFW_MODERNGL,
+                    WindowBackendPlan(
+                        WindowSystem.AUTO,
+                        (WindowSystem.X11, WindowSystem.WAYLAND),
+                    ),
+                ),
+                reason_code="viewer_launch_glfw_route_available",
+            ),
+            FeatureState.ENABLED,
+            "viewer_launch_glfw_route_available",
+            "glfw_moderngl:x11_then_wayland",
+        ),
+        (
+            CapabilityResult.available(
+                ViewerLaunchTarget(
+                    ViewerLaunchRoute.NATIVE_MODERNGL,
+                    WindowBackendPlan(WindowSystem.AUTO, ()),
+                ),
+                reason_code="viewer_launch_native_route_available",
+            ),
+            FeatureState.ENABLED,
+            "viewer_launch_native_route_available",
+            "native_moderngl",
+        ),
+        (
+            CapabilityResult.unavailable(
+                reason_code="viewer_launch_display_unavailable",
+            ),
+            FeatureState.DISABLED,
+            "viewer_launch_display_unavailable",
+            None,
+        ),
+        (
+            CapabilityResult.unknown(
+                reason_code="viewer_launch_capability_probe_failed",
+                source=CapabilitySource.CONSERVATIVE_FALLBACK,
+            ),
+            FeatureState.DISABLED,
+            "viewer_launch_capability_unknown",
+            None,
+        ),
+    ],
+)
+def test_viewer_launch_policy_is_a_pure_capability_table(
+    capability,
+    state,
+    reason_code,
+    route,
+):
+    decision = decide_viewer_launch(capability)
+
+    assert decision.feature is FeatureId.VIEWER_LAUNCH
+    assert decision.state is state
+    assert decision.reason_code == reason_code
+    assert decision.route == route
+    assert decision.allows_execution is (state is FeatureState.ENABLED)
 
 
 @pytest.mark.parametrize(

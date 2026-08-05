@@ -12,12 +12,22 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    ViewerLaunchRoute,
+    ViewerLaunchTarget,
+    WindowBackendPlan,
+    WindowSystem,
+)
 from caveviewer.core.map import cache_paths
 from caveviewer.gui import recording, viewer_window
+from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.manual_dive_trace import ManualDivePose, ManualDiveTraceResult
 from caveviewer.gui.platform.app_identity import tk_root_options
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
+from caveviewer.gui.platform.runtime import ViewerLaunchPreflight
+from caveviewer.gui.platform.viewer_launch import ViewerLaunchError
 
 
 class FakeImportInhibitor:
@@ -1975,6 +1985,23 @@ def test_window_shortcut_uses_command_modifier_on_macos():
 
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     calls = []
+    target = ViewerLaunchTarget(
+        ViewerLaunchRoute.GLFW_MODERNGL,
+        WindowBackendPlan(WindowSystem.AUTO, (WindowSystem.X11,)),
+    )
+    preflight = ViewerLaunchPreflight(
+        capability=CapabilityResult.available(
+            target,
+            reason_code="viewer_launch_glfw_route_available",
+        ),
+        decision=FeatureDecision(
+            feature=FeatureId.VIEWER_LAUNCH,
+            state=FeatureState.ENABLED,
+            reason_code="viewer_launch_glfw_route_available",
+            explanation="The viewer window is available.",
+            route=target.route_key,
+        ),
+    )
     monkeypatch.setattr(
         viewer_window,
         "get_platform_adapter",
@@ -1989,26 +2016,66 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     )
     monkeypatch.setattr(
         viewer_window,
-        "run_window_config",
-        lambda *args, **kwargs: calls.append((args, kwargs)),
+        "create_window_backend_adapter",
+        lambda: SimpleNamespace(
+            launch_viewer=lambda launch_target, request: calls.append(
+                (launch_target, request)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "viewer_launch_preflight",
+        lambda **_kwargs: preflight,
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "authorized_viewer_launch_target",
+        lambda _preflight: target,
     )
 
     viewer_window._launch_viewer_window()
 
     assert viewer_window.CaveViewerWindow.window_size == (1600, 1000)
-    assert calls[0][0] == (viewer_window.CaveViewerWindow,)
-    assert calls[0][1]["runner"] is viewer_window._run_moderngl_window_config
-    assert calls[0][1]["window_size_fraction"] == 0.8
-    assert calls[0][1]["fallback_window_size"] == (1600, 1000)
-    assert calls[0][1]["force_resizable_window"] is True
+    assert calls[0][0] is target
+    request = calls[0][1]
+    assert request.config_class is viewer_window.CaveViewerWindow
+    assert request.runner is viewer_window._run_moderngl_window_config
+    assert request.window_size_fraction == 0.8
+    assert request.fallback_window_size == (1600, 1000)
+    assert request.force_resizable_window is True
 
 
 def test_viewer_launch_uses_injected_runtime_adapter(monkeypatch):
     calls = []
     adapter = SimpleNamespace(viewer_uses_glfw_native_initial_size=lambda: True)
+    target = ViewerLaunchTarget(
+        ViewerLaunchRoute.GLFW_MODERNGL,
+        WindowBackendPlan(WindowSystem.AUTO, (WindowSystem.X11,)),
+    )
+    preflight = ViewerLaunchPreflight(
+        capability=CapabilityResult.available(
+            target,
+            reason_code="viewer_launch_glfw_route_available",
+        ),
+        decision=FeatureDecision(
+            feature=FeatureId.VIEWER_LAUNCH,
+            state=FeatureState.ENABLED,
+            reason_code="viewer_launch_glfw_route_available",
+            explanation="The viewer window is available.",
+            route=target.route_key,
+        ),
+    )
     previous_runtime = viewer_window.CaveViewerWindow.cave_platform_runtime
+    window_backend_adapter = SimpleNamespace(
+        launch_viewer=lambda launch_target, request: calls.append(
+            (launch_target, request)
+        )
+    )
     viewer_window.CaveViewerWindow.cave_platform_runtime = SimpleNamespace(
-        platform_adapter=adapter
+        platform_adapter=adapter,
+        viewer_launch_preflight=lambda: preflight,
+        window_backend_adapter=window_backend_adapter,
     )
     monkeypatch.setattr(
         viewer_window,
@@ -2017,8 +2084,13 @@ def test_viewer_launch_uses_injected_runtime_adapter(monkeypatch):
     )
     monkeypatch.setattr(
         viewer_window,
-        "run_window_config",
-        lambda *args, **kwargs: calls.append((args, kwargs)),
+        "create_window_backend_adapter",
+        lambda: pytest.fail("launch must use the injected runtime window adapter"),
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "authorized_viewer_launch_target",
+        lambda received_preflight: target if received_preflight is preflight else None,
     )
 
     try:
@@ -2026,8 +2098,38 @@ def test_viewer_launch_uses_injected_runtime_adapter(monkeypatch):
     finally:
         viewer_window.CaveViewerWindow.cave_platform_runtime = previous_runtime
 
-    assert calls[0][1]["window_size_fraction"] == 0.8
-    assert calls[0][1]["fallback_window_size"] == (1600, 1000)
+    assert calls[0][0] is target
+    assert calls[0][1].window_size_fraction == 0.8
+    assert calls[0][1].fallback_window_size == (1600, 1000)
+
+
+def test_viewer_launch_refuses_disabled_preflight_before_window_execution(monkeypatch):
+    disabled_preflight = ViewerLaunchPreflight(
+        capability=CapabilityResult.unavailable(
+            reason_code="viewer_launch_display_unavailable",
+        ),
+        decision=FeatureDecision(
+            feature=FeatureId.VIEWER_LAUNCH,
+            state=FeatureState.DISABLED,
+            reason_code="viewer_launch_display_unavailable",
+            explanation="The viewer cannot start because no supported display is available.",
+        ),
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "viewer_launch_preflight",
+        lambda **_kwargs: disabled_preflight,
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "create_window_backend_adapter",
+        lambda: pytest.fail(
+            "a disabled viewer route must not initialize a window"
+        ),
+    )
+
+    with pytest.raises(ViewerLaunchError, match="no supported display"):
+        viewer_window._launch_viewer_window()
 
 
 def test_run_viewer_forwards_map_root_to_the_deferred_window_load(

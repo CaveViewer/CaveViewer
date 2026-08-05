@@ -10,19 +10,24 @@ platform/
 ├── app_identity.py          # Native window identity and Tk root options
 ├── base.py                  # SplashPlatformAdapter protocol definition
 ├── desktop_services.py      # Desktop file, URI, notification, and inhibit services
+├── desktop_inhibition.py    # Optional inhibitor authorization/acquisition
+├── desktop_notifications.py # Optional notification authorization/execution
 ├── directory_selection.py   # Shared action-time directory-picker authorization
+├── file_selection.py        # Shared action-time file-picker authorization
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── update_package_storage.py # Focused verified-package storage facade
 ├── saved_recording_reveal.py # Focused post-save recording reveal facade
 ├── recording_process.py      # Focused recording-encoder startup facade
 ├── tls_trust.py               # Focused native TLS-trust augmentation facade
-├── probes/desktop.py        # On-demand directory-selection route declaration
+├── probes/desktop.py        # On-demand desktop action route declarations
 ├── probes/update_package_reveal.py # Static package-reveal route declaration
 ├── probes/updates.py        # Static signed-update configuration and target probe
 ├── probes/recording.py      # On-demand encoder and output-directory preflight
+├── probes/windowing.py      # On-demand side-effect-free viewer launch probe
 ├── portal.py                # Linux XDG Desktop Portal transport and states
-├── windowing.py             # Linux GLFW Wayland/X11 selection and fallback
+├── windowing.py             # Pure Linux GLFW Wayland/X11 plan resolver
+├── window_backend.py        # Typed native GLFW/ModernGL launch executor
 ├── factory.py               # Platform detection and adapter instantiation
 ├── macos.py                 # macOS-specific implementations
 ├── windows.py               # Windows-specific implementations
@@ -53,11 +58,14 @@ while the package is downloaded and verified; uncached map imports use inhibit
 requests while parsing and building the cache. These requests are best-effort
 and must not affect the underlying operation.
 
-`windowing.py` owns Linux display-protocol selection. Automatic mode attempts
-X11/XWayland before Wayland when both session endpoints exist so source,
-debugger, and AppImage launches use the same GNOME window-management path. It
-retries only an initialization/window-creation failure. Renderer and application
-exceptions must propagate without opening a second backend.
+`windowing.py` owns the pure Linux display-protocol plan resolver. Automatic
+mode selects X11/XWayland before Wayland when both session endpoints exist so
+source, debugger, and AppImage launches use the same GNOME window-management
+path. `window_backend.py` owns native execution of an already-authorized
+target: GLFW loading, native hints, EGL context setup, work-area sizing, retry,
+and cleanup. It retries only a recognized initialization/window-creation
+failure; renderer and application exceptions propagate without opening a
+second backend.
 
 `app_identity.py` owns native-window identity. Tk roots use the stable Linux
 desktop application ID as their class name, matching the desktop file,
@@ -143,8 +151,8 @@ after the existing on-demand video-recording preflight and provides the
 platform-specific non-command `Popen` kwargs used to launch ffmpeg. It neither
 selects the encoder nor decides recording availability. Its compatibility
 facade preserves Windows `STARTUPINFO`/`CREATE_NO_WINDOW` console suppression
-and the empty default, macOS, and Linux option sets. Notifications and
-inhibition remain separate migrations.
+and the empty default, macOS, and Linux option sets. Desktop notifications and
+idle/suspend inhibition are independent optional action-time migrations.
 
 TLS trust augmentation has its own `TlsTrustAdapter`. It augments a fresh,
 normally verifying SSL context with native trust roots immediately before
@@ -172,6 +180,42 @@ before opening a chooser; `LinuxPortalDesktopServices` retains its action-time
 fallback when a portal request fails. The Preferences “Downloaded maps folder”
 control is Map Library's directory-setting surface, so it shares this same
 authorization rather than creating a Map Library-specific gate.
+
+File opening has the corresponding `FileSelectionPreflight`: its separately
+typed route prevents a Guided Dive file picker from borrowing directory-picker
+authority. The action boundary rechecks the declaration immediately before
+`choose_file`, while Linux keeps its existing Portal-to-Tk fallback internally.
+
+Desktop notifications are an optional on-demand action, not a gate on update
+or map-library work. `DesktopNotificationPreflight` pairs a side-effect-free
+route declaration with pure policy: Linux declares `portal_then_noop`, portable
+Tk declares an unavailable no-op route, and legacy injected services remain a
+degraded route. `desktop_notifications.py` rechecks that typed target before
+each send or withdrawal, then converts unavailable, unknown, changed, and
+native-action failures into diagnostic no-ops. It does not contact D-Bus during
+the probe, and `PlatformRuntime.feature_gates` does not cache the result.
+
+Idle/suspend inhibition is likewise optional, but it owns a scoped resource.
+`IdleSuspendInhibitionPreflight` uses a separate typed target: Linux declares
+`portal_then_noop`, portable Tk declares an unavailable no-op route, and legacy
+injected services remain a degraded route. `desktop_inhibition.py` rechecks the
+target immediately before acquisition and returns no handle on an unavailable,
+unknown, changed, or failed route. Releasing a handle that was actually
+acquired is ordinary best-effort cleanup rather than another preflight, so a
+desktop-state change cannot leak it. The probe neither opens D-Bus nor starts a
+Portal inhibition worker, and this mutable result is not cached in
+`PlatformRuntime.feature_gates`.
+
+Viewer launch is an on-demand capability rather than a startup gate.
+`ViewerLaunchPreflight` pairs a typed native/GLFW target with pure policy from
+current display/session and requested-backend facts. Its probe never imports or
+initializes GLFW, creates a test window, or allocates a rendering context. The
+viewer rechecks the target immediately before `WindowBackendAdapter` executes
+it. The adapter receives the exact selected X11/Wayland plan and owns only the
+current GLFW/ModernGL native work, including the constrained automatic retry;
+it does not decide policy or retry renderer/application failures. A future
+macOS Metal launch route can use the same target/adapter seam without changing
+map-opening callers.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
 unmigrated platform actions. `UpdatePackageRevealAdapter`,
@@ -236,7 +280,7 @@ perform network checks, D-Bus calls, GPU probes, file-manager launches, DMG
 mounts, or other expensive on-demand work while it is being composed.
 
 Inject `PlatformRuntime` into a feature service when migrating it. The service
-must use the runtime's adapter and `DesktopServices`, rather than construct a
+must use the runtime's focused adapter and `DesktopServices`, rather than construct a
 second one. Existing callers of `get_platform_adapter()` and
 `get_desktop_services()` remain valid only as compatibility paths until their
 concerns are split out of `SplashPlatformAdapter`.

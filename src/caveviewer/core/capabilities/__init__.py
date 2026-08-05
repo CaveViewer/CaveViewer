@@ -12,20 +12,42 @@ from .model import (
     CapabilityStatus,
 )
 from .desktop import (
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    FileSelectionRoute,
+    FileSelectionTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
     UpdatePackageRevealRoute,
 )
 from .hardware import GpuMemoryBudget, RamAvailability
+from .windowing import (
+    ViewerLaunchRoute,
+    ViewerLaunchTarget,
+    WindowBackendPlan,
+    WindowSystem,
+)
 
 __all__ = [
     "CapabilityEvidenceValue",
     "CapabilityResult",
     "CapabilitySource",
     "CapabilityStatus",
+    "DesktopNotificationRoute",
+    "DesktopNotificationTarget",
     "DirectorySelectionRoute",
     "DirectorySelectionTarget",
+    "FileSelectionRoute",
+    "FileSelectionTarget",
+    "IdleSuspendInhibitionRoute",
+    "IdleSuspendInhibitionTarget",
     "UpdatePackageRevealRoute",
+    "ViewerLaunchRoute",
+    "ViewerLaunchTarget",
+    "WindowBackendPlan",
+    "WindowSystem",
     "GpuMemoryBudget",
     "RamAvailability",
 ]

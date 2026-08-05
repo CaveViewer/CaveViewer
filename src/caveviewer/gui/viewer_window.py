@@ -78,8 +78,20 @@ from caveviewer.gui.platform.recording_process import (
     RecordingProcessAdapter,
     create_recording_process_adapter,
 )
+from caveviewer.gui.platform.desktop_inhibition import (
+    acquire_idle_suspend_inhibitor,
+    release_desktop_inhibitor,
+)
 from caveviewer.gui.platform import DesktopServiceError, tk_root_options
-from caveviewer.gui.platform.windowing import run_window_config
+from caveviewer.gui.platform.viewer_launch import (
+    authorized_viewer_launch_target,
+    viewer_launch_preflight,
+)
+from caveviewer.gui.platform.window_backend import (
+    ViewerWindowLaunchRequest,
+    WindowBackendAdapter,
+    create_window_backend_adapter,
+)
 from caveviewer.resources import image_path, resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
 
@@ -364,37 +376,37 @@ def _map_import_inhibit_reason(map_name: str) -> str:
     return f"Importing {display_name}"
 
 
-def _acquire_map_import_inhibitor(map_name: str, *, desktop_services=None):
+def _acquire_map_import_inhibitor(
+    map_name: str,
+    *,
+    desktop_services=None,
+    platform_runtime: PlatformRuntime | None = None,
+):
     """Best-effort desktop idle/suspend inhibitor for long map imports."""
     try:
         if desktop_services is None:
             from caveviewer.gui.platform import get_desktop_services
 
             desktop_services = get_desktop_services()
-        return desktop_services.inhibit_idle_suspend(
-            _map_import_inhibit_reason(map_name)
+        return acquire_idle_suspend_inhibitor(
+            desktop_services,
+            _map_import_inhibit_reason(map_name),
+            platform_runtime=platform_runtime,
         )
     except Exception as exc:
-        # Desktop integration must not block opening maps. Linux portals
-        # provide the real inhibitor; unsupported sessions continue normally.
-        _LOG.warning(
-            "Desktop idle/suspend inhibit unavailable during map import: %s",
-            exc,
+        # Legacy desktop-service construction must not block opening maps. The
+        # typed acquisition boundary already handles capability and action
+        # failures as no-ops once a service exists.
+        _LOG.debug(
+            "Desktop idle/suspend inhibitor setup skipped: error_type=%s",
+            type(exc).__name__,
         )
         return None
 
 
 def _release_desktop_inhibitor(inhibitor) -> None:
     """Release a desktop inhibitor without affecting import completion."""
-    if inhibitor is None:
-        return
-    try:
-        inhibitor.close()
-    except Exception as exc:
-        _LOG.warning(
-            "Desktop idle/suspend inhibit release failed after map import: %s",
-            exc,
-        )
+    release_desktop_inhibitor(inhibitor)
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -459,6 +471,17 @@ def _platform_adapter_for_runtime(platform_runtime: PlatformRuntime | None = Non
     if platform_runtime is not None:
         return platform_runtime.platform_adapter
     return get_platform_adapter()
+
+
+def _window_backend_adapter_for_runtime(
+    platform_runtime: PlatformRuntime | None = None,
+) -> WindowBackendAdapter:
+    """Use the injected viewer-window executor with a legacy direct fallback."""
+    if platform_runtime is not None:
+        adapter = getattr(platform_runtime, "window_backend_adapter", None)
+        if adapter is not None:
+            return adapter
+    return create_window_backend_adapter()
 
 
 def _saved_recording_reveal_adapter_for_runtime(
@@ -1077,6 +1100,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         return _acquire_map_import_inhibitor(
             map_name,
             desktop_services=runtime.desktop_services,
+            platform_runtime=runtime,
         )
 
     def _ensure_import_controller(self) -> MapImportController:
@@ -6576,6 +6600,10 @@ def _launch_viewer_window(
     *, window_size_override: tuple[int, int] | None = None
 ) -> None:
     """Launch with dimensions expressed in the selected backend's coordinates."""
+    preflight = viewer_launch_preflight(
+        platform_runtime=CaveViewerWindow.cave_platform_runtime,
+    )
+    target = authorized_viewer_launch_target(preflight)
     if window_size_override is not None:
         CaveViewerWindow.window_size = window_size_override
         window_size_fraction = None
@@ -6592,12 +6620,17 @@ def _launch_viewer_window(
         CaveViewerWindow.window_size = _desktop_relative_window_size()
         window_size_fraction = _DESKTOP_WINDOW_SCALE
         fallback_window_size = _DEFAULT_WINDOW_SIZE
-    run_window_config(
-        CaveViewerWindow,
-        runner=_run_moderngl_window_config,
-        window_size_fraction=window_size_fraction,
-        fallback_window_size=fallback_window_size,
-        force_resizable_window=True,
+    _window_backend_adapter_for_runtime(
+        CaveViewerWindow.cave_platform_runtime
+    ).launch_viewer(
+        target,
+        ViewerWindowLaunchRequest(
+            config_class=CaveViewerWindow,
+            runner=_run_moderngl_window_config,
+            window_size_fraction=window_size_fraction,
+            fallback_window_size=fallback_window_size,
+            force_resizable_window=True,
+        ),
     )
 
 

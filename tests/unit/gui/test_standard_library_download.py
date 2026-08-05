@@ -8,6 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from caveviewer.core.capabilities import (
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
+)
 from caveviewer.gui import standard_library_download
 from caveviewer.gui.platform import DirectorySelection
 
@@ -422,3 +428,68 @@ def test_standard_library_download_continues_when_desktop_activity_is_unavailabl
 
     assert result == "/downloaded/devils-eye"
     assert len(download_calls) == 1
+
+
+def test_standard_library_download_continues_when_notification_route_is_unavailable(
+    monkeypatch, tmp_path
+):
+    class NoopNotificationDesktopServices(FakeActivityDesktopServices):
+        def desktop_notification_target(self):
+            return DesktopNotificationTarget(DesktopNotificationRoute.NOOP)
+
+    sample = _sample()
+    services = NoopNotificationDesktopServices()
+    parent = object()
+
+    def fake_download(*_args, **_options):
+        return "/downloaded/devils-eye"
+
+    monkeypatch.setattr(
+        standard_library_download,
+        "download_and_extract_to_selected_directory",
+        fake_download,
+    )
+
+    result = standard_library_download.download_standard_library_with_desktop_activity(
+        services,
+        parent,
+        DirectorySelection.from_path(str(tmp_path)),
+        sample,
+    )
+
+    assert result == "/downloaded/devils-eye"
+    assert services.calls == [
+        ("inhibit", "Downloading Devils Eye", parent),
+        ("close_inhibitor",),
+    ]
+
+
+def test_standard_library_download_continues_when_inhibition_route_is_unavailable(
+    monkeypatch, tmp_path
+):
+    class NoopInhibitionDesktopServices(FakeActivityDesktopServices):
+        def idle_suspend_inhibition_target(self):
+            return IdleSuspendInhibitionTarget(IdleSuspendInhibitionRoute.NOOP)
+
+    sample = _sample()
+    services = NoopInhibitionDesktopServices()
+
+    def fake_download(*_args, **_options):
+        return "/downloaded/devils-eye"
+
+    monkeypatch.setattr(
+        standard_library_download,
+        "download_and_extract_to_selected_directory",
+        fake_download,
+    )
+
+    result = standard_library_download.download_standard_library_with_desktop_activity(
+        services,
+        object(),
+        DirectorySelection.from_path(str(tmp_path)),
+        sample,
+    )
+
+    assert result == "/downloaded/devils-eye"
+    assert not any(call[0] == "inhibit" for call in services.calls)
+    assert not any(call[0] == "close_inhibitor" for call in services.calls)

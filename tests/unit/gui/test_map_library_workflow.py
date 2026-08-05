@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from caveviewer.core.capabilities import CapabilityResult
+from caveviewer.core.capabilities import (
+    CapabilityResult,
+    FileSelectionRoute,
+    FileSelectionTarget,
+)
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_library import recent_map_key
@@ -14,6 +18,7 @@ from caveviewer.gui.map_library_workflow import (
     MapLibraryWorkflow,
     _remaining_cache_error,
 )
+from caveviewer.gui.platform.runtime import FileSelectionPreflight
 from caveviewer.gui.standard_library_download import (
     StandardLibraryDownloadProgress,
     StandardLibraryDownloadSucceeded,
@@ -190,6 +195,7 @@ def _workflow(
     remove_cache=None,
     map_library_root_dir_provider=None,
     desktop_services=None,
+    platform_runtime=None,
     guided_dive_menu=None,
     guided_dive_preflight=None,
     open_guided_dive=None,
@@ -210,6 +216,7 @@ def _workflow(
         standard_library_maps=maps,
         map_library_root_dir="/library",
         desktop_services=desktop_services,
+        platform_runtime=platform_runtime,
         splash_exists=lambda: True,
         open_map=opened.append,
         show_feedback=lambda message, **kwargs: feedback.append(
@@ -454,6 +461,129 @@ def test_recent_map_menu_preflights_local_guided_dive():
     actions[0][1]()
 
     assert opened_guided_dive == [selected_trace]
+
+
+def test_guided_dive_file_picker_uses_runtime_preflight_and_rechecks_adapter_route():
+    selected_trace = "/maps/Recent Cave/_guided_dives/favorite.jsonl"
+    opened_guided_dive = []
+    preflight_calls = []
+    route_checks = []
+    target = FileSelectionTarget(
+        primary_route=FileSelectionRoute.PORTAL,
+        fallback_route=FileSelectionRoute.TK,
+    )
+
+    class RoutedDesktopServices:
+        def file_selection_target(self):
+            route_checks.append(True)
+            return target
+
+        def choose_file(self, **options):
+            assert options == {
+                "title": "Open Guided Dive",
+                "initial_dir": str(
+                    Path("/maps/Recent Cave").resolve() / "_guided_dives"
+                ),
+                "parent": state.root,
+            }
+            return SimpleNamespace(path=selected_trace)
+
+    desktop_services = RoutedDesktopServices()
+
+    class FakeRuntime:
+        def __init__(self):
+            self.desktop_services = desktop_services
+
+        def file_selection_preflight(self):
+            preflight_calls.append(True)
+            return FileSelectionPreflight(
+                capability=CapabilityResult.available(
+                    target,
+                    reason_code="file_selection_portal_route_available",
+                ),
+                decision=FeatureDecision(
+                    feature=FeatureId.FILE_SELECTION,
+                    state=FeatureState.ENABLED,
+                    reason_code="file_selection_available",
+                    explanation="File selection is available.",
+                    route="portal_then_tk",
+                ),
+            )
+
+    state = _workflow(
+        [],
+        desktop_services=desktop_services,
+        platform_runtime=FakeRuntime(),
+        guided_dive_menu=_enabled_guided_dive_decision,
+        guided_dive_preflight=lambda _map_path, trace_path: SimpleNamespace(
+            capability=CapabilityResult.available(
+                SimpleNamespace(trace=SimpleNamespace(path=trace_path)),
+                reason_code="guided_dive_playback_target_available",
+            ),
+            decision=_enabled_guided_dive_decision(),
+        ),
+        open_guided_dive=opened_guided_dive.append,
+    )
+
+    state.workflow.open_guided_dive_for_map("/maps/Recent Cave")
+
+    assert preflight_calls == [True]
+    assert route_checks == [True]
+    assert opened_guided_dive == [selected_trace]
+
+
+def test_guided_dive_file_picker_blocks_a_changed_route_before_choosing_file():
+    portal_target = FileSelectionTarget(
+        primary_route=FileSelectionRoute.PORTAL,
+        fallback_route=FileSelectionRoute.TK,
+    )
+    target_calls = []
+    guided_dive_preflight_calls = []
+
+    class ChangingDesktopServices:
+        def file_selection_target(self):
+            target_calls.append(True)
+            if len(target_calls) == 1:
+                return portal_target
+            return FileSelectionTarget(FileSelectionRoute.TK)
+
+        def choose_file(self, **_options):
+            raise AssertionError("a changed route must not open a file picker")
+
+    state = _workflow(
+        [],
+        desktop_services=ChangingDesktopServices(),
+        guided_dive_menu=_enabled_guided_dive_decision,
+        guided_dive_preflight=lambda *_args: guided_dive_preflight_calls.append(
+            True
+        ),
+        open_guided_dive=lambda _path: None,
+    )
+
+    state.workflow.open_guided_dive_for_map("/maps/Recent Cave")
+
+    assert target_calls == [True, True]
+    assert guided_dive_preflight_calls == []
+    assert state.feedback[-1][0] == "Couldn't open the Guided Dive picker."
+
+
+def test_guided_dive_file_picker_blocks_an_unavailable_file_route():
+    guided_dive_preflight_calls = []
+
+    state = _workflow(
+        [],
+        desktop_services=object(),
+        guided_dive_menu=_enabled_guided_dive_decision,
+        guided_dive_preflight=lambda *_args: guided_dive_preflight_calls.append(
+            True
+        ),
+        open_guided_dive=lambda _path: None,
+    )
+
+    state.workflow.open_guided_dive_for_map("/maps/Recent Cave")
+
+    assert guided_dive_preflight_calls == []
+    assert state.feedback[-1][0] == "File selection is unavailable in this environment."
 
 
 def test_guided_dive_preflight_rejection_keeps_the_splash_open():

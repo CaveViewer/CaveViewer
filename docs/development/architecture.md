@@ -191,15 +191,16 @@ first pose replaces ordinary cache-derived viewer placement, and every pose is
 applied directly on the render thread without navigation clamping, smoothing,
 collision rejection, or route planning.
 Map Library exposes **Open guided dive…** only when the selected map's
-canonical `_guided_dives` directory has a JSONL file. Its action uses the
-existing `DesktopServices` file picker, then obtains one fresh capability fact
-for the selected file: the file must remain map-local, parse within the bounded
-trace contract, resolve to that map's source, and match a current cache
-manifest exactly. `decide_guided_dive_playback` hides a map with no trace and
-otherwise fails closed with a concise disabled-state explanation. This is a
-per-map action-time preflight, not a `PlatformRuntime.feature_gates` entry;
-startup repeats the manifest validation at the viewer boundary to cover a
-filesystem change after splash has closed.
+canonical `_guided_dives` directory has a JSONL file. Its action first obtains
+a fresh file-selection preflight, then invokes the authorized desktop file
+picker only if its typed route remains executable. The selected file then
+obtains one fresh domain capability fact: it must remain map-local, parse
+within the bounded trace contract, resolve to that map's source, and match a
+current cache manifest exactly. `decide_guided_dive_playback` hides a map with
+no trace and otherwise fails closed with a concise disabled-state explanation.
+Both checks are action-time preflights, not `PlatformRuntime.feature_gates`
+entries; startup repeats the manifest validation at the viewer boundary to
+cover a filesystem change after splash has closed.
 Position and orientation are interpolated by trace time; a declared
 discontinuity remains an instantaneous jump. `StreamingWorld` receives a
 bounded chronological lookahead tube, and the playback clock freezes whenever
@@ -487,12 +488,62 @@ Directory selection follows the same on-demand contract. Its immutable target
 declares an executable route rather than performing a desktop request:
 Linux declares `portal_then_tk`, portable desktop services declare `tk`, and
 legacy injected services use the conservative `injected` route. The declaration
-does not create Tk resources or contact D-Bus. Map-opening and Preferences
-browse actions obtain a fresh preflight immediately before invoking the chooser;
-the Portal service still owns the action-time fallback to Tk if its current
-request fails. The Preferences “Downloaded maps folder” control therefore
-shares the same on-demand contract used by Map Library storage without adding a
-separate startup gate.
+does not create Tk resources or contact D-Bus. An executable directory
+preflight must prove that its decision's route matches the typed target, and
+the directory-selection boundary rechecks the desktop service's route
+declaration immediately before it invokes a chooser. A changed or mismatched
+route fails closed before native chooser setup. Map-opening and Preferences
+browse actions obtain that fresh preflight immediately before invoking the
+chooser; the Portal service still owns the action-time fallback to Tk if its
+current request fails. The Preferences “Downloaded maps folder” control
+therefore shares the same on-demand contract used by Map Library storage
+without adding a separate startup gate.
+
+File opening uses a separate but matching on-demand contract. Its immutable
+`FileSelectionTarget` declares the Portal/Tk composite, Tk route, or
+conservative injected route without creating Tk resources or contacting D-Bus.
+An executable file-selection preflight must match its policy route to that
+typed target, and its boundary rechecks the desktop declaration immediately
+before `choose_file`. A changed or unavailable route fails closed before the
+Guided Dive picker opens. Linux Portal-to-Tk fallback remains inside
+`LinuxPortalDesktopServices`; after a selected file returns, the separate
+map-local Guided Dive trace/cache preflight remains authoritative.
+
+Desktop notifications use the same typed, on-demand boundary but remain an
+optional enhancement rather than a gate on their owning workflow.
+`DesktopNotificationTarget` declares Linux's `portal_then_noop` composite, a
+portable no-op route, or a conservative injected route without sending a
+message or contacting D-Bus. A portable no-op reports unavailable; an
+available Portal or injected route is rechecked immediately before send or
+withdraw. The narrow notification action boundary turns an unavailable,
+unknown, changed, or failed route into a logged no-op, so an update download or
+Map Library download always retains its normal state and outcome. Notification
+preflights are deliberately not entries in `PlatformRuntime.feature_gates`.
+
+Idle/suspend inhibition follows a separate matching on-demand contract.
+`IdleSuspendInhibitionTarget` declares Linux's `portal_then_noop` composite, a
+portable no-op route, or a conservative injected route without opening D-Bus
+or starting an inhibition worker. The acquisition boundary rechecks the typed
+route immediately before it asks for a scoped handle and converts unavailable,
+unknown, changed, or failed acquisition into a logged no-op. Releasing an
+already acquired handle is ordinary cleanup and is never re-gated, so imports,
+Map Library downloads, and update downloads always release their valid handle
+even if desktop availability changes later. Inhibition preflights are likewise
+not entries in `PlatformRuntime.feature_gates`.
+
+Viewer launch follows the same on-demand contract because display endpoints
+and an explicit `CAVEVIEWER_WINDOW_SYSTEM` choice can change while the splash
+UI remains open. `ViewerLaunchTarget` carries either the native ModernGL route
+or an ordered Linux GLFW X11/Wayland plan; the side-effect-free probe does not
+import or initialize GLFW, create a test window, or allocate a rendering
+context. A fresh `ViewerLaunchPreflight` must match its typed target and is
+rechecked immediately before native execution. `WindowBackendAdapter` then
+executes exactly that target, retaining the existing automatic Linux retry only
+for recognized backend/context initialization failures. A shader, map, or
+other renderer/application failure never selects a second backend. The target
+and adapter provide a future seam for a macOS Metal route without changing
+map-opening policy callers; they do not implement Metal themselves. Viewer
+launch is mutable and therefore does not enter `PlatformRuntime.feature_gates`.
 
 Feature-state semantics are fixed:
 
@@ -528,25 +579,30 @@ GitHub release, loads the `caveviewer-map-library.v1.json` release asset when
 present, joins manifest entries to release zip assets, infers rows for extra
 zip assets when no manifest is present, and falls back to the last cached
 catalog or bundled catalog resource when offline.
-The Map Library also owns the Guided Dive action-time handoff: it invokes the
-desktop file-selection service only after the map-local discovery policy is
-enabled, runs the selected trace/cache preflight, and leaves splash only after
-the resulting target is executable. It does not reuse the directory-selection
-gate for this file-picker action.
+The Map Library also owns the Guided Dive action-time handoff: it receives the
+splash-owned runtime, authorizes file opening only after the map-local
+discovery policy is enabled, runs the selected trace/cache preflight, and
+leaves splash only after the resulting target is executable. It does not reuse
+the directory-selection gate for this file-picker action.
 
-Directory selection, file reveal, notifications, and idle/suspend inhibition
-use the separate `DesktopServices` capability. Linux asks XDG Desktop Portal
-first and falls back to Tk or `xdg-open` only when the portal is unavailable.
-Map-folder selection is policy-gated independently of the other desktop
-actions: an enabled Portal/Tk composite or degraded Tk/injected route may run,
-while a missing or indeterminate chooser route is blocked before the chooser is
-created. Long map library downloads request desktop notification and inhibit
-support through this same capability, but the visible Map Library dialog suppresses
-duplicate desktop notifications because it already presents progress and
-completion actions. Background update downloads request notification and
-inhibit support while the package is being downloaded and verified; a visible
-splash suppresses duplicate desktop notifications because it already presents
-the update state and actions.
+Directory selection, file selection, file reveal, notifications, and
+idle/suspend inhibition use the separate `DesktopServices` capability. Linux
+asks XDG Desktop Portal first and falls back to Tk or `xdg-open` only when the
+portal is unavailable. Map-folder and Guided Dive file selection are each
+policy-gated independently of the other desktop actions: an enabled Portal/Tk
+composite or degraded Tk/injected route may run, while a missing, indeterminate,
+or changed chooser route is blocked before the chooser is invoked. Long map
+library downloads request desktop notification and inhibit support through this
+same capability, but the visible Map Library dialog suppresses duplicate
+desktop notifications because it already presents progress and completion
+actions. Background update downloads request notification and inhibit support
+while the package is being downloaded and verified; a visible splash suppresses
+duplicate desktop notifications because it already presents the update state
+and actions. Notification sends and withdrawals use a fresh optional-route
+preflight; unavailable or indeterminate notification support is a diagnostic
+no-op, not a download failure. Idle/suspend inhibition acquisition uses the
+same optional preflight discipline, while closing an acquired handle remains
+best-effort cleanup.
 Uncached map imports request idle/suspend inhibition while parsing and
 building the cache. These requests remain best-effort so desktop integration
 cannot break the underlying work. Portal

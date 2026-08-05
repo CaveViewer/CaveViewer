@@ -13,6 +13,14 @@ import threading
 from dataclasses import dataclass
 
 from caveviewer.gui.platform import DesktopServices, DirectorySelection
+from caveviewer.gui.platform.desktop_notifications import (
+    send_desktop_notification,
+    withdraw_desktop_notification,
+)
+from caveviewer.gui.platform.desktop_inhibition import (
+    acquire_idle_suspend_inhibitor,
+    release_desktop_inhibitor,
+)
 
 
 @dataclass(frozen=True)
@@ -129,45 +137,36 @@ def safe_desktop_notify(
     priority: str = "normal",
 ) -> None:
     """Send a best-effort desktop notification without affecting workflow."""
-    try:
-        desktop_services.notify(
-            notification_id, title, body, priority=priority
-        )
-    except Exception:
-        # Notification failures must never break a download. Linux portals
-        # already fall back internally, but tests and unusual desktop sessions
-        # may provide smaller DesktopServices implementations.
-        pass
+    send_desktop_notification(
+        desktop_services,
+        notification_id,
+        title,
+        body,
+        priority=priority,
+    )
 
 
 def safe_desktop_withdraw(
     desktop_services: DesktopServices, notification_id: str
 ) -> None:
     """Withdraw a best-effort desktop notification without affecting workflow."""
-    try:
-        desktop_services.withdraw_notification(notification_id)
-    except Exception:
-        pass
+    withdraw_desktop_notification(desktop_services, notification_id)
 
 
 def safe_desktop_inhibit(
     desktop_services: DesktopServices, reason: str, *, parent
 ):
     """Keep the desktop awake during long work when the host supports it."""
-    try:
-        return desktop_services.inhibit_idle_suspend(reason, parent=parent)
-    except Exception:
-        return None
+    return acquire_idle_suspend_inhibitor(
+        desktop_services,
+        reason,
+        parent=parent,
+    )
 
 
 def close_desktop_inhibitor(inhibitor) -> None:
     """Release a desktop inhibitor returned by DesktopServices."""
-    if inhibitor is None:
-        return
-    try:
-        inhibitor.close()
-    except Exception:
-        pass
+    release_desktop_inhibitor(inhibitor)
 
 
 def download_standard_library_with_desktop_activity(

@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from caveviewer.core.capabilities import UpdatePackageRevealRoute
+from caveviewer.core.capabilities import (
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
+    UpdatePackageRevealRoute,
+)
 from caveviewer.gui.features import FeatureState
 from caveviewer.gui.update_checker import DownloadCancelled, UpdateCheckResult
 from caveviewer.gui import update_manager
@@ -385,6 +391,60 @@ def test_desktop_notification_and_inhibit_failures_do_not_break_download(tmp_pat
         assert Path(snapshot.payload_path).read_bytes() == b"payload"
     finally:
         manager.shutdown()
+
+
+def test_unavailable_notification_route_does_not_break_update_download(tmp_path):
+    class NoopNotificationDesktopServices(FakeDesktopServices):
+        def desktop_notification_target(self):
+            return DesktopNotificationTarget(DesktopNotificationRoute.NOOP)
+
+    desktop_services = NoopNotificationDesktopServices()
+
+    def download_update(_url, _expected_size, destination, **_kwargs):
+        Path(destination).write_bytes(b"payload")
+
+    manager, _adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        desktop_services=desktop_services,
+    )
+    try:
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+        assert manager.snapshot().state is UpdateState.READY
+    finally:
+        manager.shutdown()
+
+    assert desktop_services.calls == [
+        ("inhibit", "CaveViewer is downloading an update", None),
+        ("close_inhibitor",),
+    ]
+
+
+def test_unavailable_inhibition_route_does_not_break_update_download(tmp_path):
+    class NoopInhibitionDesktopServices(FakeDesktopServices):
+        def idle_suspend_inhibition_target(self):
+            return IdleSuspendInhibitionTarget(IdleSuspendInhibitionRoute.NOOP)
+
+    desktop_services = NoopInhibitionDesktopServices()
+
+    def download_update(_url, _expected_size, destination, **_kwargs):
+        Path(destination).write_bytes(b"payload")
+
+    manager, _adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        desktop_services=desktop_services,
+    )
+    try:
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+        assert manager.snapshot().state is UpdateState.READY
+    finally:
+        manager.shutdown()
+
+    assert not any(call[0] == "inhibit" for call in desktop_services.calls)
+    assert not any(call[0] == "close_inhibitor" for call in desktop_services.calls)
 
 
 def test_failed_download_can_retry_without_retaining_partial_files(tmp_path):
