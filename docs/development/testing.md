@@ -328,6 +328,12 @@ preservation of the prior certificate on failure. Map Library coverage must
 also prove that no trace
 hides the Guided Dive action and that a selected trace is preflighted against
 its map-local source and current cache before the splash session can launch it.
+
+Cache-rebuild coverage must prove row eligibility and disabled explanations,
+action-time revalidation, per-cache build ownership, child progress and OBJ
+pause behavior, preservation of the prior cache on failure, and
+background-only terminal notifications.
+
 Use the explicit farthest/frontier profile only when testing continuation
 behavior on incomplete or mesh-blocked evidence.
 Asynchronous replan, pacing-hold, and continuous-scan diagnostics remain core

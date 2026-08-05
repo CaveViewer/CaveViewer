@@ -38,6 +38,12 @@ needed by the map. The cache is published atomically as `_cache` inside the map
 folder by default, so interrupted imports do not leave a half-valid cache
 visible to normal launches.
 
+Map Library's `Rebuild cache` action uses the same importer with the current
+Import preferences without opening a viewer. It is available only for an
+existing generated cache with a readable source and a safe cache target, and
+stages its replacement so the older cache remains usable until publication
+succeeds.
+
 Chunk size is the most important import-time rendering choice:
 
 - Larger chunks reduce total chunk count and can be smoother in long/open
@@ -311,7 +317,7 @@ That command reports its own phase progress and atomically replaces only
 | `--chunk-build-reserved-cpus=<n>` | Logical CPUs kept free during cache build. |
 | `--analyze-chunk-sizes` | Analyze source geometry and recommend a chunk size without building. |
 | `--analyze-workers=<n>` | Worker threads used by chunk-size analysis. |
-| `--force` | Rebuild even if a valid matching cache already exists. |
+| `--force` | Rebuild even if a valid matching cache already exists; an active build for that cache is rejected. |
 | `--dry-run` | Validate inputs and print the planned cache path. |
 | `--json` | Print machine-readable output. |
 | `-h`, `--help` | Show CLI help. |

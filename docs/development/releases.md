@@ -197,7 +197,7 @@ finalizer for that platform. Use the same source branch, version, release notes,
 release.
 
 An all-platform build failure does not publish any platform or manifest because
-the finalizer requires all five package jobs to succeed. Inspect the retained
+the finalizer requires all four package jobs to succeed. Inspect the retained
 workflow artifacts, correct the failure, and rerun All Platform Release. A
 failed finalizer can be rerun safely while the selected branch still points to
 the original source commit: existing release assets are replaced by name and

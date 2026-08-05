@@ -591,8 +591,10 @@ ownership docstrings instead of placeholder module-path docstrings.
 
 The splash Map Library is split by responsibility: `map_library.py` builds
 presentation-independent recent-map titles, `map_library_controller.py` owns
-standard-library catalog/download state, `map_library_workflow.py` owns
-catalog fetches, download queue polling, cancellation, and row workflow
+standard-library catalog/download state, `map_cache_rebuild.py` owns map-local
+rebuild eligibility and target resolution, `cache_rebuild_controller.py` owns
+the forced child-import lifecycle, `map_library_workflow.py` owns catalog
+fetches, download/rebuild polling, cancellation/pause, and row workflow
 transitions, `map_library_panel.py` owns Tk row, scroll, status, and
 overflow-menu presentation, and `splash_screen.py` wires those pieces to
 session actions such as opening maps and preferences. The standard-library map
@@ -737,9 +739,9 @@ newer manifest.
 Build, package, publish, and manifest-generation workflows live under
 `scripts/`. The PyInstaller contract lives at
 `packaging/pyinstaller/CaveViewer.spec`; all build consumers use the installed
-package and the same package-resource paths. The five platform workflows may be
+package and the same package-resource paths. The four platform workflows may be
 run independently. `All Platform Release` runs one shared test gate, packages
-all five targets in parallel from one immutable source revision, and hands the
+all four targets in parallel from one immutable source revision, and hands the
 artifacts to a single finalizer. In GitHub Actions, only that finalizer creates
 the release, signs manifests, and pushes release metadata, preserving one owner
 for shared mutable state. The operational contract and verification checklist

@@ -115,7 +115,7 @@ map under `<map-dir>/_benchmarks`, which is ignored by Git. The map directory
 must contain either:
 
 - `_cache/manifest.json`; or
-- a supported source model (`.obj`, `.glb`, or `.gltf`) that the runner can
+- a supported source model (`.obj` or `.glb`) that the runner can
   compile with `python -m caveviewer.chunker --source <map-dir>`.
 
 If an existing editable environment was installed before

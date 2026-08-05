@@ -24,6 +24,7 @@ src/caveviewer/core/capabilities/hardware.py   typed GPU-memory and RAM-availabi
 src/caveviewer/core/json_io.py                 bounded JSON loading for core inputs
 src/caveviewer/core/map/                      map discovery, cache, and import workflow
 src/caveviewer/core/map/cache_paths.py         map-cache location policy
+src/caveviewer/core/map/cache_build_lock.py    cooperative per-cache build ownership
 src/caveviewer/core/map/cache_identity.py      versioned Guided Dive cache identity
 src/caveviewer/core/map/source_model.py        source-format registry, capabilities, and discovery
 src/caveviewer/core/map/importer.py            model import and cache-build workflow
@@ -62,6 +63,7 @@ src/caveviewer/core/mesh/glb.py                GLB/glTF parsing
 src/caveviewer/core/textures/                  worker-safe texture CPU policy
 src/caveviewer/core/textures/decoding.py       texture decode, inspection, and budgets
 src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
+src/caveviewer/gui/cache_rebuild_controller.py splash-owned forced cache-rebuild lifecycle
 src/caveviewer/gui/features/                  pure feature availability policies and gates
 src/caveviewer/gui/platform/runtime.py        process-owned platform composition root
 src/caveviewer/gui/platform/directory_selection.py shared action-time directory-picker authorization
@@ -77,6 +79,7 @@ src/caveviewer/gui/map_library.py             recent-map row display models
 src/caveviewer/gui/map_library_controller.py  standard-library row/download state
 src/caveviewer/gui/map_library_panel.py       splash Map Library Tk panel
 src/caveviewer/gui/map_library_workflow.py    splash Map Library workflow
+src/caveviewer/gui/map_cache_rebuild.py        map-local cache-rebuild preflight and target resolution
 src/caveviewer/gui/guided_dive_playback.py    map-local Guided Dive preflight and target resolution
 src/caveviewer/gui/map_opening.py             shared map-folder chooser and target resolution
 src/caveviewer/gui/standard_library_maps.py   standard-library map source/storage
