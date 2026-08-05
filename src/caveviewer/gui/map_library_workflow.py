@@ -7,16 +7,30 @@ import queue
 import threading
 import tkinter as tk
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from caveviewer.gui.cache_rebuild_controller import (
+    CacheRebuildFailed,
+    CacheRebuildJobController,
+    CacheRebuildPaused,
+    CacheRebuildProgress,
+    CacheRebuildStarted,
+    CacheRebuildSucceeded,
+)
 from caveviewer.gui.map_cache_management import (
     has_managed_map_cache,
     remove_managed_map_cache,
+)
+from caveviewer.gui.map_cache_rebuild import (
+    CacheRebuildPreflight,
+    probe_map_library_cache_rebuild,
 )
 from caveviewer.gui.map_history import remove_recent_map_path
 from caveviewer.gui.map_library import recent_map_entry, recent_map_key
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_library_panel import (
+    MapLibraryMenuAction,
     MapLibraryPanel,
     MapLibraryRowWidgets,
 )
@@ -85,6 +99,17 @@ OpenMapCallback = Callable[[str], None]
 OpenGuidedDiveCallback = Callable[[str], None]
 
 
+@dataclass(slots=True)
+class _ActiveCacheRebuild:
+    """Presentation context for the one splash-owned rebuild job."""
+
+    path: str
+    title: str
+    row_widgets: MapLibraryRowWidgets | None
+    library_map: Any | None = None
+    base_metadata: str = ""
+
+
 def _start_catalog_thread(target: Callable[[], None]) -> None:
     """Start the background worker that fetches standard-library metadata."""
     threading.Thread(
@@ -146,6 +171,10 @@ class MapLibraryWorkflow:
             [str, str], GuidedDivePlaybackPreflight
         ] = guided_dive_playback_preflight,
         open_guided_dive: OpenGuidedDiveCallback | None = None,
+        cache_rebuild_preflight: Callable[[str], CacheRebuildPreflight] = (
+            probe_map_library_cache_rebuild
+        ),
+        cache_rebuild_controller: CacheRebuildJobController | None = None,
     ) -> None:
         self.root = root
         self.controller = controller
@@ -178,6 +207,12 @@ class MapLibraryWorkflow:
         self.guided_dive_menu = guided_dive_menu
         self.guided_dive_preflight = guided_dive_preflight
         self.open_guided_dive = open_guided_dive
+        self.cache_rebuild_preflight = cache_rebuild_preflight
+        self.cache_rebuild_controller = (
+            cache_rebuild_controller or CacheRebuildJobController()
+        )
+        self._active_cache_rebuild: _ActiveCacheRebuild | None = None
+        self._cache_rebuild_after_id = None
         self.recent_map_paths: list[str] = []
 
     def populate_panel(self, parent, recent_map_paths: Sequence[str]) -> None:
@@ -197,10 +232,11 @@ class MapLibraryWorkflow:
         self.start_catalog_fetch()
 
     def close(self) -> None:
-        """Close transient UI and cancel the active download owned by splash."""
+        """Close transient UI and request a resumable active rebuild pause."""
         self.panel.close_active_menu()
         self.cancel_active_download_for_close()
         self.cancel_catalog_fetch_for_close()
+        self.request_cache_rebuild_pause(for_close=True)
 
     def set_map_library_root_dir(self, map_library_root_dir: str) -> None:
         """Update the storage root used by standard-library rows."""
@@ -248,22 +284,26 @@ class MapLibraryWorkflow:
                     lambda path=path: self.remove_recent_map(path),
                 )
             )
+            rebuild_action = self.cache_rebuild_menu_action(
+                path,
+                title,
+                row_widgets,
+            )
+            if rebuild_action is not None:
+                actions.append(rebuild_action)
             if self.has_cache(path):
                 actions.append(
-                    (
-                        "Remove cache",
-                        lambda path=path, title=title: self.remove_map_cache(
-                            path,
-                            title,
-                            row_widgets,
-                        ),
+                    self.cache_removal_menu_action(
+                        path,
+                        title,
+                        row_widgets,
                     )
                 )
             return tuple(actions)
 
         self.panel.add_recent_row(
             entry,
-            action=lambda path=path: self.open_map(path),
+            action=lambda path=path: self.open_recent_map(path),
             menu_actions_factory=menu_actions,
         )
 
@@ -303,17 +343,20 @@ class MapLibraryWorkflow:
                     ),
                 ),
             )
+            rebuild_action = self.cache_rebuild_menu_action(
+                map_path,
+                library_map.display_name,
+                row_widgets,
+                library_map=library_map,
+            )
+            if rebuild_action is not None:
+                actions.append(rebuild_action)
             if self.has_cache(map_path):
                 actions.append(
-                    (
-                        "Remove cache",
-                        lambda map_path=map_path, library_map=library_map: (
-                            self.remove_map_cache(
-                                map_path,
-                                library_map.display_name,
-                                row_widgets,
-                            )
-                        ),
+                    self.cache_removal_menu_action(
+                        map_path,
+                        library_map.display_name,
+                        row_widgets,
                     )
                 )
             return tuple(actions)
@@ -323,6 +366,290 @@ class MapLibraryWorkflow:
             action=lambda library_map=library_map: self.on_map_action(library_map),
             menu_actions_factory=menu_actions,
         )
+
+    def cache_rebuild_menu_action(
+        self,
+        path: str,
+        title: str,
+        row_widgets: MapLibraryRowWidgets | None,
+        *,
+        library_map: Any | None = None,
+    ):
+        """Build the current rebuild menu action for one map-library row."""
+        try:
+            preflight = self.cache_rebuild_preflight(path)
+        except Exception as exc:
+            self.logger.warning("Cache rebuild preflight failed for %s: %s", title, exc)
+            return MapLibraryMenuAction(
+                "Rebuild cache",
+                explanation="Cache rebuild availability could not be determined.",
+            )
+
+        decision = preflight.decision
+        if not decision.is_visible:
+            return None
+        if self.cache_rebuild_controller.active:
+            return MapLibraryMenuAction(
+                "Rebuild cache",
+                explanation="Another cache rebuild is already in progress.",
+            )
+        if not decision.allows_execution:
+            return MapLibraryMenuAction(
+                "Rebuild cache",
+                explanation=decision.explanation,
+            )
+        return (
+            "Rebuild cache",
+            lambda: self.start_cache_rebuild(
+                path,
+                title,
+                row_widgets,
+                library_map=library_map,
+            ),
+        )
+
+    def cache_removal_menu_action(
+        self,
+        path: str,
+        title: str,
+        row_widgets: MapLibraryRowWidgets | None,
+    ):
+        """Build the current generated-cache removal action for one row."""
+        if self.cache_rebuild_controller.active:
+            return MapLibraryMenuAction(
+                "Remove cache",
+                explanation="Cache actions are unavailable while a rebuild is running.",
+            )
+        return (
+            "Remove cache",
+            lambda: self.remove_map_cache(path, title, row_widgets),
+        )
+
+    def start_cache_rebuild(
+        self,
+        path: str,
+        title: str,
+        row_widgets: MapLibraryRowWidgets | None,
+        *,
+        library_map: Any | None = None,
+    ) -> None:
+        """Start one forced rebuild without opening a viewer."""
+        if self.cache_rebuild_controller.active:
+            self._show_info(
+                "Finish or pause the current cache rebuild before starting another.",
+                duration_ms=7000,
+                max_wraplength=360,
+            )
+            return
+        if self.controller.active_download.in_progress:
+            self._show_info(
+                "Finish or stop the current map library download before "
+                "rebuilding a cache.",
+                duration_ms=7000,
+                max_wraplength=380,
+            )
+            return
+
+        # Menu eligibility can be stale by the time the action is invoked.
+        preflight = self._fresh_cache_rebuild_preflight(path, title)
+        if preflight is None:
+            return
+        target = preflight.capability.value
+        if target is None:
+            return
+
+        active = _ActiveCacheRebuild(
+            path=path,
+            title=title,
+            row_widgets=row_widgets,
+            library_map=library_map,
+            base_metadata=(
+                "" if library_map is not None else recent_map_entry(path).detail
+            ),
+        )
+        self._active_cache_rebuild = active
+        started = self.cache_rebuild_controller.start(target)
+        if isinstance(started, CacheRebuildFailed):
+            self._handle_cache_rebuild_failure(started)
+            return
+
+        assert isinstance(started, CacheRebuildStarted)
+        self._show_active_cache_rebuild(active)
+        self.schedule_cache_rebuild_poll()
+
+    def _fresh_cache_rebuild_preflight(
+        self,
+        path: str,
+        title: str,
+    ) -> CacheRebuildPreflight | None:
+        """Re-evaluate one map-local rebuild decision at the action boundary."""
+        try:
+            preflight = self.cache_rebuild_preflight(path)
+        except Exception as exc:
+            self.logger.warning("Cache rebuild preflight failed for %s: %s", title, exc)
+            self._show_error("Cache rebuild availability could not be determined.")
+            return None
+        if (
+            not preflight.decision.allows_execution
+            or preflight.capability.value is None
+        ):
+            self._show_error(preflight.decision.explanation)
+            return None
+        return preflight
+
+    def _show_active_cache_rebuild(self, active: _ActiveCacheRebuild) -> None:
+        """Replace the active row's normal action with progress and pause."""
+        can_pause = self.cache_rebuild_controller.pause_supported
+        self.panel.set_row_action(
+            active.row_widgets,
+            "Pause",
+            self.request_cache_rebuild_pause,
+            enabled=can_pause,
+            show_pause_progress=True,
+        )
+        self.panel.set_row_metadata(
+            active.row_widgets,
+            "Rebuilding cache — Starting import",
+        )
+        self.panel.set_row_progress(active.row_widgets, 0.0)
+        self.panel.refresh_row_overflow(active.row_widgets)
+
+    def request_cache_rebuild_pause(self, *, for_close: bool = False) -> bool:
+        """Cooperatively checkpoint the active OBJ rebuild without deleting work."""
+        active = self._active_cache_rebuild
+        if active is None:
+            return False
+        pause_request = (
+            self.cache_rebuild_controller.request_pause_for_close
+            if for_close
+            else self.cache_rebuild_controller.request_pause
+        )
+        if not pause_request():
+            return False
+        self.panel.set_row_action(
+            active.row_widgets,
+            "Pause",
+            lambda: None,
+            enabled=False,
+            show_pause_progress=True,
+        )
+        self.panel.set_row_metadata(active.row_widgets, "Pausing cache rebuild…")
+        self.panel.refresh_row_overflow(active.row_widgets)
+        return True
+
+    def schedule_cache_rebuild_poll(self) -> None:
+        """Schedule a non-blocking child-event poll while a rebuild is active."""
+        if not self.cache_rebuild_controller.active or not self.splash_exists():
+            return
+        try:
+            self._cache_rebuild_after_id = self.root.after(
+                100,
+                self.poll_cache_rebuild,
+            )
+        except tk.TclError:
+            self.request_cache_rebuild_pause()
+
+    def poll_cache_rebuild(self) -> None:
+        """Apply latest rebuild updates on the Tk thread and continue polling."""
+        self._cache_rebuild_after_id = None
+        if not self.splash_exists():
+            self.request_cache_rebuild_pause()
+            return
+        for update in self.cache_rebuild_controller.poll():
+            if isinstance(update, CacheRebuildProgress):
+                self._apply_cache_rebuild_progress(update)
+            elif isinstance(update, CacheRebuildSucceeded):
+                self._handle_cache_rebuild_success(update)
+            elif isinstance(update, CacheRebuildPaused):
+                self._handle_cache_rebuild_paused(update)
+            elif isinstance(update, CacheRebuildFailed):
+                self._handle_cache_rebuild_failure(update)
+        if self.cache_rebuild_controller.active:
+            self.schedule_cache_rebuild_poll()
+
+    def _apply_cache_rebuild_progress(self, update: CacheRebuildProgress) -> None:
+        active = self._active_cache_rebuild
+        if active is None:
+            return
+        stage = " ".join(update.stage.strip().split()) or "Rebuilding cache"
+        label = stage[:1].upper() + stage[1:]
+        if update.pausing:
+            label = "Pausing cache rebuild"
+        self.panel.set_row_metadata(
+            active.row_widgets,
+            f"Rebuilding cache — {label}",
+        )
+        self.panel.set_row_progress(active.row_widgets, update.fraction)
+
+    def _restore_cache_rebuild_row(self, active: _ActiveCacheRebuild) -> None:
+        """Restore the row's normal Open action after a terminal rebuild state."""
+        if active.library_map is not None:
+            self.refresh_standard_row(active.library_map)
+            return
+        self.panel.set_row_action(
+            active.row_widgets,
+            "Open",
+            lambda path=active.path: self.open_recent_map(path),
+        )
+        self.panel.set_row_metadata(active.row_widgets, active.base_metadata)
+
+    def _finish_cache_rebuild(self) -> _ActiveCacheRebuild | None:
+        active = self._active_cache_rebuild
+        self._active_cache_rebuild = None
+        return active
+
+    def _handle_cache_rebuild_success(self, update: CacheRebuildSucceeded) -> None:
+        active = self._finish_cache_rebuild()
+        if active is None:
+            return
+        self._restore_cache_rebuild_row(active)
+        self.panel.show_row_status(active.row_widgets, "Cache rebuilt")
+        self.panel.refresh_row_overflow(active.row_widgets)
+
+    def _handle_cache_rebuild_paused(self, update: CacheRebuildPaused) -> None:
+        active = self._finish_cache_rebuild()
+        if active is None:
+            return
+        self._restore_cache_rebuild_row(active)
+        self.panel.show_row_status(active.row_widgets, "Cache rebuild paused")
+        self.panel.refresh_row_overflow(active.row_widgets)
+
+    def _handle_cache_rebuild_failure(self, update: CacheRebuildFailed) -> None:
+        active = self._finish_cache_rebuild()
+        if active is None:
+            return
+        self._restore_cache_rebuild_row(active)
+        self.panel.show_row_status(active.row_widgets, "Cache retained", error=True)
+        self.panel.refresh_row_overflow(active.row_widgets)
+        self.logger.warning(
+            "Cache rebuild failed for %s: %s",
+            active.title,
+            update.error,
+        )
+        message = (
+            f"Couldn't rebuild cache for {active.title}. "
+            "The existing cache was retained."
+        )
+        if update.suggestion:
+            message = f"{message} {update.suggestion}"
+        self._show_error(message, max_wraplength=420)
+
+    def _cache_rebuild_blocks_map_actions(self) -> bool:
+        """Keep splash-owned rebuild lifecycle intact until its child settles."""
+        if not self.cache_rebuild_controller.active:
+            return False
+        self._show_info(
+            "Wait for the cache rebuild to finish or pause before opening another map.",
+            duration_ms=7000,
+            max_wraplength=380,
+        )
+        return True
+
+    def open_recent_map(self, path: str) -> None:
+        """Open a recent row unless the splash currently owns a rebuild child."""
+        if self._cache_rebuild_blocks_map_actions():
+            return
+        self.open_map(path)
 
     def _guided_dive_action_available(self, map_path: str) -> bool:
         """Return whether this map currently exposes an executable dive action."""
@@ -338,7 +665,7 @@ class MapLibraryWorkflow:
         availability before the desktop picker, then validate the actual
         selected JSONL and its current cache before the splash session leaves.
         """
-        if self.open_guided_dive is None:
+        if self.open_guided_dive is None or self._cache_rebuild_blocks_map_actions():
             return
 
         availability = self.guided_dive_menu(map_path)
@@ -405,6 +732,13 @@ class MapLibraryWorkflow:
         row_widgets: MapLibraryRowWidgets | None,
     ) -> None:
         """Remove generated cache data for a map-library row."""
+        if self.cache_rebuild_controller.active:
+            self._show_info(
+                "Cache actions are unavailable while a rebuild is running.",
+                duration_ms=7000,
+                max_wraplength=360,
+            )
+            return
         result = self.remove_cache(path)
         if result.error:
             self.logger.warning("Unable to remove cache for %s: %s", title, result.error)
@@ -430,6 +764,13 @@ class MapLibraryWorkflow:
         row_widgets: MapLibraryRowWidgets | None,
     ) -> None:
         """Remove a downloaded standard-library map and its generated cache."""
+        if self.cache_rebuild_controller.active:
+            self._show_info(
+                "Map files cannot be removed while a cache rebuild is running.",
+                duration_ms=7000,
+                max_wraplength=360,
+            )
+            return
         cache_result = self.remove_cache(map_path)
         removal_result = self.remove_downloaded(
             self.map_library_root_dir,
@@ -511,6 +852,8 @@ class MapLibraryWorkflow:
 
     def open_standard_map(self, library_map) -> None:
         """Open the selected standard-library map when it is available locally."""
+        if self._cache_rebuild_blocks_map_actions():
+            return
         self.sync_map_library_root_dir()
         map_path = (
             self.downloaded_library_map_path(library_map)
@@ -723,6 +1066,8 @@ class MapLibraryWorkflow:
 
     def start_inline_download(self, library_map) -> None:
         """Start a standard-library download from an already resolved row."""
+        if self._cache_rebuild_blocks_map_actions():
+            return
         self.sync_map_library_root_dir()
         if self.controller.active_download.in_progress:
             self._show_info(
@@ -912,6 +1257,8 @@ class MapLibraryWorkflow:
 
     def prepare_catalog_for_download(self, library_map) -> None:
         """Fetch catalog details before downloading an unresolved row."""
+        if self._cache_rebuild_blocks_map_actions():
+            return
         if self.controller.active_download.in_progress:
             self._show_info(
                 "Finish or stop the current map library download before "
@@ -932,6 +1279,8 @@ class MapLibraryWorkflow:
 
     def on_map_action(self, library_map) -> None:
         """Open a local map or start the standard-library download workflow."""
+        if self._cache_rebuild_blocks_map_actions():
+            return
         self.sync_map_library_root_dir()
         resolved_map = self.controller.resolve_catalog_entry(library_map)
         if self.is_downloaded(self.map_library_root_dir, resolved_map):

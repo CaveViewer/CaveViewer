@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.map.cache_build_lock import CacheBuildInProgressError
 from caveviewer.core.map import importer
 from caveviewer.gui import import_process
 
@@ -116,7 +117,34 @@ def test_start_import_process_uses_spawn_context_and_event_queue():
         "/maps",
         context.queues[0],
         context.queues[1],
+        False,
     )
+
+
+def test_start_import_process_passes_forced_rebuild_to_child():
+    context = FakeSpawnContext()
+
+    handle = import_process.start_import_process(
+        {"glb_path": "/maps/cave.glb"},
+        "/maps",
+        force_rebuild=True,
+        context=context,
+    )
+
+    assert handle.process.args[-1] is True
+
+
+def test_start_import_process_allows_a_splash_owned_child_to_outlive_tk_close():
+    context = FakeSpawnContext()
+
+    handle = import_process.start_import_process(
+        {"glb_path": "/maps/cave.glb"},
+        "/maps",
+        daemon=False,
+        context=context,
+    )
+
+    assert handle.process.daemon is False
 
 
 def test_import_event_log_handler_sends_log_event_to_parent_queue():
@@ -172,6 +200,36 @@ def test_import_process_reports_progress_and_done(monkeypatch):
         ("progress", "building cache", 0.5),
         ("done", "/cache/cave", "/cache/cave"),
     ]
+
+
+def test_import_process_forces_rebuild_when_requested(monkeypatch):
+    events = FakeEventQueue()
+
+    def fake_import(_model_descriptor, _textures_dir, **options):
+        assert options["force_rebuild"] is True
+        return "/cache/cave"
+
+    monkeypatch.setattr(importer, "import_and_cache_any", fake_import)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+
+    import_process._run_import_process(
+        {"glb_path": "/maps/cave.glb"},
+        "/maps",
+        events,
+        force_rebuild=True,
+    )
+
+    assert events.events[-1] == ("done", "/cache/cave", "/cache/cave")
 
 
 def test_import_process_reports_paused_checkpoint(monkeypatch):
@@ -285,6 +343,38 @@ def test_import_process_reports_actionable_chunker_error_without_traceback(
     assert any(message in logged for logged in logger.error_messages)
     assert any("Suggestion:" in logged for logged in logger.error_messages)
     assert not any("Traceback" in logged for logged in logger.error_messages)
+
+
+def test_import_process_reports_competing_cache_build_without_traceback(monkeypatch):
+    events = FakeEventQueue()
+
+    def fail_import(*_args, **_kwargs):
+        raise CacheBuildInProgressError("/maps/_cache")
+
+    monkeypatch.setattr(importer, "import_and_cache_any", fail_import)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+
+    import_process._run_import_process(
+        {"glb_path": "/maps/cave.glb"},
+        "/maps",
+        events,
+    )
+
+    kind, message, trace, suggestion = events.events[-1]
+    assert kind == "error"
+    assert "already in progress" in message
+    assert trace == ""
+    assert "Wait for the other cache build" in suggestion
 
 
 def test_import_process_reports_cancelled_without_traceback_on_keyboard_interrupt(

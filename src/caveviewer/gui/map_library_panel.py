@@ -7,7 +7,20 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 
-MenuAction = tuple[str, Callable[[], None]]
+@dataclass(frozen=True)
+class MapLibraryMenuAction:
+    """One enabled or explanatory-disabled entry in a row overflow menu."""
+
+    label: str
+    action: Callable[[], None] | None = None
+    explanation: str | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.action is not None
+
+
+MenuAction = tuple[str, Callable[[], None]] | MapLibraryMenuAction
 MenuActionsFactory = Callable[["MapLibraryRowWidgets"], Iterable[MenuAction]]
 
 
@@ -24,10 +37,13 @@ def map_library_action_visual(
     action_text: str,
     *,
     show_stop_progress: bool = False,
+    show_pause_progress: bool = False,
 ) -> MapLibraryActionVisual:
     """Map the workflow's stable action labels to compact row visuals."""
     if show_stop_progress:
         return MapLibraryActionVisual("stop-progress", "Stop download")
+    if show_pause_progress:
+        return MapLibraryActionVisual("pause-progress", "Pause rebuild")
     if action_text == "Open":
         return MapLibraryActionVisual("chevron-right", "Open map", True)
     if action_text == "Get":
@@ -253,6 +269,7 @@ class MapLibraryPanel:
             size_text="",
             action_text="Open",
             action=action,
+            reserve_metadata=True,
             menu_actions_factory=menu_actions_factory,
         )
         self.recent_rows[entry.key] = widgets
@@ -326,9 +343,21 @@ class MapLibraryPanel:
     ) -> None:
         """Set the stable metadata text for one standard-library row."""
         widgets = self.standard_rows.get(key)
+        self.set_row_metadata(widgets, text, error=error)
+
+    def set_row_metadata(
+        self,
+        row_widgets: MapLibraryRowWidgets | None,
+        text: str,
+        *,
+        error: bool = False,
+    ) -> bool:
+        """Set stable metadata for either a recent or standard-library row."""
+        widgets = row_widgets
         if widgets is None or not self._widget_exists(widgets.metadata_label):
-            return
+            return False
         self._set_metadata_label_base(widgets.metadata_label, text, error=error)
+        return True
 
     def show_row_status(
         self,
@@ -379,9 +408,31 @@ class MapLibraryPanel:
         *,
         enabled: bool = True,
         show_stop_progress: bool = False,
+        show_pause_progress: bool = False,
     ) -> bool:
         """Update the primary action button for one standard-library row."""
         widgets = self.standard_rows.get(key)
+        return self.set_row_action(
+            widgets,
+            text,
+            command,
+            enabled=enabled,
+            show_stop_progress=show_stop_progress,
+            show_pause_progress=show_pause_progress,
+        )
+
+    def set_row_action(
+        self,
+        row_widgets: MapLibraryRowWidgets | None,
+        text: str,
+        command: Callable[[], None],
+        *,
+        enabled: bool = True,
+        show_stop_progress: bool = False,
+        show_pause_progress: bool = False,
+    ) -> bool:
+        """Update the primary action for either a recent or standard row."""
+        widgets = row_widgets
         if widgets is None or not self._widget_exists(widgets.action_button):
             return False
         self._set_action_button(
@@ -390,6 +441,7 @@ class MapLibraryPanel:
             command,
             enabled=enabled,
             show_stop_progress=show_stop_progress,
+            show_pause_progress=show_pause_progress,
         )
         return True
 
@@ -412,6 +464,7 @@ class MapLibraryPanel:
         if widgets is None or not self._widget_exists(widgets.action_button):
             return
         widgets.action_button._cv_show_stop_progress = False
+        widgets.action_button._cv_show_pause_progress = False
         widgets.action_button._cv_progress_fraction = 0.0
         self._draw_action_button(widgets.action_button)
 
@@ -421,6 +474,7 @@ class MapLibraryPanel:
         if widgets is None or not self._widget_exists(widgets.action_button):
             return
         widgets.action_button._cv_show_stop_progress = True
+        widgets.action_button._cv_show_pause_progress = False
         widgets.action_button._cv_progress_fraction = 0.0
         self._draw_action_button(widgets.action_button)
         self.root.update_idletasks()
@@ -444,6 +498,20 @@ class MapLibraryPanel:
         self.set_standard_row_metadata(key, "Downloading…")
         widgets.action_button._cv_progress_fraction = fraction
         self._draw_action_button(widgets.action_button)
+
+    def set_row_progress(
+        self,
+        row_widgets: MapLibraryRowWidgets | None,
+        fraction: float,
+    ) -> None:
+        """Update an inline action-progress ring for either row kind."""
+        if row_widgets is None or not self._widget_exists(row_widgets.action_button):
+            return
+        row_widgets.action_button._cv_progress_fraction = min(
+            1.0,
+            max(0.0, float(fraction)),
+        )
+        self._draw_action_button(row_widgets.action_button)
 
     def sync_after_row_change(self) -> None:
         """Schedule a scroll-region refresh after row insertion/removal."""
@@ -655,6 +723,7 @@ class MapLibraryPanel:
         button._cv_enabled = True
         button._cv_action_text = text
         button._cv_show_stop_progress = False
+        button._cv_show_pause_progress = False
         button._cv_progress_fraction = 0.0
         button._cv_action_visual = map_library_action_visual(text)
         button._cv_row_action_widgets = ()
@@ -704,6 +773,9 @@ class MapLibraryPanel:
         icon = getattr(visual, "icon", "none")
         if icon == "stop-progress":
             self._draw_action_stop_progress(button, width, height)
+            return
+        if icon == "pause-progress":
+            self._draw_action_pause_progress(button, width, height)
             return
         color = (
             self._style.button_fg
@@ -814,6 +886,26 @@ class MapLibraryPanel:
         height: int,
     ) -> None:
         """Draw the centered circular progress ring with a stop square."""
+        self._draw_action_progress(button, width, height, pause=False)
+
+    def _draw_action_pause_progress(
+        self,
+        button,
+        width: int,
+        height: int,
+    ) -> None:
+        """Draw the centered circular progress ring with a pause glyph."""
+        self._draw_action_progress(button, width, height, pause=True)
+
+    def _draw_action_progress(
+        self,
+        button,
+        width: int,
+        height: int,
+        *,
+        pause: bool,
+    ) -> None:
+        """Draw a shared progress ring with either stop or pause affordance."""
         style = self._style
         enabled = getattr(button, "_cv_enabled", True)
         diameter = self._px(style.action_progress_ring_diameter)
@@ -861,6 +953,30 @@ class MapLibraryPanel:
             tags="cv_action_content",
         )
 
+        if pause:
+            pause_width = max(1, stop_size / 3)
+            pause_gap = max(1, stop_size / 5)
+            half_height = stop_size / 2
+            button.create_rectangle(
+                center_x - pause_gap / 2 - pause_width,
+                center_y - half_height,
+                center_x - pause_gap / 2,
+                center_y + half_height,
+                fill=stop_fill_color,
+                outline="",
+                tags="cv_action_content",
+            )
+            button.create_rectangle(
+                center_x + pause_gap / 2,
+                center_y - half_height,
+                center_x + pause_gap / 2 + pause_width,
+                center_y + half_height,
+                fill=stop_fill_color,
+                outline="",
+                tags="cv_action_content",
+            )
+            return
+
         half_stop = stop_size / 2
         button.create_rectangle(
             center_x - half_stop,
@@ -886,16 +1002,19 @@ class MapLibraryPanel:
         *,
         enabled: bool = True,
         show_stop_progress: bool = False,
+        show_pause_progress: bool = False,
     ) -> None:
         self._hide_action_tooltip(button)
         button._cv_enabled = bool(enabled)
         button._cv_action_text = text
         button._cv_show_stop_progress = bool(show_stop_progress)
+        button._cv_show_pause_progress = bool(show_pause_progress)
         button._cv_action_visual = map_library_action_visual(
             text,
             show_stop_progress=show_stop_progress,
+            show_pause_progress=show_pause_progress,
         )
-        if not show_stop_progress:
+        if not show_stop_progress and not show_pause_progress:
             button._cv_progress_fraction = 0.0
 
         def invoke_if_enabled() -> None:
@@ -1029,6 +1148,20 @@ class MapLibraryPanel:
             self._log.warning("could not build map-library row menu: %s", exc)
             return ()
 
+    @staticmethod
+    def _menu_action_parts(
+        menu_action: MenuAction,
+    ) -> tuple[str, Callable[[], None] | None, str | None]:
+        """Normalize legacy action tuples and explanatory disabled entries."""
+        if isinstance(menu_action, MapLibraryMenuAction):
+            return (
+                menu_action.label,
+                menu_action.action,
+                menu_action.explanation,
+            )
+        label, action = menu_action
+        return label, action, None
+
     def _refresh_overflow_button(self, button) -> None:
         has_actions = bool(self._menu_actions(button))
         button._cv_has_menu_actions = has_actions
@@ -1104,35 +1237,43 @@ class MapLibraryPanel:
         frame.pack()
 
         first_item = [None]
-        for item_text, item_action in actions:
-
-            def invoke_and_close(action=item_action) -> None:
-                self.close_active_menu()
-                action()
+        for menu_action in actions:
+            item_text, item_action, explanation = self._menu_action_parts(menu_action)
+            enabled = item_action is not None
+            display_text = item_text
+            if explanation:
+                display_text = f"{item_text}\n{explanation}"
 
             item = tk.Label(
                 frame,
-                text=item_text,
+                text=display_text,
                 font=style.small_font,
                 bg=style.menu_bg,
-                fg=style.menu_text,
+                fg=style.menu_text if enabled else style.disabled_button_fg,
                 padx=self._px(12),
                 pady=self._px(7),
-                cursor="hand2",
-                takefocus=True,
+                cursor="hand2" if enabled else "arrow",
+                takefocus=enabled,
                 anchor="w",
+                justify="left",
             )
-            self._bind_activation(item, invoke_and_close)
-            item.bind(
-                "<Enter>",
-                lambda _event, target=item: target.config(bg=style.menu_hover_bg),
-            )
-            item.bind(
-                "<Leave>",
-                lambda _event, target=item: target.config(bg=style.menu_bg),
-            )
+            if enabled:
+
+                def invoke_and_close(action=item_action) -> None:
+                    self.close_active_menu()
+                    action()
+
+                self._bind_activation(item, invoke_and_close)
+                item.bind(
+                    "<Enter>",
+                    lambda _event, target=item: target.config(bg=style.menu_hover_bg),
+                )
+                item.bind(
+                    "<Leave>",
+                    lambda _event, target=item: target.config(bg=style.menu_bg),
+                )
             item.pack(fill="x")
-            if first_item[0] is None:
+            if enabled and first_item[0] is None:
                 first_item[0] = item
 
         try:

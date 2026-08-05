@@ -11,7 +11,24 @@ from caveviewer.core.capabilities import (
     FileSelectionRoute,
     FileSelectionTarget,
 )
-from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
+from caveviewer.gui.cache_rebuild_controller import (
+    CacheRebuildFailed,
+    CacheRebuildPaused,
+    CacheRebuildProgress,
+    CacheRebuildStarted,
+    CacheRebuildSucceeded,
+)
+from caveviewer.gui.features import (
+    FeatureDecision,
+    FeatureId,
+    FeatureState,
+    decide_map_library_cache_rebuild,
+)
+from caveviewer.gui.map_cache_rebuild import (
+    CacheRebuildPreflight,
+    CacheRebuildTarget,
+)
+from caveviewer.gui.map_library_panel import MapLibraryMenuAction
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_library import recent_map_key
 from caveviewer.gui.map_library_workflow import (
@@ -95,10 +112,13 @@ class _FakePanel:
         *,
         enabled: bool = True,
         show_stop_progress: bool = False,
+        show_pause_progress: bool = False,
     ) -> bool:
         if key not in self.standard_rows:
             return False
         self.standard_actions[key] = (text, command, enabled, show_stop_progress)
+        self.standard_pause_progress = getattr(self, "standard_pause_progress", {})
+        self.standard_pause_progress[key] = show_pause_progress
         return True
 
     def set_standard_row_metadata(
@@ -109,6 +129,35 @@ class _FakePanel:
         error: bool = False,
     ) -> None:
         self.metadata[key] = (text, error)
+
+    def set_row_action(
+        self,
+        row_widgets,
+        text: str,
+        command,
+        *,
+        enabled: bool = True,
+        show_stop_progress: bool = False,
+        show_pause_progress: bool = False,
+    ) -> bool:
+        self.row_action = (
+            row_widgets,
+            text,
+            command,
+            enabled,
+            show_stop_progress,
+            show_pause_progress,
+        )
+        return True
+
+    def set_row_metadata(self, row_widgets, text: str, *, error: bool = False) -> bool:
+        self.row_metadata = (row_widgets, text, error)
+        self.row_metadata_history = getattr(self, "row_metadata_history", [])
+        self.row_metadata_history.append(self.row_metadata)
+        return True
+
+    def set_row_progress(self, row_widgets, fraction: float) -> None:
+        self.row_progress = (row_widgets, fraction)
 
     def refresh_standard_row_overflow(self, key: str) -> None:
         self.last_overflow_key = key
@@ -166,6 +215,42 @@ class _FakeInhibitor:
         self.closed = True
 
 
+class _FakeCacheRebuildController:
+    def __init__(self, *, pause_supported: bool = True) -> None:
+        self.active = False
+        self.pause_supported = pause_supported
+        self.start_calls = []
+        self.pause_calls = 0
+        self.updates = []
+
+    def start(self, target):
+        self.start_calls.append(target)
+        self.active = True
+        return CacheRebuildStarted(target)
+
+    def request_pause(self) -> bool:
+        if not self.active or not self.pause_supported:
+            return False
+        self.pause_calls += 1
+        return True
+
+    def request_pause_for_close(self) -> bool:
+        return self.request_pause()
+
+    def poll(self):
+        updates = tuple(self.updates)
+        self.updates.clear()
+        if any(
+            isinstance(
+                update,
+                (CacheRebuildSucceeded, CacheRebuildPaused, CacheRebuildFailed),
+            )
+            for update in updates
+        ):
+            self.active = False
+        return updates
+
+
 def _library_map(
     display_name: str = "Test Cave",
     asset_name: str = "test.zip",
@@ -199,6 +284,8 @@ def _workflow(
     guided_dive_menu=None,
     guided_dive_preflight=None,
     open_guided_dive=None,
+    cache_rebuild_preflight=None,
+    cache_rebuild_controller=None,
 ):
     root = _FakeRoot()
     panel = _FakePanel()
@@ -247,6 +334,12 @@ def _workflow(
             guided_dive_preflight or _unexpected_guided_dive_preflight
         ),
         open_guided_dive=open_guided_dive,
+        cache_rebuild_preflight=(
+            cache_rebuild_preflight or _hidden_cache_rebuild_preflight
+        ),
+        cache_rebuild_controller=(
+            cache_rebuild_controller or _FakeCacheRebuildController()
+        ),
     )
     return SimpleNamespace(
         workflow=workflow,
@@ -258,6 +351,7 @@ def _workflow(
         inhibitor=inhibitor,
         closed_inhibitors=closed_inhibitors,
         desktop_services=desktop_services,
+        cache_rebuild_controller=workflow.cache_rebuild_controller,
     )
 
 
@@ -282,6 +376,44 @@ def _hidden_guided_dive_decision(_map_path: str | None = None) -> FeatureDecisio
 
 def _unexpected_guided_dive_preflight(*_args):
     raise AssertionError("Guided Dive preflight should not run")
+
+
+def _cache_rebuild_target() -> CacheRebuildTarget:
+    return CacheRebuildTarget(
+        map_path=Path("/maps/Recent Cave"),
+        model_descriptor={
+            "format": "obj",
+            "obj_path": "/maps/Recent Cave/cave.obj",
+            "mtl_path": "/maps/Recent Cave/cave.mtl",
+        },
+        textures_dir=Path("/maps/Recent Cave"),
+        cache_dir=Path("/maps/Recent Cave/_cache"),
+    )
+
+
+def _enabled_cache_rebuild_preflight(
+    _map_path: str | None = None,
+) -> CacheRebuildPreflight:
+    capability = CapabilityResult.available(
+        _cache_rebuild_target(),
+        reason_code="map_cache_rebuild_target_available",
+    )
+    return CacheRebuildPreflight(
+        capability=capability,
+        decision=decide_map_library_cache_rebuild(capability),
+    )
+
+
+def _hidden_cache_rebuild_preflight(
+    _map_path: str | None = None,
+) -> CacheRebuildPreflight:
+    capability = CapabilityResult.unavailable(
+        reason_code="map_cache_rebuild_no_generated_cache",
+    )
+    return CacheRebuildPreflight(
+        capability=capability,
+        decision=decide_map_library_cache_rebuild(capability),
+    )
 
 
 def test_populate_panel_creates_rows_and_starts_catalog_fetch():
@@ -923,3 +1055,142 @@ def test_unavailable_catalog_details_show_retry_state():
     )
     assert state.panel.standard_actions["Test Cave"][0] == "Retry"
     assert state.feedback[-1][1]["kind"] == "error"
+
+
+def test_recent_menu_places_rebuild_above_remove_cache_and_never_opens_map():
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        has_cache=lambda path: path == "/maps/Recent Cave",
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+    )
+    row_widgets = SimpleNamespace(row_shell=object())
+
+    state.workflow.add_recent_row("/maps/Recent Cave")
+    _entry, _open_map, menu_factory = state.panel.recent_row
+    actions = menu_factory(row_widgets)
+
+    assert [item[0] for item in actions] == [
+        "Remove from this list",
+        "Rebuild cache",
+        "Remove cache",
+    ]
+
+    next(action for action in actions if action[0] == "Rebuild cache")[1]()
+
+    assert rebuild_controller.start_calls == [_cache_rebuild_target()]
+    assert state.panel.row_action[1] == "Pause"
+    assert state.panel.row_metadata[1] == "Rebuilding cache — Starting import"
+    assert state.root.after_calls[-1][1] == 100
+    assert state.opened == []
+
+
+def test_rebuild_progress_success_restores_open_and_reports_completion():
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+    )
+    row_widgets = SimpleNamespace(row_shell=object())
+
+    state.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        row_widgets,
+    )
+    rebuild_controller.updates = [
+        CacheRebuildProgress(
+            target=_cache_rebuild_target(),
+            stage="building chunks",
+            fraction=0.625,
+        ),
+        CacheRebuildSucceeded(
+            target=_cache_rebuild_target(),
+            cache_dir="/maps/Recent Cave/_cache",
+        ),
+    ]
+
+    state.workflow.poll_cache_rebuild()
+
+    assert state.panel.row_progress == (row_widgets, 0.625)
+    assert (row_widgets, "Rebuilding cache — Building chunks", False) in (
+        state.panel.row_metadata_history
+    )
+    assert state.panel.row_action[1] == "Open"
+    assert state.panel.status == (row_widgets, "Cache rebuilt", False)
+    assert state.opened == []
+
+
+def test_disabled_rebuild_exposes_explanation_and_failure_retains_cache():
+    unavailable = CapabilityResult.unavailable(
+        reason_code="map_cache_rebuild_source_unavailable",
+    )
+
+    def unavailable_preflight(_path):
+        return CacheRebuildPreflight(
+            capability=unavailable,
+            decision=decide_map_library_cache_rebuild(unavailable),
+        )
+
+    disabled_state = _workflow(
+        [],
+        has_cache=lambda _path: True,
+        cache_rebuild_preflight=unavailable_preflight,
+    )
+    disabled_state.workflow.add_recent_row("/maps/Recent Cave")
+    _entry, _open_map, menu_factory = disabled_state.panel.recent_row
+    actions = menu_factory(SimpleNamespace(row_shell=object()))
+    disabled = next(
+        action
+        for action in actions
+        if isinstance(action, MapLibraryMenuAction)
+        and action.label == "Rebuild cache"
+    )
+
+    assert disabled.action is None
+    assert "source map is unavailable" in disabled.explanation.lower()
+
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+    )
+    row_widgets = SimpleNamespace(row_shell=object())
+    state.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        row_widgets,
+    )
+    rebuild_controller.updates = [
+        CacheRebuildFailed(
+            target=_cache_rebuild_target(),
+            error="disk full",
+        )
+    ]
+
+    state.workflow.poll_cache_rebuild()
+
+    assert state.panel.row_action[1] == "Open"
+    assert state.panel.status == (row_widgets, "Cache retained", True)
+    assert "existing cache was retained" in state.feedback[-1][0].lower()
+
+
+def test_close_requests_cooperative_pause_for_active_rebuild():
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+    )
+    state.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        SimpleNamespace(row_shell=object()),
+    )
+
+    state.workflow.close()
+
+    assert rebuild_controller.pause_calls == 1

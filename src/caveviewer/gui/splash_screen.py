@@ -46,6 +46,7 @@ from caveviewer.gui.dpi_utils import (
     configure_process_dpi_awareness,
     tk_display_scale,
 )
+from caveviewer.gui.cache_rebuild_controller import CacheRebuildJobController
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.map_library_panel import (
@@ -160,6 +161,7 @@ _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _ROOMY_SPLASH_LAYOUT = _WINDOWS_SPLASH_LAYOUT or _LINUX_SPLASH_LAYOUT
 _UI_FONT_FAMILY = _PLATFORM_ADAPTER.ui_font_family()
 _TK_TEXT_SCALE = 1.0
+_CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 
 
 def _scaled_tk_font_size(points: float) -> int:
@@ -667,7 +669,9 @@ def show_splash_screen(
             update_manager.reveal_download(automatic=True)
         session.schedule_after(root, 100, _refresh_update_presentation)
 
-    def _leave_splash() -> None:
+    close_waiting_for_rebuild_pause = [False]
+
+    def _finalize_leave_splash() -> None:
         workflow = map_library_workflow_ref[0]
         if workflow is not None:
             workflow.close()
@@ -675,6 +679,49 @@ def show_splash_screen(
         session.cancel_after_callbacks(root)
         root.withdraw()
         root.quit()
+
+    def _leave_splash() -> None:
+        workflow = map_library_workflow_ref[0]
+        if (
+            workflow is None
+            or not workflow.cache_rebuild_controller.active
+        ):
+            _finalize_leave_splash()
+            return
+        if close_waiting_for_rebuild_pause[0]:
+            return
+        if not workflow.request_cache_rebuild_pause():
+            _finalize_leave_splash()
+            return
+
+        close_waiting_for_rebuild_pause[0] = True
+        show_feedback(
+            root,
+            "Pausing cache rebuild…",
+            kind="info",
+            duration_ms=4000,
+            font=_BODY_FONT,
+        )
+        attempts = [0]
+
+        def wait_for_rebuild_pause() -> None:
+            if not workflow.cache_rebuild_controller.active:
+                _finalize_leave_splash()
+                return
+            attempts[0] += 1
+            if attempts[0] >= _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS:
+                _LOG.warning(
+                    "Timed out waiting for cache rebuild pause; leaving its "
+                    "non-daemon child to save or finish safely."
+                )
+                _finalize_leave_splash()
+                return
+            try:
+                root.after(100, wait_for_rebuild_pause)
+            except Exception:
+                _finalize_leave_splash()
+
+        root.after(100, wait_for_rebuild_pause)
 
     # -- browse button + instructions ---------------------------------------------
     def _show_invalid_map_feedback(message: str) -> None:
@@ -825,6 +872,7 @@ def show_splash_screen(
         logger=_LOG,
         style=_map_library_panel_style(),
     )
+    cache_rebuild_controller = CacheRebuildJobController()
 
     def _show_map_library_feedback(
         message: str,
@@ -856,6 +904,7 @@ def show_splash_screen(
         logger=_LOG,
         map_library_root_dir_provider=default_map_library_install_dir,
         open_guided_dive=_open_guided_dive_from_splash,
+        cache_rebuild_controller=cache_rebuild_controller,
     )
     map_library_workflow_ref[0] = map_library_workflow
 

@@ -243,6 +243,24 @@ Chunks, the manifest, and referenced texture assets are published in one atomic
 directory transaction. Failures must remove staging output and preserve any
 previously valid generated cache.
 
+The splash Map Library can request a forced rebuild only for an existing
+generated cache whose source model is still readable. Its map-local
+`gui.map_cache_rebuild` preflight is evaluated for each overflow menu and again
+at the action boundary; it stays outside `PlatformRuntime.feature_gates` because
+source files, cache safety, and active builders vary per map. The dedicated
+`CacheRebuildJobController` owns that child import from the splash, reports
+inline progress and cooperative OBJ pause checkpoints, and never opens a
+viewer after publication. Rebuilds use the same staging/publish transaction as
+normal imports, so the old cache remains available until replacement succeeds.
+Closing the splash requests a bounded cooperative pause; its rebuild child is
+kept non-daemon long enough to save the checkpoint or safely finish rather than
+being destructively terminated with the Tk window.
+At the core build boundary, `core.map.cache_build_lock` atomically claims a
+private sibling lock directory for each cache target. A second cooperative GUI
+or CLI build fails closed rather than racing the target; normal completion,
+failure, or pause releases the lock while preserving any resumable staging
+checkpoint.
+
 First-time imports launched from the viewer run in a spawned child process
 through `src/caveviewer/gui/import_process.py`. The viewer process owns OpenGL,
 window events, progress rendering, and desktop idle/suspend inhibition; the

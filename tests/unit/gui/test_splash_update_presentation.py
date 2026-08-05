@@ -365,6 +365,15 @@ def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     assert "show_sample_maps_dialog(" not in source
 
 
+def test_cache_rebuild_starts_from_splash_without_a_confirmation_window():
+    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert "CacheRebuildJobController()" in splash_source
+    assert "confirm_cache_rebuild=" not in splash_source
+    assert "_confirm_cache_rebuild_dialog" not in splash_source
+    assert "request_cache_rebuild_pause" in splash_source
+
+
 def test_splash_map_picker_checks_its_directory_selection_route_before_calling_it():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
