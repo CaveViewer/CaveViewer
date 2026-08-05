@@ -8,9 +8,19 @@ from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilitySource,
     CapabilityStatus,
+    DesktopNotificationRoute,
+    DesktopNotificationTarget,
     DirectorySelectionRoute,
     DirectorySelectionTarget,
+    FileSelectionRoute,
+    FileSelectionTarget,
+    IdleSuspendInhibitionRoute,
+    IdleSuspendInhibitionTarget,
     UpdatePackageRevealRoute,
+    ViewerLaunchRoute,
+    ViewerLaunchTarget,
+    WindowBackendPlan,
+    WindowSystem,
 )
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.platform import runtime
@@ -62,6 +72,11 @@ class FakeTlsTrustAdapter:
         raise AssertionError("runtime composition must not create an SSL context")
 
 
+class FakeWindowBackendAdapter:
+    def launch_viewer(self, _target, _request):
+        raise AssertionError("runtime composition must not launch a viewer")
+
+
 def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_UPDATE_BRANCH", "ignored-process-value")
     adapter = FakeUpdateAdapter()
@@ -70,6 +85,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     recording_reveal_adapter = FakeSavedRecordingRevealAdapter()
     recording_process_adapter = FakeRecordingProcessAdapter()
     tls_trust_adapter = FakeTlsTrustAdapter()
+    window_backend_adapter = FakeWindowBackendAdapter()
 
     runtime = create_platform_runtime(
         platform_adapter=adapter,
@@ -78,6 +94,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
         saved_recording_reveal_adapter=recording_reveal_adapter,
         recording_process_adapter=recording_process_adapter,
         tls_trust_adapter=tls_trust_adapter,
+        window_backend_adapter=window_backend_adapter,
         environment={
             "CAVEVIEWER_UPDATE_BRANCH": "release-candidate",
             "CAVEVIEWER_UPDATE_CHANNEL": "prerelease",
@@ -92,6 +109,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.saved_recording_reveal_adapter is recording_reveal_adapter
     assert runtime.recording_process_adapter is recording_process_adapter
     assert runtime.tls_trust_adapter is tls_trust_adapter
+    assert runtime.window_backend_adapter is window_backend_adapter
     assert runtime.profile.platform_name == "linux"
     assert runtime.profile.machine == "x86_64"
     assert runtime.update_configuration.branch == "release-candidate"
@@ -255,6 +273,228 @@ def test_directory_selection_preflight_rejects_a_route_that_disagrees_with_targe
 
     with pytest.raises(ValueError, match="must match its typed target"):
         runtime.DirectorySelectionPreflight(
+            capability=capability,
+            decision=decision,
+        )
+
+
+def test_runtime_keeps_file_selection_probe_on_demand(monkeypatch):
+    calls = []
+    desktop_services = object()
+    target = FileSelectionTarget(
+        primary_route=FileSelectionRoute.PORTAL,
+        fallback_route=FileSelectionRoute.TK,
+    )
+
+    def probe(service):
+        calls.append(service)
+        return CapabilityResult.available(
+            target,
+            reason_code="file_selection_portal_route_available",
+        )
+
+    monkeypatch.setattr(runtime, "probe_file_selection", probe)
+    platform_runtime = create_platform_runtime(
+        platform_adapter=FakeUpdateAdapter(),
+        desktop_services=desktop_services,
+        environment={},
+    )
+
+    assert calls == []
+    assert FeatureId.FILE_SELECTION not in platform_runtime.feature_gates.decisions
+
+    preflight = platform_runtime.file_selection_preflight()
+
+    assert calls == [desktop_services]
+    assert preflight.capability.value is target
+    assert preflight.decision.feature is FeatureId.FILE_SELECTION
+    assert preflight.decision.state is FeatureState.ENABLED
+    assert preflight.decision.route == "portal_then_tk"
+
+
+def test_file_selection_preflight_rejects_a_route_that_disagrees_with_target():
+    capability = CapabilityResult.available(
+        FileSelectionTarget(FileSelectionRoute.TK),
+        reason_code="file_selection_tk_route_available",
+    )
+    decision = FeatureDecision(
+        feature=FeatureId.FILE_SELECTION,
+        state=FeatureState.ENABLED,
+        reason_code="file_selection_available",
+        explanation="File selection is available.",
+        route="portal_then_tk",
+    )
+
+    with pytest.raises(ValueError, match="must match its typed target"):
+        runtime.FileSelectionPreflight(
+            capability=capability,
+            decision=decision,
+        )
+
+
+def test_runtime_keeps_desktop_notification_probe_on_demand(monkeypatch):
+    calls = []
+    desktop_services = object()
+    target = DesktopNotificationTarget(
+        primary_route=DesktopNotificationRoute.PORTAL,
+        fallback_route=DesktopNotificationRoute.NOOP,
+    )
+
+    def probe(service):
+        calls.append(service)
+        return CapabilityResult.available(
+            target,
+            reason_code="desktop_notification_portal_route_available",
+        )
+
+    monkeypatch.setattr(runtime, "probe_desktop_notification", probe)
+    platform_runtime = create_platform_runtime(
+        platform_adapter=FakeUpdateAdapter(),
+        desktop_services=desktop_services,
+        environment={},
+    )
+
+    assert calls == []
+    assert FeatureId.DESKTOP_NOTIFICATION not in platform_runtime.feature_gates.decisions
+
+    preflight = platform_runtime.desktop_notification_preflight()
+
+    assert calls == [desktop_services]
+    assert preflight.capability.value is target
+    assert preflight.decision.feature is FeatureId.DESKTOP_NOTIFICATION
+    assert preflight.decision.state is FeatureState.ENABLED
+    assert preflight.decision.route == "portal_then_noop"
+
+
+def test_desktop_notification_preflight_rejects_a_route_that_disagrees_with_target():
+    capability = CapabilityResult.available(
+        DesktopNotificationTarget(DesktopNotificationRoute.INJECTED),
+        reason_code="desktop_notification_injected_service_available",
+    )
+    decision = FeatureDecision(
+        feature=FeatureId.DESKTOP_NOTIFICATION,
+        state=FeatureState.ENABLED,
+        reason_code="desktop_notification_available",
+        explanation="Desktop notifications are available.",
+        route="portal_then_noop",
+    )
+
+    with pytest.raises(ValueError, match="must match its typed target"):
+        runtime.DesktopNotificationPreflight(
+            capability=capability,
+            decision=decision,
+        )
+
+
+def test_runtime_keeps_idle_suspend_inhibition_probe_on_demand(monkeypatch):
+    calls = []
+    desktop_services = object()
+    target = IdleSuspendInhibitionTarget(
+        primary_route=IdleSuspendInhibitionRoute.PORTAL,
+        fallback_route=IdleSuspendInhibitionRoute.NOOP,
+    )
+
+    def probe(service):
+        calls.append(service)
+        return CapabilityResult.available(
+            target,
+            reason_code="idle_suspend_inhibition_portal_route_available",
+        )
+
+    monkeypatch.setattr(runtime, "probe_idle_suspend_inhibition", probe)
+    platform_runtime = create_platform_runtime(
+        platform_adapter=FakeUpdateAdapter(),
+        desktop_services=desktop_services,
+        environment={},
+    )
+
+    assert calls == []
+    assert (
+        FeatureId.IDLE_SUSPEND_INHIBITION
+        not in platform_runtime.feature_gates.decisions
+    )
+
+    preflight = platform_runtime.idle_suspend_inhibition_preflight()
+
+    assert calls == [desktop_services]
+    assert preflight.capability.value is target
+    assert preflight.decision.feature is FeatureId.IDLE_SUSPEND_INHIBITION
+    assert preflight.decision.state is FeatureState.ENABLED
+    assert preflight.decision.route == "portal_then_noop"
+
+
+def test_idle_suspend_inhibition_preflight_rejects_route_target_disagreement():
+    capability = CapabilityResult.available(
+        IdleSuspendInhibitionTarget(IdleSuspendInhibitionRoute.INJECTED),
+        reason_code="idle_suspend_inhibition_injected_service_available",
+    )
+    decision = FeatureDecision(
+        feature=FeatureId.IDLE_SUSPEND_INHIBITION,
+        state=FeatureState.ENABLED,
+        reason_code="idle_suspend_inhibition_available",
+        explanation="Desktop idle/suspend inhibition is available.",
+        route="portal_then_noop",
+    )
+
+    with pytest.raises(ValueError, match="must match its typed target"):
+        runtime.IdleSuspendInhibitionPreflight(
+            capability=capability,
+            decision=decision,
+        )
+
+
+def test_runtime_keeps_viewer_launch_probe_on_demand(monkeypatch):
+    calls = []
+    target = ViewerLaunchTarget(
+        ViewerLaunchRoute.NATIVE_MODERNGL,
+        WindowBackendPlan(WindowSystem.AUTO, ()),
+    )
+
+    def probe(*, platform_name=None):
+        calls.append(platform_name)
+        return CapabilityResult.available(
+            target,
+            reason_code="viewer_launch_native_route_available",
+        )
+
+    monkeypatch.setattr(runtime, "probe_viewer_launch", probe)
+    platform_runtime = create_platform_runtime(
+        platform_adapter=FakeUpdateAdapter(),
+        desktop_services=object(),
+        environment={},
+        platform_name="darwin",
+    )
+
+    assert calls == []
+    assert FeatureId.VIEWER_LAUNCH not in platform_runtime.feature_gates.decisions
+
+    preflight = platform_runtime.viewer_launch_preflight()
+
+    assert calls == ["darwin"]
+    assert preflight.capability.value is target
+    assert preflight.decision.feature is FeatureId.VIEWER_LAUNCH
+    assert preflight.decision.state is FeatureState.ENABLED
+    assert preflight.decision.route == "native_moderngl"
+
+
+def test_viewer_launch_preflight_rejects_route_target_disagreement():
+    capability = CapabilityResult.available(
+        ViewerLaunchTarget(
+            ViewerLaunchRoute.NATIVE_MODERNGL,
+            WindowBackendPlan(WindowSystem.AUTO, ()),
+        ),
+        reason_code="viewer_launch_native_route_available",
+    )
+    decision = FeatureDecision(
+        feature=FeatureId.VIEWER_LAUNCH,
+        state=FeatureState.ENABLED,
+        reason_code="viewer_launch_available",
+        explanation="The viewer window is available.",
+        route="glfw_moderngl:x11",
+    )
+
+    with pytest.raises(ValueError, match="must match its typed target"):
+        runtime.ViewerLaunchPreflight(
             capability=capability,
             decision=decision,
         )

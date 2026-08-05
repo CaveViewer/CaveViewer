@@ -68,6 +68,7 @@ from .recording_process import (
     create_recording_process_adapter,
 )
 from .tls_trust import TlsTrustAdapter, create_tls_trust_adapter
+from .window_backend import WindowBackendAdapter, create_window_backend_adapter
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +295,7 @@ class PlatformRuntime:
     saved_recording_reveal_adapter: SavedRecordingRevealAdapter
     recording_process_adapter: RecordingProcessAdapter
     tls_trust_adapter: TlsTrustAdapter
+    window_backend_adapter: WindowBackendAdapter
     update_package_reveal_capability: CapabilityResult[UpdatePackageRevealRoute]
     feature_gates: FeatureGateRegistry
 
@@ -435,6 +437,7 @@ def create_platform_runtime(
     saved_recording_reveal_adapter: SavedRecordingRevealAdapter | None = None,
     recording_process_adapter: RecordingProcessAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
+    window_backend_adapter: WindowBackendAdapter | None = None,
     environment: Mapping[str, str] | None = None,
     platform_name: str | None = None,
     machine: str | None = None,
@@ -478,6 +481,9 @@ def create_platform_runtime(
     )
     resolved_tls_trust_adapter = (
         tls_trust_adapter or create_tls_trust_adapter(resolved_platform_adapter)
+    )
+    resolved_window_backend_adapter = (
+        window_backend_adapter or create_window_backend_adapter()
     )
     try:
         update_configuration = build_update_configuration(
@@ -530,6 +536,7 @@ def create_platform_runtime(
         saved_recording_reveal_adapter=resolved_saved_recording_reveal_adapter,
         recording_process_adapter=resolved_recording_process_adapter,
         tls_trust_adapter=resolved_tls_trust_adapter,
+        window_backend_adapter=resolved_window_backend_adapter,
         update_package_reveal_capability=update_package_reveal_capability,
         feature_gates=FeatureGateRegistry(
             {

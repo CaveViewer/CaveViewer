@@ -83,7 +83,15 @@ from caveviewer.gui.platform.desktop_inhibition import (
     release_desktop_inhibitor,
 )
 from caveviewer.gui.platform import DesktopServiceError, tk_root_options
-from caveviewer.gui.platform.windowing import run_window_config
+from caveviewer.gui.platform.viewer_launch import (
+    authorized_viewer_launch_target,
+    viewer_launch_preflight,
+)
+from caveviewer.gui.platform.window_backend import (
+    ViewerWindowLaunchRequest,
+    WindowBackendAdapter,
+    create_window_backend_adapter,
+)
 from caveviewer.resources import image_path, resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
 
@@ -463,6 +471,17 @@ def _platform_adapter_for_runtime(platform_runtime: PlatformRuntime | None = Non
     if platform_runtime is not None:
         return platform_runtime.platform_adapter
     return get_platform_adapter()
+
+
+def _window_backend_adapter_for_runtime(
+    platform_runtime: PlatformRuntime | None = None,
+) -> WindowBackendAdapter:
+    """Use the injected viewer-window executor with a legacy direct fallback."""
+    if platform_runtime is not None:
+        adapter = getattr(platform_runtime, "window_backend_adapter", None)
+        if adapter is not None:
+            return adapter
+    return create_window_backend_adapter()
 
 
 def _saved_recording_reveal_adapter_for_runtime(
@@ -6581,6 +6600,10 @@ def _launch_viewer_window(
     *, window_size_override: tuple[int, int] | None = None
 ) -> None:
     """Launch with dimensions expressed in the selected backend's coordinates."""
+    preflight = viewer_launch_preflight(
+        platform_runtime=CaveViewerWindow.cave_platform_runtime,
+    )
+    target = authorized_viewer_launch_target(preflight)
     if window_size_override is not None:
         CaveViewerWindow.window_size = window_size_override
         window_size_fraction = None
@@ -6597,12 +6620,17 @@ def _launch_viewer_window(
         CaveViewerWindow.window_size = _desktop_relative_window_size()
         window_size_fraction = _DESKTOP_WINDOW_SCALE
         fallback_window_size = _DEFAULT_WINDOW_SIZE
-    run_window_config(
-        CaveViewerWindow,
-        runner=_run_moderngl_window_config,
-        window_size_fraction=window_size_fraction,
-        fallback_window_size=fallback_window_size,
-        force_resizable_window=True,
+    _window_backend_adapter_for_runtime(
+        CaveViewerWindow.cave_platform_runtime
+    ).launch_viewer(
+        target,
+        ViewerWindowLaunchRequest(
+            config_class=CaveViewerWindow,
+            runner=_run_moderngl_window_config,
+            window_size_fraction=window_size_fraction,
+            fallback_window_size=fallback_window_size,
+            force_resizable_window=True,
+        ),
     )
 
 

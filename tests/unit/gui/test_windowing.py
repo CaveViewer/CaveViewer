@@ -8,7 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from caveviewer.core.capabilities import (
+    ViewerLaunchRoute,
+    ViewerLaunchTarget,
+    WindowBackendPlan,
+)
 from caveviewer.gui.platform.app_identity import LINUX_WINDOW_INSTANCE_NAME
+from caveviewer.gui.platform.window_backend import (
+    PlatformWindowBackendAdapter,
+    ViewerWindowLaunchRequest,
+)
 from caveviewer.gui.platform.windowing import (
     WINDOW_SYSTEM_ENV_VAR,
     WindowBackendError,
@@ -134,6 +143,49 @@ def test_non_linux_platform_keeps_existing_moderngl_backend():
         environ={},
         platform_name="darwin",
         glfw_loader=lambda _system: pytest.fail("GLFW must remain Linux-only"),
+    )
+
+    assert calls == [(object, [])]
+
+
+def test_focused_adapter_executes_the_authorized_target_without_replanning():
+    glfw = FakeGlfw()
+    loaded = []
+    calls = []
+    target = ViewerLaunchTarget(
+        ViewerLaunchRoute.GLFW_MODERNGL,
+        WindowBackendPlan(WindowSystem.X11, (WindowSystem.X11,)),
+    )
+
+    PlatformWindowBackendAdapter(
+        glfw_loader=lambda window_system: loaded.append(window_system) or glfw
+    ).launch_viewer(
+        target,
+        ViewerWindowLaunchRequest(
+            config_class=object,
+            runner=lambda config, args: calls.append((config, args)),
+        ),
+    )
+
+    assert loaded == [WindowSystem.X11]
+    assert calls == [(object, ["--window", "glfw"])]
+
+
+def test_focused_adapter_keeps_native_target_outside_glfw():
+    calls = []
+    target = ViewerLaunchTarget(
+        ViewerLaunchRoute.NATIVE_MODERNGL,
+        WindowBackendPlan(WindowSystem.AUTO, ()),
+    )
+
+    PlatformWindowBackendAdapter(
+        glfw_loader=lambda _window_system: pytest.fail("native target must not load GLFW")
+    ).launch_viewer(
+        target,
+        ViewerWindowLaunchRequest(
+            config_class=object,
+            runner=lambda config, args: calls.append((config, args)),
+        ),
     )
 
     assert calls == [(object, [])]

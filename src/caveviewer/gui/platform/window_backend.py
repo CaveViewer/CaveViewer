@@ -1,0 +1,500 @@
+"""Execute typed viewer-window routes behind the platform boundary."""
+
+from __future__ import annotations
+
+import importlib
+import os
+import sys
+from dataclasses import dataclass
+from types import ModuleType
+from typing import Any, Callable, Protocol
+
+from caveviewer.core.capabilities import (
+    ViewerLaunchRoute,
+    ViewerLaunchTarget,
+    WindowBackendPlan,
+    WindowSystem,
+)
+from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.gui.platform.app_identity import LINUX_WINDOW_INSTANCE_NAME
+from caveviewer.version import APPLICATION_ID
+
+from .windowing import WINDOW_SYSTEM_ENV_VAR, WindowBackendError
+
+
+_LOG = get_logger("Windowing")
+
+
+@dataclass(frozen=True, slots=True)
+class ViewerWindowLaunchRequest:
+    """Renderer-owned inputs consumed by one authorized window launch.
+
+    The request carries the existing ModernGL-window entrypoint unchanged. It
+    is intentionally separate from ``ViewerLaunchTarget``: policy selects the
+    platform route, while the viewer owns its configuration class, render-loop
+    runner, and presentation sizing request.
+    """
+
+    config_class: type
+    runner: Callable[..., None]
+    window_size_fraction: float | None = None
+    fallback_window_size: tuple[int, int] | None = None
+    force_resizable_window: bool = False
+
+    def __post_init__(self) -> None:
+        if (
+            self.window_size_fraction is not None
+            and not 0.0 < self.window_size_fraction <= 1.0
+        ):
+            raise ValueError(
+                "window_size_fraction must be greater than 0 and at most 1"
+            )
+
+
+class WindowBackendAdapter(Protocol):
+    """Execute an already-authorized viewer-window route."""
+
+    def launch_viewer(
+        self,
+        target: ViewerLaunchTarget,
+        request: ViewerWindowLaunchRequest,
+    ) -> None:
+        """Create and run the viewer window through the selected native route."""
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformWindowBackendAdapter:
+    """Current GLFW/ModernGL implementation of the narrow launch boundary.
+
+    It preserves CaveViewer's established Linux behavior: X11 is preferred in
+    automatic mode when available, Wayland uses the EGL context path, and only
+    recognized backend-initialization failures may try the next policy-selected
+    attempt. Renderer, map, and application failures are deliberately not
+    reinterpreted as a reason to change native window backends.
+    """
+
+    glfw_loader: Callable[[WindowSystem], Any] | None = None
+
+    def launch_viewer(
+        self,
+        target: ViewerLaunchTarget,
+        request: ViewerWindowLaunchRequest,
+    ) -> None:
+        """Execute exactly the target selected by the launch preflight."""
+        if target.route is ViewerLaunchRoute.NATIVE_MODERNGL:
+            request.runner(request.config_class, args=[])
+            return
+        if target.route is not ViewerLaunchRoute.GLFW_MODERNGL:
+            raise WindowBackendError(
+                f"Unsupported viewer launch route: {target.route!r}"
+            )
+        self._launch_glfw(target.backend_plan, request)
+
+    def _launch_glfw(
+        self,
+        plan: WindowBackendPlan,
+        request: ViewerWindowLaunchRequest,
+    ) -> None:
+        load_glfw = self.glfw_loader or _load_glfw_variant
+        last_error: Exception | None = None
+        for attempt_index, window_system in enumerate(plan.attempts):
+            glfw_module = None
+            try:
+                glfw_module = load_glfw(window_system)
+                _prepare_glfw(glfw_module, window_system)
+                if request.window_size_fraction is not None:
+                    fallback = request.fallback_window_size or getattr(
+                        request.config_class,
+                        "window_size",
+                        (1280, 720),
+                    )
+                    request.config_class.window_size = _glfw_workarea_window_size(
+                        glfw_module,
+                        window_system=window_system,
+                        fraction=request.window_size_fraction,
+                        fallback=fallback,
+                    )
+                _LOG.info(
+                    "Starting GLFW viewer with %s (mode=%s).",
+                    window_system.value,
+                    plan.mode.value,
+                )
+                # ModernGL-window gives its environment variable precedence
+                # over command-line arguments. Temporarily own it so a stale
+                # MODERNGL_WINDOW=pyglet cannot bypass the selected route.
+                previous_window_backend = os.environ.get("MODERNGL_WINDOW")
+                os.environ["MODERNGL_WINDOW"] = "glfw"
+                try:
+
+                    def run_glfw_window() -> None:
+                        if request.window_size_fraction is None:
+                            request.runner(
+                                request.config_class,
+                                args=["--window", "glfw"],
+                            )
+                        else:
+                            _run_with_fixed_glfw_window_scale(
+                                glfw_module,
+                                lambda: request.runner(
+                                    request.config_class,
+                                    args=["--window", "glfw"],
+                                ),
+                                force_resizable_window=request.force_resizable_window,
+                            )
+
+                    _run_with_platform_moderngl_context(
+                        request.config_class,
+                        window_system=window_system,
+                        runner=run_glfw_window,
+                    )
+                finally:
+                    if previous_window_backend is None:
+                        os.environ.pop("MODERNGL_WINDOW", None)
+                    else:
+                        os.environ["MODERNGL_WINDOW"] = previous_window_backend
+                return
+            except Exception as exc:
+                last_error = exc
+                if glfw_module is not None:
+                    _terminate_glfw(glfw_module)
+                can_retry = (
+                    plan.mode is WindowSystem.AUTO
+                    and attempt_index + 1 < len(plan.attempts)
+                    and _is_backend_initialization_failure(exc)
+                )
+                if can_retry:
+                    next_system = plan.attempts[attempt_index + 1]
+                    _LOG.warning(
+                        "GLFW %s initialization failed (%s); retrying %s.",
+                        window_system.value,
+                        exc,
+                        next_system.value,
+                    )
+                    continue
+                if _is_backend_initialization_failure(exc):
+                    raise WindowBackendError(
+                        "Could not initialize the GLFW "
+                        f"{window_system.value} backend: {exc}. "
+                        f"Set {WINDOW_SYSTEM_ENV_VAR}=x11 or =wayland "
+                        "to select a backend explicitly."
+                    ) from exc
+                raise
+
+        raise WindowBackendError(
+            f"Could not initialize a Linux window backend: {last_error}"
+        )
+
+
+def create_window_backend_adapter(
+    *,
+    glfw_loader: Callable[[WindowSystem], Any] | None = None,
+) -> PlatformWindowBackendAdapter:
+    """Compose the current native viewer-window executor."""
+    return PlatformWindowBackendAdapter(glfw_loader=glfw_loader)
+
+
+def _glfw_workarea_window_size(
+    glfw_module: Any,
+    *,
+    window_system: WindowSystem,
+    fraction: float,
+    fallback: tuple[int, int],
+) -> tuple[int, int]:
+    """Scale the primary monitor's usable work area for a windowed launch."""
+    try:
+        monitor = glfw_module.get_primary_monitor()
+        if monitor is None:
+            raise RuntimeError("GLFW did not report a primary monitor")
+        _x, _y, work_width, work_height = glfw_module.get_monitor_workarea(monitor)
+        work_width = int(work_width)
+        work_height = int(work_height)
+        if work_width <= 0 or work_height <= 0:
+            raise RuntimeError("GLFW reported an invalid monitor work area")
+    except Exception as exc:
+        _LOG.warning(
+            "Could not detect the GLFW monitor work area (%s); using %dx%d.",
+            exc,
+            *fallback,
+        )
+        return fallback
+
+    content_scale = (
+        _glfw_monitor_content_scale(glfw_module, monitor)
+        if window_system is WindowSystem.WAYLAND
+        else (1.0, 1.0)
+    )
+    if _wayland_workarea_needs_logical_coordinates(
+        glfw_module,
+        monitor,
+        window_system=window_system,
+        work_width=work_width,
+        work_height=work_height,
+        content_scale=content_scale,
+    ):
+        work_width = int(round(work_width / content_scale[0]))
+        work_height = int(round(work_height / content_scale[1]))
+
+    window_size = (
+        max(1, int(round(work_width * fraction))),
+        max(1, int(round(work_height * fraction))),
+    )
+    _LOG.info(
+        "GLFW work area is %dx%d screen coordinates; opening at %dx%d.",
+        work_width,
+        work_height,
+        *window_size,
+    )
+    return window_size
+
+
+def _glfw_monitor_content_scale(glfw_module: Any, monitor: Any) -> tuple[float, float]:
+    getter = getattr(glfw_module, "get_monitor_content_scale", None)
+    if not callable(getter):
+        return 1.0, 1.0
+    try:
+        x_scale, y_scale = getter(monitor)
+        x_scale = float(x_scale)
+        y_scale = float(y_scale)
+        if x_scale <= 0.0 or y_scale <= 0.0:
+            return 1.0, 1.0
+        return x_scale, y_scale
+    except Exception:
+        return 1.0, 1.0
+
+
+def _wayland_workarea_needs_logical_coordinates(
+    glfw_module: Any,
+    monitor: Any,
+    *,
+    window_system: WindowSystem,
+    work_width: int,
+    work_height: int,
+    content_scale: tuple[float, float],
+) -> bool:
+    if window_system is not WindowSystem.WAYLAND:
+        return False
+    x_scale, y_scale = content_scale
+    if x_scale <= 1.0 and y_scale <= 1.0:
+        return False
+
+    video_mode = None
+    getter = getattr(glfw_module, "get_video_mode", None)
+    if callable(getter):
+        try:
+            video_mode = getter(monitor)
+        except Exception:
+            video_mode = None
+
+    mode_width, mode_height = _video_mode_size(video_mode)
+    if mode_width and mode_height:
+        logical_width = mode_width / x_scale
+        logical_height = mode_height / y_scale
+        return work_width > logical_width * 1.2 or work_height > logical_height * 1.2
+
+    return True
+
+
+def _video_mode_size(video_mode: Any) -> tuple[int | None, int | None]:
+    if video_mode is None:
+        return None, None
+    size = getattr(video_mode, "size", None)
+    if size is not None:
+        try:
+            if len(size) >= 2:
+                return int(size[0]), int(size[1])
+        except Exception:
+            pass
+    width = getattr(video_mode, "width", None)
+    height = getattr(video_mode, "height", None)
+    if width is not None and height is not None:
+        return int(width), int(height)
+    if isinstance(video_mode, tuple) and len(video_mode) >= 2:
+        return int(video_mode[0]), int(video_mode[1])
+    return None, None
+
+
+def _run_with_fixed_glfw_window_scale(
+    glfw_module: Any,
+    runner: Callable[[], None],
+    *,
+    force_resizable_window: bool = False,
+) -> None:
+    """Prevent ModernGL-window from scaling a relative size a second time."""
+    original_window_hint = getattr(glfw_module, "window_hint", None)
+    scale_hint = getattr(glfw_module, "SCALE_TO_MONITOR", None)
+    false_value = getattr(glfw_module, "FALSE", 0)
+    true_value = getattr(glfw_module, "TRUE", 1)
+    resizable_hint = getattr(glfw_module, "RESIZABLE", None)
+    decorated_hint = getattr(glfw_module, "DECORATED", None)
+    has_hint_override = scale_hint is not None or (
+        force_resizable_window
+        and (resizable_hint is not None or decorated_hint is not None)
+    )
+    if not callable(original_window_hint) or not has_hint_override:
+        runner()
+        return
+
+    def window_hint(hint, value):
+        if scale_hint is not None and hint == scale_hint:
+            value = false_value
+        elif force_resizable_window and (
+            hint == resizable_hint or hint == decorated_hint
+        ):
+            # CaveViewer must stay manually resizable even when launched through
+            # AppImage/Wayland stacks that leave sticky GLFW hints behind.
+            # Decorations are part of the same user-visible contract because
+            # GNOME exposes resize handles through the decorated surface.
+            value = true_value
+        return original_window_hint(hint, value)
+
+    glfw_module.window_hint = window_hint
+    try:
+        runner()
+    finally:
+        glfw_module.window_hint = original_window_hint
+
+
+def _run_with_platform_moderngl_context(
+    config_class: type,
+    *,
+    window_system: WindowSystem,
+    runner: Callable[[], None],
+) -> None:
+    """Give ModernGL the context detector matching the selected GLFW platform."""
+    if (
+        window_system is not WindowSystem.WAYLAND
+        or not hasattr(config_class, "init_mgl_context")
+    ):
+        runner()
+        return
+
+    had_local_initializer = "init_mgl_context" in vars(config_class)
+    original_initializer = vars(config_class).get("init_mgl_context")
+
+    @classmethod
+    def init_mgl_context(cls):
+        import moderngl
+
+        return moderngl.create_context(
+            require=_moderngl_require_code(getattr(cls, "gl_version", (3, 3))),
+            share=True,
+            backend="egl",
+        )
+
+    # ModernGL-window's default Linux context detector is X11/GLX. A GLFW
+    # Wayland window exposes an EGL current context, so provide the detector
+    # explicitly for this attempt and restore the config class afterward.
+    config_class.init_mgl_context = init_mgl_context
+    try:
+        runner()
+    finally:
+        if had_local_initializer:
+            config_class.init_mgl_context = original_initializer
+        else:
+            delattr(config_class, "init_mgl_context")
+
+
+def _moderngl_require_code(gl_version: tuple[int, int]) -> int:
+    try:
+        major, minor = gl_version
+        return int(major) * 100 + int(minor) * 10
+    except Exception:
+        return 330
+
+
+def _load_glfw_variant(window_system: WindowSystem) -> ModuleType:
+    """Load the wheel's matching native library, reloading only for fallback."""
+    os.environ["PYGLFW_LIBRARY_VARIANT"] = window_system.value
+    loaded = sys.modules.get("glfw")
+    if loaded is not None and getattr(
+        loaded,
+        "_caveviewer_variant",
+        None,
+    ) != window_system.value:
+        _terminate_glfw(loaded)
+        # pyGLFW selects its native library in glfw.library at import time.
+        # Removing that private selector and reloading the public binding lets
+        # automatic mode retry the wheel's X11 library after Wayland failure.
+        sys.modules.pop("glfw.library", None)
+        loaded = importlib.reload(loaded)
+    if loaded is None:
+        loaded = importlib.import_module("glfw")
+    loaded._caveviewer_variant = window_system.value
+    return loaded
+
+
+def _prepare_glfw(glfw_module: Any, window_system: WindowSystem) -> None:
+    target_platform = (
+        glfw_module.PLATFORM_WAYLAND
+        if window_system is WindowSystem.WAYLAND
+        else glfw_module.PLATFORM_X11
+    )
+    if hasattr(glfw_module, "platform_supported") and not glfw_module.platform_supported(
+        target_platform
+    ):
+        raise WindowBackendError(
+            f"the loaded GLFW library does not support {window_system.value}"
+        )
+    glfw_module.init_hint(glfw_module.PLATFORM, target_platform)
+    libdecor_hint = getattr(glfw_module, "WAYLAND_LIBDECOR", None)
+    prefer_libdecor = getattr(glfw_module, "WAYLAND_PREFER_LIBDECOR", None)
+    if (
+        window_system is WindowSystem.WAYLAND
+        and libdecor_hint is not None
+        and prefer_libdecor is not None
+    ):
+        # GNOME's Wayland session relies on client-side decorations for normal
+        # titlebar/border resize affordances. Prefer libdecor when GLFW exposes
+        # the init hint so AppImage launches do not regress into borderless,
+        # hard-to-resize surfaces.
+        glfw_module.init_hint(libdecor_hint, prefer_libdecor)
+    if not glfw_module.init():
+        error_detail = "GLFW initialization returned false"
+        try:
+            _error_code, description = glfw_module.get_error()
+            if description:
+                error_detail = (
+                    description.decode("utf-8", "replace")
+                    if isinstance(description, bytes)
+                    else str(description)
+                )
+        except Exception:
+            pass
+        raise WindowBackendError(error_detail)
+
+    # These hints must be set after glfwInit and before ModernGL-window creates
+    # the native window. The backend's own second glfwInit call is harmless and
+    # does not clear them.
+    hint_string = getattr(glfw_module, "window_hint_string", None)
+    if callable(hint_string):
+        hint_string(glfw_module.WAYLAND_APP_ID, APPLICATION_ID)
+        hint_string(glfw_module.X11_CLASS_NAME, APPLICATION_ID)
+        hint_string(glfw_module.X11_INSTANCE_NAME, LINUX_WINDOW_INSTANCE_NAME)
+
+    actual_platform = getattr(glfw_module, "get_platform", lambda: target_platform)()
+    if actual_platform != target_platform:
+        raise WindowBackendError(
+            f"GLFW selected platform {actual_platform}, expected {target_platform}"
+        )
+
+
+def _terminate_glfw(glfw_module: Any) -> None:
+    try:
+        glfw_module.terminate()
+    except Exception:
+        pass
+
+
+def _is_backend_initialization_failure(error: Exception) -> bool:
+    if isinstance(error, WindowBackendError):
+        return True
+    message = str(error).lower()
+    if (
+        "cannot detect opengl context" in message
+        or "glxgetcurrentcontext" in message
+        or "eglgetcurrentcontext" in message
+    ):
+        return True
+    return isinstance(error, ValueError) and (
+        "failed to initialize glfw" in message or "failed to create window" in message
+    )
