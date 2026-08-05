@@ -33,6 +33,7 @@ from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_library import recent_map_key
 from caveviewer.gui.map_library_workflow import (
     MapLibraryWorkflow,
+    _cache_rebuild_notification_id,
     _remaining_cache_error,
 )
 from caveviewer.gui.platform.runtime import FileSelectionPreflight
@@ -286,6 +287,8 @@ def _workflow(
     open_guided_dive=None,
     cache_rebuild_preflight=None,
     cache_rebuild_controller=None,
+    splash_is_foreground=None,
+    notification_sender=None,
 ):
     root = _FakeRoot()
     panel = _FakePanel()
@@ -339,6 +342,10 @@ def _workflow(
         ),
         cache_rebuild_controller=(
             cache_rebuild_controller or _FakeCacheRebuildController()
+        ),
+        splash_is_foreground=splash_is_foreground,
+        notification_sender=(
+            notification_sender or (lambda *_args, **_kwargs: True)
         ),
     )
     return SimpleNamespace(
@@ -1121,6 +1128,158 @@ def test_rebuild_progress_success_restores_open_and_reports_completion():
     assert state.panel.row_action[1] == "Open"
     assert state.panel.status == (row_widgets, "Cache rebuilt", False)
     assert state.opened == []
+
+
+def test_background_cache_rebuild_reports_completion_by_desktop_notification():
+    notifications = []
+
+    def notification_sender(
+        desktop_services,
+        notification_id,
+        title,
+        body,
+        *,
+        priority,
+        platform_runtime,
+    ):
+        notifications.append(
+            (
+                desktop_services,
+                notification_id,
+                title,
+                body,
+                priority,
+                platform_runtime,
+            )
+        )
+        return True
+
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+        splash_is_foreground=lambda: False,
+        notification_sender=notification_sender,
+    )
+    state.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        SimpleNamespace(row_shell=object()),
+    )
+    rebuild_controller.updates = [
+        CacheRebuildSucceeded(
+            target=_cache_rebuild_target(),
+            cache_dir="/maps/Recent Cave/_cache",
+        )
+    ]
+
+    state.workflow.poll_cache_rebuild()
+
+    assert notifications == [
+        (
+            state.desktop_services,
+            _cache_rebuild_notification_id("/maps/Recent Cave"),
+            "Cache Rebuild Complete",
+            "Recent Cave cache rebuilt.",
+            "normal",
+            None,
+        )
+    ]
+
+
+def test_foreground_or_paused_cache_rebuild_does_not_notify():
+    notifications = []
+
+    def notification_sender(*args, **kwargs):
+        notifications.append((args, kwargs))
+        return True
+
+    foreground_controller = _FakeCacheRebuildController()
+    foreground = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=foreground_controller,
+        splash_is_foreground=lambda: True,
+        notification_sender=notification_sender,
+    )
+    foreground.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        SimpleNamespace(row_shell=object()),
+    )
+    foreground_controller.updates = [
+        CacheRebuildSucceeded(
+            target=_cache_rebuild_target(),
+            cache_dir="/maps/Recent Cave/_cache",
+        )
+    ]
+    foreground.workflow.poll_cache_rebuild()
+
+    paused_controller = _FakeCacheRebuildController()
+    paused = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=paused_controller,
+        splash_is_foreground=lambda: False,
+        notification_sender=notification_sender,
+    )
+    paused.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        SimpleNamespace(row_shell=object()),
+    )
+    paused_controller.updates = [
+        CacheRebuildPaused(
+            target=_cache_rebuild_target(),
+            resume_dir="/maps/Recent Cave/.resume",
+        )
+    ]
+    paused.workflow.poll_cache_rebuild()
+
+    assert notifications == []
+
+
+def test_background_cache_rebuild_reports_failure_by_desktop_notification():
+    notifications = []
+
+    def notification_sender(*args, **kwargs):
+        notifications.append((args, kwargs))
+        return True
+
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+        splash_is_foreground=lambda: False,
+        notification_sender=notification_sender,
+    )
+    state.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        SimpleNamespace(row_shell=object()),
+    )
+    rebuild_controller.updates = [
+        CacheRebuildFailed(
+            target=_cache_rebuild_target(),
+            error="disk full",
+        )
+    ]
+
+    state.workflow.poll_cache_rebuild()
+
+    assert notifications == [
+        (
+            (
+                state.desktop_services,
+                _cache_rebuild_notification_id("/maps/Recent Cave"),
+                "Cache Rebuild Failed",
+                "Couldn't rebuild Recent Cave; its existing cache was retained.",
+            ),
+            {"priority": "high", "platform_runtime": None},
+        )
+    ]
 
 
 def test_disabled_rebuild_exposes_explanation_and_failure_retains_cache():

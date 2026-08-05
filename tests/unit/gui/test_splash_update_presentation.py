@@ -372,6 +372,8 @@ def test_cache_rebuild_starts_from_splash_without_a_confirmation_window():
     assert "confirm_cache_rebuild=" not in splash_source
     assert "_confirm_cache_rebuild_dialog" not in splash_source
     assert "request_cache_rebuild_pause" in splash_source
+    assert "def _splash_is_foreground()" in splash_source
+    assert "splash_is_foreground=_splash_is_foreground" in splash_source
 
 
 def test_splash_map_picker_checks_its_directory_selection_route_before_calling_it():

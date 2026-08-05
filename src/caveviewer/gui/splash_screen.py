@@ -845,6 +845,15 @@ def show_splash_screen(
     def _splash_exists() -> bool:
         return not session.closing and _widget_exists(root)
 
+    def _splash_is_foreground() -> bool:
+        """Return whether the splash is already presenting inline feedback."""
+        if not _splash_exists():
+            return False
+        try:
+            return root.focus_displayof() is not None
+        except tk.TclError:
+            return False
+
     def _open_library_map_from_splash(path: str) -> None:
         is_valid, error_message = _validate_selected_map_folder(path)
         if not is_valid:
@@ -899,6 +908,7 @@ def show_splash_screen(
         desktop_services=desktop_services,
         platform_runtime=platform_runtime,
         splash_exists=_splash_exists,
+        splash_is_foreground=_splash_is_foreground,
         open_map=_open_library_map_from_splash,
         show_feedback=_show_map_library_feedback,
         logger=_LOG,

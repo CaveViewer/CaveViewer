@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import queue
 import threading
@@ -50,6 +51,7 @@ from caveviewer.gui.platform.file_selection import (
     choose_authorized_file,
     file_selection_preflight,
 )
+from caveviewer.gui.platform.desktop_notifications import send_desktop_notification
 from caveviewer.gui.standard_library_download import (
     StandardLibraryDownloadFailed,
     StandardLibraryDownloadProgress,
@@ -97,6 +99,15 @@ def _remaining_cache_error(
 
 OpenMapCallback = Callable[[str], None]
 OpenGuidedDiveCallback = Callable[[str], None]
+
+_CACHE_REBUILD_NOTIFICATION_PREFIX = "caveviewer.cache-rebuild"
+
+
+def _cache_rebuild_notification_id(map_path: str) -> str:
+    """Return an opaque, stable desktop-notification ID for one map."""
+    normalized_path = os.path.abspath(os.fspath(map_path))
+    digest = hashlib.sha256(normalized_path.encode("utf-8")).hexdigest()[:16]
+    return f"{_CACHE_REBUILD_NOTIFICATION_PREFIX}.{digest}"
 
 
 @dataclass(slots=True)
@@ -175,6 +186,8 @@ class MapLibraryWorkflow:
             probe_map_library_cache_rebuild
         ),
         cache_rebuild_controller: CacheRebuildJobController | None = None,
+        splash_is_foreground: Callable[[], bool] | None = None,
+        notification_sender: Callable[..., bool] = send_desktop_notification,
     ) -> None:
         self.root = root
         self.controller = controller
@@ -211,6 +224,8 @@ class MapLibraryWorkflow:
         self.cache_rebuild_controller = (
             cache_rebuild_controller or CacheRebuildJobController()
         )
+        self.splash_is_foreground = splash_is_foreground or (lambda: True)
+        self.notification_sender = notification_sender
         self._active_cache_rebuild: _ActiveCacheRebuild | None = None
         self._cache_rebuild_after_id = None
         self.recent_map_paths: list[str] = []
@@ -598,6 +613,39 @@ class MapLibraryWorkflow:
         self._active_cache_rebuild = None
         return active
 
+    def _notify_cache_rebuild(
+        self,
+        active: _ActiveCacheRebuild,
+        title: str,
+        body: str,
+        *,
+        priority: str = "normal",
+    ) -> None:
+        """Best-effort terminal notification when inline feedback is backgrounded."""
+        try:
+            if self.splash_is_foreground():
+                return
+        except Exception as exc:
+            self.logger.warning(
+                "Could not determine splash foreground state for cache rebuild: %s",
+                exc,
+            )
+            return
+        try:
+            self.notification_sender(
+                self.desktop_services,
+                _cache_rebuild_notification_id(active.path),
+                title,
+                body,
+                priority=priority,
+                platform_runtime=self.platform_runtime,
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "Could not send cache rebuild desktop notification: %s",
+                exc,
+            )
+
     def _handle_cache_rebuild_success(self, update: CacheRebuildSucceeded) -> None:
         active = self._finish_cache_rebuild()
         if active is None:
@@ -605,6 +653,11 @@ class MapLibraryWorkflow:
         self._restore_cache_rebuild_row(active)
         self.panel.show_row_status(active.row_widgets, "Cache rebuilt")
         self.panel.refresh_row_overflow(active.row_widgets)
+        self._notify_cache_rebuild(
+            active,
+            "Cache Rebuild Complete",
+            f"{active.title} cache rebuilt.",
+        )
 
     def _handle_cache_rebuild_paused(self, update: CacheRebuildPaused) -> None:
         active = self._finish_cache_rebuild()
@@ -633,6 +686,12 @@ class MapLibraryWorkflow:
         if update.suggestion:
             message = f"{message} {update.suggestion}"
         self._show_error(message, max_wraplength=420)
+        self._notify_cache_rebuild(
+            active,
+            "Cache Rebuild Failed",
+            f"Couldn't rebuild {active.title}; its existing cache was retained.",
+            priority="high",
+        )
 
     def _cache_rebuild_blocks_map_actions(self) -> bool:
         """Keep splash-owned rebuild lifecycle intact until its child settles."""

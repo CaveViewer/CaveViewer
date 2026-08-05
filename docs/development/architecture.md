@@ -255,6 +255,10 @@ normal imports, so the old cache remains available until replacement succeeds.
 Closing the splash requests a bounded cooperative pause; its rebuild child is
 kept non-daemon long enough to save the checkpoint or safely finish rather than
 being destructively terminated with the Tk window.
+When the splash no longer has input focus, terminal cache-rebuild success and
+failure also use the optional desktop-notification boundary; progress and
+intentional pauses remain inline only. The notification route is freshly
+preflighted at send time and cannot affect the rebuild when unavailable.
 At the core build boundary, `core.map.cache_build_lock` atomically claims a
 private sibling lock directory for each cache target. A second cooperative GUI
 or CLI build fails closed rather than racing the target; normal completion,
