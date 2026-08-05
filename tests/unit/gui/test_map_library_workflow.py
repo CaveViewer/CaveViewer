@@ -367,7 +367,7 @@ def _enabled_guided_dive_decision(_map_path: str | None = None) -> FeatureDecisi
         feature=FeatureId.GUIDED_DIVE_PLAYBACK,
         state=FeatureState.ENABLED,
         reason_code="guided_dive_playback_available",
-        explanation="Guided Dive playback is available for this map.",
+        explanation="Dive plan playback is available for this map.",
         route="map_local_trace",
     )
 
@@ -377,7 +377,7 @@ def _hidden_guided_dive_decision(_map_path: str | None = None) -> FeatureDecisio
         feature=FeatureId.GUIDED_DIVE_PLAYBACK,
         state=FeatureState.HIDDEN,
         reason_code="guided_dive_trace_unavailable",
-        explanation="No completed Guided Dives are available for this map.",
+        explanation="No completed dive plans are available for this map.",
     )
 
 
@@ -509,7 +509,7 @@ def test_downloaded_standard_library_menu_omits_cache_action_without_cache():
 
     actions = menu_factory(SimpleNamespace(row_shell=object()))
 
-    assert [label for label, _command in actions] == ["Remove downloaded maps"]
+    assert [label for label, _command in actions] == ["Remove map files"]
 
 
 def test_downloaded_standard_library_menu_preflights_local_guided_dive():
@@ -546,8 +546,8 @@ def test_downloaded_standard_library_menu_preflights_local_guided_dive():
     actions = menu_factory(SimpleNamespace(row_shell=object()))
 
     assert [label for label, _command in actions] == [
-        "Open guided dive…",
-        "Remove downloaded maps",
+        "Open dive plan…",
+        "Remove map files",
     ]
 
     actions[0][1]()
@@ -555,7 +555,7 @@ def test_downloaded_standard_library_menu_preflights_local_guided_dive():
     assert opened_guided_dive == [selected_trace]
     assert desktop_services.file_calls == [
         {
-            "title": "Open Guided Dive",
+            "title": "Open Dive Plan",
             "initial_dir": str(Path("/library/Test Cave").resolve() / "_guided_dives"),
             "parent": state.root,
         }
@@ -593,7 +593,7 @@ def test_recent_map_menu_preflights_local_guided_dive():
     actions = menu_factory(SimpleNamespace(row_shell=object()))
 
     assert [label for label, _command in actions] == [
-        "Open guided dive…",
+        "Open dive plan…",
         "Remove from this list",
     ]
 
@@ -619,7 +619,7 @@ def test_guided_dive_file_picker_uses_runtime_preflight_and_rechecks_adapter_rou
 
         def choose_file(self, **options):
             assert options == {
-                "title": "Open Guided Dive",
+                "title": "Open Dive Plan",
                 "initial_dir": str(
                     Path("/maps/Recent Cave").resolve() / "_guided_dives"
                 ),
@@ -703,7 +703,7 @@ def test_guided_dive_file_picker_blocks_a_changed_route_before_choosing_file():
 
     assert target_calls == [True, True]
     assert guided_dive_preflight_calls == []
-    assert state.feedback[-1][0] == "Couldn't open the Guided Dive picker."
+    assert state.feedback[-1][0] == "Couldn't open the dive plan picker."
 
 
 def test_guided_dive_file_picker_blocks_an_unavailable_file_route():
@@ -732,7 +732,7 @@ def test_guided_dive_preflight_rejection_keeps_the_splash_open():
         feature=FeatureId.GUIDED_DIVE_PLAYBACK,
         state=FeatureState.DISABLED,
         reason_code="guided_dive_cache_incompatible",
-        explanation="This Guided Dive does not match the current map cache.",
+        explanation="This dive plan does not match the current map cache.",
     )
     state = _workflow(
         [],
@@ -777,7 +777,7 @@ def test_downloaded_standard_library_menu_includes_remove_cache_when_cache_exist
     actions = menu_factory(row_widgets)
 
     assert [label for label, _command in actions] == [
-        "Remove downloaded maps",
+        "Remove map files",
         "Remove cache",
     ]
 

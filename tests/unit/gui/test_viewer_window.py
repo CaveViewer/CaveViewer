@@ -738,7 +738,7 @@ def test_completed_manual_trace_confirms_and_reveals_published_file(tmp_path):
     window._update_manual_dive_trace()
 
     assert window._manual_dive_trace_writers == []
-    assert window._recording_status_message == "Guided Dive saved"
+    assert window._recording_status_message == "Dive plan saved"
     assert window._recording_status_kind == "success"
     assert revealed == [str(output_path)]
 
@@ -798,10 +798,10 @@ def test_manual_trace_reveal_failure_keeps_saved_status(tmp_path, monkeypatch):
 
     window._update_manual_dive_trace()
 
-    assert window._recording_status_message == "Guided Dive saved"
+    assert window._recording_status_message == "Dive plan saved"
     assert window._recording_status_kind == "success"
     assert logger.warning_messages == [
-        f"Could not reveal saved Guided Dive {output_path}: blocked: {output_path}"
+        f"Could not reveal saved dive plan {output_path}: blocked: {output_path}"
     ]
 
 

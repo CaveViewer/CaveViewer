@@ -111,24 +111,24 @@ _VIEWER_LAUNCH_EXPLANATIONS = {
 
 _GUIDED_DIVE_PLAYBACK_EXPLANATIONS = {
     "guided_dive_trace_unavailable": (
-        "No completed Guided Dives are available for this map."
+        "No completed dive plans are available for this map."
     ),
     "guided_dive_trace_not_map_local": (
-        "Choose a Guided Dive from this map's _guided_dives folder."
+        "Choose a dive plan from this map's _guided_dives folder."
     ),
-    "guided_dive_trace_missing": "The selected Guided Dive is no longer available.",
-    "guided_dive_trace_invalid": "This Guided Dive file cannot be opened.",
+    "guided_dive_trace_missing": "The selected dive plan is no longer available.",
+    "guided_dive_trace_invalid": "This dive plan file cannot be opened.",
     "guided_dive_source_unavailable": (
-        "The source map for this Guided Dive is unavailable."
+        "The source map for this dive plan is unavailable."
     ),
     "guided_dive_source_not_map_local": (
-        "This Guided Dive does not belong to the selected map."
+        "This dive plan does not belong to the selected map."
     ),
     "guided_dive_cache_unavailable": (
-        "This map needs a current cache before opening a Guided Dive."
+        "This map needs a current cache before opening a dive plan."
     ),
     "guided_dive_cache_incompatible": (
-        "This Guided Dive does not match the current map cache."
+        "This dive plan does not match the current map cache."
     ),
 }
 
@@ -246,7 +246,7 @@ def decide_guided_dive_playback(
             feature=FeatureId.GUIDED_DIVE_PLAYBACK,
             state=FeatureState.ENABLED,
             reason_code="guided_dive_playback_available",
-            explanation="Guided Dive playback is available for this map.",
+            explanation="Dive plan playback is available for this map.",
             route="map_local_trace",
         )
 
@@ -262,7 +262,7 @@ def decide_guided_dive_playback(
             reason_code=capability.reason_code,
             explanation=_GUIDED_DIVE_PLAYBACK_EXPLANATIONS.get(
                 capability.reason_code,
-                "Guided Dive playback is unavailable for this map.",
+                "Dive plan playback is unavailable for this map.",
             ),
         )
 
@@ -270,7 +270,7 @@ def decide_guided_dive_playback(
         feature=FeatureId.GUIDED_DIVE_PLAYBACK,
         state=FeatureState.DISABLED,
         reason_code="guided_dive_playback_capability_unknown",
-        explanation="Guided Dive availability could not be determined.",
+        explanation="Dive plan availability could not be determined.",
     )
 
 

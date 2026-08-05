@@ -19,5 +19,5 @@ def test_render_cache_finalization_phases_are_user_facing():
         "Assembling render manifest…"
     )
     assert panel._stage_label("building Guided Dive identity") == (
-        "Creating Guided Dive identity…"
+        "Creating dive plan identity…"
     )

@@ -179,7 +179,7 @@ def test_video_recording_policy_is_a_pure_capability_table(
 
 
 @pytest.mark.parametrize(
-    ("capability", "state", "reason_code", "route"),
+    ("capability", "state", "reason_code", "route", "explanation"),
     [
         (
             CapabilityResult.available(
@@ -189,6 +189,7 @@ def test_video_recording_policy_is_a_pure_capability_table(
             FeatureState.ENABLED,
             "guided_dive_playback_available",
             "map_local_trace",
+            "Dive plan playback is available for this map.",
         ),
         (
             CapabilityResult.unavailable(
@@ -197,6 +198,7 @@ def test_video_recording_policy_is_a_pure_capability_table(
             FeatureState.HIDDEN,
             "guided_dive_trace_unavailable",
             None,
+            "No completed dive plans are available for this map.",
         ),
         (
             CapabilityResult.unavailable(
@@ -205,6 +207,7 @@ def test_video_recording_policy_is_a_pure_capability_table(
             FeatureState.DISABLED,
             "guided_dive_cache_incompatible",
             None,
+            "This dive plan does not match the current map cache.",
         ),
         (
             CapabilityResult.unknown(
@@ -214,6 +217,7 @@ def test_video_recording_policy_is_a_pure_capability_table(
             FeatureState.DISABLED,
             "guided_dive_playback_capability_unknown",
             None,
+            "Dive plan availability could not be determined.",
         ),
     ],
 )
@@ -222,6 +226,7 @@ def test_guided_dive_playback_policy_is_a_pure_capability_table(
     state,
     reason_code,
     route,
+    explanation,
 ):
     decision = decide_guided_dive_playback(capability)
 
@@ -229,6 +234,7 @@ def test_guided_dive_playback_policy_is_a_pure_capability_table(
     assert decision.state is state
     assert decision.reason_code == reason_code
     assert decision.route == route
+    assert decision.explanation == explanation
     assert decision.allows_execution is (state is FeatureState.ENABLED)
 
 

@@ -94,7 +94,7 @@ automatically when possible. The CaveViewer Maps list is refreshed from
 CaveViewer's GitHub-hosted map catalog when the splash screen is online and
 falls back to the last cached or bundled catalog when it is offline. Generated
 caches for downloaded maps live in each map's `_cache` subdirectory.
-Use `Remove downloaded maps` to remove the downloaded map folder and its cache,
+Use `Remove map files` to remove the downloaded map folder and its cache,
 or `Remove cache` to remove only the generated `_cache` folder.
 
 For an eligible recent or downloaded map, choose `Rebuild cache` from its
