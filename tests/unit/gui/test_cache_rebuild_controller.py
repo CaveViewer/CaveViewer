@@ -66,7 +66,7 @@ def test_controller_starts_forced_import_and_reports_progress_then_success():
                 "obj_path": "/maps/cave/cave.obj",
                 "mtl_path": "/maps/cave/cave.mtl",
             },
-            "/maps/cave",
+            str(_target().textures_dir),
             {"force_rebuild": True, "daemon": False},
         )
     ]
