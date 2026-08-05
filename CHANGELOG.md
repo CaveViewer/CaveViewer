@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Release 1.0.67
+## Release 1.0.73
 
 - Rebuild a map cache directly from Map Library without opening the map. The
   previous cache stays usable until its replacement succeeds, and background
