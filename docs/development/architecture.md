@@ -243,6 +243,28 @@ Chunks, the manifest, and referenced texture assets are published in one atomic
 directory transaction. Failures must remove staging output and preserve any
 previously valid generated cache.
 
+The splash Map Library can request a forced rebuild only for an existing
+generated cache whose source model is still readable. Its map-local
+`gui.map_cache_rebuild` preflight is evaluated for each overflow menu and again
+at the action boundary; it stays outside `PlatformRuntime.feature_gates` because
+source files, cache safety, and active builders vary per map. The dedicated
+`CacheRebuildJobController` owns that child import from the splash, reports
+inline progress and cooperative OBJ pause checkpoints, and never opens a
+viewer after publication. Rebuilds use the same staging/publish transaction as
+normal imports, so the old cache remains available until replacement succeeds.
+Closing the splash requests a bounded cooperative pause; its rebuild child is
+kept non-daemon long enough to save the checkpoint or safely finish rather than
+being destructively terminated with the Tk window.
+When the splash no longer has input focus, terminal cache-rebuild success and
+failure also use the optional desktop-notification boundary; progress and
+intentional pauses remain inline only. The notification route is freshly
+preflighted at send time and cannot affect the rebuild when unavailable.
+At the core build boundary, `core.map.cache_build_lock` atomically claims a
+private sibling lock directory for each cache target. A second cooperative GUI
+or CLI build fails closed rather than racing the target; normal completion,
+failure, or pause releases the lock while preserving any resumable staging
+checkpoint.
+
 First-time imports launched from the viewer run in a spawned child process
 through `src/caveviewer/gui/import_process.py`. The viewer process owns OpenGL,
 window events, progress rendering, and desktop idle/suspend inhibition; the
@@ -569,8 +591,10 @@ ownership docstrings instead of placeholder module-path docstrings.
 
 The splash Map Library is split by responsibility: `map_library.py` builds
 presentation-independent recent-map titles, `map_library_controller.py` owns
-standard-library catalog/download state, `map_library_workflow.py` owns
-catalog fetches, download queue polling, cancellation, and row workflow
+standard-library catalog/download state, `map_cache_rebuild.py` owns map-local
+rebuild eligibility and target resolution, `cache_rebuild_controller.py` owns
+the forced child-import lifecycle, `map_library_workflow.py` owns catalog
+fetches, download/rebuild polling, cancellation/pause, and row workflow
 transitions, `map_library_panel.py` owns Tk row, scroll, status, and
 overflow-menu presentation, and `splash_screen.py` wires those pieces to
 session actions such as opening maps and preferences. The standard-library map
@@ -715,9 +739,9 @@ newer manifest.
 Build, package, publish, and manifest-generation workflows live under
 `scripts/`. The PyInstaller contract lives at
 `packaging/pyinstaller/CaveViewer.spec`; all build consumers use the installed
-package and the same package-resource paths. The five platform workflows may be
+package and the same package-resource paths. The four platform workflows may be
 run independently. `All Platform Release` runs one shared test gate, packages
-all five targets in parallel from one immutable source revision, and hands the
+all four targets in parallel from one immutable source revision, and hands the
 artifacts to a single finalizer. In GitHub Actions, only that finalizer creates
 the release, signs manifests, and pushes release metadata, preserving one owner
 for shared mutable state. The operational contract and verification checklist

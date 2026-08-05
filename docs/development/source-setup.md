@@ -390,7 +390,9 @@ open remains silent until the splash is shown again.
 On Linux, every directory chooser also uses XDG Desktop Portal when available.
 Cancellation is distinct from portal failure; unavailable or old portals fall
 back to the owned Tk chooser. Portal-selected source folders need only be
-readable because generated cache assets are written to CaveViewer's cache root.
+readable to open an existing cache. Building a new cache or rebuilding one
+also requires a safe writable cache destination: the source map's `_cache`
+directory by default, or an absolute `CAVEVIEWER_MAP_CACHE_DIR` override.
 
 Default update checks read committed main-branch manifests, not GitHub's
 latest-release or prerelease metadata. macOS uses
@@ -687,3 +689,10 @@ progress and terminal status through queues, and the dialog applies those
 messages from `after()` callbacks. Worker callbacks must not read or mutate Tk
 widgets directly. Closing the dialog sets the active download's cancellation
 event and cancels the pending queue poll callback.
+
+Eligible recent and downloaded rows also offer `Rebuild cache`. It starts a
+forced child import using the current Import preferences without opening a
+viewer, revalidating the cache target and source at action time. The prior
+cache remains usable until the staged replacement publishes; OBJ rebuilds can
+be paused. If the splash no longer has input focus, a completion or failure may
+also use the optional desktop-notification route.

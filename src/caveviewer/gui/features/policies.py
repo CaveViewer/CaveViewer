@@ -132,6 +132,27 @@ _GUIDED_DIVE_PLAYBACK_EXPLANATIONS = {
     ),
 }
 
+_MAP_LIBRARY_CACHE_REBUILD_EXPLANATIONS = {
+    "map_cache_rebuild_no_generated_cache": (
+        "No generated cache is available to rebuild for this map."
+    ),
+    "map_cache_rebuild_precompiled_map": (
+        "This entry is a precompiled cache, not a source map that can be rebuilt."
+    ),
+    "map_cache_rebuild_source_unavailable": (
+        "The source map is unavailable, so its cache cannot be rebuilt."
+    ),
+    "map_cache_rebuild_source_unreadable": (
+        "The source map cannot be read, so its cache cannot be rebuilt."
+    ),
+    "map_cache_rebuild_destination_unsafe": (
+        "The generated cache location is not safe to replace."
+    ),
+    "map_cache_rebuild_already_in_progress": (
+        "This map's cache is already being rebuilt."
+    ),
+}
+
 
 def decide_automatic_update(
     capability: CapabilityResult[CapabilityValue],
@@ -250,6 +271,49 @@ def decide_guided_dive_playback(
         state=FeatureState.DISABLED,
         reason_code="guided_dive_playback_capability_unknown",
         explanation="Guided Dive availability could not be determined.",
+    )
+
+
+def decide_map_library_cache_rebuild(
+    capability: CapabilityResult[CapabilityValue],
+) -> FeatureDecision:
+    """Choose the Map Library rebuild affordance from one map-local probe.
+
+    This policy is deliberately separate from ``PlatformRuntime`` because a
+    source, cache target, or competing builder may change per row while the
+    splash remains open.  Rows with no generated cache hide the action; once a
+    cache exists, unsafe or incomplete facts remain visible but fail closed.
+    """
+    if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        return FeatureDecision(
+            feature=FeatureId.MAP_LIBRARY_CACHE_REBUILD,
+            state=FeatureState.ENABLED,
+            reason_code="map_cache_rebuild_available",
+            explanation="Rebuild this map's generated cache with current import settings.",
+            route="forced_import",
+        )
+
+    if capability.status is CapabilityStatus.UNAVAILABLE:
+        state = (
+            FeatureState.HIDDEN
+            if capability.reason_code == "map_cache_rebuild_no_generated_cache"
+            else FeatureState.DISABLED
+        )
+        return FeatureDecision(
+            feature=FeatureId.MAP_LIBRARY_CACHE_REBUILD,
+            state=state,
+            reason_code=capability.reason_code,
+            explanation=_MAP_LIBRARY_CACHE_REBUILD_EXPLANATIONS.get(
+                capability.reason_code,
+                "This map's generated cache cannot be rebuilt.",
+            ),
+        )
+
+    return FeatureDecision(
+        feature=FeatureId.MAP_LIBRARY_CACHE_REBUILD,
+        state=FeatureState.DISABLED,
+        reason_code="map_cache_rebuild_capability_unknown",
+        explanation="Cache rebuild availability could not be determined.",
     )
 
 

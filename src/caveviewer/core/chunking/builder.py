@@ -165,6 +165,7 @@ from caveviewer.core.mesh.obj import (
 from caveviewer.core.map.cache_paths import (
     map_cache_build_dir,
 )
+from caveviewer.core.map.cache_build_lock import CacheBuildLock
 from caveviewer.core.map.cache_identity import (
     GUIDED_DIVE_CACHE_IDENTITY_KEY,
     build_guided_dive_cache_identity,
@@ -238,51 +239,51 @@ def build_cache(
     resolved_max_upload_group_bytes = _max_upload_group_bytes_from_mb(
         resolved_max_upload_group_mb
     )
-    ensure_sufficient_disk_space(
-        obj_path,
-        cache_dir,
-        staged_asset_bytes=sum(_cache_asset_size(asset) for asset in assets),
-    )
     os.makedirs(cache_parent, exist_ok=True)
-
-    staging_dir = tempfile.mkdtemp(
-        prefix=f".{os.path.basename(cache_dir)}.tmp-{os.getpid()}-",
-        dir=cache_parent,
-    )
-    try:
-        phase_started_at = time.perf_counter()
-        _stage_cache_assets(staging_dir, assets)
-        _log_cache_build_phase("render assets staged", phase_started_at)
-        _build_cache_in_directory(
+    with CacheBuildLock(cache_dir):
+        ensure_sufficient_disk_space(
             obj_path,
-            mesh,
-            materials,
-            staging_dir,
-            chunk_size=chunk_size,
-            progress_cb=progress_cb,
-            max_upload_group_mb=resolved_max_upload_group_mb,
-            max_upload_group_bytes=resolved_max_upload_group_bytes,
+            cache_dir,
+            staged_asset_bytes=sum(_cache_asset_size(asset) for asset in assets),
         )
-        phase_started_at = time.perf_counter()
-        _publish_cache_directory(staging_dir, cache_dir)
-        _log_cache_build_phase("render cache published", phase_started_at)
-    except BaseException:
-        # In particular, ENOSPC can be raised after several worker writes.
-        # Removing the private staging tree guarantees a failed build never
-        # leaves partial chunks looking like a usable cache.
-        shutil.rmtree(staging_dir, ignore_errors=True)
-        raise
+        staging_dir = tempfile.mkdtemp(
+            prefix=f".{os.path.basename(cache_dir)}.tmp-{os.getpid()}-",
+            dir=cache_parent,
+        )
+        try:
+            phase_started_at = time.perf_counter()
+            _stage_cache_assets(staging_dir, assets)
+            _log_cache_build_phase("render assets staged", phase_started_at)
+            _build_cache_in_directory(
+                obj_path,
+                mesh,
+                materials,
+                staging_dir,
+                chunk_size=chunk_size,
+                progress_cb=progress_cb,
+                max_upload_group_mb=resolved_max_upload_group_mb,
+                max_upload_group_bytes=resolved_max_upload_group_bytes,
+            )
+            phase_started_at = time.perf_counter()
+            _publish_cache_directory(staging_dir, cache_dir)
+            _log_cache_build_phase("render cache published", phase_started_at)
+        except BaseException:
+            # In particular, ENOSPC can be raised after several worker writes.
+            # Removing the private staging tree guarantees a failed build never
+            # leaves partial chunks looking like a usable cache.
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
 
-    if progress_cb:
-        progress_cb("done", 1.0)
+        if progress_cb:
+            progress_cb("done", 1.0)
 
-    _LOG.info(
-        "Cache build completed in %.2fs: %s",
-        time.perf_counter() - build_started_at,
-        cache_dir,
-    )
+        _LOG.info(
+            "Cache build completed in %.2fs: %s",
+            time.perf_counter() - build_started_at,
+            cache_dir,
+        )
 
-    return cache_dir
+        return cache_dir
 
 
 def build_cache_incremental_obj(
@@ -324,84 +325,84 @@ def build_cache_incremental_obj(
     resolved_max_upload_group_bytes = _max_upload_group_bytes_from_mb(
         resolved_max_upload_group_mb
     )
-    ensure_sufficient_disk_space(
-        obj_path,
-        cache_dir,
-        staged_asset_bytes=sum(_cache_asset_size(asset) for asset in assets),
-    )
     os.makedirs(cache_parent, exist_ok=True)
-
-    resume = _find_incremental_obj_resume(
-        cache_dir,
-        obj_path=obj_path,
-        materials=materials,
-        chunk_size=chunk_size,
-        face_batch_size=resolved_face_batch_size,
-    )
-    if resume is None:
-        staging_dir = tempfile.mkdtemp(
-            prefix=f".{os.path.basename(cache_dir)}.tmp-{os.getpid()}-",
-            dir=cache_parent,
-        )
-        resume_checkpoint = None
-        is_resuming = False
-    else:
-        staging_dir, resume_checkpoint = resume
-        is_resuming = True
-        _LOG.info(
-            "Resuming previously paused OBJ import from checkpoint: %s "
-            "(stage=%s, progress=%.0f%%).",
-            staging_dir,
-            resume_checkpoint.get("stage", "unknown"),
-            float(resume_checkpoint.get("progress_fraction", 0.0)) * 100.0,
-        )
-        if progress_cb:
-            progress_cb(
-                "resuming import",
-                float(resume_checkpoint.get("progress_fraction", 0.0)),
-            )
-
-    try:
-        if not is_resuming:
-            phase_started_at = time.perf_counter()
-            _stage_cache_assets(staging_dir, assets)
-            _log_cache_build_phase("render assets staged", phase_started_at)
-        _build_incremental_obj_cache_in_directory(
+    with CacheBuildLock(cache_dir):
+        ensure_sufficient_disk_space(
             obj_path,
-            materials,
-            staging_dir,
-            chunk_size=chunk_size,
-            progress_cb=progress_cb,
-            face_batch_size=resolved_face_batch_size,
-            bucket_workers=resolved_bucket_workers,
-            max_upload_group_mb=resolved_max_upload_group_mb,
-            max_upload_group_bytes=resolved_max_upload_group_bytes,
-            pause_requested=pause_requested,
-            resume_checkpoint=resume_checkpoint,
+            cache_dir,
+            staged_asset_bytes=sum(_cache_asset_size(asset) for asset in assets),
         )
-        _remove_resume_checkpoint(staging_dir)
-        phase_started_at = time.perf_counter()
-        _publish_cache_directory(staging_dir, cache_dir)
-        _log_cache_build_phase("render cache published", phase_started_at)
-    except ImportPaused as paused:
-        resume_dir = _preserve_resumable_import(staging_dir, cache_dir)
-        paused.resume_dir = resume_dir
-        _LOG.info("Paused OBJ import checkpoint saved in: %s", resume_dir)
-        raise
-    except BaseException:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-        raise
+        resume = _find_incremental_obj_resume(
+            cache_dir,
+            obj_path=obj_path,
+            materials=materials,
+            chunk_size=chunk_size,
+            face_batch_size=resolved_face_batch_size,
+        )
+        if resume is None:
+            staging_dir = tempfile.mkdtemp(
+                prefix=f".{os.path.basename(cache_dir)}.tmp-{os.getpid()}-",
+                dir=cache_parent,
+            )
+            resume_checkpoint = None
+            is_resuming = False
+        else:
+            staging_dir, resume_checkpoint = resume
+            is_resuming = True
+            _LOG.info(
+                "Resuming previously paused OBJ import from checkpoint: %s "
+                "(stage=%s, progress=%.0f%%).",
+                staging_dir,
+                resume_checkpoint.get("stage", "unknown"),
+                float(resume_checkpoint.get("progress_fraction", 0.0)) * 100.0,
+            )
+            if progress_cb:
+                progress_cb(
+                    "resuming import",
+                    float(resume_checkpoint.get("progress_fraction", 0.0)),
+                )
 
-    if progress_cb:
-        progress_cb("done", 1.0)
+        try:
+            if not is_resuming:
+                phase_started_at = time.perf_counter()
+                _stage_cache_assets(staging_dir, assets)
+                _log_cache_build_phase("render assets staged", phase_started_at)
+            _build_incremental_obj_cache_in_directory(
+                obj_path,
+                materials,
+                staging_dir,
+                chunk_size=chunk_size,
+                progress_cb=progress_cb,
+                face_batch_size=resolved_face_batch_size,
+                bucket_workers=resolved_bucket_workers,
+                max_upload_group_mb=resolved_max_upload_group_mb,
+                max_upload_group_bytes=resolved_max_upload_group_bytes,
+                pause_requested=pause_requested,
+                resume_checkpoint=resume_checkpoint,
+            )
+            _remove_resume_checkpoint(staging_dir)
+            phase_started_at = time.perf_counter()
+            _publish_cache_directory(staging_dir, cache_dir)
+            _log_cache_build_phase("render cache published", phase_started_at)
+        except ImportPaused as paused:
+            resume_dir = _preserve_resumable_import(staging_dir, cache_dir)
+            paused.resume_dir = resume_dir
+            _LOG.info("Paused OBJ import checkpoint saved in: %s", resume_dir)
+            raise
+        except BaseException:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
 
-    _LOG.info(
-        "Cache build completed in %.2fs: %s",
-        time.perf_counter() - build_started_at,
-        cache_dir,
-    )
+        if progress_cb:
+            progress_cb("done", 1.0)
 
-    return cache_dir
+        _LOG.info(
+            "Cache build completed in %.2fs: %s",
+            time.perf_counter() - build_started_at,
+            cache_dir,
+        )
+
+        return cache_dir
 
 
 def _build_incremental_obj_cache_in_directory(

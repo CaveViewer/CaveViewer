@@ -14,6 +14,7 @@ class FeatureId(str, Enum):
     FILE_SELECTION = "file_selection"
     GUIDED_DIVE_PLAYBACK = "guided_dive_playback"
     IDLE_SUSPEND_INHIBITION = "idle_suspend_inhibition"
+    MAP_LIBRARY_CACHE_REBUILD = "map_library_cache_rebuild"
     MAP_SOURCE_IMPORT = "map_source_import"
     UPDATE_PACKAGE_REVEAL = "update_package_reveal"
     VIDEO_RECORDING = "video_recording"

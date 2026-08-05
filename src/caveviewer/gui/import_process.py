@@ -26,6 +26,7 @@ from caveviewer.core.chunking.capacity import (
 )
 from caveviewer.core.chunking.staging import ImportPaused
 from caveviewer.core.diagnostics.logging import configure_logging, get_logger
+from caveviewer.core.map.cache_build_lock import CacheBuildInProgressError
 from caveviewer.gui.platform.process_priority import lower_current_process_priority
 
 
@@ -96,6 +97,8 @@ def start_import_process(
     model_descriptor: dict,
     textures_dir: str,
     *,
+    force_rebuild: bool = False,
+    daemon: bool = True,
     context: BaseContext | None = None,
 ) -> ImportProcessHandle:
     """Start a spawned import process and return its event handle."""
@@ -105,10 +108,16 @@ def start_import_process(
     commands = process_context.Queue()
     process = process_context.Process(
         target=_run_import_process,
-        args=(dict(model_descriptor), str(textures_dir), events, commands),
+        args=(
+            dict(model_descriptor),
+            str(textures_dir),
+            events,
+            commands,
+            bool(force_rebuild),
+        ),
         name="CaveViewer-import",
     )
-    process.daemon = True
+    process.daemon = bool(daemon)
     process.start()
     return ImportProcessHandle(
         process=process,
@@ -329,6 +338,12 @@ def _actionable_import_failure(exc: BaseException) -> tuple[str, str] | None:
             "drive.",
         )
 
+    if isinstance(exc, CacheBuildInProgressError):
+        return (
+            str(exc),
+            "Wait for the other cache build to finish, then retry.",
+        )
+
     return None
 
 
@@ -337,6 +352,7 @@ def _run_import_process(
     textures_dir: str,
     events: Any,
     commands: Any = None,
+    force_rebuild: bool = False,
 ) -> None:
     """Child-process entry point. Sends progress, done, or error events."""
     _configure_import_child_logging(events)
@@ -384,7 +400,7 @@ def _run_import_process(
         cache_dir = import_and_cache_any(
             model_descriptor,
             textures_dir,
-            force_rebuild=False,
+            force_rebuild=bool(force_rebuild),
             progress_cb=on_progress,
             pause_requested=pause_event.is_set,
         )

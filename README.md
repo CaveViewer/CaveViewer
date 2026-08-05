@@ -97,6 +97,12 @@ caches for downloaded maps live in each map's `_cache` subdirectory.
 Use `Remove downloaded maps` to remove the downloaded map folder and its cache,
 or `Remove cache` to remove only the generated `_cache` folder.
 
+For an eligible recent or downloaded map, choose `Rebuild cache` from its
+overflow menu to recreate the cache with the current Import preferences without
+opening the map. The old cache remains available until its replacement is
+ready. OBJ rebuilds can be paused, and CaveViewer may show a desktop
+notification for completion or failure while the splash screen is not focused.
+
 ## Recording a Flight
 
 CaveViewer can record a clean flight through the cave. Recordings are currently
