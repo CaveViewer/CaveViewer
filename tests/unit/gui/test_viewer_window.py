@@ -2385,10 +2385,40 @@ def test_right_column_panel_uses_compact_default_footprint():
 
     assert 0 <= x0 < x1 <= window_size[0]
     assert 0 <= y0 < y1 <= window_size[1]
-    # GLOBAL LIGHT is wider than the compact stepper itself; the panel keeps
-    # symmetric padding around that label rather than clipping it at the
-    # right edge.
-    assert x1 - x0 <= 150
+    # GLOBAL LIGHT is wider than the compact stepper itself. Its bitmap-font
+    # width varies slightly across supported Python/platform combinations, so
+    # derive the compact footprint from the actual rendered measurements.
+    label_size = viewer_window.bitmap_font.pixel_size_at_text_scale(
+        viewer_window.StepperControl.LABEL_TEXT_SIZE,
+        viewer_window.StepperControl.FIXED_TEXT_SCALE
+        * window._right_column_label_text_scale(),
+    )
+    button_width = viewer_window.RenderModeButtons.BUTTON_WIDTH * (
+        window.render_mode_buttons._group_layout(
+            window_size,
+            column["buttons_top_y"],
+        )["scale"]
+    )
+    content_width = max(
+        window.light_stepper.total_width(),
+        window.ambient_stepper.total_width(),
+        window.render_distance_stepper.total_width(),
+        button_width,
+        *(
+            viewer_window.bitmap_font.text_width_px(stepper.label, label_size)
+            for stepper in (
+                window.light_stepper,
+                window.ambient_stepper,
+                window.render_distance_stepper,
+            )
+        ),
+    )
+    assert x1 - x0 == pytest.approx(
+        content_width
+        + 2
+        * viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SIDE_PAD
+        * window._right_column_ui_scale()
+    )
     assert y1 - y0 <= 455
 
 
