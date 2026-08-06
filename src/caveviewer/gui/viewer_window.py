@@ -594,7 +594,6 @@ class CaveViewerWindow(mglw.WindowConfig):
     RIGHT_COLUMN_PANEL_RIGHT_MARGIN = 16
     RIGHT_COLUMN_PANEL_BOTTOM_MARGIN = 16
     RIGHT_COLUMN_PANEL_LABEL_GAP = 8
-    RIGHT_COLUMN_PANEL_LABEL_SIZE = 1.7
     RIGHT_COLUMN_PANEL_SCALE = 0.76
     RIGHT_COLUMN_PANEL_TEXT_SCALE = 0.84
     RIGHT_COLUMN_PANEL_LABEL_TEXT_SCALE = 0.98
@@ -4739,12 +4738,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         'render_distance_anchor' (note: this stepper moved to the right
         column per request, no longer on the left), and 'buttons_top_y'
         -- each stepper anchor already accounts for its own label space
-        above it (see StepperControl.render's label_above handling), and
-        the button block's top_y already accounts for RenderModeButtons'
-        own height-shrinking safety net on short windows.
+        above it (see StepperControl.render's label_above handling).
 
         Stack order, top to bottom: Brightness, Global Light, Render
-        Distance, then the button block.
+        Distance, then the button block. The panel is the shared horizontal
+        layout container: labels, steppers, and buttons all use its content
+        center so a wide label cannot make the controls appear right-aligned
+        within the backplate.
         """
         self._update_right_column_hud_scale(window_size)
         if window_size == self._layout_cache_size:
@@ -4763,12 +4763,23 @@ class CaveViewerWindow(mglw.WindowConfig):
             StepperControl.LABEL_TEXT_SIZE,
             StepperControl.FIXED_TEXT_SCALE * panel_label_text_scale,
         )
-        label_reserve = bitmap_font.text_height_px(fixed_label_size) + 8 * panel_scale
+        label_height = bitmap_font.text_height_px(fixed_label_size)
+        label_reserve = label_height + 8 * panel_scale
+        label_widths = (
+            bitmap_font.text_width_px(self.light_stepper.label, fixed_label_size),
+            bitmap_font.text_width_px(self.ambient_stepper.label, fixed_label_size),
+            bitmap_font.text_width_px(
+                self.render_distance_stepper.label,
+                fixed_label_size,
+            ),
+        )
+        stepper_widths = (
+            self.light_stepper.total_width(),
+            self.ambient_stepper.total_width(),
+            self.render_distance_stepper.total_width(),
+        )
 
         button_block_height = RenderModeButtons.total_stack_height(scale=panel_scale)
-        content_right_inset = (
-            self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN + self.RIGHT_COLUMN_PANEL_SIDE_PAD
-        ) * viewer_ui_scale
         content_bottom_inset = (
             self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN + self.RIGHT_COLUMN_PANEL_BOTTOM_PAD
         ) * viewer_ui_scale
@@ -4777,6 +4788,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         # RIGHT_COLUMN_BOTTOM_MARGIN above the window's bottom edge.
         buttons_bottom_y = h - content_bottom_inset
         buttons_top_y = buttons_bottom_y - button_block_height
+
+        # RenderModeButtons may adjust its effective scale for the available
+        # height. Use that same width here so the panel, rendering, and hit
+        # testing share one horizontal geometry.
+        button_layout = self.render_mode_buttons._group_layout(
+            window_size,
+            buttons_top_y,
+        )
+        button_width = RenderModeButtons.BUTTON_WIDTH * button_layout["scale"]
+
+        # Size the interior for the widest rendered item, then center every
+        # child in it. Previously the steppers and buttons were independently
+        # right-aligned before the panel grew left to include wider labels.
+        content_width = max(*stepper_widths, *label_widths, button_width)
+        side_pad = self.RIGHT_COLUMN_PANEL_SIDE_PAD * viewer_ui_scale
+        panel_right = w - (self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN * viewer_ui_scale)
+        panel_left = panel_right - content_width - 2 * side_pad
+        content_center_x = panel_left + side_pad + content_width / 2.0
 
         render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_BUTTON_GROUP_GAP * panel_scale
         render_distance_anchor_y = render_distance_bottom_y - self.render_distance_stepper.total_height()
@@ -4787,17 +4816,26 @@ class CaveViewerWindow(mglw.WindowConfig):
         brightness_bottom_y = ambient_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP * panel_scale
         brightness_anchor_y = brightness_bottom_y - self.light_stepper.total_height()
 
-        right_x_brightness = w - content_right_inset - self.light_stepper.total_width()
-        right_x_ambient = w - content_right_inset - self.ambient_stepper.total_width()
-        right_x_render_distance = w - content_right_inset - self.render_distance_stepper.total_width()
+        brightness_anchor_x = content_center_x - stepper_widths[0] / 2.0
+        ambient_anchor_x = content_center_x - stepper_widths[1] / 2.0
+        render_distance_anchor_x = content_center_x - stepper_widths[2] / 2.0
+        label_gap = self.RIGHT_COLUMN_PANEL_LABEL_GAP * panel_scale
+        panel_top = min(
+            brightness_anchor_y - label_height - label_gap,
+            ambient_anchor_y - label_height - label_gap,
+            render_distance_anchor_y - label_height - label_gap,
+        ) - (self.RIGHT_COLUMN_PANEL_TOP_PAD * viewer_ui_scale)
+        panel_bottom = h - (self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN * viewer_ui_scale)
 
         result = {
-            "brightness_anchor": (right_x_brightness, brightness_anchor_y),
-            "ambient_anchor": (right_x_ambient, ambient_anchor_y),
-            "render_distance_anchor": (right_x_render_distance, render_distance_anchor_y),
+            "brightness_anchor": (brightness_anchor_x, brightness_anchor_y),
+            "ambient_anchor": (ambient_anchor_x, ambient_anchor_y),
+            "render_distance_anchor": (render_distance_anchor_x, render_distance_anchor_y),
             "buttons_top_y": buttons_top_y,
-            "content_right_inset": content_right_inset,
+            "button_right_inset": w - (content_center_x + button_width / 2.0),
             "content_bottom_inset": content_bottom_inset,
+            "content_center_x": content_center_x,
+            "panel_rect": (panel_left, panel_top, panel_right, panel_bottom),
         }
         self._layout_cache_size = window_size
         self._layout_cache_result = result
@@ -4807,69 +4845,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         """Bounds for the shared backplate behind the right-side HUD column."""
         if column is None:
             column = self._right_column_layout(window_size)
-
-        w, h = window_size
-        fixed_label_size = bitmap_font.pixel_size_at_text_scale(
-            self.RIGHT_COLUMN_PANEL_LABEL_SIZE,
-            StepperControl.FIXED_TEXT_SCALE * self._right_column_label_text_scale(),
-        )
-        label_height = bitmap_font.text_height_px(fixed_label_size)
-        label_widths = [
-            bitmap_font.text_width_px(self.light_stepper.label, fixed_label_size),
-            bitmap_font.text_width_px(self.ambient_stepper.label, fixed_label_size),
-            bitmap_font.text_width_px(
-                self.render_distance_stepper.label,
-                fixed_label_size,
-            ),
-        ]
-        buttons_top_y = column["buttons_top_y"]
-
-        brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
-        ambient_anchor_x, ambient_anchor_y = column["ambient_anchor"]
-        render_distance_anchor_x, render_distance_anchor_y = column["render_distance_anchor"]
-
-        stepper_lefts = [brightness_anchor_x, ambient_anchor_x, render_distance_anchor_x]
-        stepper_rights = [
-            brightness_anchor_x + self.light_stepper.total_width(),
-            ambient_anchor_x + self.ambient_stepper.total_width(),
-            render_distance_anchor_x + self.render_distance_stepper.total_width(),
-        ]
-        stepper_widths = [
-            self.light_stepper.total_width(),
-            self.ambient_stepper.total_width(),
-            self.render_distance_stepper.total_width(),
-        ]
-        label_lefts = [
-            anchor_x + (stepper_width - label_width) / 2.0
-            for anchor_x, stepper_width, label_width in zip(
-                stepper_lefts,
-                stepper_widths,
-                label_widths,
-            )
-        ]
-        panel_scale = self._right_column_geometry_scale()
-        viewer_ui_scale = self._right_column_ui_scale()
-        label_gap = self.RIGHT_COLUMN_PANEL_LABEL_GAP * panel_scale
-        label_tops = [
-            brightness_anchor_y - label_height - label_gap,
-            ambient_anchor_y - label_height - label_gap,
-            render_distance_anchor_y - label_height - label_gap,
-        ]
-
-        button_x0, _button_y0, button_x1, _button_y1 = self.render_mode_buttons._button_rect_px(
-            0, window_size, buttons_top_y, column["content_right_inset"]
-        )
-        _last_x0, _last_y0, _last_x1, button_bottom_y = self.render_mode_buttons._button_rect_px(
-            6, window_size, buttons_top_y, column["content_right_inset"]
-        )
-
-        x0 = min(min(stepper_lefts), min(label_lefts), button_x0) - (
-            self.RIGHT_COLUMN_PANEL_SIDE_PAD * viewer_ui_scale
-        )
-        x1 = w - (self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN * viewer_ui_scale)
-        y0 = min(label_tops) - (self.RIGHT_COLUMN_PANEL_TOP_PAD * viewer_ui_scale)
-        y1 = h - (self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN * viewer_ui_scale)
-        return (x0, y0, x1, y1)
+        return column["panel_rect"]
 
     def _render_right_column_panel(self, window_size: tuple[int, int], column: dict | None = None) -> None:
         """Draw a shared translucent panel behind the right-side HUD controls."""
@@ -5517,7 +5493,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                               help_active=self.controls_overlay.is_manual_mode,
                               color_active=self.color_picker.is_active,
                               recording_armed=self._recording_is_armed(),
-                              right_inset=column["content_right_inset"])
+                              right_inset=column["button_right_inset"])
 
             # Color picker panel draws on top of the regular HUD elements (it
             # dims the 3D view behind it, same visual language as the Help
@@ -6367,24 +6343,24 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
 
             if self.render_mode_buttons.hit_test_record(
-                x, y, self.wnd.size, buttons_top_y, column["content_right_inset"]
+                x, y, self.wnd.size, buttons_top_y, column["button_right_inset"]
             ):
                 self._toggle_recording()
                 return
 
             if buttons_locked_for_loading:
                 if (
-                    self.render_mode_buttons.hit_test_mesh(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
-                    or self.render_mode_buttons.hit_test_texture(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
-                    or self.render_mode_buttons.hit_test_shade(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
-                    or self.render_mode_buttons.hit_test_help(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
-                    or self.render_mode_buttons.hit_test_color(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
-                    or self.render_mode_buttons.hit_test_open(x, y, self.wnd.size, buttons_top_y, column["content_right_inset"])
+                    self.render_mode_buttons.hit_test_mesh(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
+                    or self.render_mode_buttons.hit_test_texture(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
+                    or self.render_mode_buttons.hit_test_shade(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
+                    or self.render_mode_buttons.hit_test_help(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
+                    or self.render_mode_buttons.hit_test_color(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
+                    or self.render_mode_buttons.hit_test_open(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
                 ):
                     return
 
             clicked_button = self.render_mode_buttons.on_mouse_press(
-                x, y, self.wnd.size, buttons_top_y, column["content_right_inset"]
+                x, y, self.wnd.size, buttons_top_y, column["button_right_inset"]
             )
             if clicked_button == "shade":
                 self._apply_shading_toggle()

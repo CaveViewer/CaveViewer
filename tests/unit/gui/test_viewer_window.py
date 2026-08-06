@@ -2385,8 +2385,68 @@ def test_right_column_panel_uses_compact_default_footprint():
 
     assert 0 <= x0 < x1 <= window_size[0]
     assert 0 <= y0 < y1 <= window_size[1]
-    assert x1 - x0 <= 135
+    # GLOBAL LIGHT is wider than the compact stepper itself; the panel keeps
+    # symmetric padding around that label rather than clipping it at the
+    # right edge.
+    assert x1 - x0 <= 150
     assert y1 - y0 <= 455
+
+
+def test_right_column_centers_controls_when_labels_expand_the_panel():
+    """A wide label must not leave the control column right-aligned in its panel."""
+    window = _right_column_probe_window()
+    window_size = (480, 540)
+
+    column = window._right_column_layout(window_size)
+    panel_x0, _panel_y0, panel_x1, _panel_y1 = window._right_column_panel_rect(
+        window_size,
+        column,
+    )
+    panel_center_x = (panel_x0 + panel_x1) / 2.0
+
+    assert column["content_center_x"] == pytest.approx(panel_center_x)
+    for anchor_name, stepper in (
+        ("brightness_anchor", window.light_stepper),
+        ("ambient_anchor", window.ambient_stepper),
+        ("render_distance_anchor", window.render_distance_stepper),
+    ):
+        anchor_x, _anchor_y = column[anchor_name]
+        assert anchor_x + stepper.total_width() / 2.0 == pytest.approx(
+            panel_center_x
+        )
+
+    button_x0, _button_y0, button_x1, _button_y1 = (
+        window.render_mode_buttons._button_rect_px(
+            0,
+            window_size,
+            column["buttons_top_y"],
+            column["button_right_inset"],
+        )
+    )
+    assert (button_x0 + button_x1) / 2.0 == pytest.approx(panel_center_x)
+
+    label_size = viewer_window.bitmap_font.pixel_size_at_text_scale(
+        viewer_window.StepperControl.LABEL_TEXT_SIZE,
+        viewer_window.StepperControl.FIXED_TEXT_SCALE
+        * window._right_column_label_text_scale(),
+    )
+    side_pad = (
+        viewer_window.CaveViewerWindow.RIGHT_COLUMN_PANEL_SIDE_PAD
+        * window._right_column_ui_scale()
+    )
+    for anchor_name, stepper in (
+        ("brightness_anchor", window.light_stepper),
+        ("ambient_anchor", window.ambient_stepper),
+        ("render_distance_anchor", window.render_distance_stepper),
+    ):
+        label_width = viewer_window.bitmap_font.text_width_px(
+            stepper.label,
+            label_size,
+        )
+        anchor_x, _anchor_y = column[anchor_name]
+        label_x0 = anchor_x + (stepper.total_width() - label_width) / 2.0
+        assert label_x0 >= panel_x0 + side_pad - 1e-6
+        assert label_x0 + label_width <= panel_x1 - side_pad + 1e-6
 
 
 def test_right_column_panel_scales_up_on_large_viewer_surfaces():
