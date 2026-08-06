@@ -617,7 +617,7 @@ class MapLibraryPanel:
         self.sync_after_row_change()
 
     def _draw_section_header(self, section: MapLibrarySectionWidgets) -> None:
-        """Draw a section title with a disclosure chevron without font glyphs."""
+        """Draw a section title with an explicit visibility control."""
         header = section.header
         if not self._widget_exists(header):
             return
@@ -633,35 +633,13 @@ class MapLibraryPanel:
             anchor="w",
             tags="cv_section_header",
         )
-
-        center_x = width - self._px(10)
-        center_y = height / 2
-        half_width = max(2, self._px(4))
-        half_height = max(2, self._px(3))
-        if section.expanded:
-            points = (
-                center_x - half_width,
-                center_y - half_height,
-                center_x,
-                center_y + half_height,
-                center_x + half_width,
-                center_y - half_height,
-            )
-        else:
-            points = (
-                center_x - half_height,
-                center_y - half_width,
-                center_x + half_height,
-                center_y,
-                center_x - half_height,
-                center_y + half_width,
-            )
-        header.create_line(
-            *points,
+        header.create_text(
+            width - self._px(2),
+            height / 2,
+            text="Hide" if section.expanded else "Show",
+            font=self._style.metadata_font,
             fill=self._style.instruction_color,
-            width=max(1, self._px(self._style.action_icon_stroke_width)),
-            capstyle="round",
-            joinstyle="round",
+            anchor="e",
             tags="cv_section_header",
         )
 

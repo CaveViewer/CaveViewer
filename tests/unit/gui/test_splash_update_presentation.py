@@ -511,6 +511,59 @@ def test_map_library_sections_start_expanded_and_toggle_in_place():
     assert len(sync_calls) == 2
 
 
+def test_map_library_section_headers_use_explicit_show_hide_controls():
+    class _FakeHeader:
+        def __init__(self) -> None:
+            self.text_calls = []
+            self.line_calls = []
+
+        def delete(self, _tag) -> None:
+            pass
+
+        def winfo_width(self) -> int:
+            return 320
+
+        def winfo_height(self) -> int:
+            return 24
+
+        def create_text(self, *_coordinates, **options) -> None:
+            self.text_calls.append(options)
+
+        def create_line(self, *_coordinates, **options) -> None:
+            self.line_calls.append(options)
+
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel._widget_exists = lambda _widget: True
+    panel._px = lambda value: int(value)
+    panel._style = type(
+        "Style",
+        (),
+        {
+            "section_font": ("TkDefaultFont", 10, "bold"),
+            "metadata_font": ("TkDefaultFont", 9),
+            "instruction_color": "#ffffff",
+        },
+    )()
+    header = _FakeHeader()
+    section = map_library_panel.MapLibrarySectionWidgets(
+        header=header,
+        content=object(),
+        title="CaveViewer Maps",
+    )
+
+    panel._draw_section_header(section)
+    section.expanded = False
+    panel._draw_section_header(section)
+
+    assert [call["text"] for call in header.text_calls] == [
+        "CaveViewer Maps",
+        "Hide",
+        "CaveViewer Maps",
+        "Show",
+    ]
+    assert header.line_calls == []
+
+
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
