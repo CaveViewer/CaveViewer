@@ -466,6 +466,51 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert style.progress_fill_color == style.button_fg
 
 
+def test_map_library_sections_start_expanded_and_toggle_in_place():
+    class _FakeSectionContent:
+        def __init__(self) -> None:
+            self.pack_calls = []
+            self.pack_forget_calls = 0
+
+        def pack(self, **options) -> None:
+            self.pack_calls.append(options)
+
+        def pack_forget(self) -> None:
+            self.pack_forget_calls += 1
+
+    header = object()
+    content = _FakeSectionContent()
+    section = map_library_panel.MapLibrarySectionWidgets(
+        header=header,
+        content=content,
+        title="CaveViewer Maps",
+    )
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    drawn_states = []
+    closed_menus = []
+    sync_calls = []
+    panel._widget_exists = lambda _widget: True
+    panel._draw_section_header = lambda target: drawn_states.append(target.expanded)
+    panel.close_active_menu = lambda: closed_menus.append(True)
+    panel.sync_after_row_change = lambda: sync_calls.append(True)
+
+    assert section.expanded is True
+
+    panel._toggle_section(section)
+
+    assert section.expanded is False
+    assert content.pack_forget_calls == 1
+    assert content.pack_calls == []
+
+    panel._toggle_section(section)
+
+    assert section.expanded is True
+    assert content.pack_calls == [{"fill": "x", "after": header}]
+    assert drawn_states == [False, True]
+    assert len(closed_menus) == 2
+    assert len(sync_calls) == 2
+
+
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
@@ -497,7 +542,8 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "Removed downloaded maps for" not in source
     assert "Removed cache for" not in source
     assert "has_managed_map_cache(sample_path)" not in source
-    assert "self._recent_container = tk.Frame(" in panel_source
+    assert "self._recent_container = self._recent_section.content" in panel_source
+    assert "self._standard_container = self._standard_section.content" in panel_source
     assert "self.recent_rows" in panel_source
     assert "self._recent_empty_note = self._create_empty_note" in panel_source
     assert "Open dive plan…" in source
