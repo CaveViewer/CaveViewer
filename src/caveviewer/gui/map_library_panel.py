@@ -109,6 +109,18 @@ class MapLibraryRowWidgets:
     metadata_label: object | None
 
 
+@dataclass
+class MapLibrarySectionWidgets:
+    """Tk widgets and expansion state for one collapsible map group."""
+
+    header: object
+    content: object
+    title: str
+    # Start expanded on every splash so first-time users can discover the
+    # CaveViewer Maps catalog without needing to uncover it first.
+    expanded: bool = True
+
+
 class MapLibraryPanel:
     """
     Own Tk widgets and widget mutations for the splash Map Library panel.
@@ -136,8 +148,11 @@ class MapLibraryPanel:
         self._style = style
         self.standard_rows: dict[str, MapLibraryRowWidgets] = {}
         self.recent_rows: dict[str, MapLibraryRowWidgets] = {}
+        self._recent_section: MapLibrarySectionWidgets | None = None
         self._recent_container = None
         self._recent_empty_note = None
+        self._standard_section: MapLibrarySectionWidgets | None = None
+        self._standard_container = None
         self._rows_frame = None
         self._content_canvas = None
         self._content_scrollbar = None
@@ -223,12 +238,17 @@ class MapLibraryPanel:
             add="+",
         )
 
-        self._create_section(self._rows_frame, "Your Recent Maps", top_pad=16)
-        self._recent_container = tk.Frame(
-            self._rows_frame, bg=style.panel_color
+        self._recent_section = self._create_section(
+            self._rows_frame,
+            "Your Recent Maps",
+            top_pad=16,
         )
-        self._recent_container.pack(fill="x")
-        self._create_section(self._rows_frame, "CaveViewer Maps")
+        self._recent_container = self._recent_section.content
+        self._standard_section = self._create_section(
+            self._rows_frame,
+            "CaveViewer Maps",
+        )
+        self._standard_container = self._standard_section.content
 
     def finish_population(self) -> None:
         """Bind mousewheel events after rows exist and schedule scroll sync."""
@@ -307,10 +327,10 @@ class MapLibraryPanel:
         menu_actions_factory: MenuActionsFactory | None = None,
     ) -> MapLibraryRowWidgets:
         """Append one standard-library row to the CaveViewer Maps section."""
-        if self._rows_frame is None:
+        if self._standard_container is None:
             raise RuntimeError("MapLibraryPanel.create() must run first")
         widgets = self._create_row(
-            self._rows_frame,
+            self._standard_container,
             title=row.title,
             detail=row.detail,
             size_text="",
@@ -541,16 +561,109 @@ class MapLibraryPanel:
                 self._content_scrollbar.pack_forget()
             self._content_canvas.yview_moveto(0)
 
-    def _create_section(self, parent, text: str, *, top_pad: int = 10) -> None:
-        label = tk.Label(
+    def _create_section(
+        self,
+        parent,
+        text: str,
+        *,
+        top_pad: int = 10,
+    ) -> MapLibrarySectionWidgets:
+        """Create an expanded, keyboard-accessible disclosure header and body."""
+        header = tk.Canvas(
             parent,
-            text=text,
-            font=self._style.section_font,
-            fg=self._style.instruction_color,
             bg=self._style.panel_color,
-            anchor="w",
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=self._style.panel_color,
+            highlightcolor=self._style.button_border_color,
+            height=max(1, self._px(24)),
+            cursor="hand2",
+            takefocus=True,
         )
-        label.pack(anchor="w", fill="x", pady=(self._px(top_pad), self._px(6)))
+        header.pack(fill="x", pady=(self._px(top_pad), self._px(6)))
+        content = tk.Frame(parent, bg=self._style.panel_color)
+        content.pack(fill="x")
+        section = MapLibrarySectionWidgets(
+            header=header,
+            content=content,
+            title=text,
+        )
+        self._bind_activation(
+            header,
+            lambda target=section: self._toggle_section(target),
+        )
+        header.bind(
+            "<Configure>",
+            lambda _event, target=section: self._draw_section_header(target),
+            add="+",
+        )
+        self._draw_section_header(section)
+        return section
+
+    def _toggle_section(self, section: MapLibrarySectionWidgets) -> None:
+        """Show or hide a section while preserving its place in the row order."""
+        if not (
+            self._widget_exists(section.header)
+            and self._widget_exists(section.content)
+        ):
+            return
+        self.close_active_menu()
+        section.expanded = not section.expanded
+        if section.expanded:
+            section.content.pack(fill="x", after=section.header)
+        else:
+            section.content.pack_forget()
+        self._draw_section_header(section)
+        self.sync_after_row_change()
+
+    def _draw_section_header(self, section: MapLibrarySectionWidgets) -> None:
+        """Draw a section title with a disclosure chevron without font glyphs."""
+        header = section.header
+        if not self._widget_exists(header):
+            return
+        header.delete("cv_section_header")
+        width = max(1, header.winfo_width())
+        height = max(1, header.winfo_height())
+        header.create_text(
+            self._px(2),
+            height / 2,
+            text=section.title,
+            font=self._style.section_font,
+            fill=self._style.instruction_color,
+            anchor="w",
+            tags="cv_section_header",
+        )
+
+        center_x = width - self._px(10)
+        center_y = height / 2
+        half_width = max(2, self._px(4))
+        half_height = max(2, self._px(3))
+        if section.expanded:
+            points = (
+                center_x - half_width,
+                center_y - half_height,
+                center_x,
+                center_y + half_height,
+                center_x + half_width,
+                center_y - half_height,
+            )
+        else:
+            points = (
+                center_x - half_height,
+                center_y - half_width,
+                center_x + half_height,
+                center_y,
+                center_x - half_height,
+                center_y + half_width,
+            )
+        header.create_line(
+            *points,
+            fill=self._style.instruction_color,
+            width=max(1, self._px(self._style.action_icon_stroke_width)),
+            capstyle="round",
+            joinstyle="round",
+            tags="cv_section_header",
+        )
 
     def _create_empty_note(
         self,
