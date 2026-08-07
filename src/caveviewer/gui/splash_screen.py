@@ -183,6 +183,7 @@ _LIBRARY_METADATA_FONT = _tk_font(9)
 _INSTRUCTION_FONT = _tk_font(11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
 _FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
 _LINK_FONT = _tk_font(10, "underline")
+_UPDATE_ACTION_FONT = _tk_font(11, "bold")
 _BUTTON_FONT = _tk_font(13)
 _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
 _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
@@ -265,7 +266,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
     global _UI_FONT_FAMILY, _TK_TEXT_SCALE, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
     global _SMALL_FONT, _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
-    global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT
+    global _FOOTER_FONT, _LINK_FONT, _UPDATE_ACTION_FONT, _BUTTON_FONT
 
     default_font_points = 12.0
     try:
@@ -305,6 +306,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     _INSTRUCTION_FONT = _tk_font(11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
     _FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
     _LINK_FONT = _tk_font(10, "underline")
+    _UPDATE_ACTION_FONT = _tk_font(11, "bold")
     _BUTTON_FONT = _tk_font(13)
 
 
@@ -577,7 +579,7 @@ def show_splash_screen(
     update_action_label = tk.Label(
         left_frame,
         text="",
-        font=_SMALL_FONT,
+        font=_UPDATE_ACTION_FONT,
         fg=_BUTTON_BG,
         bg=_BG_COLOR,
         cursor="arrow",
@@ -786,8 +788,17 @@ def show_splash_screen(
                 lambda _event, cb=callback: _invoke_and_break(cb),
             )
 
-    browse_button = tk.Label(
+    # Reserve a 1px focus ring outside the clickable label.  Tk label
+    # highlights are painted differently by Aqua on macOS, where the ring can
+    # look like a separate split-button segment.
+    browse_button_frame = tk.Frame(
         left_frame,
+        bg=_BUTTON_BG,
+        cursor="hand2",
+        takefocus=True,
+    )
+    browse_button = tk.Label(
+        browse_button_frame,
         text="Open map…",
         font=_BUTTON_FONT,
         bg=_BUTTON_BG,
@@ -795,15 +806,47 @@ def show_splash_screen(
         padx=34,
         pady=11,
         cursor="hand2",
-        takefocus=True,
-        highlightthickness=1,
-        highlightbackground=_BUTTON_BORDER_COLOR,
-        highlightcolor=_BUTTON_BORDER_COLOR,
+        highlightthickness=0,
+        borderwidth=0,
     )
+    browse_button.pack(padx=1, pady=1)
+    browse_button_hovered = False
+    browse_button_focused = False
+
+    def _refresh_browse_button_visual() -> None:
+        body_bg = _BUTTON_HOVER_BG if browse_button_hovered else _BUTTON_BG
+        browse_button.config(bg=body_bg)
+        browse_button_frame.config(
+            bg=_BUTTON_BORDER_COLOR if browse_button_focused else body_bg
+        )
+
+    def _on_browse_button_enter(_event) -> None:
+        nonlocal browse_button_hovered
+        browse_button_hovered = True
+        _refresh_browse_button_visual()
+
+    def _on_browse_button_leave(_event) -> None:
+        nonlocal browse_button_hovered
+        browse_button_hovered = False
+        _refresh_browse_button_visual()
+
+    def _on_browse_button_focus_in(_event) -> None:
+        nonlocal browse_button_focused
+        browse_button_focused = True
+        _refresh_browse_button_visual()
+
+    def _on_browse_button_focus_out(_event) -> None:
+        nonlocal browse_button_focused
+        browse_button_focused = False
+        _refresh_browse_button_visual()
+
+    _bind_activation(browse_button_frame, on_open_map_folder)
     _bind_activation(browse_button, on_open_map_folder)
-    browse_button.bind("<Enter>", lambda _event: browse_button.config(bg=_BUTTON_HOVER_BG))
-    browse_button.bind("<Leave>", lambda _event: browse_button.config(bg=_BUTTON_BG))
-    browse_button.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
+    browse_button.bind("<Enter>", _on_browse_button_enter)
+    browse_button.bind("<Leave>", _on_browse_button_leave)
+    browse_button_frame.bind("<FocusIn>", _on_browse_button_focus_in)
+    browse_button_frame.bind("<FocusOut>", _on_browse_button_focus_out)
+    browse_button_frame.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
 
     instruction_label = tk.Label(
         left_frame,
