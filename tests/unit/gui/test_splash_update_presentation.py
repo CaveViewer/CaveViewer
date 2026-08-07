@@ -344,13 +344,17 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
 def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
-    assert "highlightthickness=1" in source
+    assert "browse_button_frame = tk.Frame(" in source
+    assert "highlightthickness=0" in source
     assert "takefocus=True" in source
     assert 'label.bind("<Return>", invoke)' in source
     assert 'label.bind("<space>", invoke)' in source
     assert "def _invoke_and_break(callback):" in source
     assert "def _bind_activation(widget, callback) -> None:" in source
+    assert "_bind_activation(browse_button_frame, on_open_map_folder)" in source
     assert "_bind_activation(browse_button, on_open_map_folder)" in source
+    assert 'browse_button_frame.bind("<FocusIn>", _on_browse_button_focus_in)' in source
+    assert 'browse_button_frame.bind("<FocusOut>", _on_browse_button_focus_out)' in source
     assert 'text="Open map…"' in source
     assert "open_recorded_dive_link" not in source
     assert 'text="Open recorded dive…"' not in source
