@@ -134,6 +134,19 @@ def test_start_import_process_passes_forced_rebuild_to_child():
     assert handle.process.args[-1] is True
 
 
+def test_start_import_process_passes_resume_requirement_to_child():
+    context = FakeSpawnContext()
+
+    handle = import_process.start_import_process(
+        {"obj_path": "/maps/cave.obj"},
+        "/maps",
+        resume_required=True,
+        context=context,
+    )
+
+    assert handle.process.args[-2:] == (False, True)
+
+
 def test_start_import_process_allows_a_splash_owned_child_to_outlive_tk_close():
     context = FakeSpawnContext()
 
@@ -227,6 +240,36 @@ def test_import_process_forces_rebuild_when_requested(monkeypatch):
         "/maps",
         events,
         force_rebuild=True,
+    )
+
+    assert events.events[-1] == ("done", "/cache/cave", "/cache/cave")
+
+
+def test_import_process_requires_resume_checkpoint_when_requested(monkeypatch):
+    events = FakeEventQueue()
+
+    def fake_import(_model_descriptor, _textures_dir, **options):
+        assert options["resume_required"] is True
+        return "/cache/cave"
+
+    monkeypatch.setattr(importer, "import_and_cache_any", fake_import)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+
+    import_process._run_import_process(
+        {"obj_path": "/maps/cave.obj"},
+        "/maps",
+        events,
+        resume_required=True,
     )
 
     assert events.events[-1] == ("done", "/cache/cave", "/cache/cave")
@@ -375,6 +418,42 @@ def test_import_process_reports_competing_cache_build_without_traceback(monkeypa
     assert "already in progress" in message
     assert trace == ""
     assert "Wait for the other cache build" in suggestion
+
+
+def test_import_process_reports_lost_resume_checkpoint_without_traceback(monkeypatch):
+    events = FakeEventQueue()
+
+    monkeypatch.setattr(
+        importer,
+        "import_and_cache_any",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            chunker.ResumeCheckpointUnavailableError()
+        ),
+    )
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(import_process, "configure_import_child_runtime", lambda: None)
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+
+    import_process._run_import_process(
+        {"obj_path": "/maps/cave.obj"},
+        "/maps",
+        events,
+        resume_required=True,
+    )
+
+    kind, message, trace, suggestion = events.events[-1]
+    assert kind == "error"
+    assert "checkpoint is no longer usable" in message.lower()
+    assert trace == ""
+    assert "Rebuild cache" in suggestion
 
 
 def test_import_process_reports_cancelled_without_traceback_on_keyboard_interrupt(

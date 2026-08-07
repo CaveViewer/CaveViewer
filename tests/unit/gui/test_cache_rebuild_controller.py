@@ -117,6 +117,35 @@ def test_controller_requests_obj_pause_and_reports_checkpoint():
     assert not controller.active
 
 
+def test_controller_passes_resume_requirement_to_import_child():
+    handle = _FakeHandle()
+    calls = []
+    controller = CacheRebuildJobController(
+        start_process=lambda descriptor, textures_dir, **options: (
+            calls.append((descriptor, textures_dir, options)) or handle
+        )
+    )
+
+    started = controller.start(_target(), resume_required=True)
+
+    assert isinstance(started, CacheRebuildStarted)
+    assert calls == [
+        (
+            {
+                "format": "obj",
+                "obj_path": "/maps/cave/cave.obj",
+                "mtl_path": "/maps/cave/cave.mtl",
+            },
+            str(_target().textures_dir),
+            {
+                "force_rebuild": True,
+                "daemon": False,
+                "resume_required": True,
+            },
+        )
+    ]
+
+
 def test_controller_reports_abnormal_child_exit_as_failure():
     handle = _FakeHandle()
     controller = CacheRebuildJobController(

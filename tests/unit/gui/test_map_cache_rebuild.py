@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from caveviewer.core.capabilities import CapabilityStatus
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.chunking.staging import ResumableObjImport
 from caveviewer.core.map.cache_build_lock import CacheBuildLock
 from caveviewer.gui import map_cache_rebuild
 from caveviewer.gui.features import FeatureState
@@ -86,6 +89,58 @@ def test_preflight_disables_unsafe_or_busy_generated_destination(tmp_path):
     finally:
         lock.release()
 
+    assert busy.decision.state is FeatureState.DISABLED
+    assert busy.decision.reason_code == "map_cache_rebuild_already_in_progress"
+
+
+def test_preflight_attaches_a_validated_resume_fact_and_keeps_it_while_busy(
+    tmp_path,
+    monkeypatch,
+):
+    map_dir = tmp_path / "maps" / "cave"
+    map_dir.mkdir(parents=True)
+    source = map_dir / "cave.obj"
+    source.write_text("mtllib cave.mtl\nv 0 0 0\n", encoding="utf-8")
+    material = map_dir / "cave.mtl"
+    material.write_text("newmtl rock\n", encoding="utf-8")
+    cache_dir = map_dir / "_cache"
+    cache_dir.mkdir()
+    resumable = ResumableObjImport(
+        resume_dir=Path("/maps/.cache.resume-123"),
+        stage="bucketing",
+        progress_fraction=0.4,
+    )
+    calls = []
+
+    def probe(descriptor, *, cache_dir):
+        calls.append((descriptor, cache_dir))
+        return resumable
+
+    monkeypatch.setattr(map_cache_rebuild, "probe_resumable_import", probe)
+
+    available = map_cache_rebuild.probe_map_library_cache_rebuild(map_dir)
+
+    assert available.resumable_import is resumable
+    assert available.decision.allows_execution
+    assert calls == [
+        (
+            {
+                "format": "obj",
+                "obj_path": str(source),
+                "mtl_path": str(material),
+            },
+            str(cache_dir),
+        )
+    ]
+
+    lock = CacheBuildLock(cache_dir)
+    lock.acquire()
+    try:
+        busy = map_cache_rebuild.probe_map_library_cache_rebuild(map_dir)
+    finally:
+        lock.release()
+
+    assert busy.resumable_import is resumable
     assert busy.decision.state is FeatureState.DISABLED
     assert busy.decision.reason_code == "map_cache_rebuild_already_in_progress"
 

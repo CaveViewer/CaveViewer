@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from caveviewer.core.chunking.io import CHUNKS_DIRNAME
 from caveviewer.core.diagnostics.logging import get_logger
@@ -30,6 +33,22 @@ class ImportPaused(RuntimeError):
         if resume_dir:
             message = f"{message} Resume directory: {resume_dir}"
         super().__init__(message)
+
+
+class ResumeCheckpointUnavailableError(RuntimeError):
+    """Raised when an explicitly requested import resume checkpoint is unavailable."""
+
+    def __init__(self) -> None:
+        super().__init__("Saved rebuild checkpoint is no longer usable.")
+
+
+@dataclass(frozen=True, slots=True)
+class ResumableObjImport:
+    """A validated on-disk checkpoint for one incremental OBJ import."""
+
+    resume_dir: Path
+    stage: str
+    progress_fraction: float
 
 
 @dataclass(frozen=True)
@@ -293,6 +312,118 @@ def _read_incremental_obj_resume_checkpoint(path: str) -> dict | None:
     return checkpoint
 
 
+def _is_nonnegative_checkpoint_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _checkpoint_fraction(value: Any) -> float | None:
+    try:
+        fraction = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        return None
+    return fraction
+
+
+def _checkpoint_timestamp(value: Any) -> float | None:
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(timestamp):
+        return None
+    return timestamp
+
+
+def _checkpoint_chunk_key_is_valid(value: Any) -> bool:
+    """Return whether a completed manifest key names one canonical chunk."""
+    if not isinstance(value, str):
+        return False
+    fields = value.split("_")
+    if len(fields) != 3:
+        return False
+    try:
+        coordinates = tuple(int(field) for field in fields)
+    except ValueError:
+        return False
+    return value == "_".join(str(coordinate) for coordinate in coordinates)
+
+
+def _completed_resume_chunks_are_usable(
+    checkpoint: dict,
+    *,
+    resume_dir: str,
+) -> bool:
+    """Verify finalization checkpoints retain every already-written chunk."""
+    completed_chunks = checkpoint["completed_manifest_chunks"]
+    if checkpoint.get("stage") == "bucketing":
+        return not completed_chunks
+
+    total_cell_count = checkpoint.get("total_cell_count")
+    if total_cell_count is not None and len(completed_chunks) > total_cell_count:
+        return False
+    for cell_key, metadata in completed_chunks.items():
+        if not _checkpoint_chunk_key_is_valid(cell_key) or not isinstance(
+            metadata, dict
+        ):
+            return False
+        chunk_path = os.path.join(
+            resume_dir,
+            CHUNKS_DIRNAME,
+            f"{cell_key}.bin",
+        )
+        if not os.path.isfile(chunk_path):
+            return False
+    return True
+
+
+def _incremental_obj_resume_checkpoint_is_usable(
+    checkpoint: dict,
+    *,
+    resume_dir: str,
+) -> bool:
+    """Reject malformed checkpoint payloads before offering or reusing them."""
+    if _checkpoint_fraction(checkpoint.get("progress_fraction")) is None:
+        return False
+    if _checkpoint_timestamp(checkpoint.get("updated_at")) is None:
+        return False
+    if not all(
+        _is_nonnegative_checkpoint_int(checkpoint.get(field))
+        for field in ("next_batch_index", "bucketed_faces", "face_count")
+    ):
+        return False
+    if not isinstance(checkpoint.get("bucket_parts"), list):
+        return False
+    if not isinstance(checkpoint.get("completed_manifest_chunks"), dict):
+        return False
+    total_cell_count = checkpoint.get("total_cell_count")
+    if total_cell_count is not None and not _is_nonnegative_checkpoint_int(
+        total_cell_count
+    ):
+        return False
+    if not _completed_resume_chunks_are_usable(
+        checkpoint,
+        resume_dir=resume_dir,
+    ):
+        return False
+    if checkpoint["bucketed_faces"] > checkpoint["face_count"]:
+        return False
+
+    try:
+        bucket_parts = _deserialize_bucket_parts(
+            checkpoint["bucket_parts"],
+            resume_dir,
+        )
+    except (TypeError, ValueError, OSError):
+        return False
+    return all(
+        os.path.isfile(path)
+        for paths in bucket_parts.values()
+        for path in paths
+    )
+
+
 def _incremental_obj_resume_checkpoint_matches(
     checkpoint: dict,
     *,
@@ -307,9 +438,19 @@ def _incremental_obj_resume_checkpoint_matches(
         return False
     if checkpoint.get("stage") not in {"bucketing", "finalizing"}:
         return False
-    if float(checkpoint.get("chunk_size", -1.0)) != float(chunk_size):
+    try:
+        checkpoint_chunk_size = float(checkpoint.get("chunk_size", -1.0))
+        expected_chunk_size = float(chunk_size)
+    except (TypeError, ValueError, OverflowError):
         return False
-    if int(checkpoint.get("face_batch_size", -1)) != int(face_batch_size):
+    if (
+        not math.isfinite(checkpoint_chunk_size)
+        or checkpoint_chunk_size != expected_chunk_size
+    ):
+        return False
+    if not _is_nonnegative_checkpoint_int(checkpoint.get("face_batch_size")):
+        return False
+    if checkpoint["face_batch_size"] != int(face_batch_size):
         return False
     if checkpoint.get("materials") != _materials_resume_identity(materials):
         return False
@@ -353,9 +494,17 @@ def _find_incremental_obj_resume(
             face_batch_size=face_batch_size,
         ):
             continue
+        if not _incremental_obj_resume_checkpoint_is_usable(
+            checkpoint,
+            resume_dir=resume_dir,
+        ):
+            continue
+        updated_at = _checkpoint_timestamp(checkpoint.get("updated_at"))
+        if updated_at is None:
+            continue
         candidates.append(
             (
-                float(checkpoint.get("updated_at", os.path.getmtime(resume_dir))),
+                updated_at,
                 resume_dir,
                 checkpoint,
             )
@@ -365,6 +514,35 @@ def _find_incremental_obj_resume(
         return None
     _updated_at, resume_dir, checkpoint = max(candidates, key=lambda item: item[0])
     return resume_dir, checkpoint
+
+
+def find_resumable_obj_import(
+    cache_dir: str,
+    *,
+    obj_path: str,
+    materials: dict,
+    chunk_size: float,
+    face_batch_size: int,
+) -> ResumableObjImport | None:
+    """Return the newest fully validated OBJ checkpoint for this build target."""
+    resume = _find_incremental_obj_resume(
+        cache_dir,
+        obj_path=obj_path,
+        materials=materials,
+        chunk_size=chunk_size,
+        face_batch_size=face_batch_size,
+    )
+    if resume is None:
+        return None
+    resume_dir, checkpoint = resume
+    fraction = _checkpoint_fraction(checkpoint.get("progress_fraction"))
+    if fraction is None:
+        return None
+    return ResumableObjImport(
+        resume_dir=Path(resume_dir),
+        stage=str(checkpoint["stage"]),
+        progress_fraction=fraction,
+    )
 
 
 def _preserve_resumable_import(staging_dir: str, cache_dir: str) -> str:

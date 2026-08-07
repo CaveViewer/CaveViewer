@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable
 
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.chunking.staging import ResumeCheckpointUnavailableError
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.mesh import glb as glb_parser
 from caveviewer.core.mesh import obj as obj_parser
@@ -47,6 +48,7 @@ def import_and_cache(
     max_upload_group_mb: float | None = None,
     obj_import_batch_faces: int | None = None,
     obj_bucket_workers: int | None = None,
+    resume_required: bool = False,
 ) -> str:
     """Parse and cache one OBJ source, reusing an existing valid cache."""
     target_cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
@@ -87,18 +89,65 @@ def import_and_cache(
         else chunker.configured_chunk_size()
     )
 
+    build_options = {
+        "progress_cb": lambda stage, frac: _emit_progress(progress_cb, stage, frac),
+        "cache_dir": target_cache_dir,
+        "assets": texture_assets,
+        "pause_requested": pause_requested,
+        "chunk_size": active_chunk_size,
+        "face_batch_size": obj_import_batch_faces,
+        "bucket_workers": obj_bucket_workers,
+        "max_upload_group_mb": max_upload_group_mb,
+    }
+    if resume_required:
+        build_options["resume_required"] = True
     return chunker.build_cache_incremental_obj(
         obj_path,
         materials,
-        progress_cb=lambda stage, frac: _emit_progress(progress_cb, stage, frac),
-        cache_dir=target_cache_dir,
-        assets=texture_assets,
-        pause_requested=pause_requested,
-        chunk_size=active_chunk_size,
-        face_batch_size=obj_import_batch_faces,
-        bucket_workers=obj_bucket_workers,
-        max_upload_group_mb=max_upload_group_mb,
+        **build_options,
     )
+
+
+def probe_resumable_import(
+    model_descriptor: dict,
+    *,
+    cache_dir: str | None = None,
+    chunk_size: float | None = None,
+    obj_import_batch_faces: int | None = None,
+) -> chunker.ResumableObjImport | None:
+    """Return a validated OBJ checkpoint for one model descriptor, if any.
+
+    This deliberately parses the material file in the core layer so callers
+    need neither checkpoint-format knowledge nor MTL parsing logic.
+    """
+    source_format = source_model.source_format_for_id(
+        model_descriptor.get("format")
+    )
+    if (
+        source_format is None
+        or source_format.id is not source_model.SourceFormatId.OBJ
+    ):
+        return None
+    obj_path = model_descriptor.get("obj_path")
+    mtl_path = model_descriptor.get("mtl_path")
+    if not obj_path or not mtl_path:
+        return None
+    try:
+        materials = obj_parser.parse_mtl(mtl_path)
+        active_chunk_size = (
+            float(chunk_size)
+            if chunk_size is not None
+            else chunker.configured_chunk_size()
+        )
+        return chunker.probe_resumable_obj_import(
+            obj_path,
+            materials,
+            cache_dir=cache_dir,
+            chunk_size=active_chunk_size,
+            face_batch_size=obj_import_batch_faces,
+        )
+    except (OSError, TypeError, UnicodeError, ValueError):
+        return None
 
 
 def import_and_cache_any(
@@ -113,6 +162,7 @@ def import_and_cache_any(
     max_upload_group_mb: float | None = None,
     obj_import_batch_faces: int | None = None,
     obj_bucket_workers: int | None = None,
+    resume_required: bool = False,
 ) -> str:
     """Dispatch a model descriptor to the correct parser/cache path."""
     raw_format = model_descriptor.get("format")
@@ -121,21 +171,29 @@ def import_and_cache_any(
         raise ValueError(f"Unknown model format: {raw_format!r}")
 
     if source_format.id is source_model.SourceFormatId.OBJ:
+        import_options = {
+            "force_rebuild": force_rebuild,
+            "progress_cb": progress_cb,
+            "pause_requested": pause_requested,
+            "chunk_size": chunk_size,
+            "cache_dir": cache_dir,
+            "max_upload_group_mb": max_upload_group_mb,
+            "obj_import_batch_faces": obj_import_batch_faces,
+            "obj_bucket_workers": obj_bucket_workers,
+        }
+        if resume_required:
+            import_options["resume_required"] = True
         return import_and_cache(
             model_descriptor["obj_path"],
             model_descriptor["mtl_path"],
-            force_rebuild=force_rebuild,
-            progress_cb=progress_cb,
-            pause_requested=pause_requested,
-            chunk_size=chunk_size,
-            cache_dir=cache_dir,
-            max_upload_group_mb=max_upload_group_mb,
-            obj_import_batch_faces=obj_import_batch_faces,
-            obj_bucket_workers=obj_bucket_workers,
+            **import_options,
         )
 
     if source_format.id is not source_model.SourceFormatId.GLB:
         raise ValueError(f"Unknown model format: {raw_format!r}")
+
+    if resume_required:
+        raise ResumeCheckpointUnavailableError()
 
     source_path = model_descriptor.get(source_format.descriptor_path_key)
     if not source_path:

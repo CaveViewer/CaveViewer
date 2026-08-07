@@ -24,7 +24,10 @@ from caveviewer.core.chunking.capacity import (
     InsufficientDiskSpaceError,
     InsufficientImportMemoryError,
 )
-from caveviewer.core.chunking.staging import ImportPaused
+from caveviewer.core.chunking.staging import (
+    ImportPaused,
+    ResumeCheckpointUnavailableError,
+)
 from caveviewer.core.diagnostics.logging import configure_logging, get_logger
 from caveviewer.core.map.cache_build_lock import CacheBuildInProgressError
 from caveviewer.gui.platform.process_priority import lower_current_process_priority
@@ -98,6 +101,7 @@ def start_import_process(
     textures_dir: str,
     *,
     force_rebuild: bool = False,
+    resume_required: bool = False,
     daemon: bool = True,
     context: BaseContext | None = None,
 ) -> ImportProcessHandle:
@@ -106,15 +110,18 @@ def start_import_process(
     cache_dir = cache_dir_for_descriptor(model_descriptor)
     events = process_context.Queue()
     commands = process_context.Queue()
+    process_args = (
+        dict(model_descriptor),
+        str(textures_dir),
+        events,
+        commands,
+        bool(force_rebuild),
+    )
+    if resume_required:
+        process_args += (True,)
     process = process_context.Process(
         target=_run_import_process,
-        args=(
-            dict(model_descriptor),
-            str(textures_dir),
-            events,
-            commands,
-            bool(force_rebuild),
-        ),
+        args=process_args,
         name="CaveViewer-import",
     )
     process.daemon = bool(daemon)
@@ -344,6 +351,12 @@ def _actionable_import_failure(exc: BaseException) -> tuple[str, str] | None:
             "Wait for the other cache build to finish, then retry.",
         )
 
+    if isinstance(exc, ResumeCheckpointUnavailableError):
+        return (
+            str(exc),
+            "Open the Map Library menu again and choose Rebuild cache.",
+        )
+
     return None
 
 
@@ -353,6 +366,7 @@ def _run_import_process(
     events: Any,
     commands: Any = None,
     force_rebuild: bool = False,
+    resume_required: bool = False,
 ) -> None:
     """Child-process entry point. Sends progress, done, or error events."""
     _configure_import_child_logging(events)
@@ -397,12 +411,17 @@ def _run_import_process(
             _put_event(events, ("progress", stage, fraction))
 
         on_progress("starting import", 0.0)
+        import_options = {
+            "force_rebuild": bool(force_rebuild),
+            "progress_cb": on_progress,
+            "pause_requested": pause_event.is_set,
+        }
+        if resume_required:
+            import_options["resume_required"] = True
         cache_dir = import_and_cache_any(
             model_descriptor,
             textures_dir,
-            force_rebuild=bool(force_rebuild),
-            progress_cb=on_progress,
-            pause_requested=pause_event.is_set,
+            **import_options,
         )
         _put_event(events, ("done", cache_dir, cache_dir))
     except KeyboardInterrupt:

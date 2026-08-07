@@ -14,9 +14,10 @@ from types import MappingProxyType
 from typing import Mapping
 
 from caveviewer.core.capabilities import CapabilityResult
-from caveviewer.core.chunking.staging import MANIFEST_NAME
+from caveviewer.core.chunking.staging import MANIFEST_NAME, ResumableObjImport
 from caveviewer.core.map.cache_build_lock import cache_build_is_locked
 from caveviewer.core.map.cache_paths import MapCacheLocator
+from caveviewer.core.map.importer import probe_resumable_import
 from caveviewer.core.map.source_model import find_model_file
 from caveviewer.gui.features import (
     FeatureDecision,
@@ -58,6 +59,7 @@ class CacheRebuildPreflight:
 
     capability: CapabilityResult[CacheRebuildTarget]
     decision: FeatureDecision
+    resumable_import: ResumableObjImport | None = None
 
     def __post_init__(self) -> None:
         if self.decision.feature is not FeatureId.MAP_LIBRARY_CACHE_REBUILD:
@@ -124,10 +126,13 @@ def _cache_destination_is_safe(cache_dir: Path) -> bool:
 
 def _preflight_from_capability(
     capability: CapabilityResult[CacheRebuildTarget],
+    *,
+    resumable_import: ResumableObjImport | None = None,
 ) -> CacheRebuildPreflight:
     return CacheRebuildPreflight(
         capability=capability,
         decision=decide_map_library_cache_rebuild(capability),
+        resumable_import=resumable_import,
     )
 
 
@@ -217,13 +222,6 @@ def probe_map_library_cache_rebuild(
                     evidence={"cache": "unsafe_destination"},
                 )
             )
-        if cache_build_is_locked(cache_dir):
-            return _preflight_from_capability(
-                CapabilityResult.unavailable(
-                    reason_code="map_cache_rebuild_already_in_progress",
-                    evidence={"cache": "build_locked"},
-                )
-            )
         if not _sources_are_readable(descriptor):
             return _preflight_from_capability(
                 CapabilityResult.unavailable(
@@ -245,10 +243,31 @@ def probe_map_library_cache_rebuild(
         textures_dir=Path(source_path).parent,
         cache_dir=cache_dir,
     )
+    try:
+        resumable_import = probe_resumable_import(
+            dict(descriptor),
+            cache_dir=os.fspath(cache_dir),
+        )
+    except (OSError, TypeError, ValueError):
+        return _preflight_from_capability(
+            CapabilityResult.unknown(
+                reason_code="map_cache_rebuild_probe_failed",
+                evidence={"checkpoint": "probe_failed"},
+            )
+        )
+    if cache_build_is_locked(cache_dir):
+        return _preflight_from_capability(
+            CapabilityResult.unavailable(
+                reason_code="map_cache_rebuild_already_in_progress",
+                evidence={"cache": "build_locked"},
+            ),
+            resumable_import=resumable_import,
+        )
     return _preflight_from_capability(
         CapabilityResult.available(
             target,
             reason_code="map_cache_rebuild_target_available",
             evidence={"cache": "generated_destination", "source": "readable"},
-        )
+        ),
+        resumable_import=resumable_import,
     )

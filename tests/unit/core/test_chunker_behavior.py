@@ -48,6 +48,232 @@ def test_read_resume_checkpoint_rejects_oversized_json(tmp_path, monkeypatch):
     ) is None
 
 
+def test_resumable_obj_probe_rejects_partial_checkpoint(tmp_path):
+    source = tmp_path / "map.obj"
+    source.write_text("v 0 0 0\n", encoding="utf-8")
+    cache_dir = tmp_path / "managed" / "map-key"
+    resume_dir = cache_dir.parent / ".map-key.resume-partial"
+    resume_dir.mkdir(parents=True)
+    (resume_dir / chunker.IMPORT_RESUME_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "kind": "incremental_obj_import",
+                "source": chunk_staging._source_resume_identity(str(source)),
+                "chunk_size": 8.0,
+                "face_batch_size": 1,
+                "materials": {},
+                "stage": "bucketing",
+                "progress_fraction": 0.5,
+                "updated_at": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        chunker.probe_resumable_obj_import(
+            str(source),
+            {},
+            cache_dir=str(cache_dir),
+            chunk_size=8.0,
+            face_batch_size=1,
+        )
+        is None
+    )
+
+
+def _write_valid_resume_checkpoint(
+    resume_dir: Path,
+    source: Path,
+    source_materials: dict[str, obj_parser.Material],
+    **overrides,
+) -> None:
+    checkpoint = {
+        "version": 1,
+        "kind": "incremental_obj_import",
+        "source": chunk_staging._source_resume_identity(str(source)),
+        "chunk_size": 8.0,
+        "face_batch_size": 1,
+        "materials": chunk_staging._materials_resume_identity(source_materials),
+        "stage": "bucketing",
+        "next_batch_index": 0,
+        "bucketed_faces": 0,
+        "face_count": 0,
+        "progress_fraction": 0.0,
+        "bucket_parts": [],
+        "completed_manifest_chunks": {},
+        "total_cell_count": None,
+        "updated_at": 1.0,
+    }
+    checkpoint.update(overrides)
+    resume_dir.mkdir(parents=True)
+    (resume_dir / chunker.IMPORT_RESUME_MANIFEST_NAME).write_text(
+        json.dumps(checkpoint),
+        encoding="utf-8",
+    )
+
+
+def test_resumable_obj_probe_uses_chunk_size_configured_after_import(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "map.obj"
+    source.write_text("v 0 0 0\n", encoding="utf-8")
+    cache_dir = tmp_path / "managed" / "map-key"
+    _write_valid_resume_checkpoint(
+        cache_dir.parent / ".map-key.resume-current-setting",
+        source,
+        {},
+    )
+    monkeypatch.setenv(chunker.CHUNK_SIZE_ENV_VAR, "8")
+
+    resumable = chunker.probe_resumable_obj_import(
+        str(source),
+        {},
+        cache_dir=str(cache_dir),
+        face_batch_size=1,
+    )
+
+    assert resumable is not None
+
+
+@pytest.mark.parametrize(
+    "checkpoint_overrides",
+    [
+        {"version": 99},
+        {"chunk_size": 16.0},
+        {"face_batch_size": 2},
+        {"materials": {"rock": "different-texture.jpg"}},
+    ],
+)
+def test_resumable_obj_probe_rejects_checkpoint_identity_mismatches(
+    tmp_path,
+    checkpoint_overrides,
+):
+    source = tmp_path / "map.obj"
+    source.write_text("v 0 0 0\n", encoding="utf-8")
+    materials = {"rock": obj_parser.Material("rock", "rock.jpg")}
+    cache_dir = tmp_path / "managed" / "map-key"
+    _write_valid_resume_checkpoint(
+        cache_dir.parent / ".map-key.resume-mismatch",
+        source,
+        materials,
+        **checkpoint_overrides,
+    )
+
+    assert (
+        chunker.probe_resumable_obj_import(
+            str(source),
+            materials,
+            cache_dir=str(cache_dir),
+            chunk_size=8.0,
+            face_batch_size=1,
+        )
+        is None
+    )
+
+
+def test_resumable_obj_probe_rejects_a_changed_source(tmp_path):
+    source = tmp_path / "map.obj"
+    source.write_text("v 0 0 0\n", encoding="utf-8")
+    materials = {"rock": obj_parser.Material("rock", "rock.jpg")}
+    cache_dir = tmp_path / "managed" / "map-key"
+    _write_valid_resume_checkpoint(
+        cache_dir.parent / ".map-key.resume-source",
+        source,
+        materials,
+    )
+    source.write_text("v 0 0 0\nv 1 0 0\n", encoding="utf-8")
+
+    assert (
+        chunker.probe_resumable_obj_import(
+            str(source),
+            materials,
+            cache_dir=str(cache_dir),
+            chunk_size=8.0,
+            face_batch_size=1,
+        )
+        is None
+    )
+
+
+def test_resumable_obj_probe_rejects_a_finalizing_checkpoint_missing_chunks(
+    tmp_path,
+):
+    source = tmp_path / "map.obj"
+    source.write_text("v 0 0 0\n", encoding="utf-8")
+    cache_dir = tmp_path / "managed" / "map-key"
+    resume_dir = cache_dir.parent / ".map-key.resume-damaged"
+    _write_valid_resume_checkpoint(
+        resume_dir,
+        source,
+        {},
+        stage="finalizing",
+        completed_manifest_chunks={"0_0_0": {}},
+        total_cell_count=1,
+    )
+    chunk_file = resume_dir / chunk_staging.CHUNKS_DIRNAME / "0_0_0.bin"
+    chunk_file.parent.mkdir()
+    chunk_file.write_bytes(b"completed chunk")
+
+    assert (
+        chunker.probe_resumable_obj_import(
+            str(source),
+            {},
+            cache_dir=str(cache_dir),
+            chunk_size=8.0,
+            face_batch_size=1,
+        )
+        is not None
+    )
+    chunk_file.unlink()
+
+    assert (
+        chunker.probe_resumable_obj_import(
+            str(source),
+            {},
+            cache_dir=str(cache_dir),
+            chunk_size=8.0,
+            face_batch_size=1,
+        )
+        is None
+    )
+
+
+def test_resume_required_rejects_missing_checkpoint_without_fresh_staging(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "map.obj"
+    source.write_text("v 0 0 0\n", encoding="utf-8")
+    cache_dir = tmp_path / "managed" / "map-key"
+    monkeypatch.setattr(
+        chunker,
+        "ensure_sufficient_disk_space",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        chunker.tempfile,
+        "mkdtemp",
+        lambda *_args, **_kwargs: pytest.fail(
+            "resume-required mode must not create fresh staging"
+        ),
+    )
+
+    with pytest.raises(chunker.ResumeCheckpointUnavailableError):
+        chunker.build_cache_incremental_obj(
+            str(source),
+            {},
+            cache_dir=str(cache_dir),
+            chunk_size=8.0,
+            face_batch_size=1,
+            resume_required=True,
+        )
+
+    assert not (cache_dir.parent / ".map-key.build-lock").exists()
+
+
 def test_source_file_read_memory_preflight_rejects_oversized_container(
     tmp_path, monkeypatch
 ):
@@ -205,7 +431,8 @@ def test_chunk_size_configuration_handles_default_valid_and_invalid_values(
         )
 
     assert chunker.CHUNK_SIZE_ENV_VAR in caplog.text
-    assert chunker.configured_chunk_size() == chunker.DEFAULT_CHUNK_SIZE
+    monkeypatch.setenv(chunker.CHUNK_SIZE_ENV_VAR, "12.5")
+    assert chunker.configured_chunk_size() == 12.5
 
 
 def test_import_memory_estimate_scales_with_geometry_size():
@@ -972,6 +1199,22 @@ def test_incremental_obj_import_pauses_and_resumes_from_checkpoint(
     assert checkpoint["stage"] == "bucketing"
     assert checkpoint["next_batch_index"] == 1
     assert checkpoint["bucketed_faces"] == 1
+
+    resumable = chunker.probe_resumable_obj_import(
+        str(source),
+        {
+            "rock": obj_parser.Material("rock", "rock.jpg"),
+            "sand": obj_parser.Material("sand", "sand.jpg"),
+        },
+        cache_dir=str(cache_dir),
+        chunk_size=8.0,
+        face_batch_size=1,
+    )
+
+    assert resumable is not None
+    assert resumable.resume_dir == resume_dir
+    assert resumable.stage == "bucketing"
+    assert 0.0 <= resumable.progress_fraction <= 1.0
 
     caplog.set_level(logging.INFO, logger="caveviewer")
     result = chunker.build_cache_incremental_obj(

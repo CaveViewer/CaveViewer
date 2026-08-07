@@ -40,8 +40,8 @@ DEFAULT_CHUNK_SIZE = _resolve_default_chunk_size()
 
 
 def configured_chunk_size() -> float:
-    """Return the chunk size currently used by default for cache builds."""
-    return DEFAULT_CHUNK_SIZE
+    """Return the chunk size currently configured for new cache builds."""
+    return _resolve_default_chunk_size()
 
 
 def world_to_cell(point: np.ndarray, chunk_size: float) -> tuple[int, int, int]:
