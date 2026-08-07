@@ -414,6 +414,29 @@ def _enabled_cache_rebuild_preflight(
     )
 
 
+def _enabled_cache_build_preflight(
+    _map_path: str | None = None,
+) -> CacheRebuildPreflight:
+    capability = CapabilityResult.available(
+        CacheRebuildTarget(
+            map_path=Path("/maps/Recent Cave"),
+            model_descriptor={
+                "format": "obj",
+                "obj_path": "/maps/Recent Cave/cave.obj",
+                "mtl_path": "/maps/Recent Cave/cave.mtl",
+            },
+            textures_dir=Path("/maps/Recent Cave"),
+            cache_dir=Path("/maps/Recent Cave/_cache"),
+            operation="build",
+        ),
+        reason_code="map_cache_build_target_available",
+    )
+    return CacheRebuildPreflight(
+        capability=capability,
+        decision=decide_map_library_cache_rebuild(capability),
+    )
+
+
 def _resumable_cache_rebuild_preflight(
     _map_path: str | None = None,
 ) -> CacheRebuildPreflight:
@@ -512,22 +535,35 @@ def test_map_library_root_change_waits_for_active_download():
     assert "after the current download finishes" in state.feedback[-1][0]
 
 
-def test_downloaded_standard_library_menu_omits_cache_action_without_cache():
-    """Downloaded standard maps without generated cache expose one cleanup action."""
+def test_downloaded_standard_library_menu_offers_build_cache_without_cache():
+    """Downloaded standard maps without generated cache can build it in-place."""
     library_map = _library_map()
+    rebuild_controller = _FakeCacheRebuildController()
     state = _workflow(
         [library_map],
         is_downloaded=lambda _root, _map: True,
         existing_path=lambda _root, _map: "/library/Test Cave",
         has_cache=lambda _path: False,
+        cache_rebuild_preflight=_enabled_cache_build_preflight,
+        cache_rebuild_controller=rebuild_controller,
     )
+    row_widgets = SimpleNamespace(row_shell=object())
 
     state.workflow.add_standard_row(library_map)
     menu_factory = state.panel.standard_menu_factories["Test Cave"]
 
-    actions = menu_factory(SimpleNamespace(row_shell=object()))
+    actions = menu_factory(row_widgets)
 
-    assert [label for label, _command in actions] == ["Remove map files"]
+    assert [label for label, _command in actions] == [
+        "Remove map files",
+        "Build cache",
+    ]
+
+    next(action for action in actions if action[0] == "Build cache")[1]()
+
+    assert rebuild_controller.start_calls[0].operation == "build"
+    assert state.panel.row_metadata[1] == "Building cache — Starting import"
+    assert state.opened == []
 
 
 def test_downloaded_standard_library_menu_preflights_local_guided_dive():
@@ -1279,6 +1315,43 @@ def test_rebuild_progress_success_restores_open_and_reports_completion():
     )
     assert state.panel.row_action[1] == "Open"
     assert state.panel.status == (row_widgets, "Cache rebuilt", False)
+    assert state.opened == []
+
+
+def test_build_progress_success_restores_open_and_reports_completion():
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_build_preflight,
+        cache_rebuild_controller=rebuild_controller,
+    )
+    row_widgets = SimpleNamespace(row_shell=object())
+
+    state.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        row_widgets,
+    )
+    rebuild_controller.updates = [
+        CacheRebuildProgress(
+            target=rebuild_controller.start_calls[0],
+            stage="building chunks",
+            fraction=0.625,
+        ),
+        CacheRebuildSucceeded(
+            target=rebuild_controller.start_calls[0],
+            cache_dir="/maps/Recent Cave/_cache",
+        ),
+    ]
+
+    state.workflow.poll_cache_rebuild()
+
+    assert state.panel.row_progress == (row_widgets, 0.625)
+    assert (row_widgets, "Building cache — Building chunks", False) in (
+        state.panel.row_metadata_history
+    )
+    assert state.panel.row_action[1] == "Open"
+    assert state.panel.status == (row_widgets, "Cache built", False)
     assert state.opened == []
 
 
