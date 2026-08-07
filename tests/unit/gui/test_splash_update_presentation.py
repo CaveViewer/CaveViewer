@@ -312,6 +312,7 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
         "_INSTRUCTION_FONT",
         "_FOOTER_FONT",
         "_LINK_FONT",
+        "_UPDATE_ACTION_FONT",
         "_BUTTON_FONT",
     )
     original_values = {name: getattr(splash_screen, name) for name in font_globals}
@@ -335,6 +336,7 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
         assert splash_screen._BODY_FONT == ("Helvetica Neue", 17)
         assert splash_screen._SMALL_FONT == ("Helvetica Neue", 14)
         assert splash_screen._LIBRARY_METADATA_FONT == ("Helvetica Neue", 13)
+        assert splash_screen._UPDATE_ACTION_FONT == ("Helvetica Neue", 15, "bold")
         assert splash_screen._BUTTON_FONT == ("Helvetica Neue", 18)
     finally:
         for name, value in original_values.items():

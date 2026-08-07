@@ -183,6 +183,7 @@ _LIBRARY_METADATA_FONT = _tk_font(9)
 _INSTRUCTION_FONT = _tk_font(11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
 _FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
 _LINK_FONT = _tk_font(10, "underline")
+_UPDATE_ACTION_FONT = _tk_font(11, "bold")
 _BUTTON_FONT = _tk_font(13)
 _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
 _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
@@ -265,7 +266,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
     global _UI_FONT_FAMILY, _TK_TEXT_SCALE, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
     global _SMALL_FONT, _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
-    global _FOOTER_FONT, _LINK_FONT, _BUTTON_FONT
+    global _FOOTER_FONT, _LINK_FONT, _UPDATE_ACTION_FONT, _BUTTON_FONT
 
     default_font_points = 12.0
     try:
@@ -305,6 +306,7 @@ def _configure_runtime_tk_fonts(root) -> None:
     _INSTRUCTION_FONT = _tk_font(11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
     _FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
     _LINK_FONT = _tk_font(10, "underline")
+    _UPDATE_ACTION_FONT = _tk_font(11, "bold")
     _BUTTON_FONT = _tk_font(13)
 
 
@@ -577,7 +579,7 @@ def show_splash_screen(
     update_action_label = tk.Label(
         left_frame,
         text="",
-        font=_SMALL_FONT,
+        font=_UPDATE_ACTION_FONT,
         fg=_BUTTON_BG,
         bg=_BG_COLOR,
         cursor="arrow",
