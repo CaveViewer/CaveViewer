@@ -119,6 +119,7 @@ class _ActiveCacheRebuild:
     row_widgets: MapLibraryRowWidgets | None
     library_map: Any | None = None
     base_metadata: str = ""
+    operation: str = "rebuild"
 
 
 def _start_catalog_thread(target: Callable[[], None]) -> None:
@@ -404,7 +405,7 @@ class MapLibraryWorkflow:
         if not decision.is_visible:
             return None
         resume_available = preflight.resumable_import is not None
-        label = "Resume cache rebuild" if resume_available else "Rebuild cache"
+        label = self._cache_rebuild_action_label(preflight)
         if self.cache_rebuild_controller.active:
             return MapLibraryMenuAction(
                 label,
@@ -434,6 +435,16 @@ class MapLibraryWorkflow:
                 library_map=library_map,
             ),
         )
+
+    @staticmethod
+    def _cache_rebuild_action_label(preflight: CacheRebuildPreflight) -> str:
+        """Return the row-menu label for the current cache action."""
+        if preflight.resumable_import is not None:
+            return "Resume cache rebuild"
+        target = preflight.capability.value
+        if target is not None and target.operation == "build":
+            return "Build cache"
+        return "Rebuild cache"
 
     def cache_removal_menu_action(
         self,
@@ -535,6 +546,11 @@ class MapLibraryWorkflow:
             base_metadata=(
                 "" if library_map is not None else recent_map_entry(path).detail
             ),
+            operation=(
+                "build"
+                if target.operation == "build" and not resume_required
+                else "rebuild"
+            ),
         )
         self._active_cache_rebuild = active
         if resume_required:
@@ -572,6 +588,14 @@ class MapLibraryWorkflow:
             return None
         return preflight
 
+    @staticmethod
+    def _cache_rebuild_operation_word(active: _ActiveCacheRebuild) -> str:
+        return "Building" if active.operation == "build" else "Rebuilding"
+
+    @staticmethod
+    def _cache_rebuild_result_word(active: _ActiveCacheRebuild) -> str:
+        return "built" if active.operation == "build" else "rebuilt"
+
     def _show_active_cache_rebuild(self, active: _ActiveCacheRebuild) -> None:
         """Replace the active row's normal action with progress and pause."""
         can_pause = self.cache_rebuild_controller.pause_supported
@@ -584,7 +608,7 @@ class MapLibraryWorkflow:
         )
         self.panel.set_row_metadata(
             active.row_widgets,
-            "Rebuilding cache — Starting import",
+            f"{self._cache_rebuild_operation_word(active)} cache — Starting import",
         )
         self.panel.set_row_progress(active.row_widgets, 0.0)
         self.panel.refresh_row_overflow(active.row_widgets)
@@ -649,10 +673,14 @@ class MapLibraryWorkflow:
         stage = " ".join(update.stage.strip().split()) or "Rebuilding cache"
         label = stage[:1].upper() + stage[1:]
         if update.pausing:
-            label = "Pausing cache rebuild"
+            label = (
+                "Pausing cache build"
+                if active.operation == "build"
+                else "Pausing cache rebuild"
+            )
         self.panel.set_row_metadata(
             active.row_widgets,
-            f"Rebuilding cache — {label}",
+            f"{self._cache_rebuild_operation_word(active)} cache — {label}",
         )
         self.panel.set_row_progress(active.row_widgets, update.fraction)
 
@@ -711,12 +739,21 @@ class MapLibraryWorkflow:
         if active is None:
             return
         self._restore_cache_rebuild_row(active)
-        self.panel.show_row_status(active.row_widgets, "Cache rebuilt")
+        self.panel.show_row_status(
+            active.row_widgets,
+            f"Cache {self._cache_rebuild_result_word(active)}",
+        )
         self.panel.refresh_row_overflow(active.row_widgets)
         self._notify_cache_rebuild(
             active,
-            "Cache Rebuild Complete",
-            f"{active.title} cache rebuilt.",
+            "Cache Build Complete"
+            if active.operation == "build"
+            else "Cache Rebuild Complete",
+            (
+                f"{active.title} cache built."
+                if active.operation == "build"
+                else f"{active.title} cache rebuilt."
+            ),
         )
 
     def _handle_cache_rebuild_paused(self, update: CacheRebuildPaused) -> None:
@@ -724,7 +761,12 @@ class MapLibraryWorkflow:
         if active is None:
             return
         self._restore_cache_rebuild_row(active)
-        self.panel.show_row_status(active.row_widgets, "Cache rebuild paused")
+        self.panel.show_row_status(
+            active.row_widgets,
+            "Cache build paused"
+            if active.operation == "build"
+            else "Cache rebuild paused",
+        )
         self.panel.refresh_row_overflow(active.row_widgets)
 
     def _handle_cache_rebuild_failure(self, update: CacheRebuildFailed) -> None:
@@ -732,24 +774,35 @@ class MapLibraryWorkflow:
         if active is None:
             return
         self._restore_cache_rebuild_row(active)
-        self.panel.show_row_status(active.row_widgets, "Cache retained", error=True)
+        self.panel.show_row_status(
+            active.row_widgets,
+            "Cache not built" if active.operation == "build" else "Cache retained",
+            error=True,
+        )
         self.panel.refresh_row_overflow(active.row_widgets)
+        operation = "build" if active.operation == "build" else "rebuild"
         self.logger.warning(
-            "Cache rebuild failed for %s: %s",
+            "Cache %s failed for %s: %s",
+            operation,
             active.title,
             update.error,
         )
-        message = (
-            f"Couldn't rebuild cache for {active.title}. "
-            "The existing cache was retained."
-        )
+        message = f"Couldn't {operation} cache for {active.title}."
+        if active.operation != "build":
+            message = f"{message} The existing cache was retained."
         if update.suggestion:
             message = f"{message} {update.suggestion}"
         self._show_error(message, max_wraplength=420)
         self._notify_cache_rebuild(
             active,
-            "Cache Rebuild Failed",
-            f"Couldn't rebuild {active.title}; its existing cache was retained.",
+            "Cache Build Failed"
+            if active.operation == "build"
+            else "Cache Rebuild Failed",
+            (
+                f"Couldn't build {active.title}."
+                if active.operation == "build"
+                else f"Couldn't rebuild {active.title}; its existing cache was retained."
+            ),
             priority="high",
         )
 

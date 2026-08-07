@@ -281,10 +281,18 @@ def decide_map_library_cache_rebuild(
 
     This policy is deliberately separate from ``PlatformRuntime`` because a
     source, cache target, or competing builder may change per row while the
-    splash remains open.  Rows with no generated cache hide the action; once a
-    cache exists, unsafe or incomplete facts remain visible but fail closed.
+    splash remains open.  Missing or invalid non-resumable caches become build
+    actions; unsafe or incomplete facts remain visible but fail closed.
     """
     if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
+        if capability.reason_code == "map_cache_build_target_available":
+            return FeatureDecision(
+                feature=FeatureId.MAP_LIBRARY_CACHE_REBUILD,
+                state=FeatureState.ENABLED,
+                reason_code="map_cache_build_available",
+                explanation="Build this map's generated cache with current import settings.",
+                route="forced_import",
+            )
         return FeatureDecision(
             feature=FeatureId.MAP_LIBRARY_CACHE_REBUILD,
             state=FeatureState.ENABLED,

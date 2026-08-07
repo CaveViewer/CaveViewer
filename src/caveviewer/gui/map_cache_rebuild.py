@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from caveviewer.core.capabilities import CapabilityResult
+from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.chunking.staging import MANIFEST_NAME, ResumableObjImport
 from caveviewer.core.map.cache_build_lock import cache_build_is_locked
 from caveviewer.core.map.cache_paths import MapCacheLocator
@@ -28,12 +29,13 @@ from caveviewer.gui.features import (
 
 @dataclass(frozen=True, slots=True)
 class CacheRebuildTarget:
-    """One validated source and existing generated destination to replace."""
+    """One validated source and generated cache destination to build or replace."""
 
     map_path: Path
     model_descriptor: Mapping[str, str]
     textures_dir: Path
     cache_dir: Path
+    operation: str = "rebuild"
 
     def __post_init__(self) -> None:
         descriptor = {
@@ -41,6 +43,8 @@ class CacheRebuildTarget:
             for key, value in self.model_descriptor.items()
         }
         object.__setattr__(self, "model_descriptor", MappingProxyType(descriptor))
+        if self.operation not in {"build", "rebuild"}:
+            raise ValueError("cache rebuild target operation must be build or rebuild")
 
     @property
     def source_path(self) -> Path:
@@ -124,6 +128,16 @@ def _cache_destination_is_safe(cache_dir: Path) -> bool:
     return os.access(parent, os.W_OK | os.X_OK)
 
 
+def _cache_destination_can_be_built(cache_dir: Path) -> bool:
+    """Return whether the generated cache path can be created or replaced."""
+    if _path_exists_without_following(cache_dir):
+        return _cache_destination_is_safe(cache_dir)
+    parent = cache_dir.parent
+    if not parent.is_dir():
+        return False
+    return os.access(parent, os.W_OK | os.X_OK)
+
+
 def _preflight_from_capability(
     capability: CapabilityResult[CacheRebuildTarget],
     *,
@@ -139,12 +153,11 @@ def _preflight_from_capability(
 def probe_map_library_cache_rebuild(
     map_path: str | os.PathLike[str],
 ) -> CacheRebuildPreflight:
-    """Validate whether one Map Library entry may force-rebuild its cache.
+    """Validate whether one Map Library entry may build or rebuild its cache.
 
-    A valid cache manifest is not required: rebuilding a stale or malformed
-    generated cache is an intentional repair path.  The target must instead
-    have a discoverable readable source, an existing non-symlink destination,
-    and no active cooperative build lock.
+    Full generated caches are rebuilt; missing or malformed non-resumable cache
+    destinations are treated as a first build.  A validated OBJ checkpoint
+    remains resumable regardless of whether the published cache is current.
     """
     try:
         selected_path = Path(map_path).expanduser().resolve(strict=False)
@@ -208,14 +221,7 @@ def probe_map_library_cache_rebuild(
 
     try:
         cache_dir = MapCacheLocator().generated_cache_dir(source_path)
-        if not _path_exists_without_following(cache_dir):
-            return _preflight_from_capability(
-                CapabilityResult.unavailable(
-                    reason_code="map_cache_rebuild_no_generated_cache",
-                    evidence={"cache": "missing"},
-                )
-            )
-        if not _cache_destination_is_safe(cache_dir):
+        if not _cache_destination_can_be_built(cache_dir):
             return _preflight_from_capability(
                 CapabilityResult.unavailable(
                     reason_code="map_cache_rebuild_destination_unsafe",
@@ -229,6 +235,10 @@ def probe_map_library_cache_rebuild(
                     evidence={"source": "unreadable"},
                 )
             )
+        has_valid_cache = chunker.cache_dir_is_valid(
+            os.fspath(cache_dir),
+            os.fspath(source_path),
+        )
     except (OSError, TypeError, ValueError):
         return _preflight_from_capability(
             CapabilityResult.unknown(
@@ -242,6 +252,7 @@ def probe_map_library_cache_rebuild(
         model_descriptor=descriptor,
         textures_dir=Path(source_path).parent,
         cache_dir=cache_dir,
+        operation="rebuild" if has_valid_cache else "build",
     )
     try:
         resumable_import = probe_resumable_import(
@@ -263,11 +274,16 @@ def probe_map_library_cache_rebuild(
             ),
             resumable_import=resumable_import,
         )
+    reason_code = (
+        "map_cache_rebuild_target_available"
+        if target.operation == "rebuild"
+        else "map_cache_build_target_available"
+    )
     return _preflight_from_capability(
         CapabilityResult.available(
             target,
-            reason_code="map_cache_rebuild_target_available",
-            evidence={"cache": "generated_destination", "source": "readable"},
+            reason_code=reason_code,
+            evidence={"cache": target.operation, "source": "readable"},
         ),
         resumable_import=resumable_import,
     )
