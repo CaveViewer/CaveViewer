@@ -111,9 +111,12 @@ from caveviewer.core.chunking.staging import (
     MANIFEST_NAME,
     CacheAsset,
     ImportPaused,
+    ResumeCheckpointUnavailableError,
+    ResumableObjImport,
     _cache_asset_size,
     _deserialize_bucket_parts,
     _find_incremental_obj_resume,
+    find_resumable_obj_import,
     _import_resume_checkpoint_path,
     _import_resume_prefix,
     _incremental_obj_resume_checkpoint_matches,
@@ -286,6 +289,37 @@ def build_cache(
         return cache_dir
 
 
+def _resolve_obj_face_batch_size(face_batch_size: int | None) -> int:
+    """Resolve the checkpoint-relevant OBJ batch setting once per operation."""
+    return (
+        _configured_obj_import_batch_faces()
+        if face_batch_size is None
+        else max(1, int(face_batch_size))
+    )
+
+
+def probe_resumable_obj_import(
+    obj_path: str,
+    materials: dict,
+    *,
+    cache_dir: str | None = None,
+    chunk_size: float | None = None,
+    face_batch_size: int | None = None,
+) -> ResumableObjImport | None:
+    """Return a validated resumable OBJ checkpoint without changing disk state."""
+    target_cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
+    active_chunk_size = (
+        configured_chunk_size() if chunk_size is None else float(chunk_size)
+    )
+    return find_resumable_obj_import(
+        target_cache_dir,
+        obj_path=obj_path,
+        materials=materials,
+        chunk_size=active_chunk_size,
+        face_batch_size=_resolve_obj_face_batch_size(face_batch_size),
+    )
+
+
 def build_cache_incremental_obj(
     obj_path: str,
     materials: dict,
@@ -298,6 +332,7 @@ def build_cache_incremental_obj(
     bucket_workers: int | None = None,
     max_upload_group_mb: float | None = None,
     pause_requested: Callable[[], bool] | None = None,
+    resume_required: bool = False,
 ) -> str:
     """
     Build a cache from an OBJ without retaining whole-model face arrays.
@@ -311,11 +346,7 @@ def build_cache_incremental_obj(
     cache_dir = os.path.abspath(cache_dir or map_cache_build_dir(obj_path))
     cache_parent = os.path.dirname(cache_dir)
     assets = tuple(assets)
-    resolved_face_batch_size = (
-        _configured_obj_import_batch_faces()
-        if face_batch_size is None
-        else max(1, int(face_batch_size))
-    )
+    resolved_face_batch_size = _resolve_obj_face_batch_size(face_batch_size)
     resolved_bucket_workers = (
         _configured_obj_bucket_workers()
         if bucket_workers is None
@@ -340,6 +371,8 @@ def build_cache_incremental_obj(
             face_batch_size=resolved_face_batch_size,
         )
         if resume is None:
+            if resume_required:
+                raise ResumeCheckpointUnavailableError()
             staging_dir = tempfile.mkdtemp(
                 prefix=f".{os.path.basename(cache_dir)}.tmp-{os.getpid()}-",
                 dir=cache_parent,

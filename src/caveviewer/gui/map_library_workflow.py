@@ -403,18 +403,30 @@ class MapLibraryWorkflow:
         decision = preflight.decision
         if not decision.is_visible:
             return None
+        resume_available = preflight.resumable_import is not None
+        label = "Resume cache rebuild" if resume_available else "Rebuild cache"
         if self.cache_rebuild_controller.active:
             return MapLibraryMenuAction(
-                "Rebuild cache",
+                label,
                 explanation="Another cache rebuild is already in progress.",
             )
         if not decision.allows_execution:
             return MapLibraryMenuAction(
-                "Rebuild cache",
+                label,
                 explanation=decision.explanation,
             )
+        if resume_available:
+            return (
+                label,
+                lambda: self.resume_cache_rebuild(
+                    path,
+                    title,
+                    row_widgets,
+                    library_map=library_map,
+                ),
+            )
         return (
-            "Rebuild cache",
+            label,
             lambda: self.start_cache_rebuild(
                 path,
                 title,
@@ -448,6 +460,41 @@ class MapLibraryWorkflow:
         *,
         library_map: Any | None = None,
     ) -> None:
+        """Start an ordinary rebuild, preserving its existing resume behavior."""
+        self._start_cache_rebuild(
+            path,
+            title,
+            row_widgets,
+            library_map=library_map,
+            resume_required=False,
+        )
+
+    def resume_cache_rebuild(
+        self,
+        path: str,
+        title: str,
+        row_widgets: MapLibraryRowWidgets | None,
+        *,
+        library_map: Any | None = None,
+    ) -> None:
+        """Resume only a checkpoint that remains valid at click time."""
+        self._start_cache_rebuild(
+            path,
+            title,
+            row_widgets,
+            library_map=library_map,
+            resume_required=True,
+        )
+
+    def _start_cache_rebuild(
+        self,
+        path: str,
+        title: str,
+        row_widgets: MapLibraryRowWidgets | None,
+        *,
+        library_map: Any | None = None,
+        resume_required: bool,
+    ) -> None:
         """Start one forced rebuild without opening a viewer."""
         if self.cache_rebuild_controller.active:
             self._show_info(
@@ -472,6 +519,13 @@ class MapLibraryWorkflow:
         target = preflight.capability.value
         if target is None:
             return
+        if resume_required and preflight.resumable_import is None:
+            self._show_error(
+                "Saved rebuild checkpoint is no longer usable. "
+                "Open the menu again and choose Rebuild cache.",
+                max_wraplength=420,
+            )
+            return
 
         active = _ActiveCacheRebuild(
             path=path,
@@ -483,7 +537,13 @@ class MapLibraryWorkflow:
             ),
         )
         self._active_cache_rebuild = active
-        started = self.cache_rebuild_controller.start(target)
+        if resume_required:
+            started = self.cache_rebuild_controller.start(
+                target,
+                resume_required=True,
+            )
+        else:
+            started = self.cache_rebuild_controller.start(target)
         if isinstance(started, CacheRebuildFailed):
             self._handle_cache_rebuild_failure(started)
             return

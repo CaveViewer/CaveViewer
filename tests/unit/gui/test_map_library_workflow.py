@@ -11,6 +11,7 @@ from caveviewer.core.capabilities import (
     FileSelectionRoute,
     FileSelectionTarget,
 )
+from caveviewer.core.chunking.staging import ResumableObjImport
 from caveviewer.gui.cache_rebuild_controller import (
     CacheRebuildFailed,
     CacheRebuildPaused,
@@ -221,11 +222,13 @@ class _FakeCacheRebuildController:
         self.active = False
         self.pause_supported = pause_supported
         self.start_calls = []
+        self.resume_start_calls = []
         self.pause_calls = 0
         self.updates = []
 
-    def start(self, target):
+    def start(self, target, *, resume_required: bool = False):
         self.start_calls.append(target)
+        self.resume_start_calls.append(resume_required)
         self.active = True
         return CacheRebuildStarted(target)
 
@@ -408,6 +411,21 @@ def _enabled_cache_rebuild_preflight(
     return CacheRebuildPreflight(
         capability=capability,
         decision=decide_map_library_cache_rebuild(capability),
+    )
+
+
+def _resumable_cache_rebuild_preflight(
+    _map_path: str | None = None,
+) -> CacheRebuildPreflight:
+    preflight = _enabled_cache_rebuild_preflight()
+    return CacheRebuildPreflight(
+        capability=preflight.capability,
+        decision=preflight.decision,
+        resumable_import=ResumableObjImport(
+            resume_dir=Path("/maps/.cache.resume-checkpoint"),
+            stage="bucketing",
+            progress_fraction=0.5,
+        ),
     )
 
 
@@ -1091,6 +1109,140 @@ def test_recent_menu_places_rebuild_above_remove_cache_and_never_opens_map():
     assert state.panel.row_metadata[1] == "Rebuilding cache — Starting import"
     assert state.root.after_calls[-1][1] == 100
     assert state.opened == []
+
+
+def test_recent_menu_resumes_a_validated_checkpoint_without_opening_map():
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=_resumable_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+    )
+    row_widgets = SimpleNamespace(row_shell=object())
+
+    state.workflow.add_recent_row("/maps/Recent Cave")
+    _entry, _open_map, menu_factory = state.panel.recent_row
+    actions = menu_factory(row_widgets)
+
+    assert [item[0] for item in actions] == [
+        "Remove from this list",
+        "Resume cache rebuild",
+    ]
+
+    next(action for action in actions if action[0] == "Resume cache rebuild")[1]()
+
+    assert rebuild_controller.start_calls == [_cache_rebuild_target()]
+    assert rebuild_controller.resume_start_calls == [True]
+    assert state.panel.row_action[1] == "Pause"
+    assert state.opened == []
+
+
+def test_paused_rebuild_is_resumable_from_a_fresh_workflow_instance():
+    original_controller = _FakeCacheRebuildController()
+    original = _workflow(
+        [],
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=original_controller,
+    )
+    original.workflow.start_cache_rebuild(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        SimpleNamespace(row_shell=object()),
+    )
+    original_controller.updates = [
+        CacheRebuildPaused(
+            target=_cache_rebuild_target(),
+            resume_dir="/maps/.cache.resume-checkpoint",
+        )
+    ]
+    original.workflow.poll_cache_rebuild()
+
+    reopened = _workflow(
+        [],
+        cache_rebuild_preflight=_resumable_cache_rebuild_preflight,
+    )
+    reopened.workflow.add_recent_row("/maps/Recent Cave")
+    _entry, _open_map, menu_factory = reopened.panel.recent_row
+    actions = menu_factory(SimpleNamespace(row_shell=object()))
+
+    assert original.workflow is not reopened.workflow
+    assert original.panel.status[1] == "Cache rebuild paused"
+    assert [item[0] for item in actions] == [
+        "Remove from this list",
+        "Resume cache rebuild",
+    ]
+
+
+def test_downloaded_map_menu_offers_resume_for_a_validated_checkpoint():
+    library_map = _library_map()
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [library_map],
+        is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: "/library/Test Cave",
+        cache_rebuild_preflight=_resumable_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+    )
+    row_widgets = SimpleNamespace(row_shell=object())
+
+    state.workflow.add_standard_row(library_map)
+    actions = state.panel.standard_menu_factories["Test Cave"](row_widgets)
+
+    assert [item[0] for item in actions] == [
+        "Remove map files",
+        "Resume cache rebuild",
+    ]
+
+    next(action for action in actions if action[0] == "Resume cache rebuild")[1]()
+
+    assert rebuild_controller.start_calls == [_cache_rebuild_target()]
+    assert rebuild_controller.resume_start_calls == [True]
+
+
+def test_resume_click_rejects_a_checkpoint_lost_since_menu_opened():
+    preflights = iter(
+        [
+            _resumable_cache_rebuild_preflight(),
+            _enabled_cache_rebuild_preflight(),
+        ]
+    )
+    rebuild_controller = _FakeCacheRebuildController()
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=lambda _path: next(preflights),
+        cache_rebuild_controller=rebuild_controller,
+    )
+    row_widgets = SimpleNamespace(row_shell=object())
+
+    state.workflow.add_recent_row("/maps/Recent Cave")
+    _entry, _open_map, menu_factory = state.panel.recent_row
+    actions = menu_factory(row_widgets)
+
+    next(action for action in actions if action[0] == "Resume cache rebuild")[1]()
+
+    assert rebuild_controller.start_calls == []
+    assert "checkpoint is no longer usable" in state.feedback[-1][0].lower()
+
+
+def test_busy_rebuild_keeps_resume_label_but_disables_the_action():
+    rebuild_controller = _FakeCacheRebuildController()
+    rebuild_controller.active = True
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=_resumable_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
+    )
+
+    action = state.workflow.cache_rebuild_menu_action(
+        "/maps/Recent Cave",
+        "Recent Cave",
+        SimpleNamespace(row_shell=object()),
+    )
+
+    assert isinstance(action, MapLibraryMenuAction)
+    assert action.label == "Resume cache rebuild"
+    assert action.action is None
+    assert "already" in action.explanation.lower()
 
 
 def test_rebuild_progress_success_restores_open_and_reports_completion():

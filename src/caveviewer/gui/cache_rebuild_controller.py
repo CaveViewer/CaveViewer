@@ -115,8 +115,10 @@ class CacheRebuildJobController:
     def start(
         self,
         target: CacheRebuildTarget,
+        *,
+        resume_required: bool = False,
     ) -> CacheRebuildStarted | CacheRebuildFailed:
-        """Start a forced rebuild, without checking or opening the current cache."""
+        """Start a forced rebuild or require reuse of a validated checkpoint."""
         if self.active:
             return CacheRebuildFailed(
                 target=target,
@@ -130,11 +132,16 @@ class CacheRebuildJobController:
         self.pause_requested = False
         self._exit_without_event_polls = 0
         try:
+            start_options = {
+                "force_rebuild": True,
+                "daemon": False,
+            }
+            if resume_required:
+                start_options["resume_required"] = True
             self._handle = self._start_process(
                 dict(target.model_descriptor),
                 str(target.textures_dir),
-                force_rebuild=True,
-                daemon=False,
+                **start_options,
             )
         except Exception as exc:
             self._handle = None
