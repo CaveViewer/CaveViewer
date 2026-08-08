@@ -32,10 +32,13 @@ from caveviewer.gui.platform.tls_trust import (
 )
 from caveviewer.gui.platform.probes.updates import (
     UpdateConfiguration,
-    build_update_configuration,
+    UpdateManifestSchema,
+    UpdateTarget,
+    detect_update_package_kind,
 )
 from caveviewer.gui.update_signature import (
     SignatureVerificationError,
+    default_manifest_signature_url,
     verify_update_manifest_signature,
 )
 
@@ -66,9 +69,83 @@ def _legacy_update_configuration() -> UpdateConfiguration:
             ),
             source=CapabilitySource.DETECTED,
         )
-    configuration = build_update_configuration(_legacy_platform_adapter())
+    configuration = _legacy_update_configuration_for_adapter(
+        _legacy_platform_adapter()
+    )
     GITHUB_REPO = configuration.repository
     return configuration
+
+
+def _legacy_update_configuration_for_adapter(
+    platform_adapter: SplashPlatformAdapter,
+) -> UpdateConfiguration:
+    """Preserve adapter-derived defaults for direct compatibility callers.
+
+    ``PlatformRuntime`` exclusively uses the typed ``UpdateProfile`` path.
+    This local bridge deliberately retains the former adapter behavior for
+    callers that still inject a broad adapter into ``check_for_update``.
+    """
+    overridden = False
+
+    def environment_value(key: str, default: str) -> tuple[str, bool]:
+        if key not in os.environ:
+            return default, False
+        return str(os.environ[key]).strip(), True
+
+    repository, is_overridden = environment_value(
+        "CAVEVIEWER_GITHUB_REPO",
+        platform_adapter.default_update_repo(),
+    )
+    overridden = overridden or is_overridden
+    branch, is_overridden = environment_value("CAVEVIEWER_UPDATE_BRANCH", "main")
+    overridden = overridden or is_overridden
+    branch = branch or "main"
+
+    manifest_channel, is_overridden = environment_value(
+        "CAVEVIEWER_UPDATE_CHANNEL",
+        "stable",
+    )
+    overridden = overridden or is_overridden
+    manifest_channel = (manifest_channel or "stable").lower()
+    if manifest_channel not in {"stable", "prerelease"}:
+        manifest_channel = "stable"
+
+    stable_manifest_url = platform_adapter.default_update_manifest_url(
+        repository,
+        branch,
+    )
+    default_manifest_url = stable_manifest_url
+    if stable_manifest_url and manifest_channel != "stable":
+        default_manifest_url = stable_manifest_url.removesuffix("/stable.json") + (
+            f"/{manifest_channel}.json"
+        )
+    manifest_url, is_overridden = environment_value(
+        "CAVEVIEWER_UPDATE_MANIFEST_URL",
+        default_manifest_url,
+    )
+    overridden = overridden or is_overridden
+
+    default_signature_url = (
+        default_manifest_signature_url(manifest_url) if manifest_url else ""
+    )
+    manifest_signature_url, is_overridden = environment_value(
+        "CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL",
+        default_signature_url,
+    )
+    overridden = overridden or is_overridden
+
+    return UpdateConfiguration(
+        repository=repository,
+        branch=branch,
+        manifest_channel=manifest_channel,
+        manifest_url=manifest_url,
+        manifest_signature_url=manifest_signature_url,
+        source=(
+            CapabilitySource.USER_OVERRIDE
+            if overridden
+            else CapabilitySource.DETECTED
+        ),
+    )
 
 
 def make_ssl_context(
@@ -136,6 +213,43 @@ class UpdateCheckResult:
     error: Optional[str] = None
 
 
+def _legacy_update_target(
+    platform_adapter: SplashPlatformAdapter,
+    configuration: UpdateConfiguration,
+    *,
+    install_channel: str,
+) -> UpdateTarget:
+    """Bridge direct callers of the former adapter-based update API.
+
+    New runtime code composes an ``UpdateTarget`` from ``UpdateProfile`` and
+    never enters this shim.  Keeping the bridge here preserves the public
+    compatibility path while the broad adapter is retired incrementally.
+    """
+    return UpdateTarget(
+        install_channel=install_channel,
+        manifest_url=configuration.manifest_url,
+        manifest_signature_url=configuration.manifest_signature_url,
+        user_agent=platform_adapter.update_check_user_agent(),
+        manifest_schema=UpdateManifestSchema(
+            download_url_keys=platform_adapter.channel_download_url_keys(
+                install_channel
+            ),
+            download_size_keys=platform_adapter.channel_download_size_keys(
+                install_channel
+            ),
+            download_sha256_keys=platform_adapter.channel_sha256_keys(
+                install_channel
+            ),
+            allowed_package_kinds=_ALLOWED_PACKAGE_KINDS_BY_CHANNEL.get(
+                install_channel
+            ),
+            missing_download_url_message=(
+                platform_adapter.missing_download_url_message(install_channel)
+            ),
+        ),
+    )
+
+
 def _parse_version(version_str: str) -> tuple:
     """
     Parses a version string like "1.2" or "1.2.3" into a tuple of ints
@@ -189,6 +303,7 @@ def check_for_update(
     current_version: str,
     install_channel: Optional[str] = None,
     *,
+    update_target: UpdateTarget | None = None,
     configuration: UpdateConfiguration | None = None,
     platform_adapter: SplashPlatformAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
@@ -201,10 +316,37 @@ def check_for_update(
     caller can show a calm "couldn't check for updates right now"
     message rather than a stack trace.
 
-    New application code passes process-owned configuration, platform, and TLS
-    trust adapters. Omitting them preserves the legacy public API while
-    resolving environment-derived settings lazily on first use.
+    New application code passes a process-owned ``UpdateTarget`` and TLS trust
+    adapter. Omitting it preserves the legacy public API while resolving
+    environment-derived settings lazily on first use.
     """
+    if update_target is not None:
+        if tls_trust_adapter is None:
+            fetch_url_bytes = _fetch_url_bytes
+        else:
+            def fetch_url_bytes(url: str, headers: dict[str, str], timeout: int) -> bytes:
+                return _fetch_url_bytes_for_adapter(
+                    url,
+                    headers=headers,
+                    timeout=timeout,
+                    tls_trust_adapter=tls_trust_adapter,
+                )
+
+        def verify_manifest_signature(manifest_bytes: bytes) -> bool:
+            return _verify_manifest_signature_required_with_target(
+                manifest_bytes,
+                update_target=update_target,
+                fetch_url_bytes=fetch_url_bytes,
+            )
+
+        return _check_for_update_target(
+            current_version,
+            update_target=update_target,
+            fetch_url_bytes=fetch_url_bytes,
+            verify_manifest_signature=verify_manifest_signature,
+            package_kind_for_url=detect_update_package_kind,
+        )
+
     legacy_call = (
         configuration is None
         and platform_adapter is None
@@ -219,7 +361,7 @@ def check_for_update(
         _legacy_update_configuration()
         if legacy_call
         else configuration
-        or build_update_configuration(resolved_platform_adapter)
+        or _legacy_update_configuration_for_adapter(resolved_platform_adapter)
     )
     if legacy_call:
         fetch_url_bytes = _fetch_url_bytes
@@ -280,20 +422,48 @@ def _check_for_update(
             error="Update checking isn't configured yet. Set CAVEVIEWER_UPDATE_MANIFEST_URL."
         )
 
+    update_target = _legacy_update_target(
+        platform_adapter,
+        configuration,
+        install_channel=resolved_channel,
+    )
+    return _check_for_update_target(
+        current_version,
+        update_target=update_target,
+        fetch_url_bytes=fetch_url_bytes,
+        verify_manifest_signature=verify_manifest_signature,
+        package_kind_for_url=lambda download_url: platform_adapter.detect_package_kind(
+            download_url,
+            resolved_channel,
+        ),
+    )
+
+
+def _check_for_update_target(
+    current_version: str,
+    *,
+    update_target: UpdateTarget,
+    fetch_url_bytes: Callable[[str, dict[str, str], int], bytes],
+    verify_manifest_signature: Callable[[bytes], bool],
+    package_kind_for_url: Callable[[str], str],
+) -> UpdateCheckResult:
+    """Perform a manifest check using only a typed configured target."""
+    resolved_channel = update_target.install_channel
+
     try:
         _LOG.info(
             "Checking for updates: current_version=%s, manifest_url=%s, signature_url=%s",
             current_version,
-            configuration.manifest_url,
-            configuration.manifest_signature_url,
+            update_target.manifest_url,
+            update_target.manifest_signature_url,
         )
         headers = {
             "Accept": "application/json",
-            "User-Agent": platform_adapter.update_check_user_agent(),
+            "User-Agent": update_target.user_agent,
         }
 
         manifest_bytes = fetch_url_bytes(
-            configuration.manifest_url,
+            update_target.manifest_url,
             headers=headers,
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
@@ -302,10 +472,9 @@ def _check_for_update(
     except urllib.error.HTTPError as e:
         _LOG.error("Update manifest fetch failed with HTTP %s.", e.code)
         if e.code == 404:
-            manifest_channel = install_channel or platform_adapter.install_channel()
             error_msg = (
                 "Update manifest not found (HTTP 404). Check CAVEVIEWER_UPDATE_MANIFEST_URL "
-                f"or the platform-specific manifest for {manifest_channel} in your repository."
+                f"or the platform-specific manifest for {resolved_channel} in your repository."
             )
             return UpdateCheckResult(update_available=False, current_version=current_version, error=error_msg)
         else:
@@ -336,15 +505,18 @@ def _check_for_update(
     release_notes = str(data.get("release_notes") or data.get("notes") or "")
 
     download_url = _first_non_empty_str(
-        data, platform_adapter.channel_download_url_keys(resolved_channel)
+        data,
+        update_target.manifest_schema.download_url_keys,
     )
     download_size_bytes = _first_optional_int(
-        data, platform_adapter.channel_download_size_keys(resolved_channel)
+        data,
+        update_target.manifest_schema.download_size_keys,
     )
     download_sha256 = _first_non_empty_str(
-        data, platform_adapter.channel_sha256_keys(resolved_channel)
+        data,
+        update_target.manifest_schema.download_sha256_keys,
     ).lower()
-    package_kind = platform_adapter.detect_package_kind(download_url, resolved_channel)
+    package_kind = package_kind_for_url(download_url)
     _LOG.info(
         "Update manifest package details: package_kind=%s, size=%s, sha256_present=%s",
         package_kind,
@@ -352,7 +524,7 @@ def _check_for_update(
         bool(download_sha256),
     )
 
-    allowed_package_kinds = _ALLOWED_PACKAGE_KINDS_BY_CHANNEL.get(resolved_channel)
+    allowed_package_kinds = update_target.manifest_schema.allowed_package_kinds
     if allowed_package_kinds is not None and package_kind not in allowed_package_kinds:
         _LOG.error(
             "Update manifest rejected: package_kind=%r is not allowed for channel=%r.",
@@ -383,7 +555,7 @@ def _check_for_update(
             update_available=False,
             current_version=current_version,
             latest_version=latest_tag,
-            error=platform_adapter.missing_download_url_message(resolved_channel)
+            error=update_target.manifest_schema.missing_download_url_message,
         )
 
     is_newer = _parse_version(latest_tag) > _parse_version(current_version)
@@ -399,7 +571,7 @@ def _check_for_update(
             "No update available: current_version=%s, latest_version=%s, manifest_url=%s",
             current_version,
             latest_tag,
-            configuration.manifest_url,
+            update_target.manifest_url,
         )
         return UpdateCheckResult(
             update_available=False,
@@ -476,12 +648,44 @@ def _verify_manifest_signature_required_with_configuration(
         )
         return False
 
+    return _verify_manifest_signature_required_for_endpoint(
+        manifest_bytes,
+        manifest_signature_url=configuration.manifest_signature_url,
+        user_agent=platform_adapter.update_check_user_agent(),
+        fetch_url_bytes=fetch_url_bytes,
+    )
+
+
+def _verify_manifest_signature_required_with_target(
+    manifest_bytes: bytes,
+    *,
+    update_target: UpdateTarget,
+    fetch_url_bytes: Callable[[str, dict[str, str], int], bytes],
+) -> bool:
+    """Verify one manifest using only the configured immutable update target."""
+    return _verify_manifest_signature_required_for_endpoint(
+        manifest_bytes,
+        manifest_signature_url=update_target.manifest_signature_url,
+        user_agent=update_target.user_agent,
+        fetch_url_bytes=fetch_url_bytes,
+    )
+
+
+def _verify_manifest_signature_required_for_endpoint(
+    manifest_bytes: bytes,
+    *,
+    manifest_signature_url: str,
+    user_agent: str,
+    fetch_url_bytes: Callable[[str, dict[str, str], int], bytes],
+) -> bool:
+    """Fetch and verify a signature without consulting platform policy."""
+
     try:
         signature_bytes = fetch_url_bytes(
-            configuration.manifest_signature_url,
+            manifest_signature_url,
             headers={
                 "Accept": "text/plain, application/octet-stream",
-                "User-Agent": platform_adapter.update_check_user_agent(),
+                "User-Agent": user_agent,
             },
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
@@ -489,26 +693,26 @@ def _verify_manifest_signature_required_with_configuration(
         if e.code == 404:
             _LOG.error(
                 "Update manifest signature verification failed: signature not found at %s.",
-                configuration.manifest_signature_url,
+                manifest_signature_url,
             )
         else:
             _LOG.error(
                 "Update manifest signature fetch failed from %s: HTTP %s.",
-                configuration.manifest_signature_url,
+                manifest_signature_url,
                 e.code,
             )
         return False
     except urllib.error.URLError as e:
         _LOG.error(
             "Update manifest signature fetch failed from %s: %s.",
-            configuration.manifest_signature_url,
+            manifest_signature_url,
             e,
         )
         return False
     except OSError as e:
         _LOG.error(
             "Update manifest signature SSL/network setup failed from %s: %s.",
-            configuration.manifest_signature_url,
+            manifest_signature_url,
             e,
         )
         return False
@@ -536,6 +740,7 @@ def download_update(
     cancel_cb: Callable[[], bool] | None = None,
     phase_cb: Callable[[str], None] | None = None,
     *,
+    update_target: UpdateTarget | None = None,
     platform_adapter: SplashPlatformAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
 ) -> None:
@@ -557,10 +762,15 @@ def download_update(
     A later call always starts from byte zero; partial downloads are never
     retained for resuming.
     """
-    active_platform_adapter = platform_adapter or _legacy_platform_adapter()
+    active_platform_adapter = None
+    if update_target is not None:
+        user_agent = update_target.user_agent
+    else:
+        active_platform_adapter = platform_adapter or _legacy_platform_adapter()
+        user_agent = active_platform_adapter.update_check_user_agent()
     request = urllib.request.Request(
         download_url,
-        headers={"User-Agent": active_platform_adapter.update_check_user_agent()},
+        headers={"User-Agent": user_agent},
     )
     _LOG.info(
         "Downloading update payload: url=%s, expected_size=%s, sha256_expected=%s",
@@ -589,14 +799,17 @@ def download_update(
 
     try:
         raise_if_cancelled()
-        ssl_context = (
-            make_ssl_context()
-            if platform_adapter is None and tls_trust_adapter is None
-            else make_ssl_context(
+        if tls_trust_adapter is None:
+            ssl_context = (
+                make_ssl_context()
+                if active_platform_adapter is None
+                else make_ssl_context(platform_adapter=active_platform_adapter)
+            )
+        else:
+            ssl_context = make_ssl_context(
                 tls_trust_adapter=tls_trust_adapter,
                 platform_adapter=active_platform_adapter,
             )
-        )
         with urllib.request.urlopen(request, timeout=30, context=ssl_context) as response:
             total = expected_size_bytes or int(response.headers.get("Content-Length", 0)) or None
             downloaded = 0

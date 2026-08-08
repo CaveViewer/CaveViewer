@@ -38,9 +38,11 @@ from .desktop_services import DesktopServices, get_desktop_services
 from .factory import get_platform_adapter
 from .probes.updates import (
     UpdateConfiguration,
+    UpdateProfile,
     UpdateTarget,
     build_update_configuration,
     probe_automatic_update,
+    select_update_profile,
 )
 from .probes.recording import VideoRecordingTarget, probe_video_recording
 from .probes.desktop import (
@@ -288,6 +290,7 @@ class PlatformRuntime:
     profile: PlatformProfile
     platform_adapter: SplashPlatformAdapter
     desktop_services: DesktopServices
+    update_profile: UpdateProfile
     update_configuration: UpdateConfiguration
     automatic_update_capability: CapabilityResult[UpdateTarget]
     update_package_reveal_adapter: UpdatePackageRevealAdapter
@@ -311,6 +314,13 @@ class PlatformRuntime:
     def automatic_update_decision(self) -> FeatureDecision:
         """Return the gate used before checking or downloading an update."""
         return self.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
+
+    @property
+    def automatic_update_target(self) -> UpdateTarget | None:
+        """Return the configured network target when its static gate is usable."""
+        if self.automatic_update_capability.status is not CapabilityStatus.AVAILABLE:
+            return None
+        return self.automatic_update_capability.value
 
     @property
     def update_package_reveal_decision(self) -> FeatureDecision:
@@ -432,6 +442,7 @@ def create_platform_runtime(
     *,
     platform_adapter: SplashPlatformAdapter | None = None,
     desktop_services: DesktopServices | None = None,
+    update_profile: UpdateProfile | None = None,
     update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
     update_package_storage_adapter: UpdatePackageStorageAdapter | None = None,
     saved_recording_reveal_adapter: SavedRecordingRevealAdapter | None = None,
@@ -444,6 +455,11 @@ def create_platform_runtime(
 ) -> PlatformRuntime:
     """Compose one runtime with shared platform actions and static update facts."""
     resolved_platform_name = platform_name or sys.platform
+    resolved_machine = (machine or platform.machine()).strip() or "unknown"
+    resolved_update_profile = update_profile or select_update_profile(
+        platform_name=resolved_platform_name,
+        machine=resolved_machine,
+    )
     resolved_desktop_services = desktop_services or get_desktop_services(
         platform_name=resolved_platform_name
     )
@@ -451,14 +467,10 @@ def create_platform_runtime(
         desktop_services=resolved_desktop_services,
         platform_name=resolved_platform_name,
     )
-    try:
-        install_channel = resolved_platform_adapter.install_channel().strip().lower()
-    except Exception:
-        install_channel = "unknown"
     profile = PlatformProfile(
         platform_name=resolved_platform_name,
-        machine=(machine or platform.machine()).strip() or "unknown",
-        install_channel=install_channel or "unknown",
+        machine=resolved_machine,
+        install_channel=resolved_update_profile.install_channel,
     )
     resolved_update_package_reveal_adapter = (
         update_package_reveal_adapter
@@ -487,11 +499,11 @@ def create_platform_runtime(
     )
     try:
         update_configuration = build_update_configuration(
-            resolved_platform_adapter,
+            resolved_update_profile,
             environment=environment,
         )
         automatic_update_capability = probe_automatic_update(
-            resolved_platform_adapter,
+            resolved_update_profile,
             update_configuration,
         )
     except Exception:
@@ -529,6 +541,7 @@ def create_platform_runtime(
         profile=profile,
         platform_adapter=resolved_platform_adapter,
         desktop_services=resolved_desktop_services,
+        update_profile=resolved_update_profile,
         update_configuration=update_configuration,
         automatic_update_capability=automatic_update_capability,
         update_package_reveal_adapter=resolved_update_package_reveal_adapter,

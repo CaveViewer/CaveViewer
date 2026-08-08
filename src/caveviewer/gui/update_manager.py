@@ -203,11 +203,16 @@ class UpdateManager:
         )
         self._check_for_update = check_for_update or update_checker.check_for_update
         self._download_update = download_update or update_checker.download_update
-        self._uses_runtime_check_configuration = (
+        self._uses_runtime_update_target = (
             platform_runtime is not None and check_for_update is None
         )
-        self._uses_runtime_download_adapter = (
+        self._uses_runtime_update_target_for_download = (
             platform_runtime is not None and download_update is None
+        )
+        self._update_target = (
+            platform_runtime.automatic_update_target
+            if platform_runtime is not None
+            else None
         )
         self._automatic_update_decision = (
             platform_runtime.automatic_update_decision
@@ -346,13 +351,12 @@ class UpdateManager:
         result: UpdateCheckResult | None = None
         unexpected_error: Exception | None = None
         try:
-            if self._uses_runtime_check_configuration:
+            if self._uses_runtime_update_target:
                 assert self._platform_runtime is not None
+                assert self._update_target is not None
                 result = self._check_for_update(
                     self._current_version,
-                    install_channel=self._platform_adapter.install_channel(),
-                    configuration=self._platform_runtime.update_configuration,
-                    platform_adapter=self._platform_adapter,
+                    update_target=self._update_target,
                     tls_trust_adapter=self._platform_runtime.tls_trust_adapter,
                 )
             else:
@@ -525,9 +529,10 @@ class UpdateManager:
                 "cancel_cb": cancel_event.is_set,
                 "phase_cb": on_phase,
             }
-            if self._uses_runtime_download_adapter:
-                download_kwargs["platform_adapter"] = self._platform_adapter
+            if self._uses_runtime_update_target_for_download:
                 assert self._platform_runtime is not None
+                assert self._update_target is not None
+                download_kwargs["update_target"] = self._update_target
                 download_kwargs["tls_trust_adapter"] = (
                     self._platform_runtime.tls_trust_adapter
                 )

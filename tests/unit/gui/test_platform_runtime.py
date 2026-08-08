@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from caveviewer.core.capabilities import (
@@ -27,29 +29,30 @@ from caveviewer.gui.platform import runtime
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.linux import LinuxSplashPlatformAdapter
 from caveviewer.gui.platform.probes.recording import VideoRecordingTarget
+from caveviewer.gui.platform.probes.updates import select_update_profile
 from caveviewer.gui.platform.runtime import create_platform_runtime
 
 
 class FakeUpdateAdapter:
     def __init__(self, *, supported: bool = True):
         self.supported = supported
+        self.update_policy_calls = []
 
     def default_update_repo(self):
+        self.update_policy_calls.append("default_update_repo")
         return "CaveViewer/CaveViewer"
 
     def default_update_manifest_url(self, repo, branch):
+        self.update_policy_calls.append("default_update_manifest_url")
         return f"https://updates.example/{repo}/{branch}/stable.json"
 
     def install_channel(self):
+        self.update_policy_calls.append("install_channel")
         return "test_app"
 
     def supports_install_channel(self, channel):
+        self.update_policy_calls.append("supports_install_channel")
         return self.supported and channel == "test_app"
-
-
-class FailingUpdateConfigurationAdapter(FakeUpdateAdapter):
-    def default_update_repo(self):
-        raise RuntimeError("broken package metadata")
 
 
 class FakeUpdatePackageStorageAdapter:
@@ -75,6 +78,93 @@ class FakeTlsTrustAdapter:
 class FakeWindowBackendAdapter:
     def launch_viewer(self, _target, _request):
         raise AssertionError("runtime composition must not launch a viewer")
+
+
+@pytest.mark.parametrize(
+    (
+        "platform_name",
+        "machine",
+        "install_channel",
+        "supports_automatic_update",
+        "manifest_suffix",
+        "allowed_package_kinds",
+    ),
+    [
+        (
+            "darwin",
+            "arm64",
+            "macos_app",
+            True,
+            "/updates/macos/arm64/prerelease.json",
+            frozenset({"dmg", "pkg"}),
+        ),
+        (
+            "darwin",
+            "x86_64",
+            "macos_app",
+            True,
+            "/updates/macos/x86_64/prerelease.json",
+            frozenset({"dmg", "pkg"}),
+        ),
+        (
+            "win32",
+            "AMD64",
+            "windows_app",
+            True,
+            "/updates/windows/prerelease.json",
+            frozenset({"zip", "msi", "exe"}),
+        ),
+        (
+            "linux",
+            "x86_64",
+            "linux_app",
+            True,
+            "/updates/linux/x86_64/prerelease.json",
+            frozenset({"appimage", "deb", "rpm", "tar.gz"}),
+        ),
+        (
+            "linux",
+            "aarch64",
+            "linux_app",
+            False,
+            "",
+            frozenset({"appimage", "deb", "rpm", "tar.gz"}),
+        ),
+        (
+            "freebsd",
+            "x86_64",
+            "unsupported",
+            False,
+            "/updates/macos/prerelease.json",
+            None,
+        ),
+    ],
+)
+def test_update_profile_selects_static_release_policy(
+    platform_name,
+    machine,
+    install_channel,
+    supports_automatic_update,
+    manifest_suffix,
+    allowed_package_kinds,
+):
+    profile = select_update_profile(
+        platform_name=platform_name,
+        machine=machine,
+    )
+
+    assert profile.install_channel == install_channel
+    assert profile.supports_automatic_update is supports_automatic_update
+    assert profile.manifest_schema.allowed_package_kinds == allowed_package_kinds
+    manifest_url = profile.default_manifest_url(
+        "example/CaveViewer",
+        "release-candidate",
+        "prerelease",
+    )
+    if manifest_suffix:
+        assert manifest_url.endswith(manifest_suffix)
+    else:
+        assert manifest_url == ""
 
 
 def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
@@ -112,13 +202,19 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.window_backend_adapter is window_backend_adapter
     assert runtime.profile.platform_name == "linux"
     assert runtime.profile.machine == "x86_64"
+    assert runtime.profile.install_channel == "linux_app"
+    assert runtime.update_profile.install_channel == "linux_app"
     assert runtime.update_configuration.branch == "release-candidate"
     assert runtime.update_configuration.manifest_channel == "prerelease"
     assert runtime.update_configuration.manifest_url.endswith(
-        "/release-candidate/prerelease.json"
+        "/release-candidate/updates/linux/x86_64/prerelease.json"
     )
     assert runtime.update_configuration.source is CapabilitySource.USER_OVERRIDE
     assert runtime.automatic_update_capability.status is CapabilityStatus.AVAILABLE
+    assert runtime.automatic_update_target is runtime.automatic_update_capability.value
+    assert runtime.automatic_update_target is not None
+    assert runtime.automatic_update_target.install_channel == "linux_app"
+    assert adapter.update_policy_calls == []
     assert runtime.automatic_update_decision.state is FeatureState.ENABLED
     assert (
         runtime.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
@@ -142,9 +238,14 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
 
 
 def test_runtime_disables_unsupported_update_targets_before_network_work():
+    update_profile = replace(
+        select_update_profile(platform_name="linux", machine="x86_64"),
+        supports_automatic_update=False,
+    )
     runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(supported=False),
+        platform_adapter=FakeUpdateAdapter(),
         desktop_services=object(),
+        update_profile=update_profile,
         environment={},
     )
 
@@ -175,9 +276,21 @@ def test_runtime_disables_unsupported_update_package_reveal_routes():
     assert runtime.update_package_reveal_decision.state is FeatureState.DISABLED
 
 
-def test_runtime_fails_closed_when_static_update_configuration_cannot_be_probed():
+def test_runtime_fails_closed_when_static_update_configuration_cannot_be_probed(
+    monkeypatch,
+):
+    from caveviewer.gui.platform import runtime as runtime_module
+
+    def fail_configuration(*_args, **_kwargs):
+        raise RuntimeError("broken package metadata")
+
+    monkeypatch.setattr(
+        runtime_module,
+        "build_update_configuration",
+        fail_configuration,
+    )
     runtime = create_platform_runtime(
-        platform_adapter=FailingUpdateConfigurationAdapter(),
+        platform_adapter=FakeUpdateAdapter(),
         desktop_services=object(),
         environment={},
     )

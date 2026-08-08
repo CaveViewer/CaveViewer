@@ -12,7 +12,11 @@ import pytest
 from caveviewer.core.capabilities import CapabilitySource
 from caveviewer.gui import update_checker
 from caveviewer.gui.platform.windows import WindowsSplashPlatformAdapter
-from caveviewer.gui.platform.probes.updates import UpdateConfiguration
+from caveviewer.gui.platform.probes.updates import (
+    UpdateConfiguration,
+    UpdateManifestSchema,
+    UpdateTarget,
+)
 from caveviewer.gui.update_signature import SignatureVerificationError
 
 
@@ -23,6 +27,12 @@ class FakePlatformAdapter:
 
     def install_channel(self):
         return self.channel
+
+    def default_update_repo(self):
+        return "CaveViewer/Test"
+
+    def default_update_manifest_url(self, repo, branch):
+        return f"https://updates.example/{repo}/{branch}/stable.json"
 
     def supports_install_channel(self, channel):
         return self.supported
@@ -241,6 +251,86 @@ def test_download_update_uses_injected_tls_trust_adapter(monkeypatch, tmp_path):
     ]
 
 
+def test_download_update_with_runtime_target_bypasses_legacy_adapter(
+    monkeypatch, tmp_path
+):
+    target = UpdateTarget(
+        install_channel="windows_app",
+        manifest_url="https://updates.example/runtime.json",
+        manifest_signature_url="https://updates.example/runtime.json.sig",
+        user_agent="CaveViewer-Target-Test",
+        manifest_schema=UpdateManifestSchema(
+            download_url_keys=("download_url",),
+            download_size_keys=("download_size_bytes",),
+            download_sha256_keys=("sha256",),
+            allowed_package_kinds=frozenset({"zip", "msi", "exe"}),
+            missing_download_url_message="Missing update download URL.",
+        ),
+    )
+    tls_trust_adapter = object()
+    context = object()
+    context_calls = []
+    opened = {}
+
+    class FakeResponse:
+        headers = {}
+
+        def __init__(self):
+            self._chunks = iter((b"payload", b""))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, _size):
+            return next(self._chunks)
+
+    monkeypatch.setattr(
+        update_checker,
+        "_legacy_platform_adapter",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("typed update targets must not construct legacy adapters")
+        ),
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "make_ssl_context",
+        lambda **kwargs: context_calls.append(kwargs) or context,
+    )
+    monkeypatch.setattr(
+        update_checker.urllib.request,
+        "urlopen",
+        lambda request, *, timeout, context: opened.update(
+            request=request,
+            timeout=timeout,
+            context=context,
+        )
+        or FakeResponse(),
+    )
+    destination = tmp_path / "CaveViewer.zip"
+
+    update_checker.download_update(
+        "https://updates.example/CaveViewer.zip",
+        7,
+        str(destination),
+        update_target=target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert destination.read_bytes() == b"payload"
+    assert opened["request"].get_header("User-agent") == "CaveViewer-Target-Test"
+    assert opened["timeout"] == 30
+    assert opened["context"] is context
+    assert context_calls == [
+        {
+            "tls_trust_adapter": tls_trust_adapter,
+            "platform_adapter": None,
+        }
+    ]
+
+
 def test_update_check_reports_unconfigured_manifest(monkeypatch):
     monkeypatch.setattr(update_checker, "_MANIFEST_URL", "")
     result = update_checker.check_for_update("1.0.0")
@@ -322,6 +412,29 @@ def test_update_check_rejects_wrong_payload_type(
     result = update_checker.check_for_update("1.0.0")
     assert not result.update_available
     assert "not valid" in (result.error or "")
+
+
+def test_legacy_adapter_keeps_its_package_classifier(
+    configured_update_checker, monkeypatch
+):
+    configured_update_checker.detect_package_kind = lambda _url, _channel: "zip"
+    _set_manifest(
+        monkeypatch,
+        {
+            "latest_version": "2.0.0",
+            "windows_app_url": "https://updates.example/update.bundle",
+        },
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "_verify_manifest_signature_required",
+        lambda _payload: True,
+    )
+
+    result = update_checker.check_for_update("1.0.0")
+
+    assert result.update_available
+    assert result.package_kind == "zip"
 
 
 def test_update_check_rejects_missing_version(monkeypatch, configured_update_checker):
@@ -521,6 +634,101 @@ def test_explicit_runtime_configuration_bypasses_legacy_update_globals(monkeypat
         (
             "https://updates.example/runtime.json",
             {"Accept": "application/json", "User-Agent": "CaveViewer-Test"},
+            8,
+            tls_trust_adapter,
+        )
+    ]
+
+
+def test_explicit_legacy_adapter_keeps_its_default_update_configuration(monkeypatch):
+    adapter = FakePlatformAdapter()
+    tls_trust_adapter = object()
+    fetched = []
+    for name in (
+        "CAVEVIEWER_GITHUB_REPO",
+        "CAVEVIEWER_UPDATE_BRANCH",
+        "CAVEVIEWER_UPDATE_CHANNEL",
+        "CAVEVIEWER_UPDATE_MANIFEST_URL",
+        "CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        update_checker,
+        "_fetch_url_bytes_for_adapter",
+        lambda url, *, headers, timeout, tls_trust_adapter: (
+            fetched.append((url, headers, timeout, tls_trust_adapter))
+            or json.dumps(
+                {
+                    "latest_version": "1.0.0",
+                    "windows_app_url": "https://updates.example/update.zip",
+                }
+            ).encode("utf-8")
+        ),
+    )
+
+    result = update_checker.check_for_update(
+        "1.0.0",
+        platform_adapter=adapter,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert not result.update_available
+    assert fetched == [
+        (
+            "https://updates.example/CaveViewer/Test/main/stable.json",
+            {"Accept": "application/json", "User-Agent": "CaveViewer-Test"},
+            8,
+            tls_trust_adapter,
+        )
+    ]
+
+
+def test_explicit_runtime_target_bypasses_legacy_adapter(monkeypatch):
+    target = UpdateTarget(
+        install_channel="windows_app",
+        manifest_url="https://updates.example/runtime.json",
+        manifest_signature_url="https://updates.example/runtime.json.sig",
+        user_agent="CaveViewer-Target-Test",
+        manifest_schema=UpdateManifestSchema(
+            download_url_keys=("download_url",),
+            download_size_keys=("download_size_bytes",),
+            download_sha256_keys=("sha256",),
+            allowed_package_kinds=frozenset({"zip", "msi", "exe"}),
+            missing_download_url_message="Missing update download URL.",
+        ),
+    )
+    tls_trust_adapter = object()
+    fetched = []
+
+    def unexpected_legacy_adapter():
+        raise AssertionError("typed update targets must not construct legacy adapters")
+
+    monkeypatch.setattr(update_checker, "_legacy_platform_adapter", unexpected_legacy_adapter)
+    monkeypatch.setattr(
+        update_checker,
+        "_fetch_url_bytes_for_adapter",
+        lambda url, *, headers, timeout, tls_trust_adapter: (
+            fetched.append((url, headers, timeout, tls_trust_adapter))
+            or json.dumps(
+                {
+                    "latest_version": "1.0.0",
+                    "download_url": "https://updates.example/update.zip",
+                }
+            ).encode("utf-8")
+        ),
+    )
+
+    result = update_checker.check_for_update(
+        "1.0.0",
+        update_target=target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert not result.update_available
+    assert fetched == [
+        (
+            "https://updates.example/runtime.json",
+            {"Accept": "application/json", "User-Agent": "CaveViewer-Target-Test"},
             8,
             tls_trust_adapter,
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from caveviewer.core.capabilities import (
 from caveviewer.gui.features import FeatureState
 from caveviewer.gui.update_checker import DownloadCancelled, UpdateCheckResult
 from caveviewer.gui import update_manager
+from caveviewer.gui.platform.probes.updates import select_update_profile
 from caveviewer.gui.platform.runtime import create_platform_runtime
 from caveviewer.gui.update_manager import UpdateManager, UpdateState
 
@@ -775,9 +777,14 @@ def test_disabled_runtime_package_reveal_gate_blocks_native_action(tmp_path):
 
 def test_disabled_runtime_gate_starts_no_update_workers_or_downloads(tmp_path):
     adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads", supported=False)
+    update_profile = replace(
+        select_update_profile(platform_name="linux", machine="x86_64"),
+        supports_automatic_update=False,
+    )
     runtime = create_platform_runtime(
         platform_adapter=adapter,
         desktop_services=FakeDesktopServices(),
+        update_profile=update_profile,
         environment={},
     )
     checks = []
@@ -807,7 +814,7 @@ def test_disabled_runtime_gate_starts_no_update_workers_or_downloads(tmp_path):
         manager.shutdown()
 
 
-def test_runtime_configuration_is_passed_to_the_default_update_client(
+def test_runtime_target_is_passed_to_the_default_update_client(
     monkeypatch, tmp_path
 ):
     adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
@@ -842,9 +849,7 @@ def test_runtime_configuration_is_passed_to_the_default_update_client(
         (
             "1.0.63",
             {
-                "install_channel": "test_app",
-                "configuration": runtime.update_configuration,
-                "platform_adapter": adapter,
+                "update_target": runtime.automatic_update_target,
                 "tls_trust_adapter": runtime.tls_trust_adapter,
             },
         )
@@ -889,5 +894,5 @@ def test_runtime_tls_adapter_is_passed_to_default_update_download(
     finally:
         manager.shutdown()
 
-    assert calls[0]["platform_adapter"] is adapter
+    assert calls[0]["update_target"] is runtime.automatic_update_target
     assert calls[0]["tls_trust_adapter"] is tls_trust_adapter
