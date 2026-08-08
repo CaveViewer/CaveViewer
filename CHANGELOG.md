@@ -2,13 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
-## Release 1.0.73
+## Release 1.0.74
 
 - Made the Your Recent Maps and CaveViewer Maps groups independently
   collapsible while keeping both open by default.
-- Renamed user-facing Guided Dive labels and feedback to Dive Plan while
-  retaining existing trace and cache compatibility.
-- Clarified the Map Library overflow-menu cleanup action as `Remove map files`.
 - Rebuild a map cache directly from Map Library without opening the map. The
   previous cache stays usable until its replacement succeeds, and background
   completion or failure can be reported through desktop notifications.
