@@ -458,6 +458,19 @@ recording folder, uses an on-demand preflight instead of a cached startup gate.
 The preflight pairs one fresh capability result with the policy decision
 derived from that same snapshot.
 
+Automatic updates have a typed static boundary. `select_update_profile()` maps
+only the composed platform and process architecture to an immutable
+`UpdateProfile`: install channel, supported architectures, manifest layout,
+user agent, accepted package kinds, and signed-manifest field aliases.
+Environment and CLI-derived overrides turn that profile into an
+`UpdateConfiguration`; `probe_automatic_update()` then produces an immutable
+`UpdateTarget` only when both manifest endpoints are configured and the target
+is supported. `UpdateManager` passes that target and the focused
+`TlsTrustAdapter` to the checker and downloader, so the composed runtime update
+path does not consult `SplashPlatformAdapter` for release policy or manifest
+parsing. Direct callers of the former adapter-based API retain a clearly local
+compatibility bridge while they migrate.
+
 Verified update-package reveal uses a focused adapter. At composition it
 declares `finder`, `explorer`, or Linux `desktop_service` without mounting a
 DMG, launching a file manager, or contacting D-Bus. The pure policy stores the

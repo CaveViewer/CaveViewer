@@ -44,19 +44,24 @@ The module uses Python's **Protocol** pattern to define a contract (`SplashPlatf
 - **Extensibility**: New platform-specific methods can be added to the protocol and implemented per-platform
 - **Maintainability**: Platform-specific logic is isolated in dedicated files
 
-`SplashPlatformAdapter` continues to own update-channel, control, font, and
-package behavior. `DesktopServices` is intentionally separate: splash, viewer,
-settings, map-library, and background-task code request host-desktop behavior
-through one capability instead of importing Tk, shell commands, or D-Bus
-directly. Linux implements file/directory selection, file/URI opening, file
-reveal, notifications, and idle/suspend inhibition portal-first, with
-conservative fallbacks for non-portal sessions. Long map library downloads use
-notification and inhibit requests through `DesktopServices`, suppressing
-duplicate desktop notifications while the Map Library dialog owns foreground
-feedback; background update downloads use notification and inhibit requests
-while the package is downloaded and verified; uncached map imports use inhibit
-requests while parsing and building the cache. These requests are best-effort
-and must not affect the underlying operation.
+`SplashPlatformAdapter` continues to own presentation and unmigrated package
+behavior. Static update release policy now lives in the immutable
+`UpdateProfile` selected from platform and process-architecture facts; the
+runtime checker and downloader receive its resulting `UpdateTarget`, not the
+broad adapter. Direct callers of the former adapter-based update API retain a
+local compatibility bridge while they migrate. `DesktopServices` is
+intentionally separate: splash, viewer, settings, map-library, and
+background-task code request host-desktop behavior through one capability
+instead of importing Tk, shell commands, or D-Bus directly. Linux implements
+file/directory selection, file/URI opening, file reveal, notifications, and
+idle/suspend inhibition portal-first, with conservative fallbacks for
+non-portal sessions. Long map library downloads use notification and inhibit
+requests through `DesktopServices`, suppressing duplicate desktop notifications
+while the Map Library dialog owns foreground feedback; background update
+downloads use notification and inhibit requests while the package is downloaded
+and verified; uncached map imports use inhibit requests while parsing and
+building the cache. These requests are best-effort and must not affect the
+underlying operation.
 
 `windowing.py` owns the pure Linux display-protocol plan resolver. Automatic
 mode selects X11/XWayland before Wayland when both session endpoints exist so
@@ -81,11 +86,12 @@ accepting both folders and those direct files.
 
 `caveviewer.app` creates one `PlatformRuntime` after command-line overrides
 have been applied for every interactive viewer path, including a direct CLI map
-launch. It owns a stable `PlatformProfile`, one broad compatibility adapter,
-one `DesktopServices` instance, immutable capability results, and feature-gate
-decisions. It is not a global singleton: callers receive it by injection, which
-keeps test setup deterministic and prevents unrelated GUI surfaces from
-repeatedly constructing portal-backed services.
+launch. It owns a stable `PlatformProfile`, typed `UpdateProfile`, resolved
+`UpdateConfiguration`, one broad compatibility adapter, one `DesktopServices`
+instance, immutable capability results, and feature-gate decisions. It is not a
+global singleton: callers receive it by injection, which keeps test setup
+deterministic and prevents unrelated GUI surfaces from repeatedly constructing
+portal-backed services.
 
 `feature_gates` is deliberately limited to process-stable decisions. An update
 target and the OS-selected update-package reveal route are safe to evaluate
@@ -100,15 +106,20 @@ The first migrated feature is automatic update checking and downloading:
 
 ```text
 automatic update
-    -> pure FeatureDecision policy
-    -> immutable update-target capability result
-    -> update probe/configuration and existing package adapter
+    -> static UpdateProfile from platform and architecture facts
+    -> UpdateConfiguration after explicit overrides
+    -> immutable UpdateTarget capability result
+    -> pure FeatureDecision policy and focused TLS adapter
+    -> checker/download network work
 ```
 
-The update configuration is resolved when the runtime is composed, rather than
-when `update_checker.py` is imported. This means CLI `--update-branch` and
-other explicit configuration are seen by the process-owned manager. The
-manager rechecks the gate before it starts a check and before it starts a
+The update profile is a pure transform, while the configuration is resolved
+when the runtime is composed rather than when `update_checker.py` is imported.
+This means CLI `--update-branch` and other explicit configuration are seen by
+the process-owned manager. `UpdateTarget` carries the signed manifest URLs,
+user agent, accepted package policy, and manifest aliases needed by the network
+client, so the normal runtime path does not call broad adapter update methods.
+The manager rechecks the gate before it starts a check and before it starts a
 download; a disabled gate never starts network work. Offline failures remain
 ordinary transient check results, not a platform capability failure.
 
@@ -218,7 +229,9 @@ macOS Metal launch route can use the same target/adapter seam without changing
 map-opening callers.
 
 `SplashPlatformAdapter` remains a compatibility surface for presentation and
-unmigrated platform actions. `UpdatePackageRevealAdapter`,
+unmigrated platform actions. Automatic-update policy and manifest parsing have
+moved to `UpdateProfile` and `UpdateTarget`; adapter-based update calls are a
+local compatibility path only. `UpdatePackageRevealAdapter`,
 `UpdatePackageStorageAdapter`, `SavedRecordingRevealAdapter`, and
 `RecordingProcessAdapter`, and `TlsTrustAdapter` are narrow facades around
 existing package, recording, and network actions. New features should add the
