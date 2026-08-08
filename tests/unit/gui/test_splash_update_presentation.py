@@ -15,6 +15,7 @@ from caveviewer.gui import (
 )
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
+from caveviewer.gui.platform.presentation import select_presentation_profile
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
@@ -325,12 +326,14 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
 
     monkeypatch.setattr(tkfont, "families", lambda _root: ["Helvetica Neue"])
     monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
-    monkeypatch.setattr(splash_screen, "_PLATFORM_ADAPTER", MacOSSplashPlatformAdapter())
     monkeypatch.setattr(splash_screen, "_LINUX_SPLASH_LAYOUT", False)
     monkeypatch.setattr(splash_screen, "_ROOMY_SPLASH_LAYOUT", False)
 
     try:
-        splash_screen._configure_runtime_tk_fonts(object())
+        splash_screen._configure_runtime_tk_fonts(
+            object(),
+            presentation_profile=select_presentation_profile(platform_name="darwin"),
+        )
 
         assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.4)
         assert splash_screen._BODY_FONT == ("Helvetica Neue", 17)

@@ -25,7 +25,7 @@ from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.manual_dive_trace import ManualDivePose, ManualDiveTraceResult
 from caveviewer.gui.platform.app_identity import tk_root_options
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
-from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
+from caveviewer.gui.platform.presentation import select_presentation_profile
 from caveviewer.gui.platform.runtime import ViewerLaunchPreflight
 from caveviewer.gui.platform.viewer_launch import ViewerLaunchError
 
@@ -386,18 +386,18 @@ class FakeManualDiveTrace:
 
 
 @pytest.mark.parametrize(
-    ("adapter", "primary_modifiers"),
+    ("presentation_profile", "primary_modifiers"),
     [
-        (DefaultSplashPlatformAdapter(), SimpleNamespace(ctrl=True)),
-        (MacOSSplashPlatformAdapter(), SimpleNamespace(command=True)),
+        (select_presentation_profile(platform_name="unsupported"), SimpleNamespace(ctrl=True)),
+        (select_presentation_profile(platform_name="darwin"), SimpleNamespace(command=True)),
     ],
 )
 def test_manual_trace_hotkey_uses_platform_primary_modifier(
-    adapter,
+    presentation_profile,
     primary_modifiers,
 ):
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = adapter
+    window._presentation_profile = presentation_profile
     window._has_map_loaded = True
     window.wnd = SimpleNamespace(keys=SimpleNamespace(T=84))
     window._keys_down = set()
@@ -416,18 +416,18 @@ def test_manual_trace_hotkey_uses_platform_primary_modifier(
 
 
 @pytest.mark.parametrize(
-    ("adapter", "primary_modifiers"),
+    ("presentation_profile", "primary_modifiers"),
     [
-        (DefaultSplashPlatformAdapter(), SimpleNamespace(ctrl=True)),
-        (MacOSSplashPlatformAdapter(), SimpleNamespace(command=True)),
+        (select_presentation_profile(platform_name="unsupported"), SimpleNamespace(ctrl=True)),
+        (select_presentation_profile(platform_name="darwin"), SimpleNamespace(command=True)),
     ],
 )
 def test_recording_hotkey_uses_platform_primary_modifier(
-    adapter,
+    presentation_profile,
     primary_modifiers,
 ):
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = adapter
+    window._presentation_profile = presentation_profile
     window._has_map_loaded = True
     window.wnd = SimpleNamespace(keys=SimpleNamespace(R=82))
     window._keys_down = set()
@@ -830,18 +830,18 @@ def test_manual_trace_marks_bookmark_recall_as_discontinuity():
 
 
 @pytest.mark.parametrize(
-    ("adapter", "shortcut_label"),
+    ("presentation_profile", "shortcut_label"),
     [
-        (DefaultSplashPlatformAdapter(), "Ctrl"),
-        (MacOSSplashPlatformAdapter(), "Cmd"),
+        (select_presentation_profile(platform_name="unsupported"), "Ctrl"),
+        (select_presentation_profile(platform_name="darwin"), "Cmd"),
     ],
 )
 def test_manual_trace_active_renders_persistent_save_prompt(
-    adapter,
+    presentation_profile,
     shortcut_label,
 ):
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = adapter
+    window._presentation_profile = presentation_profile
     window._manual_dive_trace = FakeManualDiveTrace()
     calls = []
     window._render_dive_status_prompt = (
@@ -1000,19 +1000,23 @@ def test_viewer_ui_scale_env_override_is_developer_only_escape_hatch():
 
 def test_viewer_overlay_text_scale_uses_platform_default():
     assert viewer_window._viewer_overlay_text_scale(
-        DefaultSplashPlatformAdapter(), 1.28, {}
+        select_presentation_profile(platform_name="unsupported"), 1.28, {}
     ) == 1.28
     assert viewer_window._viewer_overlay_text_scale(
-        MacOSSplashPlatformAdapter(), 1.28, {}
+        select_presentation_profile(platform_name="darwin"), 1.28, {}
     ) == pytest.approx(1.472)
 
 
 def test_viewer_overlay_text_scale_env_override_still_wins():
     assert viewer_window._viewer_overlay_text_scale(
-        MacOSSplashPlatformAdapter(), 1.28, {"CAVEVIEWER_UI_TEXT_SCALE": "1.1"}
+        select_presentation_profile(platform_name="darwin"),
+        1.28,
+        {"CAVEVIEWER_UI_TEXT_SCALE": "1.1"},
     ) == 1.1
     assert viewer_window._viewer_overlay_text_scale(
-        MacOSSplashPlatformAdapter(), 1.28, {"CAVEVIEWER_UI_TEXT_SCALE": "bad"}
+        select_presentation_profile(platform_name="darwin"),
+        1.28,
+        {"CAVEVIEWER_UI_TEXT_SCALE": "bad"},
     ) == pytest.approx(1.472)
 
 
@@ -1893,7 +1897,9 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
 
 def test_window_shortcut_closes_viewer_on_control_w():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = DefaultSplashPlatformAdapter()
+    window._presentation_profile = select_presentation_profile(
+        platform_name="unsupported"
+    )
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
     window._keys_down = set()
     window._key_resolve_cache = {}
@@ -1906,7 +1912,9 @@ def test_window_shortcut_closes_viewer_on_control_w():
 
 def test_window_shortcut_opens_map_only_when_loaded():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = DefaultSplashPlatformAdapter()
+    window._presentation_profile = select_presentation_profile(
+        platform_name="unsupported"
+    )
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
     window._keys_down = set()
     window._key_resolve_cache = {}
@@ -1950,7 +1958,9 @@ def test_open_action_uses_runtime_and_handles_unavailable_directory_selection(
 
 def test_window_shortcut_leaves_control_a_unhandled():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = DefaultSplashPlatformAdapter()
+    window._presentation_profile = select_presentation_profile(
+        platform_name="unsupported"
+    )
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79, A=65))
     window._keys_down = set()
     window._key_resolve_cache = {}
@@ -1960,7 +1970,9 @@ def test_window_shortcut_leaves_control_a_unhandled():
 
 def test_window_shortcut_leaves_command_a_unhandled_on_macos():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = MacOSSplashPlatformAdapter()
+    window._presentation_profile = select_presentation_profile(
+        platform_name="darwin"
+    )
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79, A=65))
     window._keys_down = set()
     window._key_resolve_cache = {}
@@ -1971,7 +1983,9 @@ def test_window_shortcut_leaves_command_a_unhandled_on_macos():
 
 def test_window_shortcut_uses_command_modifier_on_macos():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = MacOSSplashPlatformAdapter()
+    window._presentation_profile = select_presentation_profile(
+        platform_name="darwin"
+    )
     window.wnd = SimpleNamespace(keys=SimpleNamespace(W=87, O=79))
     window._keys_down = set()
     window._key_resolve_cache = {}
@@ -2004,8 +2018,8 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     )
     monkeypatch.setattr(
         viewer_window,
-        "get_platform_adapter",
-        lambda: SimpleNamespace(viewer_uses_glfw_native_initial_size=lambda: True),
+        "_presentation_profile_for_runtime",
+        lambda _runtime: select_presentation_profile(platform_name="linux"),
     )
     monkeypatch.setattr(
         viewer_window,
@@ -2046,9 +2060,8 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     assert request.force_resizable_window is True
 
 
-def test_viewer_launch_uses_injected_runtime_adapter(monkeypatch):
+def test_viewer_launch_uses_injected_runtime_presentation_profile(monkeypatch):
     calls = []
-    adapter = SimpleNamespace(viewer_uses_glfw_native_initial_size=lambda: True)
     target = ViewerLaunchTarget(
         ViewerLaunchRoute.GLFW_MODERNGL,
         WindowBackendPlan(WindowSystem.AUTO, (WindowSystem.X11,)),
@@ -2073,14 +2086,14 @@ def test_viewer_launch_uses_injected_runtime_adapter(monkeypatch):
         )
     )
     viewer_window.CaveViewerWindow.cave_platform_runtime = SimpleNamespace(
-        platform_adapter=adapter,
+        presentation_profile=select_presentation_profile(platform_name="linux"),
         viewer_launch_preflight=lambda: preflight,
         window_backend_adapter=window_backend_adapter,
     )
     monkeypatch.setattr(
         viewer_window,
         "get_platform_adapter",
-        lambda: pytest.fail("launch must use the injected runtime adapter"),
+        lambda: pytest.fail("launch must use the injected runtime profile"),
     )
     monkeypatch.setattr(
         viewer_window,

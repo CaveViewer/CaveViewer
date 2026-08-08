@@ -12,6 +12,24 @@ GUI_ROOT = REPO_ROOT / "src" / "caveviewer" / "gui"
 GUI_PLATFORM_ROOT = GUI_ROOT / "platform"
 GUI_FEATURES_ROOT = GUI_ROOT / "features"
 APP_MODULE = "caveviewer.app"
+_LEGACY_STATIC_PRESENTATION_ACCESSORS = {
+    "ui_font_family",
+    "font_candidates",
+    "splash_layout_policy",
+    "preferences_dialog_layout_policy",
+    "dialog_layout_policy",
+    "bookmark_save_modifier",
+    "primary_shortcut_modifier_label",
+    "tk_primary_modifier_name",
+    "mouse_look_button_name",
+    "compact_manual_controls_layout",
+    "default_text_antialiasing_mode",
+    "supports_tk_display_scaling",
+    "command_modifier_uses_control_fallback",
+    "shift_digit_bookmark_save_fallback",
+    "option_left_mouse_look_enabled",
+    "viewer_uses_glfw_native_initial_size",
+}
 
 
 @dataclass(frozen=True)
@@ -285,6 +303,28 @@ def test_viewer_does_not_construct_platform_services_at_module_import():
                         GUI_ROOT / "viewer_window.py",
                         descendant.lineno,
                         f"constructs {descendant.func.id} during module import",
+                    )
+                )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_gui_consumers_do_not_call_legacy_static_presentation_accessors():
+    """Keep static UI conventions on PresentationProfile, not the broad adapter."""
+    violations: list[Violation] = []
+
+    for path in _gui_python_files():
+        if path.is_relative_to(GUI_PLATFORM_ROOT):
+            continue
+        for node in ast.walk(_parse_module(path)):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr in _LEGACY_STATIC_PRESENTATION_ACCESSORS:
+                violations.append(
+                    Violation(
+                        path,
+                        node.lineno,
+                        f"calls legacy static presentation accessor {node.func.attr}()",
                     )
                 )
 

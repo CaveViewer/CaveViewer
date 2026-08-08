@@ -9,7 +9,7 @@ change call sites:
 - text_bounds_px(text, pixel_size, letter_spacing=0.0)
 - iter_text_pixels(text, origin_x, origin_y, pixel_size, letter_spacing=0.0)
 - pixel_size_at_text_scale(pixel_size, target_scale)
-- set_raster_scale(scale) / raster_scale()
+- set_presentation_profile(profile), set_raster_scale(scale) / raster_scale()
 
 iter_text_pixels yields tuples:
 (px_x0, px_y0, px_x1, px_y1, alpha)
@@ -24,12 +24,33 @@ from functools import lru_cache
 
 import freetype
 
-from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform.presentation import (
+    PresentationProfile,
+    font_candidates_for_profile,
+    get_presentation_profile,
+)
 
 
 _BASE_GRID_HEIGHT = 8.5
 _TEXT_SCALE = 1.0
 _RASTER_SCALE = 1.0
+_PRESENTATION_PROFILE: PresentationProfile | None = None
+
+
+def set_presentation_profile(profile: PresentationProfile | None) -> None:
+    """Set or clear the process-selected profile used for overlay font rendering."""
+    global _PRESENTATION_PROFILE
+    if profile == _PRESENTATION_PROFILE:
+        return
+    _PRESENTATION_PROFILE = profile
+    _resolve_font_path.cache_clear()
+    _load_face.cache_clear()
+    _glyph_for.cache_clear()
+
+
+def _active_presentation_profile() -> PresentationProfile:
+    """Return the runtime-selected profile or the pure direct-call fallback."""
+    return _PRESENTATION_PROFILE or get_presentation_profile()
 
 
 def set_text_scale(scale: float) -> None:
@@ -90,10 +111,9 @@ def _font_candidates() -> list[str]:
     if env_font:
         candidates.append(env_font)
 
-    # Use platform-specific font candidates from adapter
-    adapter = get_platform_adapter()
-    candidates.extend(adapter.font_candidates())
-    
+    # The profile is pure; fontconfig lookup remains an action-time fallback.
+    candidates.extend(font_candidates_for_profile(_active_presentation_profile()))
+
     return candidates
 
 
@@ -122,7 +142,7 @@ def _get_aa_target() -> int:
     """
     env = os.getenv("CAVEVIEWER_TEXT_AA_MODE", "").lower()
     if not env:
-        mode = get_platform_adapter().default_text_antialiasing_mode()
+        mode = _active_presentation_profile().default_text_antialiasing_mode
     else:
         mode = env
     if mode == "lcd":

@@ -33,11 +33,14 @@ from caveviewer.gui.platform import (
     DesktopServiceError,
     DesktopServices,
     get_desktop_services,
-    get_platform_adapter,
 )
 from caveviewer.gui.platform.directory_selection import (
     choose_authorized_directory,
     directory_selection_preflight,
+)
+from caveviewer.gui.platform.presentation import (
+    PresentationProfile,
+    get_presentation_profile,
 )
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -54,7 +57,10 @@ _PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
-_LAYOUT_POLICY = get_platform_adapter().preferences_dialog_layout_policy()
+# These module-level defaults preserve direct callers and documentation
+# examples. Live dialogs resolve their immutable profile from the process
+# runtime so an injected profile remains authoritative.
+_LAYOUT_POLICY = get_presentation_profile().preferences_dialog_layout
 _WINDOWS_LAYOUT = _LAYOUT_POLICY.windows_layout
 _MACOS_LAYOUT = _LAYOUT_POLICY.macos_layout
 _LINUX_LAYOUT = _LAYOUT_POLICY.linux_layout
@@ -101,6 +107,7 @@ class PreferencesDialog:
         ui_font_family: str,
         desktop_services: DesktopServices | None = None,
         platform_runtime: PlatformRuntime | None = None,
+        presentation_profile: PresentationProfile | None = None,
         on_applied: Callable[[Preferences], None] | None = None,
     ) -> None:
         if (
@@ -111,9 +118,29 @@ class PreferencesDialog:
             raise ValueError(
                 "desktop_services must match the injected platform_runtime"
             )
+        runtime_presentation_profile = (
+            getattr(platform_runtime, "presentation_profile", None)
+            if platform_runtime is not None
+            else None
+        )
+        if (
+            runtime_presentation_profile is not None
+            and presentation_profile is not None
+            and presentation_profile != runtime_presentation_profile
+        ):
+            raise ValueError(
+                "presentation_profile must match the injected platform_runtime"
+            )
         self.parent = parent
         self.ui_font_family = ui_font_family
         self.platform_runtime = platform_runtime
+        self.presentation_profile = (
+            runtime_presentation_profile
+            or presentation_profile
+            or get_presentation_profile()
+        )
+        self._layout_policy = self.presentation_profile.preferences_dialog_layout
+        self._dialog_layout = self.presentation_profile.dialog_layout
         self.desktop_services = (
             platform_runtime.desktop_services
             if platform_runtime is not None
@@ -135,15 +162,15 @@ class PreferencesDialog:
         # Windows can report less usable vertical space than the GNOME-style
         # preference layout wants, so keep width fixed but let people grow the
         # dialog vertically when the page content is constrained.
-        self.dialog.resizable(False, _LAYOUT_POLICY.resizable_vertical)
+        self.dialog.resizable(False, self._layout_policy.resizable_vertical)
         self.dialog.transient(parent)
 
-        if _LINUX_LAYOUT:
+        if self._layout_policy.linux_layout:
             self.section_font = (ui_font_family, 10, "bold")
             self.body_font = (ui_font_family, 10)
             self.small_font = (ui_font_family, 9)
             self.entry_pad_y = 4
-        elif _MACOS_LAYOUT:
+        elif self._layout_policy.macos_layout:
             self.section_font = (ui_font_family, 14, "bold")
             self.body_font = (ui_font_family, 14)
             self.small_font = (ui_font_family, 12)
@@ -300,6 +327,7 @@ class PreferencesDialog:
             pady=pady,
             width=width,
             default=default,
+            dialog_layout=self._dialog_layout,
         )
 
     def _render_section(self, parent, section_key: str) -> None:
@@ -339,8 +367,8 @@ class PreferencesDialog:
         row = tk.Frame(
             section,
             bg=_PANEL_COLOR,
-            padx=_ROW_PAD_X,
-            pady=_ROW_PAD_Y,
+            padx=self._layout_policy.row_pad_x,
+            pady=self._layout_policy.row_pad_y,
         )
         row.pack(fill="x")
         row.grid_columnconfigure(0, weight=1)
@@ -365,7 +393,7 @@ class PreferencesDialog:
         entry_width = (
             _NUMERIC_ENTRY_WIDTH
             if value_type in {PreferenceValueType.INT, PreferenceValueType.FLOAT}
-            else _TEXT_ENTRY_WIDTH
+            else self._layout_policy.text_entry_width
         )
         entry_var = var
         placeholder_text = preference_placeholder_text(field)
@@ -391,7 +419,7 @@ class PreferencesDialog:
             row=1,
             column=0,
             sticky="ew" if compact_path else "w",
-            pady=(_CONTROL_ROW_TOP_PAD_Y, 0),
+            pady=(self._layout_policy.control_row_top_pad_y, 0),
         )
         entry_parent.grid_columnconfigure(0, weight=1)
         if compact_path:
@@ -501,7 +529,9 @@ class PreferencesDialog:
             bg=_PANEL_COLOR,
             justify="left",
             anchor="w",
-            wraplength=0 if single_line_hint else _WRAP_LENGTH,
+            wraplength=(
+                0 if single_line_hint else self._layout_policy.wrap_length
+            ),
         )
         hint_label.pack(anchor="w", fill="x", pady=(3, 0))
         if not single_line_hint:
@@ -560,11 +590,11 @@ class PreferencesDialog:
             font=self.small_font,
             bg=_BG_COLOR,
             fg=_INSTRUCTION_COLOR,
-            padx=_TAB_PAD_X,
-            pady=_TAB_PAD_Y,
+            padx=self._layout_policy.tab_pad_x,
+            pady=self._layout_policy.tab_pad_y,
             cursor="hand2",
             takefocus=True,
-            highlightthickness=_TAB_HIGHLIGHT_THICKNESS,
+            highlightthickness=self._layout_policy.tab_highlight_thickness,
             highlightbackground=_BG_COLOR,
             highlightcolor=DARK_THEME.entry_focus_border,
         )
@@ -759,13 +789,16 @@ class PreferencesDialog:
         body = tk.Frame(
             self.dialog,
             bg=_BG_COLOR,
-            padx=_BODY_PAD_X,
+            padx=self._layout_policy.body_pad_x,
             pady=DIALOG_BODY_PAD_Y,
         )
         body.pack(fill="both", expand=True)
 
         self.tab_bar = tk.Frame(body, bg=_BG_COLOR)
-        self.tab_bar.pack(fill="x", pady=(0, _TAB_BOTTOM_PAD_Y))
+        self.tab_bar.pack(
+            fill="x",
+            pady=(0, self._layout_policy.tab_bottom_pad_y),
+        )
         for page_key, tab_label in _PREFERENCE_PAGES:
             tab = self._new_page_tab(self.tab_bar, page_key, tab_label)
             tab.pack(side="left", padx=(0, _TAB_GAP_X))
@@ -778,7 +811,7 @@ class PreferencesDialog:
         self.button_row.pack(
             side="bottom",
             fill="x",
-            pady=(_BUTTON_ROW_TOP_PAD_Y, 0),
+            pady=(self._layout_policy.button_row_top_pad_y, 0),
         )
 
         cancel_button = self._new_dialog_button(
@@ -811,7 +844,7 @@ class PreferencesDialog:
             bg=_BG_COLOR,
             anchor="w",
             justify="left",
-            wraplength=_NOTICE_WRAP_LENGTH,
+            wraplength=self._layout_policy.notice_wrap_length,
         )
         self.error_label.pack(
             side="left",
@@ -902,7 +935,12 @@ class PreferencesDialog:
 
         self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
         self.dialog.bind("<Escape>", lambda _event: self.cancel())
-        bind_primary_shortcut(self.dialog, "w", lambda _event: self.cancel())
+        bind_primary_shortcut(
+            self.dialog,
+            "w",
+            lambda _event: self.cancel(),
+            presentation_profile=self.presentation_profile,
+        )
         self.dialog.bind("<Return>", lambda _event: self.apply())
 
     def _set_feedback(self, message: str, message_kind: MessageKind) -> None:
@@ -1059,7 +1097,7 @@ class PreferencesDialog:
         geometry_applied = False
         try:
             self.parent.update_idletasks()
-            dialog_w = max(self.dialog.winfo_reqwidth(), _MIN_WIDTH)
+            dialog_w = max(self.dialog.winfo_reqwidth(), self._layout_policy.min_width)
             dialog_h = self.dialog.winfo_reqheight()
             screen_w = self.dialog.winfo_screenwidth()
             screen_h = self.dialog.winfo_screenheight()
@@ -1075,9 +1113,9 @@ class PreferencesDialog:
             self.dialog.geometry(
                 f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}"
             )
-            if _WINDOWS_LAYOUT:
+            if self._layout_policy.windows_layout:
                 self.dialog.minsize(dialog_w, min(dialog_h, 360))
-            if _LINUX_LAYOUT:
+            if self._layout_policy.linux_layout:
                 for _ in range(2):
                     self.dialog.update_idletasks()
                 fitted_height = min(
@@ -1118,13 +1156,16 @@ def show_preferences_dialog(
     ui_font_family: str,
     desktop_services: DesktopServices | None = None,
     platform_runtime: PlatformRuntime | None = None,
+    presentation_profile: PresentationProfile | None = None,
     on_applied: Callable[[Preferences], None] | None = None,
 ) -> None:
     """Create and display a non-blocking modal Preferences dialog."""
-    PreferencesDialog(
-        parent,
-        ui_font_family=ui_font_family,
-        desktop_services=desktop_services,
-        platform_runtime=platform_runtime,
-        on_applied=on_applied,
-    ).show()
+    options = {
+        "ui_font_family": ui_font_family,
+        "desktop_services": desktop_services,
+        "platform_runtime": platform_runtime,
+        "on_applied": on_applied,
+    }
+    if presentation_profile is not None:
+        options["presentation_profile"] = presentation_profile
+    PreferencesDialog(parent, **options).show()

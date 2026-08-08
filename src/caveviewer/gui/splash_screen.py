@@ -61,12 +61,20 @@ from caveviewer.gui.platform.directory_selection import (
     choose_authorized_directory,
     directory_selection_preflight,
 )
-from caveviewer.gui.platform import get_splash_platform_adapter
 from caveviewer.gui.platform import (
     DesktopServiceError,
     DesktopServices,
     get_desktop_services,
+    get_splash_platform_adapter,
     tk_root_options,
+)
+from caveviewer.gui.platform.presentation import (
+    PresentationProfile,
+    get_presentation_profile,
+)
+from caveviewer.gui.platform.presentation_actions import (
+    PresentationActionsAdapter,
+    create_presentation_actions_adapter,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
 from caveviewer.gui.splash_session import SplashSession
@@ -94,8 +102,8 @@ def _resolve_asset_path(filename: str) -> str | None:
 # in-program loading-screen logo, reused here rather than shipping a
 # second copy of the same image.
 _LOGO_PATH = _resolve_asset_path("app_mark_transparent.png")
-_PLATFORM_ADAPTER = get_splash_platform_adapter()
-_SPLASH_LAYOUT_POLICY = _PLATFORM_ADAPTER.splash_layout_policy()
+_PRESENTATION_PROFILE = get_presentation_profile()
+_SPLASH_LAYOUT_POLICY = _PRESENTATION_PROFILE.splash_layout
 _APP_ICON_PATH = _resolve_asset_path(_SPLASH_LAYOUT_POLICY.app_icon_resource_name)
 
 
@@ -127,7 +135,11 @@ def _destroy_tk_children(root) -> None:
             pass
 
 
-def _create_splash_root(tk):
+def _create_splash_root(
+    tk,
+    *,
+    presentation_profile: PresentationProfile | None = None,
+):
     """
     Return the process Tk root for the splash screen.
 
@@ -135,7 +147,12 @@ def _create_splash_root(tk):
     stays attached to a valid Tk application.  Reuse that root on the next
     splash cycle instead of creating another Tk root in the same process.
     """
-    if _SPLASH_LAYOUT_POLICY.reuse_existing_root:
+    layout = (
+        presentation_profile.splash_layout
+        if presentation_profile is not None
+        else _SPLASH_LAYOUT_POLICY
+    )
+    if layout.reuse_existing_root:
         existing_root = getattr(tk, "_default_root", None)
         if _tk_root_exists(existing_root):
             _destroy_tk_children(existing_root)
@@ -159,7 +176,7 @@ _BORDER_COLOR = DARK_THEME.border
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _ROOMY_SPLASH_LAYOUT = _WINDOWS_SPLASH_LAYOUT or _LINUX_SPLASH_LAYOUT
-_UI_FONT_FAMILY = _PLATFORM_ADAPTER.ui_font_family()
+_UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 
@@ -242,6 +259,32 @@ _LINUX_TK_SANS_FAMILIES = (
 )
 
 
+def _presentation_profile_for_runtime(
+    platform_runtime: PlatformRuntime | None,
+) -> PresentationProfile:
+    """Return the process profile, preserving direct splash callers."""
+    profile = (
+        getattr(platform_runtime, "presentation_profile", None)
+        if platform_runtime is not None
+        else None
+    )
+    return profile or get_presentation_profile()
+
+
+def _presentation_actions_adapter_for_runtime(
+    platform_runtime: PlatformRuntime | None,
+) -> PresentationActionsAdapter:
+    """Return native presentation actions without using static adapter values."""
+    actions = (
+        getattr(platform_runtime, "presentation_actions_adapter", None)
+        if platform_runtime is not None
+        else None
+    )
+    if actions is not None:
+        return actions
+    return create_presentation_actions_adapter(get_splash_platform_adapter())
+
+
 def _select_tk_font_family(
     available: dict[str, str],
     default_family: str,
@@ -262,41 +305,12 @@ def _select_tk_font_family(
     return default_family
 
 
-def _configure_runtime_tk_fonts(root) -> None:
-    """Resolve the UI font against fonts Tk can actually render."""
-    global _UI_FONT_FAMILY, _TK_TEXT_SCALE, _TITLE_FONT, _VERSION_FONT, _BODY_FONT
-    global _SMALL_FONT, _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
+def _refresh_tk_font_tokens() -> None:
+    """Rebuild module font tuples after selecting family or text scaling."""
+    global _TITLE_FONT, _VERSION_FONT, _BODY_FONT, _SMALL_FONT
+    global _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
     global _FOOTER_FONT, _LINK_FONT, _UPDATE_ACTION_FONT, _BUTTON_FONT
 
-    default_font_points = 12.0
-    try:
-        import tkinter.font as tkfont
-
-        available = {family.lower(): family for family in tkfont.families(root)}
-        preferred = [_PLATFORM_ADAPTER.ui_font_family()]
-        if _LINUX_SPLASH_LAYOUT:
-            # Keep splash startup on the Tk path free of subprocess waits.
-            # Prefer families Tk already knows instead of asking fontconfig.
-            preferred.extend(_LINUX_TK_SANS_FAMILIES)
-
-        default_font = tkfont.nametofont("TkDefaultFont")
-        fallback_family = default_font.actual("family")
-        default_font_points = abs(float(default_font.actual("size") or default_font_points))
-        resolved_family = _select_tk_font_family(
-            available,
-            fallback_family,
-            preferred,
-            linux_layout=_LINUX_SPLASH_LAYOUT,
-        )
-
-        if resolved_family:
-            _UI_FONT_FAMILY = resolved_family
-            if _LINUX_SPLASH_LAYOUT:
-                _LOG.info(f"Using Tk UI font family: {_UI_FONT_FAMILY}")
-    except Exception as exc:
-        _LOG.warning(f"could not resolve Tk UI font family ({exc}); using {_UI_FONT_FAMILY}.")
-
-    _TK_TEXT_SCALE = _PLATFORM_ADAPTER.tk_text_scale(default_font_points)
     _TITLE_FONT = _tk_font(24, "bold")
     _VERSION_FONT = _tk_font(12)
     _BODY_FONT = _tk_font(12)
@@ -308,6 +322,88 @@ def _configure_runtime_tk_fonts(root) -> None:
     _LINK_FONT = _tk_font(10, "underline")
     _UPDATE_ACTION_FONT = _tk_font(11, "bold")
     _BUTTON_FONT = _tk_font(13)
+
+
+def _activate_presentation_profile(profile: PresentationProfile) -> None:
+    """Apply a runtime profile to legacy splash rendering tokens.
+
+    The splash remains module-oriented for Tk callbacks, but each visible
+    instance activates the process-owned immutable profile before it creates
+    any widgets. This keeps static presentation choices out of the broad
+    platform adapter while preserving the existing callback structure.
+    """
+    global _PRESENTATION_PROFILE, _SPLASH_LAYOUT_POLICY, _APP_ICON_PATH
+    global _WINDOWS_SPLASH_LAYOUT, _LINUX_SPLASH_LAYOUT, _ROOMY_SPLASH_LAYOUT
+    global _UI_FONT_FAMILY, _TK_TEXT_SCALE
+    global _SPLASH_WINDOW_WIDTH, _SPLASH_WINDOW_MIN_HEIGHT
+    global _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK, _SECONDARY_LINK_ROW_BOTTOM_GAP
+    global _FOOTER_CREDITS_BOTTOM_PAD, _TITLE_TO_ACTION_GAP
+    global _BROWSE_BUTTON_BOTTOM_GAP, _INSTRUCTION_BOTTOM_GAP
+    global _SECONDARY_LINK_ROW_TOP_GAP
+
+    _PRESENTATION_PROFILE = profile
+    _SPLASH_LAYOUT_POLICY = profile.splash_layout
+    _APP_ICON_PATH = _resolve_asset_path(_SPLASH_LAYOUT_POLICY.app_icon_resource_name)
+    _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
+    _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
+    _ROOMY_SPLASH_LAYOUT = _WINDOWS_SPLASH_LAYOUT or _LINUX_SPLASH_LAYOUT
+    _UI_FONT_FAMILY = profile.ui_font_family
+    _TK_TEXT_SCALE = 1.0
+    _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
+    _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
+    _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
+    _SECONDARY_LINK_ROW_BOTTOM_GAP = (
+        _SPLASH_LAYOUT_POLICY.secondary_link_row_bottom_gap
+    )
+    _FOOTER_CREDITS_BOTTOM_PAD = _SPLASH_LAYOUT_POLICY.footer_credits_bottom_pad
+    _TITLE_TO_ACTION_GAP = _SPLASH_LAYOUT_POLICY.title_to_action_gap
+    _BROWSE_BUTTON_BOTTOM_GAP = _SPLASH_LAYOUT_POLICY.browse_button_bottom_gap
+    _INSTRUCTION_BOTTOM_GAP = _SPLASH_LAYOUT_POLICY.instruction_bottom_gap
+    _SECONDARY_LINK_ROW_TOP_GAP = _SPLASH_LAYOUT_POLICY.secondary_link_row_top_gap
+    _refresh_tk_font_tokens()
+
+
+def _configure_runtime_tk_fonts(
+    root,
+    *,
+    presentation_profile: PresentationProfile | None = None,
+) -> None:
+    """Resolve the UI font against fonts Tk can actually render."""
+    global _UI_FONT_FAMILY, _TK_TEXT_SCALE
+
+    profile = presentation_profile or _PRESENTATION_PROFILE
+    splash_layout = profile.splash_layout
+
+    default_font_points = 12.0
+    try:
+        import tkinter.font as tkfont
+
+        available = {family.lower(): family for family in tkfont.families(root)}
+        preferred = [profile.ui_font_family]
+        if splash_layout.linux_layout:
+            # Keep splash startup on the Tk path free of subprocess waits.
+            # Prefer families Tk already knows instead of asking fontconfig.
+            preferred.extend(_LINUX_TK_SANS_FAMILIES)
+
+        default_font = tkfont.nametofont("TkDefaultFont")
+        fallback_family = default_font.actual("family")
+        default_font_points = abs(float(default_font.actual("size") or default_font_points))
+        resolved_family = _select_tk_font_family(
+            available,
+            fallback_family,
+            preferred,
+            linux_layout=splash_layout.linux_layout,
+        )
+
+        if resolved_family:
+            _UI_FONT_FAMILY = resolved_family
+            if splash_layout.linux_layout:
+                _LOG.info(f"Using Tk UI font family: {_UI_FONT_FAMILY}")
+    except Exception as exc:
+        _LOG.warning(f"could not resolve Tk UI font family ({exc}); using {_UI_FONT_FAMILY}.")
+
+    _TK_TEXT_SCALE = profile.tk_text_scale(default_font_points)
+    _refresh_tk_font_tokens()
 
 
 def _map_library_panel_style() -> MapLibraryPanelStyle:
@@ -467,13 +563,26 @@ def show_splash_screen(
             if platform_runtime is not None
             else get_desktop_services()
         )
+    presentation_profile = _presentation_profile_for_runtime(platform_runtime)
+    presentation_actions_adapter = _presentation_actions_adapter_for_runtime(
+        platform_runtime
+    )
+    _activate_presentation_profile(presentation_profile)
     _apply_preferences_to_env(_load_preferences())
 
-    configure_process_dpi_awareness()
-    root = _create_splash_root(tk)
-    apply_tk_scaling(root)
-    _configure_runtime_tk_fonts(root)
-    splash_scale = tk_display_scale(root)
+    configure_process_dpi_awareness(
+        presentation_actions_adapter=presentation_actions_adapter
+    )
+    root = _create_splash_root(
+        tk,
+        presentation_profile=presentation_profile,
+    )
+    apply_tk_scaling(root, presentation_profile=presentation_profile)
+    _configure_runtime_tk_fonts(
+        root,
+        presentation_profile=presentation_profile,
+    )
+    splash_scale = tk_display_scale(root, presentation_profile=presentation_profile)
     if _LINUX_SPLASH_LAYOUT:
         try:
             _LOG.info(
@@ -493,7 +602,7 @@ def show_splash_screen(
     root.resizable(False, False)
     _set_tk_window_icon(root)
 
-    _PLATFORM_ADAPTER.install_about_handler(root, program_name, version)
+    presentation_actions_adapter.install_about_handler(root, program_name, version)
 
     window_w, window_h = px(_SPLASH_WINDOW_WIDTH), px(_SPLASH_WINDOW_MIN_HEIGHT)
 
@@ -1022,7 +1131,12 @@ def show_splash_screen(
     session.schedule_after(root, 350, update_manager.check_for_updates)
     root.bind("<Return>", lambda _event: on_open_map_folder())
     root.bind("<Escape>", on_close)
-    bind_primary_shortcut(root, "w", on_close)
+    bind_primary_shortcut(
+        root,
+        "w",
+        on_close,
+        presentation_profile=presentation_profile,
+    )
     root.protocol("WM_DELETE_WINDOW", on_close)
 
     update_manager.set_foreground_update_surface_active(True)
@@ -1034,7 +1148,7 @@ def show_splash_screen(
 
     # Some adapters keep the single Tk app object alive for process-level
     # native menu callbacks. Others destroy the splash root normally.
-    if _SPLASH_LAYOUT_POLICY.destroy_root_on_close:
+    if presentation_profile.splash_layout.destroy_root_on_close:
         try:
             root.destroy()
         except Exception:

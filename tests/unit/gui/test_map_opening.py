@@ -31,7 +31,7 @@ def test_pick_folder_dialog_uses_desktop_services_and_destroys_root(monkeypatch)
     monkeypatch.setattr(
         map_opening,
         "_hidden_tk_root",
-        lambda: calls.append("root") or FakeRoot(),
+        lambda **_kwargs: calls.append("root") or FakeRoot(),
     )
 
     class FakeDesktopServices:
@@ -110,7 +110,7 @@ def test_pick_folder_dialog_rechecks_the_injected_runtime_for_each_action(
     monkeypatch.setattr(
         map_opening,
         "_hidden_tk_root",
-        lambda: calls.append("root") or FakeRoot(),
+        lambda **_kwargs: calls.append("root") or FakeRoot(),
     )
     target = DirectorySelectionTarget(
         primary_route=DirectorySelectionRoute.PORTAL,

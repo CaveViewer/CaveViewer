@@ -25,8 +25,10 @@ import moderngl
 import numpy as np
 
 from caveviewer.gui import bitmap_font
-from caveviewer.gui.platform.base import SplashPlatformAdapter
-from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform.presentation import (
+    PresentationProfile,
+    get_presentation_profile,
+)
 from caveviewer.core.diagnostics.logging import get_logger
 
 
@@ -96,14 +98,14 @@ def _modifier_display_label(modifier_name: str) -> str:
 
 
 def _get_platform_control_sections(
-    adapter: SplashPlatformAdapter | None = None,
+    presentation_profile: PresentationProfile | None = None,
 ) -> list[tuple[str, list[tuple[str, str]]]]:
     """Generate platform-specific control sections for display."""
-    adapter = adapter or get_platform_adapter()
-    bookmark_modifier = adapter.bookmark_save_modifier()
+    presentation_profile = presentation_profile or get_presentation_profile()
+    bookmark_modifier = presentation_profile.bookmark_save_modifier
     bookmark_modifier_label = _modifier_display_label(bookmark_modifier)
-    primary_shortcut_label = adapter.primary_shortcut_modifier_label()
-    look_button = adapter.mouse_look_button_name()
+    primary_shortcut_label = presentation_profile.primary_shortcut_modifier_label
+    look_button = presentation_profile.mouse_look_button_name
 
     movement = [
         ("W A S D", "Move / strafe"),
@@ -198,7 +200,12 @@ class ControlsOverlay:
     # fires and reveals a sparsely populated cave.
     MAX_DISPLAY_SECONDS_PANEL = 20.0
 
-    def __init__(self, ctx: moderngl.Context):
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        *,
+        presentation_profile: PresentationProfile | None = None,
+    ):
         self.ctx = ctx
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
 
@@ -219,12 +226,14 @@ class ControlsOverlay:
         self._panel_loaded_time: float | None = None
         self._logo_renderer = None  # set via set_logo_renderer() after construction
         
-        # Generate platform-specific control rows.
-        self._platform_adapter = get_platform_adapter()
+        # Generate control rows from the immutable process presentation profile.
+        self._presentation_profile = presentation_profile or get_presentation_profile()
         self._compact_manual_controls_layout = (
-            self._platform_adapter.compact_manual_controls_layout()
+            self._presentation_profile.compact_manual_controls_layout
         )
-        self._control_sections = _get_platform_control_sections(self._platform_adapter)
+        self._control_sections = _get_platform_control_sections(
+            self._presentation_profile
+        )
         self._control_rows = [
             row for _, section_rows in self._control_sections for row in section_rows
         ]

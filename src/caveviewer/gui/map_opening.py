@@ -23,6 +23,7 @@ from caveviewer.gui.platform.directory_selection import (
     choose_authorized_directory,
     directory_selection_preflight,
 )
+from caveviewer.gui.platform.presentation import get_presentation_profile
 
 if TYPE_CHECKING:
     from caveviewer.gui.platform.runtime import PlatformRuntime
@@ -69,7 +70,11 @@ def pick_folder_dialog(
     # cannot cause native chooser setup as a side effect.
     authorized_directory_selection_target(preflight, desktop_services)
 
-    root = _hidden_tk_root()
+    root = (
+        _hidden_tk_root()
+        if platform_runtime is None
+        else _hidden_tk_root(platform_runtime=platform_runtime)
+    )
     try:
         selection = choose_authorized_directory(
             preflight,
@@ -128,7 +133,7 @@ def _resolve_prebuilt_cache(folder: str, no_model_error: FileNotFoundError) -> O
     )
 
 
-def _hidden_tk_root():
+def _hidden_tk_root(*, platform_runtime: PlatformRuntime | None = None):
     """Create the hidden Tk owner used for native chooser dialogs."""
     import tkinter as tk
 
@@ -137,8 +142,29 @@ def _hidden_tk_root():
         configure_process_dpi_awareness,
     )
 
-    configure_process_dpi_awareness()
+    if platform_runtime is None:
+        # Preserve the long-standing direct-call seam for CLI helpers and
+        # focused tests. The DPI helper resolves its own action facade and
+        # pure profile in that compatibility path.
+        configure_process_dpi_awareness()
+        root = tk.Tk(**tk_root_options())
+        apply_tk_scaling(root)
+        root.withdraw()
+        return root
+
+    presentation_profile = (
+        getattr(platform_runtime, "presentation_profile", None)
+        or get_presentation_profile()
+    )
+    presentation_actions_adapter = getattr(
+        platform_runtime,
+        "presentation_actions_adapter",
+        None,
+    )
+    configure_process_dpi_awareness(
+        presentation_actions_adapter=presentation_actions_adapter
+    )
     root = tk.Tk(**tk_root_options())
-    apply_tk_scaling(root)
+    apply_tk_scaling(root, presentation_profile=presentation_profile)
     root.withdraw()
     return root

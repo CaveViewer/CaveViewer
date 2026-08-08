@@ -11,14 +11,15 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-from caveviewer.gui.platform import get_platform_adapter
+from caveviewer.gui.platform.base import DialogLayoutPolicy
+from caveviewer.gui.platform.presentation import get_presentation_profile
 from caveviewer.gui.tk_theme import DARK_THEME
 
 
 DialogButtonKind = Literal["primary", "secondary"]
 DialogNoticeKind = Literal["info", "warning", "error"]
 
-_DIALOG_LAYOUT = get_platform_adapter().dialog_layout_policy()
+_DIALOG_LAYOUT = get_presentation_profile().dialog_layout
 DIALOG_BODY_PAD_X = _DIALOG_LAYOUT.body_pad_x
 DIALOG_BODY_PAD_Y = 18
 DIALOG_PANEL_BORDER = DARK_THEME.entry_border
@@ -195,9 +196,16 @@ def create_dialog_action_button(
     padx: int = 12,
     pady: int = 6,
     default: str | None = None,
+    dialog_layout: DialogLayoutPolicy | None = None,
 ):
-    """Create a consistently styled action button for CaveViewer dialogs."""
-    if _DIALOG_LAYOUT.use_label_action_buttons:
+    """Create a consistently styled action button for CaveViewer dialogs.
+
+    ``dialog_layout`` lets a runtime-owned presentation profile control a
+    dialog instance without changing the pure module default used by direct
+    callers.
+    """
+    layout = dialog_layout or _DIALOG_LAYOUT
+    if layout.use_label_action_buttons:
         return DialogActionLabel(
             parent,
             text=text,
