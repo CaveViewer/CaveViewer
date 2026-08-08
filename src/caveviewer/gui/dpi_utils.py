@@ -1,4 +1,4 @@
-"""Tk DPI-scaling setup delegated through GUI platform adapters.
+"""Tk DPI-scaling setup from typed presentation profile and native action facade.
 
 Small DPI helpers for Tk-based windows/dialogs.
 
@@ -11,13 +11,24 @@ from __future__ import annotations
 
 import os
 
-from caveviewer.gui.platform import get_platform_adapter
+from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform.presentation import (
+    PresentationProfile,
+    get_presentation_profile,
+)
+from caveviewer.gui.platform.presentation_actions import (
+    PresentationActionsAdapter,
+    create_presentation_actions_adapter,
+)
 
 
 _DPI_AWARENESS_CONFIGURED = False
 
 
-def configure_process_dpi_awareness() -> None:
+def configure_process_dpi_awareness(
+    *,
+    presentation_actions_adapter: PresentationActionsAdapter | None = None,
+) -> None:
     """Best-effort Windows process DPI awareness setup.
 
     Must run before creating Tk roots/windows. Safe no-op on non-Windows
@@ -27,12 +38,20 @@ def configure_process_dpi_awareness() -> None:
     if _DPI_AWARENESS_CONFIGURED:
         return
     _DPI_AWARENESS_CONFIGURED = True
-    get_platform_adapter().configure_process_dpi_awareness()
+    adapter = presentation_actions_adapter or create_presentation_actions_adapter(
+        get_platform_adapter()
+    )
+    adapter.configure_process_dpi_awareness()
 
 
-def apply_tk_scaling(root) -> None:
+def apply_tk_scaling(
+    root,
+    *,
+    presentation_profile: PresentationProfile | None = None,
+) -> None:
     """Nudge Tk to use the current display DPI for font/layout scaling."""
-    if not get_platform_adapter().supports_tk_display_scaling():
+    profile = presentation_profile or get_presentation_profile()
+    if not profile.supports_tk_display_scaling:
         return
     try:
         override = os.getenv("CAVEVIEWER_TK_SCALE", "").strip()
@@ -47,9 +66,14 @@ def apply_tk_scaling(root) -> None:
         pass
 
 
-def tk_display_scale(root) -> float:
+def tk_display_scale(
+    root,
+    *,
+    presentation_profile: PresentationProfile | None = None,
+) -> float:
     """Return display scale relative to 96 DPI for pixel-sized Tk layout values."""
-    if not get_platform_adapter().supports_tk_display_scaling():
+    profile = presentation_profile or get_presentation_profile()
+    if not profile.supports_tk_display_scaling:
         return 1.0
     try:
         override = os.getenv("CAVEVIEWER_TK_SCALE", "").strip()

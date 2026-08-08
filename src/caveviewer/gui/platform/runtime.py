@@ -36,6 +36,11 @@ from caveviewer.gui.features import (
 from .base import SplashPlatformAdapter
 from .desktop_services import DesktopServices, get_desktop_services
 from .factory import get_platform_adapter
+from .presentation import PresentationProfile, select_presentation_profile
+from .presentation_actions import (
+    PresentationActionsAdapter,
+    create_presentation_actions_adapter,
+)
 from .probes.updates import (
     UpdateConfiguration,
     UpdateProfile,
@@ -288,6 +293,8 @@ class PlatformRuntime:
     """
 
     profile: PlatformProfile
+    presentation_profile: PresentationProfile
+    presentation_actions_adapter: PresentationActionsAdapter
     platform_adapter: SplashPlatformAdapter
     desktop_services: DesktopServices
     update_profile: UpdateProfile
@@ -443,6 +450,8 @@ def create_platform_runtime(
     platform_adapter: SplashPlatformAdapter | None = None,
     desktop_services: DesktopServices | None = None,
     update_profile: UpdateProfile | None = None,
+    presentation_profile: PresentationProfile | None = None,
+    presentation_actions_adapter: PresentationActionsAdapter | None = None,
     update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
     update_package_storage_adapter: UpdatePackageStorageAdapter | None = None,
     saved_recording_reveal_adapter: SavedRecordingRevealAdapter | None = None,
@@ -460,12 +469,20 @@ def create_platform_runtime(
         platform_name=resolved_platform_name,
         machine=resolved_machine,
     )
+    resolved_presentation_profile = (
+        presentation_profile
+        or select_presentation_profile(platform_name=resolved_platform_name)
+    )
     resolved_desktop_services = desktop_services or get_desktop_services(
         platform_name=resolved_platform_name
     )
     resolved_platform_adapter = platform_adapter or get_platform_adapter(
         desktop_services=resolved_desktop_services,
         platform_name=resolved_platform_name,
+    )
+    resolved_presentation_actions_adapter = (
+        presentation_actions_adapter
+        or create_presentation_actions_adapter(resolved_platform_adapter)
     )
     profile = PlatformProfile(
         platform_name=resolved_platform_name,
@@ -539,6 +556,8 @@ def create_platform_runtime(
 
     return PlatformRuntime(
         profile=profile,
+        presentation_profile=resolved_presentation_profile,
+        presentation_actions_adapter=resolved_presentation_actions_adapter,
         platform_adapter=resolved_platform_adapter,
         desktop_services=resolved_desktop_services,
         update_profile=resolved_update_profile,

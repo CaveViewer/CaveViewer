@@ -11,6 +11,13 @@ from .desktop_services import (
     get_desktop_services,
 )
 from .factory import get_platform_adapter, get_splash_platform_adapter
+from .presentation import (
+    PresentationProfile,
+    font_candidates_for_profile,
+    get_presentation_profile,
+    select_presentation_profile,
+)
+from .presentation_actions import PresentationActionsAdapter
 from .runtime import (
     DesktopNotificationPreflight,
     DirectorySelectionPreflight,
@@ -38,12 +45,17 @@ from .windows import WindowsSplashPlatformAdapter
 __all__ = [
     "get_platform_adapter",
     "get_splash_platform_adapter",
+    "get_presentation_profile",
+    "select_presentation_profile",
+    "font_candidates_for_profile",
     "get_desktop_services",
     "LINUX_WINDOW_INSTANCE_NAME",
     "tk_root_options",
     "DialogLayoutPolicy",
     "PreferencesDialogLayoutPolicy",
     "SplashLayoutPolicy",
+    "PresentationProfile",
+    "PresentationActionsAdapter",
     "DesktopServiceError",
     "DesktopInhibitor",
     "DesktopServices",

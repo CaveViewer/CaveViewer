@@ -66,6 +66,14 @@ from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
 from caveviewer.gui.features import decide_video_recording
 from caveviewer.gui.platform.factory import get_platform_adapter
+from caveviewer.gui.platform.presentation import (
+    PresentationProfile,
+    get_presentation_profile,
+)
+from caveviewer.gui.platform.presentation_actions import (
+    PresentationActionsAdapter,
+    create_presentation_actions_adapter,
+)
 from caveviewer.gui.platform.probes.recording import (
     VideoRecordingTarget,
     probe_video_recording,
@@ -254,7 +262,7 @@ def _window_pixel_ratio(window) -> float:
 
 
 def _viewer_overlay_text_scale(
-    platform_adapter,
+    presentation_profile: PresentationProfile,
     base_scale: float,
     environ: Mapping[str, str] | None = None,
 ) -> float:
@@ -266,7 +274,7 @@ def _viewer_overlay_text_scale(
             return float(raw_override)
         except ValueError:
             pass
-    return platform_adapter.viewer_overlay_text_scale(float(base_scale))
+    return presentation_profile.viewer_overlay_text_scale(float(base_scale))
 
 
 def _viewer_ui_surface_size(
@@ -473,6 +481,36 @@ def _platform_adapter_for_runtime(platform_runtime: PlatformRuntime | None = Non
     return get_platform_adapter()
 
 
+def _presentation_profile_for_runtime(
+    platform_runtime: PlatformRuntime | None = None,
+) -> PresentationProfile:
+    """Use the injected static UI profile, with a pure legacy fallback."""
+    profile = (
+        getattr(platform_runtime, "presentation_profile", None)
+        if platform_runtime is not None
+        else None
+    )
+    return profile or get_presentation_profile()
+
+
+def _presentation_actions_adapter_for_runtime(
+    platform_runtime: PlatformRuntime | None = None,
+    *,
+    platform_adapter=None,
+) -> PresentationActionsAdapter:
+    """Use injected native presentation actions or a narrow legacy facade."""
+    actions = (
+        getattr(platform_runtime, "presentation_actions_adapter", None)
+        if platform_runtime is not None
+        else None
+    )
+    if actions is not None:
+        return actions
+    if platform_adapter is None:
+        platform_adapter = get_platform_adapter()
+    return create_presentation_actions_adapter(platform_adapter)
+
+
 def _window_backend_adapter_for_runtime(
     platform_runtime: PlatformRuntime | None = None,
 ) -> WindowBackendAdapter:
@@ -510,8 +548,8 @@ def _recording_process_adapter_for_runtime(
     return create_recording_process_adapter(platform_adapter)
 
 
-def _runtime_app_icon_path(platform_adapter) -> str:
-    filenames = (platform_adapter.splash_layout_policy().app_icon_resource_name,)
+def _runtime_app_icon_path(presentation_profile: PresentationProfile) -> str:
+    filenames = (presentation_profile.splash_layout.app_icon_resource_name,)
     for filename in filenames:
         path = image_path(filename)
         if path.exists():
@@ -647,20 +685,31 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._platform_adapter = _platform_adapter_for_runtime(
             self._platform_runtime
         )
+        self._presentation_profile = _presentation_profile_for_runtime(
+            self._platform_runtime
+        )
+        self._presentation_actions_adapter = _presentation_actions_adapter_for_runtime(
+            self._platform_runtime,
+            platform_adapter=self._platform_adapter,
+        )
         self._set_runtime_window_icon()
 
         force_focus_env = os.getenv(self.FORCE_STARTUP_FOCUS_ENV, "").strip().lower()
         force_focus = force_focus_env in {"1", "true", "yes", "on"}
         self._startup_focus_enabled = True
-        if self._platform_adapter.suppress_forced_startup_focus(
+        if self._presentation_profile.suppress_forced_startup_focus(
             is_frozen=bool(getattr(sys, "frozen", False)),
             force_requested=force_focus,
         ):
             self._startup_focus_enabled = False
 
         # Optional env override for quick testing/tuning without code edits.
+        bitmap_font.set_presentation_profile(self._presentation_profile)
         bitmap_font.set_text_scale(
-            _viewer_overlay_text_scale(self._platform_adapter, self.UI_TEXT_SCALE)
+            _viewer_overlay_text_scale(
+                self._presentation_profile,
+                self.UI_TEXT_SCALE,
+            )
         )
         bitmap_font.set_raster_scale(_window_pixel_ratio(getattr(self, "wnd", None)))
         self._viewer_ui_scale = _viewer_ui_scale_for_window_size(
@@ -928,7 +977,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # again as a smaller panel any time a minimap click teleports the
         # camera somewhere new (see on_mouse_press_event's minimap-click
         # handling, which calls self.controls_overlay.show_panel()).
-        self.controls_overlay = ControlsOverlay(self.ctx)
+        self.controls_overlay = ControlsOverlay(
+            self.ctx,
+            presentation_profile=self._presentation_profile,
+        )
         self.controls_overlay.show_fullscreen()
 
         # Background ("void") color picker, toggled via the COLOR button.
@@ -1072,6 +1124,27 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             self._platform_adapter = adapter
         return adapter
+
+    def _active_presentation_profile(self) -> PresentationProfile:
+        """Return the immutable UI profile for this viewer instance."""
+        profile = getattr(self, "_presentation_profile", None)
+        if profile is None:
+            profile = _presentation_profile_for_runtime(
+                getattr(self, "_platform_runtime", None)
+            )
+            self._presentation_profile = profile
+        return profile
+
+    def _active_presentation_actions_adapter(self) -> PresentationActionsAdapter:
+        """Return native presentation actions without reusing static policy."""
+        actions = getattr(self, "_presentation_actions_adapter", None)
+        if actions is None:
+            actions = _presentation_actions_adapter_for_runtime(
+                getattr(self, "_platform_runtime", None),
+                platform_adapter=self._active_platform_adapter(),
+            )
+            self._presentation_actions_adapter = actions
+        return actions
 
     def _active_saved_recording_reveal_adapter(self) -> SavedRecordingRevealAdapter:
         """Return the runtime action adapter or preserve direct legacy callers."""
@@ -1256,7 +1329,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _set_runtime_window_icon(self) -> None:
         """Set the native viewer-window icon when the backend exposes one."""
-        icon_path = _runtime_app_icon_path(self._active_platform_adapter())
+        icon_path = _runtime_app_icon_path(self._active_presentation_profile())
         if not os.path.exists(icon_path):
             _LOG.warning(f"viewer window icon asset not found: {icon_path}")
             return
@@ -5693,8 +5766,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             keys,
             self._keys_down,
             command_modifier_uses_control_fallback=(
-                self._active_platform_adapter()
-                .command_modifier_uses_control_fallback()
+                self._active_presentation_profile()
+                .command_modifier_uses_control_fallback
             ),
             raw_command_down=self._raw_command_modifier_down(),
         )
@@ -5711,7 +5784,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _bookmark_save_modifier_is_down(self, modifiers: KeyModifiers) -> bool:
         """Check if the platform-specific bookmark save modifier is down."""
-        save_modifier = self._active_platform_adapter().bookmark_save_modifier()
+        save_modifier = self._active_presentation_profile().bookmark_save_modifier
         return viewer_input.bookmark_save_modifier_is_down(
             save_modifier=save_modifier,
             command_down=self._command_is_down(modifiers),
@@ -5932,8 +6005,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             ctrl_down=ctrl_down,
             backspace_down=backspace_down,
             shift_digit_save_fallback=(
-                self._active_platform_adapter()
-                .shift_digit_bookmark_save_fallback()
+                self._active_presentation_profile()
+                .shift_digit_bookmark_save_fallback
             ),
         )
         if action is viewer_bookmarks.BookmarkHotkeyAction.NONE:
@@ -5948,7 +6021,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         return True
 
     def _option_look_active(self) -> bool:
-        if not self._active_platform_adapter().option_left_mouse_look_enabled():
+        if not self._active_presentation_profile().option_left_mouse_look_enabled:
             return False
         return self._key_is_down(
             self.wnd.keys,
@@ -6035,13 +6108,13 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _primary_shortcut_is_down(self, modifiers: KeyModifiers) -> bool:
         """Return whether the platform-native application modifier is active."""
-        if self._active_platform_adapter().tk_primary_modifier_name() == "Command":
+        if self._active_presentation_profile().tk_primary_modifier_name == "Command":
             return self._command_is_down(modifiers)
         return self._control_is_down(modifiers)
 
     def _primary_shortcut_label(self) -> str:
         """Return the platform-native label for an application shortcut."""
-        return self._active_platform_adapter().primary_shortcut_modifier_label()
+        return self._active_presentation_profile().primary_shortcut_modifier_label
 
     def _handle_window_shortcut(self, key, modifiers: KeyModifiers) -> bool:
         """Handle desktop-standard window and open shortcuts."""
@@ -6138,7 +6211,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         self._startup_focus_requested = True
 
-        self._active_platform_adapter().focus_viewer_window(self.wnd)
+        self._active_presentation_actions_adapter().focus_viewer_window(self.wnd)
 
     def _reset_transient_input_state(self, reason: str) -> None:
         """Clear transient input/capture flags that can get stuck across sleep/focus changes."""
@@ -6289,7 +6362,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.controls_overlay.hide_help()
             return
 
-        look_button_name = self._active_platform_adapter().mouse_look_button_name()
+        look_button_name = self._active_presentation_profile().mouse_look_button_name
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
 
         if self._recording_hides_hud():
@@ -6471,7 +6544,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_press_event = on_mouse_press_event
 
     def on_mouse_release_event(self, x, y, button):
-        look_button_name = self._active_platform_adapter().mouse_look_button_name()
+        look_button_name = self._active_presentation_profile().mouse_look_button_name
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
 
         if button == self.wnd.mouse.left:
@@ -6584,9 +6657,9 @@ def _launch_viewer_window(
         CaveViewerWindow.window_size = window_size_override
         window_size_fraction = None
         fallback_window_size = window_size_override
-    elif _platform_adapter_for_runtime(
+    elif _presentation_profile_for_runtime(
         CaveViewerWindow.cave_platform_runtime
-    ).viewer_uses_glfw_native_initial_size():
+    ).viewer_uses_glfw_native_initial_size:
         # Linux GLFW sizing happens after the Wayland/X11 backend is selected,
         # using that backend's DPI-aware work-area coordinate system.
         CaveViewerWindow.window_size = _DEFAULT_WINDOW_SIZE

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from caveviewer.gui import controls_overlay
-from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
-from caveviewer.gui.platform.macos import MacOSSplashPlatformAdapter
+from caveviewer.gui.platform.presentation import select_presentation_profile
 
 
 def test_fullscreen_layout_scale_grows_for_large_viewer_surfaces():
@@ -127,7 +124,7 @@ def test_fullscreen_begin_prompt_waits_for_visual_ready_signal():
 
 
 def test_recording_help_copy_is_format_neutral():
-    rows = _control_rows_for_adapter(DefaultSplashPlatformAdapter())
+    rows = _control_rows_for_profile(select_presentation_profile(platform_name="unsupported"))
 
     assert rows["REC button"] == "Start recording countdown"
     assert "MP4" not in rows["REC button"]
@@ -136,22 +133,18 @@ def test_recording_help_copy_is_format_neutral():
     assert rows["Space"] == "Pause/resume a recorded dive"
 
 
-def _control_rows_for_adapter(adapter) -> dict[str, str]:
+def _control_rows_for_profile(profile) -> dict[str, str]:
     return {
         key: description
-        for _section, rows in controls_overlay._get_platform_control_sections(adapter)
+        for _section, rows in controls_overlay._get_platform_control_sections(profile)
         for key, description in rows
     }
 
 
-def test_control_help_copy_uses_adapter_for_macos_shortcuts():
-    adapter = SimpleNamespace(
-        bookmark_save_modifier=lambda: "command",
-        primary_shortcut_modifier_label=lambda: "Cmd",
-        mouse_look_button_name=lambda: "right",
+def test_control_help_copy_uses_profile_for_macos_shortcuts():
+    rows = _control_rows_for_profile(
+        select_presentation_profile(platform_name="darwin")
     )
-
-    rows = _control_rows_for_adapter(adapter)
 
     assert rows["Right click + mouse"] == "Look around"
     assert rows["Option + left click + mouse"] == "Look around (alternative)"
@@ -163,14 +156,10 @@ def test_control_help_copy_uses_adapter_for_macos_shortcuts():
     assert rows["Cmd + T"] == "Start/stop manual route trace"
 
 
-def test_control_help_copy_uses_adapter_for_control_shortcuts():
-    adapter = SimpleNamespace(
-        bookmark_save_modifier=lambda: "control",
-        primary_shortcut_modifier_label=lambda: "Ctrl",
-        mouse_look_button_name=lambda: "left",
+def test_control_help_copy_uses_profile_for_control_shortcuts():
+    rows = _control_rows_for_profile(
+        select_presentation_profile(platform_name="unsupported")
     )
-
-    rows = _control_rows_for_adapter(adapter)
 
     assert rows["Left click + mouse"] == "Look around"
     assert "Right click + mouse" not in rows
@@ -183,11 +172,11 @@ def test_control_help_copy_uses_adapter_for_control_shortcuts():
     assert rows["Ctrl + T"] == "Start/stop manual route trace"
 
 
-def test_platform_adapters_define_controls_overlay_layout_policy():
-    default_adapter = DefaultSplashPlatformAdapter()
-    macos_adapter = MacOSSplashPlatformAdapter()
+def test_presentation_profiles_define_controls_overlay_layout_policy():
+    default_profile = select_presentation_profile(platform_name="unsupported")
+    macos_profile = select_presentation_profile(platform_name="darwin")
 
-    assert default_adapter.primary_shortcut_modifier_label() == "Ctrl"
-    assert default_adapter.compact_manual_controls_layout() is True
-    assert macos_adapter.primary_shortcut_modifier_label() == "Cmd"
-    assert macos_adapter.compact_manual_controls_layout() is False
+    assert default_profile.primary_shortcut_modifier_label == "Ctrl"
+    assert default_profile.compact_manual_controls_layout is True
+    assert macos_profile.primary_shortcut_modifier_label == "Cmd"
+    assert macos_profile.compact_manual_controls_layout is False

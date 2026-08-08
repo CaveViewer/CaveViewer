@@ -26,7 +26,8 @@ caveviewer.benchmarking
 benchmarking. GUI, benchmark, and application entry-point code may call core
 services. Benchmarking may call reusable core policy. Concrete Tk and OpenGL
 work stays in the GUI layer. Platform behavior is selected through
-`caveviewer.gui.platform` adapters.
+`caveviewer.gui.platform` profiles, focused action facades, and compatibility
+adapters where a concern has not yet moved.
 
 `caveviewer.benchmarking` owns benchmark scenario parsing, measurement
 summaries, regression comparisons, benchmark-specific route selection, and the
@@ -457,6 +458,23 @@ launch. A mutable action prerequisite, such as an ffmpeg path or a writable
 recording folder, uses an on-demand preflight instead of a cached startup gate.
 The preflight pairs one fresh capability result with the policy decision
 derived from that same snapshot.
+
+Static GUI presentation uses a parallel, deliberately non-capability path:
+
+```text
+composed platform name -> immutable PresentationProfile -> injected UI consumer
+native UI effect       -> PresentationActionsAdapter -> action-time call
+```
+
+`PresentationProfile` contains only process-stable conventions: font families
+and candidates, splash/preferences/dialog layouts, shortcut and mouse-input
+labels, text scaling, startup focus policy, and backend sizing preferences.
+It is selected without creating Tk widgets or probing the display. The narrow
+action adapter performs only process DPI setup, macOS About-menu registration,
+and best-effort viewer focus. The current facade preserves the broad adapter's
+native implementations while static presentation consumers migrate; Linux
+fontconfig lookup remains an action-time font fallback rather than a profile
+selection side effect.
 
 Automatic updates have a typed static boundary. `select_update_profile()` maps
 only the composed platform and process architecture to an immutable

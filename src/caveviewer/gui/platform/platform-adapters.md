@@ -14,6 +14,8 @@ platform/
 ├── desktop_notifications.py # Optional notification authorization/execution
 ├── directory_selection.py   # Shared action-time directory-picker authorization
 ├── file_selection.py        # Shared action-time file-picker authorization
+├── presentation.py          # Immutable fonts, layouts, shortcut, and input profile
+├── presentation_actions.py  # Focused native DPI, About-menu, and focus facade
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── update_package_storage.py # Focused verified-package storage facade
@@ -44,8 +46,17 @@ The module uses Python's **Protocol** pattern to define a contract (`SplashPlatf
 - **Extensibility**: New platform-specific methods can be added to the protocol and implemented per-platform
 - **Maintainability**: Platform-specific logic is isolated in dedicated files
 
-`SplashPlatformAdapter` continues to own presentation and unmigrated package
-behavior. Static update release policy now lives in the immutable
+`SplashPlatformAdapter` continues to own unmigrated package behavior and a
+temporary compatibility surface. Static GUI presentation now lives in the
+immutable `PresentationProfile`, selected purely from the composed platform
+name. It contains fonts, Tk and splash layouts, shortcut/input conventions,
+text scaling, and startup sizing choices; it never creates a Tk root, probes a
+display, or invokes native APIs. `PresentationActionsAdapter` owns the small
+action-time native boundary for process DPI setup, macOS About registration,
+and viewer focus. Its current implementation is deliberately a narrow facade
+over the established adapter methods while native implementations migrate.
+
+Static update release policy now lives in the immutable
 `UpdateProfile` selected from platform and process-architecture facts; the
 runtime checker and downloader receive its resulting `UpdateTarget`, not the
 broad adapter. Direct callers of the former adapter-based update API retain a
@@ -86,7 +97,8 @@ accepting both folders and those direct files.
 
 `caveviewer.app` creates one `PlatformRuntime` after command-line overrides
 have been applied for every interactive viewer path, including a direct CLI map
-launch. It owns a stable `PlatformProfile`, typed `UpdateProfile`, resolved
+launch. It owns a stable `PlatformProfile`, `PresentationProfile`,
+`PresentationActionsAdapter`, typed `UpdateProfile`, resolved
 `UpdateConfiguration`, one broad compatibility adapter, one `DesktopServices`
 instance, immutable capability results, and feature-gate decisions. It is not a
 global singleton: callers receive it by injection, which keeps test setup
@@ -228,10 +240,13 @@ it does not decide policy or retry renderer/application failures. A future
 macOS Metal launch route can use the same target/adapter seam without changing
 map-opening callers.
 
-`SplashPlatformAdapter` remains a compatibility surface for presentation and
-unmigrated platform actions. Automatic-update policy and manifest parsing have
-moved to `UpdateProfile` and `UpdateTarget`; adapter-based update calls are a
-local compatibility path only. `UpdatePackageRevealAdapter`,
+`SplashPlatformAdapter` remains a compatibility surface for unmigrated
+platform actions. `PresentationProfile` owns static GUI choices and
+`PresentationActionsAdapter` owns the three native presentation actions;
+adapter-based presentation calls are a local compatibility path only.
+Automatic-update policy and manifest parsing have moved to `UpdateProfile` and
+`UpdateTarget`; adapter-based update calls are likewise local compatibility
+paths. `UpdatePackageRevealAdapter`,
 `UpdatePackageStorageAdapter`, `SavedRecordingRevealAdapter`, and
 `RecordingProcessAdapter`, and `TlsTrustAdapter` are narrow facades around
 existing package, recording, and network actions. New features should add the
@@ -257,10 +272,28 @@ class SplashPlatformAdapter(Protocol):
     # ... other methods for update metadata, package reveal, UI fonts, etc.
 ```
 
+The presentation methods shown above are retained only for legacy callers.
+New UI code reads `PlatformRuntime.presentation_profile` (or a pure direct
+fallback) instead of this protocol.
+
 **When to modify**: Only for an existing compatibility concern that has not
 yet been split. New platform-dependent features use a narrow edge probe, pure
 policy, and injected action adapter or service instead of expanding this broad
 protocol.
+
+### `presentation.py` and `presentation_actions.py` – UI conventions and effects
+
+`select_presentation_profile(platform_name=...)` is a pure table selection. A
+`PresentationProfile` is frozen and process-stable: it holds only user-visible
+conventions such as `splash_layout`, `ui_font_family`, key labels, mouse-look
+button, and scaling rules. Linux fontconfig resolution is intentionally an
+action-time fallback in `font_candidates_for_profile()`, not a selection-time
+probe.
+
+`PresentationActionsAdapter` has only `configure_process_dpi_awareness()`,
+`install_about_handler()`, and `focus_viewer_window()`. Those calls occur at
+their native action boundaries, after consumers have already selected static
+presentation data from the profile.
 
 ### `factory.py` – Platform Detection
 
@@ -288,9 +321,10 @@ def get_platform_adapter() -> SplashPlatformAdapter:
 
 `create_platform_runtime()` is the application composition boundary. It reads
 the selected environment once, after app-level command-line overrides, and
-creates immutable update capability and feature-decision values. It must not
-perform network checks, D-Bus calls, GPU probes, file-manager launches, DMG
-mounts, or other expensive on-demand work while it is being composed.
+creates immutable presentation, update capability, and feature-decision values.
+It must not perform network checks, D-Bus calls, GPU probes, file-manager
+launches, DMG mounts, or other expensive on-demand work while it is being
+composed.
 
 Inject `PlatformRuntime` into a feature service when migrating it. The service
 must use the runtime's focused adapter and `DesktopServices`, rather than construct a
@@ -354,15 +388,15 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
 from caveviewer.gui.platform.runtime import PlatformRuntime
 
 def configure_viewer(runtime: PlatformRuntime) -> None:
-    adapter = runtime.platform_adapter
+    profile = runtime.presentation_profile
 
-    # Get platform-specific presentation behavior from the process-owned adapter.
-    if adapter.mouse_look_button_name() == "right":
+    # Static presentation comes from the immutable process-owned profile.
+    if profile.mouse_look_button_name == "right":
         # macOS: show "Right click + mouse"
         pass
 
-    modifier = adapter.bookmark_save_modifier()  # "command" or "control"
-    font = adapter.ui_font_family()  # Platform-specific UI font
+    modifier = profile.bookmark_save_modifier  # "command" or "control"
+    font = profile.ui_font_family  # Platform-specific UI font
 ```
 
 No feature code needs `if sys.platform == ...` checks or its own platform
@@ -381,9 +415,10 @@ factory call.
 3. Put only process-stable decisions in `PlatformRuntime.feature_gates`.
    Action-time facts such as a selected path, portal availability, or an
    encoder executable remain on-demand and are checked again before execution.
-4. Use `SplashPlatformAdapter` only when migrating an existing compatibility
-   method. Do not add unrelated new methods to it; split focused adapters as
-   consumers move.
+4. For static UI conventions, add a field or pure transform to
+   `PresentationProfile`; for native UI effects, add the smallest focused
+   action method. Use `SplashPlatformAdapter` only when migrating an existing
+   compatibility method. Do not add unrelated new methods to it.
 5. Test four boundaries: pure policy table, fake probe/adapter, runtime
    composition and injection, and consumer enforcement/recheck.
 
@@ -394,20 +429,20 @@ macOS uses Cmd+1..9 to save bookmarks; Windows/Linux use Ctrl+1..9.
 
 ### Solution
 
-1. **Added to protocol** (`base.py`):
+1. **Selected in the profile** (`presentation.py`):
    ```python
-   def bookmark_save_modifier(self) -> str:
-       """Return the modifier key name ('command' or 'control')."""
+   profile = select_presentation_profile(platform_name="darwin")
+   assert profile.bookmark_save_modifier == "command"
    ```
 
-2. **Implemented per-platform** (`macos.py`, `default.py`):
+2. **Selected per platform** (`presentation.py`):
    - macOS: Returns `"command"`
    - Windows/Linux: Returns `"control"`
 
 3. **Used in UI code** (`controls_overlay.py`):
    ```python
-   adapter = get_platform_adapter()
-   if adapter.bookmark_save_modifier() == "command":
+   profile = runtime.presentation_profile
+   if profile.bookmark_save_modifier == "command":
        rows.append(("Cmd + 1..9", "Save camera bookmark slot"))
    else:
        rows.append(("Ctrl + 1..9", "Save camera bookmark slot"))
@@ -420,12 +455,9 @@ For unit testing with mocked platforms:
 ```python
 from typing import Protocol
 
-class MockAdapter:
-    def bookmark_save_modifier(self) -> str:
-        return "command"  # Simulate macOS
-
-    def mouse_look_button_name(self) -> str:
-        return "right"
+profile = select_presentation_profile(platform_name="darwin")
+assert profile.bookmark_save_modifier == "command"
+assert profile.mouse_look_button_name == "right"
 
 # Inject mock in tests, then verify behavior
 ```
@@ -436,8 +468,8 @@ class MockAdapter:
 **When**: User-facing text that varies by platform (e.g., "Cmd+1" vs "Ctrl+1")
 
 **How**:
-1. For an existing presentation concern, query the injected runtime adapter
-   for the variable part (for example, `bookmark_save_modifier()`).
+1. Query the injected runtime profile for the variable part (for example,
+   `bookmark_save_modifier`).
 2. Build the full string in UI code without adding platform checks.
 
 ### Update Packages & Distribution Channels
@@ -514,8 +546,9 @@ startup compatibility path.
 **When**: Native UI elements (menus, fonts, dialogs) behave differently per-platform
 
 **How**:
-- `ui_font_family()` returns platform-appropriate font
-- `install_about_handler()` integrates with native About menu on macOS
+- `PresentationProfile.ui_font_family` supplies the platform-appropriate font
+- `PresentationActionsAdapter.install_about_handler()` integrates with the
+  native About menu on macOS
 
 ## Best Practices
 
@@ -529,8 +562,8 @@ startup compatibility path.
 
 ## Related Files
 
-- **`src/caveviewer/gui/controls_overlay.py`**: Uses `bookmark_save_modifier()` and `mouse_look_button_name()` to display platform-specific controls
-- **`src/caveviewer/gui/viewer_window.py`**: Uses adapters to bind keyboard/mouse events to platform-specific modifiers
+- **`src/caveviewer/gui/controls_overlay.py`**: Uses `PresentationProfile` to display platform-specific controls
+- **`src/caveviewer/gui/viewer_window.py`**: Uses the profile for keyboard/mouse conventions and the action facade for native focus
 - **`src/caveviewer/gui/update_manager.py`**: Owns update state, persistence, and package reveal
 - **`src/caveviewer/gui/splash_screen.py`**: Presents update state and platform action labels
 - **`docs/development/releases.md`**: Defines platform release artifacts, update manifest paths, and signing behavior

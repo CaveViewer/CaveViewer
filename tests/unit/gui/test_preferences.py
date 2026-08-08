@@ -930,7 +930,7 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
-    assert "resizable(False, _LAYOUT_POLICY.resizable_vertical)" in module_source
+    assert "resizable(False, self._layout_policy.resizable_vertical)" in module_source
 
 
 def test_preferences_invalid_field_switches_to_containing_page():

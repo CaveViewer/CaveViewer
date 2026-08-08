@@ -66,6 +66,8 @@ src/caveviewer/gui/                           Tk/OpenGL UI and platform adapters
 src/caveviewer/gui/cache_rebuild_controller.py splash-owned forced cache-rebuild lifecycle
 src/caveviewer/gui/features/                  pure feature availability policies and gates
 src/caveviewer/gui/platform/runtime.py        process-owned platform composition root
+src/caveviewer/gui/platform/presentation.py   immutable static GUI presentation profile
+src/caveviewer/gui/platform/presentation_actions.py focused native presentation-action facade
 src/caveviewer/gui/platform/directory_selection.py shared action-time directory-picker authorization
 src/caveviewer/gui/platform/update_package_reveal.py focused verified-package reveal facade
 src/caveviewer/gui/platform/update_package_storage.py focused verified-package storage facade
