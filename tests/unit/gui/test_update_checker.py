@@ -201,7 +201,7 @@ def test_fetch_url_bytes_uses_headers_timeout_and_ssl_context(monkeypatch):
     assert opened["context"] is ssl_context
 
 
-def test_download_update_uses_injected_tls_trust_adapter(monkeypatch, tmp_path):
+def test_legacy_download_update_uses_injected_tls_trust_adapter(monkeypatch, tmp_path):
     platform_adapter = FakePlatformAdapter()
     tls_trust_adapter = object()
     context = object()
@@ -234,7 +234,7 @@ def test_download_update_uses_injected_tls_trust_adapter(monkeypatch, tmp_path):
     )
     destination = tmp_path / "CaveViewer.zip"
 
-    update_checker.download_update(
+    update_checker.download_update_legacy(
         "https://updates.example/CaveViewer.zip",
         7,
         str(destination),
@@ -311,7 +311,7 @@ def test_download_update_with_runtime_target_bypasses_legacy_adapter(
     )
     destination = tmp_path / "CaveViewer.zip"
 
-    update_checker.download_update(
+    update_checker.download_update_target(
         "https://updates.example/CaveViewer.zip",
         7,
         str(destination),
@@ -328,6 +328,44 @@ def test_download_update_with_runtime_target_bypasses_legacy_adapter(
             "tls_trust_adapter": tls_trust_adapter,
             "platform_adapter": None,
         }
+    ]
+
+
+def test_download_update_compatibility_facade_forwards_typed_target(monkeypatch):
+    target = object()
+    tls_trust_adapter = object()
+    calls = []
+
+    def download_target(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(update_checker, "download_update_target", download_target)
+
+    update_checker.download_update(
+        "https://updates.example/CaveViewer.zip",
+        7,
+        "/tmp/CaveViewer.zip",
+        expected_sha256="expected",
+        update_target=target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert calls == [
+        (
+            (
+                "https://updates.example/CaveViewer.zip",
+                7,
+                "/tmp/CaveViewer.zip",
+            ),
+            {
+                "expected_sha256": "expected",
+                "progress_cb": None,
+                "cancel_cb": None,
+                "phase_cb": None,
+                "update_target": target,
+                "tls_trust_adapter": tls_trust_adapter,
+            },
+        )
     ]
 
 
@@ -590,7 +628,7 @@ def test_signature_check_accepts_valid_signature(monkeypatch):
     assert verified == [(b"manifest", b"sig")]
 
 
-def test_explicit_runtime_configuration_bypasses_legacy_update_globals(monkeypatch):
+def test_explicit_legacy_configuration_bypasses_module_update_globals(monkeypatch):
     adapter = FakePlatformAdapter()
     tls_trust_adapter = object()
     configuration = UpdateConfiguration(
@@ -622,7 +660,7 @@ def test_explicit_runtime_configuration_bypasses_legacy_update_globals(monkeypat
         lambda *_args, **_kwargs: True,
     )
 
-    result = update_checker.check_for_update(
+    result = update_checker.check_for_update_legacy(
         "1.0.0",
         configuration=configuration,
         platform_adapter=adapter,
@@ -666,7 +704,7 @@ def test_explicit_legacy_adapter_keeps_its_default_update_configuration(monkeypa
         ),
     )
 
-    result = update_checker.check_for_update(
+    result = update_checker.check_for_update_legacy(
         "1.0.0",
         platform_adapter=adapter,
         tls_trust_adapter=tls_trust_adapter,
@@ -718,7 +756,7 @@ def test_explicit_runtime_target_bypasses_legacy_adapter(monkeypatch):
         ),
     )
 
-    result = update_checker.check_for_update(
+    result = update_checker.check_for_update_target(
         "1.0.0",
         update_target=target,
         tls_trust_adapter=tls_trust_adapter,
@@ -733,3 +771,26 @@ def test_explicit_runtime_target_bypasses_legacy_adapter(monkeypatch):
             tls_trust_adapter,
         )
     ]
+
+
+def test_check_for_update_compatibility_facade_forwards_typed_target(monkeypatch):
+    target = object()
+    tls_trust_adapter = object()
+    expected = update_checker.UpdateCheckResult(
+        update_available=False,
+        current_version="1.0.0",
+    )
+    calls = []
+
+    def check_target(current_version, *, update_target, tls_trust_adapter):
+        calls.append((current_version, update_target, tls_trust_adapter))
+        return expected
+
+    monkeypatch.setattr(update_checker, "check_for_update_target", check_target)
+
+    assert update_checker.check_for_update(
+        "1.0.0",
+        update_target=target,
+        tls_trust_adapter=tls_trust_adapter,
+    ) is expected
+    assert calls == [("1.0.0", target, tls_trust_adapter)]

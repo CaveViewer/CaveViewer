@@ -299,6 +299,42 @@ def _first_optional_int(data: dict, keys: tuple[str, ...]) -> Optional[int]:
     return None
 
 
+def check_for_update_target(
+    current_version: str,
+    *,
+    update_target: UpdateTarget,
+    tls_trust_adapter: TlsTrustAdapter,
+) -> UpdateCheckResult:
+    """Check one runtime-composed update target without legacy configuration.
+
+    The process-owned runtime supplies both the immutable target and its
+    focused TLS adapter. This path never reads module globals or asks a broad
+    platform adapter to choose release policy.
+    """
+    def fetch_url_bytes(url: str, headers: dict[str, str], timeout: int) -> bytes:
+        return _fetch_url_bytes_for_adapter(
+            url,
+            headers=headers,
+            timeout=timeout,
+            tls_trust_adapter=tls_trust_adapter,
+        )
+
+    def verify_manifest_signature(manifest_bytes: bytes) -> bool:
+        return _verify_manifest_signature_required_with_target(
+            manifest_bytes,
+            update_target=update_target,
+            fetch_url_bytes=fetch_url_bytes,
+        )
+
+    return _check_for_update_target(
+        current_version,
+        update_target=update_target,
+        fetch_url_bytes=fetch_url_bytes,
+        verify_manifest_signature=verify_manifest_signature,
+        package_kind_for_url=detect_update_package_kind,
+    )
+
+
 def check_for_update(
     current_version: str,
     install_channel: Optional[str] = None,
@@ -308,44 +344,53 @@ def check_for_update(
     platform_adapter: SplashPlatformAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
 ) -> UpdateCheckResult:
-    """
-    Synchronous -- intended to be called from a button click (the
-    person already expects a brief pause for "checking..."), not from
-    inside a render loop. Returns a result dict-like object; never
-    raises -- every failure mode is captured in .error instead, so the
-    caller can show a calm "couldn't check for updates right now"
-    message rather than a stack trace.
+    """Compatibility facade for former adapter- and global-based callers.
 
-    New application code passes a process-owned ``UpdateTarget`` and TLS trust
-    adapter. Omitting it preserves the legacy public API while resolving
-    environment-derived settings lazily on first use.
+    New application code must use :func:`check_for_update_target` with the
+    target and TLS adapter composed by ``PlatformRuntime``. This wrapper keeps
+    the former API available while its callers migrate to the explicitly named
+    compatibility path below.
     """
     if update_target is not None:
-        if tls_trust_adapter is None:
-            fetch_url_bytes = _fetch_url_bytes
-        else:
-            def fetch_url_bytes(url: str, headers: dict[str, str], timeout: int) -> bytes:
-                return _fetch_url_bytes_for_adapter(
-                    url,
-                    headers=headers,
-                    timeout=timeout,
-                    tls_trust_adapter=tls_trust_adapter,
-                )
-
-        def verify_manifest_signature(manifest_bytes: bytes) -> bool:
-            return _verify_manifest_signature_required_with_target(
-                manifest_bytes,
-                update_target=update_target,
-                fetch_url_bytes=fetch_url_bytes,
+        if (
+            install_channel is not None
+            or configuration is not None
+            or platform_adapter is not None
+        ):
+            raise ValueError(
+                "update_target cannot be combined with legacy update configuration"
             )
-
-        return _check_for_update_target(
+        if tls_trust_adapter is None:
+            raise ValueError("update_target requires an explicit tls_trust_adapter")
+        return check_for_update_target(
             current_version,
             update_target=update_target,
-            fetch_url_bytes=fetch_url_bytes,
-            verify_manifest_signature=verify_manifest_signature,
-            package_kind_for_url=detect_update_package_kind,
+            tls_trust_adapter=tls_trust_adapter,
         )
+
+    return check_for_update_legacy(
+        current_version,
+        install_channel=install_channel,
+        configuration=configuration,
+        platform_adapter=platform_adapter,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+
+def check_for_update_legacy(
+    current_version: str,
+    install_channel: Optional[str] = None,
+    *,
+    configuration: UpdateConfiguration | None = None,
+    platform_adapter: SplashPlatformAdapter | None = None,
+    tls_trust_adapter: TlsTrustAdapter | None = None,
+) -> UpdateCheckResult:
+    """Preserve direct callers that still depend on adapter/global update setup.
+
+    This bridge is intentionally separate from the runtime-owned update path.
+    It may resolve legacy module globals and broad adapter behavior, but it
+    never supplies the feature decision used by ``UpdateManager``.
+    """
 
     legacy_call = (
         configuration is None
@@ -383,7 +428,7 @@ def check_for_update(
                 fetch_url_bytes=fetch_url_bytes,
             )
 
-    return _check_for_update(
+    return _check_for_update_legacy(
         current_version,
         install_channel=install_channel,
         configuration=resolved_configuration,
@@ -393,7 +438,7 @@ def check_for_update(
     )
 
 
-def _check_for_update(
+def _check_for_update_legacy(
     current_version: str,
     *,
     install_channel: Optional[str],
@@ -402,7 +447,7 @@ def _check_for_update(
     fetch_url_bytes: Callable[[str, dict[str, str], int], bytes],
     verify_manifest_signature: Callable[[bytes], bool],
 ) -> UpdateCheckResult:
-    """Perform a check against one explicit configuration and adapter."""
+    """Perform one compatibility check against an explicit adapter setup."""
     resolved_channel = (
         install_channel or platform_adapter.install_channel()
     ).strip().lower()
@@ -731,6 +776,33 @@ def _verify_manifest_signature_required_for_endpoint(
     return True
 
 
+def download_update_target(
+    download_url: str,
+    expected_size_bytes: int | None,
+    dest_path: str,
+    expected_sha256: Optional[str] = None,
+    progress_cb: Callable[[int, int | None], None] | None = None,
+    cancel_cb: Callable[[], bool] | None = None,
+    phase_cb: Callable[[str], None] | None = None,
+    *,
+    update_target: UpdateTarget,
+    tls_trust_adapter: TlsTrustAdapter,
+) -> None:
+    """Download through one runtime-composed target and TLS boundary."""
+    _download_update(
+        download_url,
+        expected_size_bytes,
+        dest_path,
+        expected_sha256=expected_sha256,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+        phase_cb=phase_cb,
+        user_agent=update_target.user_agent,
+        tls_trust_adapter=tls_trust_adapter,
+        platform_adapter=None,
+    )
+
+
 def download_update(
     download_url: str,
     expected_size_bytes: int | None,
@@ -743,6 +815,86 @@ def download_update(
     update_target: UpdateTarget | None = None,
     platform_adapter: SplashPlatformAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
+) -> None:
+    """Compatibility facade for former adapter- and global-based callers.
+
+    New application code must use :func:`download_update_target` with the
+    target and TLS adapter composed by ``PlatformRuntime``. This wrapper keeps
+    the former API available while its callers migrate to the explicitly named
+    compatibility path below.
+    """
+    if update_target is not None:
+        if platform_adapter is not None:
+            raise ValueError(
+                "update_target cannot be combined with a legacy platform_adapter"
+            )
+        if tls_trust_adapter is None:
+            raise ValueError("update_target requires an explicit tls_trust_adapter")
+        return download_update_target(
+            download_url,
+            expected_size_bytes,
+            dest_path,
+            expected_sha256=expected_sha256,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+            phase_cb=phase_cb,
+            update_target=update_target,
+            tls_trust_adapter=tls_trust_adapter,
+        )
+
+    return download_update_legacy(
+        download_url,
+        expected_size_bytes,
+        dest_path,
+        expected_sha256=expected_sha256,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+        phase_cb=phase_cb,
+        platform_adapter=platform_adapter,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+
+def download_update_legacy(
+    download_url: str,
+    expected_size_bytes: int | None,
+    dest_path: str,
+    expected_sha256: Optional[str] = None,
+    progress_cb: Callable[[int, int | None], None] | None = None,
+    cancel_cb: Callable[[], bool] | None = None,
+    phase_cb: Callable[[str], None] | None = None,
+    *,
+    platform_adapter: SplashPlatformAdapter | None = None,
+    tls_trust_adapter: TlsTrustAdapter | None = None,
+) -> None:
+    """Preserve direct downloads that still depend on adapter/global setup."""
+    active_platform_adapter = platform_adapter or _legacy_platform_adapter()
+    _download_update(
+        download_url,
+        expected_size_bytes,
+        dest_path,
+        expected_sha256=expected_sha256,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+        phase_cb=phase_cb,
+        user_agent=active_platform_adapter.update_check_user_agent(),
+        tls_trust_adapter=tls_trust_adapter,
+        platform_adapter=active_platform_adapter,
+    )
+
+
+def _download_update(
+    download_url: str,
+    expected_size_bytes: int | None,
+    dest_path: str,
+    expected_sha256: Optional[str] = None,
+    progress_cb: Callable[[int, int | None], None] | None = None,
+    cancel_cb: Callable[[], bool] | None = None,
+    phase_cb: Callable[[str], None] | None = None,
+    *,
+    user_agent: str,
+    tls_trust_adapter: TlsTrustAdapter | None,
+    platform_adapter: SplashPlatformAdapter | None,
 ) -> None:
     """
     Downloads the release payload to dest_path. Raises on any failure
@@ -762,12 +914,6 @@ def download_update(
     A later call always starts from byte zero; partial downloads are never
     retained for resuming.
     """
-    active_platform_adapter = None
-    if update_target is not None:
-        user_agent = update_target.user_agent
-    else:
-        active_platform_adapter = platform_adapter or _legacy_platform_adapter()
-        user_agent = active_platform_adapter.update_check_user_agent()
     request = urllib.request.Request(
         download_url,
         headers={"User-Agent": user_agent},
@@ -802,13 +948,13 @@ def download_update(
         if tls_trust_adapter is None:
             ssl_context = (
                 make_ssl_context()
-                if active_platform_adapter is None
-                else make_ssl_context(platform_adapter=active_platform_adapter)
+                if platform_adapter is None
+                else make_ssl_context(platform_adapter=platform_adapter)
             )
         else:
             ssl_context = make_ssl_context(
                 tls_trust_adapter=tls_trust_adapter,
-                platform_adapter=active_platform_adapter,
+                platform_adapter=platform_adapter,
             )
         with urllib.request.urlopen(request, timeout=30, context=ssl_context) as response:
             total = expected_size_bytes or int(response.headers.get("Content-Length", 0)) or None
