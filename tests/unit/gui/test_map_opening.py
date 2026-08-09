@@ -202,6 +202,37 @@ def test_resolve_selected_map_folder_enforces_source_format_policy(monkeypatch, 
         map_opening.resolve_selected_map_folder(str(source_dir))
 
 
+def test_map_source_import_preflight_pairs_the_descriptor_capability_and_decision():
+    descriptor = {"format": "glb", "glb_path": "/maps/cave.glb"}
+
+    preflight = map_opening.map_source_import_preflight(descriptor)
+
+    assert preflight.capability.value is map_opening.source_model.GLB_SOURCE_FORMAT
+    assert preflight.decision.feature is FeatureId.MAP_SOURCE_IMPORT
+    assert preflight.decision.state is FeatureState.ENABLED
+    assert preflight.decision.route == "glb"
+
+
+def test_map_source_import_preflight_rejects_route_format_disagreement():
+    capability = CapabilityResult.available(
+        map_opening.source_model.GLB_SOURCE_FORMAT,
+        reason_code="map_source_format_available",
+    )
+    decision = FeatureDecision(
+        feature=FeatureId.MAP_SOURCE_IMPORT,
+        state=FeatureState.ENABLED,
+        reason_code="map_source_import_available",
+        explanation="GLB map import is available.",
+        route="obj",
+    )
+
+    with pytest.raises(ValueError, match="must match its source format"):
+        map_opening.MapSourceImportPreflight(
+            capability=capability,
+            decision=decision,
+        )
+
+
 def test_resolve_selected_map_folder_returns_prebuilt_cache(monkeypatch, tmp_path):
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
