@@ -7,7 +7,7 @@ import os
 from typing import TYPE_CHECKING, Any, Mapping
 
 from caveviewer.core.chunking import builder as chunker
-from caveviewer.core.capabilities import CapabilityResult, CapabilityStatus
+from caveviewer.core.capabilities import CapabilityResult
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.map import source_model
 from caveviewer.gui.features import (
@@ -15,6 +15,7 @@ from caveviewer.gui.features import (
     FeatureId,
     decide_map_source_import,
 )
+from caveviewer.gui.features.preflight import validate_route_preflight
 from caveviewer.gui.platform import (
     DesktopServices,
     get_desktop_services,
@@ -65,26 +66,15 @@ class MapSourceImportPreflight:
     decision: FeatureDecision
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.MAP_SOURCE_IMPORT:
-            raise ValueError(
-                "map-source-import preflight must contain a map-source-import "
-                "decision"
-            )
-        if not self.decision.allows_execution:
-            return
-        source_format = self.capability.value
-        if (
-            self.capability.status is not CapabilityStatus.AVAILABLE
-            or not isinstance(source_format, source_model.SourceFormat)
-        ):
-            raise ValueError(
-                "executable map-source-import preflight requires an available "
-                "source format"
-            )
-        if self.decision.route != source_format.id.value:
-            raise ValueError(
-                "map-source-import decision route must match its source format"
-            )
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.MAP_SOURCE_IMPORT,
+            target_type=source_model.SourceFormat,
+            route_for_target=lambda source_format: source_format.id.value,
+            feature_label="map-source-import",
+            target_label="source format",
+        )
 
 
 def pick_folder_dialog(
