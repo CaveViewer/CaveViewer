@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.capabilities import CapabilityResult, CapabilityStatus
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.map import source_model
 from caveviewer.gui.features import (
     FeatureDecision,
+    FeatureId,
     decide_map_source_import,
 )
 from caveviewer.gui.platform import (
@@ -47,6 +49,42 @@ class OpenMapTarget:
     def is_prebuilt_cache(self) -> bool:
         """Return whether this target is an already-built chunk cache."""
         return self.cache_dir is not None
+
+
+@dataclass(frozen=True, slots=True)
+class MapSourceImportPreflight:
+    """One selected source-format fact paired with its import decision.
+
+    A descriptor is mutable action-time input, so the preflight keeps the
+    capability fact and policy decision together until map-opening accepts it.
+    An executable decision must name exactly the route declared by the
+    canonical source-format registry.
+    """
+
+    capability: CapabilityResult[source_model.SourceFormat]
+    decision: FeatureDecision
+
+    def __post_init__(self) -> None:
+        if self.decision.feature is not FeatureId.MAP_SOURCE_IMPORT:
+            raise ValueError(
+                "map-source-import preflight must contain a map-source-import "
+                "decision"
+            )
+        if not self.decision.allows_execution:
+            return
+        source_format = self.capability.value
+        if (
+            self.capability.status is not CapabilityStatus.AVAILABLE
+            or not isinstance(source_format, source_model.SourceFormat)
+        ):
+            raise ValueError(
+                "executable map-source-import preflight requires an available "
+                "source format"
+            )
+        if self.decision.route != source_format.id.value:
+            raise ValueError(
+                "map-source-import decision route must match its source format"
+            )
 
 
 def pick_folder_dialog(
@@ -95,9 +133,9 @@ def resolve_selected_map_folder(folder: str) -> OpenMapTarget:
     except FileNotFoundError as exc:
         return _resolve_prebuilt_cache(normalized, exc)
 
-    source_import_decision = map_source_import_decision(model_descriptor)
-    if not source_import_decision.allows_execution:
-        raise FileNotFoundError(source_import_decision.explanation)
+    source_import_preflight = map_source_import_preflight(model_descriptor)
+    if not source_import_preflight.decision.allows_execution:
+        raise FileNotFoundError(source_import_preflight.decision.explanation)
 
     source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
     map_name = os.path.basename(str(source_path or normalized))
@@ -110,10 +148,25 @@ def resolve_selected_map_folder(folder: str) -> OpenMapTarget:
 
 
 def map_source_import_decision(
-    model_descriptor: dict[str, Any],
+    model_descriptor: Mapping[str, Any],
 ) -> FeatureDecision:
-    """Evaluate the action-time gate for one already-discovered map descriptor."""
-    return decide_map_source_import(source_model.probe_model_descriptor(model_descriptor))
+    """Return the compatibility decision for one already-discovered descriptor."""
+    return map_source_import_preflight(model_descriptor).decision
+
+
+def map_source_import_preflight(
+    model_descriptor: Mapping[str, Any],
+) -> MapSourceImportPreflight:
+    """Pair one descriptor's source-format fact with its import policy.
+
+    This is evaluated immediately before the GUI accepts a discovered source
+    map. It does not parse source files or perform an import.
+    """
+    capability = source_model.probe_model_descriptor(model_descriptor)
+    return MapSourceImportPreflight(
+        capability=capability,
+        decision=decide_map_source_import(capability),
+    )
 
 
 def _resolve_prebuilt_cache(folder: str, no_model_error: FileNotFoundError) -> OpenMapTarget:
