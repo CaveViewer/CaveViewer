@@ -23,6 +23,7 @@ def validate_route_preflight(
     route_for_target: Callable[[Target], str],
     feature_label: str,
     target_label: str = "typed target",
+    decision_label: str | None = None,
 ) -> None:
     """Validate the invariant shared by executable action-time preflights.
 
@@ -32,8 +33,10 @@ def validate_route_preflight(
     target because they authorize no route.
     """
     if decision.feature is not expected_feature:
+        expected_decision_label = decision_label or feature_label
         raise ValueError(
-            f"{feature_label} preflight must contain a {feature_label} decision"
+            f"{feature_label} preflight must contain a {expected_decision_label} "
+            "decision"
         )
     if not decision.allows_execution:
         return

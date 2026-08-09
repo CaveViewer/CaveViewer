@@ -459,7 +459,10 @@ then injected into every interactive viewer path, including a direct CLI map
 launch. A mutable action prerequisite, such as an ffmpeg path or a writable
 recording folder, uses an on-demand preflight instead of a cached startup gate.
 The preflight pairs one fresh capability result with the policy decision
-derived from that same snapshot.
+derived from that same snapshot. Every executable typed preflight validates
+that its decision names the expected feature and the route declared by its
+available target; shared validation lives in `gui.features.preflight` so
+action boundaries fail closed on a malformed or mismatched pair.
 
 Static GUI presentation uses a parallel, deliberately non-capability path:
 

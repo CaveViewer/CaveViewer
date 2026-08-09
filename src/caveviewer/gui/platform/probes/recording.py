@@ -26,6 +26,11 @@ class VideoRecordingTarget:
     ffmpeg_path: str
     output_directory: str
 
+    @property
+    def route_key(self) -> str:
+        """Return the only encoder route this target authorizes."""
+        return "ffmpeg"
+
 
 def _recording_configuration_source(environment: Mapping[str, str]) -> CapabilitySource:
     """Identify whether an explicit recording environment setting was supplied."""

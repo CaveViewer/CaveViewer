@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
+
+import pytest
 
 from caveviewer.core.capabilities import CapabilityStatus
 from caveviewer.gui import guided_dive_playback
@@ -134,6 +137,15 @@ def test_playback_preflight_accepts_a_map_local_matching_cache(tmp_path, monkeyp
     assert preflight.capability.value.trace.path == trace_path.resolve()
     assert preflight.capability.value.source_path == source.resolve()
     assert preflight.capability.value.cache_dir == cache_dir.resolve()
+
+    with pytest.raises(
+        ValueError,
+        match="must match its Guided Dive playback target",
+    ):
+        guided_dive_playback.GuidedDivePlaybackPreflight(
+            capability=preflight.capability,
+            decision=replace(preflight.decision, route="unexpected"),
+        )
 
 
 def test_playback_preflight_rejects_an_invalid_selected_trace(tmp_path):

@@ -22,6 +22,7 @@ from caveviewer.gui.features import (
     FeatureId,
     decide_guided_dive_playback,
 )
+from caveviewer.gui.features.preflight import validate_route_preflight
 from caveviewer.gui.manual_dive_trace import (
     MANUAL_DIVE_TRACE_DIRECTORY,
     manual_dive_trace_directory,
@@ -46,6 +47,11 @@ class GuidedDivePlaybackTarget:
     source_path: Path
     cache_dir: Path
 
+    @property
+    def route_key(self) -> str:
+        """Return the only playback route this validated target authorizes."""
+        return "map_local_trace"
+
 
 @dataclass(frozen=True, slots=True)
 class GuidedDivePlaybackPreflight:
@@ -55,10 +61,16 @@ class GuidedDivePlaybackPreflight:
     decision: FeatureDecision
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.GUIDED_DIVE_PLAYBACK:
-            raise ValueError(
-                "Guided Dive preflight must contain a Guided Dive playback decision"
-            )
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.GUIDED_DIVE_PLAYBACK,
+            target_type=GuidedDivePlaybackTarget,
+            route_for_target=lambda target: target.route_key,
+            feature_label="Guided Dive",
+            target_label="Guided Dive playback target",
+            decision_label="Guided Dive playback",
+        )
 
 
 def guided_dive_trace_directory(

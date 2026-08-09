@@ -70,6 +70,25 @@ def test_route_preflight_rejects_a_different_feature():
         )
 
 
+def test_route_preflight_can_preserve_a_specific_decision_label():
+    with pytest.raises(
+        ValueError,
+        match="demo preflight must contain a named decision",
+    ):
+        validate_route_preflight(
+            capability=CapabilityResult.available(
+                _Target("demo-route"),
+                reason_code="available",
+            ),
+            decision=_decision(feature=FeatureId.FILE_SELECTION),
+            expected_feature=FeatureId.DIRECTORY_SELECTION,
+            target_type=_Target,
+            route_for_target=lambda target: target.route_key,
+            feature_label="demo",
+            decision_label="named",
+        )
+
+
 def test_route_preflight_rejects_an_executable_decision_without_a_target():
     with pytest.raises(ValueError, match="requires an available typed target"):
         _validate(

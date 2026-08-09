@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from caveviewer.core.capabilities import CapabilityStatus
 from caveviewer.core.chunking import builder as chunker
@@ -35,6 +38,12 @@ def test_preflight_allows_build_over_an_existing_stale_generated_cache(tmp_path)
     assert preflight.capability.value.source_path == source
     assert preflight.capability.value.textures_dir == map_dir
     assert preflight.capability.value.operation == "build"
+
+    with pytest.raises(ValueError, match="must match its cache rebuild target"):
+        map_cache_rebuild.CacheRebuildPreflight(
+            capability=preflight.capability,
+            decision=replace(preflight.decision, route="unexpected"),
+        )
 
 
 def test_preflight_allows_build_when_no_generated_cache_exists(tmp_path):
