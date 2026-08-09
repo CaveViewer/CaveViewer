@@ -32,7 +32,6 @@ import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
 from caveviewer.core.chunking import builder as chunker
-from caveviewer.core.capabilities import CapabilityResult
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
@@ -64,7 +63,6 @@ from caveviewer.gui import view_culling
 from caveviewer.gui import viewer_input
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
-from caveviewer.gui.features import decide_video_recording
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.presentation import (
     PresentationProfile,
@@ -74,10 +72,7 @@ from caveviewer.gui.platform.presentation_actions import (
     PresentationActionsAdapter,
     create_presentation_actions_adapter,
 )
-from caveviewer.gui.platform.probes.recording import (
-    VideoRecordingTarget,
-    probe_video_recording,
-)
+from caveviewer.gui.platform.probes.recording import VideoRecordingTarget
 from caveviewer.gui.platform.saved_recording_reveal import (
     SavedRecordingRevealAdapter,
     create_saved_recording_reveal_adapter,
@@ -86,6 +81,7 @@ from caveviewer.gui.platform.recording_process import (
     RecordingProcessAdapter,
     create_recording_process_adapter,
 )
+from caveviewer.gui.platform.recording_preflight import video_recording_preflight
 from caveviewer.gui.platform.desktop_inhibition import (
     acquire_idle_suspend_inhibitor,
     release_desktop_inhibitor,
@@ -104,7 +100,7 @@ from caveviewer.resources import image_path, resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
 
 if TYPE_CHECKING:
-    from caveviewer.gui.platform.runtime import PlatformRuntime
+    from caveviewer.gui.platform.runtime import PlatformRuntime, VideoRecordingPreflight
 
 _LOG = get_logger("CaveViewer")
 
@@ -2127,32 +2123,19 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _resolve_ffmpeg_path(self) -> str | None:
         return recording.resolve_ffmpeg_path()
 
-    def _recording_capability(self) -> CapabilityResult[VideoRecordingTarget]:
-        """Probe recording prerequisites through the injected runtime when present."""
-        runtime = getattr(self, "_platform_runtime", None)
-        if runtime is not None:
-            return runtime.video_recording_capability(
-                self._recording_output_dir,
-                ffmpeg_resolver=self._resolve_ffmpeg_path,
-            )
-        return probe_video_recording(
+    def _recording_preflight(self) -> VideoRecordingPreflight:
+        """Return one fresh recording probe paired with its policy decision."""
+        return video_recording_preflight(
             self._recording_output_dir,
             ffmpeg_resolver=self._resolve_ffmpeg_path,
+            platform_runtime=getattr(self, "_platform_runtime", None),
         )
 
     def _recording_target_if_available(self) -> VideoRecordingTarget | None:
         """Return a freshly-probed ffmpeg target or show the policy explanation."""
-        runtime = getattr(self, "_platform_runtime", None)
-        if runtime is not None:
-            preflight = runtime.video_recording_preflight(
-                self._recording_output_dir,
-                ffmpeg_resolver=self._resolve_ffmpeg_path,
-            )
-            capability = preflight.capability
-            decision = preflight.decision
-        else:
-            capability = self._recording_capability()
-            decision = decide_video_recording(capability)
+        preflight = self._recording_preflight()
+        capability = preflight.capability
+        decision = preflight.decision
         if not decision.allows_execution or capability.value is None:
             self._recording_unavailable(decision.explanation)
             return None

@@ -21,12 +21,17 @@ from caveviewer.core.capabilities import (
 )
 from caveviewer.core.map import cache_paths
 from caveviewer.gui import recording, viewer_window
-from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
+from caveviewer.gui.features import (
+    FeatureDecision,
+    FeatureId,
+    FeatureState,
+    decide_video_recording,
+)
 from caveviewer.gui.manual_dive_trace import ManualDivePose, ManualDiveTraceResult
 from caveviewer.gui.platform.app_identity import tk_root_options
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.presentation import select_presentation_profile
-from caveviewer.gui.platform.runtime import ViewerLaunchPreflight
+from caveviewer.gui.platform.runtime import VideoRecordingPreflight, ViewerLaunchPreflight
 from caveviewer.gui.platform.viewer_launch import ViewerLaunchError
 
 
@@ -281,37 +286,66 @@ def test_viewer_uses_injected_recording_process_adapter_before_legacy_factory(
     assert window._active_recording_process_adapter() is adapter
 
 
-def test_recording_target_uses_one_injected_runtime_preflight(monkeypatch):
+def test_recording_target_uses_shared_preflight_with_injected_runtime(monkeypatch):
     target = viewer_window.VideoRecordingTarget("/usr/bin/ffmpeg", "/recordings")
-    capability = viewer_window.CapabilityResult.available(
+    capability = CapabilityResult.available(
         target,
         reason_code="video_recording_target_available",
     )
-    preflight = SimpleNamespace(
+    preflight = VideoRecordingPreflight(
         capability=capability,
-        decision=viewer_window.decide_video_recording(capability),
+        decision=decide_video_recording(capability),
     )
     calls = []
+    runtime_instance = object()
 
-    def video_recording_preflight(output_directory, *, ffmpeg_resolver=None):
-        calls.append((output_directory, ffmpeg_resolver))
+    def preflight_factory(
+        output_directory,
+        *,
+        ffmpeg_resolver=None,
+        platform_runtime=None,
+    ):
+        calls.append((output_directory, ffmpeg_resolver, platform_runtime))
         return preflight
 
     window = _recording_window()
-    window._platform_runtime = SimpleNamespace(
-        video_recording_preflight=video_recording_preflight
-    )
-    monkeypatch.setattr(
-        viewer_window,
-        "probe_video_recording",
-        lambda *_args, **_kwargs: pytest.fail(
-            "runtime recording preflight must replace the direct probe"
-        ),
-    )
+    window._platform_runtime = runtime_instance
+    monkeypatch.setattr(viewer_window, "video_recording_preflight", preflight_factory)
 
     assert window._recording_target_if_available() is target
     assert calls[0][0] == "/tmp"
     assert calls[0][1] is not None
+    assert calls[0][2] is runtime_instance
+
+
+def test_recording_target_uses_shared_preflight_without_runtime(monkeypatch):
+    target = viewer_window.VideoRecordingTarget("/usr/bin/ffmpeg", "/recordings")
+    capability = CapabilityResult.available(
+        target,
+        reason_code="video_recording_target_available",
+    )
+    preflight = VideoRecordingPreflight(
+        capability=capability,
+        decision=decide_video_recording(capability),
+    )
+    calls = []
+
+    def preflight_factory(
+        output_directory,
+        *,
+        ffmpeg_resolver=None,
+        platform_runtime=None,
+    ):
+        calls.append((output_directory, ffmpeg_resolver, platform_runtime))
+        return preflight
+
+    window = _recording_window()
+    monkeypatch.setattr(viewer_window, "video_recording_preflight", preflight_factory)
+
+    assert window._recording_target_if_available() is target
+    assert calls[0][0] == "/tmp"
+    assert calls[0][1] is not None
+    assert calls[0][2] is None
 
 
 def test_map_import_inhibitor_uses_the_runtime_desktop_service():
@@ -1364,20 +1398,31 @@ def test_start_recording_encoder_rechecks_gate_before_starting_ffmpeg(monkeypatc
         def buffer(self, *, reserve):
             return FakeBuffer()
 
-    available = viewer_window.CapabilityResult.available(
+    available = CapabilityResult.available(
         viewer_window.VideoRecordingTarget("/usr/bin/ffmpeg", "/recordings"),
         reason_code="video_recording_target_available",
     )
-    unavailable = viewer_window.CapabilityResult.unavailable(
+    unavailable = CapabilityResult.unavailable(
         reason_code="video_recording_output_directory_unavailable",
     )
-    capabilities = iter((available, unavailable))
+    preflights = iter(
+        (
+            VideoRecordingPreflight(
+                capability=available,
+                decision=decide_video_recording(available),
+            ),
+            VideoRecordingPreflight(
+                capability=unavailable,
+                decision=decide_video_recording(unavailable),
+            ),
+        )
+    )
     window = _recording_window()
     window.ctx = FakeCtx()
     window._recording_max_height = 1080
     window._recording_fps = 30
     window._recording_crf = 23
-    window._recording_capability = lambda: next(capabilities)
+    window._recording_preflight = lambda: next(preflights)
     monkeypatch.setattr(
         recording,
         "start_encoder_session",
