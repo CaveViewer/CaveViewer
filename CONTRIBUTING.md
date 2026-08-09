@@ -31,6 +31,29 @@ than system memory.
 - Run `git diff --check` and review the complete diff before submitting.
 - Update documentation and screenshots when user-visible behavior changes.
 
+## Pull requests and `main`
+
+[`main` is protected by the `protect-main` GitHub ruleset](https://github.com/CaveViewer/CaveViewer/rules/19104787).
+Do not push directly to it: every change must be submitted through a pull
+request.
+
+Before a pull request can merge, its latest commit must pass all of the
+following GitHub Actions checks:
+
+- `Syntax, import, and whitespace sanity`
+- `Coverage and Linux metadata`
+- `CLI smoke (Windows)`
+- `CLI smoke (macOS)`
+- `CLI smoke (Linux)`
+- `Unit tests (macOS)`
+- `Unit tests (Windows)`
+- `Unit tests (Linux)`
+
+The pull request must be current with `main`; passing checks on an older base
+commit are not sufficient. The ruleset also blocks branch deletion and force
+pushes. An approving review is not currently required, but the pull request
+and all required checks are.
+
 ## Release contributions
 
 Read the canonical [release guide](docs/development/releases.md) before changing
