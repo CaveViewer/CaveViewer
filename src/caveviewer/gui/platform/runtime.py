@@ -102,8 +102,16 @@ class VideoRecordingPreflight:
     decision: FeatureDecision
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.VIDEO_RECORDING:
-            raise ValueError("recording preflight must contain a video-recording decision")
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.VIDEO_RECORDING,
+            target_type=VideoRecordingTarget,
+            route_for_target=lambda target: target.route_key,
+            feature_label="recording",
+            target_label="recording target",
+            decision_label="video-recording",
+        )
 
 
 @dataclass(frozen=True, slots=True)

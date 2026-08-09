@@ -335,6 +335,12 @@ def test_runtime_keeps_video_recording_probe_on_demand(monkeypatch):
     assert preflight.decision.state is FeatureState.ENABLED
     assert preflight.decision.route == "ffmpeg"
 
+    with pytest.raises(ValueError, match="must match its recording target"):
+        runtime.VideoRecordingPreflight(
+            capability=preflight.capability,
+            decision=replace(preflight.decision, route="unexpected"),
+        )
+
 
 def test_runtime_keeps_directory_selection_probe_on_demand(monkeypatch):
     calls = []

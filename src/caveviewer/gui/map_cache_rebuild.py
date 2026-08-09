@@ -25,6 +25,7 @@ from caveviewer.gui.features import (
     FeatureId,
     decide_map_library_cache_rebuild,
 )
+from caveviewer.gui.features.preflight import validate_route_preflight
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,11 @@ class CacheRebuildTarget:
             raise ValueError("cache rebuild target is missing a source path")
         return Path(source)
 
+    @property
+    def route_key(self) -> str:
+        """Return the shared child-import route for builds and rebuilds."""
+        return "forced_import"
+
 
 @dataclass(frozen=True, slots=True)
 class CacheRebuildPreflight:
@@ -66,10 +72,16 @@ class CacheRebuildPreflight:
     resumable_import: ResumableObjImport | None = None
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.MAP_LIBRARY_CACHE_REBUILD:
-            raise ValueError(
-                "cache rebuild preflight must contain a Map Library rebuild decision"
-            )
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.MAP_LIBRARY_CACHE_REBUILD,
+            target_type=CacheRebuildTarget,
+            route_for_target=lambda target: target.route_key,
+            feature_label="cache rebuild",
+            target_label="cache rebuild target",
+            decision_label="Map Library rebuild",
+        )
 
 
 def _path_exists_without_following(path: Path) -> bool:
