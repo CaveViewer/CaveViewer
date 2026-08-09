@@ -93,6 +93,7 @@ src/caveviewer/gui/preferences_dialog.py      Tk preference dialog presentation
 src/caveviewer/gui/recording.py               recording encoder process/thread helpers
 src/caveviewer/gui/recording_controller.py    recording countdown/status/timing state
 src/caveviewer/gui/recording_capture.py       render-thread recording readback resources
+src/caveviewer/gui/manual_dive_trace_controller.py manual trace countdown/reveal state
 src/caveviewer/gui/benchmark.py               compatibility wrapper for benchmark results
 src/caveviewer/gui/benchmark_routes.py        compatibility wrapper for benchmark route generation
 src/caveviewer/gui/chunk_upload.py            render-thread chunk upload state and cleanup

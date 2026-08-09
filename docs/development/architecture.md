@@ -165,9 +165,10 @@ viewer diagnostics. The former autonomous-controller JSONL blackbox and its
 cache-local writer were removed with the controller.
 
 An explicit `Cmd/Ctrl+T` manual route trace is a separate diagnostic surface.
-It samples the render-thread camera pose after movement, sends JSONL records
-through a bounded queue to one background writer, and marks bookmark/minimap
-teleports as discontinuities instead of counting them as flown distance.
+The same shortcut first shows a render-thread 3-2-1 countdown, then begins
+sampling the camera pose after movement. It sends JSONL records through a
+bounded queue to one background writer and marks bookmark/minimap teleports as
+discontinuities instead of counting them as flown distance.
 Completed traces live under the map-local `_guided_dives` directory. Their
 location is anchored to the map root rather than the generated-cache location,
 so atomic cache replacement and managed-cache storage do not erase the
@@ -175,7 +176,7 @@ reference flight. They remain optional ground truth: cache construction and
 offline certificate route selection never consume them as required map
 metadata.
 Once the background writer atomically publishes a completed trace, the viewer
-shows a transient success status and asks the runtime's
+shows a three-second success status before asking the runtime's
 `SavedRecordingRevealAdapter` to reveal that final JSONL file. Reveal is
 best-effort and cannot change the completed trace result.
 
@@ -738,6 +739,9 @@ writer/stderr workers, and asynchronous stop finalization.
 `gui.recording_controller` owns recording countdowns, transient status messages,
 capture timing, and dropped-frame accounting so those workflow decisions remain
 testable without constructing an OpenGL window.
+`gui.manual_dive_trace_controller` similarly owns manual-trace countdown and
+post-save reveal timing; `gui.manual_dive_trace` remains the background JSONL
+writer and capture model.
 
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL

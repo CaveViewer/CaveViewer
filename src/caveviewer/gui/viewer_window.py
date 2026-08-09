@@ -57,6 +57,7 @@ from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import manual_dive_trace
+from caveviewer.gui.manual_dive_trace_controller import ManualDiveTraceStateController
 from caveviewer.gui import recorded_dive
 from caveviewer.gui import render_upload
 from caveviewer.gui import view_culling
@@ -638,6 +639,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
     RIGHT_COLUMN_PANEL_BORDER_PX = 1.5
     RECORDING_COUNTDOWN_START_NUMBER = 3
+    MANUAL_DIVE_TRACE_COUNTDOWN_START_NUMBER = 3
+    MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS = 3.0
     RECORDING_READBACK_BUFFER_COUNT = 3
     RECORDING_READBACK_COMPONENTS = 3
     RECORDING_RAW_PIX_FMT = "rgb24"
@@ -809,6 +812,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._manual_dive_trace_writers: list[
             manual_dive_trace.ManualDiveTraceRecorder
         ] = []
+        self._manual_dive_trace_controller = ManualDiveTraceStateController()
         self._pending_recorded_dive_trace = (
             CaveViewerWindow.cave_recorded_dive_trace
         )
@@ -1193,6 +1197,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         if controller is None:
             controller = RecordingStateController()
             self.__dict__["_recording_controller"] = controller
+        return controller
+
+    def _ensure_manual_dive_trace_controller(self) -> ManualDiveTraceStateController:
+        controller = self.__dict__.get("_manual_dive_trace_controller")
+        if controller is None:
+            controller = ManualDiveTraceStateController()
+            self.__dict__["_manual_dive_trace_controller"] = controller
         return controller
 
     def _ensure_recording_capture(self) -> RecordingCaptureResources:
@@ -2336,13 +2347,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         *,
         kind: str = "info",
         duration: float = 2.8,
+        now: float | None = None,
     ) -> None:
         self._ensure_recording_controller().show_status(
             message,
             detail=detail,
             kind=kind,
             duration=duration,
-            now=time.perf_counter(),
+            now=time.perf_counter() if now is None else now,
         )
 
     def _stop_recording(self, *, show_message: bool = False) -> None:
@@ -2565,12 +2577,27 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._stop_recording(show_message=True)
             return read_ms
 
-    def _recording_countdown_display(self, now: float) -> tuple[int, float]:
-        display = self._ensure_recording_controller().countdown_display(
+    def _render_countdown_overlay(
+        self,
+        *,
+        now: float,
+        controller: RecordingStateController | ManualDiveTraceStateController,
+        start_number: int,
+    ) -> None:
+        """Render the shared numeric countdown used before capture begins."""
+        display = controller.countdown_display(
             now=now,
-            start_number=self.RECORDING_COUNTDOWN_START_NUMBER,
+            start_number=start_number,
         )
-        return display.number, display.progress
+        self._render_recording_countdown_scrim(self.wnd.size)
+        self.import_progress_panel.draw_countdown_number(
+            center_x=self.wnd.size[0] / 2.0,
+            center_y=self.wnd.size[1] / 2.0,
+            window_size=self.wnd.size,
+            number=display.number,
+            progress=display.progress,
+            fixed_text_scale=self.UI_TEXT_SCALE,
+        )
 
     def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
         """Print a one-time texture summary to console on map load."""
@@ -2829,10 +2856,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if getattr(self, "_manual_dive_trace", None) is not None:
             self._render_dive_status_prompt(
                 window_size,
-                title="Manual route trace active",
+                title="Dive trace active",
                 note=(
                     "Fly the reference route, then press "
-                    f"{self._primary_shortcut_label()} + T to save."
+                    f"{self._primary_shortcut_label()} + T to stop and save."
                 ),
             )
 
@@ -5503,15 +5530,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self._recording_hides_hud():
             now = time.perf_counter()
             if self._recording_countdown_until is not None and now < self._recording_countdown_until:
-                countdown_number, countdown_progress = self._recording_countdown_display(now)
-                self._render_recording_countdown_scrim(self.wnd.size)
-                self.import_progress_panel.draw_countdown_number(
-                    center_x=self.wnd.size[0] / 2.0,
-                    center_y=self.wnd.size[1] / 2.0,
-                    window_size=self.wnd.size,
-                    number=countdown_number,
-                    progress=countdown_progress,
-                    fixed_text_scale=self.UI_TEXT_SCALE,
+                self._render_countdown_overlay(
+                    now=now,
+                    controller=self._ensure_recording_controller(),
+                    start_number=self.RECORDING_COUNTDOWN_START_NUMBER,
                 )
             else:
                 recording_read_ms = self._recording_update_after_scene(
@@ -5520,6 +5542,14 @@ class CaveViewerWindow(mglw.WindowConfig):
                 )
                 recording_stage_ms = self._recording_last_stage_ms
                 recording_drain_ms = self._recording_last_drain_ms
+            overlay_ms = 0.0
+        elif self._ensure_manual_dive_trace_controller().countdown_active:
+            now = time.perf_counter()
+            self._render_countdown_overlay(
+                now=now,
+                controller=self._ensure_manual_dive_trace_controller(),
+                start_number=self.MANUAL_DIVE_TRACE_COUNTDOWN_START_NUMBER,
+            )
             overlay_ms = 0.0
         else:
             # Overlay HUD elements draw last, on top of the 3D scene, each with
@@ -5798,6 +5828,35 @@ class CaveViewerWindow(mglw.WindowConfig):
         except (AttributeError, TypeError, ValueError):
             return None
 
+    def _start_manual_dive_trace_countdown(self) -> bool:
+        """Arm a visible countdown before collecting a manual dive trace."""
+        if (
+            not self._has_map_loaded
+            or getattr(self, "_manual_dive_trace", None) is not None
+        ):
+            return False
+        controller = self._ensure_manual_dive_trace_controller()
+        if controller.countdown_active:
+            return False
+
+        color_picker = getattr(self, "color_picker", None)
+        if color_picker is not None:
+            color_picker.hide()
+        controls_overlay = getattr(self, "controls_overlay", None)
+        if controls_overlay is not None and controls_overlay.is_manual_mode:
+            controls_overlay.hide_help()
+
+        now = time.perf_counter()
+        controller.start_countdown(
+            now=now,
+            start_number=self.MANUAL_DIVE_TRACE_COUNTDOWN_START_NUMBER,
+        )
+        _LOG.info(
+            "Manual Guided Dive trace countdown started. Press %s+T to cancel.",
+            self._primary_shortcut_label(),
+        )
+        return True
+
     def _start_manual_dive_trace(self) -> bool:
         if (
             not self._has_map_loaded
@@ -5834,6 +5893,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         return True
 
     def _stop_manual_dive_trace(self, *, reason: str) -> bool:
+        self._ensure_manual_dive_trace_controller().clear_countdown()
         recorder = getattr(self, "_manual_dive_trace", None)
         if recorder is None:
             return False
@@ -5852,14 +5912,46 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._manual_dive_trace_writers = writers
         writers.append(recorder)
         _LOG.info("Manual Guided Dive trace is saving: %s", output_path)
+        if reason == "user_stopped":
+            self._show_recording_status(
+                "Saving dive trace…",
+                kind="info",
+                duration=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
+            )
         return True
 
     def _toggle_manual_dive_trace(self) -> bool:
         if getattr(self, "_manual_dive_trace", None) is not None:
             return self._stop_manual_dive_trace(reason="user_stopped")
-        return self._start_manual_dive_trace()
+        controller = self._ensure_manual_dive_trace_controller()
+        if controller.countdown_active:
+            controller.clear_countdown()
+            now = time.perf_counter()
+            self._show_recording_status(
+                "Dive trace canceled",
+                kind="cancel",
+                duration=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
+                now=now,
+            )
+            _LOG.info("Manual Guided Dive trace countdown canceled.")
+            return True
+        return self._start_manual_dive_trace_countdown()
 
-    def _update_manual_dive_trace(self) -> None:
+    def _update_manual_dive_trace(self, *, now: float | None = None) -> None:
+        """Advance countdown, trace writer completion, and delayed file reveal."""
+        now = time.perf_counter() if now is None else now
+        controller = self._ensure_manual_dive_trace_controller()
+        if controller.countdown_ready(now=now):
+            controller.clear_countdown()
+            if not self._start_manual_dive_trace():
+                self._show_recording_status(
+                    "Dive trace unavailable",
+                    "Could not start the trace for this map.",
+                    kind="error",
+                    duration=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
+                    now=now,
+                )
+
         recorder = getattr(self, "_manual_dive_trace", None)
         if recorder is not None:
             if recorder.writer_failed:
@@ -5878,13 +5970,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             if result.completed:
                 _LOG.info("Manual Guided Dive trace saved: %s", result.output_path)
                 self._show_recording_status(
-                    "Dive plan saved",
+                    "Dive trace saved",
+                    "Opening its location…",
                     kind="success",
-                    duration=3.2,
+                    duration=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
+                    now=now,
                 )
-                self._reveal_saved_output(
+                controller.defer_reveal(
                     result.output_path,
-                    output_kind="dive plan",
+                    now=now,
+                    delay_s=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
                 )
             else:
                 _LOG.warning(
@@ -5892,6 +5987,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                     result.partial_path,
                     result.error or "unknown error",
                 )
+        for output_path in controller.take_due_reveals(now=now):
+            self._reveal_saved_output(output_path, output_kind="dive trace")
 
     def _mark_manual_dive_trace_discontinuity(
         self,

@@ -1695,6 +1695,17 @@ class MapLibraryPanel:
                 center_x,
                 track_bottom,
             )
+            # A scrollbar can be redrawn before Tk has restored its final
+            # width after a section collapse/expand.  Refresh the line
+            # options as well as its coordinates once the <Configure> event
+            # supplies the real dimensions; otherwise a one-pixel rail stays
+            # visible for the rest of the splash session.
+            self._content_scrollbar.itemconfigure(
+                self._scrollbar_track,
+                fill=style.scroll_track_color,
+                width=track_width,
+                capstyle="round",
+            )
         if getattr(self, "_scrollbar_thumb", None) is None:
             self._scrollbar_thumb = self._content_scrollbar.create_line(
                 center_x,
@@ -1713,6 +1724,12 @@ class MapLibraryPanel:
                 thumb_top,
                 center_x,
                 thumb_bottom,
+            )
+            self._content_scrollbar.itemconfigure(
+                self._scrollbar_thumb,
+                fill=style.scroll_thumb_color,
+                width=thumb_width,
+                capstyle="round",
             )
 
     def _set_scrollbar_fraction(self, first: str, last: str) -> None:

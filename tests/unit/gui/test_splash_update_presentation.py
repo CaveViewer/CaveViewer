@@ -795,6 +795,83 @@ def test_map_library_scrollbar_uses_a_recessed_rail_and_rounded_thumb():
     assert panel._scrollbar_thumb is None
 
 
+def test_map_library_scrollbar_restores_line_width_after_section_reexpands():
+    class _FakeScrollbar:
+        def __init__(self) -> None:
+            self.width = 1
+            self.height = 1
+            self.line_calls = []
+            self.coordinate_calls = []
+            self.itemconfigure_calls = []
+
+        def winfo_height(self) -> int:
+            return self.height
+
+        def winfo_width(self) -> int:
+            return self.width
+
+        def create_line(self, *coordinates, **options):
+            self.line_calls.append((coordinates, options))
+            return len(self.line_calls)
+
+        def coords(self, *args) -> None:
+            self.coordinate_calls.append(args)
+
+        def itemconfigure(self, *args, **options) -> None:
+            self.itemconfigure_calls.append((args, options))
+
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel._content_scrollbar = _FakeScrollbar()
+    panel._scrollbar_fraction = (0.25, 0.75)
+    panel._scrollbar_track = None
+    panel._scrollbar_thumb = None
+    panel._px = lambda value: int(value)
+    panel._style = SimpleNamespace(
+        scroll_track_width=12,
+        scroll_track_color="#2a2a33",
+        scroll_thumb_min_height=36,
+        scroll_thumb_width=8,
+        scroll_thumb_color="#5d6f8a",
+    )
+
+    # Tk can issue a scroll update while the custom canvas is still hidden,
+    # where its dimensions are one pixel.  This represents that first draw.
+    panel._draw_scrollbar_thumb()
+    assert [options["width"] for _coordinates, options in panel._content_scrollbar.line_calls] == [
+        1,
+        1,
+    ]
+
+    # Once a collapsed section is expanded, <Configure> redraws the same
+    # canvas items at their actual size.  They must regain their full widths.
+    panel._content_scrollbar.width = 18
+    panel._content_scrollbar.height = 200
+    panel._draw_scrollbar_thumb()
+
+    assert panel._content_scrollbar.coordinate_calls == [
+        (1, 9.0, 8, 9.0, 192),
+        (2, 9.0, 31, 9.0, 123),
+    ]
+    assert panel._content_scrollbar.itemconfigure_calls == [
+        (
+            (1,),
+            {
+                "fill": "#2a2a33",
+                "width": 12,
+                "capstyle": "round",
+            },
+        ),
+        (
+            (2,),
+            {
+                "fill": "#5d6f8a",
+                "width": 8,
+                "capstyle": "round",
+            },
+        ),
+    ]
+
+
 @pytest.mark.parametrize(
     ("action_text", "show_stop_progress", "icon", "tooltip", "row_activates"),
     [
