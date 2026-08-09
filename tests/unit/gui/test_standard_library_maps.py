@@ -419,6 +419,141 @@ def test_managed_install_registry_recognizes_a_map_after_catalog_metadata_change
     assert not standard_library_maps.is_app_supplied_standard_library_map_path(map_dir)
 
 
+def test_managed_install_restores_retained_map_metadata():
+    install = standard_library_maps.ManagedStandardLibraryMapInstall(
+        source_id="partner-library",
+        catalog_id="retained-cave",
+        display_name="Retained Cave",
+        asset_name="retained-cave.zip",
+        folder_name="Retained Cave Files",
+        path="/maps/retained-cave",
+        former=True,
+    )
+
+    assert install.as_map_info() == standard_library_maps.StandardLibraryMapInfo(
+        display_name="Retained Cave",
+        asset_name="retained-cave.zip",
+        catalog_id="retained-cave",
+        folder_name="Retained Cave Files",
+        source_id="partner-library",
+    )
+
+
+def test_github_release_source_delegates_catalog_refresh(monkeypatch):
+    expected_refresh = object()
+    monkeypatch.setattr(
+        standard_library_maps,
+        "fetch_standard_library_catalog_refresh",
+        lambda: expected_refresh,
+    )
+
+    assert (
+        standard_library_maps.GitHubReleaseMapLibrarySource().fetch_catalog()
+        is expected_refresh
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"version": 2, "installs": []},
+        {"version": 1, "installs": {}},
+    ],
+)
+def test_managed_install_registry_ignores_malformed_documents(
+    monkeypatch,
+    tmp_path,
+    payload,
+):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path / "state"))
+    registry_path = standard_library_maps._install_registry_path()
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert standard_library_maps.load_managed_standard_library_map_installs() == []
+
+
+def test_managed_install_registry_skips_invalid_and_duplicate_records(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path / "state"))
+    registry_path = standard_library_maps._install_registry_path()
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    valid_record = {
+        "source_id": "github-release",
+        "catalog_id": "retained-cave",
+        "display_name": "Retained Cave",
+        "asset_name": "retained-cave.zip",
+        "folder_name": " Retained Cave Files ",
+        "path": "/maps/retained-cave",
+        "former": True,
+    }
+    registry_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "installs": [
+                    valid_record,
+                    {**valid_record, "display_name": "Duplicate Cave"},
+                    "not a record",
+                    {**valid_record, "source_id": ""},
+                    {**valid_record, "folder_name": ""},
+                    {**valid_record, "former": "yes"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert standard_library_maps.load_managed_standard_library_map_installs() == [
+        standard_library_maps.ManagedStandardLibraryMapInstall(
+            source_id="github-release",
+            catalog_id="retained-cave",
+            display_name="Retained Cave",
+            asset_name="retained-cave.zip",
+            folder_name="Retained Cave Files",
+            path="/maps/retained-cave",
+            former=True,
+        )
+    ]
+
+
+def test_managed_install_registry_returns_only_existing_maps_under_its_root(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path / "state"))
+    install_root = tmp_path / "downloads"
+    inside_dir = install_root / "Inside Cave"
+    outside_dir = tmp_path / "elsewhere" / "Outside Cave"
+    inside_dir.mkdir(parents=True)
+    outside_dir.mkdir(parents=True)
+    (inside_dir / "cave.obj").write_text("map", encoding="utf-8")
+    (outside_dir / "cave.obj").write_text("map", encoding="utf-8")
+    inside = standard_library_maps.StandardLibraryMapInfo(
+        "Inside Cave",
+        "inside.zip",
+        catalog_id="inside-cave",
+    )
+    outside = standard_library_maps.StandardLibraryMapInfo(
+        "Outside Cave",
+        "outside.zip",
+        catalog_id="outside-cave",
+    )
+
+    standard_library_maps.record_managed_standard_library_map_install(inside, inside_dir)
+    standard_library_maps.record_managed_standard_library_map_install(outside, outside_dir)
+
+    installs = standard_library_maps.managed_standard_library_map_installs_for_root(
+        install_root
+    )
+
+    assert [(install.catalog_id, install.path) for install in installs] == [
+        ("inside-cave", str(inside_dir))
+    ]
+
+
 def test_registry_bootstrap_adopts_only_known_legacy_map_folders(monkeypatch, tmp_path):
     monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path / "state"))
     install_root = tmp_path / "downloads"
