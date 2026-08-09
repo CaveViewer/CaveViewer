@@ -308,13 +308,13 @@ Viewer coverage must prove Cmd/Ctrl+A is unhandled and that opening a map does
 not queue a navigation planner or change the ordinary cache-derived camera
 position. The core certificate tests cover route preflight independently of
 the GUI.
-Manual route-trace coverage must exercise `Cmd/Ctrl+T` start/stop, post-movement
-pose sampling, orientation and stationary-heartbeat thresholds, bounded-queue
-drop reporting, final-pose retention, background write failure, map-switch
-cleanup, saved-trace confirmation and native reveal only after atomic
-publication, and bookmark/minimap discontinuities. Test output belongs under
-`tmp_path`; generated `_guided_dives` directories are never repository
-fixtures.
+Manual route-trace coverage must exercise `Cmd/Ctrl+T` countdown/start/stop,
+post-movement pose sampling, orientation and stationary-heartbeat thresholds,
+bounded-queue drop reporting, final-pose retention, background write failure,
+map-switch cleanup, saved-trace confirmation and native reveal only after
+atomic publication and its visible confirmation duration, and bookmark/minimap
+discontinuities. Test output belongs under `tmp_path`; generated
+`_guided_dives` directories are never repository fixtures.
 Recorded Dive coverage must validate bounded JSONL parsing, its versioned
 source/cache identity contract, exact first and final poses,
 frame-rate-independent interpolation, instantaneous declared discontinuities,

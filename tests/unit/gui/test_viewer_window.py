@@ -449,6 +449,104 @@ def test_manual_trace_hotkey_uses_platform_primary_modifier(
     )
 
 
+def test_manual_trace_countdown_hides_picker_and_manual_help(monkeypatch):
+    calls = []
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 40.0)
+    window = _recording_window()
+    window._has_map_loaded = True
+    window._manual_dive_trace = None
+    window._primary_shortcut_label = lambda: "Ctrl"
+    window.color_picker = SimpleNamespace(hide=lambda: calls.append("hide_picker"))
+    window.controls_overlay = SimpleNamespace(
+        is_manual_mode=True,
+        hide_help=lambda: calls.append("hide_help"),
+    )
+
+    assert window._start_manual_dive_trace_countdown() is True
+
+    controller = window._ensure_manual_dive_trace_controller()
+    assert calls == ["hide_picker", "hide_help"]
+    assert controller.countdown_started_at == 40.0
+    assert controller.countdown_until == 44.0
+
+
+def test_manual_trace_toggle_cancels_existing_countdown(monkeypatch):
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+    window = _recording_window()
+    window._manual_dive_trace = None
+    controller = window._ensure_manual_dive_trace_controller()
+    controller.start_countdown(now=7.0, start_number=3)
+
+    assert window._toggle_manual_dive_trace() is True
+
+    assert not controller.countdown_active
+    assert window._recording_status_message == "Dive trace canceled"
+    assert window._recording_status_kind == "cancel"
+    assert window._recording_status_until == pytest.approx(13.0)
+
+
+def test_manual_trace_starts_only_after_its_countdown_expires():
+    window = _recording_window()
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = []
+    controller = window._ensure_manual_dive_trace_controller()
+    controller.start_countdown(now=10.0, start_number=3)
+    started = []
+    window._start_manual_dive_trace = lambda: started.append("started") or True
+
+    window._update_manual_dive_trace(now=13.99)
+    assert started == []
+    assert controller.countdown_active
+
+    window._update_manual_dive_trace(now=14.0)
+    assert started == ["started"]
+    assert not controller.countdown_active
+
+
+def test_manual_trace_countdown_uses_the_shared_countdown_overlay():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window.UI_TEXT_SCALE = 1.28
+    calls = []
+    window._render_recording_countdown_scrim = lambda size: calls.append(
+        ("scrim", size)
+    )
+    window.import_progress_panel = SimpleNamespace(
+        draw_countdown_number=lambda **kwargs: calls.append(("number", kwargs))
+    )
+    controller = window._ensure_manual_dive_trace_controller()
+    controller.start_countdown(now=10.0, start_number=3)
+
+    window._render_countdown_overlay(
+        now=10.1,
+        controller=controller,
+        start_number=3,
+    )
+
+    assert calls[0] == ("scrim", (800, 600))
+    assert calls[1] == (
+        "number",
+        {
+            "center_x": 400.0,
+            "center_y": 300.0,
+            "window_size": (800, 600),
+            "number": 3,
+            "progress": pytest.approx(0.025),
+            "fixed_text_scale": 1.28,
+        },
+    )
+
+
+def test_manual_trace_map_change_cancels_a_pending_countdown():
+    window = _recording_window()
+    window._manual_dive_trace = None
+    controller = window._ensure_manual_dive_trace_controller()
+    controller.start_countdown(now=10.0, start_number=3)
+
+    assert window._stop_manual_dive_trace(reason="map_changed") is False
+    assert not controller.countdown_active
+
+
 @pytest.mark.parametrize(
     ("presentation_profile", "primary_modifiers"),
     [
@@ -769,11 +867,19 @@ def test_completed_manual_trace_confirms_and_reveals_published_file(tmp_path):
     window._manual_dive_trace = None
     window._manual_dive_trace_writers = [recorder]
 
-    window._update_manual_dive_trace()
+    window._update_manual_dive_trace(now=10.0)
 
     assert window._manual_dive_trace_writers == []
-    assert window._recording_status_message == "Dive plan saved"
+    assert window._recording_status_message == "Dive trace saved"
+    assert window._recording_status_detail == "Opening its location…"
     assert window._recording_status_kind == "success"
+    assert window._recording_status_until == pytest.approx(13.0)
+    assert revealed == []
+
+    window._update_manual_dive_trace(now=12.99)
+    assert revealed == []
+
+    window._update_manual_dive_trace(now=13.0)
     assert revealed == [str(output_path)]
 
 
@@ -830,12 +936,14 @@ def test_manual_trace_reveal_failure_keeps_saved_status(tmp_path, monkeypatch):
     window._manual_dive_trace = None
     window._manual_dive_trace_writers = [recorder]
 
-    window._update_manual_dive_trace()
+    window._update_manual_dive_trace(now=10.0)
 
-    assert window._recording_status_message == "Dive plan saved"
+    assert window._recording_status_message == "Dive trace saved"
     assert window._recording_status_kind == "success"
+
+    window._update_manual_dive_trace(now=13.0)
     assert logger.warning_messages == [
-        f"Could not reveal saved dive plan {output_path}: blocked: {output_path}"
+        f"Could not reveal saved dive trace {output_path}: blocked: {output_path}"
     ]
 
 
@@ -888,10 +996,10 @@ def test_manual_trace_active_renders_persistent_save_prompt(
         (
             (800, 600),
             {
-                "title": "Manual route trace active",
+                "title": "Dive trace active",
                 "note": (
                     "Fly the reference route, then press "
-                    f"{shortcut_label} + T to save."
+                    f"{shortcut_label} + T to stop and save."
                 ),
             },
         )
