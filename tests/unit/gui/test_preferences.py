@@ -611,19 +611,12 @@ def test_preferences_dialog_uses_extracted_settings_logic():
         preferences_dialog.PreferencesFormController
         is preferences_form.PreferencesFormController
     )
-    assert (
-        splash_screen._show_preferences_dialog
-        is preferences_dialog.show_preferences_dialog
-    )
+    assert splash_screen.PreferencesPanel is preferences_dialog.PreferencesPanel
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
-    preferences_call_start = splash_source.index("_show_preferences_dialog(")
-    preferences_call_end = splash_source.index(
-        "def _widget_exists",
-        preferences_call_start,
-    )
-    assert "platform_runtime=platform_runtime" in splash_source[
-        preferences_call_start:preferences_call_end
-    ]
+    assert "PreferencesPanel(" in splash_source
+    assert "platform_runtime=platform_runtime" in splash_source
+    assert "on_cancel=_show_map_library_surface" in splash_source
+    assert "_show_preferences_dialog(" not in splash_source
 
 
 def test_show_preferences_dialog_forwards_the_injected_runtime(monkeypatch):
@@ -890,13 +883,13 @@ def test_preferences_directory_browse_reports_desktop_action_failure(tmp_path):
 def test_preferences_dialog_uses_compact_tabbed_pages():
     from caveviewer.gui import preferences_dialog
 
-    source = inspect.getsource(preferences_dialog.PreferencesDialog._build)
+    source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
     module_source = inspect.getsource(preferences_dialog)
     show_page_source = inspect.getsource(
-        preferences_dialog.PreferencesDialog._show_page
+        preferences_dialog.PreferencesPanel._show_page
     )
     render_field_source = inspect.getsource(
-        preferences_dialog.PreferencesDialog._render_field
+        preferences_dialog.PreferencesPanel._render_field
     )
     page_keys = [page[0] for page in preferences_dialog._PREFERENCE_PAGES]
     page_labels = [page[1] for page in preferences_dialog._PREFERENCE_PAGES]
@@ -930,7 +923,36 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
-    assert "resizable(False, self._layout_policy.resizable_vertical)" in module_source
+    assert "class PreferencesDialog(PreferencesPanel):" in module_source
+    assert "effective_profile.preferences_dialog_layout.resizable_vertical" in module_source
+
+
+def test_preferences_panel_tracks_and_discards_unsaved_values(valid_preferences):
+    from caveviewer.gui import preferences_dialog
+
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.preferences = snapshot
+    panel.form = preferences_dialog.PreferencesFormController(snapshot)
+    panel.rendering_state = False
+    panel.rendered_invalid_key = None
+    panel._feedback_override = ("Preferences saved.", "#ffffff")
+    synchronized = []
+    panel._sync_field_value = lambda key, value: synchronized.append((key, value))
+    panel._render_form_state = lambda *_args, **_kwargs: None
+
+    assert panel.has_unsaved_changes is False
+    panel.form.change("io_workers", "5")
+    assert panel.has_unsaved_changes is True
+
+    panel.discard_changes()
+
+    assert panel.has_unsaved_changes is False
+    assert panel.form.state.values == snapshot.as_dict()
+    assert set(synchronized) == set(snapshot.items())
+    assert panel._feedback_override is None
 
 
 def test_preferences_invalid_field_switches_to_containing_page():

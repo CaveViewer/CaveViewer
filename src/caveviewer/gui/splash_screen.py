@@ -1,9 +1,10 @@
 """Tk startup surface for map selection, preferences, and updates.
 
 The very first thing shown when CaveViewer launches: a small landing
-window with the program name/version, the skull logo, and an Open Map Folder
-button -- replacing the old behavior of jumping straight into a bare native
-folder-picker dialog with zero context about what the program even is.
+window with the program name/version, the skull logo, and a Map Library
+action for opening local map folders -- replacing the old behavior of jumping
+straight into a bare native folder-picker dialog with zero context about what
+the program even is.
 
 Built with Tkinter (ships with standard Python on Windows/Mac, same
 reasoning as the existing native folder-picker dialog already used
@@ -30,7 +31,7 @@ from __future__ import annotations
 import enum
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.diagnostics.logging import get_logger
@@ -38,9 +39,7 @@ from caveviewer.gui.preferences import (
     apply_preferences_to_env as _apply_preferences_to_env,
     load_preferences as _load_preferences,
 )
-from caveviewer.gui.preferences_dialog import (
-    show_preferences_dialog as _show_preferences_dialog,
-)
+from caveviewer.gui.preferences_dialog import PreferencesPanel
 from caveviewer.gui.dpi_utils import (
     apply_tk_scaling,
     configure_process_dpi_awareness,
@@ -170,13 +169,12 @@ _LIBRARY_FORMER_MAP_TITLE_COLOR = DARK_THEME.secondary_text
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
-_BUTTON_HOVER_BG = DARK_THEME.primary_button_hover
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
-_BUTTON_FG = DARK_THEME.primary_button_text
 _BORDER_COLOR = DARK_THEME.border
+_NAVIGATION_ACTIVE_BG = DARK_THEME.secondary_button
+_NAVIGATION_HOVER_BG = DARK_THEME.secondary_button_hover
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
-_ROOMY_SPLASH_LAYOUT = _WINDOWS_SPLASH_LAYOUT or _LINUX_SPLASH_LAYOUT
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
@@ -193,40 +191,21 @@ def _tk_font(points: float, *styles: str) -> tuple:
 
 
 _TITLE_FONT = _tk_font(24, "bold")
+_NAVIGATION_BRAND_FONT = _tk_font(14, "bold")
 _VERSION_FONT = _tk_font(12)
 _BODY_FONT = _tk_font(12)
 _SMALL_FONT = _tk_font(10)
 _LIBRARY_SECTION_FONT = _tk_font(10, "bold")
 _LIBRARY_METADATA_FONT = _tk_font(9)
-_INSTRUCTION_FONT = _tk_font(11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
-_FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
-_LINK_FONT = _tk_font(10, "underline")
 _UPDATE_ACTION_FONT = _tk_font(11, "bold")
-_BUTTON_FONT = _tk_font(13)
 _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
 _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
 _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
-_SECONDARY_LINK_ROW_BOTTOM_GAP = (
-    _SPLASH_LAYOUT_POLICY.secondary_link_row_bottom_gap
-)
-_FOOTER_CREDITS_BOTTOM_PAD = _SPLASH_LAYOUT_POLICY.footer_credits_bottom_pad
-_TITLE_TO_ACTION_GAP = _SPLASH_LAYOUT_POLICY.title_to_action_gap
-_BROWSE_BUTTON_BOTTOM_GAP = _SPLASH_LAYOUT_POLICY.browse_button_bottom_gap
-_INSTRUCTION_BOTTOM_GAP = _SPLASH_LAYOUT_POLICY.instruction_bottom_gap
-_SECONDARY_LINK_ROW_TOP_GAP = _SPLASH_LAYOUT_POLICY.secondary_link_row_top_gap
 _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
     "BottomLine Projects Scientific Dive Team.\n"
     "Engineering and design by magic mr_v.\n\n"
     "Licensed under the GNU General Public License v3.0.\n")
-_LIBRARY_SCROLLBAR_WIDTH = 24
-_LIBRARY_SCROLLBAR_RIGHT_INSET = 32
-_LIBRARY_SCROLL_TRACK_WIDTH = 12
-_LIBRARY_SCROLL_THUMB_WIDTH = 8
-_LIBRARY_SCROLL_THUMB_MIN_HEIGHT = 36
-_LIBRARY_SCROLL_TRACK_COLOR = DARK_THEME.secondary_button
-_LIBRARY_SCROLL_THUMB_COLOR = DARK_THEME.entry_focus_border
-_LIBRARY_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.primary_button_hover
 _LIBRARY_PANEL_BORDER_COLOR = "#1e2028"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
 _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
@@ -311,21 +290,18 @@ def _select_tk_font_family(
 
 def _refresh_tk_font_tokens() -> None:
     """Rebuild module font tuples after selecting family or text scaling."""
-    global _TITLE_FONT, _VERSION_FONT, _BODY_FONT, _SMALL_FONT
-    global _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _INSTRUCTION_FONT
-    global _FOOTER_FONT, _LINK_FONT, _UPDATE_ACTION_FONT, _BUTTON_FONT
+    global _TITLE_FONT, _NAVIGATION_BRAND_FONT, _VERSION_FONT
+    global _BODY_FONT, _SMALL_FONT
+    global _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _UPDATE_ACTION_FONT
 
     _TITLE_FONT = _tk_font(24, "bold")
+    _NAVIGATION_BRAND_FONT = _tk_font(14, "bold")
     _VERSION_FONT = _tk_font(12)
     _BODY_FONT = _tk_font(12)
     _SMALL_FONT = _tk_font(10)
     _LIBRARY_SECTION_FONT = _tk_font(10, "bold")
     _LIBRARY_METADATA_FONT = _tk_font(9)
-    _INSTRUCTION_FONT = _tk_font(11) if _ROOMY_SPLASH_LAYOUT else _BODY_FONT
-    _FOOTER_FONT = _tk_font(9) if _ROOMY_SPLASH_LAYOUT else _SMALL_FONT
-    _LINK_FONT = _tk_font(10, "underline")
     _UPDATE_ACTION_FONT = _tk_font(11, "bold")
-    _BUTTON_FONT = _tk_font(13)
 
 
 def _activate_presentation_profile(profile: PresentationProfile) -> None:
@@ -337,33 +313,21 @@ def _activate_presentation_profile(profile: PresentationProfile) -> None:
     platform adapter while preserving the existing callback structure.
     """
     global _PRESENTATION_PROFILE, _SPLASH_LAYOUT_POLICY, _APP_ICON_PATH
-    global _WINDOWS_SPLASH_LAYOUT, _LINUX_SPLASH_LAYOUT, _ROOMY_SPLASH_LAYOUT
+    global _WINDOWS_SPLASH_LAYOUT, _LINUX_SPLASH_LAYOUT
     global _UI_FONT_FAMILY, _TK_TEXT_SCALE
     global _SPLASH_WINDOW_WIDTH, _SPLASH_WINDOW_MIN_HEIGHT
-    global _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK, _SECONDARY_LINK_ROW_BOTTOM_GAP
-    global _FOOTER_CREDITS_BOTTOM_PAD, _TITLE_TO_ACTION_GAP
-    global _BROWSE_BUTTON_BOTTOM_GAP, _INSTRUCTION_BOTTOM_GAP
-    global _SECONDARY_LINK_ROW_TOP_GAP
+    global _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK
 
     _PRESENTATION_PROFILE = profile
     _SPLASH_LAYOUT_POLICY = profile.splash_layout
     _APP_ICON_PATH = _resolve_asset_path(_SPLASH_LAYOUT_POLICY.app_icon_resource_name)
     _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
     _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
-    _ROOMY_SPLASH_LAYOUT = _WINDOWS_SPLASH_LAYOUT or _LINUX_SPLASH_LAYOUT
     _UI_FONT_FAMILY = profile.ui_font_family
     _TK_TEXT_SCALE = 1.0
     _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
     _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
     _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
-    _SECONDARY_LINK_ROW_BOTTOM_GAP = (
-        _SPLASH_LAYOUT_POLICY.secondary_link_row_bottom_gap
-    )
-    _FOOTER_CREDITS_BOTTOM_PAD = _SPLASH_LAYOUT_POLICY.footer_credits_bottom_pad
-    _TITLE_TO_ACTION_GAP = _SPLASH_LAYOUT_POLICY.title_to_action_gap
-    _BROWSE_BUTTON_BOTTOM_GAP = _SPLASH_LAYOUT_POLICY.browse_button_bottom_gap
-    _INSTRUCTION_BOTTOM_GAP = _SPLASH_LAYOUT_POLICY.instruction_bottom_gap
-    _SECONDARY_LINK_ROW_TOP_GAP = _SPLASH_LAYOUT_POLICY.secondary_link_row_top_gap
     _refresh_tk_font_tokens()
 
 
@@ -449,15 +413,338 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         menu_border=_LIBRARY_MENU_BORDER,
         menu_hover_bg=_LIBRARY_MENU_HOVER_BG,
         menu_text=_LIBRARY_MENU_TEXT,
-        scrollbar_width=_LIBRARY_SCROLLBAR_WIDTH,
-        scrollbar_right_inset=_LIBRARY_SCROLLBAR_RIGHT_INSET,
-        scroll_track_width=_LIBRARY_SCROLL_TRACK_WIDTH,
-        scroll_track_color=_LIBRARY_SCROLL_TRACK_COLOR,
-        scroll_thumb_min_height=_LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
-        scroll_thumb_width=_LIBRARY_SCROLL_THUMB_WIDTH,
-        scroll_thumb_color=_LIBRARY_SCROLL_THUMB_COLOR,
-        scroll_thumb_active_color=_LIBRARY_SCROLL_THUMB_ACTIVE_COLOR,
     )
+
+
+def _build_themed_about_content(
+    parent,
+    *,
+    program_name: str,
+    version: str,
+    px,
+    on_close: Callable[[], None],
+    center_vertically: bool = False,
+    show_close: bool = True,
+):
+    """Build the shared About presentation inside either kind of host."""
+    import tkinter as tk
+
+    content = tk.Frame(parent, bg=_BG_COLOR)
+    if center_vertically:
+        content.pack(expand=True, padx=px(32), pady=px(28))
+    else:
+        content.pack(fill="both", expand=True, padx=px(32), pady=px(28))
+
+    logo_photo = None
+    if _LOGO_PATH:
+        try:
+            from PIL import Image, ImageTk
+
+            logo_img = Image.open(_LOGO_PATH)
+            max_logo_dim = px(92)
+            scale = min(
+                max_logo_dim / logo_img.width,
+                max_logo_dim / logo_img.height,
+                1.0,
+            )
+            if scale < 1.0:
+                logo_img = logo_img.resize(
+                    (int(logo_img.width * scale), int(logo_img.height * scale)),
+                    Image.LANCZOS,
+                )
+            logo_photo = ImageTk.PhotoImage(
+                logo_img,
+                master=parent.winfo_toplevel(),
+            )
+        except Exception as exc:
+            _LOG.warning("Could not load About presentation logo: %s", exc)
+
+    if logo_photo is not None:
+        logo_label = tk.Label(
+            content,
+            image=logo_photo,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        )
+        logo_label.image = logo_photo
+        logo_label.pack(pady=(0, px(10)))
+
+    tk.Label(
+        content,
+        text=program_name,
+        font=_TITLE_FONT,
+        fg=_TITLE_COLOR,
+        bg=_BG_COLOR,
+    ).pack()
+    tk.Label(
+        content,
+        text=f"Version {version}",
+        font=_VERSION_FONT,
+        fg=_SUBTITLE_COLOR,
+        bg=_BG_COLOR,
+    ).pack(pady=(px(2), px(18)))
+
+    tk.Label(
+        content,
+        text=_CREDITS_TEXT.strip(),
+        font=_SMALL_FONT,
+        fg=_SUBTITLE_COLOR,
+        bg=_BG_COLOR,
+        justify="center",
+        wraplength=px(350),
+    ).pack(fill="x")
+
+    close_button = content
+    if show_close:
+        close_button = tk.Label(
+            content,
+            text="Close",
+            font=_BODY_FONT,
+            fg=DARK_THEME.primary_button_text,
+            bg=_BUTTON_BG,
+            cursor="hand2",
+            takefocus=True,
+            padx=px(24),
+            pady=px(8),
+            highlightthickness=1,
+            highlightbackground=_BG_COLOR,
+            highlightcolor=_BUTTON_BORDER_COLOR,
+        )
+
+        def close_about(_event=None):
+            on_close()
+            return "break"
+
+        def set_close_button_hovered(hovered: bool) -> None:
+            close_button.config(
+                bg=(DARK_THEME.primary_button_hover if hovered else _BUTTON_BG),
+            )
+
+        for sequence in ("<Button-1>", "<Return>", "<space>"):
+            close_button.bind(sequence, close_about)
+        close_button.bind(
+            "<Enter>",
+            lambda _event: set_close_button_hovered(True),
+        )
+        close_button.bind(
+            "<Leave>",
+            lambda _event: set_close_button_hovered(False),
+        )
+        close_button.pack(pady=(px(20), 0))
+
+    return close_button
+
+
+def _show_themed_about_dialog(
+    root,
+    *,
+    program_name: str,
+    version: str,
+    px,
+    dialog_ref: list[object | None],
+) -> None:
+    """Show the reusable About presentation in a standalone modal."""
+    active_dialog = dialog_ref[0]
+    if _tk_root_exists(active_dialog):
+        try:
+            active_dialog.deiconify()
+            active_dialog.lift(root)
+            active_dialog.focus_force()
+        except Exception:
+            pass
+        return
+
+    import tkinter as tk
+
+    dialog = tk.Toplevel(root)
+    dialog_ref[0] = dialog
+    dialog.withdraw()
+    dialog.title(f"About {program_name}")
+    dialog.configure(bg=_BG_COLOR)
+    dialog.resizable(False, False)
+    dialog.transient(root)
+    _set_tk_window_icon(dialog)
+
+    def close_dialog() -> None:
+        if dialog_ref[0] is dialog:
+            dialog_ref[0] = None
+        try:
+            dialog.grab_release()
+        except tk.TclError:
+            pass
+        try:
+            dialog.destroy()
+        except tk.TclError:
+            pass
+
+    close_button = _build_themed_about_content(
+        dialog,
+        program_name=program_name,
+        version=version,
+        px=px,
+        on_close=close_dialog,
+    )
+
+    def close_dialog_event(_event=None):
+        close_dialog()
+        return "break"
+
+    dialog.bind("<Escape>", close_dialog_event)
+    dialog.bind("<Return>", close_dialog_event)
+    dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+
+    dialog.update_idletasks()
+    dialog_width = max(px(430), dialog.winfo_reqwidth())
+    dialog_height = max(px(380), dialog.winfo_reqheight())
+    try:
+        screen_width = dialog.winfo_screenwidth()
+        screen_height = dialog.winfo_screenheight()
+        x = root.winfo_rootx() + (root.winfo_width() - dialog_width) // 2
+        y = root.winfo_rooty() + (root.winfo_height() - dialog_height) // 2
+        x = max(0, min(x, screen_width - dialog_width))
+        y = max(0, min(y, screen_height - dialog_height))
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+    except tk.TclError:
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+
+    dialog.deiconify()
+    dialog.lift(root)
+    try:
+        dialog.grab_set()
+        close_button.focus_set()
+    except tk.TclError:
+        pass
+
+
+def _show_discard_preferences_dialog(
+    root,
+    *,
+    px,
+    dialog_ref: list[object | None],
+    on_discard: Callable[[], None],
+) -> None:
+    """Ask before a navigation action discards an embedded form's edits."""
+    active_dialog = dialog_ref[0]
+    if _tk_root_exists(active_dialog):
+        try:
+            active_dialog.deiconify()
+            active_dialog.lift(root)
+            active_dialog.focus_force()
+        except Exception:
+            pass
+        return
+
+    import tkinter as tk
+
+    dialog = tk.Toplevel(root)
+    dialog_ref[0] = dialog
+    dialog.withdraw()
+    dialog.title("Discard unsaved preferences?")
+    dialog.configure(bg=_BG_COLOR)
+    dialog.resizable(False, False)
+    dialog.transient(root)
+    _set_tk_window_icon(dialog)
+
+    content = tk.Frame(dialog, bg=_BG_COLOR)
+    content.pack(fill="both", expand=True, padx=px(28), pady=px(24))
+    tk.Label(
+        content,
+        text="Discard unsaved changes?",
+        font=_BODY_FONT,
+        fg=_TITLE_COLOR,
+        bg=_BG_COLOR,
+        anchor="w",
+    ).pack(fill="x")
+    tk.Label(
+        content,
+        text=(
+            "Your changes to Preferences have not been applied. "
+            "Discard them and return to the Map Library?"
+        ),
+        font=_SMALL_FONT,
+        fg=_SUBTITLE_COLOR,
+        bg=_BG_COLOR,
+        justify="left",
+        anchor="w",
+        wraplength=px(360),
+    ).pack(fill="x", pady=(px(8), px(20)))
+
+    button_row = tk.Frame(content, bg=_BG_COLOR)
+    button_row.pack(fill="x")
+
+    def _close_dialog(_event=None):
+        if dialog_ref[0] is dialog:
+            dialog_ref[0] = None
+        try:
+            dialog.grab_release()
+        except tk.TclError:
+            pass
+        try:
+            dialog.destroy()
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _discard(_event=None):
+        _close_dialog()
+        on_discard()
+        return "break"
+
+    def _make_button(text: str, callback, *, primary: bool):
+        normal_bg = _BUTTON_BG if primary else DARK_THEME.secondary_button
+        hover_bg = (
+            DARK_THEME.primary_button_hover
+            if primary
+            else DARK_THEME.secondary_button_hover
+        )
+        button = tk.Label(
+            button_row,
+            text=text,
+            font=_SMALL_FONT,
+            fg=DARK_THEME.primary_button_text if primary else _TITLE_COLOR,
+            bg=normal_bg,
+            cursor="hand2",
+            takefocus=True,
+            padx=px(14),
+            pady=px(7),
+            highlightthickness=1,
+            highlightbackground=_BG_COLOR,
+            highlightcolor=_BUTTON_BORDER_COLOR,
+        )
+        for sequence in ("<Button-1>", "<Return>", "<space>"):
+            button.bind(sequence, callback)
+        button.bind("<Enter>", lambda _event: button.config(bg=hover_bg))
+        button.bind("<Leave>", lambda _event: button.config(bg=normal_bg))
+        return button
+
+    discard_button = _make_button("Discard changes", _discard, primary=True)
+    keep_button = _make_button("Keep editing", _close_dialog, primary=False)
+    discard_button.pack(side="right")
+    keep_button.pack(side="right", padx=(0, px(8)))
+
+    dialog.bind("<Escape>", _close_dialog)
+    dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
+    dialog.update_idletasks()
+    dialog_width = max(px(430), dialog.winfo_reqwidth())
+    dialog_height = max(px(220), dialog.winfo_reqheight())
+    try:
+        screen_width = dialog.winfo_screenwidth()
+        screen_height = dialog.winfo_screenheight()
+        x = root.winfo_rootx() + (root.winfo_width() - dialog_width) // 2
+        y = root.winfo_rooty() + (root.winfo_height() - dialog_height) // 2
+        x = max(0, min(x, screen_width - dialog_width))
+        y = max(0, min(y, screen_height - dialog_height))
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+    except tk.TclError:
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+
+    dialog.deiconify()
+    dialog.lift(root)
+    try:
+        dialog.grab_set()
+        keep_button.focus_set()
+    except tk.TclError:
+        pass
 
 
 def _set_tk_window_icon(window) -> None:
@@ -625,62 +912,106 @@ def show_splash_screen(
     root.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
 
     content_frame = tk.Frame(root, bg=_BG_COLOR)
-    content_frame.pack(fill="both", expand=True, padx=px(22))
+    content_frame.pack(fill="both", expand=True, padx=px(22), pady=px(16))
 
-    left_frame = tk.Frame(content_frame, bg=_BG_COLOR)
-    left_frame.pack(side="left", fill="both", expand=True)
+    # The splash is organized as a stable navigation rail beside an active
+    # content surface. Keeping the rail a fixed width prevents map-library
+    # and Preferences content from jumping as users navigate.
+    left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(220))
+    left_frame.pack(side="left", fill="y")
+    left_frame.pack_propagate(False)
 
     divider = tk.Frame(content_frame, bg=_BORDER_COLOR, width=1)
-    divider.pack(side="left", fill="y", padx=(px(18), px(12)), pady=px(26))
+    divider.pack(side="left", fill="y", padx=(px(14), px(18)), pady=px(10))
 
     right_frame = tk.Frame(content_frame, bg=_BG_COLOR)
     right_frame.pack(side="left", fill="both", expand=True)
+    map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)
+    preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)
+    about_surface = tk.Frame(right_frame, bg=_BG_COLOR)
 
-    # -- logo image, centered near the top --------------------------------------
+    # -- compact brand masthead ---------------------------------------------------
+    brand_frame = tk.Frame(left_frame, bg=_BG_COLOR)
+    brand_frame.pack(fill="x", padx=px(14), pady=(px(18), px(10)))
+
     logo_photo = None
     if _LOGO_PATH:
         try:
             from PIL import Image, ImageTk
+
             logo_img = Image.open(_LOGO_PATH)
-            # scale down to a sensible splash-screen size if the source is
-            # larger than needed, preserving aspect ratio -- keeps this
-            # robust to the source asset's exact dimensions changing later
-            max_logo_dim = px(140)
-            scale = min(max_logo_dim / logo_img.width, max_logo_dim / logo_img.height, 1.0)
+            max_logo_dim = px(56)
+            scale = min(
+                max_logo_dim / logo_img.width,
+                max_logo_dim / logo_img.height,
+                1.0,
+            )
             if scale < 1.0:
-                new_size = (int(logo_img.width * scale), int(logo_img.height * scale))
+                new_size = (
+                    int(logo_img.width * scale),
+                    int(logo_img.height * scale),
+                )
                 logo_img = logo_img.resize(new_size, Image.LANCZOS)
             logo_photo = ImageTk.PhotoImage(logo_img, master=root)
-        except Exception as e:
-            _LOG.warning(f"could not load splash screen logo ({e}); continuing without it.")
+        except Exception as exc:
+            _LOG.warning(
+                "Could not load splash screen logo (%s); continuing without it.",
+                exc,
+            )
     else:
-        _LOG.warning("splash screen logo asset not found; continuing without it.")
+        _LOG.warning("Splash screen logo asset not found; continuing without it.")
 
     if logo_photo is not None:
-        logo_label = tk.Label(left_frame, image=logo_photo, bg=_BG_COLOR, borderwidth=0)
+        logo_label = tk.Label(
+            brand_frame,
+            image=logo_photo,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        )
         logo_label.image = logo_photo  # keep a reference so it isn't garbage-collected
-        logo_label.pack(pady=(22, 6))
+        logo_label.pack(side="left", padx=(0, px(10)))
 
-    # -- title + version, centered top -------------------------------------------
+    brand_text = tk.Frame(brand_frame, bg=_BG_COLOR)
+    brand_text.pack(side="left", fill="x", expand=True)
     title_label = tk.Label(
-        left_frame, text=program_name, font=_TITLE_FONT,
-        fg=_TITLE_COLOR, bg=_BG_COLOR,
+        brand_text,
+        text=program_name,
+        font=_NAVIGATION_BRAND_FONT,
+        fg=_TITLE_COLOR,
+        bg=_BG_COLOR,
+        anchor="w",
     )
-    title_label.pack(pady=(0, 0))
+    title_label.pack(anchor="w")
 
     version_label = tk.Label(
-        left_frame, text=f"Version {version}", font=_VERSION_FONT,
-        fg=_SUBTITLE_COLOR, bg=_BG_COLOR,
+        brand_text,
+        text=f"Version {version}",
+        font=_VERSION_FONT,
+        fg=_SUBTITLE_COLOR,
+        bg=_BG_COLOR,
+        anchor="w",
     )
-    version_label.pack(pady=(0, 8))
+    version_label.pack(anchor="w", pady=(px(1), 0))
+
+    navigation_frame = tk.Frame(left_frame, bg=_BG_COLOR)
+    navigation_frame.pack(fill="x", pady=(px(8), 0))
+
+    update_frame = tk.Frame(left_frame, bg=_BG_COLOR)
+    update_frame.pack(side="bottom", fill="x", pady=(0, px(14)))
+    update_progress_width = px(172)
 
     last_update_presentation: list[_UpdatePresentation | None] = [None]
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
+    map_library_panel_ref: list[MapLibraryPanel | None] = [None]
+    preferences_panel_ref: list[PreferencesPanel | None] = [None]
+    about_surface_initialized = [False]
+    discard_preferences_dialog_ref: list[object | None] = [None]
+    active_surface = ["map_library"]
 
     # Status and action labels stay packed even when empty. State changes never
     # resize the splash, and keyboard focus is enabled only for active actions.
     update_label = tk.Label(
-        left_frame,
+        update_frame,
         text="",
         font=_SMALL_FONT,
         fg=_INSTRUCTION_COLOR,
@@ -690,11 +1021,13 @@ def show_splash_screen(
         highlightthickness=1,
         highlightbackground=_BG_COLOR,
         highlightcolor=_BUTTON_BG,
+        wraplength=px(172),
+        justify="center",
     )
     update_label.pack(pady=(0, 2))
 
     update_action_label = tk.Label(
-        left_frame,
+        update_frame,
         text="",
         font=_UPDATE_ACTION_FONT,
         fg=_BUTTON_BG,
@@ -704,14 +1037,16 @@ def show_splash_screen(
         highlightthickness=1,
         highlightbackground=_BG_COLOR,
         highlightcolor=_BUTTON_BG,
+        wraplength=px(172),
+        justify="center",
     )
     update_action_label.pack(pady=(0, 4))
 
     # Progress bar — always packed, always 4 px tall.  Initially its background
     # matches the window so it is invisible; becomes visible during a download.
     update_progress_canvas = tk.Canvas(
-        left_frame,
-        width=300,
+        update_frame,
+        width=update_progress_width,
         height=4,
         bg=_BG_COLOR,
         highlightthickness=0,
@@ -730,7 +1065,13 @@ def show_splash_screen(
 
     def _set_progress(frac: float):
         clamped = max(0.0, min(1.0, float(frac)))
-        update_progress_canvas.coords(_update_progress_bar, 0, 0, int(300 * clamped), 4)
+        update_progress_canvas.coords(
+            _update_progress_bar,
+            0,
+            0,
+            int(update_progress_width * clamped),
+            4,
+        )
 
     def _invoke_update_action(action: _UpdateAction) -> None:
         if action in {_UpdateAction.DOWNLOAD, _UpdateAction.RETRY}:
@@ -842,7 +1183,7 @@ def show_splash_screen(
 
         root.after(100, wait_for_rebuild_pause)
 
-    # -- browse button + instructions ---------------------------------------------
+    # -- map selection and navigation actions --------------------------------------
     def _show_invalid_map_feedback(message: str) -> None:
         show_feedback(
             root,
@@ -892,7 +1233,7 @@ def show_splash_screen(
         _leave_splash()
 
     def on_close(_event=None):
-        _leave_splash()
+        _request_leave_preferences(_leave_splash)
 
     def _invoke_and_break(callback):
         callback()
@@ -905,94 +1246,223 @@ def show_splash_screen(
                 lambda _event, cb=callback: _invoke_and_break(cb),
             )
 
-    # Reserve a 1px focus ring outside the clickable label.  Tk label
-    # highlights are painted differently by Aqua on macOS, where the ring can
-    # look like a separate split-button segment.
-    browse_button_frame = tk.Frame(
-        left_frame,
-        bg=_BUTTON_BG,
-        cursor="hand2",
-        takefocus=True,
-    )
-    browse_button = tk.Label(
-        browse_button_frame,
-        text="Open map…",
-        font=_BUTTON_FONT,
-        bg=_BUTTON_BG,
-        fg=_BUTTON_FG,
-        padx=34,
-        pady=11,
-        cursor="hand2",
-        highlightthickness=0,
-        borderwidth=0,
-    )
-    browse_button.pack(padx=1, pady=1)
-    browse_button_hovered = False
-    browse_button_focused = False
-
-    def _refresh_browse_button_visual() -> None:
-        body_bg = _BUTTON_HOVER_BG if browse_button_hovered else _BUTTON_BG
-        browse_button.config(bg=body_bg)
-        browse_button_frame.config(
-            bg=_BUTTON_BORDER_COLOR if browse_button_focused else body_bg
+    def _on_preferences_applied(_preferences) -> None:
+        workflow = map_library_workflow_ref[0]
+        if workflow is None:
+            return
+        from caveviewer.gui.standard_library_maps import (
+            default_map_library_install_dir,
         )
 
-    def _on_browse_button_enter(_event) -> None:
-        nonlocal browse_button_hovered
-        browse_button_hovered = True
-        _refresh_browse_button_visual()
+        workflow.set_map_library_root_dir(default_map_library_install_dir())
 
-    def _on_browse_button_leave(_event) -> None:
-        nonlocal browse_button_hovered
-        browse_button_hovered = False
-        _refresh_browse_button_visual()
+    def _show_map_library_surface() -> None:
+        """Reveal the existing Map Library without rebuilding its catalog."""
+        if active_surface[0] != "map_library":
+            preferences_surface.pack_forget()
+            about_surface.pack_forget()
+            map_library_surface.pack(fill="both", expand=True)
+            active_surface[0] = "map_library"
+        _set_active_navigation("Map Library")
+        panel = map_library_panel_ref[0]
+        if panel is not None:
+            panel.focus_content()
 
-    def _on_browse_button_focus_in(_event) -> None:
-        nonlocal browse_button_focused
-        browse_button_focused = True
-        _refresh_browse_button_visual()
+    def _discard_preferences_and_show_map_library() -> None:
+        panel = preferences_panel_ref[0]
+        if panel is not None:
+            panel.discard_changes()
+        _show_map_library_surface()
 
-    def _on_browse_button_focus_out(_event) -> None:
-        nonlocal browse_button_focused
-        browse_button_focused = False
-        _refresh_browse_button_visual()
+    def _request_leave_preferences(next_action: Callable[[], None]) -> None:
+        """Keep navigation from silently throwing away edited Preferences."""
+        panel = preferences_panel_ref[0]
+        if (
+            active_surface[0] != "preferences"
+            or panel is None
+            or not panel.has_unsaved_changes
+        ):
+            next_action()
+            return
 
-    _bind_activation(browse_button_frame, on_open_map_folder)
-    _bind_activation(browse_button, on_open_map_folder)
-    browse_button.bind("<Enter>", _on_browse_button_enter)
-    browse_button.bind("<Leave>", _on_browse_button_leave)
-    browse_button_frame.bind("<FocusIn>", _on_browse_button_focus_in)
-    browse_button_frame.bind("<FocusOut>", _on_browse_button_focus_out)
-    browse_button_frame.pack(pady=(_TITLE_TO_ACTION_GAP, _BROWSE_BUTTON_BOTTOM_GAP))
+        def _discard_and_continue() -> None:
+            panel.discard_changes()
+            next_action()
 
-    instruction_label = tk.Label(
-        left_frame,
-        text="Choose a cave map folder.\n"
-             "Maps use .obj files with matching .mtl and textures.",
-        font=_INSTRUCTION_FONT,
-        fg=_INSTRUCTION_COLOR, bg=_BG_COLOR,
-        justify="center",
-    )
-    instruction_label.pack(pady=(0, _INSTRUCTION_BOTTOM_GAP))
-
-    def _on_preferences_click():
-        def _on_preferences_applied(_preferences) -> None:
-            workflow = map_library_workflow_ref[0]
-            if workflow is None:
-                return
-            from caveviewer.gui.standard_library_maps import (
-                default_map_library_install_dir,
-            )
-
-            workflow.set_map_library_root_dir(default_map_library_install_dir())
-
-        _show_preferences_dialog(
+        _show_discard_preferences_dialog(
             root,
+            px=px,
+            dialog_ref=discard_preferences_dialog_ref,
+            on_discard=_discard_and_continue,
+        )
+
+    def _ensure_preferences_panel() -> PreferencesPanel:
+        panel = preferences_panel_ref[0]
+        if panel is not None:
+            return panel
+
+        shell = tk.Frame(
+            preferences_surface,
+            bg=_BG_COLOR,
+            highlightthickness=1,
+            highlightbackground=_LIBRARY_PANEL_BORDER_COLOR,
+            highlightcolor=_LIBRARY_PANEL_BORDER_COLOR,
+        )
+        shell.pack(fill="both", expand=True, pady=px(14))
+        heading = tk.Frame(shell, bg=_PANEL_COLOR)
+        heading.pack(fill="x")
+        tk.Label(
+            heading,
+            text="Preferences",
+            font=_NAVIGATION_BRAND_FONT,
+            fg=_TITLE_COLOR,
+            bg=_PANEL_COLOR,
+            anchor="w",
+        ).pack(fill="x", padx=px(20), pady=(px(13), px(11)))
+        panel_host = tk.Frame(shell, bg=_BG_COLOR)
+        panel_host.pack(fill="both", expand=True)
+
+        panel = PreferencesPanel(
+            panel_host,
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
             platform_runtime=platform_runtime,
             on_applied=_on_preferences_applied,
+            on_cancel=_show_map_library_surface,
         )
+        preferences_panel_ref[0] = panel
+        return panel
+
+    def _show_preferences_surface() -> None:
+        panel = _ensure_preferences_panel()
+        if active_surface[0] != "preferences":
+            map_library_surface.pack_forget()
+            about_surface.pack_forget()
+            preferences_surface.pack(fill="both", expand=True)
+            active_surface[0] = "preferences"
+        _set_active_navigation("Preferences")
+        panel.focus_content()
+
+    def _on_preferences_click():
+        _show_preferences_surface()
+
+    def _ensure_about_surface():
+        if about_surface_initialized[0]:
+            return
+        _build_themed_about_content(
+            about_surface,
+            program_name=program_name,
+            version=version,
+            px=px,
+            on_close=_show_map_library_surface,
+            center_vertically=True,
+            show_close=False,
+        )
+        about_surface_initialized[0] = True
+
+    def _show_about_surface() -> None:
+        _ensure_about_surface()
+        if active_surface[0] != "about":
+            map_library_surface.pack_forget()
+            preferences_surface.pack_forget()
+            about_surface.pack(fill="both", expand=True)
+            active_surface[0] = "about"
+        _set_active_navigation("About")
+
+    def _on_about_click() -> None:
+        _request_leave_preferences(_show_about_surface)
+
+    def _focus_map_library() -> None:
+        _request_leave_preferences(_show_map_library_surface)
+
+    def _create_navigation_item(
+        text: str,
+        callback,
+        *,
+        selected: bool = False,
+    ):
+        """Create one keyboard-accessible action in the persistent nav rail."""
+        item = tk.Label(
+            navigation_frame,
+            text=text,
+            font=_BODY_FONT,
+            fg=_TITLE_COLOR if selected else _SUBTITLE_COLOR,
+            bg=_NAVIGATION_ACTIVE_BG if selected else _BG_COLOR,
+            anchor="w",
+            padx=px(14),
+            pady=px(9),
+            cursor="hand2",
+            takefocus=True,
+            highlightthickness=1,
+            highlightbackground=_BG_COLOR,
+            highlightcolor=_BUTTON_BORDER_COLOR,
+        )
+        state = {
+            "selected": selected,
+            "hovered": False,
+            "focused": False,
+        }
+
+        def refresh_visual() -> None:
+            active = state["selected"] or state["hovered"] or state["focused"]
+            item.config(
+                bg=_NAVIGATION_ACTIVE_BG if state["selected"] else (
+                    _NAVIGATION_HOVER_BG if active else _BG_COLOR
+                ),
+                fg=(
+                    _TITLE_COLOR
+                    if state["selected"] or active
+                    else _SUBTITLE_COLOR
+                ),
+            )
+
+        def set_selected(is_selected: bool) -> None:
+            state["selected"] = is_selected
+            refresh_visual()
+
+        def on_enter(_event) -> None:
+            state["hovered"] = True
+            refresh_visual()
+
+        def on_leave(_event) -> None:
+            state["hovered"] = False
+            refresh_visual()
+
+        def on_focus_in(_event) -> None:
+            state["focused"] = True
+            refresh_visual()
+
+        def on_focus_out(_event) -> None:
+            state["focused"] = False
+            refresh_visual()
+
+        _bind_activation(item, callback)
+        item.bind("<Enter>", on_enter)
+        item.bind("<Leave>", on_leave)
+        item.bind("<FocusIn>", on_focus_in)
+        item.bind("<FocusOut>", on_focus_out)
+        item.pack(fill="x", pady=(0, px(4)))
+        item._cv_set_selected = set_selected
+        return item
+
+    navigation_items: dict[str, object] = {}
+    map_library_navigation_item = _create_navigation_item(
+        "Map Library",
+        _focus_map_library,
+        selected=True,
+    )
+    navigation_items["Map Library"] = map_library_navigation_item
+    preferences_navigation_item = _create_navigation_item(
+        "Preferences",
+        _on_preferences_click,
+    )
+    navigation_items["Preferences"] = preferences_navigation_item
+    about_navigation_item = _create_navigation_item("About", _on_about_click)
+    navigation_items["About"] = about_navigation_item
+
+    def _set_active_navigation(active_name: str) -> None:
+        for name, item in navigation_items.items():
+            item._cv_set_selected(name == active_name)
 
     def _widget_exists(widget) -> bool:
         if widget is None:
@@ -1040,7 +1510,9 @@ def show_splash_screen(
         widget_exists=lambda widget: _widget_exists(widget),
         logger=_LOG,
         style=_map_library_panel_style(),
+        open_map_folder=on_open_map_folder,
     )
+    map_library_panel_ref[0] = map_library_panel
     cache_rebuild_controller = CacheRebuildJobController()
 
     def _show_map_library_feedback(
@@ -1083,43 +1555,28 @@ def show_splash_screen(
         # supplies the parent widget and session-level callbacks.
         map_library_workflow.populate_panel(parent, recent_map_paths)
 
-    secondary_link_row = tk.Frame(left_frame, bg=_BG_COLOR)
-    secondary_link_row.pack(pady=(_SECONDARY_LINK_ROW_TOP_GAP, _SECONDARY_LINK_ROW_BOTTOM_GAP))
+    _create_map_library_panel(map_library_surface)
+    map_library_surface.pack(fill="both", expand=True)
 
-    preferences_link = tk.Label(
-        secondary_link_row,
-        text="Preferences",
-        font=_SMALL_FONT,
-        fg="#5d6f8a",
-        bg=_BG_COLOR,
-        cursor="hand2",
-        takefocus=True,
-        highlightthickness=1,
-        highlightbackground=_BG_COLOR,
-        highlightcolor=_BUTTON_BG,
+    # Measure the complete Preferences form before showing the splash. This
+    # gives every right-hand surface one stable window height instead of
+    # visibly growing the window when someone selects Preferences later.
+    _ensure_preferences_panel()
+    map_library_surface.pack_forget()
+    preferences_surface.pack(fill="both", expand=True)
+    root.update_idletasks()
+    preferences_surface_required_height = (
+        root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK)
     )
-    _bind_activation(preferences_link, _on_preferences_click)
-    preferences_link.pack(side="left")
+    preferences_surface.pack_forget()
+    map_library_surface.pack(fill="both", expand=True)
 
-    credit_label = tk.Label(
-        left_frame,
-        text=_CREDITS_TEXT,
-        font=_FOOTER_FONT,
-        fg="#5f606b",
-        bg=_BG_COLOR,
-        justify="center",
-    )
-    credit_label.pack(pady=(0, _FOOTER_CREDITS_BOTTOM_PAD))
-
-    _create_map_library_panel(right_frame)
-
-    # -- footer note ----------------------------------------------------------------
-
-    browse_button.focus_set()
+    map_library_navigation_item.focus_set()
     root.update_idletasks()
     final_height = max(
         px(_SPLASH_WINDOW_MIN_HEIGHT),
         root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK),
+        preferences_surface_required_height,
     )
     max_height = max(px(360), root.winfo_screenheight() - px(80))
     final_height = min(final_height, max_height)
@@ -1137,12 +1594,34 @@ def show_splash_screen(
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     session.schedule_after(root, 50, _refresh_update_presentation)
     session.schedule_after(root, 350, update_manager.check_for_updates)
-    root.bind("<Return>", lambda _event: on_open_map_folder())
-    root.bind("<Escape>", on_close)
+    def _handle_root_return(_event=None):
+        if active_surface[0] == "preferences":
+            panel = preferences_panel_ref[0]
+            if panel is not None:
+                panel.apply()
+            return "break"
+        if active_surface[0] == "about":
+            _show_map_library_surface()
+            return "break"
+        on_open_map_folder()
+        return "break"
+
+    def _cancel_preferences_or_close(_event=None):
+        if active_surface[0] == "preferences":
+            _request_leave_preferences(_discard_preferences_and_show_map_library)
+            return "break"
+        if active_surface[0] == "about":
+            _show_map_library_surface()
+            return "break"
+        on_close()
+        return "break"
+
+    root.bind("<Return>", _handle_root_return)
+    root.bind("<Escape>", _cancel_preferences_or_close)
     bind_primary_shortcut(
         root,
         "w",
-        on_close,
+        _cancel_preferences_or_close,
         presentation_profile=presentation_profile,
     )
     root.protocol("WM_DELETE_WINDOW", on_close)

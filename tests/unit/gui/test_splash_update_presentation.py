@@ -307,16 +307,13 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
         "_UI_FONT_FAMILY",
         "_TK_TEXT_SCALE",
         "_TITLE_FONT",
+        "_NAVIGATION_BRAND_FONT",
         "_VERSION_FONT",
         "_BODY_FONT",
         "_SMALL_FONT",
         "_LIBRARY_SECTION_FONT",
         "_LIBRARY_METADATA_FONT",
-        "_INSTRUCTION_FONT",
-        "_FOOTER_FONT",
-        "_LINK_FONT",
         "_UPDATE_ACTION_FONT",
-        "_BUTTON_FONT",
     )
     original_values = {name: getattr(splash_screen, name) for name in font_globals}
 
@@ -329,7 +326,6 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
     monkeypatch.setattr(tkfont, "families", lambda _root: ["Helvetica Neue"])
     monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
     monkeypatch.setattr(splash_screen, "_LINUX_SPLASH_LAYOUT", False)
-    monkeypatch.setattr(splash_screen, "_ROOMY_SPLASH_LAYOUT", False)
 
     try:
         splash_screen._configure_runtime_tk_fonts(
@@ -338,42 +334,104 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
         )
 
         assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.4)
+        assert splash_screen._NAVIGATION_BRAND_FONT == (
+            "Helvetica Neue",
+            20,
+            "bold",
+        )
         assert splash_screen._BODY_FONT == ("Helvetica Neue", 17)
         assert splash_screen._SMALL_FONT == ("Helvetica Neue", 14)
         assert splash_screen._LIBRARY_METADATA_FONT == ("Helvetica Neue", 13)
         assert splash_screen._UPDATE_ACTION_FONT == ("Helvetica Neue", 15, "bold")
-        assert splash_screen._BUTTON_FONT == ("Helvetica Neue", 18)
     finally:
         for name, value in original_values.items():
             setattr(splash_screen, name, value)
 
 
-def test_splash_label_actions_are_keyboard_accessible_without_fallthrough():
+def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
 
-    assert "browse_button_frame = tk.Frame(" in source
-    assert "highlightthickness=0" in source
+    assert "navigation_frame = tk.Frame(" in source
+    assert "def _create_navigation_item(" in source
     assert "takefocus=True" in source
     assert 'label.bind("<Return>", invoke)' in source
     assert 'label.bind("<space>", invoke)' in source
     assert "def _invoke_and_break(callback):" in source
     assert "def _bind_activation(widget, callback) -> None:" in source
-    assert "_bind_activation(browse_button_frame, on_open_map_folder)" in source
-    assert "_bind_activation(browse_button, on_open_map_folder)" in source
-    assert 'browse_button_frame.bind("<FocusIn>", _on_browse_button_focus_in)' in source
-    assert 'browse_button_frame.bind("<FocusOut>", _on_browse_button_focus_out)' in source
-    assert 'text="Open map…"' in source
+    assert "map_library_navigation_item = _create_navigation_item(" in source
+    assert '"Map Library",' in source
+    assert '_create_navigation_item("Open Map", on_open_map_folder)' not in source
+    assert "preferences_navigation_item = _create_navigation_item(" in source
+    assert "about_navigation_item = _create_navigation_item(" in source
+    assert "open_map_folder=on_open_map_folder" in source
+    assert "def _focus_map_library() -> None:" in source
+    assert "panel.focus_content()" in source
+    assert "map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
+    assert "preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
+    assert "about_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
+    assert "def _show_preferences_surface() -> None:" in source
+    assert "preferences_surface_required_height" in source
+    assert "_ensure_preferences_panel()" in source
+    assert "map_library_surface.pack_forget()" in source
+    assert "preferences_surface.pack_forget()" in source
+    assert "def _show_about_surface() -> None:" in source
+    assert "PreferencesPanel(" in source
+    assert "_build_themed_about_content(" in source
+    assert "show_close=False" in source
+    assert "def _request_leave_preferences" in source
+    assert "_show_discard_preferences_dialog(" in source
+    assert 'root.bind("<Return>", _handle_root_return)' in source
+    assert 'root.bind("<Escape>", _cancel_preferences_or_close)' in source
+    assert "_show_themed_about_dialog(" not in source
+    assert "browse_button_frame" not in source
+    assert 'text="Open map…"' not in source
     assert "open_recorded_dive_link" not in source
     assert 'text="Open recorded dive…"' not in source
-    assert '"Maps use .obj files with matching .mtl and textures."' in source
+    assert "instruction_label" not in source
     assert '"Maps use .glb, or .obj with matching .mtl and textures."' not in source
     assert "def on_open(event=None):" not in source
-    assert "_bind_activation(preferences_link, _on_preferences_click)" in source
+    assert "preferences_link" not in source
     assert "MapLibraryWorkflow(" in source
     assert "load_initial_standard_library_catalog" in source
     assert "KNOWN_STANDARD_LIBRARY_MAPS" not in source
     assert "start_sample_download_worker(" not in source
     assert "show_sample_maps_dialog(" not in source
+
+
+def test_splash_navigation_uses_a_compact_horizontal_brand_masthead():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert "_NAVIGATION_BRAND_FONT = _tk_font(14, \"bold\")" in inspect.getsource(
+        splash_screen
+    )
+    assert "brand_frame = tk.Frame(left_frame, bg=_BG_COLOR)" in source
+    assert 'brand_frame.pack(fill="x", padx=px(14), pady=(px(18), px(10)))' in source
+    assert "max_logo_dim = px(56)" in source
+    assert 'logo_label.pack(side="left", padx=(0, px(10)))' in source
+    assert "brand_text = tk.Frame(brand_frame, bg=_BG_COLOR)" in source
+    assert 'brand_text.pack(side="left", fill="x", expand=True)' in source
+    assert "font=_NAVIGATION_BRAND_FONT" in source
+    assert 'title_label.pack(anchor="w")' in source
+    assert 'version_label.pack(anchor="w", pady=(px(1), 0))' in source
+    assert 'navigation_frame.pack(fill="x", pady=(px(8), 0))' in source
+
+
+def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
+    content_source = inspect.getsource(splash_screen._build_themed_about_content)
+    dialog_source = inspect.getsource(splash_screen._show_themed_about_dialog)
+
+    assert "tk.Toplevel(root)" in dialog_source
+    assert "_build_themed_about_content(" in dialog_source
+    assert "dialog.grab_set()" in dialog_source
+    assert "_LOGO_PATH" in content_source
+    assert "_CREDITS_TEXT.strip()" in content_source
+    assert "bg=_BG_COLOR" in content_source
+    assert "fg=_TITLE_COLOR" in content_source
+    assert "text=\"Close\"" in content_source
+    assert "show_close: bool = True" in content_source
+    assert "center_vertically" in content_source
+    assert "credits_panel" not in content_source
+    assert "highlightbackground=_BORDER_COLOR" not in content_source
 
 
 def test_cache_rebuild_starts_from_splash_without_a_confirmation_window():
@@ -397,7 +455,7 @@ def test_splash_map_picker_checks_its_directory_selection_route_before_calling_i
     )
 
 
-def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
+def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
     controller_source = inspect.getsource(map_library_controller.MapLibraryController)
@@ -416,7 +474,7 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
         )
     ]
 
-    assert 'text="Map Library"' not in source
+    assert '"Map Library"' in splash_source
     assert "Your Recent Maps" in source
     assert "CaveViewer Maps" in source
     assert "Your Library" not in source
@@ -427,6 +485,14 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "No user-opened maps yet." not in source
     assert 'top_pad=16' in source
     assert 'bottom_pad=18' in source
+    assert "Open a local map" in panel_source
+    assert "Browse a cave map folder" in panel_source
+    assert "def _create_open_map_action" in panel_source
+    assert "def _draw_open_map_action" in panel_source
+    assert "self._open_map_folder = open_map_folder" in panel_source
+    assert "open_map_shell = tk.Frame(panel, bg=style.panel_color)" in panel_source
+    assert "self._create_open_map_action(open_map_shell)" in panel_source
+    assert "scroll_row = 1" in panel_source
     assert '"Recent Maps"' not in source
     assert "Available Maps" not in source
     assert "Open recent or available maps." not in source
@@ -434,8 +500,11 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "font=self._style.section_font" in panel_source
     assert "font=self._style.small_font" not in section_source
     assert "Scrollbar(" not in source
-    assert "yscrollcommand=self._set_scrollbar_fraction" in panel_source
-    assert 'self._content_scrollbar.pack(side="right", fill="y")' in panel_source
+    assert "Scroll to browse more maps ↓" in panel_source
+    assert "self._content_scrollbar" not in panel_source
+    assert "self._content_overflows" in panel_source
+    assert "self.sync_scroll_region()" in panel_source
+    assert "self._content_canvas.yview_scroll" in panel_source
     assert "self.bind_mousewheel_if_ready(self._rows_frame)" in panel_source
     assert "self.sync_after_row_change()" in panel_source
     assert "recent_map_paths = _load_library_recent_map_paths()" in splash_source
@@ -443,8 +512,9 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "detail=row.detail" in panel_source
     assert "highlightthickness=0" in source
     assert "panel_border_color=_LIBRARY_PANEL_BORDER_COLOR" in style_source
-    assert 'divider.pack(side="left", fill="y", padx=(px(18), px(12)), pady=px(26))' in source
-    assert 'panel.pack(fill="both", expand=True, pady=self._px(26))' in panel_source
+    assert 'left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(220))' in source
+    assert 'divider.pack(side="left", fill="y", padx=(px(14), px(18)), pady=px(10))' in source
+    assert 'panel.pack(fill="both", expand=True, pady=self._px(14))' in panel_source
     assert "metadata_font=_LIBRARY_METADATA_FONT" in style_source
     assert "section_font=_LIBRARY_SECTION_FONT" in style_source
     assert "metadata_color=_LIBRARY_METADATA_COLOR" in style_source
@@ -726,150 +796,199 @@ def test_library_action_buttons_use_normalized_dimensions():
     assert splash_screen._LIBRARY_OVERFLOW_BUTTON_SIZE == 28
     assert splash_screen._LIBRARY_METADATA_FONT[1] == 9
     style = splash_screen._map_library_panel_style()
-    assert style.scrollbar_right_inset == 32
-    assert style.scroll_track_width == 12
-    assert style.scroll_track_color == splash_screen.DARK_THEME.secondary_button
+    assert not hasattr(style, "scrollbar_right_inset")
+    assert style.panel_border_color == splash_screen._LIBRARY_PANEL_BORDER_COLOR
 
 
-def test_map_library_scrollbar_uses_a_recessed_rail_and_rounded_thumb():
-    class _FakeScrollbar:
+def test_map_library_scroll_hint_appears_only_when_rows_overflow():
+    class _FakeHint:
         def __init__(self) -> None:
-            self.line_calls = []
-            self.deleted = []
+            self.manager = ""
+            self.calls = []
 
-        def winfo_height(self) -> int:
-            return 200
+        def winfo_manager(self) -> str:
+            return self.manager
 
-        def winfo_width(self) -> int:
-            return 18
+        def grid(self) -> None:
+            self.manager = "grid"
+            self.calls.append("grid")
 
-        def create_line(self, *coordinates, **options):
-            self.line_calls.append((coordinates, options))
-            return len(self.line_calls)
-
-        def delete(self, item_id) -> None:
-            self.deleted.append(item_id)
-
-        def coords(self, *_args) -> None:
-            raise AssertionError("The initial draw should create both scrollbar items.")
+        def grid_remove(self) -> None:
+            self.manager = ""
+            self.calls.append("grid_remove")
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
-    panel._content_scrollbar = _FakeScrollbar()
-    panel._scrollbar_fraction = (0.25, 0.75)
-    panel._scrollbar_track = None
-    panel._scrollbar_thumb = None
-    panel._px = lambda value: int(value)
-    panel._style = SimpleNamespace(
-        scroll_track_width=12,
-        scroll_track_color="#2a2a33",
-        scroll_thumb_min_height=36,
-        scroll_thumb_width=8,
-        scroll_thumb_color="#5d6f8a",
-    )
+    panel._scroll_hint = _FakeHint()
+    panel._content_overflows = False
+    panel._widget_exists = lambda widget: widget is not None
 
-    panel._draw_scrollbar_thumb()
+    panel._set_scroll_hint_visible(True)
 
-    (track_coordinates, track_options), (thumb_coordinates, thumb_options) = (
-        panel._content_scrollbar.line_calls
-    )
-    assert track_coordinates == (9.0, 8, 9.0, 192)
-    assert track_options == {
-        "fill": "#2a2a33",
-        "width": 12,
-        "capstyle": "round",
-        "tags": "cv_scrollbar_track",
-    }
-    assert thumb_coordinates == (9.0, 31, 9.0, 123)
-    assert thumb_options == {
-        "fill": "#5d6f8a",
-        "width": 8,
-        "capstyle": "round",
-        "tags": "cv_scrollbar_thumb",
-    }
+    assert panel._content_overflows is True
+    assert panel._scroll_hint.calls == ["grid"]
 
-    panel._scrollbar_fraction = (0.0, 1.0)
-    panel._draw_scrollbar_thumb()
+    panel._set_scroll_hint_visible(True)
+    assert panel._scroll_hint.calls == ["grid"]
 
-    assert panel._content_scrollbar.deleted == [1, 2]
-    assert panel._scrollbar_track is None
-    assert panel._scrollbar_thumb is None
+    panel._set_scroll_hint_visible(False)
+    assert panel._content_overflows is False
+    assert panel._scroll_hint.calls == ["grid", "grid_remove"]
 
 
-def test_map_library_scrollbar_restores_line_width_after_section_reexpands():
-    class _FakeScrollbar:
+def test_map_library_scroll_region_shows_guidance_only_for_overflow():
+    class _FakeCanvas:
         def __init__(self) -> None:
-            self.width = 1
-            self.height = 1
-            self.line_calls = []
-            self.coordinate_calls = []
-            self.itemconfigure_calls = []
+            self.height = 200
+            self.configurations = []
+            self.moveto_calls = []
+
+        def winfo_width(self) -> int:
+            return 320
 
         def winfo_height(self) -> int:
             return self.height
 
-        def winfo_width(self) -> int:
-            return self.width
+        def configure(self, **options) -> None:
+            self.configurations.append(options)
 
-        def create_line(self, *coordinates, **options):
-            self.line_calls.append((coordinates, options))
-            return len(self.line_calls)
+        def yview_moveto(self, fraction: float) -> None:
+            self.moveto_calls.append(fraction)
 
-        def coords(self, *args) -> None:
-            self.coordinate_calls.append(args)
+    class _FakeRows:
+        def __init__(self) -> None:
+            self.height = 320
 
-        def itemconfigure(self, *args, **options) -> None:
-            self.itemconfigure_calls.append((args, options))
+        def winfo_reqheight(self) -> int:
+            return self.height
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
-    panel._content_scrollbar = _FakeScrollbar()
-    panel._scrollbar_fraction = (0.25, 0.75)
-    panel._scrollbar_track = None
-    panel._scrollbar_thumb = None
+    panel._content_canvas = _FakeCanvas()
+    panel._rows_frame = _FakeRows()
+    overflow_states = []
+    panel._set_scroll_hint_visible = overflow_states.append
+
+    panel.sync_scroll_region()
+
+    assert panel._content_canvas.configurations == [
+        {"scrollregion": (0, 0, 320, 320)}
+    ]
+    assert overflow_states == [True]
+    assert panel._content_canvas.moveto_calls == []
+
+    panel._rows_frame.height = 200
+    panel.sync_scroll_region()
+
+    assert overflow_states == [True, False]
+    assert panel._content_canvas.moveto_calls == [0]
+
+
+def test_map_library_scrolls_only_when_rows_overflow():
+    class _FakeCanvas:
+        def __init__(self) -> None:
+            self.scroll_calls = []
+
+        def yview_scroll(self, amount, units) -> None:
+            self.scroll_calls.append((amount, units))
+
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel._content_canvas = _FakeCanvas()
+    panel._content_overflows = False
+
+    assert panel._scroll_content(SimpleNamespace(delta=-120)) is None
+    assert panel._content_canvas.scroll_calls == []
+
+    panel._content_overflows = True
+    assert panel._scroll_content(SimpleNamespace(delta=-120)) == "break"
+    assert panel._content_canvas.scroll_calls == [(1, "units")]
+
+
+def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypatch):
+    class _FakeCanvas:
+        def __init__(self, _parent, **options) -> None:
+            self.options = options
+            self.bindings = {}
+            self.pack_calls = []
+            self.config_calls = []
+            self.draw_calls = []
+
+        def bind(self, sequence, callback, add=None) -> None:
+            self.bindings[sequence] = callback
+
+        def pack(self, **options) -> None:
+            self.pack_calls.append(options)
+
+        def config(self, **options) -> None:
+            self.config_calls.append(options)
+
+        def winfo_width(self) -> int:
+            return 420
+
+        def winfo_height(self) -> int:
+            return 58
+
+        def delete(self, tag) -> None:
+            self.draw_calls.append(("delete", tag))
+
+        def create_rectangle(self, *coordinates, **options) -> None:
+            self.draw_calls.append(("rectangle", coordinates, options))
+
+        def create_line(self, *coordinates, **options) -> None:
+            self.draw_calls.append(("line", coordinates, options))
+
+        def create_text(self, *coordinates, **options) -> None:
+            self.draw_calls.append(("text", coordinates, options))
+
+    canvases = []
+    monkeypatch.setattr(
+        map_library_panel.tk,
+        "Canvas",
+        lambda *args, **kwargs: (
+            canvases.append(_FakeCanvas(*args, **kwargs)) or canvases[-1]
+        ),
+    )
+    opened = []
+    closed_menus = []
+    activations = []
+    wheel_targets = []
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel._open_map_folder = lambda: opened.append(True)
+    panel.close_active_menu = lambda: closed_menus.append(True)
+    panel._bind_activation = lambda _widget, callback: activations.append(callback)
+    panel.bind_mousewheel_if_ready = wheel_targets.append
+    panel._widget_exists = lambda _widget: True
     panel._px = lambda value: int(value)
     panel._style = SimpleNamespace(
-        scroll_track_width=12,
-        scroll_track_color="#2a2a33",
-        scroll_thumb_min_height=36,
-        scroll_thumb_width=8,
-        scroll_thumb_color="#5d6f8a",
+        small_font=("TkDefaultFont", 10),
+        section_font=("TkDefaultFont", 10, "bold"),
+        metadata_font=("TkDefaultFont", 9),
+        title_color="#f5d77d",
+        metadata_color="#6f717f",
+        panel_color="#101018",
+        panel_border_color="#1e2028",
+        button_border_color="#a77a10",
+        button_hover_bg="#2a2a33",
+        menu_hover_bg="#343442",
+        progress_fill_color="#f0ad22",
     )
 
-    # Tk can issue a scroll update while the custom canvas is still hidden,
-    # where its dimensions are one pixel.  This represents that first draw.
-    panel._draw_scrollbar_thumb()
-    assert [options["width"] for _coordinates, options in panel._content_scrollbar.line_calls] == [
-        1,
-        1,
+    panel._create_open_map_action(object())
+
+    action = canvases[0]
+    assert action.options["takefocus"] is True
+    assert action.options["height"] == 58
+    assert action.pack_calls == [{"anchor": "w", "fill": "x"}]
+    assert wheel_targets == [action]
+
+    action.bindings["<Configure>"](None)
+    assert [entry[2]["text"] for entry in action.draw_calls if entry[0] == "text"] == [
+        "Open a local map",
+        "Browse a cave map folder",
     ]
 
-    # Once a collapsed section is expanded, <Configure> redraws the same
-    # canvas items at their actual size.  They must regain their full widths.
-    panel._content_scrollbar.width = 18
-    panel._content_scrollbar.height = 200
-    panel._draw_scrollbar_thumb()
+    activations[0]()
 
-    assert panel._content_scrollbar.coordinate_calls == [
-        (1, 9.0, 8, 9.0, 192),
-        (2, 9.0, 31, 9.0, 123),
-    ]
-    assert panel._content_scrollbar.itemconfigure_calls == [
-        (
-            (1,),
-            {
-                "fill": "#2a2a33",
-                "width": 12,
-                "capstyle": "round",
-            },
-        ),
-        (
-            (2,),
-            {
-                "fill": "#5d6f8a",
-                "width": 8,
-                "capstyle": "round",
-            },
-        ),
-    ]
+    assert closed_menus == [True]
+    assert opened == [True]
 
 
 @pytest.mark.parametrize(
