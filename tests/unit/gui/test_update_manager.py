@@ -176,6 +176,28 @@ def _checked_manager(tmp_path, download_update, *, desktop_services=None):
     return manager, adapter
 
 
+def test_legacy_manager_constructor_composes_the_runtime_feature_gates(tmp_path):
+    manager = UpdateManager(
+        "1.0.63",
+        platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
+        desktop_services=FakeDesktopServices(),
+        temp_root=str(tmp_path),
+    )
+    try:
+        assert manager.automatic_update_decision is (
+            manager._platform_runtime.automatic_update_decision
+        )
+        assert manager.update_package_reveal_decision is (
+            manager._platform_runtime.update_package_reveal_decision
+        )
+        assert (
+            manager.automatic_update_decision.reason_code
+            != "automatic_update_legacy_runtime"
+        )
+    finally:
+        manager.shutdown()
+
+
 def test_check_transitions_through_checking_to_available(tmp_path):
     check_started = threading.Event()
     release_check = threading.Event()
@@ -260,7 +282,7 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
     manager, adapter = _checked_manager(tmp_path, download_update)
     try:
         assert manager.reveal_action_label == "Show Test Package"
-        assert manager.update_package_reveal_decision.state is FeatureState.DEGRADED
+        assert manager.update_package_reveal_decision.state is FeatureState.ENABLED
         assert manager.start_download()
         assert manager.wait_for_background_task(1)
 
@@ -833,7 +855,18 @@ def test_runtime_target_is_passed_to_the_default_update_client(
             latest_version=current_version,
         )
 
-    monkeypatch.setattr(update_manager.update_checker, "check_for_update", check_for_update)
+    monkeypatch.setattr(
+        update_manager.update_checker,
+        "check_for_update_target",
+        check_for_update,
+    )
+    monkeypatch.setattr(
+        update_manager.update_checker,
+        "check_for_update",
+        lambda *_args, **_kwargs: pytest.fail(
+            "the runtime manager must not use the legacy checker facade"
+        ),
+    )
     manager = UpdateManager(
         "1.0.63",
         platform_runtime=runtime,
@@ -879,7 +912,18 @@ def test_runtime_tls_adapter_is_passed_to_default_update_download(
         Path(destination).write_bytes(b"payload")
         kwargs["phase_cb"]("verifying")
 
-    monkeypatch.setattr(update_manager.update_checker, "download_update", download_update)
+    monkeypatch.setattr(
+        update_manager.update_checker,
+        "download_update_target",
+        download_update,
+    )
+    monkeypatch.setattr(
+        update_manager.update_checker,
+        "download_update",
+        lambda *_args, **_kwargs: pytest.fail(
+            "the runtime manager must not use the legacy download facade"
+        ),
+    )
     manager = UpdateManager(
         "1.0.63",
         platform_runtime=runtime,

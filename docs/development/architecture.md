@@ -492,11 +492,14 @@ user agent, accepted package kinds, and signed-manifest field aliases.
 Environment and CLI-derived overrides turn that profile into an
 `UpdateConfiguration`; `probe_automatic_update()` then produces an immutable
 `UpdateTarget` only when both manifest endpoints are configured and the target
-is supported. `UpdateManager` passes that target and the focused
-`TlsTrustAdapter` to the checker and downloader, so the composed runtime update
-path does not consult `SplashPlatformAdapter` for release policy or manifest
-parsing. Direct callers of the former adapter-based API retain a clearly local
-compatibility bridge while they migrate.
+is supported. `UpdateManager` always operates through that composed runtime:
+its default checker and downloader calls use the target and focused
+`TlsTrustAdapter`, so the update path does not consult `SplashPlatformAdapter`
+for release policy or manifest parsing. Former direct manager constructors are
+first converted into the same runtime instead of inventing an enabled update
+decision. `check_for_update_legacy()` and `download_update_legacy()` retain the
+former adapter/global behavior as clearly local compatibility bridges while
+their callers migrate.
 
 Verified update-package reveal uses a focused adapter. At composition it
 declares `finder`, `explorer`, or Linux `desktop_service` without mounting a

@@ -17,14 +17,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.gui.features import (
-    FeatureDecision,
-    FeatureId,
-    FeatureState,
-    decide_update_package_reveal,
-)
+from caveviewer.gui.features import FeatureDecision
 from caveviewer.gui import update_checker
-from caveviewer.gui.platform import get_desktop_services, get_platform_adapter
 from caveviewer.gui.platform.base import SplashPlatformAdapter
 from caveviewer.gui.platform.desktop_services import DesktopInhibitor, DesktopServices
 from caveviewer.gui.platform.desktop_notifications import (
@@ -35,17 +29,12 @@ from caveviewer.gui.platform.desktop_inhibition import (
     acquire_idle_suspend_inhibitor,
     release_desktop_inhibitor,
 )
-from caveviewer.gui.platform.probes.update_package_reveal import (
-    probe_update_package_reveal,
-)
-from caveviewer.gui.platform.runtime import PlatformRuntime
+from caveviewer.gui.platform.runtime import PlatformRuntime, create_platform_runtime
 from caveviewer.gui.platform.update_package_reveal import (
     UpdatePackageRevealAdapter,
-    create_legacy_update_package_reveal_adapter,
 )
 from caveviewer.gui.platform.update_package_storage import (
     UpdatePackageStorageAdapter,
-    create_update_package_storage_adapter,
 )
 from caveviewer.gui.update_checker import (
     DownloadCancelled,
@@ -124,6 +113,28 @@ class UpdateSnapshot:
         return max(0, min(100, int(fraction * 100)))
 
 
+def _compose_legacy_platform_runtime(
+    *,
+    platform_adapter: SplashPlatformAdapter | None,
+    desktop_services: DesktopServices | None,
+    update_package_reveal_adapter: UpdatePackageRevealAdapter | None,
+    update_package_storage_adapter: UpdatePackageStorageAdapter | None,
+) -> PlatformRuntime:
+    """Compose the runtime required by former direct manager callers.
+
+    Older callers may still provide broad adapters directly to
+    ``UpdateManager``. This compatibility bridge converts those inputs into
+    the same process-owned runtime used by the application, so update policy
+    is never recreated as an ad-hoc enabled decision in the manager.
+    """
+    return create_platform_runtime(
+        platform_adapter=platform_adapter,
+        desktop_services=desktop_services,
+        update_package_reveal_adapter=update_package_reveal_adapter,
+        update_package_storage_adapter=update_package_storage_adapter,
+    )
+
+
 class UpdateManager:
     """Own the update state machine for the lifetime of one app process."""
 
@@ -178,59 +189,34 @@ class UpdateManager:
                 "platform_runtime"
             )
 
+        if platform_runtime is None:
+            platform_runtime = _compose_legacy_platform_runtime(
+                platform_adapter=platform_adapter,
+                desktop_services=desktop_services,
+                update_package_reveal_adapter=update_package_reveal_adapter,
+                update_package_storage_adapter=update_package_storage_adapter,
+            )
+
         self._platform_runtime = platform_runtime
-        self._platform_adapter = (
-            platform_runtime.platform_adapter
-            if platform_runtime is not None
-            else platform_adapter or get_platform_adapter()
-        )
-        self._desktop_services = (
-            platform_runtime.desktop_services
-            if platform_runtime is not None
-            else desktop_services or get_desktop_services()
-        )
+        self._desktop_services = platform_runtime.desktop_services
         self._update_package_reveal_adapter = (
             platform_runtime.update_package_reveal_adapter
-            if platform_runtime is not None
-            else update_package_reveal_adapter
-            or create_legacy_update_package_reveal_adapter(self._platform_adapter)
         )
         self._update_package_storage_adapter = (
             platform_runtime.update_package_storage_adapter
-            if platform_runtime is not None
-            else update_package_storage_adapter
-            or create_update_package_storage_adapter(self._platform_adapter)
         )
-        self._check_for_update = check_for_update or update_checker.check_for_update
-        self._download_update = download_update or update_checker.download_update
-        self._uses_runtime_update_target = (
-            platform_runtime is not None and check_for_update is None
+        self._check_for_update = (
+            check_for_update or update_checker.check_for_update_target
         )
-        self._uses_runtime_update_target_for_download = (
-            platform_runtime is not None and download_update is None
+        self._download_update = (
+            download_update or update_checker.download_update_target
         )
-        self._update_target = (
-            platform_runtime.automatic_update_target
-            if platform_runtime is not None
-            else None
-        )
-        self._automatic_update_decision = (
-            platform_runtime.automatic_update_decision
-            if platform_runtime is not None
-            else FeatureDecision(
-                feature=FeatureId.AUTOMATIC_UPDATE,
-                state=FeatureState.ENABLED,
-                reason_code="automatic_update_legacy_runtime",
-                explanation="Automatic updates are available for this installation.",
-                route="signed_manifest",
-            )
-        )
+        self._uses_typed_update_check = check_for_update is None
+        self._uses_typed_update_download = download_update is None
+        self._update_target = platform_runtime.automatic_update_target
+        self._automatic_update_decision = platform_runtime.automatic_update_decision
         self._update_package_reveal_decision = (
             platform_runtime.update_package_reveal_decision
-            if platform_runtime is not None
-            else decide_update_package_reveal(
-                probe_update_package_reveal(self._update_package_reveal_adapter)
-            )
         )
         self._temp_root = temp_root
 
@@ -351,8 +337,7 @@ class UpdateManager:
         result: UpdateCheckResult | None = None
         unexpected_error: Exception | None = None
         try:
-            if self._uses_runtime_update_target:
-                assert self._platform_runtime is not None
+            if self._uses_typed_update_check:
                 assert self._update_target is not None
                 result = self._check_for_update(
                     self._current_version,
@@ -360,10 +345,7 @@ class UpdateManager:
                     tls_trust_adapter=self._platform_runtime.tls_trust_adapter,
                 )
             else:
-                result = self._check_for_update(
-                    self._current_version,
-                    install_channel=self._platform_adapter.install_channel(),
-                )
+                result = self._check_for_update(self._current_version)
         except Exception as exc:
             unexpected_error = exc
             _LOG.exception("Update check worker failed: %s", exc)
@@ -529,8 +511,7 @@ class UpdateManager:
                 "cancel_cb": cancel_event.is_set,
                 "phase_cb": on_phase,
             }
-            if self._uses_runtime_update_target_for_download:
-                assert self._platform_runtime is not None
+            if self._uses_typed_update_download:
                 assert self._update_target is not None
                 download_kwargs["update_target"] = self._update_target
                 download_kwargs["tls_trust_adapter"] = (

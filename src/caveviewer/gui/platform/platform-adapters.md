@@ -130,10 +130,15 @@ when the runtime is composed rather than when `update_checker.py` is imported.
 This means CLI `--update-branch` and other explicit configuration are seen by
 the process-owned manager. `UpdateTarget` carries the signed manifest URLs,
 user agent, accepted package policy, and manifest aliases needed by the network
-client, so the normal runtime path does not call broad adapter update methods.
-The manager rechecks the gate before it starts a check and before it starts a
-download; a disabled gate never starts network work. Offline failures remain
-ordinary transient check results, not a platform capability failure.
+client, so the normal runtime path calls the typed target checker/downloader
+instead of broad adapter update methods. `UpdateManager` also converts former
+direct constructor inputs into a runtime before it reads a gate, rather than
+creating an enabled update decision itself. The old adapter/global calls remain
+in explicitly named `check_for_update_legacy()` and `download_update_legacy()`
+compatibility bridges. The manager rechecks the gate before it starts a check
+and before it starts a download; a disabled gate never starts network work.
+Offline failures remain ordinary transient check results, not a platform
+capability failure.
 
 Verified update-package reveal is a separate static gate and focused adapter:
 
