@@ -166,6 +166,7 @@ _LOG = get_logger("CaveViewer")
 _BG_COLOR = DARK_THEME.background
 _PANEL_COLOR = DARK_THEME.panel
 _TITLE_COLOR = DARK_THEME.title
+_LIBRARY_FORMER_MAP_TITLE_COLOR = DARK_THEME.secondary_text
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
@@ -218,11 +219,14 @@ _CREDITS_TEXT = (
     "BottomLine Projects Scientific Dive Team.\n"
     "Engineering and design by magic mr_v.\n\n"
     "Licensed under the GNU General Public License v3.0.\n")
-_LIBRARY_SCROLLBAR_WIDTH = 14
-_LIBRARY_SCROLL_THUMB_WIDTH = 5
+_LIBRARY_SCROLLBAR_WIDTH = 24
+_LIBRARY_SCROLLBAR_RIGHT_INSET = 32
+_LIBRARY_SCROLL_TRACK_WIDTH = 12
+_LIBRARY_SCROLL_THUMB_WIDTH = 8
 _LIBRARY_SCROLL_THUMB_MIN_HEIGHT = 36
-_LIBRARY_SCROLL_THUMB_COLOR = DARK_THEME.secondary_button_border
-_LIBRARY_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
+_LIBRARY_SCROLL_TRACK_COLOR = DARK_THEME.secondary_button
+_LIBRARY_SCROLL_THUMB_COLOR = DARK_THEME.entry_focus_border
+_LIBRARY_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.primary_button_hover
 _LIBRARY_PANEL_BORDER_COLOR = "#1e2028"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
 _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
@@ -412,6 +416,7 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         panel_color=_PANEL_COLOR,
         panel_border_color=_LIBRARY_PANEL_BORDER_COLOR,
         title_color=_TITLE_COLOR,
+        former_map_title_color=_LIBRARY_FORMER_MAP_TITLE_COLOR,
         instruction_color=_INSTRUCTION_COLOR,
         section_font=_LIBRARY_SECTION_FONT,
         small_font=_SMALL_FONT,
@@ -445,6 +450,9 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         menu_hover_bg=_LIBRARY_MENU_HOVER_BG,
         menu_text=_LIBRARY_MENU_TEXT,
         scrollbar_width=_LIBRARY_SCROLLBAR_WIDTH,
+        scrollbar_right_inset=_LIBRARY_SCROLLBAR_RIGHT_INSET,
+        scroll_track_width=_LIBRARY_SCROLL_TRACK_WIDTH,
+        scroll_track_color=_LIBRARY_SCROLL_TRACK_COLOR,
         scroll_thumb_min_height=_LIBRARY_SCROLL_THUMB_MIN_HEIGHT,
         scroll_thumb_width=_LIBRARY_SCROLL_THUMB_WIDTH,
         scroll_thumb_color=_LIBRARY_SCROLL_THUMB_COLOR,

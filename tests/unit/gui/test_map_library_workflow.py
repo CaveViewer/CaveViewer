@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import queue
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,10 @@ from caveviewer.gui.map_cache_rebuild import (
 )
 from caveviewer.gui.map_library_panel import MapLibraryMenuAction
 from caveviewer.gui.map_library_controller import MapLibraryController
+from caveviewer.gui.map_library_sources import (
+    GITHUB_RELEASE_MAP_SOURCE_ID,
+    MapCatalogRefresh,
+)
 from caveviewer.gui.map_library import recent_map_key
 from caveviewer.gui.map_library_workflow import (
     MapLibraryWorkflow,
@@ -69,6 +74,8 @@ class _FakePanel:
         self.standard_rows = {}
         self.standard_actions = {}
         self.standard_menu_factories = {}
+        self.standard_former = {}
+        self.recent_rows = {}
         self.metadata = {}
         self.progress = []
         self.closed_menus = 0
@@ -89,12 +96,21 @@ class _FakePanel:
 
     def add_recent_row(self, entry, *, action, menu_actions_factory=None):
         self.recent_row = (entry, action, menu_actions_factory)
+        self.recent_rows[entry.key] = self.recent_row
         return SimpleNamespace(row_shell=object())
 
-    def add_standard_row(self, row, *, action, menu_actions_factory=None):
+    def add_standard_row(
+        self,
+        row,
+        *,
+        action,
+        former: bool = False,
+        menu_actions_factory=None,
+    ):
         self.standard_rows[row.key] = row
         self.standard_actions[row.key] = (row.action_text, action, row.enabled)
         self.standard_menu_factories[row.key] = menu_actions_factory
+        self.standard_former[row.key] = former
         return SimpleNamespace(row_shell=object())
 
     def has_standard_row(self, key: str) -> bool:
@@ -105,6 +121,13 @@ class _FakePanel:
         self.standard_rows.pop(key, None)
         self.standard_actions.pop(key, None)
         self.standard_menu_factories.pop(key, None)
+        self.standard_former.pop(key, None)
+
+    def is_standard_row_former(self, key) -> bool:
+        return self.standard_former.get(key, False)
+
+    def set_standard_row_former(self, key, former: bool) -> None:
+        self.standard_former[key] = bool(former)
 
     def set_standard_row_action(
         self,
@@ -173,6 +196,7 @@ class _FakePanel:
 
     def remove_recent_row(self, key: str) -> None:
         self.removed_recent_key = key
+        self.recent_rows.pop(key, None)
 
     def reset_standard_progress(self, key: str) -> None:
         self.progress.append(("reset", key))
@@ -271,6 +295,10 @@ def _library_map(
     )
 
 
+def _standard_key(catalog_id_or_display_name: str) -> tuple[str, str]:
+    return GITHUB_RELEASE_MAP_SOURCE_ID, catalog_id_or_display_name
+
+
 def _workflow(
     maps,
     *,
@@ -292,6 +320,9 @@ def _workflow(
     cache_rebuild_controller=None,
     splash_is_foreground=None,
     notification_sender=None,
+    managed_installs=None,
+    is_app_supplied_path=None,
+    set_managed_install_former=None,
 ):
     root = _FakeRoot()
     panel = _FakePanel()
@@ -325,7 +356,14 @@ def _workflow(
         is_downloaded=is_downloaded or (lambda _root, _map: False),
         existing_path=existing_path or (lambda _root, _map: None),
         remove_downloaded=lambda _root, _map: _RemovalResult(("/removed",)),
+        is_app_supplied_path=(
+            is_app_supplied_path or (lambda _path, _root: False)
+        ),
         fetch_catalog=fetch_catalog or (lambda: ([], None)),
+        set_managed_install_former=(
+            set_managed_install_former or (lambda _map, *, former: None)
+        ),
+        managed_installs=managed_installs or (lambda: []),
         map_library_root_dir_provider=map_library_root_dir_provider,
         start_download_worker=(
             start_download_worker
@@ -472,9 +510,27 @@ def test_populate_panel_creates_rows_and_starts_catalog_fetch():
 
     assert state.panel.created_parent == "parent"
     assert state.panel.finished
-    assert "Test Cave" in state.panel.standard_rows
+    assert _standard_key("Test Cave") in state.panel.standard_rows
     assert state.controller.catalog_fetch.loading
     assert state.root.after_calls[-1][1] == 120
+
+
+def test_populate_panel_excludes_app_managed_paths_from_recent_rows():
+    library_map = _library_map()
+    state = _workflow(
+        [library_map],
+        is_app_supplied_path=lambda path, _root: path == "/library/Former Cave",
+    )
+
+    state.workflow.populate_panel("parent", ["/library/Former Cave", "/maps/Mine"])
+
+    assert state.workflow.recent_map_paths == ["/maps/Mine"]
+    assert state.panel.recent_row[0].title == "Mine"
+
+    state.workflow.open_recent_map("/library/Former Cave")
+
+    assert state.opened == []
+    assert "still managed by Map Library" in state.feedback[-1][0]
 
 
 def test_map_library_root_change_refreshes_standard_rows():
@@ -496,8 +552,8 @@ def test_map_library_root_change_refreshes_standard_rows():
 
     assert state.workflow.map_library_root_dir == "/downloads"
     assert "/downloads" in checked_roots
-    assert state.panel.standard_actions["Test Cave"][0] == "Open"
-    assert state.panel.metadata["Test Cave"] == ("Downloaded", False)
+    assert state.panel.standard_actions[_standard_key("Test Cave")][0] == "Open"
+    assert state.panel.metadata[_standard_key("Test Cave")] == ("Downloaded", False)
 
 
 def test_download_action_syncs_latest_map_library_root_before_worker_start():
@@ -550,7 +606,7 @@ def test_downloaded_standard_library_menu_offers_build_cache_without_cache():
     row_widgets = SimpleNamespace(row_shell=object())
 
     state.workflow.add_standard_row(library_map)
-    menu_factory = state.panel.standard_menu_factories["Test Cave"]
+    menu_factory = state.panel.standard_menu_factories[_standard_key("Test Cave")]
 
     actions = menu_factory(row_widgets)
 
@@ -596,7 +652,7 @@ def test_downloaded_standard_library_menu_preflights_local_guided_dive():
     )
 
     state.workflow.add_standard_row(library_map)
-    menu_factory = state.panel.standard_menu_factories["Test Cave"]
+    menu_factory = state.panel.standard_menu_factories[_standard_key("Test Cave")]
     actions = menu_factory(SimpleNamespace(row_shell=object()))
 
     assert [label for label, _command in actions] == [
@@ -827,7 +883,7 @@ def test_downloaded_standard_library_menu_includes_remove_cache_when_cache_exist
     row_widgets = SimpleNamespace(row_shell=object())
 
     state.workflow.add_standard_row(library_map)
-    menu_factory = state.panel.standard_menu_factories["Test Cave"]
+    menu_factory = state.panel.standard_menu_factories[_standard_key("Test Cave")]
     actions = menu_factory(row_widgets)
 
     assert [label for label, _command in actions] == [
@@ -882,7 +938,7 @@ def test_download_success_applies_progress_and_open_action():
     )
 
     state.workflow.start_inline_download(library_map)
-    active_action = state.panel.standard_actions["Test Cave"]
+    active_action = state.panel.standard_actions[_standard_key("Test Cave")]
     assert active_action[0] == ""
     assert active_action[3] is True
     _selection, _map, cancel_event, result_queue = download_calls[0]
@@ -891,9 +947,9 @@ def test_download_success_applies_progress_and_open_action():
 
     state.workflow.poll_download_queue(library_map, result_queue, cancel_event)
 
-    assert ("show", "Test Cave") in state.panel.progress
-    assert ("apply", "Test Cave", 40, 100) in state.panel.progress
-    assert state.panel.standard_actions["Test Cave"][0] == "Open"
+    assert ("show", _standard_key("Test Cave")) in state.panel.progress
+    assert ("apply", _standard_key("Test Cave"), 40, 100) in state.panel.progress
+    assert state.panel.standard_actions[_standard_key("Test Cave")][0] == "Open"
     assert not state.controller.active_download.in_progress
     assert state.closed_inhibitors == [state.inhibitor]
 
@@ -919,7 +975,7 @@ def test_download_stop_action_requests_cancel_and_stays_in_stop_mode():
 
     state.workflow.start_inline_download(library_map)
     _text, stop_action, enabled, show_stop_progress = state.panel.standard_actions[
-        "Test Cave"
+        _standard_key("Test Cave")
     ]
     _selection, _map, cancel_event, _result_queue = download_calls[0]
 
@@ -929,10 +985,10 @@ def test_download_stop_action_requests_cancel_and_stays_in_stop_mode():
     stop_action()
 
     assert cancel_event.is_set()
-    assert state.panel.standard_actions["Test Cave"][0] == ""
-    assert state.panel.standard_actions["Test Cave"][2] is False
-    assert state.panel.standard_actions["Test Cave"][3] is True
-    assert state.panel.metadata["Test Cave"] == ("Stopping…", False)
+    assert state.panel.standard_actions[_standard_key("Test Cave")][0] == ""
+    assert state.panel.standard_actions[_standard_key("Test Cave")][2] is False
+    assert state.panel.standard_actions[_standard_key("Test Cave")][3] is True
+    assert state.panel.metadata[_standard_key("Test Cave")] == ("Stopping…", False)
 
 
 def test_close_cancels_active_download_poll_and_closes_menu():
@@ -1018,7 +1074,7 @@ def test_pending_download_waits_for_catalog_then_starts_resolved_download():
     state.workflow.poll_catalog_fetch()
 
     assert download_calls == [catalog_map]
-    assert state.panel.metadata["Test Cave"] == ("Downloading…", False)
+    assert state.panel.metadata[_standard_key("Test Cave")] == ("Downloading…", False)
 
 
 def test_catalog_refresh_adds_new_remote_standard_library_rows():
@@ -1042,11 +1098,11 @@ def test_catalog_refresh_adds_new_remote_standard_library_rows():
     state.workflow.poll_catalog_fetch()
 
     assert set(state.panel.standard_rows) == {
-        "initial-cave",
-        "new-remote-cave",
+        _standard_key("initial-cave"),
+        _standard_key("new-remote-cave"),
     }
-    assert state.panel.standard_rows["new-remote-cave"].title == "New Remote Cave"
-    assert state.panel.standard_rows["new-remote-cave"].detail == "25 MB"
+    assert state.panel.standard_rows[_standard_key("new-remote-cave")].title == "New Remote Cave"
+    assert state.panel.standard_rows[_standard_key("new-remote-cave")].detail == "25 MB"
 
 
 def test_catalog_refresh_removes_stale_not_downloaded_rows():
@@ -1065,17 +1121,18 @@ def test_catalog_refresh_removes_stale_not_downloaded_rows():
     state.workflow.populate_panel("parent", [])
     state.workflow.poll_catalog_fetch()
 
-    assert "stale-cave" not in state.panel.standard_rows
-    assert "current-cave" in state.panel.standard_rows
-    assert state.panel.removed_standard_key == "stale-cave"
+    assert _standard_key("stale-cave") not in state.panel.standard_rows
+    assert _standard_key("current-cave") in state.panel.standard_rows
+    assert state.panel.removed_standard_key == _standard_key("stale-cave")
 
 
-def test_catalog_refresh_keeps_stale_downloaded_rows():
+def test_catalog_refresh_keeps_former_local_maps_muted_with_normal_actions():
     stale_map = _library_map(
         display_name="Downloaded Stale Cave",
         asset_name="stale.zip",
         catalog_id="downloaded-stale-cave",
     )
+    rebuild_controller = _FakeCacheRebuildController()
     state = _workflow(
         [stale_map],
         fetch_catalog=lambda: ([], None),
@@ -1087,13 +1144,139 @@ def test_catalog_refresh_keeps_stale_downloaded_rows():
             if library_map.catalog_id == "downloaded-stale-cave"
             else None
         ),
+        cache_rebuild_preflight=_enabled_cache_rebuild_preflight,
+        cache_rebuild_controller=rebuild_controller,
     )
 
     state.workflow.populate_panel("parent", [])
     state.workflow.poll_catalog_fetch()
 
-    assert "downloaded-stale-cave" in state.panel.standard_rows
-    assert state.panel.standard_actions["downloaded-stale-cave"][0] == "Open"
+    key = _standard_key("downloaded-stale-cave")
+    assert key in state.panel.standard_rows
+    assert state.panel.is_standard_row_former(key)
+    assert state.panel.metadata[key] == (
+        "No longer a part of the standard library",
+        False,
+    )
+    assert state.panel.standard_actions[key][0] == "Open"
+    assert state.panel.standard_actions[key][2] is True
+    actions = state.panel.standard_menu_factories[key](SimpleNamespace(row_shell=object()))
+    assert [label for label, _action in actions] == [
+        "Remove map files",
+        "Rebuild cache",
+    ]
+
+    state.panel.standard_actions[key][1]()
+
+    assert state.opened == ["/library/Downloaded Stale Cave"]
+
+    next(action for label, action in actions if label == "Rebuild cache")()
+
+    assert rebuild_controller.start_calls == [_cache_rebuild_target()]
+
+
+def test_catalog_refresh_keeps_a_former_local_map_in_its_prior_position():
+    first_map = _library_map(
+        display_name="First Cave",
+        asset_name="first.zip",
+        catalog_id="first-cave",
+    )
+    former_map = _library_map(
+        display_name="Former Cave",
+        asset_name="former.zip",
+        catalog_id="former-cave",
+    )
+    last_map = _library_map(
+        display_name="Last Cave",
+        asset_name="last.zip",
+        catalog_id="last-cave",
+    )
+    new_map = _library_map(
+        display_name="New Cave",
+        asset_name="new.zip",
+        catalog_id="new-cave",
+    )
+    state = _workflow(
+        [first_map, former_map, last_map],
+        fetch_catalog=lambda: ([first_map, last_map, new_map], None),
+        is_downloaded=lambda _root, library_map: library_map is former_map,
+        existing_path=lambda _root, library_map: (
+            "/library/Former Cave" if library_map is former_map else None
+        ),
+    )
+
+    state.workflow.populate_panel("parent", [])
+    state.workflow.poll_catalog_fetch()
+
+    assert [library_map.catalog_id for library_map in state.workflow.standard_library_maps] == [
+        "first-cave",
+        "former-cave",
+        "last-cave",
+        "new-cave",
+    ]
+    assert list(state.panel.standard_rows) == [
+        _standard_key("first-cave"),
+        _standard_key("former-cave"),
+        _standard_key("last-cave"),
+        _standard_key("new-cave"),
+    ]
+    assert state.panel.is_standard_row_former(_standard_key("former-cave"))
+
+
+def test_non_authoritative_catalog_refresh_never_blocks_a_downloaded_map():
+    library_map = _library_map(catalog_id="cached-cave")
+    state = _workflow(
+        [library_map],
+        fetch_catalog=lambda: (
+            MapCatalogRefresh(
+                source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
+                maps=(),
+                authoritative=False,
+                error="offline",
+            ),
+        ),
+        is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: "/library/Cached Cave",
+    )
+
+    state.workflow.populate_panel("parent", [])
+    state.workflow.poll_catalog_fetch()
+
+    key = _standard_key("cached-cave")
+    assert key in state.panel.standard_rows
+    assert not state.panel.is_standard_row_former(key)
+    assert state.panel.standard_actions[key][0] == "Open"
+
+
+def test_persisted_former_map_remains_available_with_normal_actions_while_offline():
+    former_map = _library_map(display_name="Former Cave", catalog_id="former-cave")
+    install = SimpleNamespace(
+        former=True,
+        as_map_info=lambda: former_map,
+    )
+    state = _workflow(
+        [],
+        fetch_catalog=lambda: (
+            MapCatalogRefresh(
+                source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
+                maps=(),
+                authoritative=False,
+                error="offline",
+            ),
+        ),
+        managed_installs=lambda: [install],
+        is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: "/library/Former Cave",
+    )
+
+    state.workflow.populate_panel("parent", [])
+    state.workflow.poll_catalog_fetch()
+
+    key = _standard_key("former-cave")
+    assert key in state.panel.standard_rows
+    assert state.panel.is_standard_row_former(key)
+    assert state.panel.standard_actions[key][0] == "Open"
+    assert state.panel.standard_actions[key][2] is True
 
 
 def test_unavailable_catalog_details_show_retry_state():
@@ -1110,11 +1293,11 @@ def test_unavailable_catalog_details_show_retry_state():
     state.workflow.prepare_catalog_for_download(pending_map)
     state.workflow.poll_catalog_fetch()
 
-    assert state.panel.metadata["Test Cave"] == (
+    assert state.panel.metadata[_standard_key("Test Cave")] == (
         "Download info unavailable",
         True,
     )
-    assert state.panel.standard_actions["Test Cave"][0] == "Retry"
+    assert state.panel.standard_actions[_standard_key("Test Cave")][0] == "Retry"
     assert state.feedback[-1][1]["kind"] == "error"
 
 
@@ -1222,7 +1405,7 @@ def test_downloaded_map_menu_offers_resume_for_a_validated_checkpoint():
     row_widgets = SimpleNamespace(row_shell=object())
 
     state.workflow.add_standard_row(library_map)
-    actions = state.panel.standard_menu_factories["Test Cave"](row_widgets)
+    actions = state.panel.standard_menu_factories[_standard_key("Test Cave")](row_widgets)
 
     assert [item[0] for item in actions] == [
         "Remove map files",

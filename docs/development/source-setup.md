@@ -201,16 +201,19 @@ For local development, you can point the map library at a different source
 before launching the program. These settings are environment variables only;
 they are not exposed in the app UI.
 
-The release keeps each map as a `.zip` asset. When the release also includes
+The initial production Map Library source is a GitHub release adapter. The
+Map Library itself consumes source-neutral catalog refreshes, so another
+approved map source can later be added without changing splash rows or map
+workflow. The release keeps each map as a `.zip` asset. When the release also includes
 `caveviewer-map-library.v1.json`, that manifest controls the available map
 list, row titles, ordering, optional stable folder names, fallback sizes, and
 optional SHA-256 hashes. CaveViewer joins those manifest entries to the matching
 GitHub release assets to get current download URLs and asset sizes. If the
-catalog asset is absent, CaveViewer uses its bundled fallback catalog and still
-joins matching release assets so the current release layout remains usable. Any
-additional `.zip` assets on the release are appended with titles inferred from
-their filenames, which lets a newly uploaded map appear before a full catalog
-manifest is published.
+catalog asset is absent, it keeps friendly bundled metadata only for archives
+that are actually attached to the current release and infers titles for other
+attached `.zip` assets. This lets a newly uploaded map appear before a full
+catalog manifest is published without falsely showing a map that has been
+removed from the release.
 
 Catalog v1 shape:
 
@@ -273,7 +276,8 @@ The API response must be compatible with GitHub's release API shape, including
 an `assets` list with asset `name`, `browser_download_url`, and `size` fields.
 CaveViewer caches the last successful remote catalog under its application
 cache root and falls back to that cache, then to the bundled catalog, when
-GitHub cannot be reached.
+GitHub cannot be reached. Such a fallback is deliberately non-authoritative:
+it cannot make a local map appear removed.
 
 ## Updating Your Local Source Environment
 
@@ -669,6 +673,15 @@ texture files are staged beside its chunks before the manifest becomes visible.
 Disk-space checks therefore target the filesystem that will hold the cache,
 which is normally the map's filesystem unless an explicit cache root is set.
 
+Successful Map Library downloads are also recorded in a private versioned
+managed-install registry in application state. The registry contains only
+source-qualified map identity, app-owned install paths, and the last confirmed
+former/current state; it is used to show a locally downloaded map that has
+subsequently disappeared from an authoritative source catalog, including on an
+offline restart. It does not scan arbitrary personal map folders. GitHub maps
+retain the established direct Downloads layout; future non-GitHub sources use
+an app-managed source subdirectory to avoid source-name collisions.
+
 ### Map Library
 
 | Variable | Default | Description |
@@ -687,8 +700,16 @@ The Map Library dialog keeps Tk work on the Tk thread. Catalog fetches and
 map-library download/extract work run in background workers; workers publish
 progress and terminal status through queues, and the dialog applies those
 messages from `after()` callbacks. Worker callbacks must not read or mutate Tk
-widgets directly. Closing the dialog sets the active download's cancellation
-event and cancels the pending queue poll callback.
+widgets directly. Closing the dialog cancels the active download and its pending
+queue poll callback.
+
+After a successful authoritative refresh, a downloaded map no longer offered
+by its source stays in its prior position in **CaveViewer Maps** with a muted
+title and the message **No longer a part of the standard library**. It is
+still a normal local map: it can open, use Guided Dive, rebuild or remove cache
+data, and remove its files. It cannot download or update because its source no
+longer offers it. Its three-dot menu exposes the same local management actions
+as other downloaded maps.
 
 Eligible recent and downloaded rows also offer `Rebuild cache`. It starts a
 forced child import using the current Import preferences without opening a

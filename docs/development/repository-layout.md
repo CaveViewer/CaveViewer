@@ -78,13 +78,14 @@ src/caveviewer/gui/platform/probes/           platform capability probes and con
 src/caveviewer/gui/platform/probes/desktop.py on-demand directory-selection route probe
 src/caveviewer/gui/platform/probes/update_package_reveal.py static verified-package reveal route probe
 src/caveviewer/gui/map_library.py             recent-map row display models
-src/caveviewer/gui/map_library_controller.py  standard-library row/download state
+src/caveviewer/gui/map_library_sources.py     source-neutral catalog contracts/composition
+src/caveviewer/gui/map_library_controller.py  source-qualified library row/transfer state
 src/caveviewer/gui/map_library_panel.py       splash Map Library Tk panel
 src/caveviewer/gui/map_library_workflow.py    splash Map Library workflow
 src/caveviewer/gui/map_cache_rebuild.py        map-local cache-rebuild preflight and target resolution
 src/caveviewer/gui/guided_dive_playback.py    map-local Guided Dive preflight and target resolution
 src/caveviewer/gui/map_opening.py             shared map-folder chooser and target resolution
-src/caveviewer/gui/standard_library_maps.py   standard-library map source/storage
+src/caveviewer/gui/standard_library_maps.py   GitHub source adapter and managed map storage
 src/caveviewer/gui/standard_library_download.py standard-library download workers
 src/caveviewer/gui/preferences.py             preference persistence facade
 src/caveviewer/gui/preferences_form.py        Tk-free preference form state

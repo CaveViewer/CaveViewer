@@ -116,11 +116,13 @@ def start_standard_library_download_worker(
 
 def standard_library_download_notification_id(sample) -> str:
     """Return a stable per-map desktop notification ID."""
-    raw_key = (
+    source_id = getattr(sample, "source_id", "") or "map-library"
+    map_key = (
         getattr(sample, "asset_name", "")
         or getattr(sample, "display_name", "")
         or "standard-library-map"
     )
+    raw_key = f"{source_id}-{map_key}"
     safe_key = "".join(
         character.lower() if character.isalnum() else "-"
         for character in str(raw_key)

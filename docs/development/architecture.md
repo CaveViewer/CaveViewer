@@ -640,19 +640,42 @@ inside `src/caveviewer/gui/platform`, and that GUI Python modules carry
 ownership docstrings instead of placeholder module-path docstrings.
 
 The splash Map Library is split by responsibility: `map_library.py` builds
-presentation-independent recent-map titles, `map_library_controller.py` owns
-standard-library catalog/download state, `map_cache_rebuild.py` owns map-local
-rebuild eligibility and target resolution, `cache_rebuild_controller.py` owns
-the forced child-import lifecycle, `map_library_workflow.py` owns catalog
-fetches, download/rebuild polling, cancellation/pause, and row workflow
-transitions, `map_library_panel.py` owns Tk row, scroll, status, and
-overflow-menu presentation, and `splash_screen.py` wires those pieces to
-session actions such as opening maps and preferences. The standard-library map
-list is remote-data driven: `standard_library_maps.py` fetches the configured
-GitHub release, loads the `caveviewer-map-library.v1.json` release asset when
-present, joins manifest entries to release zip assets, infers rows for extra
-zip assets when no manifest is present, and falls back to the last cached
-catalog or bundled catalog resource when offline.
+presentation-independent recent-map titles, `map_library_sources.py` owns the
+source-neutral catalog contract and enabled-source composition,
+`map_library_controller.py` owns source-qualified row, transfer, and
+availability state, `map_library_workflow.py` owns catalog reconciliation and
+Tk-thread workflow transitions, `map_library_panel.py` owns Tk rows, scroll,
+status, and overflow-menu presentation, and `splash_screen.py` wires those
+pieces to session actions such as opening maps and preferences.
+
+Each `MapLibrarySource` returns a `MapCatalogRefresh` with a stable source id,
+ordered entries, and an explicit authority result. The initial production
+adapter is `GitHubReleaseMapLibrarySource`; it preserves the configured GitHub
+release behavior, but the workflow does not depend on GitHub endpoints or
+release parsing. Map identity is `(source_id, catalog_id)`, so future enabled
+sources can use the same catalog id without colliding in rows, active work,
+registry records, or local storage. GitHub keeps its established map-folder
+layout; other source ids use an app-managed source namespace below the selected
+map-library directory.
+
+An authoritative refresh is the source's current list: it adds newly available
+maps, removes stale undownloaded rows, and marks a missing app-managed local
+installation as a former map while keeping it in its prior **CaveViewer Maps**
+position. A failed or invalid refresh is non-authoritative and may show
+cached/bundled entries, but it never marks a map removed.
+`standard_library_maps.py` stores the GitHub catalog cache and a versioned
+private managed-install registry. The registry records only known app-managed
+paths, allowing a removed upstream map to remain visible without scanning user
+folders. A former row has a muted title and remains a normal local map: it can
+open, run Guided Dive, rebuild or remove cache data, and remove its files. It
+cannot download or update because its source no longer offers it. Removing the
+local files removes the former row through the normal map-removal path.
+
+`map_library_panel.py` schedules scroll-region synchronization after every row
+or section change so asynchronously added catalog rows stay reachable. Its
+override-redirect overflow menu owns scoped temporary splash-root pointer and
+focus bindings while open; those bindings are removed on close and never use a
+global binding that could affect other windows.
 The Map Library also owns the Guided Dive action-time handoff: it receives the
 splash-owned runtime, authorizes file opening only after the map-local
 discovery policy is enabled, runs the selected trace/cache preflight, and

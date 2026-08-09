@@ -146,7 +146,27 @@ def test_catalog_manifest_populates_remote_maps_and_caches(
     )
     assert cached_catalog["maps"][0]["title"] == "Brand New Cave"
     assert "download_url" not in cached_catalog["maps"][0]
+    assert cached_catalog["source_id"] == "github-release"
     assert standard_library_maps._MAP_LIBRARY_CONFIG_LOGGED
+
+
+def test_catalog_refresh_reports_authority_only_for_valid_remote_metadata(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path))
+    payload = {"assets": []}
+    monkeypatch.setattr(
+        standard_library_maps.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: JsonResponse(payload),
+    )
+
+    refresh = standard_library_maps.fetch_standard_library_catalog_refresh()
+
+    assert refresh.authoritative
+    assert refresh.source_id == "github-release"
+    assert refresh.maps == ()
 
 
 def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
@@ -178,16 +198,13 @@ def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
     catalog, error = standard_library_maps.fetch_standard_library_catalog()
 
     assert error is None
-    assert len(catalog) == (
-        len(standard_library_maps.bundled_standard_library_catalog()) + 1
-    )
+    assert len(catalog) == 2
     assert catalog[0].download_url == "https://example.invalid/map.zip"
     assert catalog[0].size_bytes == 1234
-    assert catalog[1].download_url is None
-    assert catalog[-1].catalog_id == "emergence-du-ressel"
-    assert catalog[-1].display_name == "Emergence du Ressel"
-    assert catalog[-1].download_url == "https://example.invalid/ressel.zip"
-    assert catalog[-1].size_bytes == 99 * 1024 * 1024
+    assert catalog[1].catalog_id == "emergence-du-ressel"
+    assert catalog[1].display_name == "Emergence du Ressel"
+    assert catalog[1].download_url == "https://example.invalid/ressel.zip"
+    assert catalog[1].size_bytes == 99 * 1024 * 1024
     cached_catalog = json.loads(
         (tmp_path / "cache" / "map_library_catalog.v1.json").read_text(
             encoding="utf-8"
@@ -323,6 +340,25 @@ def test_map_library_container_avoids_duplicate_folder_name(tmp_path):
     )
 
 
+def test_non_github_sources_use_a_separate_storage_namespace(tmp_path):
+    sample = standard_library_maps.StandardLibraryMapInfo(
+        "Partner Cave",
+        "partner.zip",
+        catalog_id="partner-cave",
+        source_id="partner-library",
+    )
+
+    assert standard_library_maps.local_standard_library_map_path(
+        str(tmp_path),
+        sample,
+    ) == str(
+        tmp_path
+        / ".caveviewer-map-library-sources"
+        / "partner-library"
+        / "Partner Cave"
+    )
+
+
 def test_standard_library_map_paths_accept_portal_directory_selection(tmp_path):
     selection = DirectorySelection.from_path(str(tmp_path))
     sample = standard_library_maps.StandardLibraryMapInfo("Test Cave", "test.zip")
@@ -331,6 +367,81 @@ def test_standard_library_map_paths_accept_portal_directory_selection(tmp_path):
         tmp_path / "Test Cave"
     )
     assert not standard_library_maps.is_standard_library_map_downloaded(selection, sample)
+
+
+def test_managed_install_registry_recognizes_a_map_after_catalog_metadata_changes(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path / "state"))
+    install_root = tmp_path / "downloads"
+    map_dir = install_root / "Former Cave"
+    map_dir.mkdir(parents=True)
+    (map_dir / "cave.obj").write_text("map", encoding="utf-8")
+    original = standard_library_maps.StandardLibraryMapInfo(
+        "Former Cave",
+        "former.zip",
+        catalog_id="former-cave",
+    )
+    refreshed = standard_library_maps.StandardLibraryMapInfo(
+        "Renamed Former Cave",
+        "different-name.zip",
+        catalog_id="former-cave",
+    )
+
+    standard_library_maps.record_managed_standard_library_map_install(original, map_dir)
+
+    installs = standard_library_maps.managed_standard_library_map_installs()
+    assert [(install.source_id, install.catalog_id, install.path) for install in installs] == [
+        ("github-release", "former-cave", str(map_dir))
+    ]
+    assert standard_library_maps.existing_standard_library_map_path(
+        str(install_root),
+        refreshed,
+    ) == str(map_dir)
+    assert standard_library_maps.is_app_supplied_standard_library_map_path(map_dir)
+
+    standard_library_maps.set_managed_standard_library_map_former(
+        refreshed,
+        former=True,
+    )
+    assert standard_library_maps.managed_standard_library_map_installs()[0].former
+
+    standard_library_maps.set_managed_standard_library_map_former(
+        refreshed,
+        former=False,
+    )
+    assert not standard_library_maps.managed_standard_library_map_installs()[0].former
+
+    standard_library_maps.forget_managed_standard_library_map_install(refreshed)
+
+    assert standard_library_maps.managed_standard_library_map_installs() == []
+    assert not standard_library_maps.is_app_supplied_standard_library_map_path(map_dir)
+
+
+def test_registry_bootstrap_adopts_only_known_legacy_map_folders(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path / "state"))
+    install_root = tmp_path / "downloads"
+    known = standard_library_maps.StandardLibraryMapInfo(
+        "Known Cave",
+        "known.zip",
+        catalog_id="known-cave",
+    )
+    known_dir = install_root / "Known Cave"
+    known_dir.mkdir(parents=True)
+    (known_dir / "cave.obj").write_text("map", encoding="utf-8")
+    unrelated_dir = install_root / "Unrelated Cave"
+    unrelated_dir.mkdir()
+    (unrelated_dir / "notes.txt").write_text("not app-owned", encoding="utf-8")
+
+    installs = standard_library_maps.bootstrap_managed_standard_library_map_installs(
+        install_root,
+        [known],
+    )
+
+    assert [(install.catalog_id, install.path) for install in installs] == [
+        ("known-cave", str(known_dir))
+    ]
 
 
 def test_default_map_library_install_dir_uses_downloads_folder(tmp_path, monkeypatch):
