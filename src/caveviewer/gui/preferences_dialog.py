@@ -97,8 +97,8 @@ _PREFERENCE_PAGES = (
 )
 
 
-class PreferencesDialog:
-    """Render Preferences state and forward Tk events to the controller."""
+class PreferencesPanel:
+    """Reusable Preferences form that can live in a panel or a dialog."""
 
     def __init__(
         self,
@@ -109,6 +109,7 @@ class PreferencesDialog:
         platform_runtime: PlatformRuntime | None = None,
         presentation_profile: PresentationProfile | None = None,
         on_applied: Callable[[Preferences], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
     ) -> None:
         if (
             platform_runtime is not None
@@ -147,6 +148,7 @@ class PreferencesDialog:
             else desktop_services or get_desktop_services()
         )
         self.on_applied = on_applied
+        self.on_cancel = on_cancel
         self.workflow = PreferencesDialogWorkflow(
             load_preferences_fn=load_preferences,
             save_preferences_fn=save_preferences,
@@ -154,16 +156,13 @@ class PreferencesDialog:
         )
         self.preferences = self.workflow.load_initial()
         self.form = PreferencesFormController(self.preferences)
-
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.withdraw()
-        self.dialog.title("Preferences")
-        self.dialog.configure(bg=_BG_COLOR)
-        # Windows can report less usable vertical space than the GNOME-style
-        # preference layout wants, so keep width fixed but let people grow the
-        # dialog vertically when the page content is constrained.
-        self.dialog.resizable(False, self._layout_policy.resizable_vertical)
-        self.dialog.transient(parent)
+        # The form needs a toplevel for Tk variables, scheduling and native
+        # directory pickers, but its widgets belong to the supplied parent.
+        # A ``PreferencesDialog`` passes its own Toplevel; the splash passes
+        # the right-hand content frame and therefore uses the splash root.
+        self.dialog = parent.winfo_toplevel()
+        self.container = tk.Frame(parent, bg=_BG_COLOR)
+        self.container.pack(fill="both", expand=True)
 
         if self._layout_policy.linux_layout:
             self.section_font = (ui_font_family, 10, "bold")
@@ -209,6 +208,7 @@ class PreferencesDialog:
         self.rendered_state: PreferencesFormState | None = None
         self.button_row = None
         self.error_label = None
+        self._feedback_override: tuple[str, str] | None = None
 
         self.numeric_entry_validator = self.dialog.register(
             self._is_numeric_entry_candidate
@@ -609,7 +609,14 @@ class PreferencesDialog:
         return tab
 
     def _sync_feedback_to_current_state(self) -> None:
-        if self.error_label is None or self.rendered_state is None:
+        if (
+            getattr(self, "error_label", None) is None
+            or getattr(self, "rendered_state", None) is None
+        ):
+            return
+        if not self.rendered_state.message and self._feedback_override is not None:
+            message, color = self._feedback_override
+            self.error_label.config(text=message, fg=color)
             return
         self._set_feedback(
             self.rendered_state.message,
@@ -787,7 +794,7 @@ class PreferencesDialog:
 
     def _build(self) -> None:
         body = tk.Frame(
-            self.dialog,
+            self.container,
             bg=_BG_COLOR,
             padx=self._layout_policy.body_pad_x,
             pady=DIALOG_BODY_PAD_Y,
@@ -933,16 +940,6 @@ class PreferencesDialog:
         self.form_ready = True
         self._render_form_state(self.form.state, focus_invalid=True)
 
-        self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
-        self.dialog.bind("<Escape>", lambda _event: self.cancel())
-        bind_primary_shortcut(
-            self.dialog,
-            "w",
-            lambda _event: self.cancel(),
-            presentation_profile=self.presentation_profile,
-        )
-        self.dialog.bind("<Return>", lambda _event: self.apply())
-
     def _set_feedback(self, message: str, message_kind: MessageKind) -> None:
         if not message:
             self.error_label.config(text="")
@@ -1033,10 +1030,12 @@ class PreferencesDialog:
     def _on_field_changed(self, key: str) -> None:
         if not self.form_ready or self.rendering_state:
             return
+        self._feedback_override = None
         state = self.form.change(key, self.field_vars[key].get())
         self._render_form_state(state, preferred_key=key)
 
     def _sync_field_value(self, key: str, value: str) -> None:
+        was_rendering_state = self.rendering_state
         self.rendering_state = True
         try:
             if key in self.numeric_entry_states:
@@ -1053,7 +1052,7 @@ class PreferencesDialog:
             elif self.field_vars[key].get() != value:
                 self.field_vars[key].set(value)
         finally:
-            self.rendering_state = False
+            self.rendering_state = was_rendering_state
 
     def _on_field_blurred(self, key: str) -> None:
         if not self.form_ready:
@@ -1062,11 +1061,12 @@ class PreferencesDialog:
         self._sync_field_value(key, state.values[key])
         self._render_form_state(state, preferred_key=key)
 
-    def apply(self) -> None:
+    def apply(self) -> bool:
+        self._feedback_override = None
         state, preferences = self.form.attempt_apply()
         self._render_form_state(state, focus_invalid=True)
         if preferences is None:
-            return
+            return False
 
         for key in self.numeric_entry_states:
             self._show_numeric_placeholder(key)
@@ -1079,12 +1079,119 @@ class PreferencesDialog:
         result = workflow.apply(preferences)
         if not result.succeeded:
             self._set_feedback(result.error or "", MessageKind.ERROR)
-            return
+            return False
         self.preferences = result.preferences
+        self._feedback_override = (
+            "Preferences saved.",
+            DARK_THEME.primary_button,
+        )
+        self._sync_feedback_to_current_state()
         on_applied = getattr(self, "on_applied", None)
         if on_applied is not None and result.preferences is not None:
             on_applied(result.preferences)
+        return True
+
+    def cancel(self) -> None:
+        self.discard_changes()
+        on_cancel = getattr(self, "on_cancel", None)
+        if on_cancel is not None:
+            on_cancel()
+
+    @property
+    def has_unsaved_changes(self) -> bool:
+        """Return whether the visible form differs from the last saved state."""
+        preferences = getattr(self, "preferences", None)
+        form = getattr(self, "form", None)
+        if preferences is None or form is None:
+            return False
+        return dict(form.state.values) != preferences.as_dict()
+
+    def discard_changes(self) -> None:
+        """Restore the last saved values without destroying this panel."""
+        preferences = getattr(self, "preferences", None)
+        if preferences is None:
+            return
+        self.form = PreferencesFormController(preferences)
+        self.rendering_state = True
+        try:
+            for key, value in preferences.items():
+                self._sync_field_value(key, value)
+        finally:
+            self.rendering_state = False
+        self.rendered_invalid_key = None
+        self._feedback_override = None
+        self._render_form_state(self.form.state)
+
+    def focus_content(self) -> None:
+        """Move keyboard focus into the active embedded Preferences view."""
+        if self.form.state.invalid_key is not None:
+            self._focus_invalid_field(self.form.state.invalid_key, select_value=True)
+            return
+        if self.apply_button is not None:
+            self.apply_button.focus_set()
+
+
+class PreferencesDialog(PreferencesPanel):
+    """Compatibility wrapper that hosts :class:`PreferencesPanel` in a modal."""
+
+    def __init__(
+        self,
+        parent,
+        *,
+        ui_font_family: str,
+        desktop_services: DesktopServices | None = None,
+        platform_runtime: PlatformRuntime | None = None,
+        presentation_profile: PresentationProfile | None = None,
+        on_applied: Callable[[Preferences], None] | None = None,
+    ) -> None:
+        self._dialog_parent = parent
+        dialog = tk.Toplevel(parent)
+        dialog.withdraw()
+        dialog.title("Preferences")
+        dialog.configure(bg=_BG_COLOR)
+
+        runtime_presentation_profile = (
+            getattr(platform_runtime, "presentation_profile", None)
+            if platform_runtime is not None
+            else None
+        )
+        effective_profile = (
+            runtime_presentation_profile
+            or presentation_profile
+            or get_presentation_profile()
+        )
+        # Windows can report less usable vertical space than the GNOME-style
+        # preference layout wants, so keep width fixed but let people grow the
+        # dialog vertically when the page content is constrained.
+        dialog.resizable(
+            False,
+            effective_profile.preferences_dialog_layout.resizable_vertical,
+        )
+        dialog.transient(parent)
+
+        super().__init__(
+            dialog,
+            ui_font_family=ui_font_family,
+            desktop_services=desktop_services,
+            platform_runtime=platform_runtime,
+            presentation_profile=presentation_profile,
+            on_applied=on_applied,
+        )
+        self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.dialog.bind("<Escape>", lambda _event: self.cancel())
+        bind_primary_shortcut(
+            self.dialog,
+            "w",
+            lambda _event: self.cancel(),
+            presentation_profile=self.presentation_profile,
+        )
+        self.dialog.bind("<Return>", lambda _event: self.apply())
+
+    def apply(self) -> bool:
+        if not super().apply():
+            return False
         self.dialog.destroy()
+        return True
 
     def cancel(self) -> None:
         self.dialog.destroy()
@@ -1096,15 +1203,15 @@ class PreferencesDialog:
     def _apply_geometry(self) -> None:
         geometry_applied = False
         try:
-            self.parent.update_idletasks()
+            self._dialog_parent.update_idletasks()
             dialog_w = max(self.dialog.winfo_reqwidth(), self._layout_policy.min_width)
             dialog_h = self.dialog.winfo_reqheight()
             screen_w = self.dialog.winfo_screenwidth()
             screen_h = self.dialog.winfo_screenheight()
             dialog_w = min(dialog_w, max(320, screen_w - 16))
-            parent_x = self.parent.winfo_rootx()
-            parent_y = self.parent.winfo_rooty()
-            parent_w = self.parent.winfo_width()
+            parent_x = self._dialog_parent.winfo_rootx()
+            parent_y = self._dialog_parent.winfo_rooty()
+            parent_w = self._dialog_parent.winfo_width()
             desired_x = parent_x + parent_w - dialog_w + 72
             desired_y = parent_y + 8
             clamped_x = max(8, min(desired_x, screen_w - dialog_w - 8))
@@ -1131,23 +1238,21 @@ class PreferencesDialog:
         if not geometry_applied:
             self.dialog.geometry(
                 "+%d+%d"
-                % (self.parent.winfo_rootx() + 24, self.parent.winfo_rooty() + 24)
+                % (
+                    self._dialog_parent.winfo_rootx() + 24,
+                    self._dialog_parent.winfo_rooty() + 24,
+                )
             )
 
     def show(self) -> None:
         self.dialog.update_idletasks()
         self._apply_geometry()
         self.dialog.deiconify()
-        self.dialog.lift(self.parent)
+        self.dialog.lift(self._dialog_parent)
         self.dialog.wait_visibility()
         self.dialog.grab_set()
         self.dialog.focus_force()
-        if self.form.state.invalid_key is not None:
-            self._focus_invalid_field(
-                self.form.state.invalid_key, select_value=True
-            )
-        else:
-            self.apply_button.focus_set()
+        self.focus_content()
 
 
 def show_preferences_dialog(

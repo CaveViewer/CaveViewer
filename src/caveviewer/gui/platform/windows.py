@@ -101,7 +101,7 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             windows_layout=True,
             linux_layout=False,
             window_width=940,
-            min_height=560,
+            min_height=680,
             extra_bottom_slack=0,
             secondary_link_row_bottom_gap=36,
             footer_credits_bottom_pad=36,

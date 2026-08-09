@@ -93,14 +93,6 @@ class MapLibraryPanelStyle:
     menu_border: str
     menu_hover_bg: str
     menu_text: str
-    scrollbar_width: int
-    scrollbar_right_inset: int
-    scroll_track_width: int
-    scroll_track_color: str
-    scroll_thumb_min_height: int
-    scroll_thumb_width: int
-    scroll_thumb_color: str
-    scroll_thumb_active_color: str
 
 
 @dataclass(frozen=True)
@@ -144,6 +136,7 @@ class MapLibraryPanel:
         widget_exists: Callable[[object | None], bool],
         logger,
         style: MapLibraryPanelStyle,
+        open_map_folder: Callable[[], None] | None = None,
     ) -> None:
         self.root = root
         self._px = px
@@ -151,6 +144,7 @@ class MapLibraryPanel:
         self._widget_exists = widget_exists
         self._log = logger
         self._style = style
+        self._open_map_folder = open_map_folder
         self.standard_rows: dict[object, MapLibraryRowWidgets] = {}
         self._standard_row_former: dict[object, bool] = {}
         self.recent_rows: dict[str, MapLibraryRowWidgets] = {}
@@ -161,12 +155,9 @@ class MapLibraryPanel:
         self._standard_container = None
         self._rows_frame = None
         self._content_canvas = None
-        self._content_scrollbar = None
         self._rows_window = None
-        self._scrollbar_fraction = (0.0, 1.0)
-        self._scrollbar_track = None
-        self._scrollbar_thumb = None
-        self._scrollbar_drag_offset = 0.0
+        self._scroll_hint = None
+        self._content_overflows = False
         self._active_menu = None
         self._active_menu_root_bindings: list[tuple[str, str]] = []
 
@@ -180,30 +171,54 @@ class MapLibraryPanel:
             highlightbackground=style.panel_border_color,
             highlightcolor=style.panel_border_color,
         )
-        panel.pack(fill="both", expand=True, pady=self._px(26))
+        # Keep a modest outer margin so the library can use more of the
+        # available splash height without losing its visual separation.
+        panel.pack(fill="both", expand=True, pady=self._px(14))
+        panel.grid_columnconfigure(0, weight=1)
+
+        scroll_row = 0
+        if self._open_map_folder is not None:
+            open_map_shell = tk.Frame(panel, bg=style.panel_color)
+            open_map_shell.grid(
+                row=0,
+                column=0,
+                sticky="ew",
+                padx=self._px(12),
+                pady=(self._px(12), self._px(2)),
+            )
+            self._create_open_map_action(open_map_shell)
+            scroll_row = 1
+        panel.grid_rowconfigure(scroll_row, weight=1)
 
         scroll_shell = tk.Frame(panel, bg=style.panel_color)
-        scroll_shell.pack(
-            fill="both",
-            expand=True,
-            padx=(self._px(12), self._px(style.scrollbar_right_inset)),
-            pady=(0, self._px(12)),
+        scroll_shell.grid(
+            row=scroll_row,
+            column=0,
+            sticky="nsew",
+            padx=self._px(12),
+            pady=(0, self._px(4)),
         )
+        self._scroll_hint = tk.Label(
+            panel,
+            text="Scroll to browse more maps ↓",
+            font=style.small_font,
+            fg=style.metadata_color,
+            bg=style.panel_color,
+            anchor="center",
+        )
+        self._scroll_hint.grid(
+            row=scroll_row + 1,
+            column=0,
+            sticky="ew",
+            pady=(0, self._px(10)),
+        )
+        self._scroll_hint.grid_remove()
 
         self._content_canvas = tk.Canvas(
             scroll_shell,
             bg=style.panel_color,
             borderwidth=0,
             highlightthickness=0,
-            yscrollcommand=lambda *_args: None,
-        )
-        self._content_scrollbar = tk.Canvas(
-            scroll_shell,
-            bg=style.panel_color,
-            borderwidth=0,
-            highlightthickness=0,
-            width=style.scrollbar_width,
-            cursor="sb_v_double_arrow",
         )
         self._content_canvas.pack(side="left", fill="both", expand=True)
 
@@ -214,9 +229,6 @@ class MapLibraryPanel:
             anchor="nw",
         )
 
-        self._content_canvas.configure(
-            yscrollcommand=self._set_scrollbar_fraction
-        )
         self._content_canvas.bind(
             "<Configure>",
             self._resize_canvas_window,
@@ -225,26 +237,6 @@ class MapLibraryPanel:
         self._content_canvas.bind("<MouseWheel>", self._scroll_content, add="+")
         self._content_canvas.bind("<Button-4>", self._scroll_content, add="+")
         self._content_canvas.bind("<Button-5>", self._scroll_content, add="+")
-        self._content_scrollbar.bind(
-            "<Configure>",
-            lambda _event: self._draw_scrollbar_thumb(),
-            add="+",
-        )
-        self._content_scrollbar.bind(
-            "<ButtonPress-1>",
-            self._start_scrollbar_drag,
-            add="+",
-        )
-        self._content_scrollbar.bind(
-            "<B1-Motion>",
-            self._drag_scrollbar,
-            add="+",
-        )
-        self._content_scrollbar.bind(
-            "<ButtonRelease-1>",
-            self._end_scrollbar_drag,
-            add="+",
-        )
 
         self._recent_section = self._create_section(
             self._rows_frame,
@@ -263,7 +255,7 @@ class MapLibraryPanel:
         if self._rows_frame is None:
             return
         self.bind_mousewheel_if_ready(self._rows_frame)
-        self.root.after_idle(self.sync_scrollbar)
+        self.root.after_idle(self.sync_scroll_region)
 
     def close_active_menu(self) -> None:
         """Close the transient overflow menu if it is currently open."""
@@ -580,31 +572,179 @@ class MapLibraryPanel:
     def sync_after_row_change(self) -> None:
         """Schedule a scroll-region refresh after row insertion/removal."""
         if self._widget_exists(self.root):
-            self.root.after_idle(self.sync_scrollbar)
+            self.root.after_idle(self.sync_scroll_region)
 
     def bind_mousewheel_if_ready(self, widget) -> None:
         """Bind recursive mousewheel handlers when panel scrolling is ready."""
         if self._widget_exists(widget):
             self._bind_mousewheel(widget)
 
-    def sync_scrollbar(self) -> None:
-        """Synchronize the scroll region and scrollbar visibility."""
+    def sync_scroll_region(self) -> None:
+        """Synchronize the scroll region and its overflow guidance."""
         if self._content_canvas is None or self._rows_frame is None:
-            return
-        if self._content_scrollbar is None:
             return
         width = max(1, self._content_canvas.winfo_width())
         content_height = self._rows_frame.winfo_reqheight()
         self._content_canvas.configure(scrollregion=(0, 0, width, content_height))
         visible_height = self._content_canvas.winfo_height()
-        if content_height > visible_height + 1:
-            if not self._content_scrollbar.winfo_manager():
-                self._content_scrollbar.pack(side="right", fill="y")
-        else:
-            if self._content_scrollbar.winfo_manager():
-                self._content_scrollbar.pack_forget()
-            self._clear_scrollbar_art()
+        content_overflows = content_height > visible_height + 1
+        self._set_scroll_hint_visible(content_overflows)
+        if not content_overflows:
             self._content_canvas.yview_moveto(0)
+
+    def _set_scroll_hint_visible(self, visible: bool) -> None:
+        """Show a quiet scroll cue only while rows extend below the viewport."""
+        self._content_overflows = bool(visible)
+        hint = self._scroll_hint
+        if not self._widget_exists(hint):
+            return
+        try:
+            mapped = bool(hint.winfo_manager())
+        except tk.TclError:
+            return
+        if visible and not mapped:
+            hint.grid()
+        elif not visible and mapped:
+            hint.grid_remove()
+
+    def focus_content(self) -> None:
+        """Return the library to its beginning and give it keyboard focus."""
+        self.close_active_menu()
+        canvas = self._content_canvas
+        if not self._widget_exists(canvas):
+            return
+        try:
+            canvas.yview_moveto(0)
+            canvas.focus_set()
+        except tk.TclError:
+            return
+
+    def _create_open_map_action(self, parent) -> None:
+        """Create the featured entry point for opening a local map folder."""
+        callback = self._open_map_folder
+        if callback is None:
+            return
+
+        style = self._style
+        action = tk.Canvas(
+            parent,
+            height=self._px(58),
+            bg=style.button_hover_bg,
+            borderwidth=0,
+            cursor="hand2",
+            takefocus=True,
+            highlightthickness=1,
+            highlightbackground=style.panel_border_color,
+            highlightcolor=style.button_border_color,
+        )
+        action._cv_open_map_hovered = False
+
+        def activate() -> None:
+            self.close_active_menu()
+            callback()
+
+        def set_hovered(hovered: bool) -> None:
+            action._cv_open_map_hovered = hovered
+            action.config(
+                bg=(style.menu_hover_bg if hovered else style.button_hover_bg)
+            )
+            self._draw_open_map_action(action)
+
+        self._bind_activation(action, activate)
+        action.bind("<Enter>", lambda _event: set_hovered(True))
+        action.bind("<Leave>", lambda _event: set_hovered(False))
+        action.bind(
+            "<Configure>",
+            lambda _event, target=action: self._draw_open_map_action(target),
+            add="+",
+        )
+        action.pack(anchor="w", fill="x")
+        self.bind_mousewheel_if_ready(action)
+
+    def _draw_open_map_action(self, action) -> None:
+        """Draw the folder command card without relying on font glyphs."""
+        if not self._widget_exists(action):
+            return
+        action.delete("cv_open_map_action")
+        width = max(1, action.winfo_width())
+        height = max(1, action.winfo_height())
+        style = self._style
+        accent_width = max(2, self._px(3))
+        stroke_width = max(1, self._px(2))
+        icon_left = self._px(22)
+        icon_top = max(self._px(8), height / 2 - self._px(11))
+        icon_right = icon_left + self._px(28)
+        icon_bottom = icon_top + self._px(22)
+        icon_tab_right = icon_left + self._px(15)
+        text_left = icon_right + self._px(16)
+        title_y = height / 2 - self._px(8)
+        subtitle_y = height / 2 + self._px(11)
+        chevron_x = width - self._px(22)
+        chevron_size = max(3, self._px(5))
+
+        action.create_rectangle(
+            0,
+            0,
+            accent_width,
+            height,
+            fill=style.progress_fill_color,
+            outline="",
+            tags="cv_open_map_action",
+        )
+        action.create_line(
+            icon_left,
+            icon_top + self._px(5),
+            icon_left + self._px(8),
+            icon_top + self._px(5),
+            icon_left + self._px(11),
+            icon_top,
+            icon_tab_right,
+            icon_top,
+            icon_right,
+            icon_top + self._px(5),
+            icon_right,
+            icon_bottom,
+            icon_left,
+            icon_bottom,
+            icon_left,
+            icon_top + self._px(5),
+            fill=style.title_color,
+            width=stroke_width,
+            capstyle="round",
+            joinstyle="round",
+            tags="cv_open_map_action",
+        )
+        action.create_text(
+            text_left,
+            title_y,
+            text="Open a local map",
+            font=style.section_font,
+            fill=style.title_color,
+            anchor="w",
+            tags="cv_open_map_action",
+        )
+        action.create_text(
+            text_left,
+            subtitle_y,
+            text="Browse a cave map folder",
+            font=style.metadata_font,
+            fill=style.metadata_color,
+            anchor="w",
+            tags="cv_open_map_action",
+        )
+        action.create_line(
+            chevron_x - chevron_size,
+            height / 2 - chevron_size,
+            chevron_x,
+            height / 2,
+            chevron_x - chevron_size,
+            height / 2 + chevron_size,
+            fill=style.progress_fill_color,
+            width=stroke_width,
+            capstyle="round",
+            joinstyle="round",
+            tags="cv_open_map_action",
+        )
 
     def _create_section(
         self,
@@ -1598,154 +1738,14 @@ class MapLibraryPanel:
         self._refresh_overflow_button(button)
         return button
 
-    def _clear_scrollbar_art(self) -> None:
-        """Remove the scrollbar's custom rail and thumb from its canvas."""
-        if self._content_scrollbar is None:
-            return
-        for attribute in ("_scrollbar_track", "_scrollbar_thumb"):
-            item_id = getattr(self, attribute, None)
-            if item_id is not None:
-                try:
-                    self._content_scrollbar.delete(item_id)
-                except tk.TclError:
-                    pass
-                setattr(self, attribute, None)
-
-    def _scrollbar_geometry(self):
-        """Return rail and thumb geometry for the current scroll fraction."""
-        if self._content_scrollbar is None:
-            return None
-        height = max(1, self._content_scrollbar.winfo_height())
-        width = max(1, self._content_scrollbar.winfo_width())
-        first, last = self._scrollbar_fraction
-        visible_fraction = max(0.0, min(1.0, last - first))
-        if visible_fraction >= 1.0:
-            return None
-
-        style = self._style
-        track_width = min(
-            max(1, style.scroll_track_width),
-            max(1, width - 2),
-        )
-        thumb_width = min(
-            max(1, style.scroll_thumb_width),
-            max(1, width - 2),
-        )
-        end_inset = max(4, (max(track_width, thumb_width) + 1) // 2 + 2)
-        track_top = min(height // 2, end_inset)
-        track_bottom = max(track_top + 1, height - end_inset)
-        track_height = max(1, track_bottom - track_top)
-        thumb_height = min(
-            track_height,
-            max(
-                style.scroll_thumb_min_height,
-                int(round(track_height * visible_fraction)),
-            ),
-        )
-        travel = max(1, track_height - thumb_height)
-        thumb_top = track_top + int(
-            round(max(0.0, min(1.0, first)) * travel)
-        )
-        thumb_bottom = min(track_bottom, thumb_top + thumb_height)
-        return (
-            width / 2,
-            track_top,
-            track_bottom,
-            track_width,
-            thumb_top,
-            thumb_bottom,
-            thumb_width,
-            travel,
-        )
-
-    def _draw_scrollbar_thumb(self) -> None:
-        """Draw a recessed rail and rounded thumb rather than a bare line."""
-        geometry = self._scrollbar_geometry()
-        if geometry is None:
-            self._clear_scrollbar_art()
-            return
-
-        (
-            center_x,
-            track_top,
-            track_bottom,
-            track_width,
-            thumb_top,
-            thumb_bottom,
-            thumb_width,
-            _travel,
-        ) = geometry
-        style = self._style
-        if getattr(self, "_scrollbar_track", None) is None:
-            self._scrollbar_track = self._content_scrollbar.create_line(
-                center_x,
-                track_top,
-                center_x,
-                track_bottom,
-                fill=style.scroll_track_color,
-                width=track_width,
-                capstyle="round",
-                tags="cv_scrollbar_track",
-            )
-        else:
-            self._content_scrollbar.coords(
-                self._scrollbar_track,
-                center_x,
-                track_top,
-                center_x,
-                track_bottom,
-            )
-            # A scrollbar can be redrawn before Tk has restored its final
-            # width after a section collapse/expand.  Refresh the line
-            # options as well as its coordinates once the <Configure> event
-            # supplies the real dimensions; otherwise a one-pixel rail stays
-            # visible for the rest of the splash session.
-            self._content_scrollbar.itemconfigure(
-                self._scrollbar_track,
-                fill=style.scroll_track_color,
-                width=track_width,
-                capstyle="round",
-            )
-        if getattr(self, "_scrollbar_thumb", None) is None:
-            self._scrollbar_thumb = self._content_scrollbar.create_line(
-                center_x,
-                thumb_top,
-                center_x,
-                thumb_bottom,
-                fill=style.scroll_thumb_color,
-                width=thumb_width,
-                capstyle="round",
-                tags="cv_scrollbar_thumb",
-            )
-        else:
-            self._content_scrollbar.coords(
-                self._scrollbar_thumb,
-                center_x,
-                thumb_top,
-                center_x,
-                thumb_bottom,
-            )
-            self._content_scrollbar.itemconfigure(
-                self._scrollbar_thumb,
-                fill=style.scroll_thumb_color,
-                width=thumb_width,
-                capstyle="round",
-            )
-
-    def _set_scrollbar_fraction(self, first: str, last: str) -> None:
-        self._scrollbar_fraction = (float(first), float(last))
-        self._draw_scrollbar_thumb()
-
     def _resize_canvas_window(self, event) -> None:
         if self._content_canvas is None or self._rows_window is None:
             return
         self._content_canvas.itemconfigure(self._rows_window, width=event.width)
-        self.sync_scrollbar()
+        self.sync_scroll_region()
 
     def _scroll_content(self, event):
-        if self._content_canvas is None or self._content_scrollbar is None:
-            return None
-        if not self._content_scrollbar.winfo_manager():
+        if self._content_canvas is None or not self._content_overflows:
             return None
         delta = getattr(event, "delta", 0)
         if delta:
@@ -1754,66 +1754,6 @@ class MapLibraryPanel:
             self._content_canvas.yview_scroll(-1, "units")
         elif getattr(event, "num", None) == 5:
             self._content_canvas.yview_scroll(1, "units")
-        return "break"
-
-    def _start_scrollbar_drag(self, event):
-        geometry = self._scrollbar_geometry()
-        if geometry is None:
-            return "break"
-        (
-            _center_x,
-            _track_top,
-            _track_bottom,
-            _track_width,
-            thumb_top,
-            thumb_bottom,
-            _thumb_width,
-            _travel,
-        ) = geometry
-        if thumb_top <= event.y <= thumb_bottom:
-            self._scrollbar_drag_offset = event.y - thumb_top
-        else:
-            self._scrollbar_drag_offset = (thumb_bottom - thumb_top) / 2
-            self._drag_scrollbar(event)
-        if self._scrollbar_thumb is not None:
-            self._content_scrollbar.itemconfigure(
-                self._scrollbar_thumb,
-                fill=self._style.scroll_thumb_active_color,
-            )
-        return "break"
-
-    def _drag_scrollbar(self, event):
-        if self._content_canvas is None:
-            return "break"
-        geometry = self._scrollbar_geometry()
-        if geometry is None:
-            return "break"
-        (
-            _center_x,
-            track_top,
-            track_bottom,
-            _track_width,
-            thumb_top,
-            thumb_bottom,
-            _thumb_width,
-            travel,
-        ) = geometry
-        thumb_height = thumb_bottom - thumb_top
-        thumb_top = max(
-            track_top,
-            min(track_bottom - thumb_height, event.y - self._scrollbar_drag_offset),
-        )
-        self._content_canvas.yview_moveto((thumb_top - track_top) / travel)
-        return "break"
-
-    def _end_scrollbar_drag(self, _event):
-        if self._content_scrollbar is None:
-            return "break"
-        if self._scrollbar_thumb is not None:
-            self._content_scrollbar.itemconfigure(
-                self._scrollbar_thumb,
-                fill=self._style.scroll_thumb_color,
-            )
         return "break"
 
     def _bind_mousewheel(self, widget) -> None:
