@@ -32,6 +32,7 @@ from caveviewer.gui.features import (
     decide_video_recording,
     decide_viewer_launch,
 )
+from caveviewer.gui.features.preflight import validate_route_preflight
 
 from .base import SplashPlatformAdapter
 from .desktop_services import DesktopServices, get_desktop_services
@@ -118,26 +119,14 @@ class DirectorySelectionPreflight:
     decision: FeatureDecision
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.DIRECTORY_SELECTION:
-            raise ValueError(
-                "directory-selection preflight must contain a "
-                "directory-selection decision"
-            )
-        if not self.decision.allows_execution:
-            return
-        target = self.capability.value
-        if (
-            self.capability.status is not CapabilityStatus.AVAILABLE
-            or not isinstance(target, DirectorySelectionTarget)
-        ):
-            raise ValueError(
-                "executable directory-selection preflight requires an "
-                "available typed target"
-            )
-        if self.decision.route != target.route_key:
-            raise ValueError(
-                "directory-selection decision route must match its typed target"
-            )
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.DIRECTORY_SELECTION,
+            target_type=DirectorySelectionTarget,
+            route_for_target=lambda target: target.route_key,
+            feature_label="directory-selection",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,25 +142,14 @@ class FileSelectionPreflight:
     decision: FeatureDecision
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.FILE_SELECTION:
-            raise ValueError(
-                "file-selection preflight must contain a file-selection decision"
-            )
-        if not self.decision.allows_execution:
-            return
-        target = self.capability.value
-        if (
-            self.capability.status is not CapabilityStatus.AVAILABLE
-            or not isinstance(target, FileSelectionTarget)
-        ):
-            raise ValueError(
-                "executable file-selection preflight requires an available "
-                "typed target"
-            )
-        if self.decision.route != target.route_key:
-            raise ValueError(
-                "file-selection decision route must match its typed target"
-            )
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.FILE_SELECTION,
+            target_type=FileSelectionTarget,
+            route_for_target=lambda target: target.route_key,
+            feature_label="file-selection",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,26 +166,14 @@ class DesktopNotificationPreflight:
     decision: FeatureDecision
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.DESKTOP_NOTIFICATION:
-            raise ValueError(
-                "desktop-notification preflight must contain a "
-                "desktop-notification decision"
-            )
-        if not self.decision.allows_execution:
-            return
-        target = self.capability.value
-        if (
-            self.capability.status is not CapabilityStatus.AVAILABLE
-            or not isinstance(target, DesktopNotificationTarget)
-        ):
-            raise ValueError(
-                "executable desktop-notification preflight requires an "
-                "available typed target"
-            )
-        if self.decision.route != target.route_key:
-            raise ValueError(
-                "desktop-notification decision route must match its typed target"
-            )
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.DESKTOP_NOTIFICATION,
+            target_type=DesktopNotificationTarget,
+            route_for_target=lambda target: target.route_key,
+            feature_label="desktop-notification",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,26 +190,14 @@ class IdleSuspendInhibitionPreflight:
     decision: FeatureDecision
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.IDLE_SUSPEND_INHIBITION:
-            raise ValueError(
-                "idle-suspend-inhibition preflight must contain an "
-                "idle-suspend-inhibition decision"
-            )
-        if not self.decision.allows_execution:
-            return
-        target = self.capability.value
-        if (
-            self.capability.status is not CapabilityStatus.AVAILABLE
-            or not isinstance(target, IdleSuspendInhibitionTarget)
-        ):
-            raise ValueError(
-                "executable idle-suspend-inhibition preflight requires an "
-                "available typed target"
-            )
-        if self.decision.route != target.route_key:
-            raise ValueError(
-                "idle-suspend-inhibition decision route must match its typed target"
-            )
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.IDLE_SUSPEND_INHIBITION,
+            target_type=IdleSuspendInhibitionTarget,
+            route_for_target=lambda target: target.route_key,
+            feature_label="idle-suspend-inhibition",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,25 +215,14 @@ class ViewerLaunchPreflight:
     decision: FeatureDecision
 
     def __post_init__(self) -> None:
-        if self.decision.feature is not FeatureId.VIEWER_LAUNCH:
-            raise ValueError(
-                "viewer-launch preflight must contain a viewer-launch decision"
-            )
-        if not self.decision.allows_execution:
-            return
-        target = self.capability.value
-        if (
-            self.capability.status is not CapabilityStatus.AVAILABLE
-            or not isinstance(target, ViewerLaunchTarget)
-        ):
-            raise ValueError(
-                "executable viewer-launch preflight requires an available "
-                "typed target"
-            )
-        if self.decision.route != target.route_key:
-            raise ValueError(
-                "viewer-launch decision route must match its typed target"
-            )
+        validate_route_preflight(
+            capability=self.capability,
+            decision=self.decision,
+            expected_feature=FeatureId.VIEWER_LAUNCH,
+            target_type=ViewerLaunchTarget,
+            route_for_target=lambda target: target.route_key,
+            feature_label="viewer-launch",
+        )
 
 
 @dataclass(frozen=True, slots=True)
