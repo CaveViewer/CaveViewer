@@ -552,6 +552,9 @@ preserves Windows `CA`/`ROOT` certificate-store augmentation and the empty
 default, macOS, and Linux behavior without disabling certificate verification.
 The process-global `truststore` startup compatibility path remains separate;
 this adapter does not change process initialization or network policy.
+The neutral file-download transport receives that explicit context from its
+caller, allowing Map Library archive downloads to retain the same trust setup
+without depending on update configuration or updater compatibility APIs.
 
 Directory selection follows the same on-demand contract. Its immutable target
 declares an executable route rather than performing a desktop request:

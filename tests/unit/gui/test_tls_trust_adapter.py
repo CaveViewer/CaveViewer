@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from caveviewer.gui.platform import tls_trust
 from caveviewer.gui.platform.tls_trust import create_tls_trust_adapter
 
 
@@ -21,3 +22,25 @@ def test_composed_tls_trust_adapter_delegates_context_augmentation():
     tls_trust_adapter.augment_ssl_context(context)
 
     assert platform_adapter.contexts == [context]
+
+
+def test_make_ssl_context_uses_explicit_focused_adapter(monkeypatch):
+    context = object()
+    augmented_contexts = []
+
+    class FakeTlsTrustAdapter:
+        def augment_ssl_context(self, received_context):
+            augmented_contexts.append(received_context)
+
+    monkeypatch.setattr(
+        tls_trust.ssl,
+        "create_default_context",
+        lambda: context,
+    )
+
+    result = tls_trust.make_ssl_context(
+        tls_trust_adapter=FakeTlsTrustAdapter()
+    )
+
+    assert result is context
+    assert augmented_contexts == [context]

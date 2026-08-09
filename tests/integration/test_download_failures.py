@@ -244,7 +244,11 @@ def test_failed_standard_library_download_preserves_existing_install(tmp_path, m
     def fail_download(*_args, **_kwargs):
         raise urllib.error.URLError("offline")
 
-    monkeypatch.setattr(standard_library_maps, "download_update", fail_download)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        fail_download,
+    )
 
     with pytest.raises(urllib.error.URLError):
         standard_library_maps.download_and_extract_standard_library_map(str(tmp_path), sample)
@@ -266,7 +270,11 @@ def test_corrupt_standard_library_zip_preserves_existing_install(tmp_path, monke
         with open(destination, "wb") as file_obj:
             file_obj.write(b"not a zip archive")
 
-    monkeypatch.setattr(standard_library_maps, "download_update", write_corrupt_zip)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        write_corrupt_zip,
+    )
 
     with pytest.raises(zipfile.BadZipFile):
         standard_library_maps.download_and_extract_standard_library_map(str(tmp_path), sample)
