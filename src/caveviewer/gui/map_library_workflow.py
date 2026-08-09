@@ -29,7 +29,16 @@ from caveviewer.gui.map_cache_rebuild import (
 )
 from caveviewer.gui.map_history import remove_recent_map_path
 from caveviewer.gui.map_library import recent_map_entry, recent_map_key
-from caveviewer.gui.map_library_controller import MapLibraryController
+from caveviewer.gui.map_library_controller import (
+    MapLibraryController,
+    StandardLibraryMapAvailability,
+)
+from caveviewer.gui.map_library_sources import (
+    GITHUB_RELEASE_MAP_SOURCE_ID,
+    MapCatalogRefresh,
+    default_map_library_catalog_service,
+    normalize_catalog_refreshes,
+)
 from caveviewer.gui.map_library_panel import (
     MapLibraryMenuAction,
     MapLibraryPanel,
@@ -62,10 +71,13 @@ from caveviewer.gui.standard_library_download import (
 )
 from caveviewer.gui.standard_library_maps import (
     DownloadCancelled,
+    bootstrap_managed_standard_library_map_installs,
     existing_standard_library_map_path,
-    fetch_standard_library_catalog,
+    is_app_supplied_standard_library_map_path,
     is_standard_library_map_downloaded,
+    managed_standard_library_map_installs,
     remove_downloaded_standard_library_map,
+    set_managed_standard_library_map_former,
 )
 
 
@@ -161,7 +173,17 @@ class MapLibraryWorkflow:
         is_downloaded: Callable[[str, Any], bool] = is_standard_library_map_downloaded,
         existing_path: Callable[[str, Any], str | None] = existing_standard_library_map_path,
         remove_downloaded: Callable[[str, Any], Any] = remove_downloaded_standard_library_map,
-        fetch_catalog: Callable[[], tuple[list[Any], str | None]] = fetch_standard_library_catalog,
+        is_app_supplied_path: Callable[[str, str], bool] = (
+            is_app_supplied_standard_library_map_path
+        ),
+        fetch_catalog: Callable[[], Any] | None = None,
+        bootstrap_managed_installs: Callable[[str, list[Any]], list[Any]] = (
+            bootstrap_managed_standard_library_map_installs
+        ),
+        managed_installs: Callable[[], list[Any]] = managed_standard_library_map_installs,
+        set_managed_install_former: Callable[..., None] = (
+            set_managed_standard_library_map_former
+        ),
         map_library_root_dir_provider: Callable[[], str] | None = None,
         start_download_worker: Callable[
             [DirectorySelection, Any, threading.Event, Any], threading.Thread
@@ -207,7 +229,11 @@ class MapLibraryWorkflow:
         self.is_downloaded = is_downloaded
         self.existing_path = existing_path
         self.remove_downloaded = remove_downloaded
-        self.fetch_catalog = fetch_catalog
+        self.is_app_supplied_path = is_app_supplied_path
+        self.fetch_catalog = fetch_catalog or default_map_library_catalog_service().fetch_catalogs
+        self.bootstrap_managed_installs = bootstrap_managed_installs
+        self.managed_installs = managed_installs
+        self.set_managed_install_former = set_managed_install_former
         self.map_library_root_dir_provider = map_library_root_dir_provider
         self.start_download_worker = start_download_worker
         self.start_catalog_worker = start_catalog_worker
@@ -234,6 +260,13 @@ class MapLibraryWorkflow:
     def populate_panel(self, parent, recent_map_paths: Sequence[str]) -> None:
         """Create Map Library rows and start the initial catalog refresh."""
         self.recent_map_paths = list(recent_map_paths)
+        self._bootstrap_managed_installs()
+        self._restore_persisted_former_maps()
+        self.recent_map_paths = [
+            path
+            for path in self.recent_map_paths
+            if not self.is_app_supplied_path(path, self.map_library_root_dir)
+        ]
         self.panel.create(parent)
         if self.recent_map_paths:
             for recent_path in self.recent_map_paths:
@@ -246,6 +279,97 @@ class MapLibraryWorkflow:
 
         self.panel.finish_population()
         self.start_catalog_fetch()
+
+    def _bootstrap_managed_installs(self) -> None:
+        """Adopt known legacy library folders before remote reconciliation."""
+        try:
+            self.bootstrap_managed_installs(
+                self.map_library_root_dir,
+                list(self.standard_library_maps),
+            )
+        except Exception as exc:
+            self.logger.warning("Could not bootstrap map library installs: %s", exc)
+
+    def _registered_local_library_installs(self) -> tuple[Any, ...]:
+        """Return prior app-managed entries retained for former-map handling."""
+        try:
+            installs = self.managed_installs()
+        except Exception as exc:
+            self.logger.warning("Could not load map library installs: %s", exc)
+            return ()
+
+        return tuple(installs)
+
+    def _map_from_managed_install(self, install):
+        """Restore row metadata from one private app-managed install record."""
+        try:
+            return install.as_map_info()
+        except AttributeError:
+            return install
+
+    def _registered_local_library_maps(self) -> tuple[Any, ...]:
+        """Return row metadata restored from known local app-managed installs."""
+        installs = self._registered_local_library_installs()
+
+        maps: list[Any] = []
+        for install in installs:
+            try:
+                library_map = self._map_from_managed_install(install)
+            except Exception as exc:
+                self.logger.warning("Could not restore a managed map install: %s", exc)
+                continue
+            maps.append(library_map)
+        return tuple(maps)
+
+    def _restore_persisted_former_maps(self) -> None:
+        """Keep a previously confirmed former map visible while offline.
+
+        A stale catalog cache may no longer mention a map that was authoritatively
+        removed during an earlier run.  The managed-install registry retains
+        that known former state so an offline restart still distinguishes the
+        local copy from maps that remain in the standard library.
+        """
+        maps = list(self.standard_library_maps)
+        availability_by_key = {
+            self.controller.map_key(library_map): self.controller.availability_for(
+                library_map
+            )
+            for library_map in maps
+        }
+        changed = False
+        known_keys = set(availability_by_key)
+        for install in self._registered_local_library_installs():
+            if not getattr(install, "former", False):
+                continue
+            try:
+                library_map = self._map_from_managed_install(install)
+            except Exception as exc:
+                self.logger.warning("Could not restore a former map install: %s", exc)
+                continue
+            key = self.controller.map_key(library_map)
+            availability_by_key[key] = StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL
+            if key not in known_keys:
+                maps.append(library_map)
+                known_keys.add(key)
+            changed = True
+        if not changed:
+            return
+        self.standard_library_maps = tuple(maps)
+        self.controller.replace_standard_library_maps(
+            self.standard_library_maps,
+            availability_by_key=availability_by_key,
+        )
+
+    def _set_managed_install_former(self, library_map, *, former: bool) -> None:
+        """Persist a source-confirmed former/current transition best-effort."""
+        try:
+            self.set_managed_install_former(library_map, former=former)
+        except Exception as exc:
+            self.logger.warning(
+                "Could not update managed map availability for %s: %s",
+                getattr(library_map, "display_name", "map"),
+                exc,
+            )
 
     def close(self) -> None:
         """Close transient UI and request a resumable active rebuild pause."""
@@ -266,7 +390,6 @@ class MapLibraryWorkflow:
                 max_wraplength=360,
             )
             return
-
         self.map_library_root_dir = map_library_root_dir
         for library_map in self.standard_library_maps:
             self.refresh_standard_row(library_map)
@@ -380,6 +503,7 @@ class MapLibraryWorkflow:
         self.panel.add_standard_row(
             row,
             action=lambda library_map=library_map: self.on_map_action(library_map),
+            former=self.controller.is_former_standard_map(library_map),
             menu_actions_factory=menu_actions,
         )
 
@@ -821,6 +945,13 @@ class MapLibraryWorkflow:
         """Open a recent row unless the splash currently owns a rebuild child."""
         if self._cache_rebuild_blocks_map_actions():
             return
+        if self.is_app_supplied_path(path, self.map_library_root_dir):
+            self._show_info(
+                "This map is still managed by Map Library. Open it from the "
+                "CaveViewer Maps section instead.",
+                max_wraplength=400,
+            )
+            return
         self.open_map(path)
 
     def _guided_dive_action_available(self, map_path: str) -> bool:
@@ -837,7 +968,10 @@ class MapLibraryWorkflow:
         availability before the desktop picker, then validate the actual
         selected JSONL and its current cache before the splash session leaves.
         """
-        if self.open_guided_dive is None or self._cache_rebuild_blocks_map_actions():
+        if (
+            self.open_guided_dive is None
+            or self._cache_rebuild_blocks_map_actions()
+        ):
             return
 
         availability = self.guided_dive_menu(map_path)
@@ -948,7 +1082,14 @@ class MapLibraryWorkflow:
             self.map_library_root_dir,
             library_map,
         )
-        self.refresh_standard_row(library_map)
+        if (
+            not removal_result.error
+            and self.controller.is_former_standard_map(library_map)
+            and not self.is_downloaded(self.map_library_root_dir, library_map)
+        ):
+            self._remove_former_standard_map(library_map)
+        else:
+            self.refresh_standard_row(library_map)
 
         cache_error = _remaining_cache_error(cache_result, removal_result.removed_paths)
         removal_error = removal_result.error
@@ -979,6 +1120,18 @@ class MapLibraryWorkflow:
 
         self.panel.show_row_status(row_widgets, "No files found")
 
+    def _remove_former_standard_map(self, library_map) -> None:
+        """Remove a former-library row after its managed files no longer exist."""
+        key = self.controller.map_key(library_map)
+        self.controller.remove_standard_library_map(library_map)
+        self.standard_library_maps = tuple(
+            candidate
+            for candidate in self.standard_library_maps
+            if self.controller.map_key(candidate) != key
+        )
+        if self.splash_exists():
+            self.panel.remove_standard_row(key)
+
     def remove_recent_map(self, path: str) -> None:
         """Forget one recent-map path and remove the visible row."""
         self.remove_recent_path(path)
@@ -1004,6 +1157,10 @@ class MapLibraryWorkflow:
             resolved_map,
             downloaded=downloaded,
             result_path=result_path if downloaded else None,
+        )
+        self.panel.set_standard_row_former(
+            row.key,
+            row.availability is StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL,
         )
         self.set_row_metadata(library_map, row.detail)
         self.set_standard_action(library_map, row)
@@ -1241,6 +1398,9 @@ class MapLibraryWorkflow:
         if self._cache_rebuild_blocks_map_actions():
             return
         self.sync_map_library_root_dir()
+        if self.controller.is_former_standard_map(library_map):
+            self.open_standard_map(library_map)
+            return
         if self.controller.active_download.in_progress:
             self._show_info(
                 "Finish or stop the current map library download before "
@@ -1351,13 +1511,24 @@ class MapLibraryWorkflow:
         if fetch_queue is None:
             return
         try:
-            catalog, error = fetch_queue.get_nowait()
+            catalog_result = fetch_queue.get_nowait()
         except queue.Empty:
             self.schedule_catalog_poll()
             return
 
-        completion = self.controller.complete_catalog_fetch(catalog, error)
-        self.reconcile_standard_catalog(completion.maps)
+        try:
+            refreshes = normalize_catalog_refreshes(catalog_result)
+        except (TypeError, ValueError) as exc:
+            refreshes = (
+                MapCatalogRefresh(
+                    source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
+                    maps=(),
+                    authoritative=False,
+                    error=f"Couldn't load the map library: {exc}",
+                ),
+            )
+        completion = self.controller.complete_catalog_fetch(refreshes)
+        self.reconcile_standard_catalog(completion.refreshes)
 
         pending_map = completion.pending_map
         if pending_map is None:
@@ -1368,39 +1539,202 @@ class MapLibraryWorkflow:
             return
         self.start_inline_download(resolved_map)
 
-    def reconcile_standard_catalog(self, catalog) -> None:
+    def reconcile_standard_catalog(
+        self,
+        refreshes: Sequence[MapCatalogRefresh],
+    ) -> None:
         """
         Reconcile visible standard-library rows after a catalog refresh.
 
-        Remote catalog metadata owns the current available-map list. Rows not in
-        the refreshed catalog are removed unless they are active or downloaded
-        locally, because those still need a safe way to finish or open/remove
-        already-managed files.
+        Each authoritative source owns its current available-map list. A local
+        installation missing from that source becomes a muted former-map row;
+        a fallback/error result never makes that change.
         """
-        active_key = self.controller.active_download.map_name
-        visible_by_key = {
-            self.controller.map_key(library_map): library_map
-            for library_map in catalog
+        active_keys = {
+            key
+            for key in (
+                self.controller.active_download.map_name,
+            )
+            if key is not None
         }
+        previous_keys = tuple(
+            self.controller.map_key(library_map)
+            for library_map in self.standard_library_maps
+        )
+        current_by_key = {
+            self.controller.map_key(library_map): library_map
+            for library_map in self.standard_library_maps
+        }
+        current_availability = {
+            key: self.controller.availability_for(library_map)
+            for key, library_map in current_by_key.items()
+        }
+        registered_installs = self._registered_local_library_installs()
+        registered_maps: list[tuple[Any, Any]] = []
+        persisted_former_keys = set()
+        for install in registered_installs:
+            try:
+                library_map = self._map_from_managed_install(install)
+            except Exception as exc:
+                self.logger.warning("Could not restore a managed map install: %s", exc)
+                continue
+            key = self.controller.map_key(library_map)
+            registered_maps.append((install, library_map))
+            if getattr(install, "former", False):
+                persisted_former_keys.add(key)
+        refresh_by_source = {refresh.source_id: refresh for refresh in refreshes}
+        authoritative_sources = {
+            refresh.source_id for refresh in refreshes if refresh.authoritative
+        }
+        authoritative_keys = {
+            refresh.source_id: {
+                self.controller.map_key(library_map) for library_map in refresh.maps
+            }
+            for refresh in refreshes
+            if refresh.authoritative
+        }
+        visible_maps: list[Any] = []
+        availability_by_key = {}
+        visible_keys = set()
+
+        def add_visible(
+            library_map,
+            availability: StandardLibraryMapAvailability,
+        ) -> None:
+            key = self.controller.map_key(library_map)
+            if key in visible_keys:
+                if availability is StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL:
+                    availability_by_key[key] = availability
+                return
+            visible_keys.add(key)
+            visible_maps.append(library_map)
+            availability_by_key[key] = availability
+
+        for refresh in refreshes:
+            source_id = refresh.source_id
+            if refresh.authoritative:
+                for library_map in refresh.maps:
+                    self._set_managed_install_former(library_map, former=False)
+                    add_visible(
+                        library_map,
+                        (
+                            StandardLibraryMapAvailability.REMOTE_AVAILABLE
+                            if getattr(library_map, "download_url", None)
+                            else StandardLibraryMapAvailability.REMOTE_UNAVAILABLE
+                        ),
+                    )
+                continue
+
+            for library_map in refresh.maps:
+                key = self.controller.map_key(library_map)
+                add_visible(
+                    library_map,
+                    (
+                        StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL
+                        if key in persisted_former_keys
+                        else current_availability.get(
+                            key,
+                            StandardLibraryMapAvailability.REMOTE_AVAILABLE,
+                        )
+                    ),
+                )
+            for library_map in self.standard_library_maps:
+                if self.controller.map_key(library_map)[0] != source_id:
+                    continue
+                add_visible(
+                    library_map,
+                    (
+                        StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL
+                        if self.controller.map_key(library_map)
+                        in persisted_former_keys
+                        else current_availability[self.controller.map_key(library_map)]
+                    ),
+                )
 
         for library_map in self.standard_library_maps:
             key = self.controller.map_key(library_map)
-            if key in visible_by_key:
+            source_id = key[0]
+            if source_id not in refresh_by_source:
+                add_visible(
+                    library_map,
+                    (
+                        StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL
+                        if key in persisted_former_keys
+                        else current_availability[key]
+                    ),
+                )
                 continue
-            if key == active_key or self.is_downloaded(
-                self.map_library_root_dir,
-                library_map,
-            ):
-                visible_by_key[key] = library_map
+            if source_id not in authoritative_sources:
+                continue
+            if key in authoritative_keys[source_id]:
+                continue
+            if key in active_keys:
+                add_visible(library_map, current_availability[key])
+                continue
+            if self.is_downloaded(self.map_library_root_dir, library_map):
+                self._set_managed_install_former(library_map, former=True)
+                add_visible(
+                    library_map,
+                    StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL,
+                )
                 continue
             self.panel.remove_standard_row(key)
 
-        visible_maps = tuple(visible_by_key.values())
-        self.standard_library_maps = visible_maps
-        self.controller.replace_standard_library_maps(visible_maps)
+        for install, library_map in registered_maps:
+            key = self.controller.map_key(library_map)
+            source_id = key[0]
+            if source_id not in authoritative_sources:
+                if getattr(install, "former", False):
+                    add_visible(
+                        library_map,
+                        StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL,
+                    )
+                continue
+            if (
+                key in authoritative_keys.get(source_id, set())
+                or key in active_keys
+                or not self.is_downloaded(self.map_library_root_dir, library_map)
+            ):
+                continue
+            self._set_managed_install_former(library_map, former=True)
+            add_visible(
+                library_map,
+                StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL,
+            )
 
+        # Preserve the established position of retained entries.  In
+        # particular, a locally installed map that has disappeared upstream
+        # stays where users last saw it rather than jumping into a new section
+        # or to the end of the list.  Truly new catalog entries follow the
+        # existing order in their source-provided sequence.
+        visible_by_key = {
+            self.controller.map_key(library_map): library_map
+            for library_map in visible_maps
+        }
+        ordered_visible_maps: list[Any] = []
+        ordered_keys = set()
+        for key in previous_keys:
+            library_map = visible_by_key.get(key)
+            if library_map is None:
+                continue
+            ordered_visible_maps.append(library_map)
+            ordered_keys.add(key)
         for library_map in visible_maps:
-            if active_key == self.controller.map_key(library_map):
+            key = self.controller.map_key(library_map)
+            if key in ordered_keys:
+                continue
+            ordered_visible_maps.append(library_map)
+            ordered_keys.add(key)
+
+        visible_maps_tuple = tuple(ordered_visible_maps)
+        self.standard_library_maps = visible_maps_tuple
+        self.controller.replace_standard_library_maps(
+            visible_maps_tuple,
+            availability_by_key=availability_by_key,
+        )
+
+        for library_map in visible_maps_tuple:
+            if self.controller.map_key(library_map) in active_keys:
                 continue
             if not self.panel.has_standard_row(self.controller.map_key(library_map)):
                 self.add_standard_row(library_map)
@@ -1421,7 +1755,14 @@ class MapLibraryWorkflow:
             try:
                 result = self.fetch_catalog()
             except Exception as exc:
-                result = ([], f"Couldn't load the map library: {exc}")
+                result = (
+                    MapCatalogRefresh(
+                        source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
+                        maps=(),
+                        authoritative=False,
+                        error=f"Couldn't load the map library: {exc}",
+                    ),
+                )
             fetch_queue.put(result)
 
         self.start_catalog_worker(fetch_worker)
@@ -1430,6 +1771,9 @@ class MapLibraryWorkflow:
     def prepare_catalog_for_download(self, library_map) -> None:
         """Fetch catalog details before downloading an unresolved row."""
         if self._cache_rebuild_blocks_map_actions():
+            return
+        if self.controller.is_former_standard_map(library_map):
+            self.open_standard_map(library_map)
             return
         if self.controller.active_download.in_progress:
             self._show_info(

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import inspect
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from caveviewer.gui import (
     map_history,
+    map_library_controller,
     map_library_panel,
     map_library_workflow,
     splash_screen,
@@ -398,9 +400,16 @@ def test_splash_map_picker_checks_its_directory_selection_route_before_calling_i
 def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
+    controller_source = inspect.getsource(map_library_controller.MapLibraryController)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
     workflow_source = inspect.getsource(map_library_workflow.MapLibraryWorkflow)
-    source = splash_source + style_source + panel_source + workflow_source
+    source = (
+        splash_source
+        + style_source
+        + controller_source
+        + panel_source
+        + workflow_source
+    )
     section_source = panel_source[
         panel_source.find("def _create_section") : panel_source.find(
             "def _create_empty_note"
@@ -428,6 +437,7 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "yscrollcommand=self._set_scrollbar_fraction" in panel_source
     assert 'self._content_scrollbar.pack(side="right", fill="y")' in panel_source
     assert "self.bind_mousewheel_if_ready(self._rows_frame)" in panel_source
+    assert "self.sync_after_row_change()" in panel_source
     assert "recent_map_paths = _load_library_recent_map_paths()" in splash_source
     assert "self.controller.row(" in workflow_source
     assert "detail=row.detail" in panel_source
@@ -466,6 +476,11 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert "poll_download_queue" not in splash_source
     assert 'self.set_standard_row_metadata(key, "Downloading…")' in panel_source
     assert "Downloading… %" not in panel_source
+    assert "Local-only former library maps" not in source
+    assert "No longer a part of the standard library" in source
+    assert "create_polygon(" in section_source
+    assert 'text="Hide"' not in section_source
+    assert 'text="Show"' not in section_source
 
     style = splash_screen._map_library_panel_style()
     assert style.progress_track_color == splash_screen.DARK_THEME.entry_background
@@ -473,6 +488,8 @@ def test_splash_map_library_panel_is_scrollable_and_generically_labeled():
     assert style.progress_track_color != style.button_bg
     assert style.progress_fill_color != style.button_bg
     assert style.progress_fill_color == style.button_fg
+    assert style.former_map_title_color == splash_screen.DARK_THEME.secondary_text
+    assert style.former_map_title_color != style.title_color
 
 
 def test_map_library_sections_start_expanded_and_toggle_in_place():
@@ -520,11 +537,11 @@ def test_map_library_sections_start_expanded_and_toggle_in_place():
     assert len(sync_calls) == 2
 
 
-def test_map_library_section_headers_use_explicit_show_hide_controls():
+def test_map_library_section_headers_use_adjacent_disclosure_triangles():
     class _FakeHeader:
         def __init__(self) -> None:
             self.text_calls = []
-            self.line_calls = []
+            self.polygon_calls = []
 
         def delete(self, _tag) -> None:
             pass
@@ -535,11 +552,15 @@ def test_map_library_section_headers_use_explicit_show_hide_controls():
         def winfo_height(self) -> int:
             return 24
 
-        def create_text(self, *_coordinates, **options) -> None:
-            self.text_calls.append(options)
+        def create_text(self, *coordinates, **options):
+            self.text_calls.append((coordinates, options))
+            return f"text-{len(self.text_calls)}"
 
-        def create_line(self, *_coordinates, **options) -> None:
-            self.line_calls.append(options)
+        def bbox(self, _item):
+            return (2, 0, 118, 24)
+
+        def create_polygon(self, *coordinates, **options) -> None:
+            self.polygon_calls.append((coordinates, options))
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     panel._widget_exists = lambda _widget: True
@@ -564,13 +585,50 @@ def test_map_library_section_headers_use_explicit_show_hide_controls():
     section.expanded = False
     panel._draw_section_header(section)
 
-    assert [call["text"] for call in header.text_calls] == [
+    assert [options["text"] for _coordinates, options in header.text_calls] == [
         "CaveViewer Maps",
-        "Hide",
         "CaveViewer Maps",
-        "Show",
     ]
-    assert header.line_calls == []
+    assert len(header.polygon_calls) == 2
+    expanded_points, expanded_options = header.polygon_calls[0]
+    collapsed_points, collapsed_options = header.polygon_calls[1]
+    assert expanded_points[1] == expanded_points[3] < expanded_points[5]
+    assert collapsed_points[0] == collapsed_points[2] < collapsed_points[4]
+    assert expanded_options == collapsed_options == {
+        "fill": "#ffffff",
+        "outline": "",
+        "tags": "cv_section_header",
+    }
+
+
+def test_former_standard_row_title_uses_a_muted_style_without_moving_the_row():
+    class _FakeLabel:
+        def __init__(self) -> None:
+            self.config_calls = []
+
+        def config(self, **options) -> None:
+            self.config_calls.append(options)
+
+    title_label = _FakeLabel()
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel.standard_rows = {
+        "former-map": SimpleNamespace(title_label=title_label),
+    }
+    panel._standard_row_former = {}
+    panel._widget_exists = lambda _widget: True
+    panel._style = SimpleNamespace(
+        title_color="#ffffff",
+        former_map_title_color="#9a9aa6",
+    )
+
+    panel.set_standard_row_former("former-map", True)
+    panel.set_standard_row_former("former-map", False)
+
+    assert panel._standard_row_former == {"former-map": False}
+    assert title_label.config_calls == [
+        {"fg": "#9a9aa6"},
+        {"fg": "#ffffff"},
+    ]
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
@@ -618,6 +676,48 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "button.create_oval(" in panel_source
     assert 'button.pack(side="right", padx=(0, self._px(12))' in panel_source
     assert "padx=(0, self._px(8))" in panel_source
+    assert "_install_menu_dismissal_bindings" in panel_source
+    assert '"<ButtonPress-1>"' in panel_source
+    assert '"<FocusOut>"' in panel_source
+    assert ".bind_all(" not in panel_source
+
+
+def test_map_library_menu_outside_click_binding_is_scoped_and_removed_on_close():
+    class _FakeRoot:
+        def __init__(self) -> None:
+            self.callbacks = {}
+            self.unbound = []
+
+        def bind(self, sequence, callback, add=None):
+            assert add == "+"
+            callback_id = f"callback-{len(self.callbacks) + 1}"
+            self.callbacks[sequence] = (callback_id, callback)
+            return callback_id
+
+        def unbind(self, sequence, callback_id):
+            self.unbound.append((sequence, callback_id))
+
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    root = _FakeRoot()
+    menu = object()
+    opener = object()
+    panel.root = root
+    panel._active_menu = menu
+    panel._active_menu_root_bindings = []
+    panel.recent_rows = {}
+    panel.standard_rows = {}
+    panel._widget_exists = lambda _widget: False
+
+    panel._install_menu_dismissal_bindings(menu, opener)
+    _callback_id, outside_click = root.callbacks["<ButtonPress-1>"]
+
+    outside_click(SimpleNamespace(widget=object()))
+
+    assert panel._active_menu is None
+    assert root.unbound == [
+        ("<ButtonPress-1>", "callback-1"),
+        ("<FocusOut>", "callback-2"),
+    ]
 
 
 def test_library_action_buttons_use_normalized_dimensions():
@@ -625,6 +725,74 @@ def test_library_action_buttons_use_normalized_dimensions():
     assert splash_screen._LIBRARY_ACTION_ICON_STROKE_WIDTH == 2
     assert splash_screen._LIBRARY_OVERFLOW_BUTTON_SIZE == 28
     assert splash_screen._LIBRARY_METADATA_FONT[1] == 9
+    style = splash_screen._map_library_panel_style()
+    assert style.scrollbar_right_inset == 32
+    assert style.scroll_track_width == 12
+    assert style.scroll_track_color == splash_screen.DARK_THEME.secondary_button
+
+
+def test_map_library_scrollbar_uses_a_recessed_rail_and_rounded_thumb():
+    class _FakeScrollbar:
+        def __init__(self) -> None:
+            self.line_calls = []
+            self.deleted = []
+
+        def winfo_height(self) -> int:
+            return 200
+
+        def winfo_width(self) -> int:
+            return 18
+
+        def create_line(self, *coordinates, **options):
+            self.line_calls.append((coordinates, options))
+            return len(self.line_calls)
+
+        def delete(self, item_id) -> None:
+            self.deleted.append(item_id)
+
+        def coords(self, *_args) -> None:
+            raise AssertionError("The initial draw should create both scrollbar items.")
+
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel._content_scrollbar = _FakeScrollbar()
+    panel._scrollbar_fraction = (0.25, 0.75)
+    panel._scrollbar_track = None
+    panel._scrollbar_thumb = None
+    panel._px = lambda value: int(value)
+    panel._style = SimpleNamespace(
+        scroll_track_width=12,
+        scroll_track_color="#2a2a33",
+        scroll_thumb_min_height=36,
+        scroll_thumb_width=8,
+        scroll_thumb_color="#5d6f8a",
+    )
+
+    panel._draw_scrollbar_thumb()
+
+    (track_coordinates, track_options), (thumb_coordinates, thumb_options) = (
+        panel._content_scrollbar.line_calls
+    )
+    assert track_coordinates == (9.0, 8, 9.0, 192)
+    assert track_options == {
+        "fill": "#2a2a33",
+        "width": 12,
+        "capstyle": "round",
+        "tags": "cv_scrollbar_track",
+    }
+    assert thumb_coordinates == (9.0, 31, 9.0, 123)
+    assert thumb_options == {
+        "fill": "#5d6f8a",
+        "width": 8,
+        "capstyle": "round",
+        "tags": "cv_scrollbar_thumb",
+    }
+
+    panel._scrollbar_fraction = (0.0, 1.0)
+    panel._draw_scrollbar_thumb()
+
+    assert panel._content_scrollbar.deleted == [1, 2]
+    assert panel._scrollbar_track is None
+    assert panel._scrollbar_thumb is None
 
 
 @pytest.mark.parametrize(

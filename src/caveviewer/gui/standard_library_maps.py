@@ -19,15 +19,19 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
 from caveviewer.core.json_io import load_bounded_json
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.download_transport import DownloadCancelled, download_file
+from caveviewer.gui.map_library_sources import (
+    GITHUB_RELEASE_MAP_SOURCE_ID,
+    MapCatalogRefresh,
+)
 from caveviewer.gui.platform.tls_trust import make_ssl_context
-from caveviewer.gui.preference_paths import write_text_atomic
+from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
 from caveviewer.resources import resource_path
 from caveviewer.storage_paths import resolve_application_paths
 
@@ -43,6 +47,7 @@ _DEFAULT_MAP_LIBRARY_RELEASE_TAG = "sample-data"
 _DEFAULT_MAP_LIBRARY_CATALOG_ASSET_NAME = "caveviewer-map-library.v1.json"
 _BUNDLED_MAP_LIBRARY_CATALOG_RESOURCE = "map_library_catalog.v1.json"
 _MAP_LIBRARY_CATALOG_CACHE_FILE = "map_library_catalog.v1.json"
+_MAP_LIBRARY_INSTALL_REGISTRY_FILE = "map_library_installs.v1.json"
 _MAX_RELEASE_METADATA_BYTES = 2 * 1024 * 1024
 _MAX_MAP_LIBRARY_CATALOG_BYTES = 128 * 1024
 _MAP_LIBRARY_USER_AGENT = "CaveViewer-MapLibrary"
@@ -84,6 +89,7 @@ _REQUEST_TIMEOUT_SECONDS = 8
 
 MAP_LIBRARY_DIRNAME = "map_library"
 _LEGACY_MAP_LIBRARY_DIRNAME = "sample_maps"
+_SOURCE_MAP_LIBRARY_DIRNAME = ".caveviewer-map-library-sources"
 
 _MAP_LIBRARY_CONFIG_LOGGED = False
 
@@ -97,6 +103,7 @@ class StandardLibraryMapInfo:
     catalog_id: Optional[str] = None
     folder_name: Optional[str] = None
     sha256: Optional[str] = None
+    source_id: str = GITHUB_RELEASE_MAP_SOURCE_ID
 
 
 @dataclass(frozen=True)
@@ -105,6 +112,40 @@ class StandardLibraryMapRemovalResult:
 
     removed_paths: tuple[str, ...]
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class ManagedStandardLibraryMapInstall:
+    """Persisted identity and resolved path of one app-managed library map."""
+
+    source_id: str
+    catalog_id: str
+    display_name: str
+    asset_name: str
+    folder_name: str | None
+    path: str
+    former: bool = False
+
+    def as_map_info(self) -> StandardLibraryMapInfo:
+        """Rebuild the source-neutral row metadata retained for a local map."""
+        return StandardLibraryMapInfo(
+            display_name=self.display_name,
+            asset_name=self.asset_name,
+            catalog_id=self.catalog_id,
+            folder_name=self.folder_name,
+            source_id=self.source_id,
+        )
+
+
+class GitHubReleaseMapLibrarySource:
+    """Adapt the current GitHub release implementation to the shared source API."""
+
+    source_id = GITHUB_RELEASE_MAP_SOURCE_ID
+    display_name = "CaveViewer Maps"
+
+    def fetch_catalog(self) -> MapCatalogRefresh:
+        """Fetch one GitHub-backed catalog without involving Tk."""
+        return fetch_standard_library_catalog_refresh()
 
 
 def bundled_standard_library_catalog() -> list[StandardLibraryMapInfo]:
@@ -309,6 +350,7 @@ def _maps_without_download_info(
             catalog_id=library_map.catalog_id,
             folder_name=library_map.folder_name,
             sha256=library_map.sha256,
+            source_id=library_map.source_id,
         )
         for library_map in maps
     ]
@@ -380,7 +422,14 @@ def _catalog_payload_from_standard_library_maps(
         if library_map.sha256:
             entry["sha256"] = library_map.sha256
         entries.append(entry)
-    return {"version": 1, "maps": entries}
+    # Old caches did not include a source id.  They remain readable as the
+    # GitHub cache below, while new writes make the ownership explicit so
+    # future source adapters cannot accidentally share catalog state.
+    return {
+        "version": 1,
+        "source_id": GITHUB_RELEASE_MAP_SOURCE_ID,
+        "maps": entries,
+    }
 
 
 def _map_catalog_from_release_zip_assets(
@@ -394,12 +443,22 @@ def _map_catalog_from_release_zip_assets(
     new map zip to the current GitHub release still makes it visible before a
     full manifest asset is published.
     """
-    catalog = bundled_standard_library_catalog()
+    attached_archives = {
+        asset_name
+        for asset_name in assets_by_name
+        if _is_map_archive_asset_name(asset_name)
+    }
+    bundled_catalog = bundled_standard_library_catalog()
+    catalog = [
+        library_map
+        for library_map in bundled_catalog
+        if library_map.asset_name in attached_archives
+    ]
     seen_assets = {library_map.asset_name for library_map in catalog}
     extra_assets = sorted(
         asset_name
-        for asset_name in assets_by_name
-        if _is_map_archive_asset_name(asset_name) and asset_name not in seen_assets
+        for asset_name in attached_archives
+        if asset_name not in seen_assets
     )
     catalog.extend(
         StandardLibraryMapInfo(
@@ -450,6 +509,9 @@ def _standard_library_maps_from_catalog_payload(
         raise ValueError(f"{source_description} must be a JSON object")
     if payload.get("version") != 1:
         raise ValueError(f"{source_description} must declare version 1")
+    source_id = payload.get("source_id", GITHUB_RELEASE_MAP_SOURCE_ID)
+    if source_id != GITHUB_RELEASE_MAP_SOURCE_ID:
+        raise ValueError(f"{source_description} has an unexpected source id")
     raw_maps = payload.get("maps")
     if not isinstance(raw_maps, list):
         raise ValueError(f"{source_description} maps must be a list")
@@ -601,6 +663,7 @@ def _enrich_catalog_with_release_assets(
                 catalog_id=library_map.catalog_id,
                 folder_name=library_map.folder_name,
                 sha256=library_map.sha256,
+                source_id=library_map.source_id,
             )
         )
     return results
@@ -653,18 +716,18 @@ def _remote_catalog_from_release_assets(
         )
 
 
-def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str | None]:
+def _fetch_github_standard_library_catalog(
+) -> tuple[list[StandardLibraryMapInfo], str | None, bool]:
     """
     Fetch the GitHub-hosted map catalog and release asset download details.
 
-    Returns ``(maps, error_message_or_None)``. A remote catalog manifest named
-    ``caveviewer-map-library.v1.json`` controls the dynamic map list when it is
-    attached to the configured release. If the manifest is absent, CaveViewer
-    preserves bundled metadata for known zip assets, infers rows for additional
-    release zip assets, and fills download URLs from the release assets. If
-    GitHub cannot be reached, CaveViewer returns cached or bundled catalog
-    metadata without download URLs so previously downloaded maps remain visible
-    and openable.
+    Return ``(maps, error_message_or_None, authoritative)`` for GitHub.
+
+    A remote catalog manifest named ``caveviewer-map-library.v1.json`` controls
+    the dynamic map list when attached to the configured release. Without a
+    manifest, the catalog is derived strictly from current release archives.
+    Cached and bundled maps are non-authoritative fallbacks when GitHub cannot
+    be reached or the response is invalid.
     """
     _log_map_library_config_once()
 
@@ -681,7 +744,7 @@ def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str 
             )
         else:
             error_msg = f"GitHub returned an error (HTTP {e.code})."
-        return _fallback_maps_with_no_download_info(), error_msg
+        return _fallback_maps_with_no_download_info(), error_msg, False
     except urllib.error.URLError as e:
         # URLError is a catch-all for "the request itself failed to
         # complete" -- it does NOT specifically mean "no internet
@@ -705,11 +768,12 @@ def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str 
                 "Couldn't reach GitHub right now. This may be a temporary "
                 "network issue -- try again in a moment."
             )
-        return _fallback_maps_with_no_download_info(), error_msg
+        return _fallback_maps_with_no_download_info(), error_msg, False
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError, TypeError) as e:
         return (
             _fallback_maps_with_no_download_info(),
             f"Got an unexpected response from GitHub: {e}",
+            False,
         )
 
     try:
@@ -718,6 +782,7 @@ def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str 
         return (
             _fallback_maps_with_no_download_info(),
             f"Got an unexpected response from GitHub: {exc}",
+            False,
         )
     catalog, catalog_error, remote_manifest_loaded = _remote_catalog_from_release_assets(
         assets_by_name
@@ -725,7 +790,25 @@ def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str 
     results = _enrich_catalog_with_release_assets(catalog, assets_by_name)
     if remote_manifest_loaded:
         _save_cached_standard_library_catalog(results)
-    return results, catalog_error
+    return results, catalog_error, remote_manifest_loaded
+
+
+def fetch_standard_library_catalog_refresh() -> MapCatalogRefresh:
+    """Fetch the GitHub release through the source-neutral catalog contract."""
+    maps, error, authoritative = _fetch_github_standard_library_catalog()
+    return MapCatalogRefresh(
+        source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
+        maps=tuple(maps),
+        authoritative=authoritative,
+        error=error,
+        display_name=GitHubReleaseMapLibrarySource.display_name,
+    )
+
+
+def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str | None]:
+    """Compatibility wrapper for legacy callers of the GitHub catalog helper."""
+    refresh = fetch_standard_library_catalog_refresh()
+    return list(refresh.maps), refresh.error
 
 
 def _log_map_library_config_once() -> None:
@@ -760,6 +843,257 @@ def _log_map_library_config_once() -> None:
     )
 
 
+def standard_library_map_identity(
+    sample: StandardLibraryMapInfo,
+) -> tuple[str, str]:
+    """Return the source-qualified durable identity for one library map."""
+    source_id = getattr(sample, "source_id", GITHUB_RELEASE_MAP_SOURCE_ID)
+    catalog_id = sample.catalog_id or _catalog_id_from_asset(sample)
+    return str(source_id), str(catalog_id)
+
+
+def _install_registry_path() -> Path:
+    """Return the app-private state file for managed library installations."""
+    return Path(
+        migrate_state_file(
+            _MAP_LIBRARY_INSTALL_REGISTRY_FILE,
+            ".caveviewer_map_library_installs",
+        )
+    )
+
+
+def _managed_install_from_payload(raw) -> ManagedStandardLibraryMapInstall | None:
+    if not isinstance(raw, dict):
+        return None
+    required = ("source_id", "catalog_id", "display_name", "asset_name", "path")
+    values: dict[str, str] = {}
+    for field_name in required:
+        value = raw.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            return None
+        values[field_name] = value.strip()
+    folder_name = raw.get("folder_name")
+    if folder_name is not None and (
+        not isinstance(folder_name, str) or not folder_name.strip()
+    ):
+        return None
+    former = raw.get("former", False)
+    if type(former) is not bool:
+        return None
+    return ManagedStandardLibraryMapInstall(
+        source_id=values["source_id"],
+        catalog_id=values["catalog_id"],
+        display_name=values["display_name"],
+        asset_name=values["asset_name"],
+        folder_name=folder_name.strip() if isinstance(folder_name, str) else None,
+        path=values["path"],
+        former=former,
+    )
+
+
+def load_managed_standard_library_map_installs(
+) -> list[ManagedStandardLibraryMapInstall]:
+    """Load valid app-managed map records without trusting arbitrary folders."""
+    path = _install_registry_path()
+    if not path.is_file():
+        return []
+    try:
+        payload = load_bounded_json(
+            path,
+            max_bytes=_MAX_MAP_LIBRARY_CATALOG_BYTES,
+            description="managed map library install registry",
+        )
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            raise ValueError("registry must declare version 1")
+        raw_installs = payload.get("installs")
+        if not isinstance(raw_installs, list):
+            raise ValueError("registry installs must be a list")
+    except Exception as exc:
+        _LOG.warning("Ignoring unreadable map install registry %s: %s", path, exc)
+        return []
+
+    installs: list[ManagedStandardLibraryMapInstall] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_installs:
+        install = _managed_install_from_payload(raw)
+        if install is None:
+            continue
+        identity = install.source_id, install.catalog_id
+        if identity in seen:
+            continue
+        seen.add(identity)
+        installs.append(install)
+    return installs
+
+
+def _save_managed_standard_library_map_installs(
+    installs: list[ManagedStandardLibraryMapInstall],
+) -> None:
+    """Atomically persist the managed-install registry's compact v1 shape."""
+    path = _install_registry_path()
+    payload = {
+        "version": 1,
+        "installs": [
+            {
+                "source_id": install.source_id,
+                "catalog_id": install.catalog_id,
+                "display_name": install.display_name,
+                "asset_name": install.asset_name,
+                "folder_name": install.folder_name,
+                "path": install.path,
+                "former": install.former,
+            }
+            for install in installs
+        ],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(str(path), json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    except Exception as exc:
+        _LOG.warning("Could not save map install registry %s: %s", path, exc)
+
+
+def _managed_install_for_map(
+    sample: StandardLibraryMapInfo,
+) -> ManagedStandardLibraryMapInstall | None:
+    identity = standard_library_map_identity(sample)
+    return next(
+        (
+            install
+            for install in load_managed_standard_library_map_installs()
+            if (install.source_id, install.catalog_id) == identity
+        ),
+        None,
+    )
+
+
+def record_managed_standard_library_map_install(
+    sample: StandardLibraryMapInfo,
+    result_path: str | os.PathLike[str],
+) -> None:
+    """Remember a successfully published app-managed standard-map directory."""
+    try:
+        path = os.path.abspath(os.fspath(result_path))
+    except (OSError, TypeError, ValueError):
+        return
+    source_id, catalog_id = standard_library_map_identity(sample)
+    record = ManagedStandardLibraryMapInstall(
+        source_id=source_id,
+        catalog_id=catalog_id,
+        display_name=sample.display_name,
+        asset_name=sample.asset_name,
+        folder_name=sample.folder_name,
+        path=path,
+    )
+    installs = load_managed_standard_library_map_installs()
+    installs = [
+        install
+        for install in installs
+        if (install.source_id, install.catalog_id) != (source_id, catalog_id)
+    ]
+    installs.append(record)
+    _save_managed_standard_library_map_installs(installs)
+
+
+def forget_managed_standard_library_map_install(
+    sample: StandardLibraryMapInfo,
+) -> None:
+    """Forget an installation after its files were removed or migrated away."""
+    identity = standard_library_map_identity(sample)
+    installs = load_managed_standard_library_map_installs()
+    retained = [
+        install
+        for install in installs
+        if (install.source_id, install.catalog_id) != identity
+    ]
+    if len(retained) != len(installs):
+        _save_managed_standard_library_map_installs(retained)
+
+
+def set_managed_standard_library_map_former(
+    sample: StandardLibraryMapInfo,
+    *,
+    former: bool,
+) -> None:
+    """Persist whether an app-owned installation was absent from its source."""
+    identity = standard_library_map_identity(sample)
+    installs = load_managed_standard_library_map_installs()
+    updated = [
+        (
+            replace(install, former=former)
+            if (install.source_id, install.catalog_id) == identity
+            else install
+        )
+        for install in installs
+    ]
+    if updated != installs:
+        _save_managed_standard_library_map_installs(updated)
+
+
+def managed_standard_library_map_installs_for_root(
+    install_dir: str | os.PathLike[str],
+) -> list[ManagedStandardLibraryMapInstall]:
+    """Return registered existing folders owned by the configured library root."""
+    root = _normalized_path_for_compare(_install_dir_path(install_dir))
+    if root is None:
+        return []
+    results: list[ManagedStandardLibraryMapInstall] = []
+    for install in load_managed_standard_library_map_installs():
+        path = _normalized_path_for_compare(install.path)
+        if path is None:
+            continue
+        try:
+            if os.path.commonpath((root, path)) != root:
+                continue
+        except ValueError:
+            continue
+        if _folder_has_contents(install.path):
+            results.append(install)
+    return results
+
+
+def managed_standard_library_map_installs() -> list[ManagedStandardLibraryMapInstall]:
+    """Return every existing app-owned map installation from the registry.
+
+    A user can change their configured library folder after downloading a map.
+    The registry remains authoritative for app ownership in that case, so a
+    later source refresh can still retain and mark the old installation instead
+    of silently losing it from the library view.
+    """
+    return [
+        install
+        for install in load_managed_standard_library_map_installs()
+        if _folder_has_contents(install.path)
+    ]
+
+
+def bootstrap_managed_standard_library_map_installs(
+    install_dir: str | os.PathLike[str],
+    known_maps: list[StandardLibraryMapInfo],
+) -> list[ManagedStandardLibraryMapInstall]:
+    """Adopt legacy known map folders under the app-managed library roots."""
+    known_by_identity = {
+        standard_library_map_identity(sample): sample for sample in known_maps
+    }
+    for sample in bundled_standard_library_catalog():
+        known_by_identity.setdefault(standard_library_map_identity(sample), sample)
+
+    existing = {
+        (install.source_id, install.catalog_id)
+        for install in load_managed_standard_library_map_installs()
+    }
+    for sample in known_by_identity.values():
+        identity = standard_library_map_identity(sample)
+        if identity in existing:
+            continue
+        path = _existing_standard_library_map_path_without_registry(install_dir, sample)
+        if not _folder_has_contents(path):
+            continue
+        record_managed_standard_library_map_install(sample, path)
+        existing.add(identity)
+    return managed_standard_library_map_installs_for_root(install_dir)
+
+
 def _install_dir_path(install_dir) -> str:
     """
     Normalize a map-library install root to a filesystem path string.
@@ -778,12 +1112,15 @@ def local_standard_library_map_path(install_dir: str, sample: StandardLibraryMap
     a file browser, inside the configured downloaded-maps folder.
     """
     return os.path.join(
-        _map_library_container_dir(install_dir),
+        _map_library_container_dir(install_dir, sample),
         sample.folder_name or sample.display_name,
     )
 
 
-def _map_library_container_dir(install_dir: str) -> str:
+def _map_library_container_dir(
+    install_dir: str,
+    sample: StandardLibraryMapInfo | None = None,
+) -> str:
     """
     Return the folder that should directly contain individual map-library entries.
 
@@ -791,7 +1128,24 @@ def _map_library_container_dir(install_dir: str) -> str:
     Older releases treated that value as a parent and created map_library/
     inside it; those paths remain readable as legacy candidates.
     """
-    return os.path.normpath(_install_dir_path(install_dir))
+    root = os.path.normpath(_install_dir_path(install_dir))
+    source_id = getattr(sample, "source_id", GITHUB_RELEASE_MAP_SOURCE_ID)
+    if source_id == GITHUB_RELEASE_MAP_SOURCE_ID:
+        return root
+    return os.path.join(
+        root,
+        _SOURCE_MAP_LIBRARY_DIRNAME,
+        _safe_source_storage_name(str(source_id)),
+    )
+
+
+def _safe_source_storage_name(source_id: str) -> str:
+    """Return a stable directory component for a non-GitHub source id."""
+    cleaned = "".join(
+        character.lower() if character.isalnum() else "-"
+        for character in source_id
+    ).strip(".-")
+    return cleaned or "source"
 
 
 def is_standard_library_map_downloaded(install_dir: str, sample: StandardLibraryMapInfo) -> bool:
@@ -801,15 +1155,22 @@ def is_standard_library_map_downloaded(install_dir: str, sample: StandardLibrary
     "Download" for a map that's already been fetched, rather than
     re-downloading tens to hundreds of MB unnecessarily every time.
     """
-    path = local_standard_library_map_path(install_dir, sample)
-    return _folder_has_contents(path) or any(
-        _folder_has_contents(legacy_path)
-        for legacy_path in _legacy_standard_library_map_paths(install_dir, sample)
-    )
+    return _folder_has_contents(existing_standard_library_map_path(install_dir, sample))
 
 
 def existing_standard_library_map_path(install_dir: str, sample: StandardLibraryMapInfo) -> str:
     """Return the actual existing local path for a standard-library map."""
+    recorded_install = _managed_install_for_map(sample)
+    if recorded_install is not None and _folder_has_contents(recorded_install.path):
+        return recorded_install.path
+    return _existing_standard_library_map_path_without_registry(install_dir, sample)
+
+
+def _existing_standard_library_map_path_without_registry(
+    install_dir: str | os.PathLike[str],
+    sample: StandardLibraryMapInfo,
+) -> str:
+    """Return a known current/legacy map path without consulting app state."""
     path = local_standard_library_map_path(install_dir, sample)
     if _folder_has_contents(path):
         return path
@@ -840,6 +1201,9 @@ def remove_downloaded_standard_library_map(
             continue
         except OSError as exc:
             errors.append(f"{candidate}: {exc}")
+
+    if not errors:
+        forget_managed_standard_library_map_install(sample)
 
     return StandardLibraryMapRemovalResult(
         removed_paths=tuple(removed_paths),
@@ -877,6 +1241,9 @@ def _standard_library_map_removal_candidates(
         local_standard_library_map_path(os.fspath(install_dir), sample),
         *_legacy_standard_library_map_paths(os.fspath(install_dir), sample),
     ]
+    recorded_install = _managed_install_for_map(sample)
+    if recorded_install is not None:
+        raw_candidates.append(recorded_install.path)
     candidates: list[str] = []
     seen: set[str] = set()
     for candidate in raw_candidates:
@@ -913,6 +1280,8 @@ def _app_supplied_standard_library_map_path_candidates(
         roots = (Path(_install_dir_path(install_dir)),)
 
     candidates: list[str] = []
+    for install in load_managed_standard_library_map_installs():
+        candidates.append(install.path)
     for root in roots:
         root_path = os.fspath(root)
         for sample in load_initial_standard_library_catalog():
@@ -936,6 +1305,8 @@ def _legacy_standard_library_map_paths(
     install_dir: str, sample: StandardLibraryMapInfo
 ) -> list[str]:
     """Paths used by older builds before the app-managed map_library folder."""
+    if getattr(sample, "source_id", GITHUB_RELEASE_MAP_SOURCE_ID) != GITHUB_RELEASE_MAP_SOURCE_ID:
+        return []
     normalized = os.path.normpath(_install_dir_path(install_dir))
     basename = os.path.basename(normalized).lower()
     legacy_paths: list[str] = []
@@ -1128,7 +1499,7 @@ def download_and_extract_standard_library_map(
 
     raise_if_cancelled()
     dest_dir = local_standard_library_map_path(install_dir, sample)
-    os.makedirs(_map_library_container_dir(install_dir), exist_ok=True)
+    os.makedirs(_map_library_container_dir(install_dir, sample), exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="caveviewer_map_library_") as tmp_dir:
         zip_path = os.path.join(tmp_dir, sample.asset_name)
@@ -1163,5 +1534,6 @@ def download_and_extract_standard_library_map(
         raise_if_cancelled()
         _copy_and_publish_standard_library_map(source_root, dest_dir, raise_if_cancelled)
 
+    record_managed_standard_library_map_install(sample, dest_dir)
     _LOG.info("Map library entry extracted: %s", dest_dir)
     return dest_dir

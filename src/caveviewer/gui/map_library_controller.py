@@ -3,18 +3,37 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+
+from caveviewer.gui.map_library_sources import (
+    GITHUB_RELEASE_MAP_SOURCE_ID,
+    MapCatalogRefresh,
+    normalize_catalog_refreshes,
+)
+
+
+MapLibraryMapKey = tuple[str, str]
+
+
+class StandardLibraryMapAvailability(str, Enum):
+    """Whether a map remains current at its configured source."""
+
+    REMOTE_AVAILABLE = "remote_available"
+    REMOTE_UNAVAILABLE = "remote_unavailable"
+    FORMER_STANDARD_LOCAL = "former_standard_local"
 
 
 @dataclass(frozen=True)
 class StandardLibraryMapRow:
     """Presentation model for one standard-library map row."""
 
-    key: str
+    key: MapLibraryMapKey
     title: str
     detail: str
     action_text: str
     downloaded: bool
+    availability: StandardLibraryMapAvailability
     enabled: bool = True
     result_path: str | None = None
 
@@ -35,7 +54,7 @@ class ActiveLibraryDownload:
     cancel_event: Any | None = None
     after_id: Any | None = None
     inhibitor: Any | None = None
-    map_name: str | None = None
+    map_name: MapLibraryMapKey | None = None
     thread: Any | None = None
 
     @property
@@ -58,9 +77,18 @@ class CatalogFetchState:
 class CatalogFetchCompletion:
     """Result of applying a finished standard-library catalog fetch."""
 
-    maps: tuple[Any, ...]
+    refreshes: tuple[MapCatalogRefresh, ...]
     error: str | None
     pending_map: Any | None
+
+    @property
+    def maps(self) -> tuple[Any, ...]:
+        """Return the flattened entries for compatibility with old callers."""
+        return tuple(
+            library_map
+            for refresh in self.refreshes
+            for library_map in refresh.maps
+        )
 
 
 @dataclass(frozen=True)
@@ -86,25 +114,39 @@ class MapLibraryController:
             self.map_key(library_map): library_map
             for library_map in self.standard_library_maps
         }
-        self.downloaded_paths: dict[str, str] = {}
+        self.availability_by_key: dict[
+            MapLibraryMapKey, StandardLibraryMapAvailability
+        ] = {
+            self.map_key(library_map): StandardLibraryMapAvailability.REMOTE_AVAILABLE
+            for library_map in self.standard_library_maps
+        }
+        self.downloaded_paths: dict[MapLibraryMapKey, str] = {}
         self.active_download = ActiveLibraryDownload()
         self.catalog_fetch = CatalogFetchState()
 
     @staticmethod
-    def map_key(library_map) -> str:
-        """Return the stable row key for a standard-library map."""
-        return (
+    def map_key(library_map) -> MapLibraryMapKey:
+        """Return a source-qualified stable row key for a library map."""
+        source_id = getattr(library_map, "source_id", GITHUB_RELEASE_MAP_SOURCE_ID)
+        catalog_id = (
             getattr(library_map, "catalog_id", None)
             or getattr(library_map, "display_name", "")
         )
+        return str(source_id), str(catalog_id)
 
     def resolve_catalog_entry(self, library_map):
         """Return a catalog-refreshed map entry when available."""
         return self.catalog_by_key.get(self.map_key(library_map), library_map)
 
     @staticmethod
-    def action_text(*, downloaded: bool) -> str:
+    def action_text(
+        *,
+        downloaded: bool,
+        availability: StandardLibraryMapAvailability,
+    ) -> str:
         """Return the primary row action for the current download state."""
+        if availability is StandardLibraryMapAvailability.REMOTE_UNAVAILABLE:
+            return "Retry"
         return "Open" if downloaded else "Get"
 
     @staticmethod
@@ -117,9 +159,31 @@ class MapLibraryController:
 
     def status_text(self, library_map, *, downloaded: bool) -> str:
         """Return the secondary row text for a standard-library map."""
+        availability = self.availability_for(library_map)
+        if availability is StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL:
+            return "No longer a part of the standard library"
+        if availability is StandardLibraryMapAvailability.REMOTE_UNAVAILABLE:
+            return "Unavailable from CaveViewer Maps"
         if downloaded:
             return "Downloaded"
         return self.size_text(self.resolve_catalog_entry(library_map))
+
+    def availability_for(
+        self,
+        library_map,
+    ) -> StandardLibraryMapAvailability:
+        """Return the source/reconciliation state for one visible map."""
+        return self.availability_by_key.get(
+            self.map_key(library_map),
+            StandardLibraryMapAvailability.REMOTE_AVAILABLE,
+        )
+
+    def is_former_standard_map(self, library_map) -> bool:
+        """Return whether a local map was removed from its standard source."""
+        return (
+            self.availability_for(library_map)
+            is StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL
+        )
 
     def row(
         self,
@@ -132,14 +196,17 @@ class MapLibraryController:
     ) -> StandardLibraryMapRow:
         """Build a row presentation model for a standard-library map."""
         key = self.map_key(library_map)
+        availability = self.availability_for(library_map)
         if downloaded and result_path:
             self.downloaded_paths[key] = result_path
         return StandardLibraryMapRow(
             key=key,
             title=getattr(library_map, "display_name", ""),
             detail=self.status_text(library_map, downloaded=downloaded),
-            action_text=action_text or self.action_text(downloaded=downloaded),
+            action_text=action_text
+            or self.action_text(downloaded=downloaded, availability=availability),
             downloaded=downloaded,
+            availability=availability,
             enabled=enabled,
             result_path=result_path,
         )
@@ -228,31 +295,68 @@ class MapLibraryController:
 
     def complete_catalog_fetch(
         self,
-        catalog,
-        error: str | None,
+        catalog_result,
+        error: str | None = None,
     ) -> CatalogFetchCompletion:
-        """Apply a fetched catalog and return the pending map to continue."""
+        """Apply typed source results and return the pending map to continue."""
+        if isinstance(catalog_result, MapCatalogRefresh):
+            refreshes = normalize_catalog_refreshes(catalog_result)
+        elif isinstance(catalog_result, (tuple, list)) and all(
+            isinstance(item, MapCatalogRefresh) for item in catalog_result
+        ):
+            refreshes = normalize_catalog_refreshes(catalog_result)
+        else:
+            refreshes = normalize_catalog_refreshes((catalog_result, error))
         self.catalog_fetch.loading = False
         self.catalog_fetch.queue = None
-        self.catalog_fetch.error = error
-        for library_map in catalog:
-            self.catalog_by_key[self.map_key(library_map)] = library_map
+        self.catalog_fetch.error = next(
+            (refresh.error for refresh in refreshes if refresh.error),
+            None,
+        )
+        for refresh in refreshes:
+            for library_map in refresh.maps:
+                self.catalog_by_key[self.map_key(library_map)] = library_map
         pending_map = self.catalog_fetch.pending_map
         self.catalog_fetch.pending_map = None
         return CatalogFetchCompletion(
-            maps=tuple(catalog),
-            error=error,
+            refreshes=refreshes,
+            error=self.catalog_fetch.error,
             pending_map=pending_map,
         )
 
-    def replace_standard_library_maps(self, standard_library_maps) -> tuple[Any, ...]:
+    def replace_standard_library_maps(
+        self,
+        standard_library_maps,
+        *,
+        availability_by_key: dict[
+            MapLibraryMapKey, StandardLibraryMapAvailability
+        ] | None = None,
+    ) -> tuple[Any, ...]:
         """Replace catalog rows after a remote refresh reconciles visibility."""
         self.standard_library_maps = tuple(standard_library_maps)
         self.catalog_by_key = {
             self.map_key(library_map): library_map
             for library_map in self.standard_library_maps
         }
+        if availability_by_key is None:
+            availability_by_key = {
+                self.map_key(library_map): StandardLibraryMapAvailability.REMOTE_AVAILABLE
+                for library_map in self.standard_library_maps
+            }
+        self.availability_by_key = dict(availability_by_key)
         return self.standard_library_maps
+
+    def remove_standard_library_map(self, library_map) -> None:
+        """Forget one former row after its local app-managed files are removed."""
+        key = self.map_key(library_map)
+        self.standard_library_maps = tuple(
+            candidate
+            for candidate in self.standard_library_maps
+            if self.map_key(candidate) != key
+        )
+        self.catalog_by_key.pop(key, None)
+        self.availability_by_key.pop(key, None)
+        self.downloaded_paths.pop(key, None)
 
     def close_catalog_fetch(self) -> CatalogFetchCleanup:
         """Clear catalog fetch state and return cleanup handles."""
