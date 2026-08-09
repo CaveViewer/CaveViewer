@@ -467,6 +467,10 @@ preflight validates
 that its decision names the expected feature and the route declared by its
 available target; shared validation lives in `gui.features.preflight` so
 action boundaries fail closed on a malformed or mismatched pair.
+The GUI architecture-boundary tests enforce these ownership rules: only the
+pure policy module constructs `FeatureDecision` values, only
+`gui.platform.runtime` composes `FeatureGateRegistry`, and `UpdateManager`'s
+normal clients use the runtime-composed typed update target APIs.
 
 Static GUI presentation uses a parallel, deliberately non-capability path:
 

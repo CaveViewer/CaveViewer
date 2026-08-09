@@ -11,6 +11,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 GUI_ROOT = REPO_ROOT / "src" / "caveviewer" / "gui"
 GUI_PLATFORM_ROOT = GUI_ROOT / "platform"
 GUI_FEATURES_ROOT = GUI_ROOT / "features"
+FEATURE_POLICY_MODULE = GUI_FEATURES_ROOT / "policies.py"
+PLATFORM_RUNTIME_MODULE = GUI_PLATFORM_ROOT / "runtime.py"
+UPDATE_MANAGER_MODULE = GUI_ROOT / "update_manager.py"
 APP_MODULE = "caveviewer.app"
 _LEGACY_STATIC_PRESENTATION_ACCESSORS = {
     "ui_font_family",
@@ -45,6 +48,78 @@ def _gui_python_files() -> list[Path]:
 
 def _parse_module(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _constructor_calls(tree: ast.Module, constructor_name: str) -> list[ast.Call]:
+    """Return calls that construct a named feature-boundary type.
+
+    Import aliases are included so the boundary cannot be bypassed by renaming
+    a direct import. Attribute calls are safe to treat as constructions here:
+    both types have deliberately unique names within the GUI package.
+    """
+    imported_names = {constructor_name}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for alias in node.names:
+            if alias.name == constructor_name:
+                imported_names.add(alias.asname or alias.name)
+
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in imported_names:
+            calls.append(node)
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == constructor_name
+        ):
+            calls.append(node)
+    return calls
+
+
+def _is_self_attribute(node: ast.expr, attribute_name: str) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+        and node.attr == attribute_name
+    )
+
+
+def _class_method(
+    tree: ast.Module, class_name: str, method_name: str
+) -> ast.FunctionDef | None:
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        for member in node.body:
+            if isinstance(member, ast.FunctionDef) and member.name == method_name:
+                return member
+    return None
+
+
+def _assignment_values(
+    method: ast.FunctionDef, target_attribute: str
+) -> list[ast.expr]:
+    values: list[ast.expr] = []
+    for node in ast.walk(method):
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(_is_self_attribute(target, target_attribute) for target in node.targets):
+            values.append(node.value)
+    return values
+
+
+def _uses_update_checker_client(expression: ast.expr, client_name: str) -> bool:
+    return any(
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "update_checker"
+        and node.attr == client_name
+        for node in ast.walk(expression)
+    )
 
 
 def _format_violations(violations: list[Violation]) -> str:
@@ -189,6 +264,103 @@ def test_feature_policies_do_not_import_platform_or_side_effect_modules():
                 elif module.partition(".")[0] in forbidden_modules:
                     violations.append(
                         Violation(path, node.lineno, f"imports {module}"))
+
+    assert not violations, _format_violations(violations)
+
+
+def test_feature_decisions_are_constructed_only_by_policies():
+    """Keep product availability decisions in the pure policy module."""
+    violations: list[Violation] = []
+
+    for path in _gui_python_files():
+        if path == FEATURE_POLICY_MODULE:
+            continue
+        for node in _constructor_calls(_parse_module(path), "FeatureDecision"):
+            violations.append(
+                Violation(
+                    path,
+                    node.lineno,
+                    "constructs FeatureDecision outside gui.features.policies",
+                )
+            )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_feature_gate_registry_is_composed_only_by_platform_runtime():
+    """Keep process-stable gate composition in one runtime boundary."""
+    violations: list[Violation] = []
+
+    for path in _gui_python_files():
+        if path == PLATFORM_RUNTIME_MODULE:
+            continue
+        for node in _constructor_calls(_parse_module(path), "FeatureGateRegistry"):
+            violations.append(
+                Violation(
+                    path,
+                    node.lineno,
+                    "constructs FeatureGateRegistry outside gui.platform.runtime",
+                )
+            )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_update_manager_defaults_to_typed_update_clients():
+    """Keep normal update traffic on the runtime-composed target contract."""
+    manager = _parse_module(UPDATE_MANAGER_MODULE)
+    initializer = _class_method(manager, "UpdateManager", "__init__")
+    assert initializer is not None, "UpdateManager.__init__ is required"
+
+    expected_clients = {
+        "_check_for_update": "check_for_update_target",
+        "_download_update": "download_update_target",
+    }
+    violations: list[Violation] = []
+
+    for attribute_name, client_name in expected_clients.items():
+        assignments = _assignment_values(initializer, attribute_name)
+        if not assignments:
+            violations.append(
+                Violation(
+                    UPDATE_MANAGER_MODULE,
+                    initializer.lineno,
+                    f"does not assign self.{attribute_name}",
+                )
+            )
+        elif not any(
+            _uses_update_checker_client(assignment, client_name)
+            for assignment in assignments
+        ):
+            violations.append(
+                Violation(
+                    UPDATE_MANAGER_MODULE,
+                    assignments[0].lineno,
+                    f"does not default self.{attribute_name} to "
+                    f"update_checker.{client_name}",
+                )
+            )
+
+    legacy_client_names = {
+        "check_for_update",
+        "check_for_update_legacy",
+        "download_update",
+        "download_update_legacy",
+    }
+    for node in ast.walk(manager):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "update_checker"
+            and node.attr in legacy_client_names
+        ):
+            violations.append(
+                Violation(
+                    UPDATE_MANAGER_MODULE,
+                    node.lineno,
+                    f"uses legacy update_checker.{node.attr} client",
+                )
+            )
 
     assert not violations, _format_violations(violations)
 
