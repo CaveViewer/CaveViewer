@@ -24,11 +24,13 @@ from typing import Callable, Optional
 
 from caveviewer.core.capabilities import CapabilitySource
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.gui.download_transport import DownloadCancelled, download_file
 from caveviewer.gui.platform import get_platform_adapter
 from caveviewer.gui.platform.base import SplashPlatformAdapter
 from caveviewer.gui.platform.tls_trust import (
     TlsTrustAdapter,
     create_tls_trust_adapter,
+    make_ssl_context as _make_ssl_context,
 )
 from caveviewer.gui.platform.probes.updates import (
     UpdateConfiguration,
@@ -153,29 +155,17 @@ def make_ssl_context(
     tls_trust_adapter: TlsTrustAdapter | None = None,
     platform_adapter: SplashPlatformAdapter | None = None,
 ) -> ssl.SSLContext:
-    """
-    Returns an SSL context that trusts both Python's bundled CA bundle and
-    the Windows system certificate store.
+    """Preserve the updater's adapter-aware TLS compatibility entry point.
 
-    Python's default SSL context only uses its own bundled CA bundle
-    (derived from Mozilla/certifi) -- it does not consult the Windows
-    certificate store.  This causes CERTIFICATE_VERIFY_FAILED on machines
-    where antivirus software (Avast, Bitdefender, Kaspersky, Windows
-    Defender with network inspection, etc.) or a corporate proxy performs
-    SSL inspection: those tools re-sign server certificates with their own
-    root CA, which Windows trusts but Python's bundle does not.
-
-    Loading the Windows store alongside the bundled bundle fixes both cases
-    without disabling verification. The focused TLS adapter owns whether any
-    operating-system certificate stores need to be loaded. ``platform_adapter``
-    remains a legacy compatibility input for direct callers.
+    New non-update callers import the focused TLS helper directly. This wrapper
+    keeps existing updater callers on their legacy adapter path until those
+    APIs can be retired without changing their trust-store behavior.
     """
-    ctx = ssl.create_default_context()
-    active_tls_trust_adapter = tls_trust_adapter or create_tls_trust_adapter(
-        platform_adapter or _legacy_platform_adapter()
+    if tls_trust_adapter is not None:
+        return _make_ssl_context(tls_trust_adapter=tls_trust_adapter)
+    return _make_ssl_context(
+        platform_adapter=platform_adapter or _legacy_platform_adapter()
     )
-    active_tls_trust_adapter.augment_ssl_context(ctx)
-    return ctx
 
 
 # Compatibility globals remain for existing direct callers and tests, but are
@@ -194,10 +184,6 @@ _ALLOWED_PACKAGE_KINDS_BY_CHANNEL = {
     "windows_app": {"zip", "msi", "exe"},
     "linux_app": {"appimage", "deb", "rpm", "tar.gz"},
 }
-
-
-class DownloadCancelled(Exception):
-    """Raised when a caller cooperatively cancels an active download."""
 
 
 @dataclass
@@ -896,154 +882,28 @@ def _download_update(
     tls_trust_adapter: TlsTrustAdapter | None,
     platform_adapter: SplashPlatformAdapter | None,
 ) -> None:
-    """
-    Downloads the release payload to dest_path. Raises on any failure
-    (network error, size mismatch) -- the caller is expected to catch
-    this and show a clear message, since a failed download should never
-    silently proceed to the file-replacement step with a corrupt/partial
-    file.
-
-    progress_cb(downloaded_bytes, total_bytes), if given, is called
-    periodically during the download for a progress indicator.
-
-    phase_cb("verifying"), if given, is called after the network transfer and
-    before size/hash verification.
-
-    cancel_cb(), if given, is checked between network reads. When it returns
-    true, DownloadCancelled is raised and any partial destination is removed.
-    A later call always starts from byte zero; partial downloads are never
-    retained for resuming.
-    """
-    request = urllib.request.Request(
-        download_url,
-        headers={"User-Agent": user_agent},
-    )
-    _LOG.info(
-        "Downloading update payload: url=%s, expected_size=%s, sha256_expected=%s",
+    """Supply update-specific TLS context and policy to neutral transport."""
+    if tls_trust_adapter is None:
+        ssl_context = (
+            make_ssl_context()
+            if platform_adapter is None
+            else make_ssl_context(platform_adapter=platform_adapter)
+        )
+    else:
+        ssl_context = make_ssl_context(
+            tls_trust_adapter=tls_trust_adapter,
+            platform_adapter=platform_adapter,
+        )
+    download_file(
         download_url,
         expected_size_bytes,
-        bool(expected_sha256),
+        dest_path,
+        expected_sha256=expected_sha256,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+        phase_cb=phase_cb,
+        user_agent=user_agent,
+        ssl_context=ssl_context,
+        label="update payload",
+        urlopen=urllib.request.urlopen,
     )
-    download_started = False
-
-    def remove_partial_download() -> None:
-        if not download_started:
-            return
-        try:
-            if os.path.exists(dest_path):
-                os.remove(dest_path)
-        except OSError as cleanup_exc:
-            _LOG.warning(
-                "could not remove partial update payload %s: %s",
-                dest_path,
-                cleanup_exc,
-            )
-
-    def raise_if_cancelled() -> None:
-        if cancel_cb and cancel_cb():
-            raise DownloadCancelled("Download cancelled")
-
-    try:
-        raise_if_cancelled()
-        if tls_trust_adapter is None:
-            ssl_context = (
-                make_ssl_context()
-                if platform_adapter is None
-                else make_ssl_context(platform_adapter=platform_adapter)
-            )
-        else:
-            ssl_context = make_ssl_context(
-                tls_trust_adapter=tls_trust_adapter,
-                platform_adapter=platform_adapter,
-            )
-        with urllib.request.urlopen(request, timeout=30, context=ssl_context) as response:
-            total = expected_size_bytes or int(response.headers.get("Content-Length", 0)) or None
-            downloaded = 0
-            chunk_size = 65536
-
-            raise_if_cancelled()
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            with open(dest_path, "wb") as f:
-                download_started = True
-                while True:
-                    raise_if_cancelled()
-                    chunk = response.read(chunk_size)
-                    if not chunk:
-                        raise_if_cancelled()
-                        break
-                    raise_if_cancelled()
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress_cb:
-                        progress_cb(downloaded, total)
-                    raise_if_cancelled()
-            raise_if_cancelled()
-    except DownloadCancelled:
-        remove_partial_download()
-        _LOG.info("Download cancelled; removed partial payload: %s", dest_path)
-        raise
-    except urllib.error.HTTPError as e:
-        remove_partial_download()
-        _LOG.warning("Update payload download failed with HTTP %s: %s", e.code, download_url)
-        raise
-    except urllib.error.URLError as e:
-        remove_partial_download()
-        _LOG.warning("Update payload download failed: %s", e)
-        raise
-    except OSError as e:
-        remove_partial_download()
-        _LOG.warning("Update payload download failed while writing %s: %s", dest_path, e)
-        raise
-
-    try:
-        if phase_cb:
-            phase_cb("verifying")
-        raise_if_cancelled()
-
-        actual_size = os.path.getsize(dest_path)
-        _LOG.info("Downloaded update payload: bytes=%d, path=%s", actual_size, dest_path)
-        if expected_size_bytes is not None and actual_size != expected_size_bytes:
-            _LOG.warning(
-                "Update payload security check failed: size mismatch actual=%d expected=%d",
-                actual_size,
-                expected_size_bytes,
-            )
-            os.remove(dest_path)
-            raise IOError(
-                f"Downloaded file size ({actual_size} bytes) doesn't match the "
-                f"expected size ({expected_size_bytes} bytes) -- the download may "
-                f"have been interrupted or corrupted. Please try again."
-            )
-
-        if expected_sha256:
-            import hashlib
-
-            _LOG.info("Verifying update payload SHA-256.")
-            sha256 = hashlib.sha256()
-            with open(dest_path, "rb") as f:
-                for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                    raise_if_cancelled()
-                    sha256.update(chunk)
-            raise_if_cancelled()
-            actual_sha = sha256.hexdigest().lower()
-            if actual_sha != expected_sha256.strip().lower():
-                _LOG.warning(
-                    "Update payload security check failed: SHA-256 mismatch actual=%s expected=%s",
-                    actual_sha,
-                    expected_sha256.strip().lower(),
-                )
-                os.remove(dest_path)
-                raise IOError(
-                    "Downloaded file hash doesn't match the expected SHA-256. "
-                    "The download may be corrupted or tampered."
-                )
-            _LOG.info("Update payload security check passed: SHA-256 verified.")
-        else:
-            _LOG.warning("Update payload security check skipped: no expected SHA-256 provided.")
-    except DownloadCancelled:
-        # Verification may hold the payload open when cancellation is first
-        # observed. This handler runs after that file handle is closed, which
-        # also makes cleanup reliable on Windows.
-        remove_partial_download()
-        _LOG.info("Verification cancelled; removed update payload: %s", dest_path)
-        raise

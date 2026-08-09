@@ -14,6 +14,7 @@ GUI_FEATURES_ROOT = GUI_ROOT / "features"
 FEATURE_POLICY_MODULE = GUI_FEATURES_ROOT / "policies.py"
 PLATFORM_RUNTIME_MODULE = GUI_PLATFORM_ROOT / "runtime.py"
 UPDATE_MANAGER_MODULE = GUI_ROOT / "update_manager.py"
+STANDARD_LIBRARY_MAPS_MODULE = GUI_ROOT / "standard_library_maps.py"
 APP_MODULE = "caveviewer.app"
 _LEGACY_STATIC_PRESENTATION_ACCESSORS = {
     "ui_font_family",
@@ -359,6 +360,42 @@ def test_update_manager_defaults_to_typed_update_clients():
                     UPDATE_MANAGER_MODULE,
                     node.lineno,
                     f"uses legacy update_checker.{node.attr} client",
+                )
+            )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_standard_library_maps_do_not_import_update_compatibility_api():
+    """Keep map downloads independent from updater compatibility behavior."""
+    module = _parse_module(STANDARD_LIBRARY_MAPS_MODULE)
+    violations: list[Violation] = []
+
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            if any(
+                alias.name == "caveviewer.gui.update_checker" for alias in node.names
+            ):
+                violations.append(
+                    Violation(
+                        STANDARD_LIBRARY_MAPS_MODULE,
+                        node.lineno,
+                        "imports caveviewer.gui.update_checker",
+                    )
+                )
+        elif isinstance(node, ast.ImportFrom) and (
+            node.module == "caveviewer.gui.update_checker"
+            or (node.level > 0 and node.module == "update_checker")
+            or (
+                (node.module == "caveviewer.gui" or node.level > 0)
+                and any(alias.name == "update_checker" for alias in node.names)
+            )
+        ):
+            violations.append(
+                Violation(
+                    STANDARD_LIBRARY_MAPS_MODULE,
+                    node.lineno,
+                    "imports caveviewer.gui.update_checker",
                 )
             )
 

@@ -25,12 +25,9 @@ from typing import Callable, Optional
 
 from caveviewer.core.json_io import load_bounded_json
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.gui.download_transport import DownloadCancelled, download_file
+from caveviewer.gui.platform.tls_trust import make_ssl_context
 from caveviewer.gui.preference_paths import write_text_atomic
-from caveviewer.gui.update_checker import (
-    DownloadCancelled,
-    download_update,
-    make_ssl_context,
-)
 from caveviewer.resources import resource_path
 from caveviewer.storage_paths import resolve_application_paths
 
@@ -48,6 +45,7 @@ _BUNDLED_MAP_LIBRARY_CATALOG_RESOURCE = "map_library_catalog.v1.json"
 _MAP_LIBRARY_CATALOG_CACHE_FILE = "map_library_catalog.v1.json"
 _MAX_RELEASE_METADATA_BYTES = 2 * 1024 * 1024
 _MAX_MAP_LIBRARY_CATALOG_BYTES = 128 * 1024
+_MAP_LIBRARY_USER_AGENT = "CaveViewer-MapLibrary"
 
 
 def _env_or_default(name: str, default: str) -> str:
@@ -334,7 +332,7 @@ def _read_json_url(url: str, *, accept: str, max_bytes: int):
         url,
         headers={
             "Accept": accept,
-            "User-Agent": "CaveViewer-MapLibrary",
+            "User-Agent": _MAP_LIBRARY_USER_AGENT,
         },
     )
     with urllib.request.urlopen(
@@ -1076,8 +1074,32 @@ def _copy_and_publish_standard_library_map(
             shutil.rmtree(publish_staging_dir, ignore_errors=True)
 
 
-def download_and_extract_standard_library_map(install_dir: str, sample: StandardLibraryMapInfo,
-                                    progress_cb=None, cancel_cb=None) -> str:
+def download_standard_library_map_archive(
+    download_url: str,
+    expected_size_bytes: int | None,
+    dest_path: str,
+    progress_cb=None,
+    cancel_cb=None,
+) -> None:
+    """Download one map archive through neutral transport and focused TLS setup."""
+    download_file(
+        download_url,
+        expected_size_bytes,
+        dest_path,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+        user_agent=_MAP_LIBRARY_USER_AGENT,
+        ssl_context=make_ssl_context(),
+        label="map library archive",
+    )
+
+
+def download_and_extract_standard_library_map(
+    install_dir: str,
+    sample: StandardLibraryMapInfo,
+    progress_cb=None,
+    cancel_cb=None,
+) -> str:
     """
     Downloads the given standard-library map zip to a temp location, verifies
     its size, extracts it into its own folder under map_library/, and
@@ -1111,7 +1133,7 @@ def download_and_extract_standard_library_map(install_dir: str, sample: Standard
     with tempfile.TemporaryDirectory(prefix="caveviewer_map_library_") as tmp_dir:
         zip_path = os.path.join(tmp_dir, sample.asset_name)
 
-        download_update(
+        download_standard_library_map_archive(
             sample.download_url,
             sample.size_bytes,
             zip_path,

@@ -58,6 +58,41 @@ def test_map_library_dirname_points_to_map_library():
     assert not hasattr(standard_library_maps, "SAMPLE_MAPS_DIRNAME")
 
 
+def test_map_archive_download_uses_neutral_transport(monkeypatch):
+    context = object()
+    calls = []
+    progress_cb = lambda _done, _total: None
+    cancel_cb = lambda: False
+
+    monkeypatch.setattr(standard_library_maps, "make_ssl_context", lambda: context)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_file",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    standard_library_maps.download_standard_library_map_archive(
+        "https://example.invalid/test.zip",
+        42,
+        "/tmp/test.zip",
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+    )
+
+    assert calls == [
+        (
+            ("https://example.invalid/test.zip", 42, "/tmp/test.zip"),
+            {
+                "progress_cb": progress_cb,
+                "cancel_cb": cancel_cb,
+                "user_agent": "CaveViewer-MapLibrary",
+                "ssl_context": context,
+                "label": "map library archive",
+            },
+        )
+    ]
+
+
 def test_catalog_manifest_populates_remote_maps_and_caches(
     monkeypatch, tmp_path
 ):
@@ -623,7 +658,11 @@ def test_successful_standard_library_download_extracts_expected_layout(
             progress_cb(1, 1)
 
     progress = []
-    monkeypatch.setattr(standard_library_maps, "download_update", create_zip)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        create_zip,
+    )
 
     result = standard_library_maps.download_and_extract_standard_library_map(
         str(tmp_path), sample, progress_cb=lambda done, total: progress.append((done, total))
@@ -650,7 +689,11 @@ def test_standard_library_download_rejects_sha256_mismatch(tmp_path, monkeypatch
         with zipfile.ZipFile(zip_path, "w") as archive:
             archive.writestr("map.obj", "new mesh")
 
-    monkeypatch.setattr(standard_library_maps, "download_update", create_zip)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        create_zip,
+    )
 
     with pytest.raises(ValueError, match="SHA-256"):
         standard_library_maps.download_and_extract_standard_library_map(
@@ -679,7 +722,11 @@ def test_standard_library_download_accepts_matching_sha256(tmp_path, monkeypatch
         None,
         sha256=hashlib.sha256(archive_bytes).hexdigest(),
     )
-    monkeypatch.setattr(standard_library_maps, "download_update", create_zip)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        create_zip,
+    )
 
     result = standard_library_maps.download_and_extract_standard_library_map(
         str(tmp_path),
@@ -710,7 +757,11 @@ def test_standard_library_publish_copy_failure_preserves_existing_install_and_cl
         Path(dest, "partial.obj").write_text("partial", encoding="utf-8")
         raise OSError("copy failed")
 
-    monkeypatch.setattr(standard_library_maps, "download_update", create_zip)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        create_zip,
+    )
     monkeypatch.setattr(standard_library_maps.shutil, "copytree", fail_copytree)
 
     with pytest.raises(OSError, match="copy failed"):
@@ -747,7 +798,11 @@ def test_standard_library_publish_failure_restores_existing_install_and_cleans_s
             raise OSError("publish failed")
         real_replace(source, dest)
 
-    monkeypatch.setattr(standard_library_maps, "download_update", create_zip)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        create_zip,
+    )
     monkeypatch.setattr(standard_library_maps.os, "replace", fail_new_publish)
 
     with pytest.raises(OSError, match="publish failed"):
@@ -769,7 +824,11 @@ def test_standard_library_download_accepts_portal_directory_selection(tmp_path, 
             archive.writestr("map.obj", "mesh")
             archive.writestr("map.mtl", "newmtl rock")
 
-    monkeypatch.setattr(standard_library_maps, "download_update", create_zip)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        create_zip,
+    )
 
     result = standard_library_maps.download_and_extract_standard_library_map(
         DirectorySelection.from_path(str(tmp_path)),
@@ -806,7 +865,11 @@ def test_cancelled_standard_library_download_removes_temporary_files_and_preserv
         assert cancel_cb is not None and cancel_cb()
         raise standard_library_maps.DownloadCancelled("cancelled")
 
-    monkeypatch.setattr(standard_library_maps, "download_update", cancel_partial_download)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        cancel_partial_download,
+    )
 
     with pytest.raises(standard_library_maps.DownloadCancelled):
         standard_library_maps.download_and_extract_standard_library_map(
@@ -837,7 +900,11 @@ def test_retry_after_cancellation_starts_a_fresh_standard_library_download(
         cancel_requested[0] = True
         raise standard_library_maps.DownloadCancelled("cancelled")
 
-    monkeypatch.setattr(standard_library_maps, "download_update", cancel_first_download)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        cancel_first_download,
+    )
     with pytest.raises(standard_library_maps.DownloadCancelled):
         standard_library_maps.download_and_extract_standard_library_map(
             str(tmp_path),
@@ -857,7 +924,11 @@ def test_retry_after_cancellation_starts_a_fresh_standard_library_download(
             archive.writestr("map.obj", "complete map")
             archive.writestr("map.mtl", "newmtl rock")
 
-    monkeypatch.setattr(standard_library_maps, "download_update", complete_fresh_download)
+    monkeypatch.setattr(
+        standard_library_maps,
+        "download_standard_library_map_archive",
+        complete_fresh_download,
+    )
     result = standard_library_maps.download_and_extract_standard_library_map(
         str(tmp_path),
         sample,
