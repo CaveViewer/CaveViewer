@@ -55,6 +55,18 @@ def test_status_expires_when_read():
     assert controller.status_until is None
 
 
+def test_persistent_saving_status_remains_visible_until_replaced():
+    controller = RecordingStateController()
+
+    controller.show_status("Saving video…", now=10.0, duration=None)
+
+    status = controller.active_status(now=99.0)
+
+    assert status is not None
+    assert status.message == "Saving video…"
+    assert status.until is None
+
+
 def test_drop_frames_returns_true_only_for_first_warning():
     controller = RecordingStateController()
 

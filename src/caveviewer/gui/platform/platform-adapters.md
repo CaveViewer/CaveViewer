@@ -19,7 +19,8 @@ platform/
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── update_package_storage.py # Focused verified-package storage facade
-├── saved_recording_reveal.py # Focused post-save recording reveal facade
+├── saved_artifact_reveal.py # Focused post-save user-artifact reveal facade
+├── saved_recording_reveal.py # Compatibility imports for former recording facade
 ├── recording_process.py      # Focused recording-encoder startup facade
 ├── tls_trust.py               # Focused native TLS-trust augmentation facade
 ├── probes/desktop.py        # On-demand desktop action route declarations
@@ -166,13 +167,13 @@ collision, macOS DMG, and Linux AppImage behavior. A persistence exception is
 an ordinary update-workflow failure, after which `UpdateManager` performs its
 normal temporary-file cleanup.
 
-Saved-recording reveal is a focused post-save
-`SavedRecordingRevealAdapter`. It runs only after the encoder reports success
-for a user-visible stop, so it does not require a capability probe or feature
-gate: a file-manager failure cannot undo a recording that was already saved.
-Its compatibility facade delegates to the broad adapter's established Finder,
+Saved-artifact reveal is a focused post-save `SavedArtifactRevealAdapter`. It
+runs only after a video encoder or trace writer reports success for a
+user-visible stop, so it does not require a capability probe or feature gate:
+a file-manager failure cannot undo an artifact that was already saved. Its
+compatibility facade delegates to the broad adapter's established Finder,
 Explorer, and Linux desktop-service behavior. The viewer logs a reveal failure
-while preserving the successful recording status.
+while preserving the successful artifact status.
 
 Recording encoder startup has its own `RecordingProcessAdapter`. It runs only
 after the existing on-demand video-recording preflight and provides the
@@ -252,7 +253,7 @@ adapter-based presentation calls are a local compatibility path only.
 Automatic-update policy and manifest parsing have moved to `UpdateProfile` and
 `UpdateTarget`; adapter-based update calls are likewise local compatibility
 paths. `UpdatePackageRevealAdapter`,
-`UpdatePackageStorageAdapter`, `SavedRecordingRevealAdapter`, and
+`UpdatePackageStorageAdapter`, `SavedArtifactRevealAdapter`, and
 `RecordingProcessAdapter`, and `TlsTrustAdapter` are narrow facades around
 existing package, recording, and network actions. New features should add the
 smallest appropriate combination of a probe, a pure policy in
@@ -496,14 +497,14 @@ Explorer, and Linux uses `OpenURI.OpenDirectory` with `xdg-open` fallback.
 Adapters must never launch an installer or execute a downloaded package.
 
 ### Saved Files
-**When**: A workflow creates a user-owned output file, such as an MP4 recording,
-and should show the file in the native file manager after a user-visible
-completion.
+**When**: A workflow creates a user-owned output file, such as an MP4 video or
+Guided Dive JSONL trace, and should show the file in the native file manager
+after a user-visible completion.
 
 **How**:
-- `SavedRecordingRevealAdapter.reveal_saved_recording()` exposes a completed
-  recording without opening or executing it.
-- `reveal_file()` remains the compatibility implementation until recording
+- `SavedArtifactRevealAdapter.reveal_saved_artifact()` exposes a completed
+  artifact without opening or executing it.
+- `reveal_file()` remains the compatibility implementation until artifact
   reveal behavior moves behind that focused adapter.
 - macOS reveals the file in Finder.
 - Windows selects the file in Explorer.

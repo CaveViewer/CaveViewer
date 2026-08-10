@@ -175,10 +175,14 @@ so atomic cache replacement and managed-cache storage do not erase the
 reference flight. They remain optional ground truth: cache construction and
 offline certificate route selection never consume them as required map
 metadata.
-Once the background writer atomically publishes a completed trace, the viewer
-shows a three-second success status before asking the runtime's
-`SavedRecordingRevealAdapter` to reveal that final JSONL file. Reveal is
-best-effort and cannot change the completed trace result.
+Video recordings and completed traces keep their separate capture writers, but
+share one post-save presentation workflow. After a user-visible stop, the
+viewer keeps a saving status visible until the writer has atomically published
+the final file, then shows a three-second success confirmation before asking
+the runtime's `SavedArtifactRevealAdapter` to reveal that MP4 or JSONL file.
+Non-user map-change and shutdown stops remain silent; failure feedback and
+native reveal are reserved for the user-visible workflow. Reveal is best-effort
+and cannot change the completed artifact result.
 
 Recorded Dive is the separate trace-playback path. Opening a completed JSONL
 associates its bounded source basename, cache-manifest version, chunk size,
@@ -527,12 +531,12 @@ adapter behavior, preserving macOS DMG naming, Windows/default Downloads
 handling, and Linux AppImage permissions until those implementations move
 behind the narrow contract.
 
-Saved-recording reveal is another focused action, not a feature gate. The
-encoder has already reported success when `CaveViewerWindow` calls
-`SavedRecordingRevealAdapter`, and the action is only a post-save convenience
-after a user-visible stop. A failure to launch Finder, Explorer, or the Linux
-desktop reveal route is logged but cannot downgrade the completed recording's
-success state. The compatibility facade delegates to the existing
+Saved-artifact reveal is another focused action, not a feature gate. A video
+encoder or trace writer has already reported success when `CaveViewerWindow`
+calls `SavedArtifactRevealAdapter`, and the action is only a post-save
+convenience after a user-visible stop. A failure to launch Finder, Explorer, or
+the Linux desktop reveal route is logged but cannot downgrade the completed
+artifact's success state. The compatibility facade delegates to the existing
 `reveal_file()` behavior until native implementations move behind the narrow
 contract.
 

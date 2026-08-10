@@ -21,12 +21,12 @@ class RecordingCountdownSnapshot:
 
 @dataclass(frozen=True)
 class RecordingStatusSnapshot:
-    """Transient recording status message ready for presentation."""
+    """Current recording or capture status message ready for presentation."""
 
     message: str
     detail: str | None
     kind: str | None
-    until: float
+    until: float | None
 
 
 @dataclass
@@ -141,13 +141,13 @@ class RecordingStateController:
         now: float,
         detail: str | None = None,
         kind: str | None = "info",
-        duration: float = 2.8,
+        duration: float | None = 2.8,
     ) -> None:
-        """Show a transient recording status message."""
+        """Show a status until it expires, is replaced, or is explicitly cleared."""
         self.status_message = message
         self.status_detail = detail
         self.status_kind = kind
-        self.status_until = now + duration
+        self.status_until = None if duration is None else now + duration
 
     def clear_status(self) -> None:
         """Clear the transient recording status message."""
@@ -158,9 +158,9 @@ class RecordingStateController:
 
     def active_status(self, *, now: float) -> RecordingStatusSnapshot | None:
         """Return the current status snapshot, expiring it when needed."""
-        if not self.status_message or self.status_until is None:
+        if not self.status_message:
             return None
-        if now >= self.status_until:
+        if self.status_until is not None and now >= self.status_until:
             self.clear_status()
             return None
         return RecordingStatusSnapshot(

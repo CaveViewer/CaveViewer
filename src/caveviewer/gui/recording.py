@@ -22,7 +22,12 @@ RECORDING_MAX_OUTPUT_HEIGHT = 4320
 
 @dataclass(frozen=True)
 class RecordingStopWork:
-    """State needed to finalize an active recording encoder."""
+    """State needed to finalize an active recording encoder.
+
+    ``show_message`` controls HUD feedback. ``reveal_on_success`` is reserved
+    for an explicit user stop, so an internally interrupted capture cannot
+    unexpectedly open a file manager.
+    """
 
     process: subprocess.Popen
     output_path: str | None
@@ -30,6 +35,7 @@ class RecordingStopWork:
     writer_thread: threading.Thread | None
     stderr_thread: threading.Thread | None
     show_message: bool
+    reveal_on_success: bool = False
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,7 @@ class RecordingStopResult:
     writer_error: Exception | None
     dropped_frames: int
     show_message: bool
+    reveal_on_success: bool = False
 
 
 @dataclass
@@ -115,7 +122,12 @@ class RecordingEncoderSession:
         """Return whether the encoder exited or its writer failed early."""
         return self.writer_error is not None or self.process.poll() is not None
 
-    def stop_work(self, *, show_message: bool) -> RecordingStopWork:
+    def stop_work(
+        self,
+        *,
+        show_message: bool,
+        reveal_on_success: bool = False,
+    ) -> RecordingStopWork:
         """Package this active session for asynchronous stop finalization."""
         return RecordingStopWork(
             process=self.process,
@@ -124,6 +136,7 @@ class RecordingEncoderSession:
             writer_thread=self.writer_thread,
             stderr_thread=self.stderr_thread,
             show_message=show_message,
+            reveal_on_success=reveal_on_success,
         )
 
 
@@ -392,6 +405,7 @@ def finalize_stop_worker(
         writer_error=finalize_error or writer_error(),
         dropped_frames=dropped_frames(),
         show_message=work.show_message,
+        reveal_on_success=work.reveal_on_success,
     )
 
 

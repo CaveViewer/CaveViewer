@@ -1,4 +1,4 @@
-"""Tests for manual Guided Dive countdown and deferred-reveal state."""
+"""Tests for manual Guided Dive countdown state."""
 
 from __future__ import annotations
 
@@ -28,18 +28,3 @@ def test_trace_countdown_displays_numbers_and_becomes_ready():
 
     assert not controller.countdown_active
     assert controller.countdown_display(now=20.0, start_number=3).number == 0
-
-
-def test_trace_reveals_only_after_the_confirmation_duration():
-    controller = ManualDiveTraceStateController()
-
-    controller.defer_reveal("/maps/Cave/_guided_dives/trace.jsonl", now=30.0, delay_s=3.0)
-    controller.defer_reveal("/maps/Cave/_guided_dives/second.jsonl", now=31.0, delay_s=3.0)
-
-    assert controller.take_due_reveals(now=32.99) == ()
-    assert controller.take_due_reveals(now=33.0) == (
-        "/maps/Cave/_guided_dives/trace.jsonl",
-    )
-    assert controller.take_due_reveals(now=34.0) == (
-        "/maps/Cave/_guided_dives/second.jsonl",
-    )

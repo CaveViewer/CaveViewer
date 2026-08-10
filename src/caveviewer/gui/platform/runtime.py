@@ -67,9 +67,9 @@ from .update_package_storage import (
     UpdatePackageStorageAdapter,
     create_update_package_storage_adapter,
 )
-from .saved_recording_reveal import (
-    SavedRecordingRevealAdapter,
-    create_saved_recording_reveal_adapter,
+from .saved_artifact_reveal import (
+    SavedArtifactRevealAdapter,
+    create_saved_artifact_reveal_adapter,
 )
 from .recording_process import (
     RecordingProcessAdapter,
@@ -253,12 +253,17 @@ class PlatformRuntime:
     automatic_update_capability: CapabilityResult[UpdateTarget]
     update_package_reveal_adapter: UpdatePackageRevealAdapter
     update_package_storage_adapter: UpdatePackageStorageAdapter
-    saved_recording_reveal_adapter: SavedRecordingRevealAdapter
+    saved_artifact_reveal_adapter: SavedArtifactRevealAdapter
     recording_process_adapter: RecordingProcessAdapter
     tls_trust_adapter: TlsTrustAdapter
     window_backend_adapter: WindowBackendAdapter
     update_package_reveal_capability: CapabilityResult[UpdatePackageRevealRoute]
     feature_gates: FeatureGateRegistry
+
+    @property
+    def saved_recording_reveal_adapter(self) -> SavedArtifactRevealAdapter:
+        """Preserve the former recording-specific runtime attribute."""
+        return self.saved_artifact_reveal_adapter
 
     def static_feature_decision(self, feature: FeatureId) -> FeatureDecision:
         """Return a process-stable decision composed into ``feature_gates``.
@@ -405,7 +410,7 @@ def create_platform_runtime(
     presentation_actions_adapter: PresentationActionsAdapter | None = None,
     update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
     update_package_storage_adapter: UpdatePackageStorageAdapter | None = None,
-    saved_recording_reveal_adapter: SavedRecordingRevealAdapter | None = None,
+    saved_artifact_reveal_adapter: SavedArtifactRevealAdapter | None = None,
     recording_process_adapter: RecordingProcessAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
     window_backend_adapter: WindowBackendAdapter | None = None,
@@ -451,9 +456,9 @@ def create_platform_runtime(
         update_package_storage_adapter
         or create_update_package_storage_adapter(resolved_platform_adapter)
     )
-    resolved_saved_recording_reveal_adapter = (
-        saved_recording_reveal_adapter
-        or create_saved_recording_reveal_adapter(resolved_platform_adapter)
+    resolved_saved_artifact_reveal_adapter = (
+        saved_artifact_reveal_adapter
+        or create_saved_artifact_reveal_adapter(resolved_platform_adapter)
     )
     resolved_recording_process_adapter = (
         recording_process_adapter
@@ -516,7 +521,7 @@ def create_platform_runtime(
         automatic_update_capability=automatic_update_capability,
         update_package_reveal_adapter=resolved_update_package_reveal_adapter,
         update_package_storage_adapter=resolved_update_package_storage_adapter,
-        saved_recording_reveal_adapter=resolved_saved_recording_reveal_adapter,
+        saved_artifact_reveal_adapter=resolved_saved_artifact_reveal_adapter,
         recording_process_adapter=resolved_recording_process_adapter,
         tls_trust_adapter=resolved_tls_trust_adapter,
         window_backend_adapter=resolved_window_backend_adapter,

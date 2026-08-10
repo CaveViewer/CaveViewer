@@ -60,9 +60,9 @@ class FakeUpdatePackageStorageAdapter:
         raise AssertionError("runtime composition must not persist a package")
 
 
-class FakeSavedRecordingRevealAdapter:
-    def reveal_saved_recording(self, _output_path):
-        raise AssertionError("runtime composition must not reveal a recording")
+class FakeSavedArtifactRevealAdapter:
+    def reveal_saved_artifact(self, _output_path):
+        raise AssertionError("runtime composition must not reveal an artifact")
 
 
 class FakeRecordingProcessAdapter:
@@ -172,7 +172,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     adapter = FakeUpdateAdapter()
     desktop_services = object()
     storage_adapter = FakeUpdatePackageStorageAdapter()
-    recording_reveal_adapter = FakeSavedRecordingRevealAdapter()
+    artifact_reveal_adapter = FakeSavedArtifactRevealAdapter()
     recording_process_adapter = FakeRecordingProcessAdapter()
     tls_trust_adapter = FakeTlsTrustAdapter()
     window_backend_adapter = FakeWindowBackendAdapter()
@@ -181,7 +181,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
         platform_adapter=adapter,
         desktop_services=desktop_services,
         update_package_storage_adapter=storage_adapter,
-        saved_recording_reveal_adapter=recording_reveal_adapter,
+        saved_artifact_reveal_adapter=artifact_reveal_adapter,
         recording_process_adapter=recording_process_adapter,
         tls_trust_adapter=tls_trust_adapter,
         window_backend_adapter=window_backend_adapter,
@@ -196,7 +196,8 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.platform_adapter is adapter
     assert runtime.desktop_services is desktop_services
     assert runtime.update_package_storage_adapter is storage_adapter
-    assert runtime.saved_recording_reveal_adapter is recording_reveal_adapter
+    assert runtime.saved_artifact_reveal_adapter is artifact_reveal_adapter
+    assert runtime.saved_recording_reveal_adapter is artifact_reveal_adapter
     assert runtime.recording_process_adapter is recording_process_adapter
     assert runtime.tls_trust_adapter is tls_trust_adapter
     assert runtime.window_backend_adapter is window_backend_adapter
