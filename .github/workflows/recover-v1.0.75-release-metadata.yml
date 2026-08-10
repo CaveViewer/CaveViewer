@@ -1,0 +1,168 @@
+name: Recover v1.0.75 Release Metadata
+
+# One-shot recovery for the metadata commit rejected by protect-main during the
+# v1.0.75 release. It never writes main: it rebuilds signed manifests from the
+# published assets on a release branch and opens a normal, fully tested PR.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Enter 1.0.75 to confirm metadata recovery"
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: caveviewer-recover-v1.0.75-release-metadata
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Recreate signed v1.0.75 metadata PR
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: "1.0.75"
+      RELEASE_PREVIOUS_VERSION: "1.0.74"
+      RELEASE_TAG: "v1.0.75"
+      RELEASE_NOTES: "New UI layout and map metadata."
+      RELEASE_SOURCE_SHA: "1702996891ced402e48cd56cb2be65134caf0994"
+      RELEASE_TARGET_BRANCH: "main"
+      RECOVERY_BRANCH: "release/v1.0.75-metadata"
+
+    steps:
+      - name: Confirm the one-shot recovery request
+        env:
+          RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if [ "$RECOVERY_CONFIRMATION" != "$RELEASE_VERSION" ]; then
+            echo "Error: enter $RELEASE_VERSION to run this recovery."
+            exit 1
+          fi
+
+      - name: Check out the current protected-main base
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure release signing key
+        env:
+          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
+            echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required."
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
+          chmod 600 "$key_path"
+          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
+
+      - name: Verify the release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin "$RELEASE_TARGET_BRANCH"
+          recovery_base_sha="$(git rev-parse "origin/$RELEASE_TARGET_BRANCH")"
+          if ! git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" "$recovery_base_sha"; then
+            echo "Error: $RELEASE_TARGET_BRANCH no longer contains the published release source."
+            exit 1
+          fi
+
+          source scripts/common/version.sh
+          current_version="$(cv_read_app_version src/caveviewer/version.py)"
+          if [ "$current_version" != "$RELEASE_PREVIOUS_VERSION" ]; then
+            echo "Error: expected APP_VERSION $RELEASE_PREVIOUS_VERSION before recovery, found $current_version."
+            exit 1
+          fi
+
+          echo "RECOVERY_BASE_SHA=$recovery_base_sha" >> "$GITHUB_ENV"
+
+          release_target="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq '.targetCommitish')"
+          if [ "$release_target" != "$RELEASE_SOURCE_SHA" ]; then
+            echo "Error: $RELEASE_TAG targets $release_target, not $RELEASE_SOURCE_SHA."
+            exit 1
+          fi
+
+      - name: Download and verify the published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifacts_dir="$RUNNER_TEMP/release-artifacts"
+          mkdir -p "$artifacts_dir"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$artifacts_dir"
+
+          while IFS=$'\t' read -r asset_name asset_digest; do
+            if [ -z "$asset_name" ] || [ -z "$asset_digest" ]; then
+              echo "Error: release asset digest is missing."
+              exit 1
+            fi
+            expected_digest="${asset_digest#sha256:}"
+            actual_digest="$(sha256sum "$artifacts_dir/$asset_name" | awk '{print $1}')"
+            if [ "$actual_digest" != "$expected_digest" ]; then
+              echo "Error: checksum mismatch for $asset_name."
+              exit 1
+            fi
+          done < <(
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              --jq '.assets[] | "\(.name)\t\(.digest)"'
+          )
+
+          echo "RELEASE_ARTIFACTS_DIR=$artifacts_dir" >> "$GITHUB_ENV"
+
+      - name: Create the auditable metadata branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          remote_main_sha="$(git ls-remote --heads origin "refs/heads/$RELEASE_TARGET_BRANCH" | awk '{print $1}')"
+          if [ "$remote_main_sha" != "$RECOVERY_BASE_SHA" ]; then
+            echo "Error: $RELEASE_TARGET_BRANCH moved from $RECOVERY_BASE_SHA to $remote_main_sha."
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --heads origin "refs/heads/$RECOVERY_BRANCH" >/dev/null; then
+            echo "Error: recovery branch already exists: $RECOVERY_BRANCH"
+            echo "Inspect its pull request instead of overwriting an auditable recovery branch."
+            exit 1
+          fi
+
+          git switch --create "$RECOVERY_BRANCH" "$RECOVERY_BASE_SHA"
+          git push origin "HEAD:refs/heads/$RECOVERY_BRANCH"
+
+      - name: Regenerate signed metadata on the recovery branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/common/finalize_release.sh \
+            --platforms=all \
+            --version="$RELEASE_VERSION" \
+            --notes="$RELEASE_NOTES" \
+            --artifacts-dir="$RELEASE_ARTIFACTS_DIR" \
+            --target-branch="$RECOVERY_BRANCH" \
+            --expected-source-sha="$RECOVERY_BASE_SHA" \
+            --reuse-existing-release
+
+      - name: Create the protected-main recovery PR and dispatch its checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_body=$'Regenerates the signed v1.0.75 update metadata from the existing published assets.\n\nNo package was rebuilt or replaced. The required checks were dispatched explicitly for this recovery branch.'
+          pr_url="$(
+            gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base "$RELEASE_TARGET_BRANCH" \
+              --head "$RECOVERY_BRANCH" \
+              --title "Release v1.0.75 stable metadata" \
+              --body "$pr_body"
+          )"
+          gh workflow run tests.yml --repo "$GITHUB_REPOSITORY" --ref "$RECOVERY_BRANCH"
+          echo "Created recovery PR: $pr_url"
