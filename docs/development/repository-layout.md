@@ -71,7 +71,6 @@ src/caveviewer/gui/platform/presentation_actions.py focused native presentation-
 src/caveviewer/gui/platform/directory_selection.py shared action-time directory-picker authorization
 src/caveviewer/gui/platform/update_package_reveal.py focused verified-package reveal facade
 src/caveviewer/gui/platform/update_package_storage.py focused verified-package storage facade
-src/caveviewer/gui/platform/saved_recording_reveal.py focused post-save recording reveal facade
 src/caveviewer/gui/platform/recording_process.py focused recording-encoder startup facade
 src/caveviewer/gui/platform/tls_trust.py       focused native TLS-trust augmentation facade
 src/caveviewer/gui/platform/probes/           platform capability probes and configuration
@@ -97,8 +96,6 @@ src/caveviewer/gui/recording.py               recording encoder process/thread h
 src/caveviewer/gui/recording_controller.py    recording countdown/status/timing state
 src/caveviewer/gui/recording_capture.py       render-thread recording readback resources
 src/caveviewer/gui/manual_dive_trace_controller.py manual trace countdown/reveal state
-src/caveviewer/gui/benchmark.py               compatibility wrapper for benchmark results
-src/caveviewer/gui/benchmark_routes.py        compatibility wrapper for benchmark route generation
 src/caveviewer/gui/chunk_upload.py            render-thread chunk upload state and cleanup
 src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
 src/caveviewer/gui/view_culling.py            resident chunk frustum-culling cache

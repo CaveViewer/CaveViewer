@@ -374,8 +374,6 @@ def test_release_finalizer_is_the_single_shared_state_writer():
 
     assert finalizer.count("gh release create") == 1
     assert finalizer.count('git -C "$repo_root" push') == 1
-    assert "--reuse-existing-release" in finalizer
-    assert "Reusing existing release $tag; release assets are unchanged." in finalizer
     assert "origin/$target_branch moved" in finalizer
     assert 'git -C "$repo_root" commit -m "Release $tag $manifest_channel"' in finalizer
     for manifest_path in (
@@ -385,29 +383,6 @@ def test_release_finalizer_is_the_single_shared_state_writer():
         "updates/macos/x86_64/$manifest_channel.json",
     ):
         assert manifest_path in finalizer
-
-
-def test_v1_0_75_metadata_recovery_opens_a_protected_main_pr():
-    workflow = (
-        WORKFLOWS_DIR / "recover-v1.0.75-release-metadata.yml"
-    ).read_text(encoding="utf-8")
-
-    assert "workflow_dispatch:" in workflow
-    assert "actions: write" in workflow
-    assert "contents: write" in workflow
-    assert "pull-requests: write" in workflow
-    assert 'RELEASE_VERSION: "1.0.75"' in workflow
-    assert 'RELEASE_SOURCE_SHA: "1702996891ced402e48cd56cb2be65134caf0994"' in workflow
-    assert 'RECOVERY_BRANCH: "release/v1.0.75-metadata"' in workflow
-    assert "git merge-base --is-ancestor" in workflow
-    assert 'ref: main' in workflow
-    assert "git push origin \"HEAD:refs/heads/$RECOVERY_BRANCH\"" in workflow
-    assert "--target-branch=\"$RECOVERY_BRANCH\"" in workflow
-    assert "--expected-source-sha=\"$RECOVERY_BASE_SHA\"" in workflow
-    assert "--reuse-existing-release" in workflow
-    assert "gh pr create" in workflow
-    assert "gh workflow run tests.yml" in workflow
-    assert "HEAD:refs/heads/$RELEASE_TARGET_BRANCH" not in workflow
 
 
 @requires_executable_shell_scripts

@@ -6,7 +6,6 @@ import pytest
 
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.render_mode_buttons import RenderModeButtons
-from caveviewer.gui.stats_readout import StatsReadout
 from caveviewer.gui.stepper_control import StepperControl
 
 
@@ -191,7 +190,6 @@ def test_stepper_rebuilds_when_raster_scale_changes():
     finally:
         bitmap_font.set_raster_scale(1.0)
 
-
 def test_render_mode_buttons_reuse_geometry_until_state_or_layout_changes():
     buttons = RenderModeButtons(_TrackingContext())
 
@@ -284,36 +282,6 @@ def test_render_mode_buttons_rebuild_when_raster_scale_changes():
 
         bitmap_font.set_raster_scale(2.0)
         buttons.render((1920, 1080), 500, right_inset=24)
-
-        assert buffer.write_count == 2
-    finally:
-        bitmap_font.set_raster_scale(1.0)
-
-
-def test_stats_readout_rebuilds_when_raster_scale_changes():
-    try:
-        bitmap_font.set_raster_scale(1.0)
-        readout = StatsReadout(_TrackingContext())
-
-        readout.render(
-            (1920, 1080),
-            bottom_left_x=20,
-            bottom_y=1000,
-            fps=60.0,
-            chunks_loaded=10,
-            chunks_pending=0,
-        )
-        buffer = readout._vbo
-
-        bitmap_font.set_raster_scale(2.0)
-        readout.render(
-            (1920, 1080),
-            bottom_left_x=20,
-            bottom_y=1000,
-            fps=60.0,
-            chunks_loaded=10,
-            chunks_pending=0,
-        )
 
         assert buffer.write_count == 2
     finally:

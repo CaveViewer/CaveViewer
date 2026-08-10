@@ -197,7 +197,6 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.desktop_services is desktop_services
     assert runtime.update_package_storage_adapter is storage_adapter
     assert runtime.saved_artifact_reveal_adapter is artifact_reveal_adapter
-    assert runtime.saved_recording_reveal_adapter is artifact_reveal_adapter
     assert runtime.recording_process_adapter is recording_process_adapter
     assert runtime.tls_trust_adapter is tls_trust_adapter
     assert runtime.window_backend_adapter is window_backend_adapter

@@ -203,21 +203,6 @@ Release. If a finalizer fails after publishing external release state, do not
 rerun it blindly against protected `main`: first reconcile that state through
 an auditable metadata pull request.
 
-## v1.0.75 metadata recovery
-
-`v1.0.75` was published before its metadata commit could reach protected
-`main`. After this recovery support reaches `main`, use **Recover v1.0.75
-Release Metadata** once from Actions and enter `1.0.75` as confirmation. The
-workflow verifies the release tag remains in `main` history and every published
-asset digest, regenerates the version and signed stable manifests on
-`release/v1.0.75-metadata`, opens a pull request to `main`, and explicitly
-dispatches Essential Tests for that branch.
-
-It does not rebuild or replace release packages. Merge that recovery PR only
-after all required checks pass; its metadata makes the already-published
-release discoverable by the in-app updater. This workflow is a one-shot repair,
-not the normal release path.
-
 ## Local dispatcher
 
 Use [`scripts/release.sh`](../../scripts/release.sh) for local build, package,
