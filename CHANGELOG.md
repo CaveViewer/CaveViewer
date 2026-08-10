@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Release 1.0.75
 
+- Fixed scrolling in the Map Library and Preferences for macOS trackpads and
+  mice.
 - The Map Library can now recognize many well-known caves and show useful
   details such as location and cave type. Choose **About cave** for a fuller
   description without changing how the map is downloaded, opened, or cached.

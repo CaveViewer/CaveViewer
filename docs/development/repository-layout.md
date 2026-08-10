@@ -80,6 +80,7 @@ src/caveviewer/gui/platform/probes/update_package_reveal.py static verified-pack
 src/caveviewer/gui/map_library.py             recent-map row display models
 src/caveviewer/gui/cave_metadata.py           offline cave catalog validation and matching
 src/caveviewer/gui/cave_metadata_panel.py     in-splash cave details presentation
+src/caveviewer/gui/tk_scrolling.py             cross-platform Tk mouse-wheel normalization
 src/caveviewer/gui/map_library_sources.py     source-neutral catalog contracts/composition
 src/caveviewer/gui/map_library_controller.py  source-qualified library row/transfer state
 src/caveviewer/gui/map_library_panel.py       splash Map Library Tk panel

@@ -6,6 +6,8 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from caveviewer.gui.tk_scrolling import vertical_scroll_units
+
 
 @dataclass(frozen=True)
 class MapLibraryMenuAction:
@@ -1785,13 +1787,9 @@ class MapLibraryPanel:
     def _scroll_content(self, event):
         if self._content_canvas is None or not self._content_overflows:
             return None
-        delta = getattr(event, "delta", 0)
-        if delta:
-            self._content_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
-        elif getattr(event, "num", None) == 4:
-            self._content_canvas.yview_scroll(-1, "units")
-        elif getattr(event, "num", None) == 5:
-            self._content_canvas.yview_scroll(1, "units")
+        units = vertical_scroll_units(event)
+        if units is not None:
+            self._content_canvas.yview_scroll(units, "units")
         return "break"
 
     def _bind_mousewheel(self, widget) -> None:

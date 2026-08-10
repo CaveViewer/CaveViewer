@@ -1033,7 +1033,8 @@ def test_map_library_scroll_region_shows_guidance_only_for_overflow():
     assert panel._content_canvas.moveto_calls == [0]
 
 
-def test_map_library_scrolls_only_when_rows_overflow():
+@pytest.mark.parametrize("delta", (-120, -1))
+def test_map_library_scrolls_only_when_rows_overflow(delta):
     class _FakeCanvas:
         def __init__(self) -> None:
             self.scroll_calls = []
@@ -1045,11 +1046,11 @@ def test_map_library_scrolls_only_when_rows_overflow():
     panel._content_canvas = _FakeCanvas()
     panel._content_overflows = False
 
-    assert panel._scroll_content(SimpleNamespace(delta=-120)) is None
+    assert panel._scroll_content(SimpleNamespace(delta=delta)) is None
     assert panel._content_canvas.scroll_calls == []
 
     panel._content_overflows = True
-    assert panel._scroll_content(SimpleNamespace(delta=-120)) == "break"
+    assert panel._scroll_content(SimpleNamespace(delta=delta)) == "break"
     assert panel._content_canvas.scroll_calls == [(1, "units")]
 
 

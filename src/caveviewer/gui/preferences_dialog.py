@@ -43,6 +43,7 @@ from caveviewer.gui.platform.presentation import (
     get_presentation_profile,
 )
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
+from caveviewer.gui.tk_scrolling import vertical_scroll_units
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 
@@ -699,13 +700,9 @@ class PreferencesPanel:
             or not self.page_scrollbar.winfo_manager()
         ):
             return None
-        delta = getattr(event, "delta", 0)
-        if delta:
-            self.page_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
-        elif getattr(event, "num", None) == 4:
-            self.page_canvas.yview_scroll(-1, "units")
-        elif getattr(event, "num", None) == 5:
-            self.page_canvas.yview_scroll(1, "units")
+        units = vertical_scroll_units(event)
+        if units is not None:
+            self.page_canvas.yview_scroll(units, "units")
         return "break"
 
     def _start_page_scrollbar_drag(self, event):
