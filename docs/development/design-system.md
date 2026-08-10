@@ -1,9 +1,10 @@
 # Design system
 
 This document defines the small, shared visual system for CaveViewer-owned
-interfaces. It currently applies to the Tk startup shell, Map Library, cave
-details, About, and Preferences. Native operating-system window chrome is not
-part of this system; the platform owns its title-bar typography.
+interfaces. It applies to the Tk startup shell, Map Library, cave details,
+About, Preferences, and the OpenGL viewer's loading and capture feedback.
+Native operating-system window chrome is not part of this system; the platform
+owns its title-bar typography.
 
 ## Typography
 
@@ -70,6 +71,35 @@ show **Update ready** for three seconds, then replace it with the amber
 **Show update** link. The link reveals the already verified package; it does
 not install or execute it.
 
+## Viewer loading and capture feedback
+
+The OpenGL viewer uses the same primary/supporting hierarchy while respecting
+its own bitmap-font rendering scale:
+
+- **Primary message** is the largest light label and explains the current
+  stage, such as **Prepare to record a dive** or **Saving video**.
+- **Supporting message** is muted and gives the next useful detail, such as
+  the keyboard shortcut, save guidance, or the location-opening notice.
+
+For video recording and dive tracing, the circular countdown/status indicator
+comes first, followed by the primary message and then the supporting message.
+All three are centered on the same axis. Do not add a separate feature label:
+the primary message already identifies the action, and a second label is
+redundant.
+
+If the viewer is closed while a video or dive trace is still being written,
+keep the window open and replace the cave view with the same centered status
+treatment. Use **Finishing video** or **Finishing dive trace** as the primary
+message and explain that CaveViewer will close automatically once the file is
+saved. Leave the status visible briefly even when the writer finishes
+immediately. Do not open a file browser during this exit path, and ignore
+repeat close requests until the writer has finished.
+
+The full-screen map-import panel keeps its import-specific title/ring/stage
+arrangement, but uses the same amber, light, and muted roles. Viewer overlay
+text continues to follow `CAVEVIEWER_UI_TEXT_SCALE`; do not substitute raw Tk
+font sizes or a second platform multiplier.
+
 ## Applying the system
 
 1. Use `create_tk_typography(font_family, text_scale=...)` to obtain the
@@ -80,6 +110,5 @@ not install or execute it.
 4. When larger text changes density, adjust spacing before reducing text back
    below its role's defined size.
 
-The OpenGL viewer overlay has a separate rendering and accessibility scale.
-It should adopt equivalent semantic roles in a dedicated follow-up rather
-than silently mixing bitmap-font scale factors with this Tk system.
+The OpenGL viewer overlay has a separate rendering and accessibility scale,
+but its primary and supporting roles intentionally match this system.
