@@ -60,8 +60,6 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "gui" / "preferences_dialog.py",
         PACKAGE_ROOT / "gui" / "tk_scrolling.py",
         PACKAGE_ROOT / "gui" / "tk_typography.py",
-        PACKAGE_ROOT / "gui" / "benchmark.py",
-        PACKAGE_ROOT / "gui" / "benchmark_routes.py",
         PACKAGE_ROOT / "gui" / "cave_metadata.py",
         PACKAGE_ROOT / "gui" / "cave_metadata_panel.py",
         PACKAGE_ROOT / "gui" / "viewer_window.py",
