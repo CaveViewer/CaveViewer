@@ -260,11 +260,6 @@ class PlatformRuntime:
     update_package_reveal_capability: CapabilityResult[UpdatePackageRevealRoute]
     feature_gates: FeatureGateRegistry
 
-    @property
-    def saved_recording_reveal_adapter(self) -> SavedArtifactRevealAdapter:
-        """Preserve the former recording-specific runtime attribute."""
-        return self.saved_artifact_reveal_adapter
-
     def static_feature_decision(self, feature: FeatureId) -> FeatureDecision:
         """Return a process-stable decision composed into ``feature_gates``.
 

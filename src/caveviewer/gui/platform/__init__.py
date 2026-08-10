@@ -32,7 +32,6 @@ from .runtime import (
 from .update_package_reveal import UpdatePackageRevealAdapter
 from .update_package_storage import UpdatePackageStorageAdapter
 from .saved_artifact_reveal import SavedArtifactRevealAdapter
-from .saved_recording_reveal import SavedRecordingRevealAdapter
 from .recording_process import RecordingProcessAdapter
 from .tls_trust import TlsTrustAdapter
 from .window_backend import (
@@ -76,7 +75,6 @@ __all__ = [
     "UpdatePackageRevealAdapter",
     "UpdatePackageStorageAdapter",
     "SavedArtifactRevealAdapter",
-    "SavedRecordingRevealAdapter",
     "RecordingProcessAdapter",
     "TlsTrustAdapter",
     "ViewerWindowLaunchRequest",

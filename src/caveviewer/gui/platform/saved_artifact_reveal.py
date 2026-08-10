@@ -31,10 +31,6 @@ class PlatformSavedArtifactRevealAdapter:
         """Delegate non-executing reveal to existing native behavior."""
         self.platform_adapter.reveal_file(output_path)
 
-    def reveal_saved_recording(self, output_path: str) -> None:
-        """Preserve the former recording-specific method for compatibility."""
-        self.reveal_saved_artifact(output_path)
-
 
 def create_saved_artifact_reveal_adapter(
     platform_adapter: SplashPlatformAdapter,
