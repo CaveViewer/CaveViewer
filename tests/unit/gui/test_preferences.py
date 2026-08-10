@@ -927,6 +927,27 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     assert "effective_profile.preferences_dialog_layout.resizable_vertical" in module_source
 
 
+@pytest.mark.parametrize("delta", (-120, -1))
+def test_preferences_page_scrolls_for_windows_and_macos_wheel_deltas(delta):
+    from caveviewer.gui import preferences_dialog
+
+    class _FakeCanvas:
+        def __init__(self) -> None:
+            self.scroll_calls = []
+
+        def yview_scroll(self, amount, units) -> None:
+            self.scroll_calls.append((amount, units))
+
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.page_canvas = _FakeCanvas()
+    panel.page_scrollbar = SimpleNamespace(winfo_manager=lambda: "pack")
+
+    assert panel._scroll_page_content(SimpleNamespace(delta=delta)) == "break"
+    assert panel.page_canvas.scroll_calls == [(1, "units")]
+
+
 def test_preferences_panel_tracks_and_discards_unsaved_values(valid_preferences):
     from caveviewer.gui import preferences_dialog
 

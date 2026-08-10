@@ -43,7 +43,9 @@ from caveviewer.gui.platform.presentation import (
     get_presentation_profile,
 )
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
+from caveviewer.gui.tk_scrolling import vertical_scroll_units
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 
 if TYPE_CHECKING:
     from caveviewer.gui.platform.runtime import PlatformRuntime
@@ -108,6 +110,7 @@ class PreferencesPanel:
         desktop_services: DesktopServices | None = None,
         platform_runtime: PlatformRuntime | None = None,
         presentation_profile: PresentationProfile | None = None,
+        typography: TkTypography | None = None,
         on_applied: Callable[[Preferences], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
     ) -> None:
@@ -142,6 +145,10 @@ class PreferencesPanel:
         )
         self._layout_policy = self.presentation_profile.preferences_dialog_layout
         self._dialog_layout = self.presentation_profile.dialog_layout
+        self.typography = typography or create_tk_typography(
+            ui_font_family,
+            text_scale=self.presentation_profile.minimum_tk_text_scale,
+        )
         self.desktop_services = (
             platform_runtime.desktop_services
             if platform_runtime is not None
@@ -164,21 +171,10 @@ class PreferencesPanel:
         self.container = tk.Frame(parent, bg=_BG_COLOR)
         self.container.pack(fill="both", expand=True)
 
-        if self._layout_policy.linux_layout:
-            self.section_font = (ui_font_family, 10, "bold")
-            self.body_font = (ui_font_family, 10)
-            self.small_font = (ui_font_family, 9)
-            self.entry_pad_y = 4
-        elif self._layout_policy.macos_layout:
-            self.section_font = (ui_font_family, 14, "bold")
-            self.body_font = (ui_font_family, 14)
-            self.small_font = (ui_font_family, 12)
-            self.entry_pad_y = 3
-        else:
-            self.section_font = (ui_font_family, 12, "bold")
-            self.body_font = (ui_font_family, 12)
-            self.small_font = (ui_font_family, 10)
-            self.entry_pad_y = 4
+        self.section_font = self.typography.section
+        self.action_font = self.typography.body_strong
+        self.body_font = self.typography.body
+        self.small_font = self.typography.supporting
 
         self.field_vars: dict[str, tk.StringVar] = {}
         self.field_entries: dict[str, tk.Entry] = {}
@@ -321,7 +317,7 @@ class PreferencesPanel:
             parent,
             text,
             command,
-            font=self.small_font,
+            font=self.action_font,
             kind=kind,
             padx=padx,
             pady=pady,
@@ -587,7 +583,7 @@ class PreferencesPanel:
         tab = tk.Label(
             parent,
             text=label,
-            font=self.small_font,
+            font=self.body_font,
             bg=_BG_COLOR,
             fg=_INSTRUCTION_COLOR,
             padx=self._layout_policy.tab_pad_x,
@@ -704,13 +700,9 @@ class PreferencesPanel:
             or not self.page_scrollbar.winfo_manager()
         ):
             return None
-        delta = getattr(event, "delta", 0)
-        if delta:
-            self.page_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
-        elif getattr(event, "num", None) == 4:
-            self.page_canvas.yview_scroll(-1, "units")
-        elif getattr(event, "num", None) == 5:
-            self.page_canvas.yview_scroll(1, "units")
+        units = vertical_scroll_units(event)
+        if units is not None:
+            self.page_canvas.yview_scroll(units, "units")
         return "break"
 
     def _start_page_scrollbar_drag(self, event):

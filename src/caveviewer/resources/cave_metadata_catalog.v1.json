@@ -1,0 +1,1208 @@
+{
+  "schema_version": "1.0",
+  "catalog": {
+    "name": "CaveViewer Famous Cave Systems",
+    "description": "Starter metadata catalog of notable cave systems in North America, Europe, and Asia for CaveViewer name and alias matching.",
+    "matching_note": "Match imported map names against name and aliases after normalization. The id is intended as a stable identifier for future exact matching.",
+    "caves": [
+      {
+        "id": "us-ky-mammoth-cave",
+        "name": "Mammoth Cave System",
+        "aliases": [
+          "Mammoth Cave",
+          "Mammoth Cave-Flint Ridge Cave System"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "Kentucky",
+        "type": "cave_system",
+        "statistics": [
+          {
+            "label": "Surveyed passage",
+            "value": 426,
+            "unit": "mi",
+            "qualifier": "greater_than",
+            "as_of": "2026"
+          }
+        ],
+        "facts": [
+          "The longest known cave system in the world.",
+          "Exploration and survey continue to add newly documented passage."
+        ],
+        "sources": [
+          {
+            "title": "U.S. National Park Service — Mammoth Cave FAQ",
+            "url": "https://www.nps.gov/maca/faqs.htm"
+          }
+        ]
+      },
+      {
+        "id": "us-sd-jewel-cave",
+        "name": "Jewel Cave",
+        "aliases": [
+          "Jewel Cave National Monument"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "South Dakota",
+        "type": "cave_system",
+        "statistics": [
+          {
+            "label": "Surveyed passage",
+            "value": 220.33,
+            "unit": "mi",
+            "qualifier": "approx",
+            "as_of": "2024"
+          },
+          {
+            "label": "Vertical extent",
+            "value": 822,
+            "unit": "ft"
+          }
+        ],
+        "facts": [
+          "One of the longest mapped cave systems in the world.",
+          "Strong airflow suggests that a large amount of cave may remain undiscovered."
+        ],
+        "sources": [
+          {
+            "title": "U.S. National Park Service — Jewel Cave Exploration",
+            "url": "https://www.nps.gov/jeca/learn/nature/caveexploration.htm"
+          }
+        ]
+      },
+      {
+        "id": "us-sd-wind-cave",
+        "name": "Wind Cave",
+        "aliases": [
+          "Wind Cave National Park"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "South Dakota",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "Known for extensive boxwork formations.",
+          "One of the world's longest and most complex cave systems."
+        ],
+        "sources": [
+          {
+            "title": "U.S. National Park Service — Wind Cave",
+            "url": "https://www.nps.gov/wica/"
+          }
+        ]
+      },
+      {
+        "id": "us-nm-carlsbad-cavern",
+        "name": "Carlsbad Cavern",
+        "aliases": [
+          "Carlsbad Caverns",
+          "Carlsbad Caverns National Park"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "New Mexico",
+        "type": "cave_system",
+        "statistics": [
+          {
+            "label": "Surveyed passage",
+            "value": 30,
+            "unit": "mi",
+            "qualifier": "greater_than"
+          },
+          {
+            "label": "Big Room area",
+            "value": 8.2,
+            "unit": "acres"
+          }
+        ],
+        "facts": [
+          "The Big Room is one of the largest readily accessible cave chambers in North America.",
+          "The cave is notable for large chambers and richly decorated mineral formations."
+        ],
+        "sources": [
+          {
+            "title": "U.S. National Park Service — Carlsbad Caverns facts",
+            "url": "https://www.nps.gov/cave/learn/news/interesting-facts-about-carlsbad-caverns.htm"
+          }
+        ]
+      },
+      {
+        "id": "us-nm-lechuguilla",
+        "name": "Lechuguilla Cave",
+        "aliases": [
+          "Lechuguilla"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "New Mexico",
+        "type": "cave_system",
+        "statistics": [
+          {
+            "label": "Mapped passage",
+            "value": 145,
+            "unit": "mi",
+            "qualifier": "greater_than",
+            "as_of": "2025"
+          },
+          {
+            "label": "Depth",
+            "value": 1604,
+            "unit": "ft"
+          }
+        ],
+        "facts": [
+          "Famous for exceptionally rare and delicate mineral formations.",
+          "Access is tightly restricted primarily to research and exploration."
+        ],
+        "sources": [
+          {
+            "title": "U.S. National Park Service — Lechuguilla Cave",
+            "url": "https://www.nps.gov/cave/learn/nature/lechuguilla_cave.htm"
+          }
+        ]
+      },
+      {
+        "id": "us-fl-devils-spring-system",
+        "name": "Devil's Spring System",
+        "aliases": [
+          "Devil's Eye",
+          "Devils Eye",
+          "Devil's Eye at Ginnie Springs",
+          "Ginnie Springs Devil's Eye"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "Florida",
+        "type": "underwater_cave",
+        "statistics": [
+          {
+            "label": "Surveyed underwater passage",
+            "value": 8000,
+            "unit": "ft",
+            "qualifier": "greater_than"
+          }
+        ],
+        "facts": [
+          "Devil's Eye and Devil's Ear provide access to the same underwater cave system.",
+          "One of the best-known cave-diving sites in Florida."
+        ],
+        "sources": [
+          {
+            "title": "Ginnie Springs — Devil's Spring System",
+            "url": "https://ginniespringsoutdoors.com/dive/devils-spring-system/"
+          }
+        ]
+      },
+      {
+        "id": "us-fl-peacock-springs",
+        "name": "Peacock Springs Cave System",
+        "aliases": [
+          "Peacock Springs",
+          "Wes Skiles Peacock Springs"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "Florida",
+        "type": "underwater_cave",
+        "statistics": [
+          {
+            "label": "Surveyed underwater passage",
+            "value": 33000,
+            "unit": "ft",
+            "qualifier": "approx"
+          }
+        ],
+        "facts": [
+          "A major Florida cave-diving system with multiple springs and sinkholes.",
+          "The system has played an important role in cave-diver training and exploration."
+        ],
+        "sources": [
+          {
+            "title": "Florida State Parks — Wes Skiles Peacock Springs",
+            "url": "https://www.floridastateparks.org/parks-and-trails/wes-skiles-peacock-springs-state-park"
+          }
+        ]
+      },
+      {
+        "id": "us-fl-wakulla-leon-sinks",
+        "name": "Wakulla–Leon Sinks Cave System",
+        "aliases": [
+          "Wakulla Cave System",
+          "Leon Sinks Cave System",
+          "Wakulla-Leon Sinks"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "Florida",
+        "type": "underwater_cave",
+        "statistics": [],
+        "facts": [
+          "A major submerged cave system associated with Wakulla Spring and the Woodville Karst Plain.",
+          "Known for long-range technical cave-diving exploration."
+        ],
+        "sources": []
+      },
+      {
+        "id": "us-fl-eagles-nest",
+        "name": "Eagle's Nest",
+        "aliases": [
+          "Eagles Nest",
+          "Eagle's Nest Cave"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "Florida",
+        "type": "underwater_cave",
+        "statistics": [],
+        "facts": [
+          "A deep, advanced cave-diving site in Florida.",
+          "Known for large submerged rooms and deep passages."
+        ],
+        "sources": []
+      },
+      {
+        "id": "us-fl-little-river",
+        "name": "Little River Cave System",
+        "aliases": [
+          "Little River Spring",
+          "Little River"
+        ],
+        "continent": "North America",
+        "country": "United States",
+        "region": "Florida",
+        "type": "underwater_cave",
+        "statistics": [],
+        "facts": [
+          "A well-known Florida spring and cave-diving system.",
+          "Characterized by clear spring water and substantial flow."
+        ],
+        "sources": []
+      },
+      {
+        "id": "mx-qr-sac-actun",
+        "name": "Sistema Sac Actun",
+        "aliases": [
+          "Sac Actun",
+          "Sistema Sac Aktun"
+        ],
+        "continent": "North America",
+        "country": "Mexico",
+        "region": "Quintana Roo",
+        "type": "underwater_cave",
+        "statistics": [],
+        "facts": [
+          "One of the world's longest known underwater cave systems.",
+          "Located in the extensive flooded limestone karst of the Yucatán Peninsula."
+        ],
+        "sources": []
+      },
+      {
+        "id": "mx-qr-ox-bel-ha",
+        "name": "Sistema Ox Bel Ha",
+        "aliases": [
+          "Ox Bel Ha",
+          "Ox Bel Ha Cave System"
+        ],
+        "continent": "North America",
+        "country": "Mexico",
+        "region": "Quintana Roo",
+        "type": "underwater_cave",
+        "statistics": [],
+        "facts": [
+          "One of the world's largest explored underwater cave systems.",
+          "Its name is commonly translated from Yucatec Maya as 'Three Paths of Water'."
+        ],
+        "sources": []
+      },
+      {
+        "id": "mx-qr-dos-ojos",
+        "name": "Sistema Dos Ojos",
+        "aliases": [
+          "Dos Ojos",
+          "Cenote Dos Ojos"
+        ],
+        "continent": "North America",
+        "country": "Mexico",
+        "region": "Quintana Roo",
+        "type": "underwater_cave",
+        "statistics": [],
+        "facts": [
+          "One of the most internationally recognized cenote cave-diving systems in the Yucatán.",
+          "Known for clear water and highly decorated submerged passages."
+        ],
+        "sources": []
+      },
+      {
+        "id": "mx-oax-sistema-huautla",
+        "name": "Sistema Huautla",
+        "aliases": [
+          "Huautla Cave System",
+          "Sistema Huautla de Jiménez"
+        ],
+        "continent": "North America",
+        "country": "Mexico",
+        "region": "Oaxaca",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "One of the deepest cave systems in the Western Hemisphere.",
+          "A major focus of international expedition caving for decades."
+        ],
+        "sources": []
+      },
+      {
+        "id": "mx-oax-sistema-cheve",
+        "name": "Sistema Cheve",
+        "aliases": [
+          "Cheve Cave",
+          "Sistema Cheve"
+        ],
+        "continent": "North America",
+        "country": "Mexico",
+        "region": "Oaxaca",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "A vast deep-cave system in the Sierra Mazateca.",
+          "Known for extremely long and difficult underground expeditions."
+        ],
+        "sources": []
+      },
+      {
+        "id": "ca-ab-castleguard",
+        "name": "Castleguard Cave",
+        "aliases": [
+          "Castleguard"
+        ],
+        "continent": "North America",
+        "country": "Canada",
+        "region": "Alberta",
+        "type": "cave_system",
+        "statistics": [
+          {
+            "label": "Surveyed passage",
+            "value": 21.3,
+            "unit": "km",
+            "qualifier": "greater_than",
+            "as_of": "2026"
+          }
+        ],
+        "facts": [
+          "Canada's longest known single-entrance cave system.",
+          "Passages extend beneath the Columbia Icefield and include unusual ice features."
+        ],
+        "sources": [
+          {
+            "title": "Parks Canada — Castleguard Cave",
+            "url": "https://parks.canada.ca/pn-np/ab/banff/nature/environnement-environment/ecosystemes-ecosystems/caverne-castleguard-cave"
+          }
+        ]
+      },
+      {
+        "id": "si-postojna",
+        "name": "Postojna Cave",
+        "aliases": [
+          "Postojnska jama",
+          "Postojna Cave System"
+        ],
+        "continent": "Europe",
+        "country": "Slovenia",
+        "region": "Inner Carniola",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "One of Europe's most famous show caves.",
+          "Known for extensive passages, large halls, and a long history of cave tourism and exploration."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Classical Karst tentative listing",
+            "url": "https://whc.unesco.org/en/tentativelists/6072/"
+          }
+        ]
+      },
+      {
+        "id": "si-skocjan",
+        "name": "Škocjan Caves",
+        "aliases": [
+          "Skocjan Caves",
+          "Škocjanske jame",
+          "Skocjanske jame"
+        ],
+        "continent": "Europe",
+        "country": "Slovenia",
+        "region": "Karst Plateau",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "A UNESCO World Heritage cave system with immense underground canyons.",
+          "A classic example of karst landscape and subterranean river development."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Škocjan Caves",
+            "url": "https://whc.unesco.org/en/list/390/"
+          }
+        ]
+      },
+      {
+        "id": "hu-sk-baradla-domica",
+        "name": "Baradla–Domica Cave System",
+        "aliases": [
+          "Baradla Cave",
+          "Domica Cave",
+          "Baradla-Domica"
+        ],
+        "continent": "Europe",
+        "country": "Hungary / Slovakia",
+        "region": "Aggtelek Karst / Slovak Karst",
+        "type": "cave_system",
+        "statistics": [
+          {
+            "label": "System length",
+            "value": 25,
+            "unit": "km",
+            "qualifier": "approx"
+          }
+        ],
+        "facts": [
+          "A major transboundary cave system between Hungary and Slovakia.",
+          "Richly decorated with stalactites and stalagmites and crossed by active underground streams."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Caves of Aggtelek Karst and Slovak Karst",
+            "url": "https://whc.unesco.org/en/list/725/"
+          }
+        ]
+      },
+      {
+        "id": "at-eisriesenwelt",
+        "name": "Eisriesenwelt",
+        "aliases": [
+          "Eisriesenwelt Ice Cave"
+        ],
+        "continent": "Europe",
+        "country": "Austria",
+        "region": "Salzburg",
+        "type": "ice_cave",
+        "statistics": [],
+        "facts": [
+          "One of the world's best-known ice caves.",
+          "Famous for extensive seasonal and perennial ice formations."
+        ],
+        "sources": []
+      },
+      {
+        "id": "fr-gouffre-berger",
+        "name": "Gouffre Berger",
+        "aliases": [
+          "Berger Cave",
+          "Gouffre Berger Cave System"
+        ],
+        "continent": "Europe",
+        "country": "France",
+        "region": "Vercors",
+        "type": "vertical_cave",
+        "statistics": [],
+        "facts": [
+          "Historically the first cave explored to more than 1,000 m below its entrance.",
+          "A landmark system in the history of deep-cave exploration."
+        ],
+        "sources": []
+      },
+      {
+        "id": "fr-gouffre-padirac",
+        "name": "Gouffre de Padirac",
+        "aliases": [
+          "Padirac Cave",
+          "Padirac Chasm"
+        ],
+        "continent": "Europe",
+        "country": "France",
+        "region": "Occitanie",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "A famous chasm and underground river cave in southwestern France.",
+          "Visitors descend into the shaft and travel part of the underground river by boat."
+        ],
+        "sources": []
+      },
+      {
+        "id": "fr-ressel",
+        "name": "Émergence du Ressel",
+        "aliases": [
+          "Ressel",
+          "Emergence du Ressel",
+          "Résurgence du Ressel"
+        ],
+        "continent": "Europe",
+        "country": "France",
+        "region": "Occitanie",
+        "type": "underwater_cave",
+        "statistics": [
+          {
+            "label": "Explored penetration",
+            "value": 6300,
+            "unit": "m",
+            "qualifier": "greater_than"
+          },
+          {
+            "label": "Deep loop depth",
+            "value": 73,
+            "unit": "m",
+            "qualifier": "approx"
+          }
+        ],
+        "facts": [
+          "The underwater entrance opens in the bed of the Célé River.",
+          "One of Europe's best-known technical cave-diving systems."
+        ],
+        "sources": []
+      },
+      {
+        "id": "fr-font-estramar",
+        "name": "Font Estramar",
+        "aliases": [
+          "Font d'Estramar",
+          "Font Estramar Cave"
+        ],
+        "continent": "Europe",
+        "country": "France",
+        "region": "Occitanie",
+        "type": "underwater_cave",
+        "statistics": [],
+        "facts": [
+          "A deep and technically demanding submerged cave system in southern France.",
+          "Known for major advances in extreme-depth cave diving."
+        ],
+        "sources": []
+      },
+      {
+        "id": "gb-wookey-hole",
+        "name": "Wookey Hole Caves",
+        "aliases": [
+          "Wookey Hole",
+          "Wookey Hole Cave System"
+        ],
+        "continent": "Europe",
+        "country": "United Kingdom",
+        "region": "Somerset, England",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "A famous British cave and resurgence system.",
+          "Historically important in the development of cave diving."
+        ],
+        "sources": []
+      },
+      {
+        "id": "gb-goughs-cave",
+        "name": "Gough's Cave",
+        "aliases": [
+          "Goughs Cave"
+        ],
+        "continent": "Europe",
+        "country": "United Kingdom",
+        "region": "Somerset, England",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "A major cave in Cheddar Gorge.",
+          "Known for archaeology, human remains, and show-cave passages."
+        ],
+        "sources": []
+      },
+      {
+        "id": "gb-ogof-draenen",
+        "name": "Ogof Draenen",
+        "aliases": [
+          "Draenen",
+          "Ogof Draenen Cave System"
+        ],
+        "continent": "Europe",
+        "country": "United Kingdom",
+        "region": "Wales",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "One of the longest cave systems in the United Kingdom.",
+          "Known for an extensive maze of passages beneath South Wales."
+        ],
+        "sources": []
+      },
+      {
+        "id": "es-altamira",
+        "name": "Cave of Altamira",
+        "aliases": [
+          "Altamira Cave",
+          "Cueva de Altamira"
+        ],
+        "continent": "Europe",
+        "country": "Spain",
+        "region": "Cantabria",
+        "type": "cave",
+        "statistics": [],
+        "facts": [
+          "World-famous for prehistoric cave art.",
+          "The original cave has tightly controlled access for conservation."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Cave of Altamira and Paleolithic Cave Art of Northern Spain",
+            "url": "https://whc.unesco.org/en/list/310/"
+          }
+        ]
+      },
+      {
+        "id": "es-ojo-guarena",
+        "name": "Ojo Guareña",
+        "aliases": [
+          "Ojo Guarena",
+          "Ojo Guareña Cave System"
+        ],
+        "continent": "Europe",
+        "country": "Spain",
+        "region": "Castile and León",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "One of Spain's largest cave complexes.",
+          "Contains extensive passages as well as important archaeological sites."
+        ],
+        "sources": []
+      },
+      {
+        "id": "it-frassassi",
+        "name": "Frasassi Caves",
+        "aliases": [
+          "Grotte di Frasassi",
+          "Frasassi Cave System"
+        ],
+        "continent": "Europe",
+        "country": "Italy",
+        "region": "Marche",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "One of Italy's most famous show-cave systems.",
+          "The enormous Ancona Abyss is one of its signature chambers."
+        ],
+        "sources": []
+      },
+      {
+        "id": "cz-moravian-karst-punkva",
+        "name": "Punkva Caves and Macocha Abyss",
+        "aliases": [
+          "Punkva Caves",
+          "Punkevní Caves",
+          "Macocha Abyss"
+        ],
+        "continent": "Europe",
+        "country": "Czech Republic",
+        "region": "South Moravia",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "A famous cave system in the Moravian Karst.",
+          "Includes an underground river route and the dramatic Macocha Abyss."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Punkva Caves and Macocha Abyss tentative listing",
+            "url": "https://whc.unesco.org/en/tentativelists/6921/"
+          }
+        ]
+      },
+      {
+        "id": "ua-optimistic-cave",
+        "name": "Optymistychna Cave",
+        "aliases": [
+          "Optimistic Cave",
+          "Optymistychna"
+        ],
+        "continent": "Europe",
+        "country": "Ukraine",
+        "region": "Ternopil Oblast",
+        "type": "gypsum_cave",
+        "statistics": [],
+        "facts": [
+          "One of the world's longest gypsum cave systems.",
+          "Known for an immense maze-like network of passages."
+        ],
+        "sources": []
+      },
+      {
+        "id": "gr-diros",
+        "name": "Diros Caves",
+        "aliases": [
+          "Caves of Diros",
+          "Vlychada Cave",
+          "Diros Cave"
+        ],
+        "continent": "Europe",
+        "country": "Greece",
+        "region": "Mani, Peloponnese",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "Famous for extensive flooded passages explored partly by boat.",
+          "Known for richly decorated chambers and subterranean waterways."
+        ],
+        "sources": []
+      },
+      {
+        "id": "cn-guizhou-shuanghe",
+        "name": "Shuanghe Cave System",
+        "aliases": [
+          "Shuanghe Cave",
+          "Shuanghedong",
+          "Shuanghe Dong"
+        ],
+        "continent": "Asia",
+        "country": "China",
+        "region": "Guizhou",
+        "type": "cave_system",
+        "statistics": [
+          {
+            "label": "Surveyed passage",
+            "value": 439.7,
+            "unit": "km",
+            "qualifier": "approx",
+            "as_of": "2025"
+          },
+          {
+            "label": "Confirmed entrances",
+            "value": 115,
+            "unit": "count",
+            "qualifier": "as_of",
+            "as_of": "2025"
+          }
+        ],
+        "facts": [
+          "The longest known cave system in Asia.",
+          "Also recognized as the world's longest known dolomite cave system."
+        ],
+        "sources": [
+          {
+            "title": "Guizhou Government — Shuanghe survey update",
+            "url": "https://www.eguizhou.gov.cn/2025-10/28/c_1136012.htm"
+          }
+        ]
+      },
+      {
+        "id": "vn-son-doong",
+        "name": "Sơn Đoòng Cave",
+        "aliases": [
+          "Son Doong",
+          "Hang Son Doong",
+          "Hang Sơn Đoòng"
+        ],
+        "continent": "Asia",
+        "country": "Vietnam",
+        "region": "Quảng Bình",
+        "type": "cave",
+        "statistics": [],
+        "facts": [
+          "Contains the world's largest documented cave passage by diameter and continuity.",
+          "Part of the Phong Nha–Kẻ Bàng karst landscape."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Phong Nha-Ke Bang and Hin Nam No",
+            "url": "https://whc.unesco.org/en/list/951"
+          }
+        ]
+      },
+      {
+        "id": "vn-phong-nha",
+        "name": "Phong Nha Cave",
+        "aliases": [
+          "Động Phong Nha",
+          "Phong Nha"
+        ],
+        "continent": "Asia",
+        "country": "Vietnam",
+        "region": "Quảng Bình",
+        "type": "river_cave",
+        "statistics": [],
+        "facts": [
+          "A major river cave within the Phong Nha–Kẻ Bàng karst.",
+          "One of Vietnam's best-known cave attractions."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Phong Nha-Ke Bang and Hin Nam No",
+            "url": "https://whc.unesco.org/en/list/951"
+          }
+        ]
+      },
+      {
+        "id": "vn-hang-en",
+        "name": "Hang Én",
+        "aliases": [
+          "Hang En",
+          "En Cave"
+        ],
+        "continent": "Asia",
+        "country": "Vietnam",
+        "region": "Quảng Bình",
+        "type": "cave",
+        "statistics": [],
+        "facts": [
+          "A huge river cave in the Phong Nha–Kẻ Bàng region.",
+          "Known for enormous entrances and a large interior campsite area."
+        ],
+        "sources": []
+      },
+      {
+        "id": "my-sarawak-clearwater",
+        "name": "Clearwater Cave System",
+        "aliases": [
+          "Clearwater Cave",
+          "Clearwater System"
+        ],
+        "continent": "Asia",
+        "country": "Malaysia",
+        "region": "Sarawak, Borneo",
+        "type": "cave_system",
+        "statistics": [
+          {
+            "label": "Mapped and explored passage",
+            "value": 110,
+            "unit": "km",
+            "qualifier": "greater_than"
+          }
+        ],
+        "facts": [
+          "One of the major cave systems of Gunung Mulu National Park.",
+          "UNESCO documentation historically recognized it as Asia's longest explored cave system before later discoveries elsewhere."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Gunung Mulu National Park",
+            "url": "https://whc.unesco.org/en/list/1013/"
+          }
+        ]
+      },
+      {
+        "id": "my-sarawak-deer-cave",
+        "name": "Deer Cave",
+        "aliases": [
+          "Gua Rusa",
+          "Deer Cave Mulu"
+        ],
+        "continent": "Asia",
+        "country": "Malaysia",
+        "region": "Sarawak, Borneo",
+        "type": "cave",
+        "statistics": [
+          {
+            "label": "Passage diameter",
+            "value": 120,
+            "unit": "m",
+            "qualifier": "range_start"
+          },
+          {
+            "label": "Passage diameter upper",
+            "value": 150,
+            "unit": "m",
+            "qualifier": "range_end"
+          }
+        ],
+        "facts": [
+          "One of the immense cave passages of Gunung Mulu National Park.",
+          "Famous for its enormous dimensions and bat populations."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Gunung Mulu National Park",
+            "url": "https://whc.unesco.org/en/list/1013/"
+          }
+        ]
+      },
+      {
+        "id": "my-sarawak-good-luck",
+        "name": "Good Luck Cave",
+        "aliases": [
+          "Gua Nasib Bagus",
+          "Sarawak Chamber"
+        ],
+        "continent": "Asia",
+        "country": "Malaysia",
+        "region": "Sarawak, Borneo",
+        "type": "cave",
+        "statistics": [
+          {
+            "label": "Sarawak Chamber length",
+            "value": 600,
+            "unit": "m",
+            "qualifier": "approx"
+          },
+          {
+            "label": "Sarawak Chamber width",
+            "value": 415,
+            "unit": "m",
+            "qualifier": "approx"
+          },
+          {
+            "label": "Sarawak Chamber height",
+            "value": 80,
+            "unit": "m",
+            "qualifier": "approx"
+          }
+        ],
+        "facts": [
+          "Contains Sarawak Chamber, one of the world's largest known cave chambers.",
+          "Located within Gunung Mulu National Park."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Punkva nomination comparative cave data",
+            "url": "https://whc.unesco.org/en/tentativelists/6921/"
+          }
+        ]
+      },
+      {
+        "id": "my-sarawak-niah",
+        "name": "Niah Great Cave",
+        "aliases": [
+          "Niah Cave",
+          "Great Cave of Niah"
+        ],
+        "continent": "Asia",
+        "country": "Malaysia",
+        "region": "Sarawak, Borneo",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "One of Southeast Asia's most important archaeological cave sites.",
+          "Known for major evidence of long-term human occupation."
+        ],
+        "sources": []
+      },
+      {
+        "id": "th-tham-luang",
+        "name": "Tham Luang–Khun Nam Nang Non",
+        "aliases": [
+          "Tham Luang",
+          "Tham Luang Cave",
+          "Tham Luang Nang Non"
+        ],
+        "continent": "Asia",
+        "country": "Thailand",
+        "region": "Chiang Rai",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "Internationally known from the 2018 rescue of a youth football team and coach.",
+          "A seasonally flooded limestone cave system."
+        ],
+        "sources": []
+      },
+      {
+        "id": "th-kanchanaburi-boh-yai-mines",
+        "name": "Boh Yai Mines",
+        "aliases": [
+          "Boh Yai Mine",
+          "Boh Yai Mine I",
+          "Boh Yai Mine II",
+          "Boh Yai North",
+          "Boh Yai South",
+          "Bo Yai Mine",
+          "Bo Yai Mines"
+        ],
+        "continent": "Asia",
+        "country": "Thailand",
+        "region": "Kanchanaburi Province",
+        "type": "flooded_mine",
+        "statistics": [
+          {
+            "label": "Reported line",
+            "value": 4650,
+            "unit": "m",
+            "as_of": "2025"
+          },
+          {
+            "label": "Reported surveyed depth",
+            "value": 106,
+            "unit": "m",
+            "as_of": "2025"
+          }
+        ],
+        "facts": [
+          "A group of flooded former metal mines in the karst mountains of Kanchanaburi Province.",
+          "A 2025 exploration update described ongoing documentation of the Boh Yai North and South workings."
+        ],
+        "sources": [
+          {
+            "title": "InDEPTH — Thai Mine Exploration Project",
+            "url": "https://indepthmag.com/postcards-from-the-edge-02/"
+          }
+        ]
+      },
+      {
+        "id": "lb-jeita-grotto",
+        "name": "Jeita Grotto",
+        "aliases": [
+          "Jeita Cave",
+          "Jeita Grottoes"
+        ],
+        "continent": "Asia",
+        "country": "Lebanon",
+        "region": "Mount Lebanon",
+        "type": "cave_system",
+        "statistics": [],
+        "facts": [
+          "A major limestone cave system with upper and lower galleries.",
+          "The lower cave carries an underground river that contributes to a major water source."
+        ],
+        "sources": []
+      },
+      {
+        "id": "ir-ali-sadr",
+        "name": "Ali-Sadr Cave",
+        "aliases": [
+          "Ali Sadr Cave",
+          "Ali-Sadr",
+          "Alisadr Cave"
+        ],
+        "continent": "Asia",
+        "country": "Iran",
+        "region": "Hamadan Province",
+        "type": "water_cave",
+        "statistics": [],
+        "facts": [
+          "Famous for extensive navigable water passages.",
+          "Visitors travel through substantial parts of the cave by boat."
+        ],
+        "sources": []
+      },
+      {
+        "id": "ph-puerto-princesa-underground-river",
+        "name": "Puerto Princesa Subterranean River",
+        "aliases": [
+          "Puerto Princesa Underground River",
+          "St. Paul Underground River",
+          "Saint Paul Underground River"
+        ],
+        "continent": "Asia",
+        "country": "Philippines",
+        "region": "Palawan",
+        "type": "river_cave",
+        "statistics": [],
+        "facts": [
+          "A major underground river system flowing through limestone karst to the sea.",
+          "Part of a UNESCO World Heritage property."
+        ],
+        "sources": [
+          {
+            "title": "UNESCO — Puerto-Princesa Subterranean River National Park",
+            "url": "https://whc.unesco.org/en/list/652/"
+          }
+        ]
+      },
+      {
+        "id": "jp-akiyoshido",
+        "name": "Akiyoshidō Cave",
+        "aliases": [
+          "Akiyoshido",
+          "Akiyoshi-do",
+          "Akiyoshi Cave"
+        ],
+        "continent": "Asia",
+        "country": "Japan",
+        "region": "Yamaguchi Prefecture",
+        "type": "cave",
+        "statistics": [],
+        "facts": [
+          "One of Japan's largest and best-known show caves.",
+          "Located beneath the Akiyoshidai karst plateau."
+        ],
+        "sources": []
+      },
+      {
+        "id": "jp-ryusendo",
+        "name": "Ryūsendō Cave",
+        "aliases": [
+          "Ryusendo",
+          "Ryusendo Cave",
+          "Ryūsen-dō"
+        ],
+        "continent": "Asia",
+        "country": "Japan",
+        "region": "Iwate Prefecture",
+        "type": "water_cave",
+        "statistics": [],
+        "facts": [
+          "Known for exceptionally clear subterranean lakes.",
+          "One of Japan's best-known limestone cave systems."
+        ],
+        "sources": []
+      },
+      {
+        "id": "id-goa-jomblang",
+        "name": "Jomblang Cave",
+        "aliases": [
+          "Goa Jomblang",
+          "Jomblang"
+        ],
+        "continent": "Asia",
+        "country": "Indonesia",
+        "region": "Yogyakarta Special Region",
+        "type": "vertical_cave",
+        "statistics": [],
+        "facts": [
+          "A famous collapse doline and vertical cave.",
+          "Known for a dramatic beam of sunlight entering the cavern."
+        ],
+        "sources": []
+      },
+      {
+        "id": "ru-perm-orda",
+        "name": "Orda Cave",
+        "aliases": [
+          "Ordinskaya Cave",
+          "Ordinskaya Peschera",
+          "Ordinskaya Peshchera"
+        ],
+        "continent": "Europe",
+        "country": "Russia",
+        "region": "Perm Krai",
+        "type": "underwater_cave",
+        "statistics": [],
+        "facts": [
+          "A major underwater gypsum cave system.",
+          "Known for long submerged passages in pale gypsum rock and exceptionally clear water."
+        ],
+        "sources": [
+          {
+            "title": "Show Caves — Orda Cave",
+            "url": "https://www.showcaves.com/english/ru/caves/Orda.html"
+          }
+        ]
+      },
+      {
+        "id": "my-selangor-batu-caves",
+        "name": "Batu Caves",
+        "aliases": [
+          "Batu Cave",
+          "Batu Caves Complex"
+        ],
+        "continent": "Asia",
+        "country": "Malaysia",
+        "region": "Selangor",
+        "type": "cave_complex",
+        "statistics": [],
+        "facts": [
+          "A famous limestone cave complex immediately north of Kuala Lumpur.",
+          "Internationally known both for its karst caves and for the major Hindu temple complex within them."
+        ],
+        "sources": []
+      }
+    ]
+  }
+}

@@ -487,7 +487,10 @@ assert profile.mouse_look_button_name == "right"
   temporary package into platform-specific user-visible storage
 - `persist_downloaded_payload()` remains the compatibility implementation until
   storage behavior moves behind that focused adapter
-- `download_reveal_action_label()` provides the splash action text
+- `download_reveal_action_label()` provides a platform-native label for other
+  consumers that need to describe the reveal action. The compact splash uses
+  the neutral `Show update` wording so its one-label ready-state transition is
+  consistent across platforms.
 - `reveal_downloaded_payload()` exposes the verified package without running it
 - The update system knows which channel the current build came from
 

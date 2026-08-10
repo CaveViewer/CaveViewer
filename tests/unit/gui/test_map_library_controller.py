@@ -66,6 +66,39 @@ def test_downloaded_standard_library_row_remembers_open_path():
     ) == "/maps/Boh Yai Mine I"
 
 
+def test_cave_metadata_detail_replaces_ordinary_download_state_text():
+    library_map = _library_map(display_name="Devils Eye")
+    controller = MapLibraryController([library_map])
+
+    row = controller.row(
+        library_map,
+        downloaded=True,
+        cave_metadata_detail="Florida, United States · Underwater cave",
+    )
+
+    assert row.detail == "Florida, United States · Underwater cave"
+
+
+def test_former_map_warning_still_takes_priority_over_cave_metadata():
+    library_map = _library_map(display_name="Devils Eye")
+    controller = MapLibraryController([library_map])
+    key = controller.map_key(library_map)
+    controller.replace_standard_library_maps(
+        [library_map],
+        availability_by_key={
+            key: StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL,
+        },
+    )
+
+    row = controller.row(
+        library_map,
+        downloaded=True,
+        cave_metadata_detail="Florida, United States · Underwater cave",
+    )
+
+    assert row.detail == "No longer a part of the standard library"
+
+
 def test_former_downloaded_map_keeps_its_open_action():
     library_map = _library_map()
     controller = MapLibraryController([library_map])

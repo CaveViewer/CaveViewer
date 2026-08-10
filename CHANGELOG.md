@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## Release 1.0.75
+
+- Fixed scrolling in the Map Library and Preferences for macOS trackpads and
+  mice.
+- The Map Library can now recognize many well-known caves and show useful
+  details such as location and cave type. Choose **About cave** for a fuller
+  description without changing how the map is downloaded, opened, or cached.
+- The startup screen and Map Library are easier to use, with clearer
+  navigation, more consistent text sizes, and room for map names that need two
+  lines.
+- Preferences and About now open in the main window instead of separate
+  pop-up windows.
+- Update messages are simpler: CaveViewer first confirms that an update is
+  ready, then offers one clear link to show the downloaded update.
+
 ## Release 1.0.74
 
 - Made the Your Recent Maps and CaveViewer Maps groups independently

@@ -83,6 +83,7 @@ class PresentationProfile:
     default_text_antialiasing_mode: str
     viewer_overlay_text_scale_factor: float
     minimum_tk_text_scale: float
+    uses_tk_default_font_scale: bool
     supports_tk_display_scaling: bool
     suppress_startup_focus_when_frozen: bool
     command_modifier_uses_control_fallback: bool
@@ -118,6 +119,8 @@ class PresentationProfile:
 
     def tk_text_scale(self, default_font_points: float) -> float:
         """Return the platform-adjusted scale for fixed-size Tk font tokens."""
+        if not self.uses_tk_default_font_scale:
+            return self.minimum_tk_text_scale
         try:
             default_scale = max(1.0, float(default_font_points) / 12.0)
         except (TypeError, ValueError):
@@ -190,6 +193,7 @@ _DEFAULT_PRESENTATION_PROFILE = PresentationProfile(
     default_text_antialiasing_mode="normal",
     viewer_overlay_text_scale_factor=1.0,
     minimum_tk_text_scale=1.0,
+    uses_tk_default_font_scale=True,
     supports_tk_display_scaling=False,
     suppress_startup_focus_when_frozen=False,
     command_modifier_uses_control_fallback=False,
@@ -356,6 +360,10 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 resizable_vertical=False,
             ),
             default_text_antialiasing_mode="light",
+            # Tk's Linux DPI scaling already changes the physical size of Tk
+            # point fonts. Do not also scale the semantic type system from a
+            # distribution's TkDefaultFont size.
+            uses_tk_default_font_scale=False,
             supports_tk_display_scaling=True,
             viewer_uses_glfw_native_initial_size=True,
         )

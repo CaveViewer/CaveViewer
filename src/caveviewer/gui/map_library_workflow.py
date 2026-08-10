@@ -8,7 +8,7 @@ import queue
 import threading
 import tkinter as tk
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from caveviewer.gui.cache_rebuild_controller import (
@@ -18,6 +18,11 @@ from caveviewer.gui.cache_rebuild_controller import (
     CacheRebuildProgress,
     CacheRebuildStarted,
     CacheRebuildSucceeded,
+)
+from caveviewer.gui.cave_metadata import (
+    CaveMetadata,
+    CaveMetadataCatalog,
+    CaveMetadataMatch,
 )
 from caveviewer.gui.map_cache_management import (
     has_managed_map_cache,
@@ -32,6 +37,7 @@ from caveviewer.gui.map_library import recent_map_entry, recent_map_key
 from caveviewer.gui.map_library_controller import (
     MapLibraryController,
     StandardLibraryMapAvailability,
+    StandardLibraryMapRow,
 )
 from caveviewer.gui.map_library_sources import (
     GITHUB_RELEASE_MAP_SOURCE_ID,
@@ -111,6 +117,7 @@ def _remaining_cache_error(
 
 OpenMapCallback = Callable[[str], None]
 OpenGuidedDiveCallback = Callable[[str], None]
+ShowCaveMetadataCallback = Callable[[CaveMetadata], None]
 
 _CACHE_REBUILD_NOTIFICATION_PREFIX = "caveviewer.cache-rebuild"
 
@@ -211,6 +218,8 @@ class MapLibraryWorkflow:
         cache_rebuild_controller: CacheRebuildJobController | None = None,
         splash_is_foreground: Callable[[], bool] | None = None,
         notification_sender: Callable[..., bool] = send_desktop_notification,
+        cave_metadata_catalog: CaveMetadataCatalog | None = None,
+        show_cave_metadata: ShowCaveMetadataCallback | None = None,
     ) -> None:
         self.root = root
         self.controller = controller
@@ -253,6 +262,8 @@ class MapLibraryWorkflow:
         )
         self.splash_is_foreground = splash_is_foreground or (lambda: True)
         self.notification_sender = notification_sender
+        self.cave_metadata_catalog = cave_metadata_catalog
+        self.show_cave_metadata = show_cave_metadata
         self._active_cache_rebuild: _ActiveCacheRebuild | None = None
         self._cache_rebuild_after_id = None
         self.recent_map_paths: list[str] = []
@@ -406,10 +417,24 @@ class MapLibraryWorkflow:
     def add_recent_row(self, path: str) -> None:
         """Append one recent-map row and wire its management actions."""
         entry = recent_map_entry(path)
+        metadata_match = self.cave_metadata_match(entry.title)
+        if metadata_match is not None:
+            entry = replace(entry, detail=metadata_match.cave.library_detail)
         title = entry.title
 
-        def menu_actions(row_widgets, path=path, title=title):
+        def menu_actions(
+            row_widgets,
+            path=path,
+            title=title,
+            metadata_match=metadata_match,
+        ):
             actions = []
+            metadata_action = None
+            if metadata_match is not None and self.show_cave_metadata is not None:
+                metadata_action = (
+                    "About cave",
+                    lambda cave=metadata_match.cave: self.show_cave_metadata(cave),
+                )
             if self._guided_dive_action_available(path):
                 actions.append(
                     (
@@ -438,6 +463,8 @@ class MapLibraryWorkflow:
                         row_widgets,
                     )
                 )
+            if metadata_action is not None:
+                actions.append(metadata_action)
             return tuple(actions)
 
         self.panel.add_recent_row(
@@ -450,17 +477,28 @@ class MapLibraryWorkflow:
         """Append one standard-library row and wire its workflow actions."""
         downloaded = self.is_downloaded(self.map_library_root_dir, library_map)
         result_path = self.existing_path(self.map_library_root_dir, library_map)
-        row = self.controller.row(
+        row = self.standard_library_row(
             library_map,
             downloaded=downloaded,
             result_path=result_path if downloaded else None,
         )
 
         def menu_actions(row_widgets, library_map=library_map):
+            actions = []
+            metadata_match = self.cave_metadata_match_for_library_map(
+                self.controller.resolve_catalog_entry(library_map)
+            )
+            metadata_action = None
+            if metadata_match is not None and self.show_cave_metadata is not None:
+                metadata_action = (
+                    "About cave",
+                    lambda cave=metadata_match.cave: self.show_cave_metadata(cave),
+                )
             map_path = self.downloaded_library_map_path(library_map)
             if map_path is None:
-                return ()
-            actions = []
+                if metadata_action is not None:
+                    actions.append(metadata_action)
+                return tuple(actions)
             if self._guided_dive_action_available(map_path):
                 actions.append(
                     (
@@ -498,6 +536,8 @@ class MapLibraryWorkflow:
                         row_widgets,
                     )
                 )
+            if metadata_action is not None:
+                actions.append(metadata_action)
             return tuple(actions)
 
         self.panel.add_standard_row(
@@ -1152,9 +1192,8 @@ class MapLibraryWorkflow:
             downloaded=downloaded,
             result_path=result_path,
         )
-        resolved_map = self.controller.resolve_catalog_entry(library_map)
-        row = self.controller.row(
-            resolved_map,
+        row = self.standard_library_row(
+            library_map,
             downloaded=downloaded,
             result_path=result_path if downloaded else None,
         )
@@ -1164,6 +1203,60 @@ class MapLibraryWorkflow:
         )
         self.set_row_metadata(library_map, row.detail)
         self.set_standard_action(library_map, row)
+
+    def cave_metadata_match(self, title: str) -> CaveMetadataMatch | None:
+        """Return one safe metadata association for a visible map title."""
+        catalog = self.cave_metadata_catalog
+        if catalog is None:
+            return None
+        try:
+            return catalog.match(title)
+        except Exception as exc:
+            self.logger.warning("Could not match cave metadata for %s: %s", title, exc)
+            return None
+
+    def cave_metadata_match_for_library_map(
+        self,
+        library_map,
+    ) -> CaveMetadataMatch | None:
+        """Prefer a source-supplied stable cave id over name matching."""
+        catalog = self.cave_metadata_catalog
+        if catalog is None:
+            return None
+        title = getattr(library_map, "display_name", "")
+        try:
+            return catalog.match(
+                title,
+                cave_metadata_id=getattr(library_map, "cave_metadata_id", None),
+            )
+        except Exception as exc:
+            self.logger.warning("Could not match cave metadata for %s: %s", title, exc)
+            return None
+
+    def standard_library_row(
+        self,
+        library_map,
+        *,
+        downloaded: bool,
+        enabled: bool = True,
+        action_text: str | None = None,
+        result_path: str | None = None,
+    ) -> StandardLibraryMapRow:
+        """Build a standard row while restoring its stable cave subtitle."""
+        resolved_map = self.controller.resolve_catalog_entry(library_map)
+        metadata_match = self.cave_metadata_match_for_library_map(resolved_map)
+        return self.controller.row(
+            resolved_map,
+            downloaded=downloaded,
+            enabled=enabled,
+            action_text=action_text,
+            result_path=result_path,
+            cave_metadata_detail=(
+                metadata_match.cave.library_detail
+                if metadata_match is not None
+                else None
+            ),
+        )
 
     def downloaded_library_map_path(self, library_map) -> str | None:
         """Return the known downloaded path for a standard-library map."""
@@ -1211,6 +1304,20 @@ class MapLibraryWorkflow:
             error=error,
         )
 
+    def show_standard_row_status(
+        self,
+        library_map,
+        text: str,
+        *,
+        error: bool = False,
+    ) -> None:
+        """Show short-lived operational feedback over a stable row subtitle."""
+        self.panel.show_standard_row_status(
+            self.controller.map_key(library_map),
+            text,
+            error=error,
+        )
+
     def set_standard_action(self, library_map, row) -> None:
         """Apply a row model's primary action to the standard-library panel."""
         if row.downloaded:
@@ -1246,7 +1353,7 @@ class MapLibraryWorkflow:
                 self.map_library_root_dir,
                 library_map,
             )
-            row = self.controller.row(
+            row = self.standard_library_row(
                 library_map,
                 downloaded=downloaded,
                 enabled=enabled,
@@ -1289,7 +1396,7 @@ class MapLibraryWorkflow:
             self.clear_active_download(library_map)
             return
         self.reset_progress(library_map)
-        row = self.controller.row(
+        row = self.standard_library_row(
             library_map,
             downloaded=True,
             result_path=result_path,
@@ -1304,18 +1411,19 @@ class MapLibraryWorkflow:
             return
         self.reset_progress(library_map)
         if isinstance(error, self.download_cancelled_type):
-            row = self.controller.row(library_map, downloaded=False)
+            row = self.standard_library_row(library_map, downloaded=False)
             self.set_row_metadata(library_map, row.detail)
             self.set_standard_action(library_map, row)
             self.clear_active_download(library_map)
             return
-        self.set_row_metadata(library_map, "Download failed", error=True)
-        row = self.controller.row(
+        row = self.standard_library_row(
             library_map,
             downloaded=False,
             action_text="Retry",
         )
+        self.set_row_metadata(library_map, row.detail)
         self.set_standard_action(library_map, row)
+        self.show_standard_row_status(library_map, "Download failed", error=True)
         self.clear_active_download(library_map)
         self._show_error(
             f"Couldn't download {library_map.display_name}. "
@@ -1459,13 +1567,14 @@ class MapLibraryWorkflow:
             )
         except RuntimeError as exc:
             self.reset_progress(library_map)
-            self.set_row_metadata(library_map, "Download failed", error=True)
-            row = self.controller.row(
+            row = self.standard_library_row(
                 library_map,
                 downloaded=False,
                 action_text="Retry",
             )
+            self.set_row_metadata(library_map, row.detail)
             self.set_standard_action(library_map, row)
+            self.show_standard_row_status(library_map, "Download failed", error=True)
             self.clear_active_download(library_map)
             self._show_error(
                 f"Couldn't start the {library_map.display_name} download: {exc}",
@@ -1478,17 +1587,18 @@ class MapLibraryWorkflow:
 
     def handle_download_info_unavailable(self, library_map) -> None:
         """Put a row into retry state when catalog details are unavailable."""
-        self.set_row_metadata(
-            library_map,
-            "Download info unavailable",
-            error=True,
-        )
-        row = self.controller.row(
+        row = self.standard_library_row(
             library_map,
             downloaded=False,
             action_text="Retry",
         )
+        self.set_row_metadata(library_map, row.detail)
         self.set_standard_action(library_map, row)
+        self.show_standard_row_status(
+            library_map,
+            "Download info unavailable",
+            error=True,
+        )
         self.set_non_active_actions_enabled(library_map, True)
         self._show_error(
             "Couldn't load download info. Check your connection and retry.",
@@ -1784,7 +1894,7 @@ class MapLibraryWorkflow:
             )
             return
         self.set_row_metadata(library_map, "Preparing download…")
-        row = self.controller.row(
+        row = self.standard_library_row(
             library_map,
             downloaded=False,
             enabled=False,

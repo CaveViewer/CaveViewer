@@ -20,6 +20,7 @@ from caveviewer.gui.cache_rebuild_controller import (
     CacheRebuildStarted,
     CacheRebuildSucceeded,
 )
+from caveviewer.gui.cave_metadata import load_bundled_cave_metadata_catalog
 from caveviewer.gui.features import (
     FeatureDecision,
     FeatureId,
@@ -194,6 +195,10 @@ class _FakePanel:
         self.status = (row_widgets, text, error)
         return True
 
+    def show_standard_row_status(self, key, text: str, *, error: bool = False) -> bool:
+        self.standard_status = (key, text, error)
+        return True
+
     def remove_recent_row(self, key: str) -> None:
         self.removed_recent_key = key
         self.recent_rows.pop(key, None)
@@ -285,6 +290,7 @@ def _library_map(
     download_url: str | None = "https://example.invalid/test.zip",
     size_bytes: int | None = None,
     catalog_id: str | None = None,
+    cave_metadata_id: str | None = None,
 ):
     return SimpleNamespace(
         display_name=display_name,
@@ -292,6 +298,7 @@ def _library_map(
         download_url=download_url,
         size_bytes=size_bytes,
         catalog_id=catalog_id,
+        cave_metadata_id=cave_metadata_id,
     )
 
 
@@ -323,6 +330,8 @@ def _workflow(
     managed_installs=None,
     is_app_supplied_path=None,
     set_managed_install_former=None,
+    cave_metadata_catalog=None,
+    show_cave_metadata=None,
 ):
     root = _FakeRoot()
     panel = _FakePanel()
@@ -388,6 +397,8 @@ def _workflow(
         notification_sender=(
             notification_sender or (lambda *_args, **_kwargs: True)
         ),
+        cave_metadata_catalog=cave_metadata_catalog,
+        show_cave_metadata=show_cave_metadata,
     )
     return SimpleNamespace(
         workflow=workflow,
@@ -531,6 +542,104 @@ def test_populate_panel_excludes_app_managed_paths_from_recent_rows():
 
     assert state.opened == []
     assert "still managed by Map Library" in state.feedback[-1][0]
+
+
+def test_standard_library_metadata_uses_stable_id_and_offers_about_cave():
+    library_map = _library_map(
+        display_name="Devils Eye",
+        catalog_id="devils-eye",
+        cave_metadata_id="us-fl-devils-spring-system",
+    )
+    shown_caves = []
+    state = _workflow(
+        [library_map],
+        is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: "/maps/Devils Eye",
+        cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
+        show_cave_metadata=shown_caves.append,
+    )
+
+    state.workflow.add_standard_row(library_map)
+    row = state.panel.standard_rows[_standard_key("devils-eye")]
+    actions = state.panel.standard_menu_factories[_standard_key("devils-eye")](
+        SimpleNamespace(row_shell=object())
+    )
+
+    assert row.detail == "Florida, United States · Underwater cave"
+    assert [label for label, _command in actions] == [
+        "Remove map files",
+        "About cave",
+    ]
+    actions[-1][1]()
+    assert [cave.id for cave in shown_caves] == ["us-fl-devils-spring-system"]
+
+
+def test_recent_map_metadata_uses_the_same_safe_match_and_about_action():
+    shown_caves = []
+    state = _workflow(
+        [],
+        cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
+        show_cave_metadata=shown_caves.append,
+    )
+
+    state.workflow.add_recent_row("/maps/Peacock Springs Cave System")
+    entry, _open_map, menu_factory = state.panel.recent_row
+    actions = menu_factory(SimpleNamespace(row_shell=object()))
+
+    assert entry.detail == "Florida, United States · Underwater cave"
+    assert [label for label, _command in actions] == [
+        "Remove from this list",
+        "About cave",
+    ]
+    actions[-1][1]()
+    assert [cave.id for cave in shown_caves] == ["us-fl-peacock-springs"]
+
+
+def test_download_completion_restores_cave_metadata_after_progress_status():
+    library_map = _library_map(
+        display_name="Devils Eye",
+        catalog_id="devils-eye",
+        cave_metadata_id="us-fl-devils-spring-system",
+    )
+    state = _workflow(
+        [library_map],
+        cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
+    )
+    state.workflow.add_standard_row(library_map)
+    state.workflow.set_row_metadata(library_map, "Downloading…")
+
+    state.workflow.finish_download_success(library_map, "/library/Devils Eye")
+
+    assert state.panel.metadata[_standard_key("devils-eye")] == (
+        "Florida, United States · Underwater cave",
+        False,
+    )
+    assert state.panel.standard_actions[_standard_key("devils-eye")][0] == "Open"
+
+
+def test_download_failure_returns_to_cave_metadata_after_error_feedback():
+    library_map = _library_map(
+        display_name="Devils Eye",
+        catalog_id="devils-eye",
+        cave_metadata_id="us-fl-devils-spring-system",
+    )
+    state = _workflow(
+        [library_map],
+        cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
+    )
+    state.workflow.add_standard_row(library_map)
+
+    state.workflow.finish_download_failure(library_map, RuntimeError("offline"))
+
+    assert state.panel.metadata[_standard_key("devils-eye")] == (
+        "Florida, United States · Underwater cave",
+        False,
+    )
+    assert state.panel.standard_status == (
+        _standard_key("devils-eye"),
+        "Download failed",
+        True,
+    )
 
 
 def test_map_library_root_change_refreshes_standard_rows():
@@ -1293,7 +1402,9 @@ def test_unavailable_catalog_details_show_retry_state():
     state.workflow.prepare_catalog_for_download(pending_map)
     state.workflow.poll_catalog_fetch()
 
-    assert state.panel.metadata[_standard_key("Test Cave")] == (
+    assert state.panel.metadata[_standard_key("Test Cave")] == ("", False)
+    assert state.panel.standard_status == (
+        _standard_key("Test Cave"),
         "Download info unavailable",
         True,
     )

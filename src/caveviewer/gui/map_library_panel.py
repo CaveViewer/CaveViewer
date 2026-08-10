@@ -6,6 +6,8 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from caveviewer.gui.tk_scrolling import vertical_scroll_units
+
 
 @dataclass(frozen=True)
 class MapLibraryMenuAction:
@@ -62,9 +64,10 @@ class MapLibraryPanelStyle:
     title_color: str
     former_map_title_color: str
     instruction_color: str
+    title_font: tuple
+    body_font: tuple
+    supporting_font: tuple
     section_font: tuple
-    small_font: tuple
-    metadata_font: tuple
     button_bg: str
     button_fg: str
     button_hover_bg: str
@@ -201,7 +204,7 @@ class MapLibraryPanel:
         self._scroll_hint = tk.Label(
             panel,
             text="Scroll to browse more maps ↓",
-            font=style.small_font,
+            font=style.supporting_font,
             fg=style.metadata_color,
             bg=style.panel_color,
             anchor="center",
@@ -455,6 +458,20 @@ class MapLibraryPanel:
             restore_metadata,
         )
         return True
+
+    def show_standard_row_status(
+        self,
+        key: object,
+        text: str,
+        *,
+        error: bool = False,
+    ) -> bool:
+        """Temporarily replace one standard row's stable metadata text."""
+        return self.show_row_status(
+            self.standard_rows.get(key),
+            text,
+            error=error,
+        )
 
     def set_standard_row_action(
         self,
@@ -718,7 +735,7 @@ class MapLibraryPanel:
             text_left,
             title_y,
             text="Open a local map",
-            font=style.section_font,
+            font=style.title_font,
             fill=style.title_color,
             anchor="w",
             tags="cv_open_map_action",
@@ -727,7 +744,7 @@ class MapLibraryPanel:
             text_left,
             subtitle_y,
             text="Browse a cave map folder",
-            font=style.metadata_font,
+            font=style.supporting_font,
             fill=style.metadata_color,
             anchor="w",
             tags="cv_open_map_action",
@@ -864,7 +881,7 @@ class MapLibraryPanel:
         label = tk.Label(
             parent,
             text=text,
-            font=self._style.small_font,
+            font=self._style.supporting_font,
             fg=self._style.empty_note_color,
             bg=self._style.panel_color,
             anchor="w",
@@ -924,14 +941,21 @@ class MapLibraryPanel:
         name_label = tk.Label(
             text_column,
             text=title,
-            font=style.small_font,
+            font=style.title_font,
             fg=title_color or style.title_color,
             bg=style.panel_color,
             anchor="w",
             justify="left",
-            wraplength=self._px(250),
         )
         name_label.pack(anchor="w", fill="x")
+        text_column.bind(
+            "<Configure>",
+            lambda event, target=name_label: self._sync_row_title_wraplength(
+                target,
+                event.width,
+            ),
+            add="+",
+        )
 
         metadata_text = detail or size_text
         metadata_label = None
@@ -939,7 +963,7 @@ class MapLibraryPanel:
             metadata_label = tk.Label(
                 text_column,
                 text=metadata_text,
-                font=style.metadata_font,
+                font=style.supporting_font,
                 fg=style.metadata_color,
                 bg=style.panel_color,
                 anchor="w",
@@ -974,6 +998,22 @@ class MapLibraryPanel:
         row_holder[0] = row_widgets
         self.refresh_row_overflow(row_widgets)
         return row_widgets
+
+    def _sync_row_title_wraplength(self, title_label, available_width: int) -> None:
+        """Wrap a map title only at the width its row can really provide."""
+        if not self._widget_exists(title_label):
+            return
+        try:
+            wraplength = max(1, int(available_width))
+        except (TypeError, ValueError):
+            return
+        if getattr(title_label, "_cv_title_wraplength", None) == wraplength:
+            return
+        title_label._cv_title_wraplength = wraplength
+        title_label.configure(wraplength=wraplength)
+        # A title may gain or lose a line after a window resize. Refresh the
+        # canvas region after Tk has recalculated the row's natural height.
+        self.sync_after_row_change()
 
     def _cancel_row_status(self, metadata_label) -> None:
         after_id = getattr(metadata_label, "_cv_status_after_id", None)
@@ -1426,7 +1466,7 @@ class MapLibraryPanel:
             label = tk.Label(
                 tooltip,
                 text=text,
-                font=self._style.small_font,
+                font=self._style.supporting_font,
                 bg=self._style.menu_bg,
                 fg=self._style.menu_text,
                 padx=self._px(8),
@@ -1630,7 +1670,7 @@ class MapLibraryPanel:
             item = tk.Label(
                 frame,
                 text=display_text,
-                font=style.small_font,
+                font=style.body_font,
                 bg=style.menu_bg,
                 fg=style.menu_text if enabled else style.disabled_button_fg,
                 padx=self._px(12),
@@ -1747,13 +1787,9 @@ class MapLibraryPanel:
     def _scroll_content(self, event):
         if self._content_canvas is None or not self._content_overflows:
             return None
-        delta = getattr(event, "delta", 0)
-        if delta:
-            self._content_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
-        elif getattr(event, "num", None) == 4:
-            self._content_canvas.yview_scroll(-1, "units")
-        elif getattr(event, "num", None) == 5:
-            self._content_canvas.yview_scroll(1, "units")
+        units = vertical_scroll_units(event)
+        if units is not None:
+            self._content_canvas.yview_scroll(units, "units")
         return "break"
 
     def _bind_mousewheel(self, widget) -> None:
