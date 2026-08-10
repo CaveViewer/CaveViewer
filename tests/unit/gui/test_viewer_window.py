@@ -535,6 +535,7 @@ def test_manual_trace_countdown_uses_the_shared_countdown_overlay():
         controller=controller,
         start_number=3,
         title="Prepare to plan a dive",
+        note="Press Ctrl+T again to cancel.",
     )
 
     assert calls[0] == ("scrim", (800, 600))
@@ -547,12 +548,13 @@ def test_manual_trace_countdown_uses_the_shared_countdown_overlay():
             "number": 3,
             "progress": pytest.approx(0.025),
             "fixed_text_scale": 1.28,
-            "title": "Prepare to plan a dive",
+            "stage": "Prepare to plan a dive",
+            "note": "Press Ctrl+T again to cancel.",
         },
     )
 
 
-def test_capture_status_uses_the_import_label_layout(monkeypatch):
+def test_capture_status_uses_import_style_message_note_layout(monkeypatch):
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.wnd = SimpleNamespace(size=(800, 600))
     window.UI_TEXT_SCALE = 1.28
@@ -587,7 +589,7 @@ def test_capture_status_uses_the_import_label_layout(monkeypatch):
                 "progress": 1.0,
                 "pixel_size": 5.2,
                 "fixed_text_scale": 1.28,
-                "title": "Video saved",
+                "stage": "Video saved",
                 "note": "Opening its location…",
             },
         ),
@@ -601,6 +603,7 @@ def test_saving_capture_status_uses_an_indeterminate_ring(monkeypatch):
     controller = window._ensure_recording_controller()
     controller.show_status(
         "Saving dive trace…",
+        detail="Finishing the file. Keep CaveViewer open.",
         kind="info",
         duration=None,
         now=10.0,
@@ -623,8 +626,8 @@ def test_saving_capture_status_uses_an_indeterminate_ring(monkeypatch):
             "progress": None,
             "pixel_size": 3.8,
             "fixed_text_scale": 1.28,
-            "title": "Saving dive trace…",
-            "note": None,
+            "stage": "Saving dive trace…",
+            "note": "Finishing the file. Keep CaveViewer open.",
         }
     ]
 
@@ -2233,7 +2236,7 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     window._stop_recording(show_message=True, reveal_on_success=True)
 
     assert window._recording_status_message == "Saving video…"
-    assert window._recording_status_detail is None
+    assert window._recording_status_detail == "Finishing the file. Keep CaveViewer open."
     assert window._recording_stop_thread is not None
     window._recording_stop_thread.join(timeout=1.0)
     assert not window._recording_stop_thread.is_alive()

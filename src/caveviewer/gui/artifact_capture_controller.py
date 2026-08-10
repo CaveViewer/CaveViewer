@@ -50,7 +50,7 @@ class ArtifactCapturePresentationController:
         """Return a persistent status while a writer finalizes an artifact."""
         return ArtifactCaptureStatus(
             message=f"Saving {artifact_name.lower()}…",
-            detail=None,
+            detail="Finishing the file. Keep CaveViewer open.",
             kind="info",
             duration=None,
         )

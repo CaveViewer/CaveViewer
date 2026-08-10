@@ -2649,8 +2649,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         controller: RecordingStateController | ManualDiveTraceStateController,
         start_number: int,
         title: str,
+        note: str,
     ) -> None:
-        """Render the shared titled countdown used before capture begins."""
+        """Render the shared import-style countdown used before capture begins."""
         display = controller.countdown_display(
             now=now,
             start_number=start_number,
@@ -2663,8 +2664,13 @@ class CaveViewerWindow(mglw.WindowConfig):
             number=display.number,
             progress=display.progress,
             fixed_text_scale=self.UI_TEXT_SCALE,
-            title=title,
+            stage=title,
+            note=note,
         )
+
+    def _countdown_cancel_note(self, shortcut_key: str) -> str:
+        """Describe the active platform shortcut while a capture is armed."""
+        return f"Press {self._primary_shortcut_label()}+{shortcut_key} again to cancel."
 
     def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
         """Print a one-time texture summary to console on map load."""
@@ -5075,7 +5081,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             progress=None if kind == "info" else 1.0,
             pixel_size=symbol_size,
             fixed_text_scale=self.UI_TEXT_SCALE,
-            title=message,
+            stage=message,
             note=detail,
         )
 
@@ -5534,6 +5540,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     controller=self._ensure_recording_controller(),
                     start_number=self.RECORDING_COUNTDOWN_START_NUMBER,
                     title=self.RECORDING_COUNTDOWN_TITLE,
+                    note=self._countdown_cancel_note("R"),
                 )
             else:
                 recording_read_ms = self._recording_update_after_scene(
@@ -5550,6 +5557,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 controller=self._ensure_manual_dive_trace_controller(),
                 start_number=self.MANUAL_DIVE_TRACE_COUNTDOWN_START_NUMBER,
                 title=self.MANUAL_DIVE_TRACE_COUNTDOWN_TITLE,
+                note=self._countdown_cancel_note("T"),
             )
             overlay_ms = 0.0
         else:

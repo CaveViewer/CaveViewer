@@ -1,4 +1,4 @@
-"""OpenGL progress panel for first-time map imports.
+"""OpenGL progress and capture-feedback presentation for the viewer.
 
 A simple full-screen progress panel, drawn while a newly-opened map is
 being imported and chunked for the FIRST time (no cache yet) -- the same
@@ -9,7 +9,9 @@ _handle_open_button_click).
 The actual import work (OBJ/GLB parsing and cache construction) runs in a
 spawned child process. The viewer process keeps rendering this panel and
 drains progress events sent by that child, so resize/repaint/window-manager
-events stay responsive while the cache is built.
+events stay responsive while the cache is built. The same render-thread-owned
+component also presents the short capture messages beneath their indicators
+before and after video and dive-trace capture.
 """
 
 from __future__ import annotations
@@ -345,8 +347,10 @@ class ImportProgressPanel:
         alpha: float = 1.0,
         fixed_text_scale: float | None = None,
         title: str | None = None,
+        stage: str | None = None,
+        note: str | None = None,
     ) -> None:
-        """Render the loading ring with an optional title and countdown number."""
+        """Render the loading ring with import-style labels and a countdown."""
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
@@ -376,6 +380,8 @@ class ImportProgressPanel:
             center_y=center_y,
             window_width=w,
             title=title,
+            stage=stage,
+            note=note,
             alpha=alpha,
             fixed_text_scale=fixed_text_scale,
         )
@@ -504,7 +510,6 @@ class ImportProgressPanel:
         fixed_text_scale: float | None = None,
     ) -> None:
         """Append labels using the shared title, stage, and note hierarchy."""
-
         def add_centered_text(
             text: str | None,
             y: float,

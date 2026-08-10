@@ -18,6 +18,7 @@ def test_save_feedback_is_consistent_and_reveals_after_confirmation():
     )
 
     assert saving.message == "Saving video…"
+    assert saving.detail == "Finishing the file. Keep CaveViewer open."
     assert saving.duration is None
     assert saved.message == "Dive trace saved"
     assert saved.detail == "Opening its location…"
