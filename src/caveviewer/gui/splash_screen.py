@@ -46,6 +46,14 @@ from caveviewer.gui.dpi_utils import (
     tk_display_scale,
 )
 from caveviewer.gui.cache_rebuild_controller import CacheRebuildJobController
+from caveviewer.gui.cave_metadata import (
+    CaveMetadata,
+    load_bundled_cave_metadata_catalog,
+)
+from caveviewer.gui.cave_metadata_panel import (
+    CaveMetadataPanel,
+    CaveMetadataPanelStyle,
+)
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.map_library_panel import (
@@ -80,6 +88,7 @@ from caveviewer.gui.splash_session import SplashSession
 from caveviewer.gui.tk_feedback import show_feedback
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 from caveviewer.gui.update_manager import (
     UpdateManager,
     UpdateSnapshot,
@@ -171,33 +180,23 @@ _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 _BORDER_COLOR = DARK_THEME.border
-_NAVIGATION_ACTIVE_BG = DARK_THEME.secondary_button
-_NAVIGATION_HOVER_BG = DARK_THEME.secondary_button_hover
+# Navigation uses a location marker rather than a button treatment.  The
+# background shift stays deliberately quiet; the amber rail and stronger label
+# carry the selected-state meaning.
+_NAVIGATION_ACTIVE_BG = DARK_THEME.panel
+_NAVIGATION_HOVER_BG = DARK_THEME.entry_background
+_NAVIGATION_ACTIVE_INDICATOR = DARK_THEME.primary_button
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
+_UPDATE_READY_ACTION_DELAY_MS = 3_000
 
-
-def _scaled_tk_font_size(points: float) -> int:
-    """Return a runtime-scaled Tk point size for fixed splash font tokens."""
-    return max(1, int(round(float(points) * _TK_TEXT_SCALE)))
-
-
-def _tk_font(points: float, *styles: str) -> tuple:
-    """Return a Tk font tuple using the resolved family and runtime text scale."""
-    return (_UI_FONT_FAMILY, _scaled_tk_font_size(points), *styles)
-
-
-_TITLE_FONT = _tk_font(24, "bold")
-_NAVIGATION_BRAND_FONT = _tk_font(14, "bold")
-_VERSION_FONT = _tk_font(12)
-_BODY_FONT = _tk_font(12)
-_SMALL_FONT = _tk_font(10)
-_LIBRARY_SECTION_FONT = _tk_font(10, "bold")
-_LIBRARY_METADATA_FONT = _tk_font(9)
-_UPDATE_ACTION_FONT = _tk_font(11, "bold")
+_TYPOGRAPHY: TkTypography = create_tk_typography(
+    _UI_FONT_FAMILY,
+    text_scale=_TK_TEXT_SCALE,
+)
 _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
 _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
 _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
@@ -206,6 +205,12 @@ _CREDITS_TEXT = (
     "BottomLine Projects Scientific Dive Team.\n"
     "Engineering and design by magic mr_v.\n\n"
     "Licensed under the GNU General Public License v3.0.\n")
+_CAVEVIEWER_WEBSITE_URL = "https://www.caveviewer.com"
+_BOTTOMLINE_PROJECTS_WEBSITE_URL = "https://www.bottomlineprojects.com"
+_ABOUT_WEBSITE_LINKS = (
+    ("www.caveviewer.com", _CAVEVIEWER_WEBSITE_URL),
+    ("www.bottomlineprojects.com", _BOTTOMLINE_PROJECTS_WEBSITE_URL),
+)
 _LIBRARY_PANEL_BORDER_COLOR = "#1e2028"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
 _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
@@ -289,19 +294,13 @@ def _select_tk_font_family(
 
 
 def _refresh_tk_font_tokens() -> None:
-    """Rebuild module font tuples after selecting family or text scaling."""
-    global _TITLE_FONT, _NAVIGATION_BRAND_FONT, _VERSION_FONT
-    global _BODY_FONT, _SMALL_FONT
-    global _LIBRARY_SECTION_FONT, _LIBRARY_METADATA_FONT, _UPDATE_ACTION_FONT
+    """Rebuild semantic Tk typography after selecting family or text scaling."""
+    global _TYPOGRAPHY
 
-    _TITLE_FONT = _tk_font(24, "bold")
-    _NAVIGATION_BRAND_FONT = _tk_font(14, "bold")
-    _VERSION_FONT = _tk_font(12)
-    _BODY_FONT = _tk_font(12)
-    _SMALL_FONT = _tk_font(10)
-    _LIBRARY_SECTION_FONT = _tk_font(10, "bold")
-    _LIBRARY_METADATA_FONT = _tk_font(9)
-    _UPDATE_ACTION_FONT = _tk_font(11, "bold")
+    _TYPOGRAPHY = create_tk_typography(
+        _UI_FONT_FAMILY,
+        text_scale=_TK_TEXT_SCALE,
+    )
 
 
 def _activate_presentation_profile(profile: PresentationProfile) -> None:
@@ -382,9 +381,10 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         title_color=_TITLE_COLOR,
         former_map_title_color=_LIBRARY_FORMER_MAP_TITLE_COLOR,
         instruction_color=_INSTRUCTION_COLOR,
-        section_font=_LIBRARY_SECTION_FONT,
-        small_font=_SMALL_FONT,
-        metadata_font=_LIBRARY_METADATA_FONT,
+        title_font=_TYPOGRAPHY.body_strong,
+        body_font=_TYPOGRAPHY.body,
+        supporting_font=_TYPOGRAPHY.supporting,
+        section_font=_TYPOGRAPHY.section,
         button_bg=_PANEL_COLOR,
         button_fg=_BUTTON_BG,
         button_hover_bg=DARK_THEME.secondary_button,
@@ -416,6 +416,26 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
     )
 
 
+def _cave_metadata_panel_style() -> CaveMetadataPanelStyle:
+    """Return the splash-owned style tokens for in-panel cave details."""
+    return CaveMetadataPanelStyle(
+        background_color=_BG_COLOR,
+        title_color=_TITLE_COLOR,
+        subtitle_color=_SUBTITLE_COLOR,
+        section_color=_LIBRARY_METADATA_COLOR,
+        body_color=_SUBTITLE_COLOR,
+        divider_color=_LIBRARY_PANEL_BORDER_COLOR,
+        link_color=_BUTTON_BG,
+        link_hover_color=DARK_THEME.primary_button_hover,
+        title_font=_TYPOGRAPHY.display,
+        subtitle_font=_TYPOGRAPHY.body,
+        section_font=_TYPOGRAPHY.section,
+        body_strong_font=_TYPOGRAPHY.body_strong,
+        body_font=_TYPOGRAPHY.body,
+        small_font=_TYPOGRAPHY.supporting,
+    )
+
+
 def _build_themed_about_content(
     parent,
     *,
@@ -423,6 +443,7 @@ def _build_themed_about_content(
     version: str,
     px,
     on_close: Callable[[], None],
+    on_open_website: Callable[[str], None] | None = None,
     center_vertically: bool = False,
     show_close: bool = True,
 ):
@@ -472,14 +493,14 @@ def _build_themed_about_content(
     tk.Label(
         content,
         text=program_name,
-        font=_TITLE_FONT,
+        font=_TYPOGRAPHY.heading,
         fg=_TITLE_COLOR,
         bg=_BG_COLOR,
     ).pack()
     tk.Label(
         content,
         text=f"Version {version}",
-        font=_VERSION_FONT,
+        font=_TYPOGRAPHY.supporting,
         fg=_SUBTITLE_COLOR,
         bg=_BG_COLOR,
     ).pack(pady=(px(2), px(18)))
@@ -487,19 +508,41 @@ def _build_themed_about_content(
     tk.Label(
         content,
         text=_CREDITS_TEXT.strip(),
-        font=_SMALL_FONT,
+        font=_TYPOGRAPHY.supporting,
         fg=_SUBTITLE_COLOR,
         bg=_BG_COLOR,
         justify="center",
         wraplength=px(350),
     ).pack(fill="x")
 
+    for index, (label_text, website_url) in enumerate(_ABOUT_WEBSITE_LINKS):
+        website_label = tk.Label(
+            content,
+            text=label_text,
+            font=_TYPOGRAPHY.supporting,
+            fg=_BUTTON_BG if on_open_website is not None else _SUBTITLE_COLOR,
+            bg=_BG_COLOR,
+            cursor="hand2" if on_open_website is not None else "arrow",
+            takefocus=on_open_website is not None,
+            highlightthickness=1,
+            highlightbackground=_BG_COLOR,
+            highlightcolor=_BUTTON_BG,
+        )
+        if on_open_website is not None:
+            def open_website(_event=None, *, url=website_url):
+                on_open_website(url)
+                return "break"
+
+            for sequence in ("<Button-1>", "<Return>", "<space>"):
+                website_label.bind(sequence, open_website)
+        website_label.pack(pady=(px(12) if index == 0 else px(6), 0))
+
     close_button = content
     if show_close:
         close_button = tk.Label(
             content,
             text="Close",
-            font=_BODY_FONT,
+            font=_TYPOGRAPHY.body_strong,
             fg=DARK_THEME.primary_button_text,
             bg=_BUTTON_BG,
             cursor="hand2",
@@ -650,7 +693,7 @@ def _show_discard_preferences_dialog(
     tk.Label(
         content,
         text="Discard unsaved changes?",
-        font=_BODY_FONT,
+        font=_TYPOGRAPHY.body_strong,
         fg=_TITLE_COLOR,
         bg=_BG_COLOR,
         anchor="w",
@@ -661,7 +704,7 @@ def _show_discard_preferences_dialog(
             "Your changes to Preferences have not been applied. "
             "Discard them and return to the Map Library?"
         ),
-        font=_SMALL_FONT,
+        font=_TYPOGRAPHY.body,
         fg=_SUBTITLE_COLOR,
         bg=_BG_COLOR,
         justify="left",
@@ -700,7 +743,7 @@ def _show_discard_preferences_dialog(
         button = tk.Label(
             button_row,
             text=text,
-            font=_SMALL_FONT,
+            font=_TYPOGRAPHY.body_strong,
             fg=DARK_THEME.primary_button_text if primary else _TITLE_COLOR,
             bg=normal_bg,
             cursor="hand2",
@@ -772,20 +815,13 @@ class _UpdatePresentation:
     action_text: str = ""
     action: _UpdateAction | None = None
     status_action: _UpdateAction | None = None
+    action_replaces_status_after_delay: bool = False
     progress_visible: bool = False
     progress_fraction: float = 0.0
     error: bool = False
 
 
-def _display_version(version: str | None) -> str:
-    text = (version or "").strip()
-    return text[1:] if text.lower().startswith("v") else text
-
-
-def _update_presentation(
-    snapshot: UpdateSnapshot,
-    reveal_action_label: str,
-) -> _UpdatePresentation:
+def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     """Map manager states to the exact compact labels rendered by the splash."""
     if (
         snapshot.automatic_update is not None
@@ -793,10 +829,8 @@ def _update_presentation(
     ):
         return _UpdatePresentation(status_text=snapshot.automatic_update.explanation)
     if snapshot.state == UpdateState.AVAILABLE:
-        version = _display_version(snapshot.available_version)
         return _UpdatePresentation(
-            status_text=f"Update {version} available",
-            action_text="Download",
+            action_text="Download update",
             action=_UpdateAction.DOWNLOAD,
         )
     if snapshot.state == UpdateState.DOWNLOADING:
@@ -821,8 +855,9 @@ def _update_presentation(
             )
         return _UpdatePresentation(
             status_text="Update ready",
-            action_text=reveal_action_label,
+            action_text="Show update",
             action=_UpdateAction.REVEAL,
+            action_replaces_status_after_delay=True,
         )
     if snapshot.state == UpdateState.FAILED:
         return _UpdatePresentation(
@@ -832,6 +867,24 @@ def _update_presentation(
             error=True,
         )
     return _UpdatePresentation()
+
+
+def _update_status_label(
+    presentation: _UpdatePresentation,
+    *,
+    show_delayed_action: bool = False,
+) -> tuple[str, str, _UpdateAction | None]:
+    """Return the one status label's current text, color, and action."""
+    if (
+        presentation.action_replaces_status_after_delay
+        and show_delayed_action
+    ):
+        return presentation.action_text, _BUTTON_BG, presentation.action
+    return (
+        presentation.status_text,
+        "#ff9b90" if presentation.error else _INSTRUCTION_COLOR,
+        presentation.status_action,
+    )
 
 
 def show_splash_screen(
@@ -929,76 +982,19 @@ def show_splash_screen(
     map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     about_surface = tk.Frame(right_frame, bg=_BG_COLOR)
-
-    # -- compact brand masthead ---------------------------------------------------
-    brand_frame = tk.Frame(left_frame, bg=_BG_COLOR)
-    brand_frame.pack(fill="x", padx=px(14), pady=(px(18), px(10)))
-
-    logo_photo = None
-    if _LOGO_PATH:
-        try:
-            from PIL import Image, ImageTk
-
-            logo_img = Image.open(_LOGO_PATH)
-            max_logo_dim = px(56)
-            scale = min(
-                max_logo_dim / logo_img.width,
-                max_logo_dim / logo_img.height,
-                1.0,
-            )
-            if scale < 1.0:
-                new_size = (
-                    int(logo_img.width * scale),
-                    int(logo_img.height * scale),
-                )
-                logo_img = logo_img.resize(new_size, Image.LANCZOS)
-            logo_photo = ImageTk.PhotoImage(logo_img, master=root)
-        except Exception as exc:
-            _LOG.warning(
-                "Could not load splash screen logo (%s); continuing without it.",
-                exc,
-            )
-    else:
-        _LOG.warning("Splash screen logo asset not found; continuing without it.")
-
-    if logo_photo is not None:
-        logo_label = tk.Label(
-            brand_frame,
-            image=logo_photo,
-            bg=_BG_COLOR,
-            borderwidth=0,
-        )
-        logo_label.image = logo_photo  # keep a reference so it isn't garbage-collected
-        logo_label.pack(side="left", padx=(0, px(10)))
-
-    brand_text = tk.Frame(brand_frame, bg=_BG_COLOR)
-    brand_text.pack(side="left", fill="x", expand=True)
-    title_label = tk.Label(
-        brand_text,
-        text=program_name,
-        font=_NAVIGATION_BRAND_FONT,
-        fg=_TITLE_COLOR,
-        bg=_BG_COLOR,
-        anchor="w",
-    )
-    title_label.pack(anchor="w")
-
-    version_label = tk.Label(
-        brand_text,
-        text=f"Version {version}",
-        font=_VERSION_FONT,
-        fg=_SUBTITLE_COLOR,
-        bg=_BG_COLOR,
-        anchor="w",
-    )
-    version_label.pack(anchor="w", pady=(px(1), 0))
+    cave_metadata_surface = tk.Frame(right_frame, bg=_BG_COLOR)
 
     navigation_frame = tk.Frame(left_frame, bg=_BG_COLOR)
-    navigation_frame.pack(fill="x", pady=(px(8), 0))
+    navigation_frame.pack(fill="x", pady=(px(22), 0))
 
-    update_frame = tk.Frame(left_frame, bg=_BG_COLOR)
-    update_frame.pack(side="bottom", fill="x", pady=(0, px(14)))
-    update_progress_width = px(172)
+    app_status_frame = tk.Frame(left_frame, bg=_BG_COLOR)
+    app_status_frame.pack(
+        side="bottom",
+        fill="x",
+        padx=px(14),
+        pady=(0, px(14)),
+    )
+    update_progress_width = px(192)
 
     last_update_presentation: list[_UpdatePresentation | None] = [None]
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
@@ -1008,12 +1004,25 @@ def show_splash_screen(
     discard_preferences_dialog_ref: list[object | None] = [None]
     active_surface = ["map_library"]
 
-    # Status and action labels stay packed even when empty. State changes never
-    # resize the splash, and keyboard focus is enabled only for active actions.
+    # The status frame remains anchored to the lower-left rail. Its version is
+    # always visible; the update subsection is introduced only when it has a
+    # meaningful state, keeping the quiet state genuinely compact.
+    version_label = tk.Label(
+        app_status_frame,
+        text=f"Version {version}",
+        font=_TYPOGRAPHY.supporting,
+        fg=_SUBTITLE_COLOR,
+        bg=_BG_COLOR,
+        anchor="w",
+    )
+    version_label.pack(anchor="w")
+
+    update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)
+
     update_label = tk.Label(
-        update_frame,
+        update_cluster,
         text="",
-        font=_SMALL_FONT,
+        font=_TYPOGRAPHY.supporting,
         fg=_INSTRUCTION_COLOR,
         bg=_BG_COLOR,
         cursor="arrow",
@@ -1021,15 +1030,18 @@ def show_splash_screen(
         highlightthickness=1,
         highlightbackground=_BG_COLOR,
         highlightcolor=_BUTTON_BG,
-        wraplength=px(172),
-        justify="center",
+        wraplength=px(192),
+        justify="left",
+        anchor="w",
     )
-    update_label.pack(pady=(0, 2))
 
     update_action_label = tk.Label(
-        update_frame,
+        update_cluster,
         text="",
-        font=_UPDATE_ACTION_FONT,
+        # Footer actions are links to a follow-on update task, not the primary
+        # action of the active panel. Keep their hierarchy with the status
+        # text; amber color and interaction behavior provide the affordance.
+        font=_TYPOGRAPHY.supporting,
         fg=_BUTTON_BG,
         bg=_BG_COLOR,
         cursor="arrow",
@@ -1037,15 +1049,13 @@ def show_splash_screen(
         highlightthickness=1,
         highlightbackground=_BG_COLOR,
         highlightcolor=_BUTTON_BG,
-        wraplength=px(172),
-        justify="center",
+        wraplength=px(192),
+        justify="left",
+        anchor="w",
     )
-    update_action_label.pack(pady=(0, 4))
 
-    # Progress bar — always packed, always 4 px tall.  Initially its background
-    # matches the window so it is invisible; becomes visible during a download.
     update_progress_canvas = tk.Canvas(
-        update_frame,
+        update_cluster,
         width=update_progress_width,
         height=4,
         bg=_BG_COLOR,
@@ -1054,14 +1064,47 @@ def show_splash_screen(
     _update_progress_bar = update_progress_canvas.create_rectangle(
         0, 0, 0, 4, fill=_BUTTON_BG, width=0
     )
-    update_progress_canvas.pack(pady=(0, 4))
 
-    def _set_progress_bar_visible(visible: bool):
-        update_progress_canvas.config(
-            bg=DARK_THEME.entry_background if visible else _BG_COLOR
-        )
-        if not visible:
+    def _set_update_cluster_visible(visible: bool) -> None:
+        if visible:
+            if not update_cluster.winfo_manager():
+                update_cluster.pack(anchor="w", fill="x", pady=(px(10), 0))
+            return
+        update_cluster.pack_forget()
+
+    def _layout_update_cluster(presentation: _UpdatePresentation) -> None:
+        """Pack only the update controls relevant to the current state."""
+        update_label.pack_forget()
+        update_action_label.pack_forget()
+        update_progress_canvas.pack_forget()
+
+        if presentation.status_text:
+            update_label.pack(anchor="w", fill="x")
+        if (
+            presentation.action_text
+            and not presentation.action_replaces_status_after_delay
+        ):
+            update_action_label.pack(
+                anchor="w",
+                pady=(px(2) if presentation.status_text else 0, 0),
+            )
+        if presentation.progress_visible:
+            update_progress_canvas.config(bg=DARK_THEME.entry_background)
+            update_progress_canvas.pack(anchor="w", pady=(px(5), 0))
+        else:
+            update_progress_canvas.config(bg=_BG_COLOR)
             update_progress_canvas.coords(_update_progress_bar, 0, 0, 0, 4)
+
+        _set_update_cluster_visible(
+            bool(
+                presentation.status_text
+                or (
+                    presentation.action_text
+                    and not presentation.action_replaces_status_after_delay
+                )
+                or presentation.progress_visible
+            )
+        )
 
     def _set_progress(frac: float):
         clamped = max(0.0, min(1.0, float(frac)))
@@ -1095,28 +1138,43 @@ def show_splash_screen(
         label.bind("<Return>", invoke)
         label.bind("<space>", invoke)
 
+    def _show_delayed_update_action(presentation: _UpdatePresentation) -> None:
+        """Replace the completion status with its single follow-up action."""
+        if last_update_presentation[0] != presentation:
+            return
+        label_text, label_color, label_action = _update_status_label(
+            presentation,
+            show_delayed_action=True,
+        )
+        update_label.config(text=label_text, fg=label_color)
+        _bind_label_action(update_label, label_action)
+
     def _apply_update_presentation(presentation: _UpdatePresentation) -> None:
+        label_text, label_color, label_action = _update_status_label(presentation)
         update_label.config(
-            text=presentation.status_text,
-            fg="#ff9b90" if presentation.error else _INSTRUCTION_COLOR,
+            text=label_text,
+            fg=label_color,
         )
         update_action_label.config(text=presentation.action_text)
-        _bind_label_action(update_label, presentation.status_action)
+        _bind_label_action(update_label, label_action)
         _bind_label_action(update_action_label, presentation.action)
-        _set_progress_bar_visible(presentation.progress_visible)
+        _layout_update_cluster(presentation)
         _set_progress(presentation.progress_fraction)
+        if presentation.action_replaces_status_after_delay:
+            session.schedule_after(
+                root,
+                _UPDATE_READY_ACTION_DELAY_MS,
+                lambda: _show_delayed_update_action(presentation),
+            )
 
     def _refresh_update_presentation() -> None:
         if session.closing:
             return
         snapshot = update_manager.snapshot()
-        presentation = _update_presentation(
-            snapshot,
-            update_manager.reveal_action_label,
-        )
+        presentation = _update_presentation(snapshot)
         if presentation != last_update_presentation[0]:
-            _apply_update_presentation(presentation)
             last_update_presentation[0] = presentation
+            _apply_update_presentation(presentation)
         if (
             snapshot.state == UpdateState.READY
             and (
@@ -1160,7 +1218,7 @@ def show_splash_screen(
             "Pausing cache rebuild…",
             kind="info",
             duration_ms=4000,
-            font=_BODY_FONT,
+            font=_TYPOGRAPHY.body,
         )
         attempts = [0]
 
@@ -1190,7 +1248,7 @@ def show_splash_screen(
             f"Unable to open this folder: {message}",
             kind="error",
             duration_ms=9000,
-            font=_BODY_FONT,
+            font=_TYPOGRAPHY.body,
         )
 
     def on_open_map_folder() -> None:
@@ -1261,6 +1319,7 @@ def show_splash_screen(
         if active_surface[0] != "map_library":
             preferences_surface.pack_forget()
             about_surface.pack_forget()
+            cave_metadata_surface.pack_forget()
             map_library_surface.pack(fill="both", expand=True)
             active_surface[0] = "map_library"
         _set_active_navigation("Map Library")
@@ -1314,7 +1373,7 @@ def show_splash_screen(
         tk.Label(
             heading,
             text="Preferences",
-            font=_NAVIGATION_BRAND_FONT,
+            font=_TYPOGRAPHY.heading,
             fg=_TITLE_COLOR,
             bg=_PANEL_COLOR,
             anchor="w",
@@ -1327,6 +1386,7 @@ def show_splash_screen(
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
             platform_runtime=platform_runtime,
+            typography=_TYPOGRAPHY,
             on_applied=_on_preferences_applied,
             on_cancel=_show_map_library_surface,
         )
@@ -1338,6 +1398,7 @@ def show_splash_screen(
         if active_surface[0] != "preferences":
             map_library_surface.pack_forget()
             about_surface.pack_forget()
+            cave_metadata_surface.pack_forget()
             preferences_surface.pack(fill="both", expand=True)
             active_surface[0] = "preferences"
         _set_active_navigation("Preferences")
@@ -1345,6 +1406,20 @@ def show_splash_screen(
 
     def _on_preferences_click():
         _show_preferences_surface()
+
+    def _open_about_website(url: str) -> None:
+        try:
+            desktop_services.open_uri(url, parent=root)
+        except Exception as exc:
+            _LOG.warning("Could not open About website %s: %s", url, exc)
+            show_feedback(
+                root,
+                "Couldn’t open that website.",
+                kind="error",
+                duration_ms=7000,
+                font=_TYPOGRAPHY.body,
+                max_wraplength=420,
+            )
 
     def _ensure_about_surface():
         if about_surface_initialized[0]:
@@ -1355,6 +1430,7 @@ def show_splash_screen(
             version=version,
             px=px,
             on_close=_show_map_library_surface,
+            on_open_website=_open_about_website,
             center_vertically=True,
             show_close=False,
         )
@@ -1365,6 +1441,7 @@ def show_splash_screen(
         if active_surface[0] != "about":
             map_library_surface.pack_forget()
             preferences_surface.pack_forget()
+            cave_metadata_surface.pack_forget()
             about_surface.pack(fill="both", expand=True)
             active_surface[0] = "about"
         _set_active_navigation("About")
@@ -1382,14 +1459,21 @@ def show_splash_screen(
         selected: bool = False,
     ):
         """Create one keyboard-accessible action in the persistent nav rail."""
+        item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)
+        indicator = tk.Frame(
+            item_row,
+            bg=_NAVIGATION_ACTIVE_INDICATOR if selected else _BG_COLOR,
+            width=px(3),
+        )
+        indicator.pack(side="left", fill="y")
         item = tk.Label(
-            navigation_frame,
+            item_row,
             text=text,
-            font=_BODY_FONT,
+            font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body,
             fg=_TITLE_COLOR if selected else _SUBTITLE_COLOR,
             bg=_NAVIGATION_ACTIVE_BG if selected else _BG_COLOR,
             anchor="w",
-            padx=px(14),
+            padx=px(11),
             pady=px(9),
             cursor="hand2",
             takefocus=True,
@@ -1397,6 +1481,7 @@ def show_splash_screen(
             highlightbackground=_BG_COLOR,
             highlightcolor=_BUTTON_BORDER_COLOR,
         )
+        item.pack(side="left", fill="both", expand=True)
         state = {
             "selected": selected,
             "hovered": False,
@@ -1405,15 +1490,30 @@ def show_splash_screen(
 
         def refresh_visual() -> None:
             active = state["selected"] or state["hovered"] or state["focused"]
+            background = _NAVIGATION_ACTIVE_BG if state["selected"] else (
+                _NAVIGATION_HOVER_BG if active else _BG_COLOR
+            )
+            item_row.config(bg=background)
+            indicator.config(
+                bg=(
+                    _NAVIGATION_ACTIVE_INDICATOR
+                    if state["selected"]
+                    else background
+                )
+            )
             item.config(
-                bg=_NAVIGATION_ACTIVE_BG if state["selected"] else (
-                    _NAVIGATION_HOVER_BG if active else _BG_COLOR
-                ),
+                bg=background,
                 fg=(
                     _TITLE_COLOR
                     if state["selected"] or active
                     else _SUBTITLE_COLOR
                 ),
+                font=(
+                    _TYPOGRAPHY.body_strong
+                    if state["selected"]
+                    else _TYPOGRAPHY.body
+                ),
+                highlightbackground=background,
             )
 
         def set_selected(is_selected: bool) -> None:
@@ -1441,7 +1541,7 @@ def show_splash_screen(
         item.bind("<Leave>", on_leave)
         item.bind("<FocusIn>", on_focus_in)
         item.bind("<FocusOut>", on_focus_out)
-        item.pack(fill="x", pady=(0, px(4)))
+        item_row.pack(fill="x", pady=(0, px(4)))
         item._cv_set_selected = set_selected
         return item
 
@@ -1494,6 +1594,50 @@ def show_splash_screen(
         _save_last_browse_dir(path)
         _leave_splash()
 
+    def _open_cave_metadata_source(url: str) -> None:
+        """Open a user-selected, catalog-validated cave reference in the browser."""
+        try:
+            desktop_services.open_uri(url, parent=root)
+        except Exception as exc:
+            _LOG.warning("Could not open cave metadata source %s: %s", url, exc)
+            show_feedback(
+                root,
+                "Couldn’t open that source.",
+                kind="error",
+                duration_ms=7000,
+                font=_TYPOGRAPHY.body,
+                max_wraplength=420,
+            )
+
+    def _show_cave_metadata(cave: CaveMetadata) -> None:
+        """Replace the right surface with one cave's descriptive information."""
+        for child in cave_metadata_surface.winfo_children():
+            child.destroy()
+        panel = CaveMetadataPanel(
+            cave_metadata_surface,
+            cave=cave,
+            px=px,
+            bind_activation=_bind_activation,
+            style=_cave_metadata_panel_style(),
+            on_back=_show_map_library_surface,
+            on_open_source=_open_cave_metadata_source,
+        )
+        panel.create()
+        if active_surface[0] != "cave_metadata":
+            map_library_surface.pack_forget()
+            preferences_surface.pack_forget()
+            about_surface.pack_forget()
+            cave_metadata_surface.pack(fill="both", expand=True)
+            active_surface[0] = "cave_metadata"
+        _set_active_navigation("Map Library")
+        panel.focus_content()
+
+    try:
+        cave_metadata_catalog = load_bundled_cave_metadata_catalog()
+    except Exception as exc:
+        _LOG.warning("Could not load bundled cave metadata: %s", exc)
+        cave_metadata_catalog = None
+
     from caveviewer.gui.standard_library_maps import (
         default_map_library_install_dir,
         load_initial_standard_library_catalog,
@@ -1527,7 +1671,7 @@ def show_splash_screen(
             message,
             kind=kind,
             duration_ms=duration_ms,
-            font=_BODY_FONT,
+            font=_TYPOGRAPHY.body,
             max_wraplength=520 if max_wraplength is None else max_wraplength,
         )
 
@@ -1547,6 +1691,8 @@ def show_splash_screen(
         map_library_root_dir_provider=default_map_library_install_dir,
         open_guided_dive=_open_guided_dive_from_splash,
         cache_rebuild_controller=cache_rebuild_controller,
+        cave_metadata_catalog=cave_metadata_catalog,
+        show_cave_metadata=_show_cave_metadata,
     )
     map_library_workflow_ref[0] = map_library_workflow
 

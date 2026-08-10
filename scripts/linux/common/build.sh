@@ -319,6 +319,7 @@ CAVEVIEWER_APP_ICON="" \
   --add-data "$repo_root/src/caveviewer/resources/shaders:caveviewer/resources/shaders" \
   --add-data "$repo_root/src/caveviewer/resources/images:caveviewer/resources/images" \
   --add-data "$repo_root/src/caveviewer/resources/release_signing_public_key.pem:caveviewer/resources" \
+  --add-data "$repo_root/src/caveviewer/resources/cave_metadata_catalog.v1.json:caveviewer/resources" \
   --add-data "$repo_root/LICENSE:." \
   --add-data "$repo_root/THIRD_PARTY_NOTICES.md:." \
   "$repo_root/src/caveviewer/__main__.py"

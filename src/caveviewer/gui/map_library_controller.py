@@ -157,13 +157,21 @@ class MapLibraryController:
             return f"{size_bytes / (1024 * 1024):.0f} MB"
         return ""
 
-    def status_text(self, library_map, *, downloaded: bool) -> str:
-        """Return the secondary row text for a standard-library map."""
+    def status_text(
+        self,
+        library_map,
+        *,
+        downloaded: bool,
+        cave_metadata_detail: str | None = None,
+    ) -> str:
+        """Return the secondary row text with source warnings taking priority."""
         availability = self.availability_for(library_map)
         if availability is StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL:
             return "No longer a part of the standard library"
         if availability is StandardLibraryMapAvailability.REMOTE_UNAVAILABLE:
             return "Unavailable from CaveViewer Maps"
+        if cave_metadata_detail:
+            return cave_metadata_detail
         if downloaded:
             return "Downloaded"
         return self.size_text(self.resolve_catalog_entry(library_map))
@@ -193,6 +201,7 @@ class MapLibraryController:
         enabled: bool = True,
         action_text: str | None = None,
         result_path: str | None = None,
+        cave_metadata_detail: str | None = None,
     ) -> StandardLibraryMapRow:
         """Build a row presentation model for a standard-library map."""
         key = self.map_key(library_map)
@@ -202,7 +211,11 @@ class MapLibraryController:
         return StandardLibraryMapRow(
             key=key,
             title=getattr(library_map, "display_name", ""),
-            detail=self.status_text(library_map, downloaded=downloaded),
+            detail=self.status_text(
+                library_map,
+                downloaded=downloaded,
+                cave_metadata_detail=cave_metadata_detail,
+            ),
             action_text=action_text
             or self.action_text(downloaded=downloaded, availability=availability),
             downloaded=downloaded,

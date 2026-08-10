@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer.gui import (
+    cave_metadata_panel,
     map_history,
     map_library_controller,
     map_library_panel,
@@ -22,8 +23,30 @@ from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
 
+def test_map_library_cave_details_stay_in_the_splash_content_area():
+    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    details_source = inspect.getsource(cave_metadata_panel.CaveMetadataPanel)
+
+    assert "cave_metadata_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in splash_source
+    assert "show_cave_metadata=_show_cave_metadata" in splash_source
+    assert "on_back=_show_map_library_surface" in splash_source
+    assert "_set_active_navigation(\"Map Library\")" in splash_source
+    assert "This describes the cave system, not necessarily this 3D map." in details_source
+    assert "on_open_source" in details_source
+    assert 'text="‹  Map Library"' in details_source
+    assert "highlightthickness=0" in details_source
+    assert "Focus the neutral detail surface without outlining the back link." in details_source
+
+
 @pytest.mark.parametrize(
-    ("snapshot", "status", "action_text", "action", "status_action"),
+    (
+        "snapshot",
+        "status",
+        "action_text",
+        "action",
+        "status_action",
+        "action_replaces_status_after_delay",
+    ),
     [
         (
             UpdateSnapshot(
@@ -31,10 +54,11 @@ from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
                 current_version="1.0.63",
                 available_version="v1.0.64",
             ),
-            "Update 1.0.64 available",
-            "Download",
+            "",
+            "Download update",
             splash_screen._UpdateAction.DOWNLOAD,
             None,
+            False,
         ),
         (
             UpdateSnapshot(
@@ -48,6 +72,7 @@ from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
             "",
             None,
             None,
+            False,
         ),
         (
             UpdateSnapshot(
@@ -59,6 +84,7 @@ from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
             "",
             None,
             None,
+            False,
         ),
         (
             UpdateSnapshot(
@@ -68,9 +94,10 @@ from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
                 payload_path="/downloads/CaveViewer.dmg",
             ),
             "Update ready",
-            "Show in Finder",
+            "Show update",
             splash_screen._UpdateAction.REVEAL,
             None,
+            True,
         ),
         (
             UpdateSnapshot(
@@ -83,6 +110,7 @@ from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
             "Retry",
             splash_screen._UpdateAction.RETRY,
             None,
+            False,
         ),
     ],
 )
@@ -92,13 +120,18 @@ def test_update_state_has_expected_splash_presentation(
     action_text,
     action,
     status_action,
+    action_replaces_status_after_delay,
 ):
-    presentation = splash_screen._update_presentation(snapshot, "Show in Finder")
+    presentation = splash_screen._update_presentation(snapshot)
 
     assert presentation.status_text == status
     assert presentation.action_text == action_text
     assert presentation.action == action
     assert presentation.status_action == status_action
+    assert (
+        presentation.action_replaces_status_after_delay
+        is action_replaces_status_after_delay
+    )
 
 
 @pytest.mark.parametrize(
@@ -113,7 +146,6 @@ def test_update_state_has_expected_splash_presentation(
 def test_non_actionable_update_states_remain_quiet(state):
     presentation = splash_screen._update_presentation(
         UpdateSnapshot(state=state, current_version="1.0.63"),
-        "Show in Finder",
     )
 
     assert presentation == splash_screen._UpdatePresentation()
@@ -131,7 +163,6 @@ def test_disabled_update_gate_shows_its_safe_explanation_without_an_action():
                 explanation="Automatic updates are unavailable for this installation.",
             ),
         ),
-        "Show in Finder",
     )
 
     assert presentation == splash_screen._UpdatePresentation(
@@ -153,11 +184,35 @@ def test_disabled_update_package_reveal_gate_hides_ready_action():
                 explanation="The verified update package cannot be revealed automatically.",
             ),
         ),
-        "Show in Finder",
     )
 
     assert presentation == splash_screen._UpdatePresentation(
         status_text="The verified update package cannot be revealed automatically."
+    )
+
+
+def test_ready_update_uses_one_label_that_becomes_a_reveal_action():
+    presentation = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.READY,
+            current_version="1.0.63",
+            available_version="1.0.64",
+            payload_path="/downloads/CaveViewer.AppImage",
+        )
+    )
+
+    assert splash_screen._update_status_label(presentation) == (
+        "Update ready",
+        splash_screen._INSTRUCTION_COLOR,
+        None,
+    )
+    assert splash_screen._update_status_label(
+        presentation,
+        show_delayed_action=True,
+    ) == (
+        "Show update",
+        splash_screen._BUTTON_BG,
+        splash_screen._UpdateAction.REVEAL,
     )
 
 
@@ -306,14 +361,7 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
     font_globals = (
         "_UI_FONT_FAMILY",
         "_TK_TEXT_SCALE",
-        "_TITLE_FONT",
-        "_NAVIGATION_BRAND_FONT",
-        "_VERSION_FONT",
-        "_BODY_FONT",
-        "_SMALL_FONT",
-        "_LIBRARY_SECTION_FONT",
-        "_LIBRARY_METADATA_FONT",
-        "_UPDATE_ACTION_FONT",
+        "_TYPOGRAPHY",
     )
     original_values = {name: getattr(splash_screen, name) for name in font_globals}
 
@@ -334,15 +382,59 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
         )
 
         assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.4)
-        assert splash_screen._NAVIGATION_BRAND_FONT == (
+        assert splash_screen._TYPOGRAPHY.display == (
             "Helvetica Neue",
-            20,
+            28,
             "bold",
         )
-        assert splash_screen._BODY_FONT == ("Helvetica Neue", 17)
-        assert splash_screen._SMALL_FONT == ("Helvetica Neue", 14)
-        assert splash_screen._LIBRARY_METADATA_FONT == ("Helvetica Neue", 13)
-        assert splash_screen._UPDATE_ACTION_FONT == ("Helvetica Neue", 15, "bold")
+        assert splash_screen._TYPOGRAPHY.heading == ("Helvetica Neue", 22, "bold")
+        assert splash_screen._TYPOGRAPHY.body_strong == (
+            "Helvetica Neue",
+            17,
+            "bold",
+        )
+        assert splash_screen._TYPOGRAPHY.body == ("Helvetica Neue", 17)
+        assert splash_screen._TYPOGRAPHY.supporting == ("Helvetica Neue", 14)
+        assert splash_screen._TYPOGRAPHY.section == (
+            "Helvetica Neue",
+            14,
+            "bold",
+        )
+    finally:
+        for name, value in original_values.items():
+            setattr(splash_screen, name, value)
+
+
+def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
+    font_globals = (
+        "_UI_FONT_FAMILY",
+        "_TK_TEXT_SCALE",
+        "_TYPOGRAPHY",
+    )
+    original_values = {name: getattr(splash_screen, name) for name in font_globals}
+
+    class FakeDefaultFont:
+        def actual(self, key):
+            return {"family": "sans-serif", "size": 18}[key]
+
+    import tkinter.font as tkfont
+
+    monkeypatch.setattr(tkfont, "families", lambda _root: ["sans-serif"])
+    monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
+
+    try:
+        splash_screen._configure_runtime_tk_fonts(
+            object(),
+            presentation_profile=select_presentation_profile(platform_name="linux"),
+        )
+
+        assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.0)
+        assert splash_screen._TYPOGRAPHY.body_strong == (
+            "sans-serif",
+            12,
+            "bold",
+        )
+        assert splash_screen._TYPOGRAPHY.supporting == ("sans-serif", 10)
     finally:
         for name, value in original_values.items():
             setattr(splash_screen, name, value)
@@ -353,6 +445,10 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
 
     assert "navigation_frame = tk.Frame(" in source
     assert "def _create_navigation_item(" in source
+    assert "item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)" in source
+    assert "indicator = tk.Frame(" in source
+    assert "_NAVIGATION_ACTIVE_INDICATOR" in source
+    assert "font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body" in source
     assert "takefocus=True" in source
     assert 'label.bind("<Return>", invoke)' in source
     assert 'label.bind("<space>", invoke)' in source
@@ -398,33 +494,59 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "show_sample_maps_dialog(" not in source
 
 
-def test_splash_navigation_uses_a_compact_horizontal_brand_masthead():
+def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     source = inspect.getsource(splash_screen.show_splash_screen)
+    update_source = inspect.getsource(splash_screen._update_presentation)
 
-    assert "_NAVIGATION_BRAND_FONT = _tk_font(14, \"bold\")" in inspect.getsource(
+    assert "_TYPOGRAPHY: TkTypography = create_tk_typography(" in inspect.getsource(
         splash_screen
     )
-    assert "brand_frame = tk.Frame(left_frame, bg=_BG_COLOR)" in source
-    assert 'brand_frame.pack(fill="x", padx=px(14), pady=(px(18), px(10)))' in source
-    assert "max_logo_dim = px(56)" in source
-    assert 'logo_label.pack(side="left", padx=(0, px(10)))' in source
-    assert "brand_text = tk.Frame(brand_frame, bg=_BG_COLOR)" in source
-    assert 'brand_text.pack(side="left", fill="x", expand=True)' in source
-    assert "font=_NAVIGATION_BRAND_FONT" in source
-    assert 'title_label.pack(anchor="w")' in source
-    assert 'version_label.pack(anchor="w", pady=(px(1), 0))' in source
-    assert 'navigation_frame.pack(fill="x", pady=(px(8), 0))' in source
+    assert "brand_frame = tk.Frame(left_frame, bg=_BG_COLOR)" not in source
+    assert "masthead_icon_label" not in source
+    assert 'navigation_frame.pack(fill="x", pady=(px(22), 0))' in source
+    assert "app_status_frame = tk.Frame(left_frame, bg=_BG_COLOR)" in source
+    assert "update_progress_width = px(192)" in source
+    assert 'text=f"Version {version}"' in source
+    assert 'version_label.pack(anchor="w")' in source
+    assert "update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)" in source
+    assert "def _set_update_cluster_visible(visible: bool)" in source
+    assert "def _layout_update_cluster(presentation: _UpdatePresentation)" in source
+    assert 'action_text="Download update"' in update_source
+    assert 'action_text="Show update"' in update_source
+    assert "action_replaces_status_after_delay=True" in update_source
+    assert "_UPDATE_READY_ACTION_DELAY_MS = 3_000" in inspect.getsource(
+        splash_screen
+    )
+    assert "def _show_delayed_update_action(" in source
+    assert "show_delayed_action=True" in source
+    assert "update_cluster.pack_forget()" in source
+    assert "update_progress_canvas.pack_forget()" in source
+    footer_action_source = source[
+        source.index("update_action_label = tk.Label(") : source.index(
+            "update_progress_canvas = tk.Canvas("
+        )
+    ]
+    assert "font=_TYPOGRAPHY.supporting" in footer_action_source
+    assert 'justify="left"' in source
 
 
 def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
     content_source = inspect.getsource(splash_screen._build_themed_about_content)
     dialog_source = inspect.getsource(splash_screen._show_themed_about_dialog)
+    splash_source = inspect.getsource(splash_screen.show_splash_screen)
 
     assert "tk.Toplevel(root)" in dialog_source
     assert "_build_themed_about_content(" in dialog_source
     assert "dialog.grab_set()" in dialog_source
     assert "_LOGO_PATH" in content_source
     assert "_CREDITS_TEXT.strip()" in content_source
+    assert "_ABOUT_WEBSITE_LINKS" in content_source
+    assert "www.caveviewer.com" in inspect.getsource(splash_screen)
+    assert "www.bottomlineprojects.com" in inspect.getsource(splash_screen)
+    assert "on_open_website: Callable[[str], None] | None = None" in content_source
+    assert 'website_label.pack(pady=(px(12) if index == 0 else px(6), 0))' in content_source
+    assert "_open_about_website" in splash_source
+    assert "on_open_website=_open_about_website" in splash_source
     assert "bg=_BG_COLOR" in content_source
     assert "fg=_TITLE_COLOR" in content_source
     assert "text=\"Close\"" in content_source
@@ -510,13 +632,17 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "recent_map_paths = _load_library_recent_map_paths()" in splash_source
     assert "self.controller.row(" in workflow_source
     assert "detail=row.detail" in panel_source
+    assert "wraplength=self._px(250)" not in panel_source
+    assert "self._sync_row_title_wraplength(" in panel_source
     assert "highlightthickness=0" in source
     assert "panel_border_color=_LIBRARY_PANEL_BORDER_COLOR" in style_source
     assert 'left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(220))' in source
     assert 'divider.pack(side="left", fill="y", padx=(px(14), px(18)), pady=px(10))' in source
     assert 'panel.pack(fill="both", expand=True, pady=self._px(14))' in panel_source
-    assert "metadata_font=_LIBRARY_METADATA_FONT" in style_source
-    assert "section_font=_LIBRARY_SECTION_FONT" in style_source
+    assert "title_font=_TYPOGRAPHY.body_strong" in style_source
+    assert "body_font=_TYPOGRAPHY.body" in style_source
+    assert "supporting_font=_TYPOGRAPHY.supporting" in style_source
+    assert "section_font=_TYPOGRAPHY.section" in style_source
     assert "metadata_color=_LIBRARY_METADATA_COLOR" in style_source
     assert "_action_button_pixel_size" in panel_source
     assert "style.action_button_size" in panel_source
@@ -549,6 +675,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "Local-only former library maps" not in source
     assert "No longer a part of the standard library" in source
     assert "create_polygon(" in section_source
+    assert "button.create_arc(" in panel_source
     assert 'text="Hide"' not in section_source
     assert 'text="Show"' not in section_source
 
@@ -640,7 +767,6 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         (),
         {
             "section_font": ("TkDefaultFont", 10, "bold"),
-            "metadata_font": ("TkDefaultFont", 9),
             "instruction_color": "#ffffff",
         },
     )()
@@ -699,6 +825,31 @@ def test_former_standard_row_title_uses_a_muted_style_without_moving_the_row():
         {"fg": "#9a9aa6"},
         {"fg": "#ffffff"},
     ]
+
+
+def test_map_title_wrap_tracks_the_live_text_column_width():
+    class _FakeLabel:
+        def __init__(self) -> None:
+            self.config_calls = []
+
+        def configure(self, **options) -> None:
+            self.config_calls.append(options)
+
+    title_label = _FakeLabel()
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    refreshes = []
+    panel._widget_exists = lambda widget: widget is title_label
+    panel.sync_after_row_change = lambda: refreshes.append(True)
+
+    panel._sync_row_title_wraplength(title_label, 620)
+    panel._sync_row_title_wraplength(title_label, 620)
+    panel._sync_row_title_wraplength(title_label, 168)
+
+    assert title_label.config_calls == [
+        {"wraplength": 620},
+        {"wraplength": 168},
+    ]
+    assert refreshes == [True, True]
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
@@ -794,7 +945,7 @@ def test_library_action_buttons_use_normalized_dimensions():
     assert splash_screen._LIBRARY_ACTION_BUTTON_SIZE == 32
     assert splash_screen._LIBRARY_ACTION_ICON_STROKE_WIDTH == 2
     assert splash_screen._LIBRARY_OVERFLOW_BUTTON_SIZE == 28
-    assert splash_screen._LIBRARY_METADATA_FONT[1] == 9
+    assert splash_screen._TYPOGRAPHY.supporting[1] == 10
     style = splash_screen._map_library_panel_style()
     assert not hasattr(style, "scrollbar_right_inset")
     assert style.panel_border_color == splash_screen._LIBRARY_PANEL_BORDER_COLOR
@@ -958,9 +1109,8 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
     panel._widget_exists = lambda _widget: True
     panel._px = lambda value: int(value)
     panel._style = SimpleNamespace(
-        small_font=("TkDefaultFont", 10),
-        section_font=("TkDefaultFont", 10, "bold"),
-        metadata_font=("TkDefaultFont", 9),
+        title_font=("TkDefaultFont", 13, "bold"),
+        supporting_font=("TkDefaultFont", 11),
         title_color="#f5d77d",
         metadata_color="#6f717f",
         panel_color="#101018",

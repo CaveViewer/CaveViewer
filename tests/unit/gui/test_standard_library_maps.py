@@ -213,6 +213,49 @@ def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
     assert cached_catalog["maps"][-1]["title"] == "Emergence du Ressel"
 
 
+def test_catalog_preserves_optional_stable_cave_metadata_id():
+    payload = {
+        "version": 1,
+        "maps": [
+            {
+                "id": "devils-eye",
+                "title": "Devils Eye",
+                "asset": "Devils.Eye.3D.Map.zip",
+                "cave_metadata_id": "us-fl-devils-spring-system",
+            }
+        ],
+    }
+
+    maps = standard_library_maps._standard_library_maps_from_catalog_payload(
+        payload,
+        source_description="test catalog",
+    )
+    serialized = standard_library_maps._catalog_payload_from_standard_library_maps(
+        maps
+    )
+
+    assert maps[0].cave_metadata_id == "us-fl-devils-spring-system"
+    assert serialized["maps"][0]["cave_metadata_id"] == "us-fl-devils-spring-system"
+
+
+def test_bundled_catalog_uses_stable_ids_for_known_cave_metadata():
+    cave_ids_by_map_id = {
+        library_map.catalog_id: library_map.cave_metadata_id
+        for library_map in standard_library_maps.bundled_standard_library_catalog()
+    }
+
+    assert (
+        cave_ids_by_map_id["boh-yai-mine-i-low-res"]
+        == "th-kanchanaburi-boh-yai-mines"
+    )
+    assert (
+        cave_ids_by_map_id["boh-yai-mine-ii-low-res"]
+        == "th-kanchanaburi-boh-yai-mines"
+    )
+    assert cave_ids_by_map_id["devils-eye"] == "us-fl-devils-spring-system"
+    assert cave_ids_by_map_id["peacock-springs-cave-system"] == "us-fl-peacock-springs"
+
+
 @pytest.mark.parametrize(
     ("code", "message_fragment"),
     [(404, "No map library release"), (500, "HTTP 500")],
@@ -382,6 +425,7 @@ def test_managed_install_registry_recognizes_a_map_after_catalog_metadata_change
         "Former Cave",
         "former.zip",
         catalog_id="former-cave",
+        cave_metadata_id="us-fl-devils-spring-system",
     )
     refreshed = standard_library_maps.StandardLibraryMapInfo(
         "Renamed Former Cave",
@@ -392,8 +436,16 @@ def test_managed_install_registry_recognizes_a_map_after_catalog_metadata_change
     standard_library_maps.record_managed_standard_library_map_install(original, map_dir)
 
     installs = standard_library_maps.managed_standard_library_map_installs()
-    assert [(install.source_id, install.catalog_id, install.path) for install in installs] == [
-        ("github-release", "former-cave", str(map_dir))
+    assert [
+        (install.source_id, install.catalog_id, install.cave_metadata_id, install.path)
+        for install in installs
+    ] == [
+        (
+            "github-release",
+            "former-cave",
+            "us-fl-devils-spring-system",
+            str(map_dir),
+        )
     ]
     assert standard_library_maps.existing_standard_library_map_path(
         str(install_root),
@@ -425,6 +477,7 @@ def test_managed_install_restores_retained_map_metadata():
         catalog_id="retained-cave",
         display_name="Retained Cave",
         asset_name="retained-cave.zip",
+        cave_metadata_id="us-fl-devils-spring-system",
         folder_name="Retained Cave Files",
         path="/maps/retained-cave",
         former=True,
@@ -434,6 +487,7 @@ def test_managed_install_restores_retained_map_metadata():
         display_name="Retained Cave",
         asset_name="retained-cave.zip",
         catalog_id="retained-cave",
+        cave_metadata_id="us-fl-devils-spring-system",
         folder_name="Retained Cave Files",
         source_id="partner-library",
     )

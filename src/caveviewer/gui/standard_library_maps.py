@@ -101,6 +101,7 @@ class StandardLibraryMapInfo:
     download_url: Optional[str] = None
     size_bytes: Optional[int] = None
     catalog_id: Optional[str] = None
+    cave_metadata_id: Optional[str] = None
     folder_name: Optional[str] = None
     sha256: Optional[str] = None
     source_id: str = GITHUB_RELEASE_MAP_SOURCE_ID
@@ -125,6 +126,7 @@ class ManagedStandardLibraryMapInstall:
     folder_name: str | None
     path: str
     former: bool = False
+    cave_metadata_id: str | None = None
 
     def as_map_info(self) -> StandardLibraryMapInfo:
         """Rebuild the source-neutral row metadata retained for a local map."""
@@ -132,6 +134,7 @@ class ManagedStandardLibraryMapInstall:
             display_name=self.display_name,
             asset_name=self.asset_name,
             catalog_id=self.catalog_id,
+            cave_metadata_id=self.cave_metadata_id,
             folder_name=self.folder_name,
             source_id=self.source_id,
         )
@@ -348,6 +351,7 @@ def _maps_without_download_info(
             asset_name=library_map.asset_name,
             size_bytes=library_map.size_bytes,
             catalog_id=library_map.catalog_id,
+            cave_metadata_id=library_map.cave_metadata_id,
             folder_name=library_map.folder_name,
             sha256=library_map.sha256,
             source_id=library_map.source_id,
@@ -417,6 +421,8 @@ def _catalog_payload_from_standard_library_maps(
         }
         if library_map.folder_name and library_map.folder_name != library_map.display_name:
             entry["folder"] = library_map.folder_name
+        if library_map.cave_metadata_id:
+            entry["cave_metadata_id"] = library_map.cave_metadata_id
         if library_map.size_bytes is not None:
             entry["size_bytes"] = library_map.size_bytes
         if library_map.sha256:
@@ -541,6 +547,7 @@ def _standard_library_maps_from_catalog_payload(
             index=index,
         )
         folder = _optional_catalog_string(raw_map, "folder")
+        cave_metadata_id = _optional_catalog_string(raw_map, "cave_metadata_id")
         sha256 = _optional_sha256(raw_map, source_description, index)
         size_bytes = _optional_nonnegative_int(
             raw_map,
@@ -569,6 +576,7 @@ def _standard_library_maps_from_catalog_payload(
                     asset_name=asset,
                     size_bytes=size_bytes,
                     catalog_id=catalog_id,
+                    cave_metadata_id=cave_metadata_id,
                     folder_name=folder,
                     sha256=sha256,
                 ),
@@ -661,6 +669,7 @@ def _enrich_catalog_with_release_assets(
                     else library_map.size_bytes
                 ),
                 catalog_id=library_map.catalog_id,
+                cave_metadata_id=library_map.cave_metadata_id,
                 folder_name=library_map.folder_name,
                 sha256=library_map.sha256,
                 source_id=library_map.source_id,
@@ -877,6 +886,11 @@ def _managed_install_from_payload(raw) -> ManagedStandardLibraryMapInstall | Non
         not isinstance(folder_name, str) or not folder_name.strip()
     ):
         return None
+    cave_metadata_id = raw.get("cave_metadata_id")
+    if cave_metadata_id is not None and (
+        not isinstance(cave_metadata_id, str) or not cave_metadata_id.strip()
+    ):
+        return None
     former = raw.get("former", False)
     if type(former) is not bool:
         return None
@@ -885,6 +899,9 @@ def _managed_install_from_payload(raw) -> ManagedStandardLibraryMapInstall | Non
         catalog_id=values["catalog_id"],
         display_name=values["display_name"],
         asset_name=values["asset_name"],
+        cave_metadata_id=(
+            cave_metadata_id.strip() if isinstance(cave_metadata_id, str) else None
+        ),
         folder_name=folder_name.strip() if isinstance(folder_name, str) else None,
         path=values["path"],
         former=former,
@@ -939,6 +956,7 @@ def _save_managed_standard_library_map_installs(
                 "catalog_id": install.catalog_id,
                 "display_name": install.display_name,
                 "asset_name": install.asset_name,
+                "cave_metadata_id": install.cave_metadata_id,
                 "folder_name": install.folder_name,
                 "path": install.path,
                 "former": install.former,
@@ -982,6 +1000,7 @@ def record_managed_standard_library_map_install(
         catalog_id=catalog_id,
         display_name=sample.display_name,
         asset_name=sample.asset_name,
+        cave_metadata_id=sample.cave_metadata_id,
         folder_name=sample.folder_name,
         path=path,
     )

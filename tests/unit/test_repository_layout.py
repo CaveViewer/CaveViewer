@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 from caveviewer.resources import (
+    cave_metadata_catalog_path,
     image_path,
     map_library_catalog_path,
     release_public_key_path,
@@ -57,13 +58,17 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "gui" / "preferences.py",
         PACKAGE_ROOT / "gui" / "preferences_form.py",
         PACKAGE_ROOT / "gui" / "preferences_dialog.py",
+        PACKAGE_ROOT / "gui" / "tk_typography.py",
         PACKAGE_ROOT / "gui" / "benchmark.py",
         PACKAGE_ROOT / "gui" / "benchmark_routes.py",
+        PACKAGE_ROOT / "gui" / "cave_metadata.py",
+        PACKAGE_ROOT / "gui" / "cave_metadata_panel.py",
         PACKAGE_ROOT / "gui" / "viewer_window.py",
         PACKAGE_ROOT / "resources" / "shaders" / "mesh.vert",
         PACKAGE_ROOT / "resources" / "images" / "app_mark_transparent.png",
         PACKAGE_ROOT / "resources" / "release_signing_public_key.pem",
         PACKAGE_ROOT / "resources" / "map_library_catalog.v1.json",
+        PACKAGE_ROOT / "resources" / "cave_metadata_catalog.v1.json",
         REPOSITORY_ROOT / "benchmarks" / "viewer-benchmark-scenario.v1.json",
         REPOSITORY_ROOT / "benchmarks" / "viewer-thresholds.v1.json",
         REPOSITORY_ROOT
@@ -103,6 +108,7 @@ def test_package_resource_service_resolves_runtime_files():
         assert ui_icon_path(icon_name).is_file()
     assert release_public_key_path().is_file()
     assert map_library_catalog_path().is_file()
+    assert cave_metadata_catalog_path().is_file()
 
 
 def test_legacy_runtime_paths_are_removed():
@@ -164,6 +170,8 @@ def test_packaging_consumers_reference_migrated_paths():
     assert '"packaging",' in windows_packager
     assert "package_root / '__main__.py'" in pyinstaller_spec
     assert "caveviewer/resources/shaders" in pyinstaller_spec
+    assert "cave_metadata_catalog.v1.json" in pyinstaller_spec
+    assert "cave_metadata_catalog.v1.json" in linux_builder
 
 
 def test_pyproject_declares_src_package_and_entry_point():

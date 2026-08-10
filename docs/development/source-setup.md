@@ -215,6 +215,11 @@ attached `.zip` assets. This lets a newly uploaded map appear before a full
 catalog manifest is published without falsely showing a map that has been
 removed from the release.
 
+An optional `cave_metadata_id` joins a map entry to the bundled offline cave
+metadata catalog. It is descriptive only and does not change map download,
+opening, caching, or source authority. See [cave-metadata.md](cave-metadata.md)
+for its schema and conservative fallback matching rules.
+
 Catalog v1 shape:
 
 ```json
@@ -227,6 +232,7 @@ Catalog v1 shape:
       "asset": "Devils.Eye.3D.Map.zip",
       "sort": 30,
       "folder": "Devils Eye",
+      "cave_metadata_id": "us-fl-devils-spring-system",
       "size_bytes": 91226112,
       "sha256": "optional 64-character lowercase hex digest"
     }
@@ -234,9 +240,9 @@ Catalog v1 shape:
 }
 ```
 
-`id`, `title`, and `asset` are required. `folder`, `size_bytes`, `sort`, and
-`sha256` are optional. The `asset` value must match the corresponding release
-zip filename exactly.
+`id`, `title`, and `asset` are required. `folder`, `cave_metadata_id`,
+`size_bytes`, `sort`, and `sha256` are optional. The `asset` value must match
+the corresponding release zip filename exactly.
 
 Precedence:
 
@@ -372,8 +378,10 @@ any non-SHUTDOWN state -> SHUTDOWN
 ```
 
 The splash polls immutable manager snapshots and maps the visible states to
-`Update <version> available`, `Downloading… <percentage>%`, `Verifying…`,
-`Update ready`, and `Download failed` with a separate `Retry` action.
+`Download update`, `Downloading… <percentage>%`, `Verifying…`,
+`Update ready`, and `Download failed` with a separate `Retry` action. A ready
+update remains a single footer label: after three seconds, `Update ready`
+becomes the `Show update` link that reveals the already verified package.
 While a splash window is visible, it is the foreground update surface and
 suppresses duplicate desktop notifications for update progress or completion.
 If a download finishes after that surface closes, desktop notifications remain

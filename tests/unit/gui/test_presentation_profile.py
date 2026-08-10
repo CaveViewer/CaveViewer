@@ -75,6 +75,14 @@ def test_macos_profile_keeps_its_static_layout_and_input_fallbacks():
     ) is True
 
 
+def test_linux_profile_leaves_semantic_font_density_to_tk_dpi_scaling():
+    profile = select_presentation_profile(platform_name="linux")
+
+    assert profile.supports_tk_display_scaling is True
+    assert profile.uses_tk_default_font_scale is False
+    assert profile.tk_text_scale(18.0) == pytest.approx(1.0)
+
+
 def test_presentation_profile_is_immutable():
     profile = select_presentation_profile(platform_name="linux")
 

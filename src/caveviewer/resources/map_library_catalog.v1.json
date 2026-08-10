@@ -5,6 +5,7 @@
       "id": "boh-yai-mine-i-low-res",
       "title": "Boh Yai Mine I (Low Res)",
       "asset": "Boh.Yai.Mine.I.Low.Res.zip",
+      "cave_metadata_id": "th-kanchanaburi-boh-yai-mines",
       "size_bytes": 59768832,
       "sort": 10
     },
@@ -12,6 +13,7 @@
       "id": "boh-yai-mine-ii-low-res",
       "title": "Boh Yai Mine II (Low Res)",
       "asset": "Boh.Yai.Mine.II.Low.Res.zip",
+      "cave_metadata_id": "th-kanchanaburi-boh-yai-mines",
       "size_bytes": 65011712,
       "sort": 20
     },
@@ -19,6 +21,7 @@
       "id": "devils-eye",
       "title": "Devils Eye",
       "asset": "Devils.Eye.3D.Map.zip",
+      "cave_metadata_id": "us-fl-devils-spring-system",
       "size_bytes": 91226112,
       "sort": 30
     },
@@ -26,6 +29,7 @@
       "id": "peacock-springs-cave-system",
       "title": "Peacock Springs Cave System",
       "asset": "Peacock.Springs.Cave.System.3D.Map.zip",
+      "cave_metadata_id": "us-fl-peacock-springs",
       "size_bytes": 382730240,
       "sort": 40
     }

@@ -29,3 +29,8 @@ def release_public_key_path() -> Path:
 
 def map_library_catalog_path() -> Path:
     return resource_path("map_library_catalog.v1.json")
+
+
+def cave_metadata_catalog_path() -> Path:
+    """Return the bundled offline cave metadata catalog."""
+    return resource_path("cave_metadata_catalog.v1.json")

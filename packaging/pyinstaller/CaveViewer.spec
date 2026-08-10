@@ -52,6 +52,10 @@ a = Analysis(
             str(resources_root / 'map_library_catalog.v1.json'),
             'caveviewer/resources',
         ),
+        (
+            str(resources_root / 'cave_metadata_catalog.v1.json'),
+            'caveviewer/resources',
+        ),
         (str(project_root / 'LICENSE'), '.'),
         (str(project_root / 'THIRD_PARTY_NOTICES.md'), '.'),
     ] + extra_datas,

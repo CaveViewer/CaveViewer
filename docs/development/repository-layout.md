@@ -78,6 +78,8 @@ src/caveviewer/gui/platform/probes/           platform capability probes and con
 src/caveviewer/gui/platform/probes/desktop.py on-demand directory-selection route probe
 src/caveviewer/gui/platform/probes/update_package_reveal.py static verified-package reveal route probe
 src/caveviewer/gui/map_library.py             recent-map row display models
+src/caveviewer/gui/cave_metadata.py           offline cave catalog validation and matching
+src/caveviewer/gui/cave_metadata_panel.py     in-splash cave details presentation
 src/caveviewer/gui/map_library_sources.py     source-neutral catalog contracts/composition
 src/caveviewer/gui/map_library_controller.py  source-qualified library row/transfer state
 src/caveviewer/gui/map_library_panel.py       splash Map Library Tk panel
@@ -151,7 +153,9 @@ CaveViewer/
 │       └── resources/
 │           ├── shaders/
 │           ├── images/
-│           └── release_signing_public_key.pem
+│           ├── release_signing_public_key.pem
+│           ├── map_library_catalog.v1.json
+│           └── cave_metadata_catalog.v1.json
 ├── tests/
 │   ├── unit/
 │   └── integration/

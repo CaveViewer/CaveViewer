@@ -663,6 +663,16 @@ registry records, or local storage. GitHub keeps its established map-folder
 layout; other source ids use an app-managed source namespace below the selected
 map-library directory.
 
+The bundled `cave_metadata_catalog.v1.json` is a separate offline,
+descriptive catalog. `cave_metadata.py` validates it and resolves only exact
+or conservative unambiguous name/alias matches; map-source entries may supply
+an explicit `cave_metadata_id` to avoid heuristic association. A metadata
+match changes only the row subtitle and enables an in-splash **About Cave**
+surface rendered by `cave_metadata_panel.py`. It never authorizes an action,
+changes source reconciliation, or describes the correctness of the 3D map.
+The splash composition root owns user-selected external source opening through
+`DesktopServices`.
+
 An authoritative refresh is the source's current list: it adds newly available
 maps, removes stale undownloaded rows, and marks a missing app-managed local
 installation as a former map while keeping it in its prior **CaveViewer Maps**

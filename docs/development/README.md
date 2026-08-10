@@ -17,8 +17,12 @@
   tool-specific adapters, and safe maintenance rules.
 - [Documentation](documentation.md): documentation placement, inheritance,
   override, and naming rules.
+- [Design system](design-system.md): shared Tk typography roles, scaling, and
+  presentation rules.
 - [Source setup](source-setup.md): source setup, runtime configuration, and
   detailed environment variables.
+- [Cave metadata](cave-metadata.md): bundled catalog schema, conservative
+  matching, and Map Library presentation behavior.
 
 The focused documents in this directory are canonical for their subjects.
 `source-setup.md` holds operational details that remain too detailed for the
