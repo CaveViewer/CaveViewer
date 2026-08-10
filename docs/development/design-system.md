@@ -87,6 +87,14 @@ All three are centered on the same axis. Do not add a separate feature label:
 the primary message already identifies the action, and a second label is
 redundant.
 
+If the viewer is closed while a video or dive trace is still being written,
+keep the window open and replace the cave view with the same centered status
+treatment. Use **Finishing video** or **Finishing dive trace** as the primary
+message and explain that CaveViewer will close automatically once the file is
+saved. Leave the status visible briefly even when the writer finishes
+immediately. Do not open a file browser during this exit path, and ignore
+repeat close requests until the writer has finished.
+
 The full-screen map-import panel keeps its import-specific title/ring/stage
 arrangement, but uses the same amber, light, and muted roles. Viewer overlay
 text continues to follow `CAVEVIEWER_UI_TEXT_SCALE`; do not substitute raw Tk

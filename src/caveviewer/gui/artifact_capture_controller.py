@@ -55,6 +55,30 @@ class ArtifactCapturePresentationController:
             duration=None,
         )
 
+    def exit_saving_status(
+        self,
+        artifact_names: tuple[str, ...],
+    ) -> ArtifactCaptureStatus:
+        """Return the persistent status shown while CaveViewer exits safely."""
+        names = tuple(dict.fromkeys(name for name in artifact_names if name))
+        if names == ("Video",):
+            message = "Finishing video"
+            detail = "Saving the last frames. CaveViewer will close automatically."
+        elif names == ("Dive trace",):
+            message = "Finishing dive trace"
+            detail = "Saving the final trace. CaveViewer will close automatically."
+        else:
+            message = "Finishing captures"
+            detail = (
+                "Saving the video and dive trace. CaveViewer will close automatically."
+            )
+        return ArtifactCaptureStatus(
+            message=message,
+            detail=detail,
+            kind="info",
+            duration=None,
+        )
+
     def canceled_status(self, artifact_name: str) -> ArtifactCaptureStatus:
         """Return the shared countdown-cancellation confirmation."""
         return ArtifactCaptureStatus(
@@ -113,3 +137,7 @@ class ArtifactCapturePresentationController:
                 remaining.append((reveal_at, request))
         self._pending_reveals = remaining
         return tuple(due)
+
+    def discard_pending_reveals(self) -> None:
+        """Prevent delayed file-browser launches while the application exits."""
+        self._pending_reveals.clear()

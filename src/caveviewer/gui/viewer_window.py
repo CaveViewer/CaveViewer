@@ -128,6 +128,7 @@ _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
 _VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
+_EXIT_CAPTURE_STATUS_MINIMUM_SECONDS = 0.75
 _MAIN_THREAD_STALL_LOG_THRESHOLD_S = 0.5
 _MAIN_THREAD_STALL_LOG_MIN_INTERVAL_S = 2.0
 _RECORDED_DIVE_LOOKAHEAD_SECONDS = 10.0
@@ -814,6 +815,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._is_background_paused = False
         self._render_throttle_due_at: dict[str, float] = {}
         self._closing_requested = False
+        self._close_after_capture_requested = False
+        self._close_after_capture_status_presented = False
+        self._close_after_capture_status_presented_at: float | None = None
         self._startup_focus_requested = False
         self._upload_chunks_per_frame = _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
         self._upload_groups_per_frame = _env_int("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", 1, 1, 64)
@@ -2116,6 +2120,104 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._ensure_recording_stop_state()
         return self._recording_stop_thread is not None
 
+    def _exit_capture_artifacts(self) -> tuple[str, ...]:
+        """Return user artifacts that must finish before the viewer may close."""
+        artifacts: list[str] = []
+        if (
+            getattr(self, "_recording_session", None) is not None
+            or self._recording_stop_in_progress()
+        ):
+            artifacts.append("Video")
+        if (
+            getattr(self, "_manual_dive_trace", None) is not None
+            or getattr(self, "_manual_dive_trace_writers", None)
+        ):
+            artifacts.append("Dive trace")
+        return tuple(artifacts)
+
+    def _exit_capture_finalization_active(self) -> bool:
+        """Return whether shutdown is waiting for a user artifact writer."""
+        return bool(getattr(self, "_close_after_capture_requested", False))
+
+    def _defer_backend_close_request(self) -> None:
+        """Keep the GLFW window alive after its close callback has fired."""
+        wnd = getattr(self, "wnd", None)
+        if wnd is None:
+            return
+        try:
+            wnd.is_closing = False
+        except Exception:
+            # A lightweight or future backend may not expose a cancellable
+            # native-close flag. Its normal close path remains unchanged.
+            pass
+
+    def _begin_exit_capture_finalization(
+        self,
+        artifact_names: tuple[str, ...],
+    ) -> None:
+        """Stop active capture cleanly and show progress before shutdown."""
+        self._close_after_capture_requested = True
+        self._close_after_capture_status_presented = False
+        self._close_after_capture_status_presented_at = None
+        self._defer_backend_close_request()
+        self._reset_transient_input_state("saving capture before close")
+
+        presentation = self._ensure_artifact_capture_presentation()
+        # A user who is closing the viewer did not ask to open a file browser.
+        presentation.discard_pending_reveals()
+
+        if getattr(self, "_recording_session", None) is not None:
+            self._stop_recording()
+        if getattr(self, "_manual_dive_trace", None) is not None:
+            self._stop_manual_dive_trace(reason="viewer_closed")
+
+        self._show_artifact_capture_status(
+            presentation.exit_saving_status(artifact_names)
+        )
+        _LOG.info(
+            "Waiting for %s before closing the viewer.",
+            " and ".join(name.lower() for name in artifact_names),
+        )
+
+    def _complete_exit_capture_finalization_if_ready(
+        self,
+        *,
+        allow_unpresented_status: bool = False,
+    ) -> bool:
+        """Close once all exit-time capture writers have published their files."""
+        if not self._exit_capture_finalization_active():
+            return False
+        if self._exit_capture_artifacts():
+            return False
+        if (
+            not getattr(self, "_close_after_capture_status_presented", False)
+            and not allow_unpresented_status
+        ):
+            return False
+        if not allow_unpresented_status:
+            presented_at = getattr(
+                self,
+                "_close_after_capture_status_presented_at",
+                None,
+            )
+            if (
+                presented_at is None
+                or time.perf_counter() - presented_at
+                < _EXIT_CAPTURE_STATUS_MINIMUM_SECONDS
+            ):
+                return False
+
+        self._close_after_capture_requested = False
+        self._complete_window_close()
+        return True
+
+    def _input_is_suppressed(self) -> bool:
+        """Return whether viewer controls should ignore late input callbacks."""
+        return bool(
+            getattr(self, "_closing_requested", False)
+            or self._exit_capture_finalization_active()
+        )
+
     def _recording_hides_hud(self) -> bool:
         return self._recording_is_armed()
 
@@ -2500,7 +2602,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             _LOG.info(f"Recording saved: {result.output_path}")
             if result.dropped_frames:
                 _LOG.warning(f"Recording saved after dropping {result.dropped_frames} frame(s).")
-            if result.show_message:
+            if result.show_message and not self._exit_capture_finalization_active():
                 now = time.perf_counter()
                 status = self._ensure_artifact_capture_presentation().saved_status(
                     "Video",
@@ -2519,7 +2621,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             else:
                 detail = ""
             _LOG.warning(f"Recording encoder exited with code {result.returncode}{detail}")
-            if result.show_message:
+            if result.show_message and not self._exit_capture_finalization_active():
                 self._show_artifact_capture_status(
                     self._ensure_artifact_capture_presentation().failed_status(
                         "Video",
@@ -5084,6 +5186,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             stage=message,
             note=detail,
         )
+        if (
+            self._exit_capture_finalization_active()
+            and not self._close_after_capture_status_presented
+        ):
+            self._close_after_capture_status_presented = True
+            self._close_after_capture_status_presented_at = time.perf_counter()
 
     def _render_recording_countdown_scrim(self, window_size: tuple[int, int], alpha: float = 0.62) -> None:
         """Darken the cave view behind the countdown ring without hiding it."""
@@ -5169,6 +5277,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "iconified", _ICONIFIED_RENDER_POLL_INTERVAL_S
             ):
                 self._drain_recording_stop_results()
+                if self._exit_capture_finalization_active():
+                    self._update_manual_dive_trace()
+                    self._complete_exit_capture_finalization_if_ready(
+                        allow_unpresented_status=True
+                    )
                 self._drain_due_saved_artifact_reveals()
             return
         self._reset_render_throttle("iconified")
@@ -5180,6 +5293,17 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._sync_render_mode_loading_policy()
         self._drain_recording_stop_results()
         self._drain_due_saved_artifact_reveals()
+
+        if self._exit_capture_finalization_active():
+            self._update_manual_dive_trace()
+            if self._complete_exit_capture_finalization_if_ready():
+                return
+            # Do not continue navigation, streaming, or map interaction while
+            # a user-visible artifact is still being published. The centered
+            # status keeps the same visual hierarchy as import and capture UI.
+            self.ctx.clear(0.02, 0.02, 0.03)
+            self._render_capture_status_message(self.wnd.size)
+            return
 
         if self._startup_focus_enabled:
             self._request_startup_focus_once()
@@ -5983,9 +6107,13 @@ class CaveViewerWindow(mglw.WindowConfig):
             if result is None:
                 continue
             pending.remove(pending_writer)
+            show_completion = (
+                pending_writer.show_completion
+                and not self._exit_capture_finalization_active()
+            )
             if result.completed:
                 _LOG.info("Manual Guided Dive trace saved: %s", result.output_path)
-                if pending_writer.show_completion:
+                if show_completion:
                     status = self._ensure_artifact_capture_presentation().saved_status(
                         "Dive trace",
                         result.output_path,
@@ -5999,7 +6127,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     result.partial_path,
                     result.error or "unknown error",
                 )
-                if pending_writer.show_completion:
+                if show_completion:
                     self._show_artifact_capture_status(
                         self._ensure_artifact_capture_presentation().failed_status(
                             "Dive trace",
@@ -6170,7 +6298,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # after teardown has started. Input is not actionable in either state.
         if (
             not getattr(self, "_window_setup_complete", False)
-            or getattr(self, "_closing_requested", False)
+            or self._input_is_suppressed()
         ):
             return
 
@@ -6410,7 +6538,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # ignored callback exceptions to stderr.
         if (
             not getattr(self, "_window_setup_complete", False)
-            or getattr(self, "_closing_requested", False)
+            or self._input_is_suppressed()
         ):
             return
 
@@ -6448,6 +6576,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_position_event = on_mouse_position_event
 
     def on_mouse_drag_event(self, x, y, dx, dy):
+        if self._input_is_suppressed():
+            return
         if self.controls_overlay.is_waiting_for_begin:
             return
         self._handle_mouse_look_motion(x, y, dx, dy)
@@ -6455,6 +6585,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_drag_event = on_mouse_drag_event
 
     def on_mouse_press_event(self, x, y, button):
+        if self._input_is_suppressed():
+            return
         if self.controls_overlay.is_waiting_for_begin:
             return
         if self.controls_overlay.is_manual_mode:
@@ -6643,6 +6775,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_press_event = on_mouse_press_event
 
     def on_mouse_release_event(self, x, y, button):
+        if self._input_is_suppressed():
+            return
         look_button_name = self._active_presentation_profile().mouse_look_button_name
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
 
@@ -6666,6 +6800,8 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_release_event = on_mouse_release_event
 
     def on_mouse_scroll_event(self, x_offset, y_offset):
+        if self._input_is_suppressed():
+            return
         if self._recorded_dive_is_paused():
             return
         self.camera.adjust_speed(y_offset)
@@ -6678,10 +6814,12 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _shutdown_active_import(self) -> None:
         self._ensure_import_controller().shutdown()
 
-    def on_close(self):
+    def _complete_window_close(self) -> None:
+        """Release viewer resources after any active capture has finished."""
         if self._closing_requested:
             return
         self._closing_requested = True
+        self._close_after_capture_requested = False
 
         if hasattr(self, "wnd"):
             try:
@@ -6706,6 +6844,22 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.wnd.close()
             except Exception:
                 pass
+
+    def on_close(self):
+        if self._closing_requested:
+            return
+        if self._exit_capture_finalization_active():
+            # Repeated close requests must not tear down the OpenGL context
+            # while the non-daemon writer is publishing the user's file.
+            self._defer_backend_close_request()
+            return
+
+        artifact_names = self._exit_capture_artifacts()
+        if artifact_names:
+            self._begin_exit_capture_finalization(artifact_names)
+            return
+
+        self._complete_window_close()
 
     close = on_close
 

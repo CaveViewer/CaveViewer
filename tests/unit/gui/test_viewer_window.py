@@ -2116,6 +2116,38 @@ def test_recording_success_does_not_reveal_after_background_stop():
     assert revealed == []
 
 
+def test_exit_finalization_keeps_its_video_status_and_does_not_reveal_files(
+    monkeypatch,
+):
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+    window = _recording_window()
+    window._close_after_capture_requested = True
+    window._show_capture_status(
+        "Finishing video",
+        "Saving the last frames. CaveViewer will close automatically.",
+        duration=None,
+        now=10.0,
+    )
+
+    window._apply_recording_stop_result(
+        recording.RecordingStopResult(
+            output_path="/recordings/cave.mp4",
+            returncode=0,
+            stderr_text="",
+            writer_error=None,
+            dropped_frames=0,
+            show_message=True,
+            reveal_on_success=True,
+        )
+    )
+
+    assert window._recording_status_message == "Finishing video"
+    assert window._recording_status_detail == (
+        "Saving the last frames. CaveViewer will close automatically."
+    )
+    assert window._ensure_artifact_capture_presentation().take_due_reveals(now=20.0) == ()
+
+
 def test_interrupted_recording_success_can_confirm_without_revealing():
     revealed = []
 
@@ -4865,3 +4897,139 @@ def test_on_close_shutdowns_active_import_before_releasing_resources():
     window.on_close()
 
     assert calls == ["shutdown_import", "release_resources", "close_window"]
+
+
+def test_on_close_keeps_viewer_open_while_active_trace_is_saved():
+    calls = []
+    recorder = FakeManualDiveTrace()
+    window = _recording_window()
+    window._closing_requested = False
+    window._close_after_capture_requested = False
+    window._close_after_capture_status_presented = False
+    window._has_map_loaded = True
+    window._manual_dive_trace = recorder
+    window._manual_dive_trace_writers = []
+    window.camera = _manual_trace_camera()
+    window._reset_transient_input_state = lambda reason: calls.append(
+        ("reset_input", reason)
+    )
+    window._teardown_current_map = lambda **_kwargs: calls.append("teardown")
+    window._release_window_resources = lambda: calls.append("release_resources")
+    window.wnd = SimpleNamespace(
+        mouse_exclusivity=True,
+        is_closing=True,
+        close=lambda: calls.append("close_window"),
+    )
+
+    window.on_close()
+
+    assert not window._closing_requested
+    assert window._close_after_capture_requested
+    assert window.wnd.is_closing is False
+    assert recorder.stopped == [
+        (ManualDivePose.from_camera(window.camera), "viewer_closed")
+    ]
+    assert window._recording_status_message == "Finishing dive trace"
+    assert window._recording_status_detail == (
+        "Saving the final trace. CaveViewer will close automatically."
+    )
+    assert calls == [("reset_input", "saving capture before close")]
+
+    window.wnd.is_closing = True
+    window.on_close()
+
+    assert window.wnd.is_closing is False
+    assert len(recorder.stopped) == 1
+    assert calls == [("reset_input", "saving capture before close")]
+
+
+def test_on_close_keeps_viewer_open_while_active_video_is_saved():
+    calls = []
+    window = _recording_window()
+    window._closing_requested = False
+    window._close_after_capture_requested = False
+    window._close_after_capture_status_presented = False
+    window._has_map_loaded = True
+    window._recording_session = object()
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = []
+    window._reset_transient_input_state = lambda reason: calls.append(
+        ("reset_input", reason)
+    )
+    window._stop_recording = lambda: calls.append("stop_recording")
+    window._teardown_current_map = lambda **_kwargs: calls.append("teardown")
+    window._release_window_resources = lambda: calls.append("release_resources")
+    window.wnd = SimpleNamespace(
+        mouse_exclusivity=True,
+        is_closing=True,
+        close=lambda: calls.append("close_window"),
+    )
+
+    window.on_close()
+
+    assert not window._closing_requested
+    assert window._close_after_capture_requested
+    assert window.wnd.is_closing is False
+    assert window._recording_status_message == "Finishing video"
+    assert window._recording_status_detail == (
+        "Saving the last frames. CaveViewer will close automatically."
+    )
+    assert calls == [
+        ("reset_input", "saving capture before close"),
+        "stop_recording",
+    ]
+
+
+def test_exit_capture_finalization_waits_until_status_is_visible(monkeypatch):
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+    calls = []
+    window = _recording_window()
+    window._closing_requested = False
+    window._close_after_capture_requested = True
+    window._close_after_capture_status_presented = False
+    window._close_after_capture_status_presented_at = None
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = []
+    window._complete_window_close = lambda: calls.append("close")
+
+    assert window._complete_exit_capture_finalization_if_ready() is False
+
+    window._close_after_capture_status_presented = True
+    window._close_after_capture_status_presented_at = 9.5
+    assert window._complete_exit_capture_finalization_if_ready() is False
+
+    window._close_after_capture_status_presented_at = 9.25
+    assert window._complete_exit_capture_finalization_if_ready() is True
+    assert calls == ["close"]
+
+
+def test_exit_finalization_keeps_its_trace_status_and_does_not_reveal_files(tmp_path):
+    output_path = tmp_path / "trace.jsonl"
+    output_path.write_text('{"record": "trace_completed"}\n', encoding="utf-8")
+    recorder = FakeManualDiveTrace()
+    recorder.result = ManualDiveTraceResult(
+        output_path=str(output_path),
+        partial_path=str(tmp_path / ".trace.jsonl.part"),
+        completed=True,
+        error=None,
+    )
+    window = _recording_window()
+    window._close_after_capture_requested = True
+    window._close_after_capture_status_presented = False
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = [_pending_manual_trace_writer(recorder)]
+    window._show_capture_status(
+        "Finishing dive trace",
+        "Saving the final trace. CaveViewer will close automatically.",
+        duration=None,
+        now=10.0,
+    )
+
+    window._update_manual_dive_trace(now=10.0)
+
+    assert window._manual_dive_trace_writers == []
+    assert window._recording_status_message == "Finishing dive trace"
+    assert window._recording_status_detail == (
+        "Saving the final trace. CaveViewer will close automatically."
+    )
+    assert window._ensure_artifact_capture_presentation().take_due_reveals(now=20.0) == ()

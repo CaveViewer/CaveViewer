@@ -44,3 +44,21 @@ def test_failure_or_non_revealed_save_never_queues_native_reveal():
     assert failed.detail == "Disk may be full"
     assert saved.detail is None
     assert controller.take_due_reveals(now=40.0) == ()
+
+
+def test_exit_save_feedback_names_the_artifact_and_suppresses_file_reveals():
+    controller = ArtifactCapturePresentationController()
+    controller.saved_status("Video", "/recordings/cave.mp4", now=10.0)
+
+    video = controller.exit_saving_status(("Video",))
+    trace = controller.exit_saving_status(("Dive trace",))
+    both = controller.exit_saving_status(("Video", "Dive trace"))
+    controller.discard_pending_reveals()
+
+    assert video.message == "Finishing video"
+    assert video.detail == "Saving the last frames. CaveViewer will close automatically."
+    assert trace.message == "Finishing dive trace"
+    assert trace.detail == "Saving the final trace. CaveViewer will close automatically."
+    assert both.message == "Finishing captures"
+    assert both.duration is None
+    assert controller.take_due_reveals(now=20.0) == ()
