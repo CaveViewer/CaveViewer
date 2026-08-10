@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Release 1.0.75
+## Release 1.0.76
 
 - Fixed scrolling in the Map Library and Preferences for macOS trackpads and
   mice.
