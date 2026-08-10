@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased (1.0.75)
+## Release 1.0.75
 
 - The Map Library can now recognize many well-known caves and show useful
   details such as location and cave type. Choose **About cave** for a fuller
